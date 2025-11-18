@@ -1,0 +1,273 @@
+name: Security Scan
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'requirements.txt'
+      - '**.py'
+
+jobs:
+  dependency-check:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install safety pip-audit
+        
+    - name: Run safety check
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check --full-report
+      continue-on-error: true
+        
+    - name: Run pip-audit
+      run: |
+        pip-audit --desc --format json --output pip-audit-report.json || true
+        pip-audit --desc
+      continue-on-error: true
+        
+    - name: Upload reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: dependency-security-reports
+        path: |
+          safety-report.json
+          pip-audit-report.json
+        retention-days: 90
+
+  code-security:
+    name: Static Code Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit semgrep
+        pip install -r requirements.txt
+        
+    - name: Run Bandit
+      run: |
+        bandit -r . -f json -o bandit-report.json
+        bandit -r . -ll -f txt -o bandit-summary.txt
+      continue-on-error: true
+        
+    - name: Run Semgrep
+      run: |
+        semgrep --config=auto --json --output=semgrep-report.json . || true
+        semgrep --config=auto . || true
+      continue-on-error: true
+        
+    - name: Upload security reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: code-security-reports
+        path: |
+          bandit-report.json
+          bandit-summary.txt
+          semgrep-report.json
+        retention-days: 90
+        
+    - name: Create summary
+      if: always()
+      run: |
+        echo "## Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Bandit Results" >> $GITHUB_STEP_SUMMARY
+        if [ -f bandit-summary.txt ]; then
+          cat bandit-summary.txt >> $GITHUB_STEP_SUMMARY
+        fi
+
+  secrets-scan:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Run Gitleaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        
+    - name: Run TruffleHog
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.repository.default_branch }}
+        head: HEAD
+        extra_args: --debug --only-verified
+
+  container-security:
+    name: Container Image Security
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Create Dockerfile
+      run: |
+        cat > Dockerfile << 'EOF'
+        FROM python:3.11-slim
+        WORKDIR /app
+        COPY requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY . .
+        ENTRYPOINT ["python", "acm_switchover.py"]
+        EOF
+        
+    - name: Build image
+      run: docker build -t acm-switchover:scan .
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'acm-switchover:scan'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        
+    - name: Upload Trivy results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+        
+    - name: Run Trivy for detailed report
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'acm-switchover:scan'
+        format: 'table'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+
+  sbom-generation:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install cyclonedx-bom
+        
+    - name: Generate CycloneDX SBOM
+      run: |
+        cyclonedx-py -r -i requirements.txt -o sbom.json
+        cyclonedx-py -r -i requirements.txt -o sbom.xml --format xml
+        
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom
+        path: |
+          sbom.json
+          sbom.xml
+        retention-days: 90
+
+  license-check:
+    name: License Compliance
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pip-licenses
+        
+    - name: Check licenses
+      run: |
+        pip-licenses --format=markdown --output-file=licenses.md
+        pip-licenses --format=json --output-file=licenses.json
+        cat licenses.md
+        
+    - name: Upload license report
+      uses: actions/upload-artifact@v4
+      with:
+        name: license-report
+        path: |
+          licenses.md
+          licenses.json
+        retention-days: 90
+
+  notify-security:
+    name: Security Notification
+    runs-on: ubuntu-latest
+    needs: [dependency-check, code-security, secrets-scan, container-security]
+    if: failure()
+    
+    steps:
+    - name: Create issue on failure
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = '🔒 Security Scan Failed - ' + new Date().toISOString().split('T')[0];
+          const body = `Security scan workflow failed. Please review the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId}).
+          
+          ### Failed Jobs
+          - Dependency Check: ${{ needs.dependency-check.result }}
+          - Code Security: ${{ needs.code-security.result }}
+          - Secrets Scan: ${{ needs.secrets-scan.result }}
+          - Container Security: ${{ needs.container-security.result }}
+          
+          Please investigate and resolve any security issues.`;
+          
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['security', 'automated']
+          });

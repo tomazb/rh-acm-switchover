@@ -1,0 +1,19 @@
+# Test dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+
+# Code quality
+flake8>=6.1.0
+pylint>=3.0.0
+black>=23.7.0
+isort>=5.12.0
+mypy>=1.5.0
+
+# Security scanning
+bandit>=1.7.5
+safety>=2.3.5
+pip-audit>=2.6.0
+
+# Additional testing utilities
+coverage>=7.3.0

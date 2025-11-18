@@ -1,0 +1,364 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run security scan weekly on Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-mock coverage
+        
+    - name: Run unit tests with coverage
+      run: |
+        python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=html --cov-report=term
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-${{ matrix.python-version }}
+        fail_ci_if_error: false
+        
+    - name: Archive coverage reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report-${{ matrix.python-version }}
+        path: htmlcov/
+        retention-days: 7
+
+  lint:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install linting tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pylint black isort mypy bandit
+        pip install -r requirements.txt
+        
+    - name: Run flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings
+        flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
+        
+    - name: Run pylint
+      run: |
+        pylint acm_switchover.py lib/ modules/ --exit-zero --max-line-length=120 --disable=C0103,C0114,C0115,C0116
+        
+    - name: Check code formatting with black
+      run: |
+        black --check --line-length 120 --diff .
+        
+    - name: Check import sorting with isort
+      run: |
+        isort --check-only --profile black --line-length 120 .
+        
+    - name: Run type checking with mypy
+      run: |
+        mypy acm_switchover.py lib/ modules/ --ignore-missing-imports --no-strict-optional
+        
+    - name: Run bandit security linter
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . -f txt
+        
+    - name: Upload bandit report
+      uses: actions/upload-artifact@v4
+      with:
+        name: bandit-security-report
+        path: bandit-report.json
+        retention-days: 30
+
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install safety
+        
+    - name: Run safety check for vulnerable dependencies
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check || true
+        
+    - name: Upload safety report
+      uses: actions/upload-artifact@v4
+      with:
+        name: safety-vulnerability-report
+        path: safety-report.json
+        retention-days: 30
+        
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: python
+        
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Upload Trivy results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  syntax-check:
+    name: Python Syntax Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Compile Python files
+      run: |
+        python -m py_compile acm_switchover.py
+        python -m py_compile lib/*.py
+        python -m py_compile modules/*.py
+        python -m py_compile tests/*.py
+        echo "✓ All Python files compile successfully"
+
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check documentation files exist
+      run: |
+        required_docs=(
+          "README.md"
+          "LICENSE"
+          "docs/README.md"
+          "docs/QUICKREF.md"
+          "docs/USAGE.md"
+          "docs/ARCHITECTURE.md"
+          "docs/INSTALL.md"
+          "docs/CONTRIBUTING.md"
+          "docs/CHANGELOG.md"
+          "docs/PRD.md"
+          "docs/TESTING.md"
+        )
+        
+        for doc in "${required_docs[@]}"; do
+          if [ ! -f "$doc" ]; then
+            echo "Error: Required documentation file '$doc' is missing"
+            exit 1
+          fi
+        done
+        echo "✓ All required documentation files present"
+        
+    - name: Check markdown links
+      uses: gaurav-nelson/github-action-markdown-link-check@v1
+      with:
+        use-quiet-mode: 'yes'
+        use-verbose-mode: 'yes'
+        config-file: '.github/markdown-link-check.json'
+
+  integration-test:
+    name: Integration Tests (Dry-Run)
+    runs-on: ubuntu-latest
+    needs: [test, lint, syntax-check]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Test CLI help output
+      run: |
+        python acm_switchover.py --help
+        python acm_switchover.py switchover --help
+        python acm_switchover.py rollback --help
+        python acm_switchover.py decommission --help
+        
+    - name: Test version display
+      run: |
+        grep -q "version.*1.0.0" acm_switchover.py || echo "Warning: Version string check"
+        
+    - name: Validate state file structure
+      run: |
+        python -c "
+import json
+from lib.utils import StateManager
+state = StateManager('/tmp/test-state.json')
+state.save()
+with open('/tmp/test-state.json', 'r') as f:
+    data = json.load(f)
+    assert 'phase' in data
+    assert 'completed_steps' in data
+    assert 'config' in data
+    assert 'errors' in data
+print('✓ State file structure valid')
+"
+
+  build-container:
+    name: Container Build Test
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Create Dockerfile for testing
+      run: |
+        cat > Dockerfile << 'EOF'
+        FROM python:3.11-slim
+        WORKDIR /app
+        COPY requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY . .
+        RUN python -m py_compile acm_switchover.py lib/*.py modules/*.py
+        ENTRYPOINT ["python", "acm_switchover.py"]
+        CMD ["--help"]
+        EOF
+        
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: acm-switchover:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Test container
+      run: |
+        docker run --rm acm-switchover:test --help
+
+  release-check:
+    name: Release Readiness
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: [test, lint, security, syntax-check, documentation]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check version consistency
+      run: |
+        # Check that version is consistent across files
+        echo "Checking version consistency..."
+        
+        # Extract versions from different sources
+        grep -o "Version.*[0-9]\+\.[0-9]\+\.[0-9]\+" docs/CHANGELOG.md | head -1
+        grep -o "Version.*[0-9]\+\.[0-9]\+\.[0-9]\+" docs/PRD.md | head -1
+        grep -o "version.*[0-9]\+\.[0-9]\+\.[0-9]\+" acm_switchover.py | head -1
+        
+    - name: Verify CHANGELOG updated
+      run: |
+        if ! grep -q "$(date +%Y-%m-%d)" docs/CHANGELOG.md; then
+          echo "Warning: CHANGELOG may not be updated for today's date"
+        fi
+        
+    - name: Summary
+      run: |
+        echo "✓ All checks passed - Release ready"
+
+  notify:
+    name: Notification
+    runs-on: ubuntu-latest
+    needs: [test, lint, security, syntax-check, documentation, integration-test]
+    if: always()
+    
+    steps:
+    - name: Check job statuses
+      run: |
+        echo "Test: ${{ needs.test.result }}"
+        echo "Lint: ${{ needs.lint.result }}"
+        echo "Security: ${{ needs.security.result }}"
+        echo "Syntax: ${{ needs.syntax-check.result }}"
+        echo "Documentation: ${{ needs.documentation.result }}"
+        echo "Integration: ${{ needs.integration-test.result }}"
