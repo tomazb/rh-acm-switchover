@@ -136,22 +136,20 @@ class TestPhaseEnum(unittest.TestCase):
 
     def test_phase_values(self):
         """Test phase enum values."""
-        self.assertEqual(Phase.INIT.value, "init")
-        self.assertEqual(Phase.PREFLIGHT.value, "preflight_validation")
-        self.assertEqual(Phase.PRIMARY_PREP.value, "primary_preparation")
-        self.assertEqual(Phase.ACTIVATION.value, "activation")
-        self.assertEqual(Phase.POST_ACTIVATION.value, "post_activation_verification")
-        self.assertEqual(Phase.FINALIZATION.value, "finalization")
-        self.assertEqual(Phase.COMPLETED.value, "completed")
-        self.assertEqual(Phase.ROLLBACK.value, "rollback")
-        self.assertEqual(Phase.FAILED.value, "failed")
+        expected = {
+            Phase.INIT: "init",
+            Phase.PREFLIGHT: "preflight_validation",
+            Phase.PRIMARY_PREP: "primary_preparation",
+            Phase.ACTIVATION: "activation",
+            Phase.POST_ACTIVATION: "post_activation_verification",
+            Phase.FINALIZATION: "finalization",
+            Phase.COMPLETED: "completed",
+            Phase.ROLLBACK: "rollback",
+            Phase.FAILED: "failed",
+        }
 
-
-
-        self.assertEqual(Phase.FINALIZATION.value, "finalization")
-        self.assertEqual(Phase.COMPLETED.value, "completed")
-        self.assertEqual(Phase.FAILED.value, "failed")
-        self.assertEqual(Phase.ROLLBACK.value, "rollback")
+        for phase, value in expected.items():
+            self.assertEqual(phase.value, value)
 
 
 class TestVersionComparison(unittest.TestCase):

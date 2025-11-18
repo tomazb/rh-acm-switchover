@@ -5,9 +5,9 @@ Common utilities for ACM switchover automation.
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 class Phase(Enum):
@@ -22,6 +22,11 @@ class Phase(Enum):
     COMPLETED = "completed"
     ROLLBACK = "rollback"
     FAILED = "failed"
+
+
+def _utc_timestamp() -> str:
+    """Return an ISO-8601 timestamp in UTC."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 class StateManager:
@@ -44,12 +49,12 @@ class StateManager:
         
         return {
             "version": "1.0",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": _utc_timestamp(),
             "current_phase": Phase.INIT.value,
             "completed_steps": [],
             "config": {},
             "errors": [],
-            "last_updated": datetime.utcnow().isoformat()
+            "last_updated": _utc_timestamp()
         }
     
     def save_state(self) -> None:
@@ -57,7 +62,7 @@ class StateManager:
         state_dir = os.path.dirname(self.state_file)
         if state_dir:  # Only create directory if path contains one
             os.makedirs(state_dir, exist_ok=True)
-        self.state["last_updated"] = datetime.utcnow().isoformat()
+        self.state["last_updated"] = _utc_timestamp()
         
         with open(self.state_file, 'w', encoding='utf-8') as f:
             json.dump(self.state, f, indent=2)
@@ -72,7 +77,7 @@ class StateManager:
         if not self.is_step_completed(step_name):
             self.state["completed_steps"].append({
                 "name": step_name,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": _utc_timestamp()
             })
             self.save_state()
     
@@ -94,7 +99,7 @@ class StateManager:
         self.state["errors"].append({
             "error": error,
             "phase": phase or self.state["current_phase"],
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": _utc_timestamp()
         })
         self.save_state()
     
@@ -102,12 +107,12 @@ class StateManager:
         """Reset state to initial."""
         self.state = {
             "version": "1.0",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": _utc_timestamp(),
             "current_phase": Phase.INIT.value,
             "completed_steps": [],
             "config": {},
             "errors": [],
-            "last_updated": datetime.utcnow().isoformat()
+            "last_updated": _utc_timestamp()
         }
         self.save_state()
     
@@ -127,9 +132,10 @@ def setup_logging(verbose: bool = False) -> logging.Logger:
     )
     
     return logging.getLogger("acm_switchover")
+    from typing import Optional, Tuple
 
 
-def parse_acm_version(version_string: str) -> tuple:
+def parse_acm_version(version_string: str) -> Optional[Tuple[int, int, int]]:
     """
     Parse ACM version string to tuple for comparison.
     
@@ -140,10 +146,12 @@ def parse_acm_version(version_string: str) -> tuple:
         Tuple of (major, minor, patch)
     """
     try:
-        parts = version_string.strip().split('.')
-        return tuple(int(p) for p in parts[:3])
+        parts = [int(p) for p in version_string.strip().split('.')]
+        while len(parts) < 3:
+            parts.append(0)
+        return tuple(parts[:3])
     except (ValueError, AttributeError):
-        return (0, 0, 0)
+        return None
 
 
 def is_acm_version_ge(version: str, compare_to: str) -> bool:
@@ -157,7 +165,13 @@ def is_acm_version_ge(version: str, compare_to: str) -> bool:
     Returns:
         True if version >= compare_to
     """
-    return parse_acm_version(version) >= parse_acm_version(compare_to)
+    current = parse_acm_version(version)
+    target = parse_acm_version(compare_to)
+
+    if current is None or target is None:
+        return False
+
+    return current >= target
 
 
 def format_duration(seconds: float) -> str:
