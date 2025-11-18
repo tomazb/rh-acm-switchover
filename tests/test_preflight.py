@@ -1,69 +1,46 @@
-"""Unit tests for modules/preflight.py."""
+"""Unit tests for preflight validation helpers."""
 
-import unittest
-from unittest.mock import MagicMock, patch
-import sys
 import os
+import sys
+import unittest
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from modules.preflight import PreflightValidator
-from lib.utils import StateManager
-import tempfile
+from modules.preflight_validators import ValidationReporter
 
 
-class TestPreflightValidator(unittest.TestCase):
-    """Test cases for PreflightValidator class."""
+class TestValidationReporter(unittest.TestCase):
+    """Tests for the ValidationReporter helper."""
 
-    def setUp(self):
-        """Set up test fixtures."""
-        self.mock_primary = MagicMock()
-        self.mock_secondary = MagicMock()
-        
-        self.validator = PreflightValidator(
-            self.mock_primary,
-            self.mock_secondary,
-            method="passive"
-        )
+    def setUp(self) -> None:
+        self.reporter = ValidationReporter()
 
-    def tearDown(self):
-        """Clean up test fixtures."""
-        pass  # No cleanup needed with mocks only
+    def test_add_result_passed(self) -> None:
+        self.reporter.add_result("demo", True, "all good", critical=True)
 
-    def test_add_result_passed(self):
-        """Test recording a passed validation result."""
-        self.validator.add_result("test_check", True, "all good", critical=True)
-        
-        self.assertEqual(len(self.validator.validation_results), 1)
-        result = self.validator.validation_results[0]
-        self.assertEqual(result["check"], "test_check")
+        self.assertEqual(len(self.reporter.results), 1)
+        result = self.reporter.results[0]
+        self.assertEqual(result["check"], "demo")
         self.assertTrue(result["passed"])
         self.assertEqual(result["message"], "all good")
         self.assertTrue(result["critical"])
 
-    def test_add_result_failed(self):
-        """Test recording a failed validation result."""
-        self.validator.add_result("test_check", False, "failed", critical=True)
-        
-        self.assertEqual(len(self.validator.validation_results), 1)
-        result = self.validator.validation_results[0]
-        self.assertEqual(result["check"], "test_check")
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["message"], "failed")
-        self.assertTrue(result["critical"])
+    def test_add_result_warning(self) -> None:
+        self.reporter.add_result("demo", False, "warn", critical=False)
 
-    def test_add_result_warning(self):
-        """Test recording a non-critical warning result."""
-        self.validator.add_result("test_check", False, "warning", critical=False)
-        
-        result = self.validator.validation_results[0]
+        result = self.reporter.results[0]
         self.assertFalse(result["passed"])
         self.assertFalse(result["critical"])
 
+    def test_critical_failures(self) -> None:
+        self.reporter.add_result("ok", True, "fine", critical=True)
+        self.reporter.add_result("bad", False, "nope", critical=True)
+        self.reporter.add_result("warn", False, "heads up", critical=False)
 
-if __name__ == '__main__':
-    unittest.main()
+        failures = self.reporter.critical_failures()
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["check"], "bad")
 
 
 if __name__ == '__main__':

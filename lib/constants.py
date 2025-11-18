@@ -1,0 +1,24 @@
+"""Centralized constants for ACM switchover."""
+
+# Exit codes
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+EXIT_INTERRUPT = 130
+
+# Timeouts (in seconds)
+RESTORE_WAIT_TIMEOUT = 1800
+RESTORE_POLL_INTERVAL = 30
+
+CLUSTER_VERIFY_TIMEOUT = 600
+CLUSTER_VERIFY_INTERVAL = 30
+
+OBSERVABILITY_TERMINATE_TIMEOUT = 300
+OBSERVABILITY_TERMINATE_INTERVAL = 10
+
+DECOMMISSION_POD_TIMEOUT = 1200
+DECOMMISSION_POD_INTERVAL = 30
+
+# Namespaces
+BACKUP_NAMESPACE = "open-cluster-management-backup"
+OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
+ACM_NAMESPACE = "open-cluster-management"
