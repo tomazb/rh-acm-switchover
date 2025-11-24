@@ -24,7 +24,7 @@ Welcome to the ACM Switchover Automation documentation.
 11. **[Changelog (CHANGELOG)](CHANGELOG.md)** - Version history and changes
 
 ### Source Material
-12. **[Original Runbook](ACM_switchover_runbook_Complete_Nov12.txt)** - Source documentation
+12. **[ACM Switchover Runbook (Markdown)](ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational runbook
 
 ---
 
@@ -101,5 +101,5 @@ See [CONTRIBUTING](CONTRIBUTING.md) for more details.
 
 ---
 
-**Last Updated**: November 18, 2025  
+**Last Updated**: November 24, 2025  
 **Version**: 1.0.0
