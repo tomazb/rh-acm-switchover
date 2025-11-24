@@ -1,185 +1,223 @@
-# Tests Directory
+# ACM Switchover Test Suite
 
-This directory contains the unit test suite for the ACM Switchover Automation project.
+Comprehensive test suite for the Red Hat Advanced Cluster Management (ACM) Switchover Tool.
 
-## Test Files
+## Overview
 
-- **`test_utils.py`** - Tests for `lib/utils.py`
-  - StateManager class (load, save, reset, step tracking)
-  - Phase enum
-  - Version comparison utilities
-  - Logging setup
+The test suite uses **pytest** with modern fixtures, markers, and parameterization to provide:
+- Fast unit tests for individual components
+- Integration tests with mocked Kubernetes/bash environments
+- High code coverage with minimal maintenance overhead
 
-- **`test_kube_client.py`** - Tests for `lib/kube_client.py`
-  - KubeClient initialization
-  - Custom resource operations (get, list, patch, create, delete)
-  - Deployment and StatefulSet scaling
-  - Pod management and waiting
-  - Dry-run mode functionality
+**Test Statistics:**
+- **Total Tests**: 136
+- **Unit Tests**: ~120 (fast, no external dependencies)
+- **Integration Tests**: ~16 (mocked external commands)
+- **Execution Time**: ~46 seconds (all tests)
+- **Coverage**: 61% kube_client, 75% utils, comprehensive module coverage
 
-- **`test_preflight.py`** - Tests for `modules/preflight.py`
-  - Namespace validation
-  - ACM version detection
-  - OADP operator checks
-  - Backup status validation
-  - ClusterDeployment preserveOnDelete validation (critical)
-  - Passive sync restore verification
-  - Observability detection
+## Test Organization
+
+### Python Unit Tests (pytest style)
+Located in `tests/test_*.py`:
+
+- `test_kube_client.py` - KubeClient operations (19 tests)
+- `test_utils.py` - StateManager, Phase enum, utilities (28 tests)
+- `test_preflight.py` - Validation reporters and validators (10 tests)
+- `test_backup_schedule.py` - BackupSchedule management (13 tests)
+- `test_primary_prep.py` - Primary hub preparation (16 tests)
+- `test_activation.py` - Secondary hub activation (7 tests)
+- `test_decommission.py` - Old hub decommissioning (15 tests)
+- `test_post_activation.py` - Post-activation verification (15 tests)
+- `test_rollback.py` - Rollback workflow (6 tests)
+- `test_finalization.py` - Finalization workflow (6 tests)
+- `test_waiter.py` - Wait/poll utilities (4 tests)
+- `test_main.py` - Argument parsing (8 tests)
+
+### Bash Script Tests
+- `test_scripts.py` - Argument validation, error handling (12 tests)
+- `test_scripts_integration.py` - End-to-end with mocked `oc`/`jq` (8 tests)
+
+See `README-scripts-tests.md` for detailed bash test documentation.
 
 ## Running Tests
 
-### Quick Start
-
+### All Tests
 ```bash
-# From project root
+pytest tests/
+# or
 ./run_tests.sh
 ```
 
-### Individual Test Files
-
+### Specific Test Files
 ```bash
-# Run specific test file
-python -m pytest tests/test_utils.py -v
+pytest tests/test_kube_client.py -v
+pytest tests/test_utils.py -v
+```
 
-# Run specific test class
-python -m pytest tests/test_utils.py::TestStateManager -v
+### By Test Marker
+```bash
+# Unit tests only (fast)
+pytest -m unit -v
 
-# Run specific test
-python -m pytest tests/test_utils.py::TestStateManager::test_initial_state -v
+# Integration tests only
+pytest -m integration -v
+
+# Exclude slow tests
+pytest -m "not slow" -v
 ```
 
 ### With Coverage
-
 ```bash
-python -m pytest tests/ -v --cov=. --cov-report=html
+# Coverage disabled by default for speed
+# Enable explicitly:
+pytest --cov=. --cov-branch --cov-report=html tests/
+
+# View report
 open htmlcov/index.html
 ```
 
-## Test Structure
-
-All tests follow this pattern:
-
-```python
-import unittest
-from unittest.mock import MagicMock, patch
-
-class TestMyClass(unittest.TestCase):
-    def setUp(self):
-        """Set up test fixtures."""
-        # Initialize mocks and test data
-    
-    def tearDown(self):
-        """Clean up after tests."""
-        # Remove temp files, etc.
-    
-    def test_feature_success(self):
-        """Test successful scenario."""
-        # Arrange
-        # Act
-        # Assert
-    
-    def test_feature_failure(self):
-        """Test failure scenario."""
-        # Test error handling
-```
-
-## Mocking Strategy
-
-- **Kubernetes API**: Always mocked to avoid real cluster dependencies
-- **File system**: Temporary directories used for state files
-- **External calls**: All network and API calls are mocked
-
-Example:
-```python
-@patch('lib.kube_client.client.CoreV1Api')
-def test_namespace_exists(self, mock_api):
-    mock_instance = mock_api.return_value
-    # Configure mock behavior
-    # Test the function
-```
-
-## Coverage Goals
-
-- **Overall**: 80%+ line coverage
-- **Critical paths**: 100% coverage (data protection, validation)
-- **State management**: 100% coverage
-- **Error handling**: All error paths tested
-
-## Adding New Tests
-
-1. Create test file: `test_<module>.py`
-2. Import module under test
-3. Create test class inheriting from `unittest.TestCase`
-4. Add setUp/tearDown methods if needed
-5. Write test methods (must start with `test_`)
-6. Run tests to verify
-7. Check coverage
-
-## Test Dependencies
-
-Install with:
+### Single Test
 ```bash
-pip install -r requirements-dev.txt
+pytest tests/test_utils.py::TestStateManager::test_persistence -v
 ```
 
-Includes:
-- pytest
-- pytest-cov
-- pytest-mock
-- coverage
+## Test Markers
 
-## CI/CD Integration
+Configured in `setup.cfg`:
+- `@pytest.mark.unit` - Fast unit tests
+- `@pytest.mark.integration` - Integration tests with mocking
+- `@pytest.mark.slow` - Slower running tests
 
-Tests run automatically on:
-- Every push to main/develop
-- Every pull request
-- Python versions: 3.8, 3.9, 3.10, 3.11, 3.12
+## Test Fixtures
 
-See `.github/workflows/ci-cd.yml` for details.
+### Common Fixtures
+- `tmp_path` - Temporary directory (pytest built-in)
+- `mock_kube_client` - Mocked KubeClient
+- `mock_state_manager` - Mocked StateManager
+- `mock_k8s_apis` - Mocked Kubernetes API clients
+
+### Module-Specific Fixtures
+Each test file defines fixtures for its module's classes with common configurations.
+
+## Writing Tests
+
+### Unit Test Example
+```python
+import pytest
+from unittest.mock import Mock
+
+@pytest.fixture
+def my_fixture():
+    return Mock()
+
+@pytest.mark.unit
+class TestMyClass:
+    def test_my_method(self, my_fixture):
+        result = my_fixture.do_something()
+        assert result is True
+```
+
+### Parameterized Test Example
+```python
+@pytest.mark.parametrize("version,expected", [
+    ("2.12.0", True),
+    ("2.11.0", False),
+])
+def test_version_check(version, expected):
+    result = is_acm_version_ge(version, "2.12.0")
+    assert result == expected
+```
+
+## Configuration
+
+### setup.cfg
+- Test discovery: `python_files = test_*.py`
+- Test markers: `unit`, `integration`, `slow`
+- Coverage: Disabled by default (use `--cov=.` to enable)
+- Excluded from coverage: `*/tests/*`, `*/venv/*`
+
+### pytest.ini (via setup.cfg)
+```ini
+[tool:pytest]
+testpaths = tests
+markers =
+    unit: Unit tests for individual components
+    integration: Integration tests with mocked binaries
+    slow: Slower running tests
+```
+
+## Test Coverage Goals
+
+### Current Coverage
+- `lib/kube_client.py`: 61%
+- `lib/utils.py`: 75%
+- `modules/backup_schedule.py`: Well covered
+- `modules/primary_prep.py`: Well covered
+- `modules/decommission.py`: Well covered
+- `modules/post_activation.py`: Well covered
+- Bash scripts: Comprehensive argument/integration coverage
+
+### Future Enhancements
+- [ ] Integration tests for multi-step workflows
+- [ ] Performance benchmarking tests
+- [ ] Additional edge case coverage
+
+## Continuous Integration
+
+Tests are designed for CI/CD integration:
+- Fast execution (~46s for full suite)
+- No external dependencies (all mocked)
+- Clear pass/fail signals
+- Detailed error reporting
+
+### CI Example
+```yaml
+- name: Run tests
+  run: |
+    python -m pytest tests/ -v --junitxml=test-results.xml
+    
+- name: Run tests with coverage
+  run: |
+    python -m pytest tests/ --cov=. --cov-report=xml
+```
 
 ## Troubleshooting
 
+### Tests Hanging
+- **Cause**: Coverage tracing adds significant overhead
+- **Solution**: Disable coverage with `--no-cov` flag
+- **Note**: Coverage is disabled by default in setup.cfg
+
 ### Import Errors
+- **Cause**: Module import issues or missing dependencies
+- **Solution**: Ensure venv is activated and requirements installed:
+  ```bash
+  source .venv/bin/activate
+  pip install -r requirements-dev.txt
+  ```
 
-Ensure Python path includes parent directory:
-```python
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-```
+### Mock Issues
+- **Symptom**: `'Mock' object has no attribute X`
+- **Solution**: Configure mock return values properly:
+  ```python
+  mock_client.method.return_value = expected_value
+  ```
 
-### Kubernetes Client Errors
+## Best Practices
 
-Mock the kubernetes client:
-```python
-with patch('lib.kube_client.config'):
-    client = KubeClient()
-```
+1. **Use pytest fixtures** instead of unittest setUp/tearDown
+2. **Use assert statements** instead of self.assertEqual()
+3. **Parameterize tests** to reduce code duplication
+4. **Mock external dependencies** (Kubernetes API, shell commands)
+5. **Test both success and failure paths**
+6. **Use descriptive test names** that explain what is being tested
+7. **Group related tests** in classes
+8. **Mark tests** with appropriate markers (unit/integration/slow)
 
-### State File Conflicts
+## Resources
 
-Use temporary directories:
-```python
-import tempfile
-self.temp_dir = tempfile.mkdtemp()
-self.state_file = os.path.join(self.temp_dir, "test-state.json")
-```
-
-## Future Tests
-
-Planned additions:
-- [ ] tests/test_primary_prep.py
-- [ ] tests/test_activation.py
-- [ ] tests/test_post_activation.py
-- [ ] tests/test_finalization.py
-- [ ] tests/test_decommission.py
-- [ ] Integration tests with real clusters
-- [ ] End-to-end tests
-
-## Documentation
-
-See [CONTRIBUTING.md](../docs/CONTRIBUTING.md) for details.
-
----
-
-**Note**: Tests use mocks and do not require access to real Kubernetes clusters.
+- [pytest Documentation](https://docs.pytest.org/)
+- [pytest Fixtures](https://docs.pytest.org/en/stable/fixture.html)
+- [pytest Parametrization](https://docs.pytest.org/en/stable/parametrize.html)
+- [unittest.mock](https://docs.python.org/3/library/unittest.mock.html)

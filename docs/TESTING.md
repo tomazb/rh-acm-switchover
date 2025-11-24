@@ -9,9 +9,19 @@ This document describes the testing strategy, test structure, and how to run tes
 ```
 tests/
 ├── __init__.py
-├── test_utils.py          # Tests for lib/utils.py
-├── test_kube_client.py    # Tests for lib/kube_client.py
-└── test_preflight.py      # Tests for modules/preflight.py
+├── test_utils.py             # Tests for lib/utils.py
+├── test_kube_client.py       # Tests for lib/kube_client.py
+├── test_preflight.py         # Tests for modules/preflight.py
+├── test_backup_schedule.py   # Tests for modules/backup_schedule.py
+├── test_primary_prep.py      # Tests for modules/primary_prep.py
+├── test_decommission.py      # Tests for modules/decommission.py
+├── test_post_activation.py   # Tests for modules/post_activation.py
+├── test_rollback.py          # Tests for modules/rollback.py
+├── test_finalization.py      # Tests for modules/finalization.py
+├── test_waiter.py            # Tests for lib/waiter.py
+├── test_main.py              # Tests for acm_switchover.py (args)
+├── test_scripts.py           # Unit tests for bash scripts
+└── test_scripts_integration.py # Integration tests for bash scripts
 ```
 
 ## Running Tests
