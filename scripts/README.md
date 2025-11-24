@@ -1,0 +1,411 @@
+# Automation Scripts
+
+This directory contains automated validation scripts for ACM hub switchover operations.
+
+## Overview
+
+These scripts automate the validation process before and after switchover, ensuring safety and operational readiness.
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
+| [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
+
+## Idempotency & Safety
+
+**Both scripts are fully idempotent and safe to run multiple times:**
+
+- ✅ **Read-only operations** - Only perform `oc get`, `oc describe`, and similar read operations
+- ✅ **No state modifications** - Never modify cluster resources or configuration
+- ✅ **No side effects** - Can be run repeatedly without affecting cluster state
+- ✅ **Safe in production** - No risk of accidental changes or disruptions
+
+**You can safely:**
+- Run pre-flight checks multiple times before switchover
+- Re-run post-flight verification to monitor stabilization
+- Use scripts for ongoing health monitoring
+- Run in parallel with other operations (read-only)
+
+---
+
+## Pre-flight Validation Script
+
+**File:** `preflight-check.sh`
+
+### Purpose
+
+Automates all prerequisite checks before starting an ACM switchover to catch configuration issues early and prevent failures mid-process.
+
+### Usage
+
+```bash
+./scripts/preflight-check.sh \
+  --primary-context <primary-hub-context> \
+  --secondary-context <secondary-hub-context> \
+  --method passive
+```
+
+**Options:**
+- `--primary-context` - Kubernetes context for primary hub (required)
+- `--secondary-context` - Kubernetes context for secondary hub (required)
+- `--method` - Switchover method: `passive` (default) or `full`
+- `--help` - Show help message
+
+### What It Checks
+
+1. **CLI Tools** - Verifies `oc`/`kubectl` and `jq` are installed
+2. **Kubernetes Contexts** - Confirms contexts exist and are accessible
+3. **Namespace Access** - Validates required namespaces on both hubs
+4. **ACM Versions** - Ensures versions match between hubs
+5. **OADP Operator** - Checks OADP is installed and Velero pods running
+6. **DataProtectionApplication** - Verifies DPA is configured and reconciled
+7. **Backup Status** - Confirms latest backup completed, no in-progress backups
+8. **ClusterDeployment Safety** - **CRITICAL:** Verifies `preserveOnDelete=true` on ALL ClusterDeployments
+9. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date
+10. **Observability** - Detects if observability is installed (optional)
+
+### Example Output
+
+```
+╔════════════════════════════════════════════════════════════╗
+║   ACM Switchover Pre-flight Validation                    ║
+╚════════════════════════════════════════════════════════════╝
+
+Primary Hub:    primary-hub
+Secondary Hub:  secondary-hub
+Method:         passive
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Checking CLI Tools
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ OpenShift CLI (oc) is installed
+✓ jq is installed
+
+[... additional checks ...]
+
+╔════════════════════════════════════════════════════════════╗
+║   Validation Summary                                       ║
+╚════════════════════════════════════════════════════════════╝
+
+Total Checks:    28
+Passed:          28
+Failed:          0
+Warnings:        0
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ ALL CRITICAL CHECKS PASSED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You are ready to proceed with the switchover.
+```
+
+### Exit Codes
+
+- `0` - All checks passed
+- `1` - One or more critical checks failed
+- `2` - Invalid arguments
+
+### Workflow Diagram
+
+```mermaid
+graph TD
+    A[Start Pre-flight Check] --> B[Parse Arguments]
+    B --> C[Verify CLI Tools]
+    C --> D[Check Kubernetes Contexts]
+    D --> E[Verify Namespaces]
+    E --> F[Check ACM Versions]
+    F --> G{Versions Match?}
+    G -->|No| H[FAIL: Version Mismatch]
+    G -->|Yes| I[Check OADP Operator]
+    I --> J[Verify DataProtectionApplication]
+    J --> K[Check Backup Status]
+    K --> L{Backups OK?}
+    L -->|No| M[FAIL: Backup Issues]
+    L -->|Yes| N[CRITICAL: Check preserveOnDelete]
+    N --> O{All CDs have<br/>preserveOnDelete=true?}
+    O -->|No| P[FAIL: Missing preserveOnDelete<br/>DANGER: Infrastructure at risk!]
+    O -->|Yes| Q{Method?}
+    Q -->|Passive| R[Check Passive Sync Status]
+    Q -->|Full| S[Skip Passive Check]
+    R --> T{Passive Sync<br/>Enabled?}
+    T -->|No| U[FAIL: Passive Sync Not Ready]
+    T -->|Yes| V[Check Observability Optional]
+    S --> V
+    V --> W[Generate Summary Report]
+    W --> X{Any Failures?}
+    X -->|Yes| Y[Exit Code 1<br/>Display Failed Checks]
+    X -->|No| Z[Exit Code 0<br/>Ready to Proceed]
+    
+    style P fill:#ff6b6b
+    style H fill:#ff6b6b
+    style M fill:#ff6b6b
+    style U fill:#ff6b6b
+    style Z fill:#51cf66
+```
+
+---
+
+## Post-flight Validation Script
+
+**File:** `postflight-check.sh`
+
+### Purpose
+
+Verifies that the ACM switchover completed successfully by validating all critical components on the new hub and optionally comparing with the old hub.
+
+### Usage
+
+```bash
+# Basic validation (new hub only)
+./scripts/postflight-check.sh --new-hub-context <new-hub-context>
+
+# With old hub comparison
+./scripts/postflight-check.sh \
+  --new-hub-context <new-hub-context> \
+  --old-hub-context <old-hub-context>
+```
+
+**Options:**
+- `--new-hub-context` - Kubernetes context for new active hub (required)
+- `--old-hub-context` - Kubernetes context for old primary hub (optional, for comparison)
+- `--help` - Show help message
+
+### What It Checks
+
+1. **Restore Status** - Confirms restore completed successfully (Phase: Finished)
+2. **ManagedCluster Connectivity** - Verifies all clusters are Available and Joined
+3. **Observability Components** - Checks all observability pods are running
+4. **Metrics Collection** - Validates Grafana route and observatorium-api status
+5. **Backup Configuration** - Ensures BackupSchedule is enabled and creating backups
+6. **ACM Hub Components** - Verifies MultiClusterHub and ACM pods are healthy
+7. **Old Hub Comparison** (if provided) - Checks old hub clusters are disconnected
+8. **Auto-Import Status** - Verifies no lingering disable-auto-import annotations
+
+### Example Output
+
+```
+╔════════════════════════════════════════════════════════════╗
+║   ACM Switchover Post-flight Verification                 ║
+╚════════════════════════════════════════════════════════════╝
+
+New Hub:        new-hub
+Old Hub:        old-hub (for comparison)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Checking Restore Status
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ Restore 'restore-acm-passive-sync' completed successfully (Phase: Finished)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. Checking ManagedCluster Status
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ Found 5 managed cluster(s) (excluding local-cluster)
+✓ All 5 cluster(s) show Available=True
+✓ All 5 cluster(s) show Joined=True
+✓ No clusters stuck in Pending Import
+
+[... additional checks ...]
+
+╔════════════════════════════════════════════════════════════╗
+║   Verification Summary                                     ║
+╚════════════════════════════════════════════════════════════╝
+
+Total Checks:    24
+Passed:          24
+Failed:          0
+Warnings:        0
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ SWITCHOVER VERIFICATION PASSED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The ACM switchover appears to have completed successfully.
+
+Recommended next steps:
+  1. Verify Grafana dashboards show recent metrics (wait 5-10 minutes)
+  2. Test cluster management operations (create/update policies, etc.)
+  3. Monitor for 24 hours before decommissioning old hub
+  4. Inform stakeholders that switchover is complete
+```
+
+### Exit Codes
+
+- `0` - All checks passed
+- `1` - One or more critical checks failed
+- `2` - Invalid arguments
+
+### Workflow Diagram
+
+```mermaid
+graph TD
+    A[Start Post-flight Check] --> B[Parse Arguments]
+    B --> C[Check Restore Status]
+    C --> D{Restore<br/>Finished?}
+    D -->|No| E[FAIL: Restore Not Complete]
+    D -->|Yes| F[Check ManagedCluster Status]
+    F --> G{All Clusters<br/>Available?}
+    G -->|No| H[FAIL: Clusters Not Connected]
+    G -->|Yes| I{All Clusters<br/>Joined?}
+    I -->|No| J[WARN: Some Clusters Still Joining]
+    I -->|Yes| K[Check Observability Pods]
+    J --> K
+    K --> L{Observability<br/>Installed?}
+    L -->|No| M[SKIP: Observability Not Installed]
+    L -->|Yes| N{All Pods<br/>Running?}
+    N -->|No| O[FAIL: Observability Pods Failed]
+    N -->|Yes| P[Check observatorium-api Restart]
+    M --> Q
+    P --> Q[Check Grafana Route]
+    Q --> R[Verify BackupSchedule Enabled]
+    R --> S{BackupSchedule<br/>Enabled?}
+    S -->|No| T[FAIL: Backups Not Enabled]
+    S -->|Yes| U[Check ACM Hub Components]
+    U --> V{MultiClusterHub<br/>Running?}
+    V -->|No| W[FAIL: MCH Not Running]
+    V -->|Yes| X{Old Hub<br/>Provided?}
+    X -->|Yes| Y[Compare with Old Hub]
+    X -->|No| Z[Skip Old Hub Checks]
+    Y --> AA{Old Hub Clusters<br/>Disconnected?}
+    AA -->|No| AB[WARN: Old Hub Still Active]
+    AA -->|Yes| AC[Check Old Hub Backup Paused]
+    AB --> AD
+    AC --> AD[Generate Summary Report]
+    Z --> AD
+    AD --> AE{Any Failures?}
+    AE -->|Yes| AF[Exit Code 1<br/>Display Issues & Recommendations]
+    AE -->|No| AG[Exit Code 0<br/>Switchover Successful]
+    
+    style E fill:#ff6b6b
+    style H fill:#ff6b6b
+    style O fill:#ff6b6b
+    style T fill:#ff6b6b
+    style W fill:#ff6b6b
+    style AG fill:#51cf66
+    style J fill:#ffd43b
+    style AB fill:#ffd43b
+```
+
+---
+
+## Complete Switchover Workflow
+
+This diagram shows how both scripts fit into the overall switchover process:
+
+```mermaid
+graph TD
+    A[Start: Plan Switchover] --> B[Run Pre-flight Check]
+    B --> C{Pre-flight<br/>Passed?}
+    C -->|No| D[Fix Issues]
+    D --> B
+    C -->|Yes| E[Begin Switchover Procedure]
+    E --> F[Step 1-3: Prepare Primary Hub]
+    F --> G[Step 4-5: Activate Secondary Hub]
+    G --> H[Wait for Restore Complete]
+    H --> I[Run Post-flight Check]
+    I --> J{Post-flight<br/>Passed?}
+    J -->|No| K{Critical<br/>Failures?}
+    K -->|Yes| L[Consider Rollback]
+    K -->|No| M[Troubleshoot & Retry]
+    M --> I
+    J -->|Yes| N[Steps 6-11: Post-Activation]
+    N --> O[Verify Metrics in Grafana]
+    O --> P[Monitor for 24 Hours]
+    P --> Q[Step 12: Decommission Old Hub Optional]
+    Q --> R[Switchover Complete]
+    
+    style C fill:#ffd43b
+    style J fill:#ffd43b
+    style L fill:#ff6b6b
+    style R fill:#51cf66
+```
+
+---
+
+## Best Practices
+
+### Before Switchover
+
+1. **Always run pre-flight check** in both test and production environments
+2. **Save pre-flight output** for audit trail and troubleshooting
+3. **Fix all failures** before proceeding - warnings should be reviewed
+4. **Verify preserveOnDelete** is set on ALL ClusterDeployments (critical!)
+
+### After Switchover
+
+1. **Run post-flight check immediately** after activation completes
+2. **Wait 5-10 minutes** if clusters show as "Unknown" - they may still be connecting
+3. **Check Grafana metrics** manually after 10-15 minutes
+4. **Keep old hub accessible** for at least 24 hours in case rollback is needed
+5. **Save post-flight output** for documentation and compliance
+
+### Troubleshooting
+
+If pre-flight check fails:
+- Review the specific failed checks in the output
+- Most common issue: `preserveOnDelete` not set on ClusterDeployments
+- Fix issues and re-run the script until all checks pass
+
+If post-flight check fails:
+- Check if restore is still in progress (wait and retry)
+- Verify observatorium-api pods were restarted (Step 7 in runbook)
+- Review the troubleshooting section in the runbook
+- Consider rollback if critical failures persist
+
+---
+
+## Integration with CI/CD
+
+Both scripts can be integrated into automation pipelines:
+
+```bash
+# Example: Pre-flight check in CI/CD
+if ! ./scripts/preflight-check.sh \
+    --primary-context "$PRIMARY_CTX" \
+    --secondary-context "$SECONDARY_CTX" \
+    --method passive; then
+    echo "Pre-flight validation failed. Aborting switchover."
+    exit 1
+fi
+
+# Example: Post-flight check in CI/CD
+if ! ./scripts/postflight-check.sh \
+    --new-hub-context "$NEW_HUB_CTX" \
+    --old-hub-context "$OLD_HUB_CTX"; then
+    echo "Post-flight validation failed. Review and consider rollback."
+    exit 1
+fi
+```
+
+---
+
+## Script Maintenance
+
+### Adding New Checks
+
+To add a new validation check:
+
+1. Add a new section using `section_header "N. Check Name"`
+2. Implement the check logic
+3. Use `check_pass`, `check_fail`, or `check_warn` for results
+4. Update the script documentation above
+5. Test in a non-production environment first
+
+### Version Compatibility
+
+These scripts are compatible with:
+- ACM 2.11+
+- OpenShift 4.12+
+- OADP 1.2+
+
+---
+
+## Support
+
+For issues or questions:
+- Review the [ACM Switchover Runbook](../docs/ACM_SWITCHOVER_RUNBOOK.md)
+- Check the [Troubleshooting section](../docs/ACM_SWITCHOVER_RUNBOOK.md#troubleshooting-common-issues)
+- Consult the [Architecture documentation](../docs/ARCHITECTURE.md)
+
+---
+
+**Last Updated:** 2025-11-24

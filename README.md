@@ -15,6 +15,7 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 
 ## Documentation
 
+- **[ACM Switchover Runbook](docs/ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational procedures
 - **[Quick Reference](docs/QUICKREF.md)** - Command cheat sheet and common tasks
 - **[Detailed Usage Guide](docs/USAGE.md)** - Complete examples and scenarios
 - **[Installation Guide](docs/INSTALL.md)** - Detailed installation instructions
@@ -23,6 +24,15 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - **[Contributing](docs/CONTRIBUTING.md)** - Development guidelines
 
 See [docs/README.md](docs/README.md) for complete documentation index.
+
+## Automation Scripts
+
+Automated validation scripts to ensure safe and successful switchovers:
+
+- **[Pre-flight Validation](scripts/preflight-check.sh)** - Verify all prerequisites before switchover
+- **[Post-flight Validation](scripts/postflight-check.sh)** - Confirm switchover completed successfully
+
+See [scripts/README.md](scripts/README.md) for detailed usage and workflow diagrams.
 
 ## Prerequisites
 

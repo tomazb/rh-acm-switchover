@@ -20,6 +20,38 @@
 
 ---
 
+## ⚠️ CRITICAL SAFETY WARNINGS
+
+> [!CAUTION]
+> **BEFORE YOU BEGIN - READ THIS CAREFULLY**
+>
+> 1. **preserveOnDelete MUST be `true` on ALL ClusterDeployments**
+>    - Without this, deleting ManagedClusters will DESTROY your underlying cluster infrastructure
+>    - Verify with: `oc get clusterdeployment --all-namespaces -o custom-columns=NAME:.metadata.name,PRESERVE:.spec.preserveOnDelete`
+>    - **ALL must show "true"** - if any show "false" or "<none>", STOP and fix them first!
+>
+> 2. **Test in non-production environment first**
+>    - This procedure affects ALL managed clusters simultaneously
+>    - Practice the complete workflow in a test environment before production
+>    - Verify rollback procedures work in your test environment
+>
+> 3. **Have a rollback plan ready**
+>    - Know how to rollback (see [Rollback Procedure](#rollback-procedure-if-needed))
+>    - **Do NOT decommission primary hub** until secondary is fully validated
+>    - Keep primary hub accessible for at least 24 hours after switchover
+>
+> 4. **Coordinate with stakeholders**
+>    - Managed clusters will show as "Unknown" during switchover (5-10 minutes)
+>    - Plan for a 30-60 minute maintenance window
+>    - Notify all teams that depend on ACM observability and cluster management
+>
+> 5. **Estimated timeline**
+>    - Method 1 (Passive Restore): 20-30 minutes
+>    - Method 2 (Full Restore): 40-60 minutes
+>    - Add 15-20 minutes for validation and verification
+
+---
+
 ## Restore Methods Overview
 
 This runbook supports two restore strategies. Choose based on your DR design:
@@ -37,6 +69,51 @@ Perform a single restore of credentials, resources, and managed clusters from th
 **Use when:** Passive sync is not running or bringing up a new hub.
 
 > **Tip:** Steps 6–12 are POST-ACTIVATION COMMON STEPS for BOTH methods.
+
+### Workflow Diagrams
+
+#### Method 1: Passive Restore Activation Flow
+
+```mermaid
+graph TD
+    A[Start: Prerequisites Verified] --> B[Step 1: Pause BackupSchedule<br/>on Primary Hub]
+    B --> C[Step 2: Disable Auto-Import<br/>on Primary Hub]
+    C --> D[Step 3: Stop Thanos Compactor<br/>on Primary Hub]
+    D --> E[Step 4: Verify Latest<br/>Passive Restore]
+    E --> F{Passive sync<br/>up to date?}
+    F -->|No| E
+    F -->|Yes| G[Step 5: Activate Managed Clusters<br/>Patch or Create Restore]
+    G --> H[Monitor Restore Status]
+    H --> I{Restore<br/>Finished?}
+    I -->|No, wait| H
+    I -->|Yes| J[POST-ACTIVATION STEPS]
+    J --> K[Step 6: Verify Clusters Connected<br/>5-10 minutes]
+    K --> L[Step 7: Restart Observatorium API]
+    L --> M[Step 8: Verify Observability Pods]
+    M --> N[Step 9: Verify Metrics Collection]
+    N --> O[Step 10: Enable BackupSchedule<br/>on New Hub]
+    O --> P[Step 11: Inform Stakeholders]
+    P --> Q{Decommission<br/>old hub?}
+    Q -->|Yes| R[Step 12: Decommission Primary]
+    Q -->|No| S[Complete: Keep Primary as Backup]
+    R --> S
+```
+
+#### Method 2: Full Restore Flow
+
+```mermaid
+graph TD
+    A[Start: Prerequisites Verified] --> B[F1: Optional - Pause BackupSchedule<br/>on Primary if accessible]
+    B --> C[F2: Optional - Disable Auto-Import<br/>on Primary if accessible]
+    C --> D[F3: Optional - Stop Thanos Compactor<br/>on Primary if accessible]
+    D --> E[F4: Create Full Restore<br/>on Secondary Hub]
+    E --> F[Monitor Restore Status]
+    F --> G{Restore<br/>Finished?}
+    G -->|No, wait| F
+    G -->|Yes| H[F5: Continue to POST-ACTIVATION]
+    H --> I[Steps 6-12: Same as Method 1]
+    I --> J[Complete]
+```
 
 ---
 
@@ -64,6 +141,17 @@ Perform a single restore of credentials, resources, and managed clusters from th
 ---
 
 ## Step 0: Verify Prerequisites Before Starting Switchover
+
+> **💡 Automated Validation Available**
+> 
+> Use the automated pre-flight validation script to check all prerequisites:
+> ```bash
+> ./scripts/preflight-check.sh \
+>   --primary-context <primary> \
+>   --secondary-context <secondary> \
+>   --method passive
+> ```
+> This script will verify all items below and provide a detailed report.
 
 ### Pre-Switchover Verification
 
@@ -519,6 +607,16 @@ Notify stakeholders that:
 - ✅ Normal operations can resume
 
 Provide new hub cluster details and any relevant access information.
+
+> **💡 Automated Validation Available**
+> 
+> Use the automated post-flight validation script to verify switchover success:
+> ```bash
+> ./scripts/postflight-check.sh \
+>   --new-hub-context <new-hub> \
+>   --old-hub-context <old-hub>
+> ```
+> This script will verify all critical components and provide a detailed report.
 
 ---
 
