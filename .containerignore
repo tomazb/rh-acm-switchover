@@ -1,0 +1,79 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Documentation (not needed in container)
+docs/
+*.md
+!README.md
+!LICENSE
+
+# CI/CD
+.github/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# State files (managed as volumes)
+.state/
+*.json
+
+# Development
+requirements-dev.txt
+setup.cfg
+.flake8
+mypy.ini
+.pylintrc
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.swp

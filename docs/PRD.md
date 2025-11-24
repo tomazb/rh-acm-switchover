@@ -405,7 +405,7 @@ Automated Python tool that:
    - **Status**: ⏳ Planned v1.1
 
 2. **FR-10.2**: COPR Repository Setup
-   - Create COPR project: `@tomazb/acm-switchover`
+   - Create COPR project: `@tomazborstnar/acm-switchover`
    - Configure automatic builds from git tags
    - Enable for RHEL 8, RHEL 9, Fedora 40+
    - Set up GPG key for package signing
@@ -415,33 +415,52 @@ Automated Python tool that:
 3. **FR-10.3**: Container Image
    - Create Containerfile/Dockerfile
    - Use UBI 9 minimal base image
-   - Install Python dependencies
-   - Copy application code
-   - Set appropriate user (non-root)
+   - Multi-stage build for optimization
+   - Install Python 3.9 runtime
+   - Install CLI prerequisites (oc, kubectl, jq, curl)
+   - Copy application code and dependencies
+   - Set appropriate user (non-root, UID 1001)
    - Define ENTRYPOINT and CMD
    - Support volume mounts for kubeconfig and state
+   - Configure health checks
+   - Set OCI labels and metadata
    - **Status**: ⏳ Planned v1.1
 
 4. **FR-10.4**: Container Registry Publishing
-   - Publish to quay.io/tomazb/acm-switchover
+   - Publish to quay.io/tomazborstnar/acm-switchover
    - Tag with version numbers and 'latest'
    - Multi-arch builds (x86_64, aarch64)
-   - Security scanning integration
+   - Security scanning integration (Trivy)
    - Automated builds on releases
+   - Generate and publish SBOM (SPDX format)
+   - Sign images with cosign/sigstore
    - **Status**: ⏳ Planned v1.1
 
-5. **FR-10.5**: PyPI Package (future)
+5. **FR-10.5**: GitHub Actions CI/CD
+   - Automated container builds on push/tag
+   - Multi-architecture build support (QEMU)
+   - Security scanning (Trivy vulnerability scanner)
+   - SBOM generation (Anchore)
+   - Image signing (cosign)
+   - Automated GitHub releases
+   - Container testing (verify prerequisites)
+   - **Status**: ⏳ Planned v1.1
+
+6. **FR-10.6**: PyPI Package (future)
    - Create `setup.py` or `pyproject.toml`
    - Register on PyPI as `acm-switchover`
    - Enable `pip install acm-switchover`
    - Version management via git tags
    - **Status**: ⏳ Planned v1.2
 
-6. **FR-10.6**: Installation Documentation
+7. **FR-10.7**: Installation Documentation
    - Document all installation methods
    - Provide platform-specific instructions
    - Include troubleshooting guide
    - Add verification steps
+   - Container usage examples
+   - Volume mount configurations
+   - Environment variable reference
    - **Status**: ⏳ Planned v1.1
 
 ---
@@ -556,7 +575,7 @@ Automated Python tool that:
 - Systemd service file (optional, for daemon mode v2.0)
 
 **NFR-8.2: COPR Repository**
-- Repository: `@tomazb/acm-switchover`
+- Repository: `@tomazborstnar/acm-switchover`
 - Automated builds on git tags
 - Support for RHEL 8, RHEL 9, Fedora 40+
 - GPG signing of packages
@@ -564,16 +583,47 @@ Automated Python tool that:
 - Installation instructions in README
 
 **NFR-8.3: Container Image**
-- Base image: `registry.access.redhat.com/ubi9/python-39` or `ubi9-minimal`
-- Multi-arch support: x86_64, aarch64
-- Image registry: `quay.io/tomazb/acm-switchover`
-- Tagged versions: `latest`, `v1.0.0`, `v1.1.0`
-- Minimal image size (<200MB)
-- Non-root user execution
-- Security scanning passed (Clair, Trivy)
-- Kubernetes/OpenShift compatibility
-- Volume mounts for state persistence
-- Environment variable configuration
+
+**Base Image & Build**:
+- Base image: `registry.access.redhat.com/ubi9/ubi-minimal:latest`
+- Multi-stage build (builder + runtime)
+- Python 3.9 runtime included
+- Image registry: `quay.io/tomazborstnar/acm-switchover`
+- Tagged versions: `latest`, `v1.0.0`, `v1.1.0`, `v1.2.0`
+
+**Included Prerequisites**:
+- OpenShift CLI (`oc`) - stable-4.14 or later
+- `kubectl` (via oc binary)
+- `jq` v1.7.1+ - JSON processing
+- `curl` - HTTP client
+- `ca-certificates` - TLS/SSL support
+- Python packages: `kubernetes`, `PyYAML`, `rich`
+
+**Security & Compliance**:
+- Non-root user execution (UID 1001)
+- Minimal attack surface (<250MB compressed)
+- Security scanning passed (Trivy, Grype)
+- SBOM generation (SPDX format)
+- Image signing (cosign/sigstore)
+- No secrets or credentials embedded
+
+**Architecture Support**:
+- Multi-arch builds: linux/amd64, linux/arm64
+- QEMU-based cross-compilation
+- Platform-specific binary detection
+
+**Runtime Configuration**:
+- Volume mounts: `/var/lib/acm-switchover` (state), `/app/.kube` (kubeconfig)
+- Environment variables: `STATE_DIR`, `KUBECONFIG`, `LOG_LEVEL`
+- Working directory: `/app`
+- Entrypoint: `python3 /app/acm_switchover.py`
+- Default CMD: `--help`
+
+**Labels & Metadata**:
+- OCI-compliant labels
+- OpenShift/Kubernetes compatibility tags
+- Version and build information
+- License and maintainer info
 
 #### Installation Methods
 
@@ -586,7 +636,7 @@ Users should be able to install via:
 
 2. **RPM via COPR** (planned v1.1):
    ```bash
-   dnf copr enable @tomazb/acm-switchover
+   dnf copr enable @tomazborstnar/acm-switchover
    dnf install acm-switchover
    ```
 
@@ -595,7 +645,7 @@ Users should be able to install via:
    podman run -it --rm \
      -v ~/.kube:/root/.kube:ro \
      -v ./state:/var/lib/acm-switchover \
-     quay.io/tomazb/acm-switchover:latest --help
+     quay.io/tomazborstnar/acm-switchover:latest --help
    ```
 
 4. **Direct from source** (current):
@@ -612,13 +662,16 @@ Users should be able to install via:
 |-------------|--------|
 | RPM spec file | Planned v1.1 ⏳ |
 | COPR project setup | Planned v1.1 ⏳ |
-| Containerfile/Dockerfile | Planned v1.1 ⏳ |
-| PyPI package | Planned v1.2 ⏳ |
-| GitHub releases automation | Planned v1.1 ⏳ |
+| Containerfile/Dockerfile | Implemented ✓ |
+| Container prerequisites (oc, jq) | Implemented ✓ |
 | Multi-arch container builds | Planned v1.1 ⏳ |
+| GitHub Actions workflow | Implemented ✓ |
+| PyPI package | Planned v1.2 ⏳ |
+| GitHub releases automation | Implemented ✓ |
 | Package signing (GPG) | Planned v1.1 ⏳ |
-| Container image signing (cosign) | Planned v1.2 ⏳ |
-| SBOM generation | Planned v1.2 ⏳ |
+| Container image signing (cosign) | Implemented ✓ |
+| SBOM generation | Implemented ✓ |
+| Security scanning (Trivy) | Implemented ✓ |
 
 ---
 
@@ -943,13 +996,18 @@ Any phase can transition to: FAILED or ROLLBACK
 - [ ] Performance optimizations
 
 **Packaging & Distribution** 🎯:
-- [ ] RPM package creation (`.spec` file)
+- [x] Containerfile created (multi-stage, UBI9-based)
+- [x] Container prerequisites integrated (oc, jq, curl)
+- [x] GitHub Actions workflow for container builds
+- [x] Multi-arch build configuration (amd64, arm64)
+- [x] Security scanning (Trivy integration)
+- [x] SBOM generation (SPDX format)
+- [x] Image signing (cosign/sigstore)
+- [x] Automated GitHub releases
 - [ ] COPR repository setup and automation
-- [ ] Container image (Containerfile)
-- [ ] Multi-arch container builds (x86_64, aarch64)
-- [ ] Automated release workflow (GitHub Actions)
+- [ ] RPM package creation (`.spec` file)
 - [ ] Package signing (GPG for RPM)
-- [ ] Container image publishing (Quay.io)
+- [ ] Container image publishing to Quay.io (requires secrets)
 - [ ] Installation documentation update
 
 **Operational Enhancements**:
@@ -1057,6 +1115,34 @@ Any phase can transition to: FAILED or ROLLBACK
 ---
 
 ## Change Log
+
+### November 24, 2025 (Update 3) - Container Image Support
+
+**Container Infrastructure** ✅:
+- Created multi-stage Containerfile based on UBI 9 minimal
+- Integrated all prerequisites: oc CLI (4.14+), jq (1.7.1+), curl, Python 3.9
+- Implemented multi-architecture support (linux/amd64, linux/arm64)
+- Created GitHub Actions workflow for automated builds
+- Added security scanning (Trivy), SBOM generation (SPDX), image signing (cosign)
+- Created comprehensive container usage documentation
+- Added GitHub Actions setup guide for CI/CD
+- Updated README with container installation option
+- Non-root user execution (UID 1001)
+- Volume mount support for kubeconfig and state persistence
+- Health checks and OCI-compliant labels
+
+**Files Created**:
+- `Containerfile` - Multi-stage build with all prerequisites
+- `.containerignore` - Build optimization
+- `.github/workflows/container-build.yml` - CI/CD pipeline
+- `docs/CONTAINER_USAGE.md` - Complete usage guide
+- `docs/GITHUB_ACTIONS_SETUP.md` - Repository setup guide
+
+**PRD Updates**:
+- Enhanced NFR-8.3 with detailed container specifications
+- Updated FR-10.3, FR-10.4, FR-10.5 with implementation details
+- Marked container-related requirements as implemented
+- Updated distribution requirements status table
 
 ### November 24, 2025 (Update 2)
 

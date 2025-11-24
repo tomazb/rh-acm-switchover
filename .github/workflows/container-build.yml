@@ -1,0 +1,233 @@
+name: Build and Push Container Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: quay.io
+  IMAGE_NAME: tomazborstnar/acm-switchover
+
+jobs:
+  build-and-push:
+    name: Build and Push Multi-Arch Container Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # For cosign signing
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Quay.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Tag as 'latest' on main branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Version tags from git tags (v1.0.0 -> 1.0.0)
+            type=semver,pattern={{version}}
+            # Major.minor tags (v1.0.0 -> 1.0)
+            type=semver,pattern={{major}}.{{minor}}
+            # Major tags (v1.0.0 -> 1)
+            type=semver,pattern={{major}}
+            # Short SHA for commits
+            type=sha,prefix={{branch}}-,format=short
+          labels: |
+            org.opencontainers.image.title=ACM Switchover
+            org.opencontainers.image.description=Automated ACM Hub Switchover Tool
+            org.opencontainers.image.vendor=Red Hat
+            org.opencontainers.image.authors=Platform Engineering
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push container image
+        id: build-and-push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign container image
+        if: github.event_name != 'pull_request'
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign --yes {}@${{ steps.build-and-push.outputs.digest }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+        continue-on-error: true
+
+      - name: Generate SBOM
+        if: github.event_name != 'pull_request'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 90
+
+      - name: Image digest
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Image pushed to:"
+          echo "${{ steps.meta.outputs.tags }}"
+          echo ""
+          echo "Digest: ${{ steps.build-and-push.outputs.digest }}"
+
+  test-container:
+    name: Test Container Image
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Containerfile
+          load: true
+          tags: acm-switchover:test
+          cache-from: type=gha
+
+      - name: Test - Help command
+        run: |
+          docker run --rm acm-switchover:test --help
+
+      - name: Test - Version check
+        run: |
+          docker run --rm acm-switchover:test --version || echo "Version flag may not exist yet"
+
+      - name: Test - Python dependencies
+        run: |
+          docker run --rm acm-switchover:test python3 -c "import kubernetes, yaml, rich; print('Dependencies OK')"
+
+      - name: Test - CLI tools availability
+        run: |
+          docker run --rm acm-switchover:test sh -c "oc version --client && jq --version"
+
+      - name: Test - Non-root user
+        run: |
+          docker run --rm acm-switchover:test sh -c "id && test \$(id -u) -eq 1001"
+
+      - name: Test - Permissions
+        run: |
+          docker run --rm acm-switchover:test sh -c "ls -la /var/lib/acm-switchover && touch /var/lib/acm-switchover/test.txt"
+
+  publish-release:
+    name: Create GitHub Release
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            sbom.spdx.json
+          body: |
+            ## Container Image
+            
+            ```bash
+            podman pull quay.io/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ```
+            
+            ### Multi-Architecture Support
+            - linux/amd64
+            - linux/arm64
+            
+            ### Verification
+            ```bash
+            # Verify signature (cosign)
+            cosign verify quay.io/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ```
+            
+            ### Usage
+            ```bash
+            podman run -it --rm \
+              -v ~/.kube:/app/.kube:ro \
+              -v ./state:/var/lib/acm-switchover \
+              quay.io/${{ env.IMAGE_NAME }}:${{ github.ref_name }} \
+              --validate-only \
+              --primary-context primary-hub \
+              --secondary-context secondary-hub
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

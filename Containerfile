@@ -1,0 +1,122 @@
+# Multi-stage build for ACM Switchover Automation
+# Based on Red Hat Universal Base Image 9
+
+# Stage 1: Build stage with full tooling
+FROM registry.access.redhat.com/ubi9/python-39:latest AS builder
+
+USER root
+
+# Install build dependencies
+RUN dnf install -y \
+    gcc \
+    python39-devel \
+    && dnf clean all
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt /tmp/
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Stage 2: Runtime stage with minimal footprint
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+LABEL name="acm-switchover" \
+      vendor="Red Hat" \
+      version="1.0.0" \
+      release="1" \
+      summary="ACM Hub Switchover Automation Tool" \
+      description="Automated, idempotent tool for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster." \
+      maintainer="Platform Engineering" \
+      io.k8s.description="ACM Hub Switchover Automation with comprehensive validation and rollback capabilities" \
+      io.k8s.display-name="ACM Switchover" \
+      io.openshift.tags="acm,openshift,kubernetes,backup,disaster-recovery"
+
+# Define versions
+ARG OC_VERSION=4.14
+ARG JQ_VERSION=1.7.1
+ARG PYTHON_VERSION=3.9
+
+USER root
+
+# Install required packages
+RUN microdnf install -y \
+    python3.9 \
+    python3.9-pip \
+    python3.9-setuptools \
+    tar \
+    gzip \
+    curl \
+    ca-certificates \
+    && microdnf clean all
+
+# Install jq for JSON processing
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then JQ_ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then JQ_ARCH="arm64"; \
+    else JQ_ARCH="$ARCH"; fi && \
+    curl -sL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${JQ_ARCH}" -o /usr/local/bin/jq && \
+    chmod +x /usr/local/bin/jq
+
+# Install OpenShift CLI (oc)
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then OC_ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then OC_ARCH="arm64"; \
+    else OC_ARCH="$ARCH"; fi && \
+    curl -sL "https://mirror.openshift.com/pub/openshift-v4/${OC_ARCH}/clients/ocp/stable-${OC_VERSION}/openshift-client-linux.tar.gz" | \
+    tar xvz -C /usr/local/bin oc kubectl && \
+    chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
+
+# Copy Python packages from builder
+COPY --from=builder /opt/app-root/lib/python3.9/site-packages /usr/lib/python3.9/site-packages
+
+# Create application user and directories
+RUN useradd -r -u 1001 -g 0 -d /app -s /sbin/nologin \
+    -c "ACM Switchover User" acm-switchover && \
+    mkdir -p /app /var/lib/acm-switchover /etc/acm-switchover && \
+    chown -R 1001:0 /app /var/lib/acm-switchover /etc/acm-switchover && \
+    chmod -R g=u /app /var/lib/acm-switchover /etc/acm-switchover
+
+# Set working directory
+WORKDIR /app
+
+# Copy application code
+COPY --chown=1001:0 acm_switchover.py /app/
+COPY --chown=1001:0 lib/ /app/lib/
+COPY --chown=1001:0 modules/ /app/modules/
+COPY --chown=1001:0 scripts/ /app/scripts/
+COPY --chown=1001:0 requirements.txt /app/
+COPY --chown=1001:0 LICENSE /app/
+COPY --chown=1001:0 README.md /app/
+
+# Make scripts executable
+RUN chmod +x /app/acm_switchover.py \
+    /app/scripts/*.sh
+
+# Switch to non-root user
+USER 1001
+
+# Set environment variables
+ENV PATH="/app:/app/scripts:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=UTF-8 \
+    STATE_DIR=/var/lib/acm-switchover \
+    HOME=/app
+
+# Create state directory structure
+RUN mkdir -p ${STATE_DIR}/.state
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD python3 -c "import sys; sys.exit(0)" || exit 1
+
+# Default entrypoint
+ENTRYPOINT ["python3", "/app/acm_switchover.py"]
+
+# Default command (show help)
+CMD ["--help"]
+
+# Volume mounts for kubeconfig and state
+VOLUME ["/var/lib/acm-switchover", "/app/.kube"]
+
+# Expose metadata
+#EXPOSE 8080/tcp

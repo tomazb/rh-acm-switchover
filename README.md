@@ -12,12 +12,14 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - ✅ **Validate-only mode** - Run all validations without execution
 - ✅ **State tracking** - JSON state file for resume capability
 - ✅ **Two methods supported** - Continuous passive restore (Method 1) or one-time full restore (Method 2)
+- ✅ **Container image** - Ready-to-use image with all prerequisites included
 
 ## Documentation
 
 - **[ACM Switchover Runbook](docs/ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational procedures
 - **[Quick Reference](docs/QUICKREF.md)** - Command cheat sheet and common tasks
 - **[Detailed Usage Guide](docs/USAGE.md)** - Complete examples and scenarios
+- **[Container Usage Guide](docs/CONTAINER_USAGE.md)** - Container-based deployment and usage
 - **[Installation Guide](docs/INSTALL.md)** - Detailed installation instructions
 - **[Architecture](docs/ARCHITECTURE.md)** - Design and implementation details
 - **[Testing Guide](docs/TESTING.md)** - How to run tests and CI/CD
@@ -42,7 +44,28 @@ See [scripts/README.md](scripts/README.md) for detailed usage and workflow diagr
 - OADP operator installed on both hubs
 - Network access to both Kubernetes clusters
 
+**OR** use the container image with all prerequisites included (recommended).
+
 ## Installation
+
+### Option 1: Container Image (Recommended)
+
+```bash
+# Pull the latest image
+podman pull quay.io/tomazborstnar/acm-switchover:latest
+
+# Run validation
+podman run -it --rm \
+  -v ~/.kube:/app/.kube:ro \
+  quay.io/tomazborstnar/acm-switchover:latest \
+  --validate-only \
+  --primary-context primary-hub \
+  --secondary-context secondary-hub
+```
+
+See **[Container Usage Guide](docs/CONTAINER_USAGE.md)** for complete examples.
+
+### Option 2: From Source
 
 ```bash
 # Clone the repository
