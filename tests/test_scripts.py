@@ -6,6 +6,7 @@ Tests argument parsing, help output, and basic error handling for:
 
 These tests run quickly without requiring cluster access.
 """
+
 import os
 import subprocess
 from pathlib import Path
@@ -28,18 +29,18 @@ def run_script(script_name: str, *args: str, env=None):
     script_path = SCRIPTS_DIR / script_name
     assert script_path.exists(), f"Script not found: {script_path}"
     cmd = ["bash", str(script_path), *args]
-    
+
     use_env = os.environ.copy()
     if env:
         use_env.update(env)
-    
+
     proc = subprocess.run(
-        cmd, 
-        stdout=subprocess.PIPE, 
-        stderr=subprocess.STDOUT, 
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
         env=use_env,
-        timeout=5  # Prevent hanging
+        timeout=5,  # Prevent hanging
     )
     output = strip_ansi(proc.stdout)
     return proc.returncode, output
@@ -49,10 +50,17 @@ def run_script(script_name: str, *args: str, env=None):
 # Argument Validation Tests
 # ============================================================================
 
-@pytest.mark.parametrize("script,expected_args", [
-    ("preflight-check.sh", ["--primary-context", "--secondary-context", "--method"]),
-    ("postflight-check.sh", ["--new-hub-context", "--old-hub-context"]),
-])
+
+@pytest.mark.parametrize(
+    "script,expected_args",
+    [
+        (
+            "preflight-check.sh",
+            ["--primary-context", "--secondary-context", "--method"],
+        ),
+        ("postflight-check.sh", ["--new-hub-context", "--old-hub-context"]),
+    ],
+)
 def test_help_output(script, expected_args):
     """Test --help output for both scripts."""
     code, out = run_script(script, "--help")
@@ -62,11 +70,14 @@ def test_help_output(script, expected_args):
         assert arg in out, f"Missing {arg} in help text"
 
 
-@pytest.mark.parametrize("args", [
-    ([]),  # No args
-    (["--primary-context", "alpha"]),  # Only primary
-    (["--secondary-context", "beta"]),  # Only secondary
-])
+@pytest.mark.parametrize(
+    "args",
+    [
+        ([]),  # No args
+        (["--primary-context", "alpha"]),  # Only primary
+        (["--secondary-context", "beta"]),  # Only secondary
+    ],
+)
 def test_preflight_missing_args(args):
     """Test preflight error handling for missing required args."""
     code, out = run_script("preflight-check.sh", *args)
@@ -81,10 +92,13 @@ def test_postflight_missing_new_hub_context():
     assert "--new-hub-context" in out or "required" in out.lower()
 
 
-@pytest.mark.parametrize("script,bad_option", [
-    ("preflight-check.sh", "--invalid-option"),
-    ("postflight-check.sh", "--bad-flag"),
-])
+@pytest.mark.parametrize(
+    "script,bad_option",
+    [
+        ("preflight-check.sh", "--invalid-option"),
+        ("postflight-check.sh", "--bad-flag"),
+    ],
+)
 def test_unknown_option(script, bad_option):
     """Test that unknown options are rejected."""
     code, out = run_script(script, bad_option)
@@ -96,9 +110,12 @@ def test_preflight_invalid_method():
     """Test preflight with valid args runs checks (will fail without real cluster but args parse)."""
     code, out = run_script(
         "preflight-check.sh",
-        "--primary-context", "fake-primary",
-        "--secondary-context", "fake-secondary",
-        "--method", "passive"
+        "--primary-context",
+        "fake-primary",
+        "--secondary-context",
+        "fake-secondary",
+        "--method",
+        "passive",
     )
     # Without oc available, it will fail to find the command (127)
     # With oc available, it will fail validation (1)
@@ -113,8 +130,10 @@ def test_postflight_with_optional_old_hub():
     """Test postflight with optional old-hub-context (will fail on cluster access but args parse)."""
     code, out = run_script(
         "postflight-check.sh",
-        "--new-hub-context", "fake-new",
-        "--old-hub-context", "fake-old"
+        "--new-hub-context",
+        "fake-new",
+        "--old-hub-context",
+        "fake-old",
     )
     # Args should parse, failure will be validation (exit 1) or command not found (exit 127)
     assert code in (0, 1, 127), f"Expected 0/1/127, got {code}"
@@ -127,8 +146,10 @@ def test_preflight_output_format():
     """Test that preflight produces well-formatted output with sections."""
     code, out = run_script(
         "preflight-check.sh",
-        "--primary-context", "test-primary",
-        "--secondary-context", "test-secondary",
+        "--primary-context",
+        "test-primary",
+        "--secondary-context",
+        "test-secondary",
     )
     # Should show formatted header even if validation fails
     assert "ACM Switchover Pre-flight Validation" in out
@@ -142,7 +163,8 @@ def test_postflight_output_format():
     """Test that postflight produces well-formatted output with sections."""
     code, out = run_script(
         "postflight-check.sh",
-        "--new-hub-context", "test-new",
+        "--new-hub-context",
+        "test-new",
     )
     # Should show formatted header even if validation fails
     assert "ACM Switchover Post-flight Verification" in out or "New Hub:" in out

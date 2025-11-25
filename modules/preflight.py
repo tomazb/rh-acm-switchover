@@ -22,10 +22,11 @@ logger = logging.getLogger("acm_switchover")
 
 class ValidationError(Exception):
     """Validation check failed.
-    
+
     Raised when a critical pre-flight validation check fails,
     indicating that the switchover should not proceed.
     """
+
     pass
 
 

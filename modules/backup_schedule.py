@@ -12,6 +12,7 @@ from lib.utils import StateManager, is_acm_version_ge
 
 logger = logging.getLogger("acm_switchover")
 
+
 class BackupScheduleManager:
     """Handles enabling or restoring BackupSchedules on hubs."""
 
@@ -105,5 +106,11 @@ class BackupScheduleManager:
         if not metadata:
             return
 
-        for key in ("uid", "resourceVersion", "creationTimestamp", "generation", "managedFields"):
+        for key in (
+            "uid",
+            "resourceVersion",
+            "creationTimestamp",
+            "generation",
+            "managedFields",
+        ):
             metadata.pop(key, None)

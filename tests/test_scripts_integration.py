@@ -7,6 +7,7 @@ Test categories:
 - Success paths: All validation checks pass
 - Failure scenarios: Version mismatches, backups in progress, missing resources
 """
+
 import os
 import subprocess
 from pathlib import Path
@@ -31,18 +32,18 @@ def run_script(script_name: str, *args: str, env=None):
     script_path = SCRIPTS_DIR / script_name
     assert script_path.exists(), f"Script not found: {script_path}"
     cmd = ["bash", str(script_path), *args]
-    
+
     use_env = os.environ.copy()
     if env:
         use_env.update(env)
-    
+
     proc = subprocess.run(
-        cmd, 
-        stdout=subprocess.PIPE, 
-        stderr=subprocess.STDOUT, 
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
         env=use_env,
-        timeout=10
+        timeout=10,
     )
     output = strip_ansi(proc.stdout)
     return proc.returncode, output
@@ -434,16 +435,21 @@ def test_preflight_success_passive_method(mock_oc_success):
     """Test preflight validation success with passive method."""
     code, out = run_script(
         "preflight-check.sh",
-        "--primary-context", "primary-ok",
-        "--secondary-context", "secondary-ok",
-        "--method", "passive",
+        "--primary-context",
+        "primary-ok",
+        "--secondary-context",
+        "secondary-ok",
+        "--method",
+        "passive",
         env=mock_oc_success,
     )
-    
+
     assert code == 0, f"Expected exit 0, got {code}. Output:\n{out}"
     assert "ALL CRITICAL CHECKS PASSED" in out
     assert "Failed:          0" in out
-    assert "Passive sync" in out.lower() or "Method 1" in out  # Should check passive sync
+    assert (
+        "Passive sync" in out.lower() or "Method 1" in out
+    )  # Should check passive sync
     assert "Observability namespace exists" in out
     assert "MultiClusterObservability CR found" in out
     assert "'thanos-object-storage' secret exists" in out
@@ -454,12 +460,15 @@ def test_preflight_success_full_method(mock_oc_success):
     """Test preflight validation success with full method."""
     code, out = run_script(
         "preflight-check.sh",
-        "--primary-context", "primary-ok",
-        "--secondary-context", "secondary-ok",
-        "--method", "full",
+        "--primary-context",
+        "primary-ok",
+        "--secondary-context",
+        "secondary-ok",
+        "--method",
+        "full",
         env=mock_oc_success,
     )
-    
+
     assert code == 0, f"Expected exit 0, got {code}. Output:\n{out}"
     assert "ALL CRITICAL CHECKS PASSED" in out
     assert "Method 2" in out
@@ -470,24 +479,28 @@ def test_postflight_success(mock_oc_success):
     """Test postflight verification success."""
     code, out = run_script(
         "postflight-check.sh",
-        "--new-hub-context", "new-hub",
+        "--new-hub-context",
+        "new-hub",
         env=mock_oc_success,
     )
-    
+
     # Postflight may have warnings (like Joined count) but should show success
     # Exit code 0 = perfect, exit code 1 with warnings but no failures = acceptable
-    assert code in (0, 1), f"Expected success (0) or warnings (1), got {code}. Output:\n{out}"
-    
+    assert code in (
+        0,
+        1,
+    ), f"Expected success (0) or warnings (1), got {code}. Output:\n{out}"
+
     # Must have found clusters and show verification passed or be close to passing
     assert "2 managed cluster(s)" in out
     assert "Failed:          0" in out  # No critical failures
-    
+
     # Observability checks
     assert "Observability namespace exists" in out
     assert "MultiClusterObservability CR is Ready" in out
     assert "observability-grafana: 1 pod(s) running" in out
     assert "Grafana route accessible" in out
-    
+
     # Either fully passed or had only warnings
     if code == 0:
         assert "SWITCHOVER VERIFICATION PASSED" in out
@@ -507,12 +520,15 @@ def test_preflight_version_mismatch_fails(mock_oc_version_mismatch, method):
     """Test that version mismatch between hubs causes failure."""
     code, out = run_script(
         "preflight-check.sh",
-        "--primary-context", "primary-ok",
-        "--secondary-context", "secondary-ok",
-        "--method", method,
+        "--primary-context",
+        "primary-ok",
+        "--secondary-context",
+        "secondary-ok",
+        "--method",
+        method,
         env=mock_oc_version_mismatch,
     )
-    
+
     assert code == 1, f"Expected exit 1 (failure), got {code}"
     assert "VALIDATION FAILED" in out
     assert "version mismatch" in out.lower() or "2.11.0" in out
@@ -523,12 +539,15 @@ def test_preflight_backup_in_progress_fails(mock_oc_backup_in_progress):
     """Test that backup in progress causes validation failure."""
     code, out = run_script(
         "preflight-check.sh",
-        "--primary-context", "primary-ok",
-        "--secondary-context", "secondary-ok",
-        "--method", "passive",
+        "--primary-context",
+        "primary-ok",
+        "--secondary-context",
+        "secondary-ok",
+        "--method",
+        "passive",
         env=mock_oc_backup_in_progress,
     )
-    
+
     assert code == 1, f"Expected exit 1 (failure), got {code}"
     assert "VALIDATION FAILED" in out
     assert "in progress" in out.lower() or "InProgress" in out
@@ -541,11 +560,14 @@ def test_preflight_missing_namespace_fails():
     # This just confirms that the failure happens, not from arg parsing
     code, out = run_script(
         "preflight-check.sh",
-        "--primary-context", "nonexistent-primary",
-        "--secondary-context", "nonexistent-secondary",
-        "--method", "passive",
+        "--primary-context",
+        "nonexistent-primary",
+        "--secondary-context",
+        "nonexistent-secondary",
+        "--method",
+        "passive",
     )
-    
+
     # Will fail - either from missing oc (127) or validation (1)
     assert code != 0, f"Expected failure, got success (exit 0)"
     assert code != 2, f"Expected validation/runtime failure, not arg error (exit 2)"
@@ -557,9 +579,10 @@ def test_postflight_missing_restore_fails():
     # Use real env - will fail on missing context
     code, out = run_script(
         "postflight-check.sh",
-        "--new-hub-context", "nonexistent-hub",
+        "--new-hub-context",
+        "nonexistent-hub",
     )
-    
+
     # Will fail - either from validation (1) or command not found (127)
     assert code != 0, f"Expected failure, got success (exit 0)"
     assert code != 2, f"Expected validation/runtime failure, not arg error (exit 2)"

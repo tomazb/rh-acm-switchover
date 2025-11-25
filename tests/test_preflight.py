@@ -64,29 +64,31 @@ class TestValidationReporter:
         reporter.add_result("check1", True, "pass")
         reporter.add_result("check2", False, "fail", critical=True)
         reporter.add_result("check3", True, "pass")
-        
+
         assert len(reporter.results) == 3
         assert len(reporter.critical_failures()) == 1
 
-    @patch('modules.preflight_validators.logger')
+    @patch("modules.preflight_validators.logger")
     def test_print_summary_all_passed(self, mock_logger, reporter):
         """Test summary when all checks pass."""
         reporter.add_result("check1", True, "ok", critical=True)
         reporter.add_result("check2", True, "ok", critical=True)
-        
-        reporter.print_summary()
-        
-        # Verify info log calls
-        assert any("2/2 checks passed" in str(call) for call in mock_logger.info.call_args_list)
 
-    @patch('modules.preflight_validators.logger')
+        reporter.print_summary()
+
+        # Verify info log calls
+        assert any(
+            "2/2 checks passed" in str(call) for call in mock_logger.info.call_args_list
+        )
+
+    @patch("modules.preflight_validators.logger")
     def test_print_summary_with_failures(self, mock_logger, reporter):
         """Test summary when there are critical failures."""
         reporter.add_result("check1", True, "ok", critical=True)
         reporter.add_result("check2", False, "failed", critical=True)
-        
+
         reporter.print_summary()
-        
+
         # Verify error log calls for failures
         assert mock_logger.error.called
 
@@ -101,10 +103,10 @@ class TestNamespaceValidator:
         secondary = Mock()
         primary.namespace_exists.return_value = True
         secondary.namespace_exists.return_value = True
-        
+
         validator = NamespaceValidator(reporter)
         validator.run(primary, secondary)
-        
+
         # Should have results for both namespaces on both hubs
         assert len(reporter.results) == 4  # 2 namespaces × 2 hubs
         assert all(r["passed"] for r in reporter.results)
@@ -115,10 +117,10 @@ class TestNamespaceValidator:
         secondary = Mock()
         primary.namespace_exists.return_value = False
         secondary.namespace_exists.return_value = True
-        
+
         validator = NamespaceValidator(reporter)
         validator.run(primary, secondary)
-        
+
         # Should have failures for primary hub
         failures = [r for r in reporter.results if not r["passed"]]
         assert len(failures) == 2  # 2 namespaces missing on primary
@@ -130,10 +132,10 @@ class TestNamespaceValidator:
         secondary = Mock()
         primary.namespace_exists.return_value = True
         secondary.namespace_exists.return_value = False
-        
+
         validator = NamespaceValidator(reporter)
         validator.run(primary, secondary)
-        
+
         # Should have failures for secondary hub
         failures = [r for r in reporter.results if not r["passed"]]
         assert len(failures) == 2  # 2 namespaces missing on secondary
@@ -145,10 +147,10 @@ class TestNamespaceValidator:
         secondary = Mock()
         primary.namespace_exists.return_value = True
         secondary.namespace_exists.return_value = True
-        
+
         validator = NamespaceValidator(reporter)
         validator.run(primary, secondary)
-        
+
         # Verify ACM and BACKUP namespaces are checked
         check_names = [r["check"] for r in reporter.results]
         assert any(ACM_NAMESPACE in check for check in check_names)

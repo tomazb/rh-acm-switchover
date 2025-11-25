@@ -11,12 +11,12 @@ from .primary_prep import PrimaryPreparation
 from .rollback import Rollback
 
 __all__ = [
-    'PreflightValidator',
-    'ValidationError',
-    'PrimaryPreparation',
-    'SecondaryActivation',
-    'PostActivationVerification',
-    'Finalization',
-    'Rollback',
-    'Decommission'
+    "PreflightValidator",
+    "ValidationError",
+    "PrimaryPreparation",
+    "SecondaryActivation",
+    "PostActivationVerification",
+    "Finalization",
+    "Rollback",
+    "Decommission",
 ]

@@ -2,7 +2,7 @@
 """
 ACM Hub Switchover Automation Script
 
-Automates the switchover process from a primary Red Hat Advanced Cluster 
+Automates the switchover process from a primary Red Hat Advanced Cluster
 Management (ACM) hub to a secondary hub cluster.
 
 Features:
@@ -36,7 +36,7 @@ from modules import (
     PostActivationVerification,
     Finalization,
     Rollback,
-    Decommission
+    Decommission,
 )
 
 PhaseHandler = Callable[
@@ -48,7 +48,7 @@ PhaseHandler = Callable[
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='ACM Hub Switchover Automation',
+        description="ACM Hub Switchover Automation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -69,89 +69,83 @@ Examples:
   
   # Decommission old hub
   %(prog)s --decommission --primary-context old-hub
-        """
+        """,
     )
-    
+
     # Context arguments
     parser.add_argument(
-        '--primary-context',
-        required=True,
-        help='Kubernetes context for primary hub'
+        "--primary-context", required=True, help="Kubernetes context for primary hub"
     )
     parser.add_argument(
-        '--secondary-context',
-        help='Kubernetes context for secondary hub (required for switchover/rollback)'
+        "--secondary-context",
+        help="Kubernetes context for secondary hub (required for switchover/rollback)",
     )
-    
+
     # Operation mode
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
-        '--validate-only',
-        action='store_true',
-        help='Run validation checks only, make no changes'
+        "--validate-only",
+        action="store_true",
+        help="Run validation checks only, make no changes",
     )
     mode_group.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='Show planned actions without executing them'
+        "--dry-run",
+        action="store_true",
+        help="Show planned actions without executing them",
     )
     mode_group.add_argument(
-        '--rollback',
-        action='store_true',
-        help='Rollback to primary hub'
+        "--rollback", action="store_true", help="Rollback to primary hub"
     )
     mode_group.add_argument(
-        '--decommission',
-        action='store_true',
-        help='Decommission old hub (interactive)'
+        "--decommission", action="store_true", help="Decommission old hub (interactive)"
     )
-    
+
     # Switchover options
     parser.add_argument(
-        '--method',
-        choices=['passive', 'full'],
-        default='passive',
-        help='Switchover method: passive (continuous sync) or full (one-time restore)'
+        "--method",
+        choices=["passive", "full"],
+        default="passive",
+        help="Switchover method: passive (continuous sync) or full (one-time restore)",
     )
-    
+
     # State management
     parser.add_argument(
-        '--state-file',
-        default='.state/switchover-state.json',
-        help='Path to state file for idempotent execution'
+        "--state-file",
+        default=".state/switchover-state.json",
+        help="Path to state file for idempotent execution",
     )
     parser.add_argument(
-        '--reset-state',
-        action='store_true',
-        help='Reset state file and start fresh (use with caution)'
+        "--reset-state",
+        action="store_true",
+        help="Reset state file and start fresh (use with caution)",
     )
-    
+
     # Optional features
     parser.add_argument(
-        '--skip-observability-checks',
-        action='store_true',
-        help='Skip Observability-related steps even if detected'
+        "--skip-observability-checks",
+        action="store_true",
+        help="Skip Observability-related steps even if detected",
     )
     parser.add_argument(
-        '--non-interactive',
-        action='store_true',
-        help='Non-interactive mode for decommission (dangerous)'
+        "--non-interactive",
+        action="store_true",
+        help="Non-interactive mode for decommission (dangerous)",
     )
-    
+
     # Logging
     parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose logging'
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
-    
+
     return parser.parse_args()
 
 
 def validate_args(args):
     """Validate argument combinations."""
     if not args.decommission and not args.secondary_context:
-        print("Error: --secondary-context is required for switchover/rollback operations")
+        print(
+            "Error: --secondary-context is required for switchover/rollback operations"
+        )
         sys.exit(1)
 
 
@@ -354,27 +348,28 @@ def run_rollback(
     logger.warning("\n" + "=" * 60)
     logger.warning("ROLLBACK MODE")
     logger.warning("=" * 60)
-    
+
     if not confirm_action(
-        "\nAre you sure you want to rollback to the primary hub?",
-        default=False
+        "\nAre you sure you want to rollback to the primary hub?", default=False
     ):
         logger.info("Rollback cancelled by user")
         return False
-    
+
     state.set_phase(Phase.ROLLBACK)
-    
+
     rollback = Rollback(
         primary,
         secondary,
         state,
         state.get_config("primary_version", "unknown"),
-        state.get_config("has_observability", False)
+        state.get_config("has_observability", False),
     )
-    
+
     if rollback.rollback():
         logger.info("\n✓ Rollback completed successfully!")
-        logger.info("Allow 5-10 minutes for ManagedClusters to reconnect to primary hub")
+        logger.info(
+            "Allow 5-10 minutes for ManagedClusters to reconnect to primary hub"
+        )
         state.reset()
         return True
     else:
@@ -389,10 +384,7 @@ def run_decommission(
     logger: logging.Logger,
 ):
     """Execute decommission of old hub."""
-    decom = Decommission(
-        primary,
-        state.get_config("has_observability", False)
-    )
+    decom = Decommission(primary, state.get_config("has_observability", False))
 
     logger.info("Starting decommission workflow")
 

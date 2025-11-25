@@ -15,16 +15,19 @@ from lib.kube_client import KubeClient
 @pytest.fixture
 def mock_k8s_apis():
     """Mock Kubernetes API clients."""
-    with patch('lib.kube_client.config.load_kube_config') as mock_config, \
-         patch('lib.kube_client.client.CustomObjectsApi') as mock_custom_cls, \
-         patch('lib.kube_client.client.CoreV1Api') as mock_core_cls, \
-         patch('lib.kube_client.client.AppsV1Api') as mock_apps_cls:
-        
+    with patch("lib.kube_client.config.load_kube_config") as mock_config, patch(
+        "lib.kube_client.client.CustomObjectsApi"
+    ) as mock_custom_cls, patch(
+        "lib.kube_client.client.CoreV1Api"
+    ) as mock_core_cls, patch(
+        "lib.kube_client.client.AppsV1Api"
+    ) as mock_apps_cls:
+
         yield {
-            'config': mock_config,
-            'custom_api': mock_custom_cls.return_value,
-            'core_api': mock_core_cls.return_value,
-            'apps_api': mock_apps_cls.return_value,
+            "config": mock_config,
+            "custom_api": mock_custom_cls.return_value,
+            "core_api": mock_core_cls.return_value,
+            "apps_api": mock_apps_cls.return_value,
         }
 
 
@@ -46,7 +49,7 @@ class TestKubeClient:
 
     def test_get_custom_resource(self, kube_client, mock_k8s_apis):
         """Test getting a custom resource successfully."""
-        mock_k8s_apis['custom_api'].get_namespaced_custom_object.return_value = {
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = {
             "metadata": {"name": "test"}
         }
 
@@ -59,7 +62,9 @@ class TestKubeClient:
         )
 
         assert result is not None
-        mock_k8s_apis['custom_api'].get_namespaced_custom_object.assert_called_once_with(
+        mock_k8s_apis[
+            "custom_api"
+        ].get_namespaced_custom_object.assert_called_once_with(
             group="operator.open-cluster-management.io",
             version="v1",
             namespace="test-ns",
@@ -69,7 +74,9 @@ class TestKubeClient:
 
     def test_get_custom_resource_not_found(self, kube_client, mock_k8s_apis):
         """Test getting a non-existent custom resource returns None."""
-        mock_k8s_apis['custom_api'].get_namespaced_custom_object.side_effect = ApiException(status=404)
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.side_effect = (
+            ApiException(status=404)
+        )
 
         result = kube_client.get_custom_resource(
             "operator.open-cluster-management.io",
@@ -83,7 +90,7 @@ class TestKubeClient:
 
     def test_list_custom_resources(self, kube_client, mock_k8s_apis):
         """Test listing custom resources."""
-        mock_k8s_apis['custom_api'].list_namespaced_custom_object.return_value = {
+        mock_k8s_apis["custom_api"].list_namespaced_custom_object.return_value = {
             "items": [
                 {"metadata": {"name": "cluster1"}},
                 {"metadata": {"name": "cluster2"}},
@@ -98,7 +105,7 @@ class TestKubeClient:
         )
 
         assert len(result) == 2
-        mock_k8s_apis['custom_api'].list_namespaced_custom_object.assert_called_once()
+        mock_k8s_apis["custom_api"].list_namespaced_custom_object.assert_called_once()
 
     def test_patch_custom_resource_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test dry-run mode doesn't make actual API calls."""
@@ -112,11 +119,13 @@ class TestKubeClient:
         )
 
         assert result == {}
-        mock_k8s_apis['custom_api'].patch_namespaced_custom_object.assert_not_called()
+        mock_k8s_apis["custom_api"].patch_namespaced_custom_object.assert_not_called()
 
     def test_patch_custom_resource_normal(self, kube_client, mock_k8s_apis):
         """Test patching a custom resource in normal mode."""
-        mock_k8s_apis['custom_api'].patch_namespaced_custom_object.return_value = {"result": True}
+        mock_k8s_apis["custom_api"].patch_namespaced_custom_object.return_value = {
+            "result": True
+        }
 
         result = kube_client.patch_custom_resource(
             "cluster.open-cluster-management.io",
@@ -128,7 +137,7 @@ class TestKubeClient:
         )
 
         assert result
-        mock_k8s_apis['custom_api'].patch_namespaced_custom_object.assert_called_once()
+        mock_k8s_apis["custom_api"].patch_namespaced_custom_object.assert_called_once()
 
     def test_create_custom_resource_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test creating a custom resource in dry-run mode."""
@@ -147,7 +156,7 @@ class TestKubeClient:
         )
 
         assert result == resource_body
-        mock_k8s_apis['custom_api'].create_namespaced_custom_object.assert_not_called()
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.assert_not_called()
 
     def test_delete_custom_resource_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test deleting a custom resource in dry-run mode."""
@@ -160,7 +169,7 @@ class TestKubeClient:
         )
 
         assert result is True
-        mock_k8s_apis['custom_api'].delete_namespaced_custom_object.assert_not_called()
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.assert_not_called()
 
     def test_scale_deployment_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test scaling deployment in dry-run mode."""
@@ -171,13 +180,15 @@ class TestKubeClient:
         )
 
         assert result == {}
-        mock_k8s_apis['apps_api'].patch_namespaced_deployment_scale.assert_not_called()
+        mock_k8s_apis["apps_api"].patch_namespaced_deployment_scale.assert_not_called()
 
     def test_scale_deployment_normal(self, kube_client, mock_k8s_apis):
         """Test scaling deployment in normal mode."""
         response = MagicMock()
         response.to_dict.return_value = {"status": "scaled"}
-        mock_k8s_apis['apps_api'].patch_namespaced_deployment_scale.return_value = response
+        mock_k8s_apis["apps_api"].patch_namespaced_deployment_scale.return_value = (
+            response
+        )
 
         result = kube_client.scale_deployment(
             namespace="test-ns",
@@ -186,13 +197,15 @@ class TestKubeClient:
         )
 
         assert result == {"status": "scaled"}
-        mock_k8s_apis['apps_api'].patch_namespaced_deployment_scale.assert_called_once()
+        mock_k8s_apis["apps_api"].patch_namespaced_deployment_scale.assert_called_once()
 
     def test_scale_statefulset(self, kube_client, mock_k8s_apis):
         """Test scaling statefulset."""
         response = MagicMock()
         response.to_dict.return_value = {"status": "scaled"}
-        mock_k8s_apis['apps_api'].patch_namespaced_stateful_set_scale.return_value = response
+        mock_k8s_apis["apps_api"].patch_namespaced_stateful_set_scale.return_value = (
+            response
+        )
 
         result = kube_client.scale_statefulset(
             namespace="test-ns",
@@ -201,20 +214,22 @@ class TestKubeClient:
         )
 
         assert result == {"status": "scaled"}
-        mock_k8s_apis['apps_api'].patch_namespaced_stateful_set_scale.assert_called_once()
+        mock_k8s_apis[
+            "apps_api"
+        ].patch_namespaced_stateful_set_scale.assert_called_once()
 
     def test_namespace_exists(self, kube_client, mock_k8s_apis):
         """Test checking if namespace exists."""
-        mock_k8s_apis['core_api'].read_namespace.return_value = MagicMock()
+        mock_k8s_apis["core_api"].read_namespace.return_value = MagicMock()
 
         result = kube_client.namespace_exists("test-ns")
 
         assert result is True
-        mock_k8s_apis['core_api'].read_namespace.assert_called_once_with("test-ns")
+        mock_k8s_apis["core_api"].read_namespace.assert_called_once_with("test-ns")
 
     def test_namespace_not_exists(self, kube_client, mock_k8s_apis):
         """Test checking if namespace doesn't exist."""
-        mock_k8s_apis['core_api'].read_namespace.side_effect = ApiException(status=404)
+        mock_k8s_apis["core_api"].read_namespace.side_effect = ApiException(status=404)
 
         result = kube_client.namespace_exists("test-ns")
 
@@ -226,17 +241,17 @@ class TestKubeClient:
         pod1.to_dict.return_value = {"metadata": {"name": "pod1"}}
         pod2 = MagicMock()
         pod2.to_dict.return_value = {"metadata": {"name": "pod2"}}
-        mock_k8s_apis['core_api'].list_namespaced_pod.return_value.items = [pod1, pod2]
+        mock_k8s_apis["core_api"].list_namespaced_pod.return_value.items = [pod1, pod2]
 
         result = kube_client.get_pods("test-ns", label_selector="app=test")
 
         assert len(result) == 2
-        mock_k8s_apis['core_api'].list_namespaced_pod.assert_called_once_with(
+        mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once_with(
             namespace="test-ns",
             label_selector="app=test",
         )
 
-    @patch('lib.kube_client.time.sleep')
+    @patch("lib.kube_client.time.sleep")
     def test_wait_for_pods_ready(self, mock_sleep, kube_client, mock_k8s_apis):
         """Test waiting for pods to become ready."""
         pod_not_ready = MagicMock()
@@ -250,7 +265,7 @@ class TestKubeClient:
             "status": {"conditions": [{"type": "Ready", "status": "True"}]},
         }
 
-        mock_k8s_apis['core_api'].list_namespaced_pod.side_effect = [
+        mock_k8s_apis["core_api"].list_namespaced_pod.side_effect = [
             MagicMock(items=[pod_not_ready]),
             MagicMock(items=[pod_ready]),
         ]
@@ -258,7 +273,7 @@ class TestKubeClient:
         result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=10)
 
         assert result is True
-        assert mock_k8s_apis['core_api'].list_namespaced_pod.call_count >= 2
+        assert mock_k8s_apis["core_api"].list_namespaced_pod.call_count >= 2
 
     def test_rollout_restart_deployment_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test rollout restart deployment in dry-run mode."""
@@ -268,13 +283,13 @@ class TestKubeClient:
         )
 
         assert result == {}
-        mock_k8s_apis['apps_api'].patch_namespaced_deployment.assert_not_called()
+        mock_k8s_apis["apps_api"].patch_namespaced_deployment.assert_not_called()
 
     def test_rollout_restart_deployment_normal(self, kube_client, mock_k8s_apis):
         """Test rollout restart deployment in normal mode."""
         response = MagicMock()
         response.to_dict.return_value = {"status": "restarted"}
-        mock_k8s_apis['apps_api'].patch_namespaced_deployment.return_value = response
+        mock_k8s_apis["apps_api"].patch_namespaced_deployment.return_value = response
 
         result = kube_client.rollout_restart_deployment(
             namespace="test-ns",
@@ -282,26 +297,26 @@ class TestKubeClient:
         )
 
         assert result == {"status": "restarted"}
-        mock_k8s_apis['apps_api'].patch_namespaced_deployment.assert_called_once()
+        mock_k8s_apis["apps_api"].patch_namespaced_deployment.assert_called_once()
 
 
 @pytest.mark.unit
 class TestKubeClientInitialization:
     """Test cases for KubeClient initialization."""
 
-    @patch('lib.kube_client.config.load_kube_config')
+    @patch("lib.kube_client.config.load_kube_config")
     def test_init_with_context(self, mock_load_config):
         """Test initializing with a specific context."""
         KubeClient(context="test-context")
         mock_load_config.assert_called_once_with(context="test-context")
 
-    @patch('lib.kube_client.config.load_kube_config')
+    @patch("lib.kube_client.config.load_kube_config")
     def test_init_without_context(self, mock_load_config):
         """Test initializing without a context."""
         KubeClient()
         mock_load_config.assert_called_once_with(context=None)
 
-    @patch('lib.kube_client.config.load_kube_config')
+    @patch("lib.kube_client.config.load_kube_config")
     def test_init_dry_run_flag(self, mock_load_config):
         """Test dry-run flag initialization."""
         client_normal = KubeClient(dry_run=False)
