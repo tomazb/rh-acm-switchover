@@ -493,6 +493,8 @@ Automated Python tool that:
 | State consistency | 100% | ✓ |
 | Data loss prevention | 100% | ✓ |
 | Error recovery | > 95% | ✓ |
+| API Retry Logic | 100% | ✓ |
+| Client-Side Timeouts | 100% | ✓ |
 
 ### NFR-3: Usability
 
@@ -515,6 +517,8 @@ Automated Python tool that:
 - Comprehensive inline documentation ✓
 - Type hints in critical functions ✓
 - Consistent coding style ✓
+- Structured logging (JSON) ✓
+- Custom exception hierarchy ✓
 
 ### NFR-5: Security
 
@@ -1127,6 +1131,15 @@ Any phase can transition to: FAILED or ROLLBACK
 ---
 
 ## Change Log
+
+### November 25, 2025 (Update 5) - Reliability Hardening
+
+**Reliability Improvements** ✅:
+- Implemented API retry logic with exponential backoff (tenacity)
+- Enforced client-side timeouts for all Kubernetes API calls
+- Defined custom exception hierarchy (`SwitchoverError`, `FatalError`, etc.)
+- Implemented structured JSON logging support
+- Added comprehensive unit tests for failure scenarios
 
 ### November 25, 2025 (Update 4) - Refactoring & Cleanup
 

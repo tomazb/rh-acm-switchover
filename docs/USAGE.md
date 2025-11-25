@@ -407,17 +407,23 @@ python acm_switchover.py \
 --verbose
 ```
 
-### 4. Maintain State Files
+### 4. Structured Logging
+```bash
+# Use JSON format for log aggregation systems
+--log-format json
+```
+
+### 5. Maintain State Files
 - Keep `.state/` directory in version control (optional)
 - Provides audit trail of switchovers
 - Enables rollback with context
 
-### 5. Plan Maintenance Window
+### 6. Plan Maintenance Window
 - Estimated time: 30-60 minutes
 - Brief managed cluster disconnect (5-10 minutes)
 - Inform stakeholders beforehand
 
-### 6. Verify Post-Switchover
+### 7. Verify Post-Switchover
 ```bash
 # On new secondary hub, check:
 oc get managedclusters
@@ -426,7 +432,7 @@ oc get backup -n open-cluster-management-backup
 # Verify all clusters show AVAILABLE=True
 ```
 
-### 7. Test Rollback Procedure
+### 8. Test Rollback Procedure
 In a test environment, practice rollback before production use.
 
 ## Complete Example: Production Switchover

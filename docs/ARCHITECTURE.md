@@ -25,6 +25,7 @@ rh-acm-switchover/
 ├── lib/                       # Core utilities
 │   ├── __init__.py
 │   ├── constants.py           # Shared constants
+│   ├── exceptions.py          # Custom exception hierarchy
 │   ├── kube_client.py         # Kubernetes API wrapper
 │   ├── utils.py               # State management, logging, helpers
 │   └── waiter.py              # Resource polling and waiting logic
@@ -153,6 +154,7 @@ Handle optional components gracefully:
 - Track current phase and completed steps
 - Store configuration detected during execution
 - Record errors for debugging
+- **Logging**: Configure structured JSON logging or human-readable text logging
 
 **State Structure:**
 ```json
@@ -182,6 +184,8 @@ Handle optional components gracefully:
 - Support dry-run mode (log actions without execution)
 - Handle custom resources (CRDs)
 - Manage deployments, statefulsets, pods
+- **Reliability**: Automatic retries with exponential backoff for transient errors (5xx, 429)
+- **Timeouts**: Enforced client-side timeouts (default 30s) to prevent hanging operations
 
 **Key Methods:**
 - `get_custom_resource()`: Retrieve ACM custom resources
@@ -363,13 +367,21 @@ class KubeClient:
 
 ## Error Handling Strategy
 
+### Exception Hierarchy
+The project uses a custom exception hierarchy defined in `lib/exceptions.py`:
+- `SwitchoverError`: Base class for all application errors
+- `FatalError`: Non-recoverable errors that stop execution immediately
+- `TransientError`: Temporary errors that may be resolved by retrying
+- `ValidationError`: Pre-flight check failures
+- `ConfigurationError`: Missing or invalid configuration
+
 ### Validation Errors
 - Stop immediately if critical validations fail
 - Provide actionable error messages
 - Guide user to fix issues
 
 ### Runtime Errors
-- Catch exceptions at module level
+- Catch specific exceptions (`SwitchoverError`) at module level
 - Record error in state file
 - Log detailed error for debugging
 - Allow resume from last successful step
