@@ -207,6 +207,9 @@ class PostActivationVerification:
             logger.warning("No Observability pods found")
             return
 
+        critical_waiting_reasons = {"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull"}
+        critical_terminated_reasons = {"Error", "OOMKilled"}
+
         running_pods = 0
         ready_pods = 0
         error_pods = []
@@ -214,11 +217,12 @@ class PostActivationVerification:
         for pod in pods:
             pod_name = pod.get("metadata", {}).get("name")
             phase = pod.get("status", {}).get("phase", "unknown")
+            pod_errors = []
 
             if phase == "Running":
                 running_pods += 1
-            elif phase in ("Failed", "CrashLoopBackOff", "Error"):
-                error_pods.append(f"{pod_name} ({phase})")
+            elif phase in ("Failed", "Unknown"):
+                pod_errors.append(f"phase={phase}")
 
             # Check ready condition
             conditions = pod.get("status", {}).get("conditions", [])
@@ -229,6 +233,35 @@ class PostActivationVerification:
                 ):
                     ready_pods += 1
                     break
+
+            # Inspect container states for crash loops or repeated failures
+            container_statuses = pod.get("status", {}).get("containerStatuses", [])
+            for container in container_statuses:
+                container_name = container.get("name", "container")
+                state = container.get("state") or {}
+
+                waiting_state = state.get("waiting")
+                if waiting_state:
+                    reason = waiting_state.get("reason", "waiting")
+                    if reason in critical_waiting_reasons:
+                        pod_errors.append(
+                            f"{container_name} waiting ({reason})"
+                        )
+
+                terminated_state = state.get("terminated")
+                if terminated_state:
+                    reason = terminated_state.get("reason", "terminated")
+                    exit_code = terminated_state.get("exitCode")
+                    if (
+                        reason in critical_terminated_reasons
+                        or (exit_code is not None and exit_code != 0)
+                    ):
+                        pod_errors.append(
+                            f"{container_name} terminated ({reason}, exit={exit_code})"
+                        )
+
+            if pod_errors:
+                error_pods.append(f"{pod_name}: " + "; ".join(pod_errors))
 
         logger.info(
             f"Observability pods: {running_pods}/{len(pods)} running, "

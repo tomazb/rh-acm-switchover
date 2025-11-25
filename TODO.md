@@ -7,7 +7,7 @@
    - Update `ObservabilityDetector` to return both flags.  
    - Ensure post-activation verification only restarts/validates Observability when the secondary hub actually runs it.
 
-3. [ ] **Enhance Observability pod health checks (`modules/post_activation.py`)**  
+3. [x] **Enhance Observability pod health checks (`modules/post_activation.py`)**  
    - Inspect container `waiting`/`terminated` states so CrashLoopBackOff pods are reported instead of being counted as healthy.
 
 4. [ ] **Make bash scripts honor the detected CLI (`scripts/preflight-check.sh`, `scripts/postflight-check.sh`)**  

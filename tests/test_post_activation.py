@@ -244,6 +244,39 @@ class TestPostActivationVerification:
         # Verify get_pods was called
         mock_secondary_client.get_pods.assert_called_once()
 
+    @patch("modules.post_activation.logger")
+    def test_verify_observability_pods_detects_crashloop(
+        self, mock_logger, post_verify_with_obs, mock_secondary_client
+    ):
+        """CrashLoopBackOff pods should be reported explicitly."""
+        mock_secondary_client.get_pods.return_value = [
+            {
+                "metadata": {"name": "obs-pod"},
+                "status": {
+                    "phase": "Running",
+                    "conditions": [{"type": "Ready", "status": "False"}],
+                    "containerStatuses": [
+                        {
+                            "name": "collector",
+                            "state": {
+                                "waiting": {
+                                    "reason": "CrashLoopBackOff",
+                                    "message": "Back-off restarting failed container",
+                                }
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+
+        post_verify_with_obs._verify_observability_pods()
+
+        assert any(
+            "CrashLoopBackOff" in str(call.args[0])
+            for call in mock_logger.warning.call_args_list
+        )
+
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_metrics_collection(
         self, mock_wait, post_verify_with_obs, mock_secondary_client
