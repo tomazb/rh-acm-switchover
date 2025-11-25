@@ -43,13 +43,19 @@ retry_api_call = retry(
 class KubeClient:
     """Wrapper for Kubernetes API client with ACM-specific helpers."""
 
-    def __init__(self, context: Optional[str] = None, dry_run: bool = False) -> None:
+    def __init__(
+        self,
+        context: Optional[str] = None,
+        dry_run: bool = False,
+        request_timeout: int = 30,
+    ) -> None:
         """
         Initialize Kubernetes client for specific context.
 
         Args:
             context: Kubernetes context name
             dry_run: If True, don't make actual changes
+            request_timeout: API request timeout in seconds
         """
         self.context = context
         self.dry_run = dry_run
@@ -57,12 +63,24 @@ class KubeClient:
         # Load config for specific context
         config.load_kube_config(context=context)
 
+        # Configure default timeouts
+        configuration = client.Configuration.get_default_copy()
+        configuration.retries = 3
+        # Connect timeout, Read timeout
+        configuration.assert_hostname = False
+        client.Configuration.set_default(configuration)
+
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
         self.custom_api = client.CustomObjectsApi()
+        
+        # Set timeout on API clients
+        self.core_v1.api_client.configuration.timeout = request_timeout
+        self.apps_v1.api_client.configuration.timeout = request_timeout
+        self.custom_api.api_client.configuration.timeout = request_timeout
 
         logger.info(
-            f"Initialized Kubernetes client for context: {context or 'default'}"
+            f"Initialized Kubernetes client for context: {context or 'default'} (timeout: {request_timeout}s)"
         )
 
     @retry_api_call

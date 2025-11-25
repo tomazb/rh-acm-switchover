@@ -10,7 +10,7 @@ This document tracks the progress of reliability hardening tasks for the ACM Swi
     - Apply decorator to all `KubeClient` methods (`get_`, `list_`, `patch_`, `create_`, `delete_`).
     - Handle `ApiException` (5xx) and `urllib3` connection errors.
 
-- [ ] **2. Client-Side Timeouts** (Est: 1h)
+- [x] **2. Client-Side Timeouts** (Est: 1h)
     - Update `KubeClient.__init__` to accept `request_timeout`.
     - Configure `kubernetes.client.Configuration` with default timeouts (e.g., 30s connect, 60s read).
 
