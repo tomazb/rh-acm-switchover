@@ -448,21 +448,24 @@ podman build \
 ## Best Practices
 
 1. **Always use version tags** in production (not `latest`)
-2. **Mount kubeconfig read-only** for security
-3. **Persist state directory** for resume capability
-4. **Use rootless podman** when possible
-5. **Verify image signatures** before use
-6. **Review SBOM** for security compliance
-7. **Run validation** before actual switchover
-8. **Use dry-run** to preview changes
-9. **Monitor container logs** during execution
-10. **Keep images updated** for security patches
+2. **Mount kubeconfig read-only** (`:ro`) for security
+3. **Use validate-only mode** first to check prerequisites
+4. **Persist state directory** to enable resume capability
+5. **Use non-root user** (default) for better security
+
+## Related Documentation
+
+- **[Container Quick Reference](CONTAINER_QUICKREF.md)** - Cheat sheet for common commands
+- **[GitHub Actions Setup](GITHUB_ACTIONS_SETUP.md)** - Guide for setting up the build pipeline
+- **[Usage Guide](USAGE.md)** - General usage scenarios and examples
+
 
 ## Support
 
 For issues or questions:
-- GitHub Issues: https://github.com/tomazb/rh-acm-switchover/issues
-- Documentation: https://github.com/tomazb/rh-acm-switchover/docs
+
+- GitHub Issues: <https://github.com/tomazb/rh-acm-switchover/issues>
+- Documentation: <https://github.com/tomazb/rh-acm-switchover/docs>
 
 ## Version History
 
