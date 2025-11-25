@@ -28,7 +28,9 @@ class Rollback:
         self.state = state_manager
         self.acm_version = acm_version
         self.has_observability = has_observability
-        self.backup_manager = BackupScheduleManager(primary_client, state_manager, "primary hub")
+        self.backup_manager = BackupScheduleManager(
+            primary_client, state_manager, "primary hub"
+        )
 
     def rollback(self) -> bool:
         """Execute rollback to primary hub."""
@@ -43,7 +45,9 @@ class Rollback:
 
             self._unpause_backup_schedule()
 
-            logger.info("Rollback completed. Waiting for clusters to reconnect to primary...")
+            logger.info(
+                "Rollback completed. Waiting for clusters to reconnect to primary..."
+            )
             logger.info("Allow 5-10 minutes for ManagedClusters to reconnect.")
 
             return True
@@ -72,11 +76,7 @@ class Rollback:
     def _enable_auto_import(self) -> None:
         logger.info("Re-enabling auto-import on ManagedClusters...")
 
-        managed_clusters = self.primary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
-        )
+        managed_clusters = self.primary.list_managed_clusters()
 
         count = 0
         for mc in managed_clusters:
@@ -95,17 +95,13 @@ class Rollback:
                     }
                 }
 
-                self.primary.patch_custom_resource(
-                    group="cluster.open-cluster-management.io",
-                    version="v1",
-                    plural="managedclusters",
-                    name=mc_name,
-                    patch=patch,
-                )
+                self.primary.patch_managed_cluster(name=mc_name, patch=patch)
 
                 count += 1
 
-        logger.info("Removed disable-auto-import annotation from %s ManagedCluster(s)", count)
+        logger.info(
+            "Removed disable-auto-import annotation from %s ManagedCluster(s)", count
+        )
 
     def _restart_thanos_compactor(self) -> None:
         logger.info("Restarting Thanos compactor...")
