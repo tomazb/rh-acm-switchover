@@ -13,6 +13,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
+    retry_if_exception,
     before_sleep_log,
 )
 from urllib3.exceptions import HTTPError
@@ -32,7 +33,7 @@ def is_retryable_error(exception: Exception) -> bool:
 
 # Standard retry decorator for API calls
 retry_api_call = retry(
-    retry=retry_if_exception_type((ApiException, HTTPError)),
+    retry=retry_if_exception(is_retryable_error),
     wait=wait_exponential(multiplier=1, min=1, max=10),
     stop=stop_after_attempt(5),
     before_sleep=before_sleep_log(logger, logging.DEBUG),

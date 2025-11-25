@@ -14,7 +14,7 @@ This document tracks the progress of reliability hardening tasks for the ACM Swi
     - Update `KubeClient.__init__` to accept `request_timeout`.
     - Configure `kubernetes.client.Configuration` with default timeouts (e.g., 30s connect, 60s read).
 
-- [ ] **3. Failure Scenario Testing** (Est: 4h)
+- [x] **3. Failure Scenario Testing** (Est: 4h)
     - Create unit tests mocking API failures (503, timeouts).
     - Verify retry logic behavior (backoff, eventual failure).
     - Ensure `SwitchoverError` is raised appropriately.
