@@ -117,7 +117,7 @@ python acm_switchover.py \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
   --method passive \
-  --state-file .state/switchover-state.json
+  --state-file .state/switchover-<primary>__<secondary>.json
 ```
 
 ### Rollback
@@ -126,7 +126,7 @@ python acm_switchover.py \
 python acm_switchover.py --rollback \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
-  --state-file .state/switchover-state.json
+  --state-file .state/switchover-<primary>__<secondary>.json
 ```
 
 ### Decommission Old Hub
@@ -145,7 +145,7 @@ python acm_switchover.py --decommission \
 | `--method` | Switchover method: `passive` (default) or `full` |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
-| `--state-file` | Path to state file (default: `.state/switchover-state.json`) |
+| `--state-file` | Path to state file (default: `.state/switchover-<primary>__<secondary>.json`) |
 | `--rollback` | Rollback to primary hub |
 | `--decommission` | Decommission old hub (interactive) |
 | `--skip-observability-checks` | Skip Observability-related steps even if detected |

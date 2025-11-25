@@ -331,7 +331,7 @@ Automated Python tool that:
 #### Requirements
 
 1. **FR-8.1**: JSON state file tracking
-   - Store at `.state/switchover-state.json`
+   - Store at `.state/switchover-<primary>__<secondary>.json`
    - Track current phase
    - Record completed steps with timestamps
    - **Status**: ✓ Implemented

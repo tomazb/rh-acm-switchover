@@ -77,7 +77,7 @@ python acm_switchover.py \
 - **Total: ~30-45 minutes**
 
 **State file tracking:**
-The script creates `.state/switchover-state.json` tracking progress:
+The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
 ```json
 {
   "version": "1.0",
@@ -104,7 +104,7 @@ python acm_switchover.py \
 ```
 
 The script will:
-- Load state from `.state/switchover-state.json`
+- Load state from `.state/switchover-<primary>__<secondary>.json`
 - Skip already-completed steps
 - Continue from the last successful step
 
@@ -217,7 +217,7 @@ python acm_switchover.py \
   --rollback \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
-  --state-file .state/switchover-state.json
+  --state-file .state/switchover-<primary>__<secondary>.json
 ```
 
 **What rollback does:**
@@ -359,7 +359,7 @@ Look for specific errors and resolve before re-running.
 ### View Current State
 
 ```bash
-cat .state/switchover-state.json | python -m json.tool
+cat .state/switchover-<primary>__<secondary>.json | python -m json.tool
 ```
 
 ### Reset State (Start Fresh)

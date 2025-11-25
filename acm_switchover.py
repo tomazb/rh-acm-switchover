@@ -17,6 +17,8 @@ Features:
 
 import argparse
 import logging
+import os
+import re
 import sys
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, cast
@@ -111,8 +113,11 @@ Examples:
     # State management
     parser.add_argument(
         "--state-file",
-        default=".state/switchover-state.json",
-        help="Path to state file for idempotent execution",
+        default=None,
+        help=(
+            "Path to state file for idempotent execution "
+            "(defaults to .state/switchover-<primary>__<secondary>.json)"
+        ),
     )
     parser.add_argument(
         "--reset-state",
@@ -418,16 +423,24 @@ def main():
     """Main entry point."""
     args = parse_args()
     validate_args(args)
+    resolved_state_file = _resolve_state_file(
+        args.state_file or DEFAULT_STATE_FILE,
+        args.primary_context,
+        args.secondary_context,
+    )
+    args.state_file = resolved_state_file
 
     logger = setup_logging(args.verbose, args.log_format)
     logger.info("ACM Hub Switchover Automation")
     logger.info(f"Started at: {datetime.utcnow().isoformat()}")
+    logger.info(f"Using state file: {resolved_state_file}")
 
-    state = StateManager(args.state_file)
+    state = StateManager(resolved_state_file)
 
     if args.reset_state:
         logger.warning("Resetting state file...")
         state.reset()
+    state.ensure_contexts(args.primary_context, args.secondary_context)
 
     try:
         primary, secondary = _initialize_clients(args, logger)
@@ -497,3 +510,21 @@ def _execute_operation(
 
 if __name__ == "__main__":
     main()
+DEFAULT_STATE_FILE = ".state/switchover-state.json"
+
+
+def _sanitize_context_identifier(value: str) -> str:
+    """Sanitize context string to be filesystem friendly."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", value)
+
+
+def _resolve_state_file(
+    requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]
+) -> str:
+    """Derive the state file path based on contexts unless user provided one."""
+    if requested_path and requested_path != DEFAULT_STATE_FILE:
+        return requested_path
+
+    secondary_label = secondary_ctx or "none"
+    slug = f"{_sanitize_context_identifier(primary_ctx)}__{_sanitize_context_identifier(secondary_label)}"
+    return os.path.join(".state", f"switchover-{slug}.json")

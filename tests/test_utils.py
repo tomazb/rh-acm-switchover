@@ -125,6 +125,30 @@ class TestStateManager:
         assert len(completed) == 1
         assert completed[0]["name"] == "step1"
 
+    def test_ensure_contexts_stores_values(self, tmp_path):
+        """Contexts should be persisted and reloaded."""
+        state_path = tmp_path / "ctx.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.state["contexts"]["primary"] == "primary-a"
+        assert reloaded.state["contexts"]["secondary"] == "secondary-b"
+
+    def test_ensure_contexts_resets_on_mismatch(self, tmp_path):
+        """Mismatched contexts should trigger a reset to avoid stale state."""
+        state_path = tmp_path / "ctx-reset.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.mark_step_completed("step1")
+
+        reloaded = StateManager(str(state_path))
+        reloaded.ensure_contexts("primary-other", "secondary-b")
+
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.state["completed_steps"] == []
+
 
 @pytest.mark.unit
 class TestPhaseEnum:
@@ -208,25 +232,39 @@ class TestVersionComparison:
 class TestSetupLogging:
     """Test cases for logging setup."""
 
+    def _mock_logging_env(self, mock_logging):
+        root_logger = MagicMock()
+        root_logger.handlers = [MagicMock()]
+        named_logger = MagicMock()
+        mock_logging.getLogger.side_effect = [root_logger, named_logger]
+        return root_logger, named_logger
+
     @patch("lib.utils.logging")
     def test_setup_logging_default(self, mock_logging):
         """Test logging setup with default level."""
-        setup_logging()
-        mock_logging.basicConfig.assert_called_once()
+        root_logger, named_logger = self._mock_logging_env(mock_logging)
+
+        result_logger = setup_logging()
+
+        root_logger.setLevel.assert_called_once_with(mock_logging.INFO)
+        assert root_logger.removeHandler.call_count == 1
+        root_logger.addHandler.assert_called_once()
+        assert result_logger is named_logger
 
     @patch("lib.utils.logging")
     def test_setup_logging_verbose(self, mock_logging):
         """Test logging setup with verbose flag."""
+        root_logger, _ = self._mock_logging_env(mock_logging)
+
         setup_logging(verbose=True)
-        mock_logging.basicConfig.assert_called_once()
-        # Check that DEBUG level is used
-        call_kwargs = mock_logging.basicConfig.call_args[1]
-        assert call_kwargs["level"] == mock_logging.DEBUG
+
+        root_logger.setLevel.assert_called_once_with(mock_logging.DEBUG)
 
     @patch("lib.utils.logging")
     def test_setup_logging_info(self, mock_logging):
         """Test logging setup with info level."""
+        root_logger, _ = self._mock_logging_env(mock_logging)
+
         setup_logging(verbose=False)
-        mock_logging.basicConfig.assert_called_once()
-        call_kwargs = mock_logging.basicConfig.call_args[1]
-        assert call_kwargs["level"] == mock_logging.INFO
+
+        root_logger.setLevel.assert_called_once_with(mock_logging.INFO)

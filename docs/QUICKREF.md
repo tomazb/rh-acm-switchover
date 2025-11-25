@@ -86,7 +86,7 @@ python acm_switchover.py \
 
 ```bash
 # View current state
-cat .state/switchover-state.json | python -m json.tool
+cat .state/switchover-<primary>__<secondary>.json | python -m json.tool
 
 # Use custom state file
 python acm_switchover.py \
@@ -187,7 +187,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--dry-run` | Show planned actions without executing |
 | `--rollback` | Rollback to primary hub |
 | `--decommission` | Decommission old hub (interactive) |
-| `--state-file PATH` | Path to state file (default: .state/switchover-state.json) |
+| `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
 | `--reset-state` | Reset state file and start fresh |
 | `--skip-observability-checks` | Skip Observability steps even if detected |
 | `--non-interactive` | Non-interactive mode for decommission |
@@ -207,7 +207,7 @@ oc rollout restart deployment/observability-observatorium-api \
 |------|---------|
 | `acm_switchover.py` | Main script |
 | `quick-start.sh` | Interactive setup wizard |
-| `.state/switchover-state.json` | State tracking (auto-created) |
+| `.state/switchover-<primary>__<secondary>.json` | State tracking (auto-created) |
 | `requirements.txt` | Python dependencies |
 | `README.md` | Project overview |
 | `USAGE.md` | Detailed examples |
@@ -229,7 +229,7 @@ oc rollout restart deployment/observability-observatorium-api \
 For issues or questions:
 - Review `USAGE.md` for detailed examples
 - Check `ARCHITECTURE.md` for design details
-- Inspect `.state/switchover-state.json` for progress
+- Inspect `.state/switchover-<primary>__<secondary>.json` for progress
 - Enable `--verbose` for detailed logging
 
 ## Quick Start (New Users)

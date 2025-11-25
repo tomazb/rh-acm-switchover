@@ -300,7 +300,7 @@ rh-acm-switchover/
 │   └── ...
 │
 ├── .state/                    # State files (created at runtime)
-│   └── switchover-state.json
+│   └── switchover-<primary>__<secondary>.json
 │
 └── venv/                      # Virtual environment (if using venv)
 ```
@@ -451,10 +451,10 @@ If state format changes in future:
 
 ```bash
 # Backup current state
-cp .state/switchover-state.json .state/switchover-state.json.backup
+cp .state/switchover-<primary>__<secondary>.json .state/switchover-<primary>__<secondary>.json.backup
 
 # Run migration script (if provided in future)
-python migrate_state.py --input .state/switchover-state.json
+python migrate_state.py --input .state/switchover-<primary>__<secondary>.json
 ```
 
 ## Uninstallation

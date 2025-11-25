@@ -534,7 +534,7 @@ python acm_switchover.py --verbose ...
 
 ### State Inspection
 ```bash
-cat .state/switchover-state.json | python -m json.tool
+cat .state/switchover-<primary>__<secondary>.json | python -m json.tool
 ```
 
 ### Log Analysis

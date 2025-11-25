@@ -10,10 +10,10 @@
 3. [x] **Enhance Observability pod health checks (`modules/post_activation.py`)**  
    - Inspect container `waiting`/`terminated` states so CrashLoopBackOff pods are reported instead of being counted as healthy.
 
-4. [ ] **Make bash scripts honor the detected CLI (`scripts/preflight-check.sh`, `scripts/postflight-check.sh`)**  
+4. [x] **Make bash scripts honor the detected CLI (`scripts/preflight-check.sh`, `scripts/postflight-check.sh`)**  
    - After detecting whether `oc` or `kubectl` is available, run every subsequent command with that binary (or explicitly require `oc`).
 
-5. [ ] **Prevent stale state leakage across runs**  
+5. [x] **Prevent stale state leakage across runs**  
    - Derive the default state file path from the primary/secondary context pair or store the contexts inside the state file and validate the match before reuse.  
    - Consider auto-resetting when contexts change.
 

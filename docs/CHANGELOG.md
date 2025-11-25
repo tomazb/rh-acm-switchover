@@ -120,7 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 5. Finalization
 
 #### State Management
-- JSON state file at `.state/switchover-state.json`
+- JSON state file at `.state/switchover-<primary>__<secondary>.json`
 - Tracks current phase, completed steps, configuration
 - Records errors for debugging
 - Enables resume and rollback operations

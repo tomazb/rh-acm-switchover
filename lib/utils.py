@@ -65,6 +65,7 @@ class StateManager:
             "config": {},
             "errors": [],
             "last_updated": _utc_timestamp(),
+            "contexts": {"primary": None, "secondary": None},
         }
 
     def _ensure_state_dir(self) -> None:
@@ -122,20 +123,36 @@ class StateManager:
 
     def reset(self) -> None:
         """Reset state to initial."""
-        self.state = {
-            "version": "1.0",
-            "created_at": _utc_timestamp(),
-            "current_phase": Phase.INIT.value,
-            "completed_steps": [],
-            "config": {},
-            "errors": [],
-            "last_updated": _utc_timestamp(),
-        }
+        self.state = self._new_state()
         self.save_state()
 
     def get_current_phase(self) -> Phase:
         """Get current phase as enum."""
         return Phase(self.state["current_phase"])
+
+    def ensure_contexts(
+        self, primary_context: str, secondary_context: Optional[str]
+    ) -> None:
+        """Ensure stored contexts match the ones provided on the CLI."""
+        stored = self.state.get("contexts") or {}
+        desired = {"primary": primary_context, "secondary": secondary_context}
+
+        if stored and (
+            stored.get("primary") not in (None, primary_context)
+            or stored.get("secondary") not in (None, secondary_context)
+        ):
+            logging.warning(
+                "Stored state contexts (%s/%s) differ from current invocation (%s/%s). "
+                "Resetting state to avoid mixing runs.",
+                stored.get("primary"),
+                stored.get("secondary"),
+                primary_context,
+                secondary_context,
+            )
+            self.state = self._new_state()
+
+        self.state["contexts"] = desired
+        self.save_state()
 
 
 class JSONFormatter(logging.Formatter):
