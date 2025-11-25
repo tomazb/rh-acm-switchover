@@ -122,6 +122,37 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
 fi
 echo ""
 
+# Check 0: Verify CLI tools
+section_header "0. Checking CLI Tools"
+
+CLUSTER_CLI_BIN=""
+CLUSTER_CLI_NAME=""
+
+if command -v oc &> /dev/null; then
+    CLUSTER_CLI_BIN="oc"
+    CLUSTER_CLI_NAME="OpenShift CLI (oc)"
+    check_pass "$CLUSTER_CLI_NAME is installed"
+elif command -v kubectl &> /dev/null; then
+    CLUSTER_CLI_BIN="kubectl"
+    CLUSTER_CLI_NAME="Kubernetes CLI (kubectl)"
+    oc() {
+        kubectl "$@"
+    }
+    check_pass "$CLUSTER_CLI_NAME is installed"
+else
+    check_fail "Neither oc nor kubectl CLI found"
+fi
+
+if command -v jq &> /dev/null; then
+    check_pass "jq is installed"
+else
+    check_warn "jq not found (optional, but recommended for some commands)"
+fi
+
+if [[ -n "$CLUSTER_CLI_BIN" ]]; then
+    echo "Using CLI: $CLUSTER_CLI_NAME ($(command -v "$CLUSTER_CLI_BIN"))"
+fi
+
 # Check 1: Verify restore completed
 section_header "1. Checking Restore Status"
 
