@@ -393,6 +393,35 @@ class TestPostActivationVerification:
             else:
                 mock_restart.assert_not_called()
 
+    def test_verify_disable_auto_import_cleanup_success(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
+        """disable-auto-import verification should pass when annotations removed."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster1", "annotations": {}}},
+            {"metadata": {"name": "local-cluster"}},
+        ]
+
+        post_verify_with_obs._verify_disable_auto_import_cleared()
+
+    def test_verify_disable_auto_import_cleanup_failure(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
+        """disable-auto-import verification should fail when annotation remains."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {
+                    "name": "cluster1",
+                    "annotations": {
+                        "import.open-cluster-management.io/disable-auto-import": ""
+                    },
+                }
+            }
+        ]
+
+        with pytest.raises(Exception):
+            post_verify_with_obs._verify_disable_auto_import_cleared()
+
 
 @pytest.mark.integration
 class TestPostActivationVerificationIntegration:

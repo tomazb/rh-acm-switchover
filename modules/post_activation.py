@@ -46,6 +46,12 @@ class PostActivationVerification:
             else:
                 logger.info("Step already completed: verify_clusters_connected")
 
+            if not self.state.is_step_completed("verify_auto_import_cleanup"):
+                self._verify_disable_auto_import_cleared()
+                self.state.mark_step_completed("verify_auto_import_cleanup")
+            else:
+                logger.info("Step already completed: verify_auto_import_cleanup")
+
             # Steps 7-9: Observability verification (if present)
             if self.has_observability:
                 if not self.state.is_step_completed("restart_observatorium_api"):
@@ -334,3 +340,30 @@ class PostActivationVerification:
                 logger.warning("Grafana route not found in Observability namespace")
         except Exception as exc:
             logger.warning(f"Unable to query Grafana route: {exc}")
+
+    def _verify_disable_auto_import_cleared(self):
+        """Ensure disable-auto-import annotations were removed after activation."""
+        logger.info("Ensuring disable-auto-import annotations are cleared...")
+        managed_clusters = self.secondary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+
+        flagged = []
+        for mc in managed_clusters:
+            mc_name = mc.get("metadata", {}).get("name")
+            if mc_name == "local-cluster":
+                continue
+
+            annotations = mc.get("metadata", {}).get("annotations") or {}
+            if "import.open-cluster-management.io/disable-auto-import" in annotations:
+                flagged.append(mc_name or "unknown")
+
+        if flagged:
+            raise Exception(
+                "disable-auto-import annotation still present on: "
+                + ", ".join(flagged)
+            )
+
+        logger.info("All ManagedClusters cleared disable-auto-import annotation")

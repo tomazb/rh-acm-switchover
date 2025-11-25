@@ -40,7 +40,7 @@
 12. [x] **Introduce “old hub” regression checks post-switchover**  
     - Optionally verify the old hub shows clusters as disconnected, BackupSchedule paused, and Thanos compactor still scaled down, paralleling script section 7.
 
-13. [ ] **Reconfirm disable-auto-import cleanup on the new hub**  
+13. [x] **Reconfirm disable-auto-import cleanup on the new hub**  
     - After activation, ensure no ManagedClusters retain the `disable-auto-import` annotation unless explicitly expected.
 
 14. [ ] **Update/extend tests affected by these changes**  
