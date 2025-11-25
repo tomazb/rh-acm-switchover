@@ -125,6 +125,21 @@ class TestStateManager:
         assert len(completed) == 1
         assert completed[0]["name"] == "step1"
 
+    @patch("lib.utils.logging")
+    def test_get_current_phase_handles_unknown(self, mock_logging, temp_state_file):
+        """Unknown persisted phase should reset to INIT with warning."""
+        sm = StateManager(str(temp_state_file))
+        sm.state["current_phase"] = "mystery-phase"
+        sm.save_state()
+
+        # Reload to simulate separate run
+        sm_reloaded = StateManager(str(temp_state_file))
+        phase = sm_reloaded.get_current_phase()
+
+        assert phase == Phase.INIT
+        assert sm_reloaded.state["current_phase"] == Phase.INIT.value
+        mock_logging.warning.assert_called()
+
     def test_ensure_contexts_stores_values(self, tmp_path):
         """Contexts should be persisted and reloaded."""
         state_path = tmp_path / "ctx.json"

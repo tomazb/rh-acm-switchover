@@ -128,7 +128,18 @@ class StateManager:
 
     def get_current_phase(self) -> Phase:
         """Get current phase as enum."""
-        return Phase(self.state["current_phase"])
+        raw_phase = self.state.get("current_phase", Phase.INIT.value)
+        try:
+            return Phase(raw_phase)
+        except ValueError:
+            logging.warning(
+                "Unknown phase '%s' in state file %s. Falling back to INIT.",
+                raw_phase,
+                self.state_file,
+            )
+            self.state["current_phase"] = Phase.INIT.value
+            self.save_state()
+            return Phase.INIT
 
     def ensure_contexts(
         self, primary_context: str, secondary_context: Optional[str]

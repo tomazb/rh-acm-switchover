@@ -17,7 +17,7 @@
    - Derive the default state file path from the primary/secondary context pair or store the contexts inside the state file and validate the match before reuse.  
    - Consider auto-resetting when contexts change.
 
-6. [ ] **Harden `StateManager.get_current_phase`**  
+6. [x] **Harden `StateManager.get_current_phase`**  
    - Catch `ValueError` when unknown strings are stored and fall back to `Phase.INIT` (or instruct the user to reset), instead of crashing.
 
 7. [ ] **Handle Kubernetes list pagination in `lib/kube_client.list_custom_resources`**  
