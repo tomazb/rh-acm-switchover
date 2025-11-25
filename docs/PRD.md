@@ -1128,6 +1128,17 @@ Any phase can transition to: FAILED or ROLLBACK
 
 ## Change Log
 
+### November 25, 2025 (Update 4) - Refactoring & Cleanup
+
+**Codebase Refactoring** ✅:
+- Consolidated shell scripts into `scripts/` directory with shared `constants.sh`
+- Moved container build resources to `container-bootstrap/`
+- Refactored Python modules to use centralized `KubeClient` helper methods
+- Reduced code duplication in `primary_prep.py`, `rollback.py`, and `decommission.py`
+- Updated `setup.cfg` for Python 3.9+ compatibility
+- Applied global code formatting (Black) and type checking (MyPy)
+- Consolidated documentation structure
+
 ### November 24, 2025 (Update 3) - Container Image Support
 
 **Container Infrastructure** ✅:

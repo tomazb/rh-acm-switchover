@@ -7,52 +7,66 @@
 
 ```
 rh-acm-switchover/
-├── acm_switchover.py          # Main orchestrator script (318 lines)
+├── acm_switchover.py          # Main orchestrator script
 ├── quick-start.sh             # Interactive setup wizard
+├── run_tests.sh               # Test execution wrapper
 ├── requirements.txt           # Python dependencies
 ├── requirements-dev.txt       # Development/testing dependencies
 ├── setup.cfg                  # Tool configuration (flake8, pytest, etc.)
 ├── README.md                  # Project overview
-├── QUICKREF.md                # Quick reference card
-├── USAGE.md                   # Detailed usage examples
-├── ARCHITECTURE.md            # This file - design documentation
-├── INSTALL.md                 # Installation and deployment guide
-├── CONTRIBUTING.md            # Development guidelines
-├── CHANGELOG.md               # Version history
-├── PRD.md                     # Product Requirements Document
-├── PROJECT_SUMMARY.md         # Comprehensive project summary
 ├── LICENSE                    # MIT License
+├── SECURITY.md                # Security policy
 ├── .gitignore                 # Git ignore patterns
 │
-├── lib/                       # Core utilities (561 lines total)
-│   ├── __init__.py
-│   ├── utils.py              # State management, logging, helpers (203 lines)
-│   └── kube_client.py        # Kubernetes API wrapper (358 lines)
+├── container-bootstrap/       # Container build resources
+│   ├── Containerfile          # Multi-stage container build definition
+│   └── get-pip.py             # Python package installer bootstrapper
 │
-├── modules/                   # Switchover modules (1,277 lines total)
+├── lib/                       # Core utilities
 │   ├── __init__.py
-│   ├── preflight.py          # Pre-flight validation (366 lines)
-│   ├── primary_prep.py       # Primary hub preparation (143 lines)
-│   ├── activation.py         # Secondary hub activation (169 lines)
-│   ├── post_activation.py   # Post-activation verification (218 lines)
-│   ├── finalization.py       # Finalization & rollback (237 lines)
-│   └── decommission.py       # Old hub decommission (144 lines)
+│   ├── constants.py           # Shared constants
+│   ├── kube_client.py         # Kubernetes API wrapper
+│   ├── utils.py               # State management, logging, helpers
+│   └── waiter.py              # Resource polling and waiting logic
 │
-├── tests/                     # Unit tests
+├── modules/                   # Switchover modules
 │   ├── __init__.py
-│   ├── test_utils.py         # Tests for lib/utils.py
-│   ├── test_kube_client.py   # Tests for lib/kube_client.py
-│   └── test_preflight.py     # Tests for modules/preflight.py
+│   ├── preflight.py           # Pre-flight validation
+│   ├── preflight_validators.py # Individual validation logic
+│   ├── primary_prep.py        # Primary hub preparation
+│   ├── activation.py          # Secondary hub activation
+│   ├── post_activation.py     # Post-activation verification
+│   ├── finalization.py        # Finalization & rollback
+│   ├── decommission.py        # Old hub decommission
+│   ├── rollback.py            # Rollback orchestration
+│   └── backup_schedule.py     # Backup schedule management
+│
+├── scripts/                   # Shell helper scripts
+│   ├── constants.sh           # Shared shell variables
+│   ├── preflight-check.sh     # Standalone pre-flight check
+│   └── postflight-check.sh    # Standalone post-flight check
+│
+├── tests/                     # Unit and integration tests
+│   ├── __init__.py
+│   ├── test_main.py           # Tests for main orchestrator
+│   ├── test_utils.py          # Tests for lib/utils.py
+│   ├── test_kube_client.py    # Tests for lib/kube_client.py
+│   ├── test_preflight.py      # Tests for modules/preflight.py
+│   ├── test_scripts.py        # Tests for shell scripts
+│   └── ... (comprehensive test suite for all modules)
 │
 ├── .github/                   # CI/CD configuration
 │   ├── workflows/
-│   │   ├── ci-cd.yml         # Main CI/CD pipeline
-│   │   └── security.yml      # Security scanning workflow
-│   ├── markdown-link-check.json
-│   └── .gitignore
+│   │   ├── ci-cd.yml          # Main CI/CD pipeline
+│   │   └── security.yml       # Security scanning workflow
+│   └── ...
 │
-└── docs/
-    └── ACM_SWITCHOVER_RUNBOOK.md  # Source runbook
+└── docs/                      # Documentation
+    ├── ACM_SWITCHOVER_RUNBOOK.md
+    ├── ARCHITECTURE.md
+    ├── CONTAINER_USAGE.md
+    ├── PRD.md
+    └── ...
 ```
 
 **Total Lines of Code**: ~2,156 lines (excluding documentation and tests)
