@@ -120,6 +120,20 @@ class KubeClient:
         return self.get_namespace(name) is not None
 
     @retry_api_call
+    def secret_exists(self, namespace: str, name: str) -> bool:
+        """Check if a secret exists."""
+        try:
+            self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
+            return True
+        except ApiException as e:
+            if e.status == 404:
+                return False
+            if is_retryable_error(e):
+                raise
+            logger.error("Failed to read secret %s/%s: %s", namespace, name, e)
+            raise
+
+    @retry_api_call
     def get_custom_resource(
         self,
         group: str,

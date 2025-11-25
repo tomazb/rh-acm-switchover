@@ -11,6 +11,8 @@ from modules.preflight_validators import (
     ValidationReporter,
     NamespaceValidator,
     ObservabilityDetector,
+    ToolingValidator,
+    ObservabilityPrereqValidator,
 )
 from lib.constants import ACM_NAMESPACE, BACKUP_NAMESPACE
 
@@ -184,3 +186,60 @@ class TestObservabilityDetector:
 
         assert result == (primary_has, secondary_has)
         assert reporter.results[-1]["message"] == expected_message
+
+
+@pytest.mark.unit
+class TestToolingValidator:
+    """Tests for the ToolingValidator."""
+
+    @patch("modules.preflight_validators.shutil.which")
+    def test_tooling_validator_success(self, mock_which, reporter):
+        """Succeeds when oc or kubectl and jq are present."""
+        def fake_which(binary):
+            if binary in ("oc", "jq"):
+                return f"/usr/bin/{binary}"
+            return None
+
+        mock_which.side_effect = fake_which
+
+        validator = ToolingValidator(reporter)
+        validator.run()
+
+        cli_result = next(r for r in reporter.results if r["check"] == "Cluster CLI")
+        jq_result = next(r for r in reporter.results if r["check"] == "jq availability")
+        assert cli_result["passed"] is True
+        assert jq_result["passed"] is True
+
+    @patch("modules.preflight_validators.shutil.which", return_value=None)
+    def test_tooling_validator_failure(self, mock_which, reporter):
+        """Fails when neither oc nor kubectl are found."""
+        validator = ToolingValidator(reporter)
+        validator.run()
+
+        cli_result = next(r for r in reporter.results if r["check"] == "Cluster CLI")
+        assert cli_result["passed"] is False
+
+
+@pytest.mark.unit
+class TestObservabilityPrereqValidator:
+    """Tests for ObservabilityPrereqValidator."""
+
+    def test_secret_present(self, reporter):
+        secondary = Mock()
+        secondary.namespace_exists.return_value = True
+        secondary.secret_exists.return_value = True
+
+        validator = ObservabilityPrereqValidator(reporter)
+        validator.run(secondary)
+
+        assert reporter.results[-1]["passed"] is True
+
+    def test_secret_missing(self, reporter):
+        secondary = Mock()
+        secondary.namespace_exists.return_value = True
+        secondary.secret_exists.return_value = False
+
+        validator = ObservabilityPrereqValidator(reporter)
+        validator.run(secondary)
+
+        assert reporter.results[-1]["passed"] is False

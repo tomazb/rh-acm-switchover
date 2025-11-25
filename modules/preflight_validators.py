@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from typing import Any, Dict, List, Sequence, Tuple
 
-from lib.constants import ACM_NAMESPACE, BACKUP_NAMESPACE, OBSERVABILITY_NAMESPACE
+from lib.constants import (
+    ACM_NAMESPACE,
+    BACKUP_NAMESPACE,
+    OBSERVABILITY_NAMESPACE,
+    THANOS_OBJECT_STORAGE_SECRET,
+)
 from lib.kube_client import KubeClient
 
 logger = logging.getLogger("acm_switchover")
@@ -60,6 +66,49 @@ class ValidationReporter:
             logger.info("All critical validations passed!")
 
         logger.info("=" * 60 + "\n")
+
+
+class ToolingValidator:
+    """Validates required command-line tools exist for operator workflows."""
+
+    def __init__(self, reporter: ValidationReporter) -> None:
+        self.reporter = reporter
+
+    def run(self) -> None:
+        oc_path = shutil.which("oc")
+        kubectl_path = shutil.which("kubectl")
+
+        if oc_path or kubectl_path:
+            binary = "oc" if oc_path else "kubectl"
+            self.reporter.add_result(
+                "Cluster CLI",
+                True,
+                f"{binary} found in PATH",
+                critical=True,
+            )
+        else:
+            self.reporter.add_result(
+                "Cluster CLI",
+                False,
+                "Neither oc nor kubectl found in PATH",
+                critical=True,
+            )
+
+        jq_path = shutil.which("jq")
+        if jq_path:
+            self.reporter.add_result(
+                "jq availability",
+                True,
+                "jq found",
+                critical=False,
+            )
+        else:
+            self.reporter.add_result(
+                "jq availability",
+                False,
+                "jq not found (optional but recommended)",
+                critical=False,
+            )
 
 
 class NamespaceValidator:
@@ -504,3 +553,31 @@ class ObservabilityDetector:
             )
 
         return primary_has, secondary_has
+
+
+class ObservabilityPrereqValidator:
+    """Checks additional Observability requirements on the secondary hub."""
+
+    def __init__(self, reporter: ValidationReporter) -> None:
+        self.reporter = reporter
+
+    def run(self, secondary: KubeClient) -> None:
+        if not secondary.namespace_exists(OBSERVABILITY_NAMESPACE):
+            return
+
+        if secondary.secret_exists(
+            OBSERVABILITY_NAMESPACE, THANOS_OBJECT_STORAGE_SECRET
+        ):
+            self.reporter.add_result(
+                "Observability object storage secret",
+                True,
+                f"{THANOS_OBJECT_STORAGE_SECRET} present on secondary hub",
+                critical=True,
+            )
+        else:
+            self.reporter.add_result(
+                "Observability object storage secret",
+                False,
+                f"{THANOS_OBJECT_STORAGE_SECRET} missing on secondary hub",
+                critical=True,
+            )

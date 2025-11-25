@@ -26,7 +26,7 @@
 8. [x] **Loosen `wait_for_pods_ready` pod count handling**  
    - Allow extra pods during rollouts (e.g., accept `len(pods) >= expected_count`) so transient replica mismatches don’t time out when the desired number of pods are already ready.
 
-9. [ ] **Port CLI/context prerequisite checks into Python preflight**  
+9. [x] **Port CLI/context prerequisite checks into Python preflight**  
    - Mirror the bash script’s validation that `oc`/`kubectl`/`jq` are available and both contexts resolve before deeper checks run.  
    - Ensure missing Observability prerequisites such as the Thanos object-storage secret on the secondary hub are surfaced in `PreflightValidator`.
 

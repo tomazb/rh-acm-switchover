@@ -22,3 +22,6 @@ DECOMMISSION_POD_INTERVAL = 30
 BACKUP_NAMESPACE = "open-cluster-management-backup"
 OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 ACM_NAMESPACE = "open-cluster-management"
+
+# Secrets
+THANOS_OBJECT_STORAGE_SECRET = "thanos-object-storage"

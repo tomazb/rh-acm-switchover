@@ -257,6 +257,21 @@ class TestKubeClient:
 
         assert result is False
 
+    def test_secret_exists(self, kube_client, mock_k8s_apis):
+        """Test checking if secret exists."""
+        mock_k8s_apis["core_api"].read_namespaced_secret.return_value = MagicMock()
+        assert kube_client.secret_exists("ns", "secret") is True
+        mock_k8s_apis["core_api"].read_namespaced_secret.assert_called_once_with(
+            name="secret", namespace="ns"
+        )
+
+    def test_secret_not_exists(self, kube_client, mock_k8s_apis):
+        """Test checking if secret does not exist."""
+        mock_k8s_apis["core_api"].read_namespaced_secret.side_effect = ApiException(
+            status=404
+        )
+        assert kube_client.secret_exists("ns", "secret") is False
+
     def test_get_pods(self, kube_client, mock_k8s_apis):
         """Test getting pods with label selector."""
         pod1 = MagicMock()

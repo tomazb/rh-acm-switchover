@@ -13,7 +13,9 @@ from .preflight_validators import (
     HubComponentValidator,
     NamespaceValidator,
     ObservabilityDetector,
+    ObservabilityPrereqValidator,
     PassiveSyncValidator,
+    ToolingValidator,
     ValidationReporter,
     VersionValidator,
 )
@@ -42,12 +44,17 @@ class PreflightValidator:
         self.cluster_deployment_validator = ClusterDeploymentValidator(self.reporter)
         self.passive_sync_validator = PassiveSyncValidator(self.reporter)
         self.observability_detector = ObservabilityDetector(self.reporter)
+        self.observability_prereq_validator = ObservabilityPrereqValidator(
+            self.reporter
+        )
+        self.tooling_validator = ToolingValidator(self.reporter)
 
     def validate_all(self) -> Tuple[bool, Dict[str, object]]:
         """Run all validation checks and return pass/fail with detected config."""
 
         logger.info("Starting pre-flight validation...")
 
+        self.tooling_validator.run()
         self.namespace_validator.run(self.primary, self.secondary)
         primary_version, secondary_version = self.version_validator.run(
             self.primary,
@@ -67,6 +74,9 @@ class PreflightValidator:
             self.primary,
             self.secondary,
         )
+
+        if secondary_observability:
+            self.observability_prereq_validator.run(self.secondary)
 
         self.reporter.print_summary()
 
