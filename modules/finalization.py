@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Optional
 
-from lib.constants import ACM_NAMESPACE, BACKUP_NAMESPACE
+from lib.constants import ACM_NAMESPACE, BACKUP_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.kube_client import KubeClient
 from lib.utils import StateManager
 from .backup_schedule import BackupScheduleManager
@@ -22,10 +22,14 @@ class Finalization:
         secondary_client: KubeClient,
         state_manager: StateManager,
         acm_version: str,
+        primary_client: Optional[KubeClient] = None,
+        primary_has_observability: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
         self.acm_version = acm_version
+        self.primary = primary_client
+        self.primary_has_observability = primary_has_observability
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -67,6 +71,9 @@ class Finalization:
                 self.state.mark_step_completed("verify_mch_health")
             else:
                 logger.info("Step already completed: verify_mch_health")
+
+            if self.primary:
+                self._verify_old_hub_state()
 
             logger.info("Finalization completed successfully")
             return True
@@ -219,3 +226,65 @@ class Finalization:
             )
 
         logger.info("MultiClusterHub %s is Running and all pods are healthy", mch_name)
+
+    def _verify_old_hub_state(self):
+        """Run regression checks on the old (primary) hub."""
+        if not self.primary:
+            return
+
+        logger.info("Running regression checks on old primary hub...")
+
+        clusters = self.primary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+
+        still_available = []
+        for cluster in clusters:
+            name = cluster.get("metadata", {}).get("name")
+            if name == "local-cluster":
+                continue
+
+            conditions = cluster.get("status", {}).get("conditions", [])
+            available = any(
+                c.get("type") == "ManagedClusterConditionAvailable"
+                and c.get("status") == "True"
+                for c in conditions
+            )
+            if available:
+                still_available.append(name or "unknown")
+
+        if still_available:
+            logger.warning(
+                "Old hub still reports the following ManagedClusters as Available: %s",
+                ", ".join(still_available),
+            )
+        else:
+            logger.info("All ManagedClusters show as disconnected from old hub")
+
+        schedules = self.primary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            namespace=BACKUP_NAMESPACE,
+        )
+        if schedules:
+            paused = schedules[0].get("spec", {}).get("paused", False)
+            if paused:
+                logger.info("Old hub BackupSchedule remains paused as expected")
+            else:
+                logger.warning("Old hub BackupSchedule is not paused")
+
+        if self.primary_has_observability:
+            compactor_pods = self.primary.get_pods(
+                namespace=OBSERVABILITY_NAMESPACE,
+                label_selector="app.kubernetes.io/name=thanos-compact",
+            )
+            if compactor_pods:
+                logger.warning(
+                    "Thanos compactor still running on old hub (%s pod(s))",
+                    len(compactor_pods),
+                )
+            else:
+                logger.info("Thanos compactor is scaled down on old hub")

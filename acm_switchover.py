@@ -345,6 +345,8 @@ def _run_phase_finalization(
         secondary,
         state,
         state.get_config("secondary_version", "unknown"),
+        primary_client=primary,
+        primary_has_observability=state.get_config("primary_has_observability", False),
     )
 
     if not finalization.finalize():

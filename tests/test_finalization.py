@@ -48,6 +48,22 @@ def finalization(mock_secondary_client, mock_state_manager, mock_backup_manager)
     )
 
 
+@pytest.fixture
+def finalization_with_primary(
+    mock_secondary_client, mock_state_manager, mock_backup_manager
+):
+    """Create Finalization instance with primary client."""
+    primary = Mock()
+    fin = Finalization(
+        secondary_client=mock_secondary_client,
+        state_manager=mock_state_manager,
+        acm_version="2.12.0",
+        primary_client=primary,
+        primary_has_observability=True,
+    )
+    return fin, primary
+
+
 @pytest.mark.unit
 class TestFinalization:
     """Tests for Finalization class."""
@@ -194,3 +210,28 @@ class TestFinalization:
 
         with pytest.raises(RuntimeError):
             finalization._verify_multiclusterhub_health()
+
+    def test_verify_old_hub_state(
+        self, finalization_with_primary, mock_secondary_client
+    ):
+        """Old hub checks should inspect clusters, backups, and observability pods."""
+        fin, primary = finalization_with_primary
+        primary.list_custom_resources.side_effect = [
+            [
+                {
+                    "metadata": {"name": "cluster1"},
+                    "status": {
+                        "conditions": [
+                            {"type": "ManagedClusterConditionAvailable", "status": "False"}
+                        ]
+                    },
+                }
+            ],
+            [{"metadata": {"name": "schedule"}, "spec": {"paused": True}}],
+        ]
+        primary.get_pods.return_value = []
+
+        fin._verify_old_hub_state()
+
+        assert primary.list_custom_resources.call_count == 2
+        primary.get_pods.assert_called_once()
