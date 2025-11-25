@@ -20,7 +20,9 @@ Decommission = decommission_module.Decommission
 @pytest.fixture
 def mock_primary_client():
     """Create a mock KubeClient for primary hub."""
-    return Mock()
+    client = Mock()
+    client.list_managed_clusters = Mock(return_value=[])
+    return client
 
 
 @pytest.fixture
@@ -59,6 +61,9 @@ class TestDecommission:
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "observability"}}
         ]
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}}
+        ]
         mock_primary_client.delete_custom_resource.return_value = True
 
         result = decommission_with_obs.decommission(interactive=False)
@@ -76,6 +81,10 @@ class TestDecommission:
 
         # Mock resources
         mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "cluster2"}},
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [
             {"metadata": {"name": "cluster1"}},
             {"metadata": {"name": "cluster2"}},
         ]
@@ -107,6 +116,7 @@ class TestDecommission:
         mock_wait.return_value = True
 
         mock_primary_client.list_custom_resources.return_value = []
+        mock_primary_client.list_managed_clusters.return_value = []
         mock_primary_client.delete_custom_resource.return_value = True
 
         result = decommission_with_obs.decommission(interactive=True)
@@ -154,6 +164,11 @@ class TestDecommission:
             {"metadata": {"name": "local-cluster"}},
             {"metadata": {"name": "cluster2"}},
         ]
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "local-cluster"}},
+            {"metadata": {"name": "cluster2"}},
+        ]
 
         decommission_with_obs._delete_managed_clusters()
 
@@ -165,6 +180,7 @@ class TestDecommission:
     ):
         """Test when no managed clusters exist."""
         mock_primary_client.list_custom_resources.return_value = []
+        mock_primary_client.list_managed_clusters.return_value = []
 
         decommission_with_obs._delete_managed_clusters()
 
@@ -249,6 +265,9 @@ class TestDecommissionIntegration:
             [{"metadata": {"name": "observability"}}],  # MCO
             [{"metadata": {"name": "cluster1"}}],  # ManagedClusters
             [{"metadata": {"name": "multiclusterhub"}}],  # MCH
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}}
         ]
         mock_primary_client.delete_custom_resource.return_value = True
 

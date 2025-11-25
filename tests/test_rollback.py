@@ -20,7 +20,10 @@ Rollback = rollback_module.Rollback
 @pytest.fixture
 def mock_primary_client():
     """Create a mock KubeClient for primary hub."""
-    return Mock()
+    client = Mock()
+    client.list_managed_clusters = Mock(return_value=[])
+    client.patch_managed_cluster = Mock()
+    return client
 
 
 @pytest.fixture
@@ -112,6 +115,16 @@ class TestRollback:
                 }
             }
         ]
+        mock_primary_client.list_managed_clusters.return_value = [
+            {
+                "metadata": {
+                    "name": "cluster1",
+                    "annotations": {
+                        "import.open-cluster-management.io/disable-auto-import": "true"
+                    },
+                }
+            }
+        ]
 
         result = rollback_with_obs.rollback()
 
@@ -127,7 +140,7 @@ class TestRollback:
         )
 
         # Verify auto-import re-enabled
-        mock_primary_client.patch_custom_resource.assert_called_once()
+        mock_primary_client.patch_managed_cluster.assert_called_once()
 
         # Verify Thanos restart
         mock_primary_client.scale_statefulset.assert_called_with(
@@ -144,6 +157,7 @@ class TestRollback:
     ):
         """Test successful rollback without observability."""
         mock_primary_client.list_custom_resources.return_value = []
+        mock_primary_client.list_managed_clusters.return_value = []
 
         result = rollback_no_obs.rollback()
 
@@ -173,12 +187,30 @@ class TestRollback:
                 }
             },
         ]
+        mock_primary_client.list_managed_clusters.return_value = [
+            {
+                "metadata": {
+                    "name": "local-cluster",
+                    "annotations": {
+                        "import.open-cluster-management.io/disable-auto-import": "true"
+                    },
+                }
+            },
+            {
+                "metadata": {
+                    "name": "remote-cluster",
+                    "annotations": {
+                        "import.open-cluster-management.io/disable-auto-import": "true"
+                    },
+                }
+            },
+        ]
 
         rollback_no_obs._enable_auto_import()
 
         # Should only patch remote-cluster
-        assert mock_primary_client.patch_custom_resource.call_count == 1
-        args = mock_primary_client.patch_custom_resource.call_args[1]
+        assert mock_primary_client.patch_managed_cluster.call_count == 1
+        args = mock_primary_client.patch_managed_cluster.call_args[1]
         assert args["name"] == "remote-cluster"
 
     def test_enable_auto_import_skips_clean_clusters(
@@ -186,6 +218,9 @@ class TestRollback:
     ):
         """Test that auto-import enabling skips clusters without the annotation."""
         mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "clean-cluster", "annotations": {}}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [
             {"metadata": {"name": "clean-cluster", "annotations": {}}}
         ]
 

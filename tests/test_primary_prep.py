@@ -20,7 +20,10 @@ PrimaryPreparation = primary_prep_module.PrimaryPreparation
 @pytest.fixture
 def mock_primary_client():
     """Create a mock KubeClient for primary hub."""
-    return Mock()
+    client = Mock()
+    client.list_managed_clusters = Mock(return_value=[])
+    client.patch_managed_cluster = Mock()
+    return client
 
 
 @pytest.fixture
@@ -91,6 +94,10 @@ class TestPrimaryPreparation:
             return []
 
         mock_primary_client.list_custom_resources.side_effect = list_side_effect
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "cluster2"}},
+        ]
         mock_primary_client.patch_custom_resource.return_value = True
         mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
         mock_primary_client.get_pods.return_value = []
@@ -106,6 +113,9 @@ class TestPrimaryPreparation:
         """Test successful preparation without observability."""
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}}
         ]
         mock_primary_client.patch_custom_resource.return_value = True
 
@@ -204,21 +214,27 @@ class TestPrimaryPreparation:
             {"metadata": {"name": "local-cluster", "labels": {}}},
             {"metadata": {"name": "cluster2", "labels": {}}},
         ]
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "local-cluster"}},
+            {"metadata": {"name": "cluster2"}},
+        ]
 
         primary_prep_with_obs._disable_auto_import()
 
         # Should patch all clusters except local-cluster
-        assert mock_primary_client.patch_custom_resource.call_count == 2
+        assert mock_primary_client.patch_managed_cluster.call_count == 2
 
     def test_disable_auto_import_no_clusters(
         self, primary_prep_with_obs, mock_primary_client
     ):
         """Test when no managed clusters exist."""
         mock_primary_client.list_custom_resources.return_value = []
+        mock_primary_client.list_managed_clusters.return_value = []
 
         primary_prep_with_obs._disable_auto_import()
 
-        mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.patch_managed_cluster.assert_not_called()
 
     def test_scale_down_thanos(self, primary_prep_with_obs, mock_primary_client):
         """Test scaling down Thanos compactor."""
@@ -277,6 +293,9 @@ class TestPrimaryPreparationIntegration:
             return []
 
         mock_primary_client.list_custom_resources.side_effect = list_side_effect
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}}
+        ]
         mock_primary_client.patch_custom_resource.return_value = True
         mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
         mock_primary_client.get_pods.return_value = []

@@ -43,5 +43,5 @@
 13. [x] **Reconfirm disable-auto-import cleanup on the new hub**  
     - After activation, ensure no ManagedClusters retain the `disable-auto-import` annotation unless explicitly expected.
 
-14. [ ] **Update/extend tests affected by these changes**  
+14. [x] **Update/extend tests affected by these changes**  
     - Add or refresh unit/integration tests (Python modules and bash script harness) so new validations and flows are covered.
