@@ -24,10 +24,12 @@ class PostActivationVerification:
         secondary_client: KubeClient,
         state_manager: StateManager,
         has_observability: bool,
+        dry_run: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
         self.has_observability = has_observability
+        self.dry_run = dry_run
 
     def verify(self) -> bool:
         """
@@ -140,8 +142,9 @@ class PostActivationVerification:
                 "pending": pending_clusters,
             }
 
+            # If there are no non-local ManagedClusters, that's OK - nothing to wait for
             if total_clusters == 0:
-                return False, "No non-local ManagedClusters found"
+                return True, "No non-local ManagedClusters to verify (only local-cluster exists)"
 
             is_ready = available_clusters == total_clusters and joined_clusters == total_clusters
             detail = f"available={available_clusters}/{total_clusters}, " f"joined={joined_clusters}/{total_clusters}"
@@ -173,6 +176,11 @@ class PostActivationVerification:
             )
 
             logger.info("Triggered observatorium-api restart")
+
+            # Skip pod waiting in dry-run mode since no actual restart happened
+            if self.dry_run:
+                logger.info("[DRY-RUN] Skipping wait for observatorium-api pods")
+                return
 
             # Wait for pods to be ready
             logger.info("Waiting for observatorium-api pods to be ready...")

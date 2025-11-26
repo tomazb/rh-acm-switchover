@@ -245,9 +245,9 @@ class HubComponentValidator:
 
     def _check_oadp_operator(self, kube_client: KubeClient, hub_name: str) -> None:
         try:
-            if kube_client.namespace_exists("openshift-adp"):
+            if kube_client.namespace_exists(BACKUP_NAMESPACE):
                 pods = kube_client.get_pods(
-                    namespace="openshift-adp",
+                    namespace=BACKUP_NAMESPACE,
                     label_selector="app.kubernetes.io/name=velero",
                 )
 
@@ -269,7 +269,7 @@ class HubComponentValidator:
                 self.reporter.add_result(
                     f"OADP operator ({hub_name})",
                     False,
-                    "openshift-adp namespace not found",
+                    f"{BACKUP_NAMESPACE} namespace not found",
                     critical=True,
                 )
         except Exception as exc:
@@ -286,7 +286,7 @@ class HubComponentValidator:
                 group="oadp.openshift.io",
                 version="v1alpha1",
                 plural="dataprotectionapplications",
-                namespace="openshift-adp",
+                namespace=BACKUP_NAMESPACE,
             )
 
             if dpas:
@@ -334,8 +334,8 @@ class BackupValidator:
     def run(self, primary: KubeClient) -> None:
         try:
             backups = primary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
+                group="velero.io",
+                version="v1",
                 plural="backups",
                 namespace=BACKUP_NAMESPACE,
             )
@@ -369,7 +369,7 @@ class BackupValidator:
                     f"backup(s) in progress: {', '.join(in_progress)}",
                     critical=True,
                 )
-            elif phase == "Finished":
+            elif phase == "Completed":
                 self.reporter.add_result(
                     "Backup status",
                     True,

@@ -305,6 +305,7 @@ def _run_phase_post_activation(
         secondary,
         state,
         state.get_config("secondary_has_observability", False),
+        dry_run=args.dry_run,
     )
 
     if not verification.verify():
@@ -332,6 +333,7 @@ def _run_phase_finalization(
         state.get_config("secondary_version", "unknown"),
         primary_client=primary,
         primary_has_observability=state.get_config("primary_has_observability", False),
+        dry_run=args.dry_run,
     )
 
     if not finalization.finalize():
@@ -466,6 +468,24 @@ def _initialize_clients(
     return primary, secondary
 
 
+DEFAULT_STATE_FILE = ".state/switchover-state.json"
+
+
+def _sanitize_context_identifier(value: str) -> str:
+    """Sanitize context string to be filesystem friendly."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", value)
+
+
+def _resolve_state_file(requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]) -> str:
+    """Derive the state file path based on contexts unless user provided one."""
+    if requested_path and requested_path != DEFAULT_STATE_FILE:
+        return requested_path
+
+    secondary_label = secondary_ctx or "none"
+    slug = f"{_sanitize_context_identifier(primary_ctx)}__{_sanitize_context_identifier(secondary_label)}"
+    return os.path.join(".state", f"switchover-{slug}.json")
+
+
 def _execute_operation(
     args: argparse.Namespace,
     state: StateManager,
@@ -491,19 +511,3 @@ def _execute_operation(
 
 if __name__ == "__main__":
     main()
-DEFAULT_STATE_FILE = ".state/switchover-state.json"
-
-
-def _sanitize_context_identifier(value: str) -> str:
-    """Sanitize context string to be filesystem friendly."""
-    return re.sub(r"[^A-Za-z0-9._-]", "_", value)
-
-
-def _resolve_state_file(requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]) -> str:
-    """Derive the state file path based on contexts unless user provided one."""
-    if requested_path and requested_path != DEFAULT_STATE_FILE:
-        return requested_path
-
-    secondary_label = secondary_ctx or "none"
-    slug = f"{_sanitize_context_identifier(primary_ctx)}__{_sanitize_context_identifier(secondary_label)}"
-    return os.path.join(".state", f"switchover-{slug}.json")

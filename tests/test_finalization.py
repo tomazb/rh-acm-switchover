@@ -144,10 +144,11 @@ class TestFinalization:
         # 1. Initial list (empty)
         # 2. Loop 1 list (still empty)
         # 3. Loop 2 list (new backup found)
+        # Velero uses "Completed" phase, not "Finished"
         mock_secondary_client.list_custom_resources.side_effect = [
             [],
             [],
-            [{"metadata": {"name": "new-backup"}, "status": {"phase": "Finished"}}],
+            [{"metadata": {"name": "new-backup"}, "status": {"phase": "Completed"}}],
         ]
 
         finalization._verify_new_backups(timeout=10)

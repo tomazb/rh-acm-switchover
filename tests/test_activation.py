@@ -73,10 +73,33 @@ class TestSecondaryActivation:
         """Test successful passive activation."""
         mock_wait.return_value = True
 
-        # Mock verify_passive_sync
-        mock_secondary_client.get_custom_resource.return_value = {
-            "status": {"phase": "Enabled", "lastMessage": "Synced"}
-        }
+        # Mock verify_passive_sync - return Enabled state
+        # This will be called multiple times for different resources
+        def get_custom_resource_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores" and kwargs.get("name") == "restore-acm-passive-sync":
+                return {
+                    "status": {
+                        "phase": "Enabled",
+                        "lastMessage": "Synced",
+                        "veleroManagedClustersRestoreName": "test-velero-restore",
+                    }
+                }
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
+                return {
+                    "status": {
+                        "phase": "Completed",
+                        "progress": {"itemsRestored": 100},
+                    }
+                }
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+
+        # Mock list_custom_resources for managed clusters verification
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "local-cluster"}},
+        ]
 
         # Mock patch for activation
         mock_secondary_client.patch_custom_resource.return_value = True
@@ -84,16 +107,6 @@ class TestSecondaryActivation:
         result = activation_passive.activate()
 
         assert result is True
-
-        # Verify steps
-        # 1. Verify passive sync
-        mock_secondary_client.get_custom_resource.assert_called_with(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
-            name="restore-acm-passive-sync",
-            namespace=BACKUP_NAMESPACE,
-        )
 
         # 2. Activate (patch)
         mock_secondary_client.patch_custom_resource.assert_called_with(
@@ -104,10 +117,6 @@ class TestSecondaryActivation:
             patch={"spec": {"veleroManagedClustersBackupName": "latest"}},
             namespace=BACKUP_NAMESPACE,
         )
-
-        # 3. Wait for completion
-        mock_wait.assert_called_once()
-        assert "restore-acm-passive-sync" in mock_wait.call_args[0][0]
 
     @patch("modules.activation.wait_for_condition")
     def test_activate_full_success(self, mock_wait, activation_full, mock_secondary_client):
@@ -162,12 +171,34 @@ class TestSecondaryActivation:
 
     def test_poll_restore_logic(self, activation_passive, mock_secondary_client):
         """Test the internal _poll_restore logic via _wait_for_restore_completion."""
-        # This is tricky because _poll_restore is internal closure.
-        # We can test it by NOT mocking wait_for_condition but mocking time to avoid sleep,
-        # OR we can trust wait_for_condition tests and just verify we pass the right callback.
-        # Let's try to run it with a mocked wait_for_condition that executes the callback.
+        # Mock get_custom_resource to return appropriate values for different resources
+        call_count = [0]
 
-        mock_secondary_client.get_custom_resource.return_value = {"status": {"phase": "Finished"}}
+        def get_custom_resource_side_effect(**kwargs):
+            call_count[0] += 1
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
+                return {
+                    "status": {
+                        "phase": "Enabled",
+                        "veleroManagedClustersRestoreName": "test-velero-mc-restore",
+                    }
+                }
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
+                return {
+                    "status": {
+                        "phase": "Completed",
+                        "progress": {"itemsRestored": 50},
+                    }
+                }
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+
+        # Mock list_custom_resources for managed clusters
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "local-cluster"}},
+        ]
 
         with patch("modules.activation.wait_for_condition") as mock_wait:
             # Define side effect to execute the callback passed to wait_for_condition

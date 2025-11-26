@@ -25,12 +25,14 @@ class Finalization:
         acm_version: str,
         primary_client: Optional[KubeClient] = None,
         primary_has_observability: bool = False,
+        dry_run: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
         self.acm_version = acm_version
         self.primary = primary_client
         self.primary_has_observability = primary_has_observability
+        self.dry_run = dry_run
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -85,9 +87,52 @@ class Finalization:
             return False
 
     def _enable_backup_schedule(self):
-        """Enable BackupSchedule on new hub (version-aware)."""
+        """Enable BackupSchedule on new hub (version-aware).
+        
+        Important: Before creating the BackupSchedule, we must delete any active
+        restore resources. ACM will not allow a BackupSchedule to run while a
+        restore is active (to prevent data corruption).
+        """
         logger.info("Enabling BackupSchedule on new hub...")
+        
+        # First, delete any active restore resources
+        self._cleanup_restore_resources()
+        
+        # Now create/enable the BackupSchedule
         self.backup_manager.ensure_enabled(self.acm_version)
+
+    def _cleanup_restore_resources(self):
+        """Delete restore resources before enabling BackupSchedule.
+        
+        ACM backup operator won't allow BackupSchedule to be active while
+        a Restore resource exists. We need to clean them up first.
+        """
+        restore_names = ["restore-acm-passive-sync", "restore-acm-full"]
+        
+        for restore_name in restore_names:
+            try:
+                existing = self.secondary.get_custom_resource(
+                    group="cluster.open-cluster-management.io",
+                    version="v1beta1",
+                    plural="restores",
+                    name=restore_name,
+                    namespace=BACKUP_NAMESPACE,
+                )
+                
+                if existing:
+                    logger.info(f"Deleting restore resource: {restore_name}")
+                    self.secondary.delete_custom_resource(
+                        group="cluster.open-cluster-management.io",
+                        version="v1beta1",
+                        plural="restores",
+                        name=restore_name,
+                        namespace=BACKUP_NAMESPACE,
+                    )
+                    logger.info(f"Deleted restore resource: {restore_name}")
+            except Exception as e:
+                # Not found is OK, other errors should be logged
+                if "not found" not in str(e).lower():
+                    logger.warning(f"Error checking/deleting restore {restore_name}: {e}")
 
     def _verify_new_backups(self, timeout: int = 600):
         """
@@ -96,12 +141,16 @@ class Finalization:
         Args:
             timeout: Maximum wait time in seconds (default 10 minutes)
         """
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping new backup verification")
+            return
+
         logger.info("Verifying new backups are being created...")
 
-        # Get current backup list
+        # Get current backup list (Velero Backups use velero.io/v1)
         initial_backups = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
+            group="velero.io",
+            version="v1",
             plural="backups",
             namespace=BACKUP_NAMESPACE,
         )
@@ -115,8 +164,8 @@ class Finalization:
 
         while time.time() - start_time < timeout:
             current_backups = self.secondary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
+                group="velero.io",
+                version="v1",
                 plural="backups",
                 namespace=BACKUP_NAMESPACE,
             )
@@ -140,7 +189,8 @@ class Finalization:
                         phase = backup.get("status", {}).get("phase", "unknown")
                         logger.info(f"Backup {backup_name} phase: {phase}")
 
-                        if phase in ("InProgress", "Finished"):
+                        # Velero uses "InProgress" and "Completed" phases
+                        if phase in ("InProgress", "Completed", "New"):
                             logger.info("New backup is being created successfully!")
                             return
 
@@ -154,6 +204,10 @@ class Finalization:
 
     def _verify_backup_schedule_enabled(self):
         """Ensure BackupSchedule is present and not paused."""
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping BackupSchedule verification")
+            return
+
         schedules = self.secondary.list_custom_resources(
             group="cluster.open-cluster-management.io",
             version="v1beta1",
