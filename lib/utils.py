@@ -2,12 +2,70 @@
 Common utilities for ACM switchover automation.
 """
 
+import functools
 import json
 import logging
 import os
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
+
+# Type variable for generic return type
+T = TypeVar("T")
+
+
+def dry_run_skip(
+    message: str = "Skipping in dry-run mode",
+    return_value: Any = None,
+    dry_run_attr: str = "dry_run",
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """
+    Decorator that skips function execution in dry-run mode.
+
+    This decorator checks if the instance has dry_run=True and if so,
+    logs a message and returns a default value instead of executing
+    the decorated function.
+
+    Args:
+        message: Message to log when skipping (will be prefixed with "[DRY-RUN]")
+        return_value: Value to return when skipping (default: None)
+        dry_run_attr: Name of the attribute to check for dry-run mode.
+                     Can be a dot-separated path like "client.dry_run"
+
+    Returns:
+        Decorated function that skips execution in dry-run mode
+
+    Example:
+        class MyClass:
+            def __init__(self, dry_run: bool = False):
+                self.dry_run = dry_run
+
+            @dry_run_skip(message="Would perform action", return_value=True)
+            def perform_action(self):
+                # This code only runs when dry_run=False
+                return do_something()
+    """
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs) -> T:
+            # Navigate through dot-separated attribute path
+            obj = self
+            for attr_name in dry_run_attr.split("."):
+                obj = getattr(obj, attr_name, None)
+                if obj is None:
+                    break
+
+            if obj:
+                logger = logging.getLogger("acm_switchover")
+                logger.info(f"[DRY-RUN] {message}")
+                return return_value
+
+            return func(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 class Phase(Enum):

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.utils import Phase, StateManager, is_acm_version_ge, setup_logging
+from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge, setup_logging
 
 
 @pytest.fixture
@@ -284,3 +284,154 @@ class TestSetupLogging:
         setup_logging(verbose=False)
 
         root_logger.setLevel.assert_called_once_with(mock_logging.INFO)
+
+
+@pytest.mark.unit
+class TestDryRunSkipDecorator:
+    """Test cases for the dry_run_skip decorator."""
+
+    def test_decorator_skips_when_dry_run_true(self):
+        """Test that decorator skips execution when dry_run is True."""
+
+        class TestClass:
+            def __init__(self):
+                self.dry_run = True
+                self.executed = False
+
+            @dry_run_skip(message="Test skip message", return_value=42)
+            def test_method(self):
+                self.executed = True
+                return 100
+
+        obj = TestClass()
+        result = obj.test_method()
+
+        assert result == 42
+        assert obj.executed is False
+
+    def test_decorator_executes_when_dry_run_false(self):
+        """Test that decorator allows execution when dry_run is False."""
+
+        class TestClass:
+            def __init__(self):
+                self.dry_run = False
+                self.executed = False
+
+            @dry_run_skip(message="Test skip message", return_value=42)
+            def test_method(self):
+                self.executed = True
+                return 100
+
+        obj = TestClass()
+        result = obj.test_method()
+
+        assert result == 100
+        assert obj.executed is True
+
+    def test_decorator_with_nested_attribute(self):
+        """Test decorator with dot-separated attribute path."""
+
+        class Client:
+            def __init__(self, dry_run: bool):
+                self.dry_run = dry_run
+
+        class TestClass:
+            def __init__(self, client: Client):
+                self.client = client
+                self.executed = False
+
+            @dry_run_skip(
+                message="Nested dry run",
+                return_value="skipped",
+                dry_run_attr="client.dry_run",
+            )
+            def test_method(self):
+                self.executed = True
+                return "executed"
+
+        # Test with dry_run=True
+        obj = TestClass(Client(dry_run=True))
+        result = obj.test_method()
+        assert result == "skipped"
+        assert obj.executed is False
+
+        # Test with dry_run=False
+        obj2 = TestClass(Client(dry_run=False))
+        result2 = obj2.test_method()
+        assert result2 == "executed"
+        assert obj2.executed is True
+
+    def test_decorator_with_missing_attribute(self):
+        """Test decorator gracefully handles missing attribute."""
+
+        class TestClass:
+            def __init__(self):
+                self.executed = False
+                # No dry_run attribute
+
+            @dry_run_skip(message="Missing attr", return_value="skipped")
+            def test_method(self):
+                self.executed = True
+                return "executed"
+
+        obj = TestClass()
+        result = obj.test_method()
+
+        # Should execute since attribute is missing (falsy)
+        assert result == "executed"
+        assert obj.executed is True
+
+    def test_decorator_with_arguments(self):
+        """Test decorator preserves function arguments."""
+
+        class TestClass:
+            def __init__(self):
+                self.dry_run = False
+                self.received_args = None
+
+            @dry_run_skip(message="With args")
+            def test_method(self, arg1, arg2, kwarg1=None):
+                self.received_args = (arg1, arg2, kwarg1)
+                return f"{arg1}-{arg2}-{kwarg1}"
+
+        obj = TestClass()
+        result = obj.test_method("a", "b", kwarg1="c")
+
+        assert result == "a-b-c"
+        assert obj.received_args == ("a", "b", "c")
+
+    def test_decorator_default_return_value_is_none(self):
+        """Test decorator returns None by default when skipping."""
+
+        class TestClass:
+            def __init__(self):
+                self.dry_run = True
+
+            @dry_run_skip(message="Default return")
+            def test_method(self):
+                return "should not return this"
+
+        obj = TestClass()
+        result = obj.test_method()
+
+        assert result is None
+
+    @patch("lib.utils.logging.getLogger")
+    def test_decorator_logs_message(self, mock_get_logger):
+        """Test decorator logs the skip message."""
+        mock_logger = MagicMock()
+        mock_get_logger.return_value = mock_logger
+
+        class TestClass:
+            def __init__(self):
+                self.dry_run = True
+
+            @dry_run_skip(message="Custom skip message")
+            def test_method(self):
+                return "executed"
+
+        obj = TestClass()
+        obj.test_method()
+
+        mock_get_logger.assert_called_with("acm_switchover")
+        mock_logger.info.assert_called_with("[DRY-RUN] Custom skip message")
