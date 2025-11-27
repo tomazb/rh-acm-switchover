@@ -49,7 +49,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 **Options:**
 - `--primary-context` - Kubernetes context for primary hub (required)
 - `--secondary-context` - Kubernetes context for secondary hub (required)
-- `--method` - Switchover method: `passive` (default) or `full`
+- `--method` - Switchover method: `passive` or `full` (required)
 - `--help` - Show help message
 
 ### What It Checks

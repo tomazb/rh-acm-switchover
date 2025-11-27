@@ -187,7 +187,7 @@ oc rollout restart deployment/observability-observatorium-api \
 |--------|-------------|
 | `--primary-context` | Kubernetes context for primary hub (required) |
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
-| `--method {passive,full}` | Switchover method (default: passive) |
+| `--method {passive,full}` | Switchover method: `passive` or `full` (required) |
 | `--old-hub-action {secondary,decommission,none}` | Action for old hub after switchover (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |

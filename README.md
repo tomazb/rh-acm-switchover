@@ -146,7 +146,7 @@ python acm_switchover.py --decommission \
 |--------|-------------|
 | `--primary-context` | Kubernetes context for primary hub (required) |
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
-| `--method` | Switchover method: `passive` (default) or `full` |
+| `--method` | Switchover method: `passive` or `full` (required) |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |

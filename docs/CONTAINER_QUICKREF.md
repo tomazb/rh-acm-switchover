@@ -77,8 +77,8 @@ podman run -it --rm \
 |------|-------------|
 | `--validate-only` | Run validations only, no changes |
 | `--dry-run` | Preview actions without executing |
-| `--method passive` | Use passive sync method |
-| `--method full` | Use full restore method |
+| `--method passive` | Use passive sync method (required) |
+| `--method full` | Use full restore method (required) |
 | `--rollback` | Revert to primary hub |
 | `--verbose` | Enable debug logging |
 

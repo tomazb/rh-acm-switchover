@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `--old-hub-action` is now a **required** parameter (no default) to force explicit user choice
+- `--method` is now a **required** parameter (no default) to force explicit switchover method choice
 - All modules now consistently support dry-run mode with clear `[DRY-RUN]` log messages
 - Improved error messages with more context for troubleshooting
 
