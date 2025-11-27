@@ -334,6 +334,16 @@ if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
     
     if [[ "$PAUSED" == "false" ]] || [[ -z "$PAUSED" ]]; then
         check_pass "BackupSchedule '$SCHEDULE_NAME' is enabled (not paused)"
+        
+        # Check for BackupCollision state (indicates scheduling conflict)
+        COLLISION_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get backupschedule "$SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+        if [[ "$COLLISION_STATUS" == "BackupCollision" ]]; then
+            check_fail "BackupSchedule in BackupCollision state (needs recreation)"
+            echo -e "${RED}       The BackupSchedule was likely restored from primary hub and conflicts with existing backups${NC}"
+            echo -e "${RED}       Resolution: Delete and recreate the BackupSchedule resource${NC}"
+        elif [[ -n "$COLLISION_STATUS" ]]; then
+            check_pass "BackupSchedule status: $COLLISION_STATUS"
+        fi
     else
         check_fail "BackupSchedule '$SCHEDULE_NAME' is paused (should be enabled on new hub)"
     fi
@@ -421,6 +431,31 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
         check_pass "Old hub Thanos compactor is stopped (expected)"
     else
         check_warn "Old hub Thanos compactor is still running (should be scaled to 0)"
+    fi
+    
+    # Check if old hub has passive sync restore configured (for failback capability)
+    OLD_RESTORE=$(oc --context="$OLD_HUB_CONTEXT" get restore -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)
+    if [[ -n "$OLD_RESTORE" ]]; then
+        OLD_RESTORE_PHASE=$(oc --context="$OLD_HUB_CONTEXT" get restore "$OLD_RESTORE" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+        OLD_RESTORE_SYNC=$(oc --context="$OLD_HUB_CONTEXT" get restore "$OLD_RESTORE" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.syncRestoreWithNewBackups}' 2>/dev/null || echo "false")
+        
+        if [[ "$OLD_RESTORE_SYNC" == "true" ]] && [[ "$OLD_RESTORE_PHASE" == "Enabled" || "$OLD_RESTORE_PHASE" == "Finished" ]]; then
+            check_pass "Old hub has passive sync restore '$OLD_RESTORE' (Phase: $OLD_RESTORE_PHASE) - ready for failback"
+        elif [[ "$OLD_RESTORE_SYNC" == "true" ]]; then
+            check_warn "Old hub has passive sync restore '$OLD_RESTORE' but phase is: $OLD_RESTORE_PHASE"
+        else
+            check_warn "Old hub restore '$OLD_RESTORE' is not configured for passive sync (failback not available)"
+        fi
+    else
+        check_warn "Old hub has no restore configured (consider setting up passive sync for failback capability)"
+    fi
+    
+    # Check if old hub ACM is still installed (for decommission status)
+    OLD_MCH=$(oc --context="$OLD_HUB_CONTEXT" get mch -n "$ACM_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
+    if [[ $OLD_MCH -gt 0 ]]; then
+        check_pass "Old hub: ACM still installed (expected if keeping as secondary)"
+    else
+        check_pass "Old hub: ACM has been decommissioned"
     fi
 fi
 

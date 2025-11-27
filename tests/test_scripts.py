@@ -150,6 +150,8 @@ def test_preflight_output_format():
         "test-primary",
         "--secondary-context",
         "test-secondary",
+        "--method",
+        "passive",
     )
     # Should show formatted header even if validation fails
     assert "ACM Switchover Pre-flight Validation" in out

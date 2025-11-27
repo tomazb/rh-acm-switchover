@@ -47,7 +47,7 @@ WARNING_MESSAGES=()
 # Parse arguments
 PRIMARY_CONTEXT=""
 SECONDARY_CONTEXT=""
-METHOD="passive"
+METHOD=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -64,12 +64,12 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --help|-h)
-            echo "Usage: $0 --primary-context <primary> --secondary-context <secondary> [--method passive|full]"
+            echo "Usage: $0 --primary-context <primary> --secondary-context <secondary> --method <passive|full>"
             echo ""
             echo "Options:"
             echo "  --primary-context     Kubernetes context for primary hub (required)"
             echo "  --secondary-context   Kubernetes context for secondary hub (required)"
-            echo "  --method              Switchover method: passive (default) or full"
+            echo "  --method              Switchover method: passive or full (required)"
             echo "  --help, -h            Show this help message"
             exit 0
             ;;
@@ -84,6 +84,18 @@ done
 # Validate required arguments
 if [[ -z "$PRIMARY_CONTEXT" ]] || [[ -z "$SECONDARY_CONTEXT" ]]; then
     echo -e "${RED}Error: Both --primary-context and --secondary-context are required${NC}"
+    echo "Use --help for usage information"
+    exit 2
+fi
+
+if [[ -z "$METHOD" ]]; then
+    echo -e "${RED}Error: --method is required (passive or full)${NC}"
+    echo "Use --help for usage information"
+    exit 2
+fi
+
+if [[ "$METHOD" != "passive" ]] && [[ "$METHOD" != "full" ]]; then
+    echo -e "${RED}Error: --method must be 'passive' or 'full', got '$METHOD'${NC}"
     echo "Use --help for usage information"
     exit 2
 fi
@@ -299,6 +311,37 @@ if [[ $BACKUPS -gt 0 ]]; then
     LATEST_PHASE=$(oc --context="$PRIMARY_CONTEXT" get backup "$LATEST_BACKUP" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
     if [[ "$LATEST_PHASE" == "Finished" ]] || [[ "$LATEST_PHASE" == "Completed" ]]; then
         check_pass "Primary hub: Latest backup '$LATEST_BACKUP' completed successfully"
+        
+        # Check if all joined ManagedClusters are included in the backup
+        # This prevents data loss when clusters were imported after the last backup
+        JOINED_CLUSTERS=$(oc --context="$PRIMARY_CONTEXT" get managedclusters -o json 2>/dev/null | \
+            jq -r '.items[] | select(.metadata.name != "local-cluster") | select(.status.conditions[]? | select(.type=="ManagedClusterJoined" and .status=="True")) | .metadata.name' | sort)
+        
+        # Get the managed clusters backup name from the latest backup
+        CLUSTERS_BACKUP_NAME=$(oc --context="$PRIMARY_CONTEXT" get backup "$LATEST_BACKUP" -n "$BACKUP_NAMESPACE" -o jsonpath='{.metadata.labels.cluster\.open-cluster-management\.io/backup-cluster}' 2>/dev/null || echo "")
+        
+        if [[ -n "$CLUSTERS_BACKUP_NAME" ]] && [[ -n "$JOINED_CLUSTERS" ]]; then
+            # Get clusters from the managed clusters backup
+            BACKED_UP_CLUSTERS=$(oc --context="$PRIMARY_CONTEXT" get backup "$CLUSTERS_BACKUP_NAME" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+                jq -r '.status.progress.itemsBackedUp // [] | .[]' 2>/dev/null | grep -E '^managedclusters/' | sed 's|managedclusters/||' | sort || echo "")
+            
+            # Find clusters that are joined but not in backup
+            MISSING_FROM_BACKUP=""
+            for cluster in $JOINED_CLUSTERS; do
+                if ! echo "$BACKED_UP_CLUSTERS" | grep -q "^${cluster}$"; then
+                    MISSING_FROM_BACKUP="$MISSING_FROM_BACKUP $cluster"
+                fi
+            done
+            
+            if [[ -z "$MISSING_FROM_BACKUP" ]]; then
+                check_pass "Primary hub: All joined ManagedClusters are included in the latest backup"
+            else
+                check_warn "Primary hub: Some joined clusters may not be in latest backup:$MISSING_FROM_BACKUP"
+                echo -e "${YELLOW}       Consider running a new backup before switchover to include recently imported clusters${NC}"
+            fi
+        else
+            check_warn "Primary hub: Could not verify ManagedCluster backup coverage (backup metadata unavailable)"
+        fi
     else
         check_fail "Primary hub: Latest backup '$LATEST_BACKUP' in unexpected state: $LATEST_PHASE"
     fi
