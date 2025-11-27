@@ -100,7 +100,7 @@ Examples:
     parser.add_argument(
         "--method",
         choices=["passive", "full"],
-        default="passive",
+        required=True,
         help="Switchover method: passive (continuous sync) or full (one-time restore)",
     )
 
