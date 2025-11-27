@@ -22,9 +22,10 @@ logger = logging.getLogger("acm_switchover")
 class Decommission:
     """Handles decommissioning of old primary hub."""
 
-    def __init__(self, primary_client: KubeClient, has_observability: bool):
+    def __init__(self, primary_client: KubeClient, has_observability: bool, dry_run: bool = False):
         self.primary = primary_client
         self.has_observability = has_observability
+        self.dry_run = dry_run
 
     def decommission(self, interactive: bool = True) -> bool:
         """
@@ -74,6 +75,9 @@ class Decommission:
             else:
                 logger.info("Skipped: Delete MultiClusterHub")
 
+            if self.dry_run:
+                logger.info("[DRY-RUN] Decommission steps completed (no changes made)")
+
             logger.info("Decommission completed")
             return True
 
@@ -99,6 +103,10 @@ class Decommission:
         for mco in mcos:
             mco_name = mco.get("metadata", {}).get("name")
 
+            if self.dry_run:
+                logger.info(f"[DRY-RUN] Would delete MultiClusterObservability: {mco_name}")
+                continue
+
             logger.info(f"Deleting MultiClusterObservability: {mco_name}")
 
             self.primary.delete_custom_resource(
@@ -107,6 +115,10 @@ class Decommission:
                 plural="multiclusterobservabilities",
                 name=mco_name,
             )
+
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping wait for observability termination")
+            return
 
         def _observability_terminated():
             pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
@@ -147,6 +159,11 @@ class Decommission:
                 logger.info(f"Skipping local-cluster")
                 continue
 
+            if self.dry_run:
+                logger.info(f"[DRY-RUN] Would delete ManagedCluster: {mc_name}")
+                deleted_count += 1
+                continue
+
             logger.info(f"Deleting ManagedCluster: {mc_name}")
 
             self.primary.delete_custom_resource(
@@ -158,7 +175,10 @@ class Decommission:
 
             deleted_count += 1
 
-        logger.info(f"Deleted {deleted_count} ManagedCluster(s)")
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] Would delete {deleted_count} ManagedCluster(s)")
+        else:
+            logger.info(f"Deleted {deleted_count} ManagedCluster(s)")
 
         # Note: We don't wait for deletion as clusters should have preserveOnDelete=true
         logger.info(
@@ -185,6 +205,10 @@ class Decommission:
         for mch in mchs:
             mch_name = mch.get("metadata", {}).get("name")
 
+            if self.dry_run:
+                logger.info(f"[DRY-RUN] Would delete MultiClusterHub: {mch_name}")
+                continue
+
             logger.info(f"Deleting MultiClusterHub: {mch_name}")
             logger.info("This may take up to 20 minutes...")
 
@@ -195,6 +219,10 @@ class Decommission:
                 name=mch_name,
                 namespace=ACM_NAMESPACE,
             )
+
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping wait for ACM pod removal")
+            return
 
         def _acm_pods_removed():
             pods = self.primary.get_pods(namespace=ACM_NAMESPACE)
