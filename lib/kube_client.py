@@ -21,7 +21,7 @@ from urllib3.exceptions import HTTPError
 logger = logging.getLogger("acm_switchover")
 
 
-def is_retryable_error(exception: Exception) -> bool:
+def is_retryable_error(exception: BaseException) -> bool:
     """Check if exception is retryable."""
     if isinstance(exception, ApiException):
         # Retry on server errors (5xx) and too many requests (429)
