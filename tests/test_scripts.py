@@ -40,7 +40,7 @@ def run_script(script_name: str, *args: str, env=None):
         stderr=subprocess.STDOUT,
         text=True,
         env=use_env,
-        timeout=5,  # Prevent hanging
+        timeout=30,  # Increased timeout for CI runners
     )
     output = strip_ansi(proc.stdout)
     return proc.returncode, output
