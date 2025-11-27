@@ -30,6 +30,7 @@ python acm_switchover.py \
   --dry-run \
   --primary-context <primary> \
   --secondary-context <secondary> \
+  --old-hub-action secondary \
   --method passive
 ```
 
@@ -41,6 +42,7 @@ python acm_switchover.py \
   --primary-context <primary> \
   --secondary-context <secondary> \
   --method passive \
+  --old-hub-action secondary \
   --verbose
 
 # Method 2: Full restore (one-time)
@@ -48,6 +50,7 @@ python acm_switchover.py \
   --primary-context <primary> \
   --secondary-context <secondary> \
   --method full \
+  --old-hub-action decommission \
   --verbose
 ```
 
@@ -58,13 +61,15 @@ python acm_switchover.py \
 python acm_switchover.py \
   --primary-context <primary> \
   --secondary-context <secondary> \
+  --old-hub-action secondary \
   --method passive
 
 # Rollback to primary hub
 python acm_switchover.py \
   --rollback \
   --primary-context <primary> \
-  --secondary-context <secondary>
+  --secondary-context <secondary> \
+  --old-hub-action none
 ```
 
 ### Decommission
@@ -183,6 +188,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--primary-context` | Kubernetes context for primary hub (required) |
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method {passive,full}` | Switchover method (default: passive) |
+| `--old-hub-action {secondary,decommission,none}` | Action for old hub after switchover (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--rollback` | Rollback to primary hub |
@@ -218,8 +224,10 @@ oc rollout restart deployment/observability-observatorium-api \
 - [ ] Validated with `--validate-only`
 - [ ] Previewed with `--dry-run`
 - [ ] All ClusterDeployments have `preserveOnDelete=true`
+- [ ] All ManagedClusters included in latest backup
 - [ ] Latest backup completed successfully
 - [ ] ACM versions match between hubs
+- [ ] Decided on `--old-hub-action` (secondary/decommission/none)
 - [ ] Stakeholders informed of maintenance window
 - [ ] Rollback procedure tested in non-production
 - [ ] State file location noted for resume

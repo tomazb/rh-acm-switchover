@@ -41,6 +41,7 @@ python acm_switchover.py \
   --dry-run \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
+  --old-hub-action secondary \
   --method passive
 ```
 
@@ -65,8 +66,14 @@ python acm_switchover.py \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
   --method passive \
+  --old-hub-action secondary \
   --verbose
 ```
+
+**The `--old-hub-action` parameter is required** and controls what happens to the old primary hub:
+- `secondary`: Set up passive sync restore for failback capability (recommended)
+- `decommission`: Remove ACM components from old hub automatically
+- `none`: Leave unchanged for manual handling
 
 **Timeline (typical execution):**
 - Pre-flight validation: 2-3 minutes
@@ -100,6 +107,7 @@ python acm_switchover.py \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
   --method passive \
+  --old-hub-action secondary \
   --verbose
 ```
 
@@ -129,7 +137,8 @@ Continuing with: verify_passive_sync
 python acm_switchover.py \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
-  --method passive
+  --method passive \
+  --old-hub-action secondary
 ```
 
 **Advantages:**
@@ -148,7 +157,8 @@ python acm_switchover.py \
 python acm_switchover.py \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
-  --method full
+  --method full \
+  --old-hub-action decommission
 ```
 
 **Considerations:**
@@ -166,7 +176,8 @@ If ACM Observability is not deployed, the script automatically detects this and 
 python acm_switchover.py \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
-  --method passive
+  --method passive \
+  --old-hub-action secondary
 ```
 
 **Automatic detection:**
@@ -185,6 +196,7 @@ python acm_switchover.py \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
   --method passive \
+  --old-hub-action secondary \
   --skip-observability-checks
 ```
 
@@ -445,10 +457,12 @@ set -e  # Exit on error
 
 PRIMARY="prod-acm-primary"
 SECONDARY="prod-acm-secondary"
+OLD_HUB_ACTION="secondary"  # Options: secondary, decommission, none
 STATE_FILE=".state/prod-switchover-$(date +%Y%m%d-%H%M%S).json"
 
 echo "=== ACM Production Switchover ==="
 echo "Started at: $(date)"
+echo "Old hub action: $OLD_HUB_ACTION"
 echo ""
 
 # Step 1: Validation
@@ -468,6 +482,7 @@ python acm_switchover.py \
   --dry-run \
   --primary-context "$PRIMARY" \
   --secondary-context "$SECONDARY" \
+  --old-hub-action "$OLD_HUB_ACTION" \
   --state-file "$STATE_FILE" \
   --verbose
 
@@ -479,6 +494,7 @@ echo "Step 3: Executing switchover..."
 python acm_switchover.py \
   --primary-context "$PRIMARY" \
   --secondary-context "$SECONDARY" \
+  --old-hub-action "$OLD_HUB_ACTION" \
   --state-file "$STATE_FILE" \
   --verbose
 
@@ -486,12 +502,15 @@ echo ""
 echo "=== Switchover Completed ==="
 echo "Completed at: $(date)"
 echo "State file: $STATE_FILE"
+echo "Old hub action: $OLD_HUB_ACTION"
 echo ""
 echo "Next steps:"
 echo "  1. Verify clusters on new hub"
 echo "  2. Test application functionality"
 echo "  3. Inform stakeholders"
-echo "  4. Decommission old hub (optional)"
+if [[ "$OLD_HUB_ACTION" == "none" ]]; then
+  echo "  4. Manually handle old hub (action was 'none')"
+fi
 ```
 
 Save as `run-production-switchover.sh` and execute when ready.

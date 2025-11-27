@@ -91,12 +91,14 @@ python acm_switchover.py --validate-only \
 python acm_switchover.py --dry-run \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
+  --old-hub-action secondary \
   --method passive
 
 # Actual execution
 python acm_switchover.py \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
+  --old-hub-action secondary \
   --method passive
 ```
 
@@ -106,6 +108,7 @@ python acm_switchover.py \
 python acm_switchover.py \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
+  --old-hub-action decommission \
   --method full
 ```
 
@@ -116,6 +119,7 @@ python acm_switchover.py \
 python acm_switchover.py \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
+  --old-hub-action secondary \
   --method passive \
   --state-file .state/switchover-<primary>__<secondary>.json
 ```
@@ -143,6 +147,7 @@ python acm_switchover.py --decommission \
 | `--primary-context` | Kubernetes context for primary hub (required) |
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method` | Switchover method: `passive` (default) or `full` |
+| `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--state-file` | Path to state file (default: `.state/switchover-<primary>__<secondary>.json`) |
@@ -160,6 +165,7 @@ python acm_switchover.py --decommission \
    - Check ACM version matching between hubs
    - Validate OADP operator and DataProtectionApplication
    - **Verify all ClusterDeployments have `spec.preserveOnDelete=true`**
+   - **Verify all ManagedClusters are included in latest backup**
    - Check passive sync status (Method 1 only)
 
 2. **Primary Hub Preparation**
@@ -180,7 +186,12 @@ python acm_switchover.py --decommission \
 
 5. **Finalization**
    - Enable BackupSchedule on new hub
+   - Fix BackupSchedule collision if detected
    - Verify new backups are created
+   - Handle old hub based on `--old-hub-action`:
+     - `secondary`: Set up passive sync restore for failback
+     - `decommission`: Remove ACM components automatically
+     - `none`: Leave unchanged for manual handling
    - Generate completion report
 
 ### State Management

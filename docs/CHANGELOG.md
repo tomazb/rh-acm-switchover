@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2025-11-27
+
+### Added
+
+#### Pre-flight Validation
+- **ManagedClusterBackupValidator**: New validation to ensure all joined ManagedClusters are included in the latest backup before switchover. Prevents data loss when clusters were imported after the last backup.
+
+#### Old Hub Handling
+- **`--old-hub-action` parameter** (REQUIRED): Explicit choice for handling old primary hub after switchover:
+  - `secondary`: Set up old hub with passive sync restore for failback capability
+  - `decommission`: Remove ACM components from old hub automatically
+  - `none`: Leave old hub unchanged for manual handling
+
+#### Finalization Improvements
+- **BackupSchedule collision fix**: Automatically detect and fix `BackupCollision` state by recreating the BackupSchedule
+- **Passive sync setup**: Automatically create passive sync restore on old hub for failback capability
+- **Restore cleanup**: Delete active restore resources before enabling BackupSchedule (required by ACM backup operator)
+
+#### Dry-Run Support
+- Comprehensive dry-run support across all modules:
+  - `PrimaryPreparation`: Skip Thanos pod verification wait
+  - `Rollback`: Log all operations with `[DRY-RUN]` prefix
+  - `BackupScheduleManager`: Log schedule modifications
+  - `Decommission`: Log all delete operations without making changes
+  - `Finalization`: Full dry-run support for old hub handling
+
+#### Activation Improvements  
+- **Patch verification**: Verify that passive sync restore patch was actually applied by re-reading the resource
+- **Detailed logging**: Added debug logging to `KubeClient.patch_custom_resource` for troubleshooting
+- **Passive sync state**: Accept both "Enabled" and "Finished" states as valid for activation
+
+### Changed
+
+- `--old-hub-action` is now a **required** parameter (no default) to force explicit user choice
+- All modules now consistently support dry-run mode with clear `[DRY-RUN]` log messages
+- Improved error messages with more context for troubleshooting
+
+### Fixed
+
+- Fixed passive sync validation to accept "Finished" state (not just "Enabled")
+- Fixed dry-run mode not being passed to all sub-modules
+
 ## [1.1.0] - 2025-11-19
 
 ### Changed
@@ -258,5 +300,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/tomazb/rh-acm-switchover/releases/tag/v1.0.0
