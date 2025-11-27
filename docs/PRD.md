@@ -2,8 +2,8 @@
 
 ## ACM Hub Switchover Automation
 
-**Version**: 1.0.0  
-**Date**: November 24, 2025  
+**Version**: 1.2.0  
+**Date**: November 27, 2025  
 **Status**: In Testing - Not Yet Production Ready  
 **Owner**: Platform Engineering Team
 
@@ -1123,14 +1123,24 @@ Any phase can transition to: FAILED or ROLLBACK
 
 ---
 
-**Document Version**: 1.0.0  
-**Last Updated**: November 24, 2025  
+**Document Version**: 1.2.0  
+**Last Updated**: November 27, 2025  
 **Status**: Living Document - Testing Phase  
 **Next Review**: December 15, 2025 (Post-Testing)
 
 ---
 
 ## Change Log
+
+### November 27, 2025 (Update 6) - Required CLI Parameters
+
+**CLI Parameter Changes** ✅:
+- `--method` is now a **required** parameter (previously defaulted to `passive`)
+- `--old-hub-action` is now a **required** parameter (no default)
+- Both parameters must be explicitly specified to force conscious user choice
+- Added ManagedClusterBackupValidator for pre-flight validation
+- Comprehensive dry-run support across all modules
+- Updated all documentation to reflect required parameters
 
 ### November 25, 2025 (Update 5) - Reliability Hardening
 
