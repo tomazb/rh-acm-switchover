@@ -23,17 +23,24 @@ class Rollback:
         state_manager: StateManager,
         acm_version: str,
         has_observability: bool,
+        dry_run: bool = False,
     ) -> None:
         self.primary = primary_client
         self.secondary = secondary_client
         self.state = state_manager
         self.acm_version = acm_version
         self.has_observability = has_observability
-        self.backup_manager = BackupScheduleManager(primary_client, state_manager, "primary hub")
+        self.dry_run = dry_run
+        self.backup_manager = BackupScheduleManager(
+            primary_client, state_manager, "primary hub", dry_run=dry_run
+        )
 
     def rollback(self) -> bool:
         """Execute rollback to primary hub."""
-        logger.info("Starting rollback to primary hub...")
+        if self.dry_run:
+            logger.info("[DRY-RUN] Starting rollback to primary hub (no changes will be made)...")
+        else:
+            logger.info("Starting rollback to primary hub...")
 
         try:
             self._deactivate_secondary()
@@ -53,7 +60,10 @@ class Rollback:
             return False
 
     def _deactivate_secondary(self) -> None:
-        logger.info("Deactivating secondary hub...")
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would deactivate secondary hub...")
+        else:
+            logger.info("Deactivating secondary hub...")
 
         deleted = self.secondary.delete_custom_resource(
             group="cluster.open-cluster-management.io",
@@ -63,15 +73,18 @@ class Rollback:
             namespace=BACKUP_NAMESPACE,
         )
 
-        if deleted:
-            logger.info("Deleted restore-acm-full")
-        else:
-            logger.debug("restore-acm-full not found")
-
-        logger.info("Secondary hub deactivated")
+        if not self.dry_run:
+            if deleted:
+                logger.info("Deleted restore-acm-full")
+            else:
+                logger.debug("restore-acm-full not found")
+            logger.info("Secondary hub deactivated")
 
     def _enable_auto_import(self) -> None:
-        logger.info("Re-enabling auto-import on ManagedClusters...")
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would re-enable auto-import on ManagedClusters...")
+        else:
+            logger.info("Re-enabling auto-import on ManagedClusters...")
 
         managed_clusters = self.primary.list_managed_clusters()
 
@@ -90,10 +103,16 @@ class Rollback:
 
                 count += 1
 
-        logger.info("Removed disable-auto-import annotation from %s ManagedCluster(s)", count)
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would remove disable-auto-import annotation from %s ManagedCluster(s)", count)
+        else:
+            logger.info("Removed disable-auto-import annotation from %s ManagedCluster(s)", count)
 
     def _restart_thanos_compactor(self) -> None:
-        logger.info("Restarting Thanos compactor...")
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would restart Thanos compactor...")
+        else:
+            logger.info("Restarting Thanos compactor...")
 
         try:
             self.primary.scale_statefulset(
@@ -102,10 +121,14 @@ class Rollback:
                 replicas=1,
             )
 
-            logger.info("Thanos compactor scaled back to 1 replica")
+            if not self.dry_run:
+                logger.info("Thanos compactor scaled back to 1 replica")
         except Exception as exc:
             logger.error(f"Failed to restart Thanos compactor: {exc}")
 
     def _unpause_backup_schedule(self) -> None:
-        logger.info("Unpausing BackupSchedule on primary hub...")
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would unpause BackupSchedule on primary hub...")
+        else:
+            logger.info("Unpausing BackupSchedule on primary hub...")
         self.backup_manager.ensure_enabled(self.acm_version)

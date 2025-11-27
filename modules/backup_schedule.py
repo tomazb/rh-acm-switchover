@@ -21,10 +21,12 @@ class BackupScheduleManager:
         kube_client: KubeClient,
         state_manager: StateManager,
         hub_label: str,
+        dry_run: bool = False,
     ) -> None:
         self.client = kube_client
         self.state = state_manager
         self.hub_label = hub_label
+        self.dry_run = dry_run
 
     def ensure_enabled(self, acm_version: str) -> None:
         """Ensure a BackupSchedule exists and is not paused."""
@@ -46,11 +48,18 @@ class BackupScheduleManager:
             return
 
         if is_acm_version_ge(acm_version, "2.12.0"):
-            logger.info(
-                "Unpausing BackupSchedule %s on %s via spec.paused",
-                schedule_name,
-                self.hub_label,
-            )
+            if self.dry_run:
+                logger.info(
+                    "[DRY-RUN] Would unpause BackupSchedule %s on %s via spec.paused",
+                    schedule_name,
+                    self.hub_label,
+                )
+            else:
+                logger.info(
+                    "Unpausing BackupSchedule %s on %s via spec.paused",
+                    schedule_name,
+                    self.hub_label,
+                )
             self.client.patch_custom_resource(
                 group="cluster.open-cluster-management.io",
                 version="v1beta1",
@@ -59,7 +68,8 @@ class BackupScheduleManager:
                 patch={"spec": {"paused": False}},
                 namespace=BACKUP_NAMESPACE,
             )
-            logger.info("BackupSchedule %s enabled", schedule_name)
+            if not self.dry_run:
+                logger.info("BackupSchedule %s enabled", schedule_name)
         else:
             logger.info(
                 "BackupSchedule pause management for ACM %s handled via restore",
@@ -83,7 +93,10 @@ class BackupScheduleManager:
             )
             return
 
-        logger.info("Restoring saved BackupSchedule on %s", self.hub_label)
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would restore saved BackupSchedule on %s", self.hub_label)
+        else:
+            logger.info("Restoring saved BackupSchedule on %s", self.hub_label)
         body = copy.deepcopy(saved_bs)
         self._clean_metadata(body)
         if "spec" not in body:
@@ -98,7 +111,8 @@ class BackupScheduleManager:
             body=body,
             namespace=BACKUP_NAMESPACE,
         )
-        logger.info("BackupSchedule restored on %s", self.hub_label)
+        if not self.dry_run:
+            logger.info("BackupSchedule restored on %s", self.hub_label)
 
     @staticmethod
     def _clean_metadata(schedule: Dict[str, Any]) -> None:

@@ -21,11 +21,13 @@ class PrimaryPreparation:
         state_manager: StateManager,
         acm_version: str,
         has_observability: bool,
+        dry_run: bool = False,
     ):
         self.primary = primary_client
         self.state = state_manager
         self.acm_version = acm_version
         self.has_observability = has_observability
+        self.dry_run = dry_run
 
     def prepare(self) -> bool:
         """
@@ -175,6 +177,11 @@ class PrimaryPreparation:
                 namespace="open-cluster-management-observability",
                 replicas=0,
             )
+
+            # Skip verification in dry-run mode
+            if self.dry_run:
+                logger.info("[DRY-RUN] Skipping Thanos compactor pod verification")
+                return
 
             # Wait a moment and verify no pods running
             import time
