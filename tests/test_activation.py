@@ -101,8 +101,10 @@ class TestSecondaryActivation:
             {"metadata": {"name": "local-cluster"}},
         ]
 
-        # Mock patch for activation
-        mock_secondary_client.patch_custom_resource.return_value = True
+        # Mock patch for activation - return a dict mimicking the patched resource
+        mock_secondary_client.patch_custom_resource.return_value = {
+            "spec": {"veleroManagedClustersBackupName": "latest"}
+        }
 
         result = activation_passive.activate()
 

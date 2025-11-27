@@ -283,8 +283,14 @@ class KubeClient:
             logger.info(f"[DRY-RUN] Would patch {plural}/{name} with: {patch}")
             return {}
 
+        logger.debug(
+            f"KUBE_CLIENT patch_custom_resource: group={group}, version={version}, "
+            f"plural={plural}, name={name}, namespace={namespace}, patch={patch}"
+        )
+
         try:
             if namespace:
+                logger.debug(f"KUBE_CLIENT: Calling patch_namespaced_custom_object...")
                 result = self.custom_api.patch_namespaced_custom_object(
                     group=group,
                     version=version,
@@ -293,15 +299,27 @@ class KubeClient:
                     name=name,
                     body=patch,
                 )
+                logger.debug(f"KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
             else:
+                logger.debug(f"KUBE_CLIENT: Calling patch_cluster_custom_object...")
                 result = self.custom_api.patch_cluster_custom_object(
                     group=group, version=version, plural=plural, name=name, body=patch
                 )
+                logger.debug(f"KUBE_CLIENT: patch_cluster_custom_object returned successfully")
+            
+            logger.debug(f"KUBE_CLIENT: Patch result keys: {list(result.keys()) if result else 'None'}")
             return result
         except ApiException as e:
+            logger.error(
+                f"KUBE_CLIENT: ApiException during patch: status={e.status}, reason={e.reason}, "
+                f"body={e.body[:500] if e.body else 'None'}"
+            )
             if is_retryable_error(e):
                 raise
             logger.error(f"Failed to patch {plural}/{name}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"KUBE_CLIENT: Unexpected exception during patch: {type(e).__name__}: {e}")
             raise
 
     @retry_api_call
