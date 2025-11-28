@@ -10,6 +10,7 @@ These scripts automate the validation process before and after switchover, ensur
 |--------|---------|-------------|
 | [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
 | [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
+| [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
 | [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts |
 
 ## Idempotency & Safety
@@ -379,6 +380,60 @@ fi
 
 ---
 
+## Shared Library
+
+**File:** `lib-common.sh`
+
+### Purpose
+
+Provides shared helper functions and utilities used by both `preflight-check.sh` and `postflight-check.sh`. This library eliminates code duplication and ensures consistent behavior across scripts.
+
+### Contents
+
+| Component | Description |
+|-----------|-------------|
+| **Color Variables** | `RED`, `GREEN`, `YELLOW`, `BLUE`, `NC` for formatted output |
+| **Counter Variables** | `TOTAL_CHECKS`, `PASSED_CHECKS`, `FAILED_CHECKS`, `WARNING_CHECKS` |
+| **Message Arrays** | `FAILED_MESSAGES`, `WARNING_MESSAGES` for summary reporting |
+| **`check_pass`** | Record a passing check with green checkmark |
+| **`check_fail`** | Record a failing check with red X, adds to failed messages |
+| **`check_warn`** | Record a warning with yellow triangle, adds to warning messages |
+| **`section_header`** | Print a formatted section header |
+| **`detect_cluster_cli`** | Detect `oc`/`kubectl` and `jq`, set up aliases |
+| **`print_summary`** | Print validation summary with mode-specific messaging |
+
+### Usage
+
+The library is automatically sourced by both scripts. To use in a new script:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/constants.sh"
+source "${SCRIPT_DIR}/lib-common.sh"
+
+# Use helper functions
+section_header "1. My Check"
+detect_cluster_cli
+
+if some_check; then
+    check_pass "Check passed"
+else
+    check_fail "Check failed"
+fi
+
+# Print summary and exit with appropriate code
+if print_summary "preflight"; then
+    exit $EXIT_SUCCESS
+else
+    exit $EXIT_FAILURE
+fi
+```
+
+---
+
 ## Script Maintenance
 
 ### Adding New Checks
@@ -390,6 +445,15 @@ To add a new validation check:
 3. Use `check_pass`, `check_fail`, or `check_warn` for results
 4. Update the script documentation above
 5. Test in a non-production environment first
+
+### Adding New Helper Functions
+
+To add a new shared helper function:
+
+1. Add the function to `lib-common.sh`
+2. Add corresponding tests to `tests/test_lib_common.sh`
+3. Add Python tests to `tests/test_scripts.py`
+4. Update this documentation
 
 ### Version Compatibility
 
@@ -409,4 +473,4 @@ For issues or questions:
 
 ---
 
-**Last Updated:** 2025-11-24
+**Last Updated:** 2025-11-28
