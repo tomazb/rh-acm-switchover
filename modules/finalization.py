@@ -492,14 +492,19 @@ class Finalization:
 
     def _fix_backup_schedule_collision(self):
         """
-        Fix BackupSchedule collision by recreating it.
+        Proactively fix BackupSchedule collision by recreating it.
 
-        After switchover, the new primary's BackupSchedule may show "BackupCollision"
-        because it detects old backups from the previous primary in storage.
-        Recreating the BackupSchedule resets this state.
+        After switchover, the new primary's BackupSchedule will eventually show
+        "BackupCollision" because it detects old backups from the previous primary
+        in storage. The collision is only detected after Velero schedules run
+        and attempt to write to the shared storage location.
+
+        To avoid this race condition, we proactively recreate the BackupSchedule
+        during switchover. This resets the cluster ID association and prevents
+        the collision from occurring.
         """
         if self.dry_run:
-            logger.info("[DRY-RUN] Would check and fix BackupSchedule collision")
+            logger.info("[DRY-RUN] Would recreate BackupSchedule to prevent collision")
             return
 
         # Check current BackupSchedule status
@@ -518,11 +523,18 @@ class Finalization:
         schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
         phase = schedule.get("status", {}).get("phase", "")
 
-        if phase != "BackupCollision":
-            logger.info("BackupSchedule %s is healthy (phase: %s)", schedule_name, phase)
-            return
-
-        logger.warning("BackupSchedule %s has collision, recreating...", schedule_name)
+        # Proactively recreate to prevent collision, or fix if already in collision
+        # The collision may not appear immediately - it only shows after Velero
+        # schedules run and detect backups from a different cluster ID
+        if phase == "BackupCollision":
+            logger.warning("BackupSchedule %s has collision, recreating...", schedule_name)
+        else:
+            logger.info(
+                "Proactively recreating BackupSchedule %s to prevent future collision "
+                "(current phase: %s)",
+                schedule_name,
+                phase or "Unknown",
+            )
 
         # Save the spec for recreation
         schedule_spec = schedule.get("spec", {})
@@ -538,7 +550,7 @@ class Finalization:
             )
             logger.info("Deleted old BackupSchedule %s", schedule_name)
 
-            # Wait a moment for deletion
+            # Wait a moment for deletion to complete
             time.sleep(5)
 
             # Recreate with same spec
@@ -559,10 +571,10 @@ class Finalization:
                 body=new_schedule,
                 namespace=BACKUP_NAMESPACE,
             )
-            logger.info("Recreated BackupSchedule %s", schedule_name)
+            logger.info("Recreated BackupSchedule %s to prevent collision", schedule_name)
 
         except Exception as e:
-            logger.warning("Failed to fix BackupSchedule collision: %s", e)
+            logger.warning("Failed to recreate BackupSchedule: %s", e)
             logger.warning("You may need to manually delete and recreate the BackupSchedule")
 
     def _verify_old_hub_state(self):
