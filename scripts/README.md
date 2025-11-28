@@ -42,14 +42,14 @@ Auto-discovers Kubernetes contexts from your kubeconfig, detects which clusters 
 ### Usage
 
 ```bash
-# Auto-discover all contexts from kubeconfig
-./scripts/discover-hub.sh
+# Auto-discover all ACM hubs from kubeconfig contexts
+./scripts/discover-hub.sh --auto
 
 # Check specific contexts only
 ./scripts/discover-hub.sh --contexts hub1,hub2
 
 # Discover and immediately run the proposed check
-./scripts/discover-hub.sh --run
+./scripts/discover-hub.sh --auto --run
 ```
 
 **Options:**
