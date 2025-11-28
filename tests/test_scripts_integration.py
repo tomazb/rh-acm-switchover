@@ -162,13 +162,19 @@ case "$*" in
         exit 0
         ;;
     
-    # Passive sync restore check
-    "--context=secondary-ok get restore -n open-cluster-management-backup --sort-by=.metadata.creationTimestamp -o jsonpath="*"items[-1].metadata.name"*"")
-        echo "restore-sample"
+    # Passive sync restore check - discovery by syncRestoreWithNewBackups=true
+    "--context=secondary-ok get restore -n open-cluster-management-backup -o json")
+        cat << 'RESTORE_JSON'
+{"items":[{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}]}
+RESTORE_JSON
         exit 0
         ;;
-    "--context=secondary-ok get restore restore-sample -n open-cluster-management-backup -o jsonpath="*"phase"*"")
-        echo "Completed"
+    "--context=secondary-ok get restore restore-acm-passive-sync -n open-cluster-management-backup -o jsonpath="*"phase"*"")
+        echo "Enabled"
+        exit 0
+        ;;
+    # Fallback check for well-known name (not needed since discovery finds it, but keep for robustness)
+    "--context=secondary-ok get restore restore-acm-passive-sync -n open-cluster-management-backup")
         exit 0
         ;;
     

@@ -25,6 +25,7 @@ export OBS_THANOS_COMPACT_POD="observability-thanos-compact"
 # Note: BackupSchedule and DataProtectionApplication names are often dynamic or specific to environment,
 # but we can define defaults or common patterns here if needed.
 # Currently scripts detect some of these dynamically.
+export RESTORE_PASSIVE_SYNC_NAME="restore-acm-passive-sync"
 
 # Timeouts / Thresholds
 export RESTORE_AGE_WARNING_SECONDS=3600 # 1 hour

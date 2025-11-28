@@ -323,18 +323,27 @@ fi
 if [[ "$METHOD" == "passive" ]]; then
     section_header "9. Checking Passive Sync (Method 1)"
     
-    # Find the latest restore in the namespace
-    PASSIVE_RESTORE_NAME=$(oc --context="$SECONDARY_CONTEXT" get restore -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)
+    # Find passive sync restore by looking for syncRestoreWithNewBackups=true
+    # This matches the Python discovery logic in modules/activation.py
+    PASSIVE_RESTORE_NAME=$(oc --context="$SECONDARY_CONTEXT" get restore -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+        jq -r '.items[] | select(.spec.syncRestoreWithNewBackups == true) | .metadata.name' | head -1 || true)
+    
+    # Fallback: if not found by spec, try the well-known name for backward compatibility
+    if [[ -z "$PASSIVE_RESTORE_NAME" ]]; then
+        if oc --context="$SECONDARY_CONTEXT" get restore "$RESTORE_PASSIVE_SYNC_NAME" -n "$BACKUP_NAMESPACE" &> /dev/null; then
+            PASSIVE_RESTORE_NAME="$RESTORE_PASSIVE_SYNC_NAME"
+        fi
+    fi
     
     if [[ -n "$PASSIVE_RESTORE_NAME" ]]; then
         PHASE=$(oc --context="$SECONDARY_CONTEXT" get restore "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
         if [[ "$PHASE" == "Enabled" ]] || [[ "$PHASE" == "Completed" ]] || [[ "$PHASE" == "Finished" ]]; then
-            check_pass "Secondary hub: Found restore '$PASSIVE_RESTORE_NAME' in state: $PHASE"
+            check_pass "Secondary hub: Found passive sync restore '$PASSIVE_RESTORE_NAME' in state: $PHASE"
         else
-            check_fail "Secondary hub: Restore '$PASSIVE_RESTORE_NAME' exists but phase is: $PHASE (expected: Enabled, Completed, or Finished)"
+            check_fail "Secondary hub: Passive sync restore '$PASSIVE_RESTORE_NAME' exists but phase is: $PHASE (expected: Enabled, Completed, or Finished)"
         fi
     else
-        check_fail "Secondary hub: No restore resources found (required for Method 1)"
+        check_fail "Secondary hub: No passive sync restore found (required for Method 1). Expected a Restore with spec.syncRestoreWithNewBackups=true or named '$RESTORE_PASSIVE_SYNC_NAME'"
     fi
 else
     section_header "9. Method 2 (Full Restore) - No passive sync check needed"
