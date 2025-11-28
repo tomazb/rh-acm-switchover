@@ -14,7 +14,7 @@ from lib.constants import (
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
     VELERO_BACKUP_LATEST,
 )
-from lib.exceptions import FatalError, SwitchoverError, TransientError
+from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager
 from lib.waiter import wait_for_condition
@@ -46,7 +46,7 @@ class SecondaryActivation:
         Returns:
             True if activation completed successfully
         """
-        logger.info(f"Starting secondary hub activation (method: {self.method})...")
+        logger.info("Starting secondary hub activation (method: %s)...", self.method)
 
         try:
             if self.method == "passive":
@@ -81,11 +81,11 @@ class SecondaryActivation:
             return True
 
         except SwitchoverError as e:
-            logger.error(f"Secondary hub activation failed: {e}")
+            logger.error("Secondary hub activation failed: %s", e)
             self.state.add_error(str(e), "activation")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error during activation: {e}")
+            logger.error("Unexpected error during activation: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "activation")
             return False
 
@@ -113,7 +113,7 @@ class SecondaryActivation:
         if phase not in ("Enabled", "Finished"):
             raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
 
-        logger.info(f"Passive sync verified ({phase}): {message}")
+        logger.info("Passive sync verified (%s): %s", phase, message)
 
     def _activate_via_passive_sync(self):
         """Activate managed clusters by patching passive sync restore."""
@@ -132,15 +132,15 @@ class SecondaryActivation:
             current_mc_backup = restore_before.get("spec", {}).get(
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>"
             )
-            logger.info(f"BEFORE PATCH: {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} = {current_mc_backup}")
-            logger.debug(f"BEFORE PATCH: Full spec = {restore_before.get('spec', {})}")
+            logger.info("BEFORE PATCH: %s = %s", SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, current_mc_backup)
+            logger.debug("BEFORE PATCH: Full spec = %s", restore_before.get("spec", {}))
         else:
-            logger.error(f"BEFORE PATCH: {RESTORE_PASSIVE_SYNC_NAME} not found!")
+            logger.error("BEFORE PATCH: %s not found!", RESTORE_PASSIVE_SYNC_NAME)
             raise FatalError(f"{RESTORE_PASSIVE_SYNC_NAME} not found before patching")
 
         # Patch existing restore with veleroManagedClustersBackupName: latest
         patch = {"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}}
-        logger.info(f"PATCHING: Applying patch = {patch}")
+        logger.info("PATCHING: Applying patch = %s", patch)
 
         result = self.secondary.patch_custom_resource(
             group="cluster.open-cluster-management.io",
@@ -151,18 +151,18 @@ class SecondaryActivation:
             namespace=BACKUP_NAMESPACE,
         )
 
-        logger.info(f"PATCH RESULT: patch_custom_resource returned type={type(result).__name__}")
+        logger.info("PATCH RESULT: patch_custom_resource returned type=%s", type(result).__name__)
         if result:
             result_mc_backup = result.get("spec", {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>")
-            logger.info(f"PATCH RESULT: {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} in response = {result_mc_backup}")
-            logger.debug(f"PATCH RESULT: Full spec in response = {result.get('spec', {})}")
+            logger.info("PATCH RESULT: %s in response = %s", SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, result_mc_backup)
+            logger.debug("PATCH RESULT: Full spec in response = %s", result.get("spec", {}))
         else:
             logger.warning("PATCH RESULT: patch_custom_resource returned empty/None result")
 
         # Skip verification in dry-run mode since the patch wasn't actually applied
         if self.secondary.dry_run:
             logger.info("[DRY-RUN] Skipping patch verification (patch was not applied)")
-            logger.info(f"Patched {RESTORE_PASSIVE_SYNC_NAME} to activate managed clusters")
+            logger.info("Patched %s to activate managed clusters", RESTORE_PASSIVE_SYNC_NAME)
             return
 
         # Verify the patch was actually applied by re-reading the resource
@@ -178,21 +178,25 @@ class SecondaryActivation:
 
         if restore_after:
             after_mc_backup = restore_after.get("spec", {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>")
-            logger.info(f"AFTER PATCH (re-read): {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} = {after_mc_backup}")
-            logger.debug(f"AFTER PATCH (re-read): Full spec = {restore_after.get('spec', {})}")
+            logger.info("AFTER PATCH (re-read): %s = %s", SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, after_mc_backup)
+            logger.debug("AFTER PATCH (re-read): Full spec = %s", restore_after.get("spec", {}))
 
             if after_mc_backup != VELERO_BACKUP_LATEST:
-                logger.error(f"PATCH VERIFICATION FAILED: Expected '{VELERO_BACKUP_LATEST}', got '{after_mc_backup}'")
+                logger.error(
+                    "PATCH VERIFICATION FAILED: Expected '%s', got '%s'",
+                    VELERO_BACKUP_LATEST, after_mc_backup,
+                )
                 raise FatalError(
                     f"Patch verification failed: {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} is '{after_mc_backup}', "
                     f"expected '{VELERO_BACKUP_LATEST}'. The patch may not have been applied correctly."
                 )
             else:
                 logger.info(
-                    f"PATCH VERIFICATION SUCCESS: {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} is now '{VELERO_BACKUP_LATEST}'"
+                    "PATCH VERIFICATION SUCCESS: %s is now '%s'",
+                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, VELERO_BACKUP_LATEST,
                 )
         else:
-            logger.error(f"AFTER PATCH: {RESTORE_PASSIVE_SYNC_NAME} not found after patching!")
+            logger.error("AFTER PATCH: %s not found after patching!", RESTORE_PASSIVE_SYNC_NAME)
             raise FatalError(f"{RESTORE_PASSIVE_SYNC_NAME} disappeared after patching")
 
     def _create_full_restore(self):
@@ -209,7 +213,7 @@ class SecondaryActivation:
         )
 
         if existing_restore:
-            logger.info(f"{RESTORE_FULL_NAME} already exists")
+            logger.info("%s already exists", RESTORE_FULL_NAME)
             return
 
         # Create restore resource
@@ -236,7 +240,7 @@ class SecondaryActivation:
             namespace=BACKUP_NAMESPACE,
         )
 
-        logger.info(f"Created {RESTORE_FULL_NAME} resource")
+        logger.info("Created %s resource", RESTORE_FULL_NAME)
 
     def _wait_for_restore_completion(self, timeout: int = RESTORE_WAIT_TIMEOUT):
         """Wait for restore to complete and verify managed clusters are restored."""
@@ -339,7 +343,7 @@ class SecondaryActivation:
 
             if velero_phase == "Completed":
                 items_restored = velero_restore.get("status", {}).get("progress", {}).get("itemsRestored", 0)
-                logger.info(f"Velero managed clusters restore completed: {items_restored} items restored")
+                logger.info("Velero managed clusters restore completed: %s items restored", items_restored)
                 return True, f"completed ({items_restored} items)"
             if velero_phase in ("Failed", "PartiallyFailed"):
                 raise FatalError(f"Velero managed clusters restore failed: {velero_phase}")
@@ -384,8 +388,9 @@ class SecondaryActivation:
 
         if len(non_local_clusters) >= MIN_MANAGED_CLUSTERS:
             logger.info(
-                f"Found {len(non_local_clusters)} ManagedCluster(s) on secondary hub: "
-                f"{', '.join(non_local_clusters) if non_local_clusters else '(none)'}"
+                "Found %s ManagedCluster(s) on secondary hub: %s",
+                len(non_local_clusters),
+                ", ".join(non_local_clusters) if non_local_clusters else "(none)",
             )
         else:
             if MIN_MANAGED_CLUSTERS > 0:
