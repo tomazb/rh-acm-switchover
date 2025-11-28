@@ -8,6 +8,7 @@ These scripts automate the validation process before and after switchover, ensur
 
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
+| [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
 | [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
 | [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
 | [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
@@ -27,6 +28,85 @@ These scripts automate the validation process before and after switchover, ensur
 - Re-run post-flight verification to monitor stabilization
 - Use scripts for ongoing health monitoring
 - Run in parallel with other operations (read-only)
+
+---
+
+## Hub Discovery Script
+
+**File:** `discover-hub.sh`
+
+### Purpose
+
+Auto-discovers Kubernetes contexts from your kubeconfig, detects which clusters are ACM hubs, determines their roles (primary/secondary/standby), and proposes the appropriate preflight or postflight check command based on the detected state.
+
+### Usage
+
+```bash
+# Auto-discover all contexts from kubeconfig
+./scripts/discover-hub.sh
+
+# Check specific contexts only
+./scripts/discover-hub.sh --contexts hub1,hub2
+
+# Discover and immediately run the proposed check
+./scripts/discover-hub.sh --run
+```
+
+**Options:**
+
+- `--contexts <ctx1,ctx2,...>` - Comma-separated list of contexts to check (default: auto-discover all)
+- `--run` - Execute the proposed check command immediately
+- `--timeout <seconds>` - Connection timeout per context (default: 5)
+- `--help` - Show help message
+
+### What It Detects
+
+The script analyzes each context to determine hub role based on:
+
+| Indicator | Primary Hub | Secondary Hub | Standby |
+|-----------|-------------|---------------|---------|
+| BackupSchedule | Active (not paused) | Paused or none | Collision state |
+| Restore resource | None or finished | Passive-sync enabled | Finished |
+| ManagedClusters | Available=True | Available=Unknown | - |
+
+### Example Output
+
+```
+╔════════════════════════════════════════════════════════════╗
+║   ACM Hub Discovery                                        ║
+╚════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Discovered ACM Hubs
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ● primary-hub
+    Role:     primary
+    Clusters: 5/5
+    State:    Active primary hub (BackupSchedule running, 5/5 clusters available)
+
+  ● secondary-hub
+    Role:     secondary
+    Clusters: 0/5
+    State:    Secondary hub in passive-sync mode (ready for switchover)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Recommended Action
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Scenario: Pre-Switchover
+  Primary hub (primary-hub) and secondary hub (secondary-hub) detected.
+  Run preflight checks before initiating switchover.
+
+  Proposed command:
+    ./scripts/preflight-check.sh --primary-context primary-hub --secondary-context secondary-hub --method passive
+```
+
+### Exit Codes
+
+- `0` - Discovery completed successfully and proposed a check
+- `1` - No ACM hubs found or unable to determine roles
+- `2` - Invalid arguments
 
 ---
 
