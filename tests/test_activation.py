@@ -26,7 +26,9 @@ SecondaryActivation = activation_module.SecondaryActivation
 @pytest.fixture
 def mock_secondary_client():
     """Create a mock KubeClient for secondary hub."""
-    return Mock()
+    mock = Mock()
+    mock.dry_run = False  # Ensure dry_run is False for tests
+    return mock
 
 
 @pytest.fixture
@@ -78,17 +80,25 @@ class TestSecondaryActivation:
         """Test successful passive activation."""
         mock_wait.return_value = True
 
+        # Track if patch has been applied to simulate the patched state
+        patch_applied = {"value": False}
+
         # Mock verify_passive_sync - return Enabled state
         # This will be called multiple times for different resources
         def get_custom_resource_side_effect(**kwargs):
             if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
-                return {
+                result = {
                     "status": {
                         "phase": "Enabled",
                         "lastMessage": "Synced",
                         "veleroManagedClustersRestoreName": "test-velero-restore",
-                    }
+                    },
+                    "spec": {},
                 }
+                # After patch is applied, include the patched field
+                if patch_applied["value"]:
+                    result["spec"][SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME] = VELERO_BACKUP_LATEST
+                return result
             if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
                 return {
                     "status": {
@@ -106,10 +116,12 @@ class TestSecondaryActivation:
             {"metadata": {"name": "local-cluster"}},
         ]
 
-        # Mock patch for activation - return a dict mimicking the patched resource
-        mock_secondary_client.patch_custom_resource.return_value = {
-            "spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}
-        }
+        # Mock patch for activation - mark patch as applied and return patched resource
+        def patch_side_effect(**kwargs):
+            patch_applied["value"] = True
+            return {"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}}
+
+        mock_secondary_client.patch_custom_resource.side_effect = patch_side_effect
 
         result = activation_passive.activate()
 

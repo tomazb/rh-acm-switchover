@@ -245,6 +245,11 @@ class SecondaryActivation:
     def _wait_for_restore_completion(self, timeout: int = RESTORE_WAIT_TIMEOUT):
         """Wait for restore to complete and verify managed clusters are restored."""
 
+        # Skip waiting in dry-run mode since no actual activation occurred
+        if self.secondary.dry_run:
+            logger.info("[DRY-RUN] Skipping wait for restore completion")
+            return
+
         restore_name = RESTORE_PASSIVE_SYNC_NAME if self.method == "passive" else RESTORE_FULL_NAME
 
         def _poll_restore():

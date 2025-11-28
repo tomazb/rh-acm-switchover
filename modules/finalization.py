@@ -324,6 +324,10 @@ class Finalization:
 
     def _verify_multiclusterhub_health(self):
         """Ensure MultiClusterHub reports healthy and pods are running."""
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping MultiClusterHub health verification")
+            return
+
         logger.info("Verifying MultiClusterHub health...")
         mch = self.secondary.get_custom_resource(
             group="operator.open-cluster-management.io",

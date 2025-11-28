@@ -92,6 +92,11 @@ class PostActivationVerification:
     def _verify_managed_clusters_connected(self, timeout: int = CLUSTER_VERIFY_TIMEOUT):
         """Verify all ManagedClusters are connected."""
 
+        # Skip waiting in dry-run mode since no actual activation occurred
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping wait for ManagedCluster connections")
+            return
+
         latest_status = {
             "available": 0,
             "joined": 0,
@@ -333,6 +338,12 @@ class PostActivationVerification:
 
     def _verify_disable_auto_import_cleared(self):
         """Ensure disable-auto-import annotations were removed after activation."""
+
+        # Skip verification in dry-run mode since annotations weren't actually cleared
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping disable-auto-import annotation verification")
+            return
+
         logger.info("Ensuring disable-auto-import annotations are cleared...")
         managed_clusters = self.secondary.list_custom_resources(
             group="cluster.open-cluster-management.io",
