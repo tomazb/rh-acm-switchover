@@ -3,6 +3,7 @@
 Tests argument parsing, help output, and basic error handling for:
 - scripts/preflight-check.sh
 - scripts/postflight-check.sh
+- scripts/lib-common.sh
 
 These tests run quickly without requiring cluster access.
 """
@@ -194,3 +195,144 @@ def test_postflight_output_format():
 # def test_postflight_success_with_mocks(mock_binaries):
 #     """Test postflight success with mocked oc/jq."""
 #     pass
+
+
+# ============================================================================
+# lib-common.sh Tests
+# ============================================================================
+
+
+def run_bash_command(command: str, env=None):
+    """Run a bash command and return (returncode, output)."""
+    use_env = os.environ.copy()
+    if env:
+        use_env.update(env)
+
+    proc = subprocess.run(
+        ["bash", "-c", command],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=use_env,
+        timeout=10,
+    )
+    return proc.returncode, strip_ansi(proc.stdout)
+
+
+def test_lib_common_exists():
+    """Test that lib-common.sh exists in scripts directory."""
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    assert lib_common.exists(), "lib-common.sh should exist in scripts/"
+
+
+def test_lib_common_sources_successfully():
+    """Test that lib-common.sh can be sourced without errors."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    code, out = run_bash_command(
+        f"source '{constants}' && source '{lib_common}' && echo 'success'"
+    )
+    assert code == 0, f"lib-common.sh should source successfully. Output: {out}"
+    assert "success" in out
+
+
+def test_lib_common_functions_defined():
+    """Test that all expected functions are defined after sourcing lib-common.sh."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    
+    functions = ["check_pass", "check_fail", "check_warn", "section_header", 
+                 "detect_cluster_cli", "print_summary"]
+    
+    for func in functions:
+        code, out = run_bash_command(
+            f"source '{constants}' && source '{lib_common}' && type {func} >/dev/null 2>&1 && echo 'exists'"
+        )
+        assert "exists" in out, f"Function {func} should be defined in lib-common.sh"
+
+
+def test_lib_common_counters_initialize():
+    """Test that counters are initialized to zero."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    code, out = run_bash_command(
+        f"source '{constants}' && source '{lib_common}' && "
+        "echo $TOTAL_CHECKS,$PASSED_CHECKS,$FAILED_CHECKS,$WARNING_CHECKS"
+    )
+    assert code == 0
+    assert out.strip() == "0,0,0,0", f"Counters should initialize to 0,0,0,0. Got: {out.strip()}"
+
+
+def test_lib_common_check_pass_increments():
+    """Test that check_pass increments the right counters."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    code, out = run_bash_command(
+        f"source '{constants}' && source '{lib_common}' && "
+        "check_pass 'test' >/dev/null && "
+        "echo $TOTAL_CHECKS,$PASSED_CHECKS,$FAILED_CHECKS,$WARNING_CHECKS"
+    )
+    assert code == 0
+    assert out.strip() == "1,1,0,0", f"After check_pass, counters should be 1,1,0,0. Got: {out.strip()}"
+
+
+def test_lib_common_check_fail_increments():
+    """Test that check_fail increments the right counters."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    code, out = run_bash_command(
+        f"source '{constants}' && source '{lib_common}' && "
+        "check_fail 'test' >/dev/null && "
+        "echo $TOTAL_CHECKS,$PASSED_CHECKS,$FAILED_CHECKS,$WARNING_CHECKS"
+    )
+    assert code == 0
+    assert out.strip() == "1,0,1,0", f"After check_fail, counters should be 1,0,1,0. Got: {out.strip()}"
+
+
+def test_lib_common_check_warn_increments():
+    """Test that check_warn increments the right counters."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    code, out = run_bash_command(
+        f"source '{constants}' && source '{lib_common}' && "
+        "check_warn 'test' >/dev/null && "
+        "echo $TOTAL_CHECKS,$PASSED_CHECKS,$FAILED_CHECKS,$WARNING_CHECKS"
+    )
+    assert code == 0
+    assert out.strip() == "1,0,0,1", f"After check_warn, counters should be 1,0,0,1. Got: {out.strip()}"
+
+
+def test_lib_common_print_summary_preflight():
+    """Test print_summary in preflight mode."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    code, out = run_bash_command(
+        f"source '{constants}' && source '{lib_common}' && "
+        "check_pass 'test' >/dev/null && print_summary 'preflight'"
+    )
+    assert code == 0
+    assert "Validation Summary" in out, "Preflight summary should say 'Validation Summary'"
+    assert "ready to proceed" in out.lower(), "Preflight success should say 'ready to proceed'"
+
+
+def test_lib_common_print_summary_postflight():
+    """Test print_summary in postflight mode."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    code, out = run_bash_command(
+        f"source '{constants}' && source '{lib_common}' && "
+        "check_pass 'test' >/dev/null && print_summary 'postflight'"
+    )
+    assert code == 0
+    assert "Verification Summary" in out, "Postflight summary should say 'Verification Summary'"
+    assert "completed successfully" in out.lower(), "Postflight success should mention completion"
+
+
+def test_constants_exit_codes_defined():
+    """Test that exit code constants are defined in constants.sh."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    code, out = run_bash_command(
+        f"source '{constants}' && echo $EXIT_SUCCESS,$EXIT_FAILURE,$EXIT_INVALID_ARGS"
+    )
+    assert code == 0
+    assert out.strip() == "0,1,2", f"Exit codes should be 0,1,2. Got: {out.strip()}"
