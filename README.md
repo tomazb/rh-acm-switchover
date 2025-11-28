@@ -49,10 +49,23 @@ See [scripts/README.md](scripts/README.md) for detailed usage and workflow diagr
 
 ## Installation
 
-### Option 1: Container Image (Recommended)
+### Option 1: From Source
 
 ```bash
-# Pull the latest image
+# Clone the repository
+git clone https://github.com/tomazb/rh-acm-switchover.git
+cd rh-acm-switchover
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### Option 2: Container Image (Coming Soon)
+
+> **Note:** Container image is not yet published. Use the source installation method above.
+
+```bash
+# Pull the latest image (NOT YET AVAILABLE)
 podman pull quay.io/tomazborstnar/acm-switchover:latest
 
 # Run validation
@@ -65,17 +78,6 @@ podman run -it --rm \
 ```
 
 See **[Container Usage Guide](docs/CONTAINER_USAGE.md)** for complete examples.
-
-### Option 2: From Source
-
-```bash
-# Clone the repository
-git clone https://github.com/tomazb/rh-acm-switchover.git
-cd rh-acm-switchover
-
-# Install dependencies
-pip install -r requirements.txt
-```
 
 ## Usage
 

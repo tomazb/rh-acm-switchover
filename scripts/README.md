@@ -54,7 +54,9 @@ Auto-discovers Kubernetes contexts from your kubeconfig, detects which clusters 
 
 **Options:**
 
-- `--contexts <ctx1,ctx2,...>` - Comma-separated list of contexts to check (default: auto-discover all)
+- `--auto` - Auto-discover ACM hubs from all kubeconfig contexts (required unless `--contexts` is used)
+- `--contexts <ctx1,ctx2,...>` - Comma-separated list of specific contexts to check
+- `--verbose, -v` - Show detailed cluster status for each hub
 - `--run` - Execute the proposed check command immediately
 - `--timeout <seconds>` - Connection timeout per context (default: 5)
 - `--help` - Show help message
@@ -68,6 +70,22 @@ The script analyzes each context to determine hub role based on:
 | BackupSchedule | Active (not paused) | Paused or none | Collision state |
 | Restore resource | None or finished | Passive-sync enabled | Finished |
 | ManagedClusters | Available=True | Available=Unknown | - |
+
+### Klusterlet Verification
+
+When **both hubs report clusters as available** (which can happen immediately after switchover before lease timeouts), the script verifies the actual klusterlet connections by checking the `hub-kubeconfig-secret` on each managed cluster:
+
+```
+  Both hubs report available clusters - verifying klusterlet connections...
+    ✓ prod1 → primary-hub
+    ✓ prod2 → primary-hub
+    ✓ prod3 → primary-hub
+
+  ● primary-hub
+    Clusters: 3/3 (reported), 3 (actual klusterlet connections)
+```
+
+This resolves ambiguity during the transition period when the old hub hasn't yet detected that clusters have disconnected.
 
 ### Example Output
 

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Hub Discovery Improvements
+- **Klusterlet verification**: When both hubs report clusters as available (during transition period), the script now verifies actual klusterlet connections by checking `hub-kubeconfig-secret` on each managed cluster
+- **`--verbose` option**: Show detailed cluster status for each hub
+- **`--auto` option documentation**: Clarified that `--auto` is required for auto-discovery
+
+### Fixed
+
+#### Dry-Run Mode
+- Fixed dry-run mode to properly skip all verification waits:
+  - `_wait_for_restore_completion()` in activation module
+  - `_verify_managed_clusters_connected()` in post-activation module  
+  - `_verify_disable_auto_import_cleared()` in post-activation module
+  - `_verify_multiclusterhub_health()` in finalization module
+- All skipped operations now log `[DRY-RUN]` messages for visibility
+- Fixed unit tests to properly mock `dry_run=False` to prevent Mock objects from being truthy
+
 ## [1.2.0] - 2025-11-27
 
 ### Added
