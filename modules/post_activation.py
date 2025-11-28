@@ -400,20 +400,30 @@ class PostActivationVerification:
             logger.warning("Could not determine new hub API server URL, skipping klusterlet verification")
             return
 
-        # Get list of managed cluster names
+        # Load kubeconfig data for context lookup
+        kubeconfig_data = self._load_kubeconfig_data()
+        if not kubeconfig_data:
+            logger.warning("Could not load kubeconfig, skipping klusterlet verification")
+            return
+
+        # Get list of managed clusters with their API server URLs
         managed_clusters = self.secondary.list_custom_resources(
             group="cluster.open-cluster-management.io",
             version="v1",
             plural="managedclusters",
         )
 
-        cluster_names = [
-            mc.get("metadata", {}).get("name")
-            for mc in managed_clusters
-            if mc.get("metadata", {}).get("name") != "local-cluster"
-        ]
+        # Build list of (cluster_name, api_url) tuples, excluding local-cluster
+        cluster_info = []
+        for mc in managed_clusters:
+            name = mc.get("metadata", {}).get("name")
+            if name and name != "local-cluster":
+                # Get API server URL from ManagedCluster spec
+                client_configs = mc.get("spec", {}).get("managedClusterClientConfigs", [])
+                api_url = client_configs[0].get("url", "") if client_configs else ""
+                cluster_info.append((name, api_url))
 
-        if not cluster_names:
+        if not cluster_info:
             logger.info("No managed clusters to verify klusterlet connections")
             return
 
@@ -422,9 +432,15 @@ class PostActivationVerification:
         failed = []
         unreachable = []
 
-        for cluster_name in cluster_names:
+        for cluster_name, cluster_api_url in cluster_info:
             try:
-                result = self._check_klusterlet_connection(cluster_name, new_hub_server)
+                # Find context by matching API server URL
+                context_name = self._find_context_by_api_url(kubeconfig_data, cluster_api_url, cluster_name)
+                if not context_name:
+                    unreachable.append(cluster_name)
+                    continue
+
+                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
                 if result == "verified":
                     verified.append(cluster_name)
                 elif result == "wrong_hub":
@@ -460,33 +476,102 @@ class PostActivationVerification:
     def _get_hub_api_server(self) -> str:
         """Get the API server URL for the new hub."""
         try:
-            # Load the kubeconfig for the secondary (new hub) context
-            contexts, _ = config.list_kube_config_contexts()
-            for ctx in contexts:
-                if ctx["name"] == self.secondary.context:
-                    cluster_name = ctx["context"]["cluster"]
-                    # Read the kubeconfig file to get cluster server
-                    import os
+            kubeconfig_data = self._load_kubeconfig_data()
+            if not kubeconfig_data:
+                return ""
 
-                    kubeconfig_path = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
-                    with open(kubeconfig_path) as f:
-                        import yaml
-
-                        kc = yaml.safe_load(f)
-                        for cluster in kc.get("clusters", []):
-                            if cluster.get("name") == cluster_name:
-                                return cluster.get("cluster", {}).get("server", "")
+            # Find the context matching secondary
+            for ctx in kubeconfig_data.get("contexts", []):
+                if ctx.get("name") == self.secondary.context:
+                    cluster_name = ctx.get("context", {}).get("cluster")
+                    # Find the cluster with matching name
+                    for cluster in kubeconfig_data.get("clusters", []):
+                        if cluster.get("name") == cluster_name:
+                            return cluster.get("cluster", {}).get("server", "")
         except Exception as e:
             logger.debug("Error getting hub API server: %s", e)
 
         return ""
 
-    def _check_klusterlet_connection(self, cluster_name: str, expected_hub: str) -> str:
+    def _load_kubeconfig_data(self) -> dict:
+        """Load and return the kubeconfig data as a dictionary."""
+        try:
+            import os
+
+            kubeconfig_path = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+            with open(kubeconfig_path) as f:
+                import yaml
+
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.debug("Error loading kubeconfig: %s", e)
+            return {}
+
+    def _find_context_by_api_url(self, kubeconfig_data: dict, api_url: str, cluster_name: str) -> str:
+        """
+        Find a kubeconfig context that matches the given API server URL.
+
+        This is smarter than name-based matching because context names often
+        differ from ManagedCluster names (e.g., "admin@prod1" vs "prod1").
+
+        Args:
+            kubeconfig_data: Parsed kubeconfig as dict
+            api_url: The API server URL from ManagedCluster spec
+            cluster_name: The ManagedCluster name (for fallback and logging)
+
+        Returns:
+            Context name if found, empty string otherwise
+        """
+        if not api_url:
+            # Fallback to name-based matching if no API URL
+            logger.debug("No API URL for %s, trying name-based matching", cluster_name)
+            try:
+                contexts, _ = config.list_kube_config_contexts()
+                for ctx in contexts:
+                    if ctx.get("name") == cluster_name:
+                        return cluster_name
+            except Exception:
+                pass
+            return ""
+
+        # Normalize the API URL for comparison (extract host)
+        api_host = re.sub(r"https://([^:/]+).*", r"\1", api_url)
+
+        # Build a map of cluster server URL -> cluster name
+        cluster_servers = {}
+        for cluster in kubeconfig_data.get("clusters", []):
+            server = cluster.get("cluster", {}).get("server", "")
+            if server:
+                server_host = re.sub(r"https://([^:/]+).*", r"\1", server)
+                cluster_servers[server_host] = cluster.get("name")
+
+        # Find which kubeconfig cluster matches this API URL
+        matching_cluster = cluster_servers.get(api_host)
+        if not matching_cluster:
+            logger.debug("No kubeconfig cluster matches API URL %s", api_url)
+            return ""
+
+        # Find the context that uses this cluster
+        for ctx in kubeconfig_data.get("contexts", []):
+            if ctx.get("context", {}).get("cluster") == matching_cluster:
+                context_name = ctx.get("name", "")
+                logger.debug(
+                    "Matched cluster %s to context %s via API URL %s",
+                    cluster_name,
+                    context_name,
+                    api_url,
+                )
+                return context_name
+
+        return ""
+
+    def _check_klusterlet_connection(self, context_name: str, cluster_name: str, expected_hub: str) -> str:
         """
         Check if a managed cluster's klusterlet is connected to the expected hub.
 
         Args:
-            cluster_name: Name of the managed cluster (used as context name)
+            context_name: Kubeconfig context name to use for connecting
+            cluster_name: ManagedCluster name (for logging)
             expected_hub: Expected hub API server URL
 
         Returns:
@@ -495,8 +580,8 @@ class PostActivationVerification:
             "unreachable" if can't connect to cluster
         """
         try:
-            # Try to load kubeconfig for this cluster
-            config.load_kube_config(context=cluster_name)
+            # Try to load kubeconfig using the discovered context name
+            config.load_kube_config(context=context_name)
             v1 = client.CoreV1Api()
 
             # Get the hub-kubeconfig-secret
@@ -516,11 +601,11 @@ class PostActivationVerification:
                     raise
 
             # Decode and parse kubeconfig from secret
-            kubeconfig_data = secret.data.get("kubeconfig", "")
-            if not kubeconfig_data:
+            secret_kubeconfig = secret.data.get("kubeconfig", "")
+            if not secret_kubeconfig:
                 return "unreachable"
 
-            kubeconfig_yaml = base64.b64decode(kubeconfig_data).decode("utf-8")
+            kubeconfig_yaml = base64.b64decode(secret_kubeconfig).decode("utf-8")
 
             # Extract server URL from kubeconfig
             server_match = re.search(r"server:\s*(https://[^\s]+)", kubeconfig_yaml)
@@ -550,4 +635,5 @@ class PostActivationVerification:
             return "unreachable"
         except Exception as e:
             logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
+            return "unreachable"
             return "unreachable"
