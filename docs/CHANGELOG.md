@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--verbose` option**: Show detailed cluster status for each hub
 - **`--auto` option documentation**: Clarified that `--auto` is required for auto-discovery
 
+#### Post-Activation Verification
+- **Klusterlet connection verification**: Python tool now verifies that klusterlet agents on managed clusters are connected to the new hub (non-blocking, requires managed cluster contexts in kubeconfig)
+
 ### Fixed
 
 #### Dry-Run Mode

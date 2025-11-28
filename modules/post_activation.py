@@ -2,7 +2,13 @@
 Post-activation verification module for ACM switchover.
 """
 
+import base64
 import logging
+import re
+from typing import List, Tuple
+
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 from lib.constants import (
     CLUSTER_VERIFY_INTERVAL,
@@ -54,6 +60,13 @@ class PostActivationVerification:
                 self.state.mark_step_completed("verify_auto_import_cleanup")
             else:
                 logger.info("Step already completed: verify_auto_import_cleanup")
+
+            # Optional: Verify klusterlet connections (non-blocking)
+            if not self.state.is_step_completed("verify_klusterlet_connections"):
+                self._verify_klusterlet_connections()
+                self.state.mark_step_completed("verify_klusterlet_connections")
+            else:
+                logger.info("Step already completed: verify_klusterlet_connections")
 
             # Steps 7-9: Observability verification (if present)
             if self.has_observability:
@@ -365,3 +378,176 @@ class PostActivationVerification:
             raise Exception("disable-auto-import annotation still present on: " + ", ".join(flagged))
 
         logger.info("All ManagedClusters cleared disable-auto-import annotation")
+
+    def _verify_klusterlet_connections(self):
+        """
+        Verify klusterlet agents on managed clusters are connected to the new hub.
+
+        This is a non-blocking verification that attempts to connect to each managed
+        cluster and verify its klusterlet is pointing to the new hub. If we can't
+        connect to a managed cluster (no context available), we log a warning but
+        don't fail the switchover.
+        """
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping klusterlet connection verification")
+            return
+
+        logger.info("Verifying klusterlet connections to new hub...")
+
+        # Get the new hub's API server URL
+        new_hub_server = self._get_hub_api_server()
+        if not new_hub_server:
+            logger.warning("Could not determine new hub API server URL, skipping klusterlet verification")
+            return
+
+        # Get list of managed cluster names
+        managed_clusters = self.secondary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+
+        cluster_names = [
+            mc.get("metadata", {}).get("name")
+            for mc in managed_clusters
+            if mc.get("metadata", {}).get("name") != "local-cluster"
+        ]
+
+        if not cluster_names:
+            logger.info("No managed clusters to verify klusterlet connections")
+            return
+
+        # Try to verify each cluster's klusterlet connection
+        verified = []
+        failed = []
+        unreachable = []
+
+        for cluster_name in cluster_names:
+            try:
+                result = self._check_klusterlet_connection(cluster_name, new_hub_server)
+                if result == "verified":
+                    verified.append(cluster_name)
+                elif result == "wrong_hub":
+                    failed.append(cluster_name)
+                else:  # unreachable or error
+                    unreachable.append(cluster_name)
+            except Exception as e:
+                logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
+                unreachable.append(cluster_name)
+
+        # Log results
+        if verified:
+            logger.info(
+                "✓ Klusterlet verified for %d cluster(s): %s",
+                len(verified),
+                ", ".join(verified),
+            )
+
+        if failed:
+            logger.warning(
+                "✗ Klusterlet NOT connected to new hub for %d cluster(s): %s",
+                len(failed),
+                ", ".join(failed),
+            )
+
+        if unreachable:
+            logger.info(
+                "Klusterlet verification skipped for %d cluster(s) (no context available): %s",
+                len(unreachable),
+                ", ".join(unreachable),
+            )
+
+    def _get_hub_api_server(self) -> str:
+        """Get the API server URL for the new hub."""
+        try:
+            # Load the kubeconfig for the secondary (new hub) context
+            contexts, _ = config.list_kube_config_contexts()
+            for ctx in contexts:
+                if ctx["name"] == self.secondary.context:
+                    cluster_name = ctx["context"]["cluster"]
+                    # Read the kubeconfig file to get cluster server
+                    import os
+
+                    kubeconfig_path = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+                    with open(kubeconfig_path) as f:
+                        import yaml
+
+                        kc = yaml.safe_load(f)
+                        for cluster in kc.get("clusters", []):
+                            if cluster.get("name") == cluster_name:
+                                return cluster.get("cluster", {}).get("server", "")
+        except Exception as e:
+            logger.debug("Error getting hub API server: %s", e)
+
+        return ""
+
+    def _check_klusterlet_connection(self, cluster_name: str, expected_hub: str) -> str:
+        """
+        Check if a managed cluster's klusterlet is connected to the expected hub.
+
+        Args:
+            cluster_name: Name of the managed cluster (used as context name)
+            expected_hub: Expected hub API server URL
+
+        Returns:
+            "verified" if connected to correct hub
+            "wrong_hub" if connected to different hub
+            "unreachable" if can't connect to cluster
+        """
+        try:
+            # Try to load kubeconfig for this cluster
+            config.load_kube_config(context=cluster_name)
+            v1 = client.CoreV1Api()
+
+            # Get the hub-kubeconfig-secret
+            try:
+                secret = v1.read_namespaced_secret(
+                    name="hub-kubeconfig-secret",
+                    namespace="open-cluster-management-agent",
+                )
+            except ApiException as e:
+                if e.status == 404:
+                    # Try bootstrap secret as fallback
+                    secret = v1.read_namespaced_secret(
+                        name="bootstrap-hub-kubeconfig",
+                        namespace="open-cluster-management-agent",
+                    )
+                else:
+                    raise
+
+            # Decode and parse kubeconfig from secret
+            kubeconfig_data = secret.data.get("kubeconfig", "")
+            if not kubeconfig_data:
+                return "unreachable"
+
+            kubeconfig_yaml = base64.b64decode(kubeconfig_data).decode("utf-8")
+
+            # Extract server URL from kubeconfig
+            server_match = re.search(r"server:\s*(https://[^\s]+)", kubeconfig_yaml)
+            if not server_match:
+                return "unreachable"
+
+            klusterlet_hub = server_match.group(1)
+
+            # Compare hostnames (ignore port differences)
+            expected_host = re.sub(r"https://([^:/]+).*", r"\1", expected_hub)
+            klusterlet_host = re.sub(r"https://([^:/]+).*", r"\1", klusterlet_hub)
+
+            if expected_host == klusterlet_host:
+                logger.debug("Cluster %s klusterlet → %s (correct)", cluster_name, klusterlet_hub)
+                return "verified"
+            else:
+                logger.debug(
+                    "Cluster %s klusterlet → %s (expected %s)",
+                    cluster_name,
+                    klusterlet_hub,
+                    expected_hub,
+                )
+                return "wrong_hub"
+
+        except config.ConfigException:
+            # Context doesn't exist
+            return "unreachable"
+        except Exception as e:
+            logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
+            return "unreachable"
