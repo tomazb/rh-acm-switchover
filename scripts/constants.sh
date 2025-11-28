@@ -28,3 +28,8 @@ export OBS_THANOS_COMPACT_POD="observability-thanos-compact"
 
 # Timeouts / Thresholds
 export RESTORE_AGE_WARNING_SECONDS=3600 # 1 hour
+
+# Exit Codes
+export EXIT_SUCCESS=0
+export EXIT_FAILURE=1
+export EXIT_INVALID_ARGS=2
