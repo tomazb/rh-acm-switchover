@@ -16,6 +16,7 @@ import modules.activation as activation_module
 from lib.constants import (
     BACKUP_NAMESPACE,
     RESTORE_PASSIVE_SYNC_NAME,
+    SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
     VELERO_BACKUP_LATEST,
 )
@@ -88,12 +89,13 @@ class TestSecondaryActivation:
         def get_custom_resource_side_effect(**kwargs):
             if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
                 result = {
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
                     "status": {
                         "phase": "Enabled",
                         "lastMessage": "Synced",
                         "veleroManagedClustersRestoreName": "test-velero-restore",
                     },
-                    "spec": {},
+                    "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
                 }
                 # After patch is applied, include the patched field
                 if patch_applied["value"]:
@@ -110,11 +112,23 @@ class TestSecondaryActivation:
 
         mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
 
-        # Mock list_custom_resources for managed clusters verification
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "cluster1"}},
-            {"metadata": {"name": "local-cluster"}},
-        ]
+        # Mock list_custom_resources for both restore discovery and managed clusters verification
+        def list_custom_resources_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores":
+                # Return the passive sync restore for discovery
+                return [{
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                    "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                    "status": {"phase": "Enabled"},
+                }]
+            if kwargs.get("plural") == "managedclusters":
+                return [
+                    {"metadata": {"name": "cluster1"}},
+                    {"metadata": {"name": "local-cluster"}},
+                ]
+            return []
+
+        mock_secondary_client.list_custom_resources.side_effect = list_custom_resources_side_effect
 
         # Mock patch for activation - mark patch as applied and return patched resource
         def patch_side_effect(**kwargs):
@@ -233,3 +247,73 @@ class TestSecondaryActivation:
 
             # Verify get_custom_resource was called by the callback
             assert mock_secondary_client.get_custom_resource.called
+
+
+@pytest.mark.unit
+class TestFindPassiveSyncRestore:
+    """Tests for the find_passive_sync_restore discovery function."""
+
+    def test_find_by_sync_restore_with_new_backups(self, mock_secondary_client):
+        """Test discovery finds restore by syncRestoreWithNewBackups=true."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "my-custom-restore"},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = None
+
+        result = activation_module.find_passive_sync_restore(mock_secondary_client)
+
+        assert result is not None
+        assert result["metadata"]["name"] == "my-custom-restore"
+        # Should not have called get_custom_resource since found via list
+        mock_secondary_client.get_custom_resource.assert_not_called()
+
+    def test_find_fallback_to_well_known_name(self, mock_secondary_client):
+        """Test discovery falls back to well-known name if no syncRestoreWithNewBackups."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "some-other-restore"},
+                "spec": {"someOtherField": True},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "spec": {},
+        }
+
+        result = activation_module.find_passive_sync_restore(mock_secondary_client)
+
+        assert result is not None
+        assert result["metadata"]["name"] == RESTORE_PASSIVE_SYNC_NAME
+        mock_secondary_client.get_custom_resource.assert_called_once()
+
+    def test_find_no_restore_found(self, mock_secondary_client):
+        """Test discovery returns None when no restore found."""
+        mock_secondary_client.list_custom_resources.return_value = []
+        mock_secondary_client.get_custom_resource.return_value = None
+
+        result = activation_module.find_passive_sync_restore(mock_secondary_client)
+
+        assert result is None
+
+    def test_find_prefers_sync_restore_over_well_known(self, mock_secondary_client):
+        """Test that syncRestoreWithNewBackups is preferred over well-known name."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "custom-passive-sync"},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            },
+            {
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: False},
+            },
+        ]
+
+        result = activation_module.find_passive_sync_restore(mock_secondary_client)
+
+        assert result is not None
+        assert result["metadata"]["name"] == "custom-passive-sync"
+        # Should not have tried fallback
+        mock_secondary_client.get_custom_resource.assert_not_called()

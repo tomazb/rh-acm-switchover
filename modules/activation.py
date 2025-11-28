@@ -4,6 +4,7 @@ Secondary hub activation module for ACM switchover.
 
 import logging
 import time
+from typing import Dict, Optional
 
 from lib.constants import (
     BACKUP_NAMESPACE,
@@ -11,6 +12,7 @@ from lib.constants import (
     RESTORE_PASSIVE_SYNC_NAME,
     RESTORE_POLL_INTERVAL,
     RESTORE_WAIT_TIMEOUT,
+    SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
     VELERO_BACKUP_LATEST,
 )
@@ -26,6 +28,51 @@ logger = logging.getLogger("acm_switchover")
 MIN_MANAGED_CLUSTERS = 0
 
 
+def find_passive_sync_restore(
+    client: KubeClient, namespace: str = BACKUP_NAMESPACE
+) -> Optional[Dict]:
+    """
+    Find an existing passive sync restore on the cluster.
+
+    A passive sync restore is identified by spec.syncRestoreWithNewBackups = true.
+    This works both before activation (when veleroManagedClustersBackupName is 'skip')
+    and after activation (when it's 'latest').
+
+    Args:
+        client: KubeClient for the cluster
+        namespace: Namespace to search in (default: open-cluster-management-backup)
+
+    Returns:
+        The restore resource dict if found, None otherwise
+    """
+    restores = client.list_custom_resources(
+        group="cluster.open-cluster-management.io",
+        version="v1beta1",
+        plural="restores",
+        namespace=namespace,
+    )
+
+    for restore in restores:
+        spec = restore.get("spec", {})
+        # Primary identifier: syncRestoreWithNewBackups = true
+        if spec.get(SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS) is True:
+            name = restore.get("metadata", {}).get("name", "unknown")
+            logger.debug("Found passive sync restore: %s", name)
+            return restore
+
+    # Fallback: check for well-known name (backward compatibility)
+    fallback = client.get_custom_resource(
+        group="cluster.open-cluster-management.io",
+        version="v1beta1",
+        plural="restores",
+        name=RESTORE_PASSIVE_SYNC_NAME,
+        namespace=namespace,
+    )
+    if fallback:
+        logger.debug("Found passive sync restore by fallback name: %s", RESTORE_PASSIVE_SYNC_NAME)
+    return fallback
+
+
 class SecondaryActivation:
     """Handles activation steps on secondary hub."""
 
@@ -38,6 +85,36 @@ class SecondaryActivation:
         self.secondary = secondary_client
         self.state = state_manager
         self.method = method
+        # Cache for discovered passive sync restore name
+        self._passive_sync_restore_name: Optional[str] = None
+
+    def _get_passive_sync_restore_name(self) -> str:
+        """
+        Get the name of the passive sync restore, discovering it if needed.
+
+        This uses cached value if available, otherwise discovers the restore
+        by looking for one with syncRestoreWithNewBackups = true.
+
+        Returns:
+            The name of the passive sync restore
+
+        Raises:
+            FatalError: If no passive sync restore is found
+        """
+        if self._passive_sync_restore_name:
+            return self._passive_sync_restore_name
+
+        restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
+        if not restore:
+            raise FatalError(
+                f"No passive sync restore found on secondary hub. "
+                f"Expected either a restore with spec.{SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true "
+                f"or a restore named '{RESTORE_PASSIVE_SYNC_NAME}'."
+            )
+
+        self._passive_sync_restore_name = restore.get("metadata", {}).get("name")
+        logger.info("Discovered passive sync restore: %s", self._passive_sync_restore_name)
+        return self._passive_sync_restore_name
 
     def activate(self) -> bool:
         """
@@ -93,16 +170,17 @@ class SecondaryActivation:
         """Verify passive sync restore is up-to-date."""
         logger.info("Verifying passive sync restore status...")
 
+        restore_name = self._get_passive_sync_restore_name()
         restore = self.secondary.get_custom_resource(
             group="cluster.open-cluster-management.io",
             version="v1beta1",
             plural="restores",
-            name=RESTORE_PASSIVE_SYNC_NAME,
+            name=restore_name,
             namespace=BACKUP_NAMESPACE,
         )
 
         if not restore:
-            raise FatalError(f"{RESTORE_PASSIVE_SYNC_NAME} not found on secondary hub")
+            raise FatalError(f"{restore_name} not found on secondary hub")
 
         status = restore.get("status", {})
         phase = status.get("phase", "unknown")
@@ -119,12 +197,14 @@ class SecondaryActivation:
         """Activate managed clusters by patching passive sync restore."""
         logger.info("Activating managed clusters via passive sync...")
 
+        restore_name = self._get_passive_sync_restore_name()
+
         # First, get current state of the restore
         restore_before = self.secondary.get_custom_resource(
             group="cluster.open-cluster-management.io",
             version="v1beta1",
             plural="restores",
-            name=RESTORE_PASSIVE_SYNC_NAME,
+            name=restore_name,
             namespace=BACKUP_NAMESPACE,
         )
 
@@ -135,8 +215,8 @@ class SecondaryActivation:
             logger.info("BEFORE PATCH: %s = %s", SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, current_mc_backup)
             logger.debug("BEFORE PATCH: Full spec = %s", restore_before.get("spec", {}))
         else:
-            logger.error("BEFORE PATCH: %s not found!", RESTORE_PASSIVE_SYNC_NAME)
-            raise FatalError(f"{RESTORE_PASSIVE_SYNC_NAME} not found before patching")
+            logger.error("BEFORE PATCH: %s not found!", restore_name)
+            raise FatalError(f"{restore_name} not found before patching")
 
         # Patch existing restore with veleroManagedClustersBackupName: latest
         patch = {"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}}
@@ -146,7 +226,7 @@ class SecondaryActivation:
             group="cluster.open-cluster-management.io",
             version="v1beta1",
             plural="restores",
-            name=RESTORE_PASSIVE_SYNC_NAME,
+            name=restore_name,
             patch=patch,
             namespace=BACKUP_NAMESPACE,
         )
@@ -162,7 +242,7 @@ class SecondaryActivation:
         # Skip verification in dry-run mode since the patch wasn't actually applied
         if self.secondary.dry_run:
             logger.info("[DRY-RUN] Skipping patch verification (patch was not applied)")
-            logger.info("Patched %s to activate managed clusters", RESTORE_PASSIVE_SYNC_NAME)
+            logger.info("Patched %s to activate managed clusters", restore_name)
             return
 
         # Verify the patch was actually applied by re-reading the resource
@@ -172,7 +252,7 @@ class SecondaryActivation:
             group="cluster.open-cluster-management.io",
             version="v1beta1",
             plural="restores",
-            name=RESTORE_PASSIVE_SYNC_NAME,
+            name=restore_name,
             namespace=BACKUP_NAMESPACE,
         )
 
@@ -196,8 +276,8 @@ class SecondaryActivation:
                     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, VELERO_BACKUP_LATEST,
                 )
         else:
-            logger.error("AFTER PATCH: %s not found after patching!", RESTORE_PASSIVE_SYNC_NAME)
-            raise FatalError(f"{RESTORE_PASSIVE_SYNC_NAME} disappeared after patching")
+            logger.error("AFTER PATCH: %s not found after patching!", restore_name)
+            raise FatalError(f"{restore_name} disappeared after patching")
 
     def _create_full_restore(self):
         """Create full restore resource (Method 2)."""
@@ -250,7 +330,7 @@ class SecondaryActivation:
             logger.info("[DRY-RUN] Skipping wait for restore completion")
             return
 
-        restore_name = RESTORE_PASSIVE_SYNC_NAME if self.method == "passive" else RESTORE_FULL_NAME
+        restore_name = self._get_passive_sync_restore_name() if self.method == "passive" else RESTORE_FULL_NAME
 
         def _poll_restore():
             restore = self.secondary.get_custom_resource(
@@ -313,13 +393,15 @@ class SecondaryActivation:
         """
         logger.info("Waiting for managed clusters Velero restore to complete...")
 
+        restore_name = self._get_passive_sync_restore_name()
+
         def _poll_velero_restore():
             # Get the ACM restore to find the Velero restore name
             restore = self.secondary.get_custom_resource(
                 group="cluster.open-cluster-management.io",
                 version="v1beta1",
                 plural="restores",
-                name=RESTORE_PASSIVE_SYNC_NAME,
+                name=restore_name,
                 namespace=BACKUP_NAMESPACE,
             )
 

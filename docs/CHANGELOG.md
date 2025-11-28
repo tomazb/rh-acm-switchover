@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--old-hub-action secondary` emphasized**: This option is now marked as **recommended** as it enables seamless reverse switchover by setting up passive sync on the old hub
 - **Documentation updated**: All rollback references replaced with reverse switchover guidance
 
+#### Passive Sync Restore Discovery
+- **Dynamic restore discovery**: The passive sync restore is now discovered dynamically by looking for a Restore with `spec.syncRestoreWithNewBackups=true` instead of requiring a hardcoded name
+- **Backward compatibility**: Falls back to well-known name `restore-acm-passive-sync` if no restore with `syncRestoreWithNewBackups=true` is found
+- **Finalization cleanup**: During finalization, all Restore resources in the backup namespace are now listed and cleaned up dynamically
+
 ### Added
 
 #### Hub Discovery Improvements

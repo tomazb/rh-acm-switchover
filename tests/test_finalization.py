@@ -248,8 +248,8 @@ class TestFinalization:
             },
         }
 
-        # First call returns restore, second call returns None (for second restore name)
-        mock_secondary_client.get_custom_resource.side_effect = [mock_restore, None]
+        # Mock list_custom_resources to return the restore when listing
+        mock_secondary_client.list_custom_resources.return_value = [mock_restore]
 
         finalization._cleanup_restore_resources()
 

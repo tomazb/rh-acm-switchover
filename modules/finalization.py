@@ -143,44 +143,52 @@ class Finalization:
 
         Before deletion, we archive the restore details to the state file
         for audit trail and troubleshooting purposes.
+
+        This method discovers all restores dynamically by listing all Restore
+        resources in the backup namespace, rather than relying on hardcoded names.
         """
-        restore_names = [RESTORE_PASSIVE_SYNC_NAME, RESTORE_FULL_NAME]
         archived_restores = []
 
-        for restore_name in restore_names:
+        # List all restores in the namespace
+        all_restores = self.secondary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="restores",
+            namespace=BACKUP_NAMESPACE,
+        )
+
+        if not all_restores:
+            logger.info("No restore resources found to clean up")
+            return
+
+        logger.info("Found %s restore resource(s) to clean up", len(all_restores))
+
+        for restore in all_restores:
+            restore_name = restore.get("metadata", {}).get("name", "unknown")
             try:
-                existing = self.secondary.get_custom_resource(
+                # Archive restore details before deletion
+                restore_archive = self._archive_restore_details(restore)
+                archived_restores.append(restore_archive)
+                logger.info(
+                    "Archived restore '%s' details: phase=%s, veleroBackups=%s",
+                    restore_name,
+                    restore_archive.get("phase"),
+                    restore_archive.get("velero_backups", {}),
+                )
+
+                logger.info("Deleting restore resource: %s", restore_name)
+                self.secondary.delete_custom_resource(
                     group="cluster.open-cluster-management.io",
                     version="v1beta1",
                     plural="restores",
                     name=restore_name,
                     namespace=BACKUP_NAMESPACE,
                 )
-
-                if existing:
-                    # Archive restore details before deletion
-                    restore_archive = self._archive_restore_details(existing)
-                    archived_restores.append(restore_archive)
-                    logger.info(
-                        "Archived restore '%s' details: phase=%s, veleroBackups=%s",
-                        restore_name,
-                        restore_archive.get("phase"),
-                        restore_archive.get("velero_backups", {}),
-                    )
-
-                    logger.info("Deleting restore resource: %s", restore_name)
-                    self.secondary.delete_custom_resource(
-                        group="cluster.open-cluster-management.io",
-                        version="v1beta1",
-                        plural="restores",
-                        name=restore_name,
-                        namespace=BACKUP_NAMESPACE,
-                    )
-                    logger.info("Deleted restore resource: %s", restore_name)
+                logger.info("Deleted restore resource: %s", restore_name)
             except Exception as e:
                 # Not found is OK, other errors should be logged
                 if "not found" not in str(e).lower():
-                    logger.warning("Error checking/deleting restore %s: %s", restore_name, e)
+                    logger.warning("Error deleting restore %s: %s", restore_name, e)
 
         # Save archived restores to state for audit trail
         if archived_restores:
