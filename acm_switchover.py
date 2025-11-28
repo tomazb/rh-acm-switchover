@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, cast
 
 from lib import (
@@ -198,8 +198,8 @@ def run_switchover(
     logger.info("\n" + "=" * 60)
     logger.info("SWITCHOVER COMPLETED SUCCESSFULLY!")
     logger.info("=" * 60)
-    logger.info(f"\nSwitchover completed at: {datetime.now().astimezone().isoformat()}")
-    logger.info(f"State file: {args.state_file}")
+    logger.info("\nSwitchover completed at: %s", datetime.now().astimezone().isoformat())
+    logger.info("State file: %s", args.state_file)
     logger.info("\nNext steps:")
     logger.info("  1. Inform stakeholders that switchover is complete")
     logger.info("  2. Provide new hub connection details")
@@ -261,7 +261,7 @@ def _run_phase_primary_prep(
     args: argparse.Namespace,
     state: StateManager,
     primary: KubeClient,
-    secondary: KubeClient,
+    _secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
     _log_phase_banner("PHASE 2: PRIMARY HUB PREPARATION", logger)
@@ -287,7 +287,7 @@ def _run_phase_primary_prep(
 def _run_phase_activation(
     args: argparse.Namespace,
     state: StateManager,
-    primary: KubeClient,
+    _primary: KubeClient,
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
@@ -308,7 +308,7 @@ def _run_phase_activation(
 def _run_phase_post_activation(
     args: argparse.Namespace,
     state: StateManager,
-    primary: KubeClient,
+    _primary: KubeClient,
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
@@ -399,9 +399,9 @@ def run_rollback(
         logger.info("Allow 5-10 minutes for ManagedClusters to reconnect to primary hub")
         state.reset()
         return True
-    else:
-        logger.error("Rollback failed!")
-        return False
+
+    logger.error("Rollback failed!")
+    return False
 
 
 def run_decommission(
@@ -438,8 +438,8 @@ def main():
 
     logger = setup_logging(args.verbose, args.log_format)
     logger.info("ACM Hub Switchover Automation")
-    logger.info(f"Started at: {datetime.utcnow().isoformat()}")
-    logger.info(f"Using state file: {resolved_state_file}")
+    logger.info("Started at: %s", datetime.now(timezone.utc).isoformat())
+    logger.info("Using state file: %s", resolved_state_file)
 
     state = StateManager(resolved_state_file)
 
@@ -451,18 +451,18 @@ def main():
     try:
         primary, secondary = _initialize_clients(args, logger)
     except Exception as exc:  # pragma: no cover - fatal init error
-        logger.error(f"Failed to initialize Kubernetes clients: {exc}")
+        logger.error("Failed to initialize Kubernetes clients: %s", exc)
         sys.exit(EXIT_FAILURE)
 
     try:
         success = _execute_operation(args, state, primary, secondary, logger)
     except KeyboardInterrupt:
         logger.warning("\n\nOperation interrupted by user")
-        logger.info(f"State saved to: {args.state_file}")
+        logger.info("State saved to: %s", args.state_file)
         logger.info("Re-run the same command to resume from last successful step")
         sys.exit(EXIT_INTERRUPT)
     except Exception as exc:
-        logger.error(f"\n✗ Unexpected error: {exc}", exc_info=args.verbose)
+        logger.error("\n✗ Unexpected error: %s", exc, exc_info=args.verbose)
         state.add_error(str(exc))
         sys.exit(EXIT_FAILURE)
 
@@ -480,12 +480,12 @@ def _initialize_clients(
 ) -> Tuple[KubeClient, Optional[KubeClient]]:
     """Create Kubernetes clients for provided contexts."""
 
-    logger.info(f"Connecting to primary hub: {args.primary_context}")
+    logger.info("Connecting to primary hub: %s", args.primary_context)
     primary = KubeClient(args.primary_context, dry_run=args.dry_run)
 
     secondary = None
     if args.secondary_context:
-        logger.info(f"Connecting to secondary hub: {args.secondary_context}")
+        logger.info("Connecting to secondary hub: %s", args.secondary_context)
         secondary = KubeClient(args.secondary_context, dry_run=args.dry_run)
 
     return primary, secondary
