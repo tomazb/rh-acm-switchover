@@ -67,11 +67,11 @@ class PrimaryPreparation:
             return True
 
         except SwitchoverError as e:
-            logger.error(f"Primary hub preparation failed: {e}")
+            logger.error("Primary hub preparation failed: %s", e)
             self.state.add_error(str(e), "primary_preparation")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error during primary preparation: {e}")
+            logger.error("Unexpected error during primary preparation: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "primary_preparation")
             return False
 
@@ -97,12 +97,12 @@ class PrimaryPreparation:
 
         # Check if already paused
         if bs.get("spec", {}).get("paused") is True:
-            logger.info(f"BackupSchedule {bs_name} is already paused")
+            logger.info("BackupSchedule %s is already paused", bs_name)
             return
 
         # ACM 2.12+ supports pausing via spec.paused
         if is_acm_version_ge(self.acm_version, "2.12.0"):
-            logger.info(f"Using spec.paused for ACM {self.acm_version}")
+            logger.info("Using spec.paused for ACM %s", self.acm_version)
 
             patch = {"spec": {"paused": True}}
             self.primary.patch_custom_resource(
@@ -114,10 +114,10 @@ class PrimaryPreparation:
                 namespace="open-cluster-management-backup",
             )
 
-            logger.info(f"BackupSchedule {bs_name} paused successfully")
+            logger.info("BackupSchedule %s paused successfully", bs_name)
         else:
             # ACM 2.11: Need to delete BackupSchedule
-            logger.info(f"ACM {self.acm_version} requires deleting BackupSchedule")
+            logger.info("ACM %s requires deleting BackupSchedule", self.acm_version)
 
             # Save the BackupSchedule YAML to state for later restoration
             self.state.set_config("saved_backup_schedule", bs)
@@ -130,7 +130,7 @@ class PrimaryPreparation:
                 namespace="open-cluster-management-backup",
             )
 
-            logger.info(f"BackupSchedule {bs_name} deleted (saved to state)")
+            logger.info("BackupSchedule %s deleted (saved to state)", bs_name)
 
     def _disable_auto_import(self):
         """Add disable-auto-import annotation to all ManagedClusters."""
@@ -148,13 +148,13 @@ class PrimaryPreparation:
 
             # Skip local-cluster
             if mc_name == "local-cluster":
-                logger.debug(f"Skipping local-cluster")
+                logger.debug("Skipping local-cluster")
                 continue
 
             # Check if annotation already exists
             annotations = mc.get("metadata", {}).get("annotations", {})
             if "import.open-cluster-management.io/disable-auto-import" in annotations:
-                logger.debug(f"ManagedCluster {mc_name} already has disable-auto-import annotation")
+                logger.debug("ManagedCluster %s already has disable-auto-import annotation", mc_name)
                 continue
 
             # Add annotation
@@ -163,9 +163,9 @@ class PrimaryPreparation:
             self.primary.patch_managed_cluster(name=mc_name, patch=patch)
 
             count += 1
-            logger.debug(f"Added disable-auto-import annotation to {mc_name}")
+            logger.debug("Added disable-auto-import annotation to %s", mc_name)
 
-        logger.info(f"Disabled auto-import on {count} ManagedCluster(s)")
+        logger.info("Disabled auto-import on %s ManagedCluster(s)", count)
 
     def _scale_down_thanos_compactor(self):
         """Scale down Thanos compactor StatefulSet."""
@@ -194,12 +194,12 @@ class PrimaryPreparation:
             )
 
             if pods:
-                logger.warning(f"Thanos compactor still has {len(pods)} pod(s) running")
+                logger.warning("Thanos compactor still has %s pod(s) running", len(pods))
             else:
                 logger.info("Thanos compactor scaled down successfully")
 
         except Exception as e:
-            logger.error(f"Failed to scale down Thanos compactor: {e}")
+            logger.error("Failed to scale down Thanos compactor: %s", e)
             # Don't fail the whole preparation if this is optional
             if "not found" in str(e).lower():
                 logger.warning("Thanos compactor StatefulSet not found (may not exist)")
