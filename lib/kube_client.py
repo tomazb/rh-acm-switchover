@@ -31,20 +31,19 @@ def is_retryable_error(exception: BaseException) -> bool:
     return False
 
 
-from tenacity import retry_if_exception
-
 def _should_retry(exception: Exception) -> bool:
     """Custom retry condition using is_retryable_error."""
     return is_retryable_error(exception)
- 
- # Standard retry decorator for API calls
- retry_api_call = retry(
+
+
+# Standard retry decorator for API calls
+retry_api_call = retry(
     retry=retry_if_exception(_should_retry),
-     wait=wait_exponential(multiplier=1, min=1, max=10),
-     stop=stop_after_attempt(5),
-     before_sleep=before_sleep_log(logger, logging.DEBUG),
-     reraise=True,
- )
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(5),
+    before_sleep=before_sleep_log(logger, logging.DEBUG),
+    reraise=True,
+)
 
 
 class KubeClient:
@@ -95,7 +94,11 @@ class KubeClient:
         self.apps_v1.api_client.configuration.timeout = request_timeout
         self.custom_api.api_client.configuration.timeout = request_timeout
 
-        logger.info(f"Initialized Kubernetes client for context: {context or 'default'} (timeout: {request_timeout}s)")
+        logger.info(
+            "Initialized Kubernetes client for context: %s (timeout: %ss)",
+            context or "default",
+            request_timeout,
+        )
 
     @retry_api_call
     def get_namespace(self, name: str) -> Optional[Dict]:
@@ -116,7 +119,7 @@ class KubeClient:
             # Re-raise retryable errors for tenacity to catch
             if is_retryable_error(e):
                 raise
-            logger.error(f"Failed to get namespace {name}: {e}")
+            logger.error("Failed to get namespace %s: %s", name, e)
             raise
 
     def namespace_exists(self, name: str) -> bool:
@@ -286,17 +289,18 @@ class KubeClient:
             Patched resource dict
         """
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Would patch {plural}/{name} with: {patch}")
+            logger.info("[DRY-RUN] Would patch %s/%s with: %s", plural, name, patch)
             return {}
 
         logger.debug(
-            f"KUBE_CLIENT patch_custom_resource: group={group}, version={version}, "
-            f"plural={plural}, name={name}, namespace={namespace}, patch={patch}"
+            "KUBE_CLIENT patch_custom_resource: group=%s, version=%s, "
+            "plural=%s, name=%s, namespace=%s, patch=%s",
+            group, version, plural, name, namespace, patch,
         )
 
         try:
             if namespace:
-                logger.debug(f"KUBE_CLIENT: Calling patch_namespaced_custom_object...")
+                logger.debug("KUBE_CLIENT: Calling patch_namespaced_custom_object...")
                 result = self.custom_api.patch_namespaced_custom_object(
                     group=group,
                     version=version,
@@ -305,27 +309,27 @@ class KubeClient:
                     name=name,
                     body=patch,
                 )
-                logger.debug(f"KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
+                logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
             else:
-                logger.debug(f"KUBE_CLIENT: Calling patch_cluster_custom_object...")
+                logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
                 result = self.custom_api.patch_cluster_custom_object(
                     group=group, version=version, plural=plural, name=name, body=patch
                 )
-                logger.debug(f"KUBE_CLIENT: patch_cluster_custom_object returned successfully")
+                logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
 
-            logger.debug(f"KUBE_CLIENT: Patch result keys: {list(result.keys()) if result else 'None'}")
+            logger.debug("KUBE_CLIENT: Patch result keys: %s", list(result.keys()) if result else "None")
             return result
         except ApiException as e:
             logger.error(
-                f"KUBE_CLIENT: ApiException during patch: status={e.status}, reason={e.reason}, "
-                f"body={e.body[:500] if e.body else 'None'}"
+                "KUBE_CLIENT: ApiException during patch: status=%s, reason=%s, body=%s",
+                e.status, e.reason, e.body[:500] if e.body else "None",
             )
             if is_retryable_error(e):
                 raise
-            logger.error(f"Failed to patch {plural}/{name}: {e}")
+            logger.error("Failed to patch %s/%s: %s", plural, name, e)
             raise
         except Exception as e:
-            logger.error(f"KUBE_CLIENT: Unexpected exception during patch: {type(e).__name__}: {e}")
+            logger.error("KUBE_CLIENT: Unexpected exception during patch: %s: %s", type(e).__name__, e)
             raise
 
     @retry_api_call
@@ -339,7 +343,7 @@ class KubeClient:
     ) -> Dict:
         """Create a custom resource."""
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Would create {plural}: {body.get('metadata', {}).get('name')}")
+            logger.info("[DRY-RUN] Would create %s: %s", plural, body.get("metadata", {}).get("name"))
             return body
 
         try:
@@ -359,7 +363,7 @@ class KubeClient:
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error(f"Failed to create {plural}: {e}")
+            logger.error("Failed to create %s: %s", plural, e)
             raise
 
     @retry_api_call
@@ -373,7 +377,7 @@ class KubeClient:
     ) -> bool:
         """Delete a custom resource."""
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Would delete {plural}/{name}")
+            logger.info("[DRY-RUN] Would delete %s/%s", plural, name)
             return True
 
         try:
@@ -393,7 +397,7 @@ class KubeClient:
                 return False
             if is_retryable_error(e):
                 raise
-            logger.error(f"Failed to delete {plural}/{name}: {e}")
+            logger.error("Failed to delete %s/%s: %s", plural, name, e)
             raise
 
     def list_managed_clusters(self) -> List[Dict]:
@@ -418,7 +422,7 @@ class KubeClient:
     def scale_deployment(self, name: str, namespace: str, replicas: int) -> Dict:
         """Scale a deployment."""
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Would scale deployment {namespace}/{name} to {replicas} replicas")
+            logger.info("[DRY-RUN] Would scale deployment %s/%s to %s replicas", namespace, name, replicas)
             return {}
 
         try:
@@ -428,14 +432,14 @@ class KubeClient:
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error(f"Failed to scale deployment {namespace}/{name}: {e}")
+            logger.error("Failed to scale deployment %s/%s: %s", namespace, name, e)
             raise
 
     @retry_api_call
     def scale_statefulset(self, name: str, namespace: str, replicas: int) -> Dict:
         """Scale a statefulset."""
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Would scale statefulset {namespace}/{name} to {replicas} replicas")
+            logger.info("[DRY-RUN] Would scale statefulset %s/%s to %s replicas", namespace, name, replicas)
             return {}
 
         try:
@@ -445,14 +449,14 @@ class KubeClient:
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error(f"Failed to scale statefulset {namespace}/{name}: {e}")
+            logger.error("Failed to scale statefulset %s/%s: %s", namespace, name, e)
             raise
 
     @retry_api_call
     def rollout_restart_deployment(self, name: str, namespace: str) -> Dict:
         """Restart a deployment by updating restart annotation."""
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Would restart deployment {namespace}/{name}")
+            logger.info("[DRY-RUN] Would restart deployment %s/%s", namespace, name)
             return {}
 
         try:
@@ -463,7 +467,7 @@ class KubeClient:
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error(f"Failed to restart deployment {namespace}/{name}: {e}")
+            logger.error("Failed to restart deployment %s/%s: %s", namespace, name, e)
             raise
 
     @retry_api_call
@@ -526,7 +530,7 @@ class KubeClient:
 
             if expected_count is None:
                 if ready_count == len(pods) and len(pods) > 0:
-                    logger.info(f"All {ready_count} pods ready in {namespace}")
+                    logger.info("All %s pods ready in %s", ready_count, namespace)
                     return True
             else:
                 if ready_count >= expected_count:
@@ -539,8 +543,8 @@ class KubeClient:
                     )
                     return True
 
-            logger.debug(f"{ready_count}/{len(pods)} pods ready in {namespace}")
+            logger.debug("%s/%s pods ready in %s", ready_count, len(pods), namespace)
             time.sleep(5)
 
-        logger.error(f"Timeout waiting for pods in {namespace}")
+        logger.error("Timeout waiting for pods in %s", namespace)
         return False
