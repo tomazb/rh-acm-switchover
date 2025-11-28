@@ -6,6 +6,7 @@ import functools
 import json
 import logging
 import os
+import stat
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
@@ -58,7 +59,7 @@ def dry_run_skip(
 
             if obj:
                 logger = logging.getLogger("acm_switchover")
-                logger.info(f"[DRY-RUN] {message}")
+                logger.info("[DRY-RUN] %s", message)
                 return return_value
 
             return func(self, *args, **kwargs)
@@ -132,8 +133,14 @@ class StateManager:
     def _write_state(self, state: Dict[str, Any]) -> None:
         """Write the provided state dict to disk without modifying it."""
         self._ensure_state_dir()
-        with open(self.state_file, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
+        # Use restrictive permissions (owner read/write only)
+        fd = os.open(self.state_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+        except Exception:
+            os.close(fd)
+            raise
 
     def save_state(self) -> None:
         """Persist current state to disk."""
