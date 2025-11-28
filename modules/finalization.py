@@ -18,6 +18,7 @@ from lib.constants import (
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
+from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager
 
@@ -110,9 +111,13 @@ class Finalization:
             logger.info("Finalization completed successfully")
             return True
 
-        except Exception as e:
-            logger.error(f"Finalization failed: {e}")
+        except SwitchoverError as e:
+            logger.error("Finalization failed: %s", e)
             self.state.add_error(str(e), "finalization")
+            return False
+        except Exception as e:
+            logger.error("Unexpected error during finalization: %s", e)
+            self.state.add_error(f"Unexpected: {str(e)}", "finalization")
             return False
 
     def _enable_backup_schedule(self):
@@ -157,12 +162,13 @@ class Finalization:
                     restore_archive = self._archive_restore_details(existing)
                     archived_restores.append(restore_archive)
                     logger.info(
-                        f"Archived restore '{restore_name}' details: "
-                        f"phase={restore_archive.get('phase')}, "
-                        f"veleroBackups={restore_archive.get('velero_backups', {})}"
+                        "Archived restore '%s' details: phase=%s, veleroBackups=%s",
+                        restore_name,
+                        restore_archive.get("phase"),
+                        restore_archive.get("velero_backups", {}),
                     )
 
-                    logger.info(f"Deleting restore resource: {restore_name}")
+                    logger.info("Deleting restore resource: %s", restore_name)
                     self.secondary.delete_custom_resource(
                         group="cluster.open-cluster-management.io",
                         version="v1beta1",
@@ -170,16 +176,16 @@ class Finalization:
                         name=restore_name,
                         namespace=BACKUP_NAMESPACE,
                     )
-                    logger.info(f"Deleted restore resource: {restore_name}")
+                    logger.info("Deleted restore resource: %s", restore_name)
             except Exception as e:
                 # Not found is OK, other errors should be logged
                 if "not found" not in str(e).lower():
-                    logger.warning(f"Error checking/deleting restore {restore_name}: {e}")
+                    logger.warning("Error checking/deleting restore %s: %s", restore_name, e)
 
         # Save archived restores to state for audit trail
         if archived_restores:
             self.state.set_config("archived_restores", archived_restores)
-            logger.info(f"Saved {len(archived_restores)} restore record(s) to state file")
+            logger.info("Saved %s restore record(s) to state file", len(archived_restores))
 
     def _archive_restore_details(self, restore: dict) -> dict:
         """Extract and return important details from a Restore resource for archiving.
@@ -246,7 +252,7 @@ class Finalization:
 
         initial_backup_names = {b.get("metadata", {}).get("name") for b in initial_backups}
 
-        logger.info(f"Found {len(initial_backups)} existing backup(s)")
+        logger.info("Found %s existing backup(s)", len(initial_backups))
         logger.info("Waiting for new backup to appear (this may take 5-10 minutes)...")
 
         start_time = time.time()
@@ -265,7 +271,7 @@ class Finalization:
             new_backups = current_backup_names - initial_backup_names
 
             if new_backups:
-                logger.info(f"New backup(s) detected: {', '.join(new_backups)}")
+                logger.info("New backup(s) detected: %s", ", ".join(new_backups))
 
                 # Verify at least one is in progress or completed
                 for backup_name in new_backups:
@@ -276,7 +282,7 @@ class Finalization:
 
                     if backup:
                         phase = backup.get("status", {}).get("phase", "unknown")
-                        logger.info(f"Backup {backup_name} phase: {phase}")
+                        logger.info("Backup %s phase: %s", backup_name, phase)
 
                         # Velero uses "InProgress" and "Completed" phases
                         if phase in ("InProgress", "Completed", "New"):
@@ -284,7 +290,7 @@ class Finalization:
                             return
 
             elapsed = int(time.time() - start_time)
-            logger.debug(f"Waiting for new backup... (elapsed: {elapsed}s)")
+            logger.debug("Waiting for new backup... (elapsed: %ss)", elapsed)
             time.sleep(30)
 
         logger.warning(
@@ -386,7 +392,7 @@ class Finalization:
             self._decommission_old_hub()
             return
 
-        logger.warning(f"Unknown old_hub_action: {self.old_hub_action}, skipping")
+        logger.warning("Unknown old_hub_action: %s, skipping", self.old_hub_action)
 
     def _decommission_old_hub(self):
         """
@@ -477,7 +483,7 @@ class Finalization:
             )
             logger.info("Created passive sync restore on old primary hub")
         except Exception as e:
-            logger.warning(f"Failed to create passive sync restore on old primary: {e}")
+            logger.warning("Failed to create passive sync restore on old primary: %s", e)
             logger.warning("You may need to manually create it for failback capability")
 
     def _fix_backup_schedule_collision(self):
@@ -509,10 +515,10 @@ class Finalization:
         phase = schedule.get("status", {}).get("phase", "")
 
         if phase != "BackupCollision":
-            logger.info(f"BackupSchedule {schedule_name} is healthy (phase: {phase})")
+            logger.info("BackupSchedule %s is healthy (phase: %s)", schedule_name, phase)
             return
 
-        logger.warning(f"BackupSchedule {schedule_name} has collision, recreating...")
+        logger.warning("BackupSchedule %s has collision, recreating...", schedule_name)
 
         # Save the spec for recreation
         schedule_spec = schedule.get("spec", {})
@@ -526,7 +532,7 @@ class Finalization:
                 name=schedule_name,
                 namespace=BACKUP_NAMESPACE,
             )
-            logger.info(f"Deleted old BackupSchedule {schedule_name}")
+            logger.info("Deleted old BackupSchedule %s", schedule_name)
 
             # Wait a moment for deletion
             time.sleep(5)
@@ -549,10 +555,10 @@ class Finalization:
                 body=new_schedule,
                 namespace=BACKUP_NAMESPACE,
             )
-            logger.info(f"Recreated BackupSchedule {schedule_name}")
+            logger.info("Recreated BackupSchedule %s", schedule_name)
 
         except Exception as e:
-            logger.warning(f"Failed to fix BackupSchedule collision: {e}")
+            logger.warning("Failed to fix BackupSchedule collision: %s", e)
             logger.warning("You may need to manually delete and recreate the BackupSchedule")
 
     def _verify_old_hub_state(self):
