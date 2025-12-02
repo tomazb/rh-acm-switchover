@@ -329,10 +329,11 @@ done
 
 ---
 
-### Step 4b: Set Auto-Import Strategy to ImportAndSync on your destination hub if it has any non local-cluster managed clusters and if you plan to switchback the primary hub (ACM 2.14+)
+### Step 4b: Set Auto-Import Strategy to ImportAndSync (ACM 2.14+ with Existing Clusters)
+
+> **Perform this step on your destination hub if it has any non local-cluster managed clusters and if you plan to switch back to the primary hub in the future.**
 
 > **NOTE:** Starting with ACM 2.14, the auto-import strategy was changed to `ImportOnly`. With this option, once a managed cluster joins the hub, the import-controller stops applying the manifests and auto-import operations are skipped. This change was introduced to support situations when the primary hub goes down uncontrolled and comes back again after the clusters have moved to another hub—the default strategy prevents the primary hub from trying to recover the managed clusters. What this means for you is that after the restore of managed clusters to the new hub, those clusters will not be actively imported and synced unless you change the strategy to `ImportAndSync`.
-
 
 **On the destination hub**, update the import strategy to `ImportAndSync` by creating this ConfigMap:
 
