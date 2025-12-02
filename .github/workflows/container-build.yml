@@ -6,9 +6,10 @@ on:
       - main
     tags:
       - 'v*.*.*'
-  pull_request:
-    branches:
-      - main
+  # Disabled for PRs - re-enable when tag generation is fixed
+  # pull_request:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 env:
