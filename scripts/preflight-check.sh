@@ -398,19 +398,15 @@ else
     check_pass "Primary hub: ACM version $PRIMARY_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
 fi
 
+# Get secondary hub auto-import strategy
+SECONDARY_STRATEGY=$(get_auto_import_strategy "$SECONDARY_CONTEXT")
+
+# Count managed clusters on secondary hub (excluding local-cluster)
 SECONDARY_CLUSTER_COUNT=$(oc --context="$SECONDARY_CONTEXT" get managedclusters --no-headers 2>/dev/null | grep -cv "$LOCAL_CLUSTER_NAME")
 if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
     check_fail "Secondary hub: Could not list managed clusters. Cannot verify auto-import strategy requirements."
     SECONDARY_CLUSTER_COUNT=0 # Set to 0 to avoid breaking subsequent logic, failure is already logged.
 fi
-if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-    check_fail "Secondary hub: Could not list managed clusters. Cannot verify auto-import strategy requirements."
-    SECONDARY_CLUSTER_COUNT=0 # Set to 0 to avoid breaking subsequent logic, failure is already logged.
-fi
-SECONDARY_STRATEGY=$(get_auto_import_strategy "$SECONDARY_CONTEXT")
-
-# Count managed clusters on secondary hub (excluding local-cluster)
-SECONDARY_CLUSTER_COUNT=$(oc --context="$SECONDARY_CONTEXT" get managedclusters --no-headers 2>/dev/null | grep -cv "$LOCAL_CLUSTER_NAME" || echo "0")
 
 # Check if secondary hub is ACM 2.14+
 if is_acm_214_or_higher "$SECONDARY_VERSION"; then

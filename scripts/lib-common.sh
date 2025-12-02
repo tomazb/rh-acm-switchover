@@ -168,10 +168,7 @@ is_acm_214_or_higher() {
     if ! [[ "$major" =~ ^[0-9]+$ ]] || ! [[ "$minor" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    # Validate that major and minor are numeric
-    if ! [[ "$major" =~ ^[0-9]+$ ]] || ! [[ "$minor" =~ ^[0-9]+$ ]]; then
-        return 1
-    fi
+    
     # Check if version is 2.14 or higher
     if [[ "$major" -gt 2 ]] || { [[ "$major" -eq 2 ]] && [[ "$minor" -ge 14 ]]; }; then
         return 0

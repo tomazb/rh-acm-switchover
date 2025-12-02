@@ -331,12 +331,8 @@ done
 
 ### Step 4b: Set Auto-Import Strategy to ImportAndSync (ACM 2.14+ with Existing Clusters)
 
-> **Perform this step on your destination hub if it has any non local-cluster managed clusters and if you plan to switch back to the primary hub in the future.**
-### Step 4b: Set Auto-Import Strategy to ImportAndSync (ACM 2.14+ with Existing Clusters)
-
-> **Perform this step on your destination hub if it has any non local-cluster managed clusters and if you plan to switch back to the primary hub in the future.**
-
-> **NOTE:** Starting with ACM 2.14, the auto-import strategy was changed to `ImportOnly`. With this option, once a managed cluster joins the hub, the import-controller stops applying the manifests and auto-import operations are skipped. This change was introduced to support situations when the primary hub goes down uncontrolled and comes back again after the clusters have moved to another hub—the default strategy prevents the primary hub from trying to recover the managed clusters. What this means for you is that after the restore of managed clusters to the new hub, those clusters will not be actively imported and synced unless you change the strategy to `ImportAndSync`.
+> **Perform this step on your destination hub if it has any non-local-cluster managed clusters and if you plan to switch back to the primary hub in the future.**
+>
 > **NOTE:** Starting with ACM 2.14, the auto-import strategy was changed to `ImportOnly`. With this option, once a managed cluster joins the hub, the import-controller stops applying the manifests and auto-import operations are skipped. This change was introduced to support situations when the primary hub goes down uncontrolled and comes back again after the clusters have moved to another hub—the default strategy prevents the primary hub from trying to recover the managed clusters. What this means for you is that after the restore of managed clusters to the new hub, those clusters will not be actively imported and synced unless you change the strategy to `ImportAndSync`.
 
 **On the destination hub**, update the import strategy to `ImportAndSync` by creating this ConfigMap:
@@ -466,12 +462,12 @@ Use when passive sync was NOT running. If the primary hub is still accessible, y
 
 ### F2. (Optional) Prevent auto-import on primary hub
 Same as [Step 2](#step-2-prevent-auto-import-on-primary-hub)
-Same as [Step 4b](#step-4b-set-auto-import-strategy-to-importandsync-on-your-destination-hub-if-it-has-any-non-local-cluster-managed-clusters-and-if-you-plan-to-switchback-the-primary-hub-acm-214)
+
 ### F3. (Optional) Shut down Thanos compactor on primary hub
 Same as [Step 3](#step-3-shut-down-thanos-compactor-on-primary-hub)
 
-### F4. (Optional) Set Auto-Import Strategy to ImportAndSync on your destination hub if you plan to switchback (ACM 2.14+)
-Same as [Step 4b](#step-4b-set-auto-import-strategy-to-importandsync-if-you-plan-to-switchback-the-primary-hub-acm-214)
+### F4. (Optional) Set Auto-Import Strategy to ImportAndSync on destination hub (ACM 2.14+)
+Same as [Step 4b](#step-4b-set-auto-import-strategy-to-importandsync-acm-214-with-existing-clusters)
 
 ### F5. Create full restore on SECONDARY hub
 
@@ -546,12 +542,12 @@ After a successful restore with managed clusters properly attached, check if the
 ```bash
 # Check if ConfigMap exists
 oc get configmap import-controller-config -n multicluster-engine 2>/dev/null
-> **NOTE:** This step is very important to prevent unintended sync operations from this hub in the future. Only perform this step if you had previously set `ImportAndSync` on this hub.
+
 # If it exists, remove it to restore default ImportOnly behavior
 oc delete configmap import-controller-config -n multicluster-engine --ignore-not-found
 ```
-> **NOTE:** This step is very important to prevent unintended sync operations from this hub in the future. Only perform this step if you had previously set `ImportAndSync` on this hub.
-> **NOTE:** This step is very important to prevent unintended sync operations from the this hub in the future. Only perform this step if you had previously set `ImportAndSync` on this hub.
+
+> **NOTE:** This step is important to prevent unintended sync operations from this hub in the future. Only perform this step if you had previously set `ImportAndSync` on this hub.
 
 ---
 

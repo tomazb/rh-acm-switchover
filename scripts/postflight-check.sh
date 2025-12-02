@@ -451,14 +451,6 @@ if is_acm_214_or_higher "$NEW_HUB_VERSION"; then
     fi
 else
     check_pass "New hub: ACM version $NEW_HUB_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
-OLD_HUB_VERSION=$(oc --context="$OLD_HUB_CONTEXT" get mch -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null)
-if [[ $? -ne 0 ]] || [[ -z "$OLD_HUB_VERSION" ]]; then
-    check_warn "Old hub: Could not determine ACM version. Skipping auto-import strategy check."
-    OLD_HUB_VERSION="unknown"
-fi
-if [[ $? -ne 0 ]] || [[ -z "$OLD_HUB_VERSION" ]]; then
-    check_warn "Old hub: Could not determine ACM version. Skipping auto-import strategy check."
-    OLD_HUB_VERSION="unknown"
 fi
 
 # Also check old hub if provided
