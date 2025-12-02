@@ -511,6 +511,7 @@ class PostActivationVerification:
             True if successful, False otherwise
         """
         import time
+
         import yaml
 
         try:
