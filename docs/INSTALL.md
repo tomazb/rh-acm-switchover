@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- **Python**: 3.8 or later
+- **Python**: 3.9 or later
 - **Kubernetes CLI**: `kubectl` or `oc` (OpenShift CLI)
 - **Access**: Kubernetes contexts configured for both hubs
 - **Permissions**: RBAC access to ACM resources on both clusters
@@ -14,7 +14,7 @@
 ```bash
 # Check Python version
 python3 --version
-# Should show: Python 3.8.x or later
+# Should show: Python 3.9.x or later
 
 # Check kubectl/oc
 kubectl version --client

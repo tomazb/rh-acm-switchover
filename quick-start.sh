@@ -11,7 +11,7 @@ echo ""
 # Check if Python is installed
 if ! command -v python3 &> /dev/null; then
     echo "Error: Python 3 is required but not found"
-    echo "Please install Python 3.8 or later"
+    echo "Please install Python 3.9 or later"
     exit 1
 fi
 

@@ -48,7 +48,7 @@ See [scripts/README.md](scripts/README.md) for detailed usage and workflow diagr
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.9+
 - `kubectl` or `oc` CLI configured for both primary and secondary hubs
 - ACM Backup configured on both hubs
 - OADP operator installed on both hubs
@@ -280,7 +280,7 @@ See [TESTING.md](docs/TESTING.md) for detailed testing guide.
 **Main Pipeline** (`.github/workflows/ci-cd.yml`):
 
 - Runs on every push and pull request
-- Tests across Python 3.8-3.12
+- Tests across Python 3.9-3.12
 - Code quality and security checks
 - Syntax validation
 - Documentation verification
