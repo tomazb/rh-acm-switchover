@@ -402,7 +402,8 @@ fi
 SECONDARY_STRATEGY=$(get_auto_import_strategy "$SECONDARY_CONTEXT")
 
 # Count managed clusters on secondary hub (excluding local-cluster)
-SECONDARY_CLUSTER_COUNT=$(oc --context="$SECONDARY_CONTEXT" get managedclusters --no-headers 2>/dev/null | grep -cv "$LOCAL_CLUSTER_NAME")
+# Note: grep -cv returns 1 when count is 0, so we use || true to prevent pipefail from exiting
+SECONDARY_CLUSTER_COUNT=$(oc --context="$SECONDARY_CONTEXT" get managedclusters --no-headers 2>/dev/null | grep -cv "$LOCAL_CLUSTER_NAME" || true)
 if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
     check_fail "Secondary hub: Could not list managed clusters. Cannot verify auto-import strategy requirements."
     SECONDARY_CLUSTER_COUNT=0 # Set to 0 to avoid breaking subsequent logic, failure is already logged.
