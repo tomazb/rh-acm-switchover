@@ -404,11 +404,15 @@ fi
 SECONDARY_STRATEGY=$(get_auto_import_strategy "$SECONDARY_CONTEXT")
 
 # Count managed clusters on secondary hub (excluding local-cluster)
-# Note: grep -cv returns 1 when count is 0, so we use || true to prevent pipefail from exiting
-SECONDARY_CLUSTER_COUNT=$(oc --context="$SECONDARY_CONTEXT" get managedclusters --no-headers 2>/dev/null | grep -cv "$LOCAL_CLUSTER_NAME" || true)
-if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+# Capture oc output first, then count - this properly detects oc failures
+SECONDARY_CLUSTERS_OUTPUT=$(oc --context="$SECONDARY_CONTEXT" get managedclusters --no-headers 2>/dev/null)
+SECONDARY_CLUSTERS_EXIT=$?
+if [[ $SECONDARY_CLUSTERS_EXIT -ne 0 ]]; then
     check_fail "Secondary hub: Could not list managed clusters. Cannot verify auto-import strategy requirements."
-    SECONDARY_CLUSTER_COUNT=0 # Set to 0 to avoid breaking subsequent logic, failure is already logged.
+    SECONDARY_CLUSTER_COUNT=0
+else
+    # grep -cv returns 1 when count is 0, so use || echo "0" to handle that case
+    SECONDARY_CLUSTER_COUNT=$(echo "$SECONDARY_CLUSTERS_OUTPUT" | grep -cv "$LOCAL_CLUSTER_NAME" || echo "0")
 fi
 
 # Check if secondary hub is ACM 2.14+
