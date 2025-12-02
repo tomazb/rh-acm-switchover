@@ -192,6 +192,28 @@ RESTORE_JSON
         exit 0
         ;;
     
+    # ACM 2.14+ autoImportStrategy checks (Check 11)
+    "--context=primary-ok get namespace multicluster-engine")
+        exit 0
+        ;;
+    "--context=secondary-ok get namespace multicluster-engine")
+        exit 0
+        ;;
+    "--context=primary-ok get configmap import-controller-config -n multicluster-engine")
+        # ConfigMap not found means default ImportOnly is used (which is OK for ACM < 2.14)
+        exit 1
+        ;;
+    "--context=secondary-ok get configmap import-controller-config -n multicluster-engine")
+        # ConfigMap not found means default ImportOnly is used
+        exit 1
+        ;;
+    
+    # Secondary hub managed clusters for Check 11 cluster count  
+    "--context=secondary-ok get managedclusters --no-headers")
+        echo "local-cluster   True"
+        exit 0
+        ;;
+    
     # Postflight checks
     "--context=new-hub get restore -n open-cluster-management-backup --sort-by=.metadata.creationTimestamp -o jsonpath="*"")
         echo "restore-final Finished 2024-11-24T10:00:00Z"
@@ -308,6 +330,10 @@ EOF
         echo "multiclusterhub"
         exit 0
         ;;
+    "--context=new-hub get mch -n open-cluster-management -o jsonpath="*"currentVersion"*"")
+        echo "2.11.0"
+        exit 0
+        ;;
     "--context=new-hub get mch -n open-cluster-management -o jsonpath="*"items[0].metadata.name"*"")
         echo "multiclusterhub"
         exit 0
@@ -320,6 +346,15 @@ EOF
         echo "pod1   1/1   Running"
         echo "pod2   1/1   Running"
         exit 0
+        ;;
+    
+    # ACM 2.14+ autoImportStrategy checks for new-hub  
+    "--context=new-hub get namespace multicluster-engine")
+        exit 0
+        ;;
+    "--context=new-hub get configmap import-controller-config -n multicluster-engine")
+        # ConfigMap not found means default ImportOnly is used (which is OK for ACM < 2.14)
+        exit 1
         ;;
     
     *)
@@ -370,6 +405,14 @@ case "$*" in
         echo "2.10.5"
         exit 0
         ;;
+    # Mocks needed for Check 11 (Auto-Import Strategy)
+    *"get configmap import-controller-config"*)
+        exit 1
+        ;;
+    *"get managedclusters --no-headers"*)
+        echo "local-cluster   True"
+        exit 0
+        ;;
     *) exit 0 ;;
 esac
 """,
@@ -413,6 +456,14 @@ case "$*" in
         ;;
     *"InProgress"*)
         echo "backup-ongoing"
+        exit 0
+        ;;
+    # Mocks needed for Check 11 (Auto-Import Strategy)
+    *"get configmap import-controller-config"*)
+        exit 1
+        ;;
+    *"get managedclusters --no-headers"*)
+        echo "local-cluster   True"
         exit 0
         ;;
     *) exit 0 ;;

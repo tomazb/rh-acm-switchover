@@ -429,7 +429,7 @@ section_header "9. Checking Auto-Import Strategy (ACM 2.14+)"
 
 # Get ACM version on new hub
 NEW_HUB_VERSION=$(oc --context="$NEW_HUB_CONTEXT" get mch -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null)
-if [[ $? -ne 0 ]] || [[ -z "$NEW_HUB_VERSION" ]]; then
+if [[ -z "$NEW_HUB_VERSION" ]]; then
     check_fail "New hub: Could not determine ACM version. Skipping auto-import strategy check."
     NEW_HUB_VERSION="unknown" # Set to prevent script errors in the conditional check
 fi
