@@ -53,22 +53,22 @@ def parse_args():
         epilog="""
 Examples:
   # Validate only (no changes)
-  %(prog)s --validate-only --primary-context primary-hub --secondary-context secondary-hub
+  %(prog)s --validate-only --primary-context primary-hub --secondary-context secondary-hub --method passive --old-hub-action secondary
 
   # Dry-run to see planned actions
-  %(prog)s --dry-run --primary-context primary-hub --secondary-context secondary-hub
+  %(prog)s --dry-run --primary-context primary-hub --secondary-context secondary-hub --method passive --old-hub-action secondary
 
-  # Execute switchover (Method 1 - passive sync)
-  %(prog)s --primary-context primary-hub --secondary-context secondary-hub --method passive
+  # Execute switchover (Method 1 - passive sync, keep old hub as secondary)
+  %(prog)s --primary-context primary-hub --secondary-context secondary-hub --method passive --old-hub-action secondary
 
-  # Execute switchover (Method 2 - full restore)
-  %(prog)s --primary-context primary-hub --secondary-context secondary-hub --method full
+  # Execute switchover (Method 2 - full restore, decommission old hub)
+  %(prog)s --primary-context primary-hub --secondary-context secondary-hub --method full --old-hub-action decommission
 
   # Reverse switchover (return to original hub - swap contexts)
-  %(prog)s --primary-context secondary-hub --secondary-context primary-hub --method passive
+  %(prog)s --primary-context secondary-hub --secondary-context primary-hub --method passive --old-hub-action secondary
 
   # Decommission old hub
-  %(prog)s --decommission --primary-context old-hub
+  %(prog)s --decommission --primary-context old-hub --method passive --old-hub-action none
         """,
     )
 
