@@ -27,6 +27,34 @@ kubectl config get-contexts
 oc config get-contexts
 ```
 
+### Upgrading Python (if needed)
+
+If your system has Python 3.8 or earlier, you must upgrade to Python 3.9+:
+
+**RHEL 8 / CentOS 8:**
+```bash
+sudo dnf install python39 python39-pip
+python3.9 -m venv venv
+source venv/bin/activate
+```
+
+**Ubuntu 20.04+:**
+```bash
+sudo apt install python3.9 python3.9-venv
+python3.9 -m venv venv
+source venv/bin/activate
+```
+
+**Using pyenv:**
+```bash
+pyenv install 3.11.0
+pyenv local 3.11.0
+python -m venv venv
+source venv/bin/activate
+```
+
+Alternatively, use the [container image](CONTAINER_USAGE.md) which includes Python 3.9 and all dependencies.
+
 ## Installation Methods
 
 ### Method 1: Clone from Git (Recommended)
