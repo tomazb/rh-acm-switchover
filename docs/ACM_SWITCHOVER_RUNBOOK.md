@@ -681,6 +681,13 @@ oc get backup -n open-cluster-management-backup \
 # Should show new backups with recent timestamps
 ```
 
+> **NOTE (OLD HUB Observatorium API):** If you paused the Observatorium API on the OLD hub in Step 3 and you are not decommissioning that hub, re-enable it now to restore normal behavior on the old hub:
+> ```bash
+> oc scale deployment observability-observatorium-api \
+>   -n open-cluster-management-observability --replicas=1
+> ```
+> If you are proceeding to Step 14 to decommission the OLD hub, you can skip this.
+
 ---
 ### Step 12: Verify Backup Integrity
 
@@ -708,7 +715,6 @@ oc logs -n open-cluster-management-backup deployment/velero -c velero | grep "$B
 - Verify storage backend is accessible
 - Check available storage space
 - Verify no resource quotas are preventing backup creation
-
 ---
 
 ### Step 13: Inform Stakeholders
