@@ -465,7 +465,7 @@ Same as [Step 2](#step-2-prevent-auto-import-on-primary-hub)
 ### F3. (Optional) Shut down Thanos compactor on primary hub
 Same as [Step 3](#step-3-shut-down-thanos-compactor-on-primary-hub)
 
-### F4. (Optional) Set Auto-Import Strategy to ImportAndSync on primary hub if you plan to switchback the primary hub (ACM 2.14+)
+### F4. (Optional) Set Auto-Import Strategy to ImportAndSync on your destination hub if you plan to switchback (ACM 2.14+)
 Same as [Step 4b](#step-4b-set-auto-import-strategy-to-importandsync-if-you-plan-to-switchback-the-primary-hub-acm-214)
 
 ### F5. Create full restore on SECONDARY hub
