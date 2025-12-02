@@ -5,6 +5,7 @@ Pre-flight validation module for ACM switchover.
 import logging
 from typing import Dict, Tuple
 
+from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 
 from .preflight_validators import (

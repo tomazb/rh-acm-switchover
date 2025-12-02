@@ -405,8 +405,22 @@ case "$*" in
         echo "2.10.5"
         exit 0
         ;;
+    # OADP checks - return empty output with exit 0 to avoid pipefail
+    *"get pods"*"velero"*"--no-headers"*) exit 0 ;;
+    # DPA checks - return empty output with exit 0 to avoid pipefail
+    *"get dpa"*"--no-headers"*) exit 0 ;;
+    *"get dpa"*"metadata.name"*) exit 0 ;;
+    # Backup checks - return empty output with exit 0 to avoid pipefail
+    *"get backup"*"--no-headers"*) exit 0 ;;
+    *"InProgress"*) exit 0 ;;
+    # Passive restore checks
+    *"get restore"*"-o json"*) echo '{"items":[]}'; exit 0 ;;
+    *"get restore restore-acm-passive-sync"*) exit 1 ;;
+    # ClusterDeployment
+    *"get clusterdeployment --all-namespaces --no-headers"*) exit 0 ;;
     # Mocks needed for Check 11 (Auto-Import Strategy)
     *"get configmap import-controller-config"*)
+        echo 'Error from server (NotFound): configmaps "import-controller-config" not found' >&2
         exit 1
         ;;
     *"get managedclusters --no-headers"*)
@@ -458,8 +472,14 @@ case "$*" in
         echo "backup-ongoing"
         exit 0
         ;;
+    # ClusterDeployment
+    *"get clusterdeployment --all-namespaces --no-headers"*) exit 0 ;;
+    # Passive restore checks (for method=passive tests)
+    *"get restore"*"-o json"*) echo '{"items":[{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}]}'; exit 0 ;;
+    *"get restore restore-acm-passive-sync"*"phase"*) echo "Enabled"; exit 0 ;;
     # Mocks needed for Check 11 (Auto-Import Strategy)
     *"get configmap import-controller-config"*)
+        echo 'Error from server (NotFound): configmaps "import-controller-config" not found' >&2
         exit 1
         ;;
     *"get managedclusters --no-headers"*)
