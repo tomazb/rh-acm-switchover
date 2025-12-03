@@ -802,7 +802,13 @@ class AutoImportStrategyValidator:
         except ValidationError:
             return "default"
 
-        cm = client.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+        try:
+            cm = client.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+        except Exception as exc:
+            # API / connection / RBAC issues - treat as non-critical
+            logger.debug("Error reading auto-import ConfigMap: %s", exc)
+            return "error"
+
         if not cm:
             return "default"
         data = (cm or {}).get("data") or {}
@@ -810,11 +816,16 @@ class AutoImportStrategyValidator:
         return strategy or "default"
 
     def _non_local_cluster_count(self, client: KubeClient) -> int:
-        mcs = client.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
-        )
+        try:
+            mcs = client.list_custom_resources(
+                group="cluster.open-cluster-management.io",
+                version="v1",
+                plural="managedclusters",
+            )
+        except Exception as exc:
+            logger.debug("Error listing managedclusters for auto-import check: %s", exc)
+            return 0
+
         return sum(
             1 for mc in mcs if mc.get("metadata", {}).get("name") != "local-cluster"
         )
@@ -829,7 +840,14 @@ class AutoImportStrategyValidator:
         # Primary hub
         if is_acm_version_ge(primary_version, "2.14.0"):
             strategy = self._strategy_for(primary)
-            if strategy in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
+            if strategy == "error":
+                self.reporter.add_result(
+                    "Auto-Import Strategy (primary)",
+                    False,
+                    "could not retrieve autoImportStrategy (connection or API error)",
+                    critical=False,
+                )
+            elif strategy in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
                 self.reporter.add_result(
                     "Auto-Import Strategy (primary)",
                     True,
@@ -855,7 +873,16 @@ class AutoImportStrategyValidator:
         if is_acm_version_ge(secondary_version, "2.14.0"):
             strategy = self._strategy_for(secondary)
             count = self._non_local_cluster_count(secondary)
-            if count > 0 and strategy in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
+            if strategy == "error":
+                self.reporter.add_result(
+                    "Auto-Import Strategy (secondary)",
+                    False,
+                    "could not retrieve autoImportStrategy (connection or API error)",
+                    critical=False,
+                )
+                # Do not apply further hints if we couldn't read the config
+                return
+            elif count > 0 and strategy in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
                 self.reporter.add_result(
                     "Auto-Import Strategy (secondary)",
                     False,

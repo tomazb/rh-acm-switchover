@@ -825,15 +825,12 @@ class PostActivationVerification:
 
             if expected_host == klusterlet_host:
                 logger.debug(
-                    "Cluster %s klusterlet → %s (correct)", cluster_name, klusterlet_hub
+                    "Cluster %s klusterlet verified (API server endpoint matched expected)", cluster_name
                 )
                 return "verified"
             else:
                 logger.debug(
-                    "Cluster %s klusterlet → %s (expected %s)",
-                    cluster_name,
-                    klusterlet_hub,
-                    expected_hub,
+                    "Cluster %s klusterlet not verified (API server endpoint did not match expected)", cluster_name
                 )
                 return "wrong_hub"
 
