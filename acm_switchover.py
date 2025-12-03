@@ -13,6 +13,7 @@ Features:
 - Support for both passive sync and full restore methods
 - Reverse switchover capability (swap contexts to return to original hub)
 - Interactive decommission of old hub
+- Robust input validation for security and reliability
 """
 
 import argparse
@@ -30,6 +31,7 @@ from lib import (
     setup_logging,
 )
 from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
+from lib.validation import InputValidator, ValidationError
 from modules import (
     Decommission,
     Finalization,
@@ -170,9 +172,18 @@ Examples:
 
 
 def validate_args(args):
-    """Validate argument combinations."""
-    if not args.decommission and not args.secondary_context:
-        print("Error: --secondary-context is required for switchover operations")
+    """Validate argument combinations and input values."""
+    try:
+        # Perform comprehensive input validation
+        # Note: validate_all_cli_args already checks that secondary_context is
+        # provided when not in decommission mode
+        InputValidator.validate_all_cli_args(args)
+
+    except ValidationError as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected validation error: {str(e)}")
         sys.exit(1)
 
 
@@ -442,7 +453,7 @@ def main():
 
     try:
         primary, secondary = _initialize_clients(args, logger)
-    except Exception as exc:  # pragma: no cover - fatal init error
+    except (ValueError, RuntimeError, Exception) as exc:  # pragma: no cover - fatal init error
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
         sys.exit(EXIT_FAILURE)
 
@@ -453,7 +464,7 @@ def main():
         logger.info("State saved to: %s", args.state_file)
         logger.info("Re-run the same command to resume from last successful step")
         sys.exit(EXIT_INTERRUPT)
-    except Exception as exc:
+    except (RuntimeError, ValueError, Exception) as exc:
         logger.error("\n✗ Unexpected error: %s", exc, exc_info=args.verbose)
         state.add_error(str(exc))
         sys.exit(EXIT_FAILURE)
@@ -488,7 +499,7 @@ DEFAULT_STATE_FILE = ".state/switchover-state.json"
 
 def _sanitize_context_identifier(value: str) -> str:
     """Sanitize context string to be filesystem friendly."""
-    return re.sub(r"[^A-Za-z0-9._-]", "_", value)
+    return InputValidator.sanitize_context_identifier(value)
 
 
 def _resolve_state_file(

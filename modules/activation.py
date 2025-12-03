@@ -177,7 +177,7 @@ class SecondaryActivation:
             logger.error("Secondary hub activation failed: %s", e)
             self.state.add_error(str(e), "activation")
             return False
-        except Exception as e:
+        except (RuntimeError, ValueError, Exception) as e:
             logger.error("Unexpected error during activation: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "activation")
             return False
@@ -367,7 +367,7 @@ class SecondaryActivation:
                 data={AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC},
             )
             self.state.set_config("auto_import_strategy_set", True)
-        except Exception as e:
+        except (RuntimeError, ValueError, Exception) as e:
             logger.warning("Unable to manage auto-import strategy: %s", e)
 
     def _create_full_restore(self):

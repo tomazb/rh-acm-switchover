@@ -245,7 +245,7 @@ class PostActivationVerification:
             else:
                 logger.warning("observatorium-api pods did not become ready in time")
 
-        except Exception as e:
+        except (ApiException, Exception) as e:
             logger.error("Failed to restart observatorium-api: %s", e)
             if "not found" in str(e).lower():
                 logger.warning("observatorium-api deployment not found")
@@ -376,7 +376,7 @@ class PostActivationVerification:
                 )
             else:
                 logger.warning("Grafana route not found in Observability namespace")
-        except Exception as exc:
+        except (ApiException, Exception) as exc:
             logger.warning("Unable to query Grafana route: %s", exc)
 
     def _verify_disable_auto_import_cleared(self):
@@ -496,7 +496,7 @@ class PostActivationVerification:
                     wrong_hub.append((cluster_name, context_name))
                 else:  # unreachable or error
                     unreachable.append(cluster_name)
-            except Exception as e:
+            except (ApiException, Exception) as e:
                 logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
                 unreachable.append(cluster_name)
 
@@ -665,7 +665,7 @@ class PostActivationVerification:
             logger.info("Force-reconnected klusterlet for %s", cluster_name)
             return True
 
-        except Exception as e:
+        except (ApiException, Exception) as e:
             logger.warning(
                 "Failed to force-reconnect klusterlet for %s: %s", cluster_name, e
             )
@@ -686,7 +686,7 @@ class PostActivationVerification:
                     for cluster in kubeconfig_data.get("clusters", []):
                         if cluster.get("name") == cluster_name:
                             return cluster.get("cluster", {}).get("server", "")
-        except Exception as e:
+        except (ApiException, Exception) as e:
             logger.debug("Error getting hub API server: %s", e)
 
         return ""
@@ -703,7 +703,7 @@ class PostActivationVerification:
                 import yaml
 
                 return yaml.safe_load(f) or {}
-        except Exception as e:
+        except (OSError, yaml.YAMLError, Exception) as e:
             logger.debug("Error loading kubeconfig: %s", e)
             return {}
 
@@ -732,8 +732,9 @@ class PostActivationVerification:
                 for ctx in contexts:
                     if ctx.get("name") == cluster_name:
                         return cluster_name
-            except Exception:
-                pass
+            except (config.ConfigException, Exception) as e:
+                # Failed to match context by name; returning empty string as fallback
+                logger.debug("Exception during name-based context matching for %s: %s", cluster_name, e)
             return ""
 
         # Normalize the API URL for comparison (extract host)
@@ -839,6 +840,6 @@ class PostActivationVerification:
         except config.ConfigException:
             # Context doesn't exist
             return "unreachable"
-        except Exception as e:
+        except (ApiException, config.ConfigException, Exception) as e:
             logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
             return "unreachable"

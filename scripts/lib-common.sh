@@ -98,6 +98,9 @@ detect_cluster_cli() {
         CLUSTER_CLI_BIN="kubectl"
         CLUSTER_CLI_NAME="Kubernetes CLI (kubectl)"
         # Provide oc alias so the rest of the script can keep using oc invocations
+        # Note: Using "$@" is safe against shell injection because it correctly
+        # preserves each argument as a separate string, preventing the shell from
+        # interpreting metacharacters within them.
         oc() {
             kubectl "$@"
         }
