@@ -26,17 +26,15 @@ logger = logging.getLogger("acm_switchover")
 # Kubernetes resource name validation patterns
 # Based on Kubernetes naming conventions: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
 # DNS-1123 subdomain format: contains only lowercase alphanumeric characters, '-' or '.',
-# starts with a lowercase letter, ends with an alphanumeric character
-# Note: While RFC 1123 technically allows starting with digits, Kubernetes requires starting with a letter
+# starts with a lowercase letter or digit, ends with an alphanumeric character
 K8S_NAME_PATTERN: Pattern[str] = re.compile(
-    r'^[a-z]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$'
+    r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
 )
 K8S_NAME_MAX_LENGTH = 253
 
 # Kubernetes namespace validation pattern
-# DNS-1123 label format: contains only lowercase alphanumeric characters or '-',
-# starts with a lowercase letter, ends with an alphanumeric character
-# Note: While RFC 1123 technically allows starting with digits, Kubernetes requires starting with a letter
+# RFC 1123 label format: contains only lowercase alphanumeric characters or '-',
+# starts with an alphabetic character (Kubernetes requires this), ends with an alphanumeric character
 K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(
     r'^[a-z]([-a-z0-9]*[a-z0-9])?$'
 )

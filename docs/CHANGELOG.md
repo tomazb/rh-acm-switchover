@@ -388,7 +388,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ### Migrating from Python 3.8 or Earlier
 
-Starting with version 1.3.0, ACM Switchover requires **Python 3.9 or later**. Python 3.8 reached end-of-life in October 2024 and is no longer supported.
+Starting with this release, ACM Switchover requires **Python 3.9 or later**. Python 3.8 reached end-of-life in October 2024 and is no longer supported.
 
 #### Option 1: Upgrade System Python (Recommended)
 
