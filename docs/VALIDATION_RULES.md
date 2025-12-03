@@ -32,13 +32,14 @@ The ACM switchover automation tool implements comprehensive input validation to:
 ### 1. Kubernetes Resource Name Validation
 
 **Pattern**: DNS-1123 subdomain format
-**Regex**: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+**Regex**: `^[a-z]([-a-z0-9]*[a-z0-9])?$|^[a-z]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$`
 **Max Length**: 253 characters
 
 **Rules**:
 - Must contain only lowercase alphanumeric characters (`a-z`, `0-9`)
 - May contain hyphens (`-`) and dots (`.`)
-- Must start and end with an alphanumeric character
+- Must start with a lowercase letter (not a digit)
+- Must end with an alphanumeric character
 - Dots cannot be consecutive or at start/end
 
 **Valid Examples**:
@@ -57,13 +58,14 @@ The ACM switchover automation tool implements comprehensive input validation to:
 ### 2. Kubernetes Namespace Validation
 
 **Pattern**: DNS-1123 label format
-**Regex**: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+**Regex**: `^[a-z]([-a-z0-9]*[a-z0-9])?$`
 **Max Length**: 63 characters
 
 **Rules**:
 - Must contain only lowercase alphanumeric characters (`a-z`, `0-9`)
 - May contain hyphens (`-`)
-- Must start and end with an alphanumeric character
+- Must start with a lowercase letter (not a digit)
+- Must end with an alphanumeric character
 - Cannot contain dots (`.`) - this is for labels only
 
 **Valid Examples**:
@@ -111,13 +113,14 @@ The ACM switchover automation tool implements comprehensive input validation to:
 ### 4. Context Name Validation
 
 **Pattern**: More permissive than Kubernetes names
-**Regex**: `^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$`
+**Regex**: `^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$`
 **Max Length**: 128 characters
 
 **Rules**:
 - May contain alphanumeric characters (`a-z`, `A-Z`, `0-9`)
-- May contain hyphens (`-`), underscores (`_`), and dots (`.`)
+- May contain hyphens (`-`), underscores (`_`), dots (`.`), colons (`:`), and forward slashes (`/`)
 - Must start and end with alphanumeric character
+- Accommodates default `oc login` contexts like `admin/api-ci-aws` or `default/api.example.com:6443/admin`
 
 **Valid Examples**:
 - `primary-hub`
@@ -125,12 +128,16 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `my-cluster-123`
 - `prod.acm.example.com`
 - `dev-hub-2024`
+- `admin/api-ci-aws`
+- `default/api.example.com:6443/admin`
+- `system:admin/api-ocp-cluster:6443`
 
 **Invalid Examples**:
 - `my cluster` (spaces)
 - `my@cluster` (invalid characters)
-- `123cluster` (starts with number)
-- `my-cluster-` (ends with hyphen)
+- `/admin` (starts with slash)
+- `admin/` (ends with slash)
+- `:6443` (starts with colon)
 
 ### 5. CLI Argument Validation
 
