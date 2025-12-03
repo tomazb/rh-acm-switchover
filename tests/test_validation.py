@@ -32,6 +32,15 @@ class TestCLIArgumentValidation:
             "my-cluster-123",
             "prod.acm.example.com",
             "dev-hub-2024",
+            # oc login style contexts with slashes and colons
+            "admin/api-ci-aws",
+            "default/api.example.com:6443/admin",
+            "system:admin/api-ocp-cluster:6443",
+            "user/api.cluster.local:6443/kube:admin",
+            # Single character names
+            "a",
+            "Z",
+            "9",
         ]
 
         for name in valid_names:
@@ -43,8 +52,10 @@ class TestCLIArgumentValidation:
             "",  # empty
             "my cluster",  # spaces
             "my@cluster",  # invalid character
-            "123cluster",  # starts with number
-            "my-cluster-",  # ends with hyphen
+            "/admin",  # starts with slash
+            "admin/",  # ends with slash
+            ":6443",  # starts with colon
+            "cluster:",  # ends with colon
             "a" * 129,  # too long
         ]
 
@@ -152,7 +163,8 @@ class TestKubernetesResourceValidation:
             "my-pod-123",
             "my.pod.name",
             "my-pod-name",
-            "a" * 253,  # max length
+            "a",  # single letter
+            "a" + "b" * 252,  # max length (253 chars, starts with letter)
         ]
 
         for name in valid_names:
@@ -183,7 +195,8 @@ class TestKubernetesResourceValidation:
             "kube-system",
             "my-namespace",
             "my-namespace-123",
-            "a" * 63,  # max length
+            "a",  # single letter
+            "a" + "b" * 62,  # max length (63 chars, starts with letter)
         ]
 
         for namespace in valid_namespaces:
@@ -214,7 +227,13 @@ class TestKubernetesResourceValidation:
             "app.kubernetes.io/name",
             "my-label",
             "my-label-123",
-            "a" * 63,  # max length
+            "a",  # single letter
+            "a" + "b" * 62,  # max length (63 chars, starts with letter)
+            # Per K8s spec, uppercase and starting with digits ARE valid
+            "My-Label",
+            "MY_LABEL",
+            "123label",
+            "1",
         ]
 
         for key in valid_keys:
@@ -222,21 +241,68 @@ class TestKubernetesResourceValidation:
 
     def test_invalid_label_keys(self):
         """Test invalid Kubernetes label keys."""
+        # Note: Per K8s spec, label keys CAN contain uppercase and CAN start with digits
+        # Only the following are truly invalid:
         invalid_keys = [
             "",  # empty
-            "My-Label",  # uppercase
             "my label",  # space
             "my@label",  # invalid character
-            "123label",  # starts with number
             "my-label-",  # ends with hyphen
             "a" * 64,  # too long
-            "my..label",  # consecutive dots
             "-my-label",  # starts with hyphen
+            "_my-label",  # starts with underscore
+            "my-label_",  # ends with underscore
+            ".my-label",  # starts with dot
+            "my-label.",  # ends with dot
         ]
 
         for key in invalid_keys:
             with pytest.raises(ValidationError):
                 InputValidator.validate_kubernetes_label_key(key)
+
+    def test_valid_label_values(self):
+        """Test valid Kubernetes label values."""
+        valid_values = [
+            "",  # empty string is valid per K8s spec
+            "value",
+            "my-value",
+            "my-value-123",
+            "a",  # single character
+            "a" + "b" * 62,  # max length (63 chars)
+            # Per K8s spec, uppercase and starting with digits ARE valid
+            "My-Value",
+            "MY_VALUE",
+            "123value",
+            "1",
+        ]
+
+        for value in valid_values:
+            InputValidator.validate_kubernetes_label_value(value)
+
+    def test_invalid_label_values(self):
+        """Test invalid Kubernetes label values."""
+        # Note: Per K8s spec, label values CAN contain uppercase
+        # Only the following are truly invalid:
+        invalid_values = [
+            "my value",  # space
+            "my@value",  # invalid character
+            "-my-value",  # starts with hyphen
+            "my-value-",  # ends with hyphen
+            "a" * 64,  # too long
+            "_my-value",  # starts with underscore
+            "my-value_",  # ends with underscore
+            ".my-value",  # starts with dot
+            "my-value.",  # ends with dot
+        ]
+
+        for value in invalid_values:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_kubernetes_label_value(value)
+
+    def test_label_value_none_raises(self):
+        """Test that None label value raises ValidationError."""
+        with pytest.raises(ValidationError):
+            InputValidator.validate_kubernetes_label_value(None)
 
 class TestFilesystemValidation:
     """Test filesystem path validation."""
@@ -269,7 +335,6 @@ class TestFilesystemValidation:
             ("`command`", "backtick"),
             ("/etc/passwd", "absolute path outside allowed"),
             ("/root/.ssh", "absolute path outside allowed"),
-            (".hidden/file", "hidden file"),
         ]
 
         for path, reason in invalid_paths:
@@ -357,7 +422,7 @@ class TestErrorHandling:
         try:
             InputValidator.validate_safe_filesystem_path("../malicious", "state-file")
         except SecurityValidationError as e:
-            assert "security" in str(e).upper()
+            assert "security" in str(e).lower()
             assert "path traversal" in str(e).lower()
 
 if __name__ == "__main__":

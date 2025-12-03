@@ -303,6 +303,45 @@ class TestKubeClient:
             label_selector="app=test",
         )
 
+    def test_get_pods_with_complex_label_selectors(self, kube_client, mock_k8s_apis):
+        """Test getting pods with complex label selectors including slashes and operators."""
+        pod1 = MagicMock()
+        pod1.to_dict.return_value = {"metadata": {"name": "pod1"}}
+        mock_k8s_apis["core_api"].list_namespaced_pod.return_value.items = [pod1]
+
+        # Test various complex label selectors that should pass through to K8s API
+        complex_selectors = [
+            "app.kubernetes.io/name=velero",
+            "app.kubernetes.io/component=server",
+            "component!=api",
+            "tier notin (dev,test)",
+            "environment in (production,staging)",
+            "pod-template-hash",
+            "!excluded-label",
+            "app.kubernetes.io/name=velero,component=server",
+            "app.kubernetes.io/managed-by=helm,app.kubernetes.io/instance=myapp",
+        ]
+
+        for selector in complex_selectors:
+            mock_k8s_apis["core_api"].list_namespaced_pod.reset_mock()
+            result = kube_client.get_pods("test-ns", label_selector=selector)
+
+            assert len(result) == 1
+            mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once_with(
+                namespace="test-ns",
+                label_selector=selector,
+            )
+
+    def test_get_pods_with_empty_label_selector_raises(self, kube_client, mock_k8s_apis):
+        """Test that empty or whitespace-only label selectors raise ValidationError."""
+        from lib.validation import ValidationError
+
+        with pytest.raises(ValidationError):
+            kube_client.get_pods("test-ns", label_selector="")
+
+        with pytest.raises(ValidationError):
+            kube_client.get_pods("test-ns", label_selector="   ")
+
     @patch("lib.kube_client.time.sleep")
     def test_wait_for_pods_ready(self, mock_sleep, kube_client, mock_k8s_apis):
         """Test waiting for pods to become ready."""

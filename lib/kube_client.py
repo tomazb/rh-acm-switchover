@@ -828,16 +828,13 @@ class KubeClient:
         """
         # Validate inputs before making API call
         InputValidator.validate_kubernetes_namespace(namespace)
-        if label_selector:
-            # Validate label selector format
-            try:
-                # Basic validation - label selectors should be key=value or key in (value1,value2)
-                # This is a simplified validation, full validation would be more complex
-                if not re.match(r'^[a-zA-Z0-9_\-\.]+(=[a-zA-Z0-9_\-\.]+| in \([^)]+\))(,[a-zA-Z0-9_\-\.]+(=[a-zA-Z0-9_\-\.]+| in \([^)]+\)))*$', label_selector):
-                    raise ValidationError(f"Invalid label selector format: '{label_selector}'")
-            except re.error:
-                # If regex itself is invalid, that's also a problem
-                raise ValidationError(f"Invalid label selector format: '{label_selector}'")
+        if label_selector is not None:
+            # Basic validation - only check for non-empty string
+            # Full label selector validation is complex (supports =, ==, !=, in, notin, exists, !exists)
+            # and includes keys with prefixes like 'app.kubernetes.io/name'
+            # Let the Kubernetes API validate the selector and return appropriate errors
+            if not label_selector.strip():
+                raise ValidationError("Label selector cannot be empty or whitespace-only")
 
         try:
             result = self.core_v1.list_namespaced_pod(

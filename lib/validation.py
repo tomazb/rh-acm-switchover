@@ -26,18 +26,20 @@ logger = logging.getLogger("acm_switchover")
 # Kubernetes resource name validation patterns
 # Based on Kubernetes naming conventions: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
 # DNS-1123 subdomain format: contains only lowercase alphanumeric characters, '-' or '.',
-# starts and ends with an alphanumeric character
+# starts with a lowercase letter, ends with an alphanumeric character
+# Note: While RFC 1123 technically allows starting with digits, Kubernetes requires starting with a letter
 K8S_NAME_PATTERN: Pattern[str] = re.compile(
-    r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
-    r'|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+    r'^[a-z]([-a-z0-9]*[a-z0-9])?$'
+    r'|^[a-z]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$'
 )
 K8S_NAME_MAX_LENGTH = 253
 
 # Kubernetes namespace validation pattern
 # DNS-1123 label format: contains only lowercase alphanumeric characters or '-',
-# starts and ends with an alphanumeric character
+# starts with a lowercase letter, ends with an alphanumeric character
+# Note: While RFC 1123 technically allows starting with digits, Kubernetes requires starting with a letter
 K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(
-    r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+    r'^[a-z]([-a-z0-9]*[a-z0-9])?$'
 )
 K8S_NAMESPACE_MAX_LENGTH = 63
 
@@ -54,9 +56,10 @@ K8S_LABEL_VALUE_PATTERN: Pattern[str] = re.compile(
 K8S_LABEL_MAX_LENGTH = 63
 
 # Context name validation pattern (more permissive than K8s names)
-# Allows alphanumeric, hyphens, underscores, dots, and forward slashes
+# Allows alphanumeric, hyphens, underscores, dots, forward slashes, and colons
+# This accommodates default oc login contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
 CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(
-    r'^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$'
+    r'^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$'
 )
 CONTEXT_NAME_MAX_LENGTH = 128
 
@@ -170,15 +173,17 @@ class InputValidator:
         Raises:
             ValidationError: If label value is invalid
         """
-        if not value:
-            raise ValidationError("Label value cannot be empty")
+        # None is not allowed, but empty string is valid per K8s spec
+        if value is None:
+            raise ValidationError("Label value cannot be None")
 
         if len(value) > K8S_LABEL_MAX_LENGTH:
             raise ValidationError(
                 f"Label value '{value}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters"
             )
 
-        if not K8S_LABEL_VALUE_PATTERN.match(value):
+        # Empty string is valid, only check pattern for non-empty values
+        if value and not K8S_LABEL_VALUE_PATTERN.match(value):
             raise ValidationError(
                 f"Invalid label value '{value}'. "
                 f"Must be 63 characters or less and must be empty or begin and end with an alphanumeric character"
@@ -206,7 +211,7 @@ class InputValidator:
         if not CONTEXT_NAME_PATTERN.match(context):
             raise ValidationError(
                 f"Invalid context name '{context}'. "
-                f"Must consist of alphanumeric characters, '-', '_', or '.', "
+                f"Must consist of alphanumeric characters, '-', '_', '.', ':', or '/', "
                 f"and must start and end with an alphanumeric character"
             )
 
