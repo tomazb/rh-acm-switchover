@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### ACM Version Display in Hub Discovery
+- **Enhanced discover-hub.sh output**: Now displays ACM version for each discovered hub during analysis
+  - Shows version inline with detection message: `ACM hub detected (version 2.11.8)`
+  - Stores version in `HUB_VERSIONS` array for potential future use
+  - Helps quickly identify version mismatches across hubs
+
 #### Auto-Import Strategy Validation (ACM 2.14+)
 - **New preflight check (Check 11)**: Validates `autoImportStrategy` configuration on both hubs
   - Warns if non-default strategy is configured (should be temporary)
@@ -48,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dynamic restore discovery**: The passive sync restore is now discovered dynamically by looking for a Restore with `spec.syncRestoreWithNewBackups=true` instead of requiring a hardcoded name
 - **Backward compatibility**: Falls back to well-known name `restore-acm-passive-sync` if no restore with `syncRestoreWithNewBackups=true` is found
 - **Finalization cleanup**: During finalization, all Restore resources in the backup namespace are now listed and cleaned up dynamically
+
+### Fixed
+
+#### Hub Discovery Script
+- **Fixed duplicate output in get_total_mc_count**: Changed from `grep -c -v` with `|| echo "0"` fallback to `grep -v | wc -l` to prevent duplicate "0" output when no managed clusters exist
+  - Previously, `grep -c` would output "0" and exit with status 1, triggering the fallback which added another "0"
+  - This caused a stray "0" line to appear in the hub discovery output for hubs with zero managed clusters
 
 ### Added
 
