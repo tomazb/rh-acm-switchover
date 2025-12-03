@@ -12,8 +12,14 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
     RESTORE_PASSIVE_SYNC_NAME,
     THANOS_OBJECT_STORAGE_SECRET,
+    MCE_NAMESPACE,
+    IMPORT_CONTROLLER_CONFIGMAP,
+    AUTO_IMPORT_STRATEGY_KEY,
+    AUTO_IMPORT_STRATEGY_DEFAULT,
+    AUTO_IMPORT_STRATEGY_SYNC,
 )
 from lib.kube_client import KubeClient
+from lib.utils import is_acm_version_ge
 
 logger = logging.getLogger("acm_switchover")
 
@@ -294,7 +300,10 @@ class HubComponentValidator:
                 dpa = dpas[0]
                 dpa_name = dpa.get("metadata", {}).get("name", "unknown")
                 conditions = dpa.get("status", {}).get("conditions", [])
-                reconciled = any(c.get("type") == "Reconciled" and c.get("status") == "True" for c in conditions)
+                reconciled = any(
+                    c.get("type") == "Reconciled" and c.get("status") == "True"
+                    for c in conditions
+                )
 
                 if reconciled:
                     self.reporter.add_result(
@@ -360,7 +369,9 @@ class BackupValidator:
             phase = latest_backup.get("status", {}).get("phase", "unknown")
 
             in_progress = [
-                b.get("metadata", {}).get("name") for b in backups if b.get("status", {}).get("phase") == "InProgress"
+                b.get("metadata", {}).get("name")
+                for b in backups
+                if b.get("status", {}).get("phase") == "InProgress"
             ]
 
             if in_progress:
@@ -578,7 +589,9 @@ class ManagedClusterBackupValidator:
                 # Check if cluster is joined (has Joined condition = True)
                 conditions = mc.get("status", {}).get("conditions", [])
                 is_joined = any(
-                    c.get("type") == "ManagedClusterJoined" and c.get("status") == "True" for c in conditions
+                    c.get("type") == "ManagedClusterJoined"
+                    and c.get("status") == "True"
+                    for c in conditions
                 )
                 if is_joined:
                     joined_clusters.append(mc_name)
@@ -618,7 +631,9 @@ class ManagedClusterBackupValidator:
 
             latest_backup = backups[0]
             backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
-            backup_time = latest_backup.get("metadata", {}).get("creationTimestamp", "unknown")
+            backup_time = latest_backup.get("metadata", {}).get(
+                "creationTimestamp", "unknown"
+            )
             phase = latest_backup.get("status", {}).get("phase", "unknown")
 
             if phase != "Completed":
@@ -668,6 +683,103 @@ class ManagedClusterBackupValidator:
             )
 
 
+class AutoImportStrategyValidator:
+    """Validate autoImportStrategy (ACM 2.14+) and provide guidance.
+
+    Behavior is detect-only; never fails preflight critically.
+    """
+
+    def __init__(self, reporter: ValidationReporter) -> None:
+        self.reporter = reporter
+
+    def _strategy_for(self, client: KubeClient) -> str:
+        cm = client.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+        if not cm:
+            return "default"
+        data = (cm or {}).get("data") or {}
+        strategy = data.get(AUTO_IMPORT_STRATEGY_KEY, "")
+        return strategy or "default"
+
+    def _non_local_cluster_count(self, client: KubeClient) -> int:
+        mcs = client.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+        return sum(
+            1 for mc in mcs if mc.get("metadata", {}).get("name") != "local-cluster"
+        )
+
+    def run(
+        self,
+        primary: KubeClient,
+        secondary: KubeClient,
+        primary_version: str,
+        secondary_version: str,
+    ) -> None:
+        # Primary hub
+        if is_acm_version_ge(primary_version, "2.14.0"):
+            strategy = self._strategy_for(primary)
+            if strategy in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
+                self.reporter.add_result(
+                    "Auto-Import Strategy (primary)",
+                    True,
+                    f"default ({AUTO_IMPORT_STRATEGY_DEFAULT}) in effect",
+                    critical=False,
+                )
+            else:
+                self.reporter.add_result(
+                    "Auto-Import Strategy (primary)",
+                    False,
+                    f"non-default strategy in use: {strategy}",
+                    critical=False,
+                )
+        else:
+            self.reporter.add_result(
+                "Auto-Import Strategy (primary)",
+                True,
+                f"ACM {primary_version} (< 2.14) - not applicable",
+                critical=False,
+            )
+
+        # Secondary hub
+        if is_acm_version_ge(secondary_version, "2.14.0"):
+            strategy = self._strategy_for(secondary)
+            count = self._non_local_cluster_count(secondary)
+            if count > 0 and strategy in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
+                self.reporter.add_result(
+                    "Auto-Import Strategy (secondary)",
+                    False,
+                    (
+                        f"secondary has {count} existing managed cluster(s) and strategy is default ({AUTO_IMPORT_STRATEGY_DEFAULT}). "
+                        f"Per runbook, consider temporarily setting {AUTO_IMPORT_STRATEGY_SYNC} on the destination hub before restore, "
+                        f"then reset to default afterward."
+                    ),
+                    critical=False,
+                )
+            elif strategy == AUTO_IMPORT_STRATEGY_SYNC:
+                self.reporter.add_result(
+                    "Auto-Import Strategy (secondary)",
+                    True,
+                    f"{AUTO_IMPORT_STRATEGY_SYNC} set (ensure to reset to default after activation)",
+                    critical=False,
+                )
+            else:
+                self.reporter.add_result(
+                    "Auto-Import Strategy (secondary)",
+                    True,
+                    f"default ({AUTO_IMPORT_STRATEGY_DEFAULT}) in effect",
+                    critical=False,
+                )
+        else:
+            self.reporter.add_result(
+                "Auto-Import Strategy (secondary)",
+                True,
+                f"ACM {secondary_version} (< 2.14) - not applicable",
+                critical=False,
+            )
+
+
 class ObservabilityPrereqValidator:
     """Checks additional Observability requirements on the secondary hub."""
 
@@ -678,7 +790,9 @@ class ObservabilityPrereqValidator:
         if not secondary.namespace_exists(OBSERVABILITY_NAMESPACE):
             return
 
-        if secondary.secret_exists(OBSERVABILITY_NAMESPACE, THANOS_OBJECT_STORAGE_SECRET):
+        if secondary.secret_exists(
+            OBSERVABILITY_NAMESPACE, THANOS_OBJECT_STORAGE_SECRET
+        ):
             self.reporter.add_result(
                 "Observability object storage secret",
                 True,

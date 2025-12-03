@@ -139,6 +139,87 @@ class KubeClient:
             logger.error("Failed to read secret %s/%s: %s", namespace, name, e)
             raise
 
+    # =============================
+    # ConfigMap helpers (core/v1)
+    # =============================
+    @retry_api_call
+    def get_configmap(self, namespace: str, name: str) -> Optional[Dict]:
+        """Get a namespaced ConfigMap as dict or None if not found."""
+        try:
+            cm = self.core_v1.read_namespaced_config_map(name=name, namespace=namespace)
+            return cm.to_dict()
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            if is_retryable_error(e):
+                raise
+            logger.error("Failed to read configmap %s/%s: %s", namespace, name, e)
+            raise
+
+    def exists_configmap(self, namespace: str, name: str) -> bool:
+        return self.get_configmap(namespace, name) is not None
+
+    @retry_api_call
+    def create_or_patch_configmap(
+        self, namespace: str, name: str, data: Dict[str, str]
+    ) -> Dict:
+        """Create or patch a ConfigMap's data field.
+
+        If CM exists, patch data; otherwise create it.
+        """
+        if self.dry_run:
+            logger.info(
+                "[DRY-RUN] Would create/patch ConfigMap %s/%s with data keys: %s",
+                namespace,
+                name,
+                list(data.keys()),
+            )
+            return {"metadata": {"name": name, "namespace": namespace}, "data": data}
+
+        try:
+            existing = self.get_configmap(namespace, name)
+            if existing is None:
+                body = {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {"name": name, "namespace": namespace},
+                    "data": data,
+                }
+                result = self.core_v1.create_namespaced_config_map(
+                    namespace=namespace, body=body
+                )
+                return result.to_dict()
+            # Patch existing
+            body = {"data": data}
+            result = self.core_v1.patch_namespaced_config_map(
+                name=name, namespace=namespace, body=body
+            )
+            return result.to_dict()
+        except ApiException as e:
+            if is_retryable_error(e):
+                raise
+            logger.error(
+                "Failed to create/patch configmap %s/%s: %s", namespace, name, e
+            )
+            raise
+
+    @retry_api_call
+    def delete_configmap(self, namespace: str, name: str) -> bool:
+        """Delete a ConfigMap; return True if deleted or absent."""
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would delete ConfigMap %s/%s", namespace, name)
+            return True
+        try:
+            self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace)
+            return True
+        except ApiException as e:
+            if e.status == 404:
+                return True
+            if is_retryable_error(e):
+                raise
+            logger.error("Failed to delete configmap %s/%s: %s", namespace, name, e)
+            raise
+
     @retry_api_call
     def get_route_host(self, namespace: str, name: str) -> Optional[str]:
         """Fetch the hostname for an OpenShift Route."""
@@ -292,7 +373,8 @@ class KubeClient:
             return {}
 
         logger.debug(
-            "KUBE_CLIENT patch_custom_resource: group=%s, version=%s, " "plural=%s, name=%s, namespace=%s, patch=%s",
+            "KUBE_CLIENT patch_custom_resource: group=%s, version=%s, "
+            "plural=%s, name=%s, namespace=%s, patch=%s",
             group,
             version,
             plural,
@@ -312,15 +394,22 @@ class KubeClient:
                     name=name,
                     body=patch,
                 )
-                logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
+                logger.debug(
+                    "KUBE_CLIENT: patch_namespaced_custom_object returned successfully"
+                )
             else:
                 logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
                 result = self.custom_api.patch_cluster_custom_object(
                     group=group, version=version, plural=plural, name=name, body=patch
                 )
-                logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
+                logger.debug(
+                    "KUBE_CLIENT: patch_cluster_custom_object returned successfully"
+                )
 
-            logger.debug("KUBE_CLIENT: Patch result keys: %s", list(result.keys()) if result else "None")
+            logger.debug(
+                "KUBE_CLIENT: Patch result keys: %s",
+                list(result.keys()) if result else "None",
+            )
             return result
         except ApiException as e:
             logger.error(
@@ -334,7 +423,11 @@ class KubeClient:
             logger.error("Failed to patch %s/%s: %s", plural, name, e)
             raise
         except Exception as e:
-            logger.error("KUBE_CLIENT: Unexpected exception during patch: %s: %s", type(e).__name__, e)
+            logger.error(
+                "KUBE_CLIENT: Unexpected exception during patch: %s: %s",
+                type(e).__name__,
+                e,
+            )
             raise
 
     @retry_api_call
@@ -348,7 +441,11 @@ class KubeClient:
     ) -> Dict:
         """Create a custom resource."""
         if self.dry_run:
-            logger.info("[DRY-RUN] Would create %s: %s", plural, body.get("metadata", {}).get("name"))
+            logger.info(
+                "[DRY-RUN] Would create %s: %s",
+                plural,
+                body.get("metadata", {}).get("name"),
+            )
             return body
 
         try:
@@ -395,7 +492,9 @@ class KubeClient:
                     name=name,
                 )
             else:
-                self.custom_api.delete_cluster_custom_object(group=group, version=version, plural=plural, name=name)
+                self.custom_api.delete_cluster_custom_object(
+                    group=group, version=version, plural=plural, name=name
+                )
             return True
         except ApiException as e:
             if e.status == 404:
@@ -427,12 +526,19 @@ class KubeClient:
     def scale_deployment(self, name: str, namespace: str, replicas: int) -> Dict:
         """Scale a deployment."""
         if self.dry_run:
-            logger.info("[DRY-RUN] Would scale deployment %s/%s to %s replicas", namespace, name, replicas)
+            logger.info(
+                "[DRY-RUN] Would scale deployment %s/%s to %s replicas",
+                namespace,
+                name,
+                replicas,
+            )
             return {}
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_deployment_scale(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_deployment_scale(
+                name=name, namespace=namespace, body=body
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -444,12 +550,19 @@ class KubeClient:
     def scale_statefulset(self, name: str, namespace: str, replicas: int) -> Dict:
         """Scale a statefulset."""
         if self.dry_run:
-            logger.info("[DRY-RUN] Would scale statefulset %s/%s to %s replicas", namespace, name, replicas)
+            logger.info(
+                "[DRY-RUN] Would scale statefulset %s/%s to %s replicas",
+                namespace,
+                name,
+                replicas,
+            )
             return {}
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_stateful_set_scale(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_stateful_set_scale(
+                name=name, namespace=namespace, body=body
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -466,8 +579,18 @@ class KubeClient:
 
         try:
             now = time.strftime("%Y%m%d%H%M%S")
-            body = {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now}}}}}
-            result = self.apps_v1.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
+            body = {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {"kubectl.kubernetes.io/restartedAt": now}
+                        }
+                    }
+                }
+            }
+            result = self.apps_v1.patch_namespaced_deployment(
+                name=name, namespace=namespace, body=body
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -476,10 +599,14 @@ class KubeClient:
             raise
 
     @retry_api_call
-    def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict]:
+    def get_pods(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[Dict]:
         """List pods in a namespace."""
         try:
-            result = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
+            result = self.core_v1.list_namespaced_pod(
+                namespace=namespace, label_selector=label_selector
+            )
             return [pod.to_dict() for pod in result.items]
         except ApiException as e:
             if e.status == 404:
@@ -529,7 +656,10 @@ class KubeClient:
             for pod in pods:
                 conditions = pod.get("status", {}).get("conditions", [])
                 for condition in conditions:
-                    if condition.get("type") == "Ready" and condition.get("status") == "True":
+                    if (
+                        condition.get("type") == "Ready"
+                        and condition.get("status") == "True"
+                    ):
                         ready_count += 1
                         break
 

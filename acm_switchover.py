@@ -73,7 +73,9 @@ Examples:
     )
 
     # Context arguments
-    parser.add_argument("--primary-context", required=True, help="Kubernetes context for primary hub")
+    parser.add_argument(
+        "--primary-context", required=True, help="Kubernetes context for primary hub"
+    )
     parser.add_argument(
         "--secondary-context",
         help="Kubernetes context for secondary hub (required for switchover)",
@@ -91,7 +93,9 @@ Examples:
         action="store_true",
         help="Show planned actions without executing them",
     )
-    mode_group.add_argument("--decommission", action="store_true", help="Decommission old hub (interactive)")
+    mode_group.add_argument(
+        "--decommission", action="store_true", help="Decommission old hub (interactive)"
+    )
 
     # Switchover options
     parser.add_argument(
@@ -101,12 +105,23 @@ Examples:
         help="Switchover method: passive (continuous sync) or full (one-time restore)",
     )
 
+    # Optional behavior
+    parser.add_argument(
+        "--manage-auto-import-strategy",
+        action="store_true",
+        help=(
+            "Temporarily set ImportAndSync on destination hub when needed (ACM 2.14+) and reset it post-switchover. "
+            "Default is detect-only."
+        ),
+    )
+
     # State management
     parser.add_argument(
         "--state-file",
         default=None,
         help=(
-            "Path to state file for idempotent execution " "(defaults to .state/switchover-<primary>__<secondary>.json)"
+            "Path to state file for idempotent execution "
+            "(defaults to .state/switchover-<primary>__<secondary>.json)"
         ),
     )
     parser.add_argument(
@@ -141,7 +156,9 @@ Examples:
     )
 
     # Logging
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
+    )
     parser.add_argument(
         "--log-format",
         choices=["text", "json"],
@@ -195,7 +212,9 @@ def run_switchover(
     logger.info("\n" + "=" * 60)
     logger.info("SWITCHOVER COMPLETED SUCCESSFULLY!")
     logger.info("=" * 60)
-    logger.info("\nSwitchover completed at: %s", datetime.now().astimezone().isoformat())
+    logger.info(
+        "\nSwitchover completed at: %s", datetime.now().astimezone().isoformat()
+    )
     logger.info("State file: %s", args.state_file)
     logger.info("\nNext steps:")
     logger.info("  1. Inform stakeholders that switchover is complete")
@@ -239,8 +258,13 @@ def _run_phase_preflight(
         config["secondary_observability_detected"],
     )
 
-    primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
-    secondary_obs_enabled = config["secondary_observability_detected"] and not args.skip_observability_checks
+    primary_obs_enabled = (
+        config["primary_observability_detected"] and not args.skip_observability_checks
+    )
+    secondary_obs_enabled = (
+        config["secondary_observability_detected"]
+        and not args.skip_observability_checks
+    )
 
     state.set_config("primary_has_observability", primary_obs_enabled)
     state.set_config("secondary_has_observability", secondary_obs_enabled)
@@ -291,7 +315,12 @@ def _run_phase_activation(
     _log_phase_banner("PHASE 3: SECONDARY HUB ACTIVATION", logger)
     state.set_phase(Phase.ACTIVATION)
 
-    activation = SecondaryActivation(secondary, state, args.method)
+    activation = SecondaryActivation(
+        secondary_client=secondary,
+        state_manager=state,
+        method=args.method,
+        manage_auto_import_strategy=args.manage_auto_import_strategy,
+    )
 
     if not activation.activate():
         logger.error("Secondary hub activation failed!")
@@ -339,13 +368,14 @@ def _run_phase_finalization(
     state.set_phase(Phase.FINALIZATION)
 
     finalization = Finalization(
-        secondary,
-        state,
-        state.get_config("secondary_version", "unknown"),
+        secondary_client=secondary,
+        state_manager=state,
+        acm_version=state.get_config("secondary_version", "unknown"),
         primary_client=primary,
         primary_has_observability=state.get_config("primary_has_observability", False),
         dry_run=args.dry_run,
         old_hub_action=args.old_hub_action,
+        manage_auto_import_strategy=args.manage_auto_import_strategy,
     )
 
     if not finalization.finalize():
@@ -378,7 +408,9 @@ def run_decommission(
     )
 
     if args.dry_run:
-        logger.info("[DRY-RUN] Starting decommission workflow (no changes will be made)")
+        logger.info(
+            "[DRY-RUN] Starting decommission workflow (no changes will be made)"
+        )
     else:
         logger.info("Starting decommission workflow")
 
@@ -459,7 +491,9 @@ def _sanitize_context_identifier(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", value)
 
 
-def _resolve_state_file(requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]) -> str:
+def _resolve_state_file(
+    requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]
+) -> str:
     """Derive the state file path based on contexts unless user provided one."""
     if requested_path and requested_path != DEFAULT_STATE_FILE:
         return requested_path

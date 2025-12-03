@@ -22,6 +22,8 @@ DECOMMISSION_POD_INTERVAL = 30
 BACKUP_NAMESPACE = "open-cluster-management-backup"
 OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 ACM_NAMESPACE = "open-cluster-management"
+# MCE (used for auto-import strategy ConfigMap)
+MCE_NAMESPACE = "multicluster-engine"
 
 # Secrets
 THANOS_OBJECT_STORAGE_SECRET = "thanos-object-storage"
@@ -38,3 +40,9 @@ SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS = "syncRestoreWithNewBackups"
 # ACM Spec Field Values
 VELERO_BACKUP_LATEST = "latest"
 VELERO_BACKUP_SKIP = "skip"
+
+# Auto-import strategy (ACM 2.14+)
+IMPORT_CONTROLLER_CONFIGMAP = "import-controller-config"
+AUTO_IMPORT_STRATEGY_KEY = "autoImportStrategy"
+AUTO_IMPORT_STRATEGY_DEFAULT = "ImportOnly"
+AUTO_IMPORT_STRATEGY_SYNC = "ImportAndSync"
