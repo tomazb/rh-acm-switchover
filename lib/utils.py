@@ -144,7 +144,8 @@ class StateManager:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
         except (OSError, ValueError, TypeError) as e:
-            os.close(fd)
+            # Note: os.fdopen() takes ownership of the fd and closes it on exit,
+            # so we don't need to call os.close(fd) here
             logging.error("Failed to write state file %s: %s", self.state_file, e)
             raise
 

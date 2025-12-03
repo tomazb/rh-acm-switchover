@@ -175,12 +175,9 @@ def validate_args(args):
     """Validate argument combinations and input values."""
     try:
         # Perform comprehensive input validation
+        # Note: validate_all_cli_args already checks that secondary_context is
+        # provided when not in decommission mode
         InputValidator.validate_all_cli_args(args)
-
-        # Additional business logic validation
-        if not args.decommission and not args.secondary_context:
-            print("Error: --secondary-context is required for switchover operations")
-            sys.exit(1)
 
     except ValidationError as e:
         print(f"Error: {str(e)}")

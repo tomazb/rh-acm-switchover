@@ -7,7 +7,6 @@ security, reliability, and proper error handling.
 """
 
 import pytest
-import argparse
 from lib.validation import (
     InputValidator,
     ValidationError,

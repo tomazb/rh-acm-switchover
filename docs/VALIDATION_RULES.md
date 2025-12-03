@@ -156,9 +156,9 @@ The ACM switchover automation tool implements comprehensive input validation to:
 ### 6. Filesystem Path Validation
 
 **Security Rules**:
-- **Path Traversal Prevention**: Blocks `..`, `~`, `$`, `{`, `}`, `|`, `&`, `;`, `<`, `>`, `` ` ``
+- **Path Traversal Prevention**: Blocks `..` as a path component (prevents `../malicious`)
+- **Command Injection Prevention**: Blocks `~`, `$`, `{`, `}`, `|`, `&`, `;`, `<`, `>`, backtick characters
 - **Absolute Path Restriction**: Only allows `/tmp/` and `/var/` prefixes for absolute paths
-- **Hidden File Prevention**: Blocks paths containing hidden files/directories (starting with `.`)
 - **Empty Path Prevention**: Rejects empty or whitespace-only paths
 
 **Valid Examples**:

@@ -18,7 +18,7 @@ Features:
 
 import re
 import logging
-from typing import Optional, Tuple, List, Pattern
+from typing import Pattern
 from lib.exceptions import ConfigurationError
 
 logger = logging.getLogger("acm_switchover")
@@ -29,8 +29,7 @@ logger = logging.getLogger("acm_switchover")
 # starts with a lowercase letter, ends with an alphanumeric character
 # Note: While RFC 1123 technically allows starting with digits, Kubernetes requires starting with a letter
 K8S_NAME_PATTERN: Pattern[str] = re.compile(
-    r'^[a-z]([-a-z0-9]*[a-z0-9])?$'
-    r'|^[a-z]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$'
+    r'^[a-z]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$'
 )
 K8S_NAME_MAX_LENGTH = 253
 
@@ -297,13 +296,20 @@ class InputValidator:
         if not path:
             raise ValidationError(f"{field_name} path cannot be empty")
 
-        # Prevent path traversal and other filesystem attacks
-        unsafe_chars = ['..', '~', '$', '{', '}', '|', '&', ';', '<', '>', '`']
+        # Prevent path traversal by checking for '..' as a path component
+        if '..' in path.split('/'):
+            raise SecurityValidationError(
+                f"SECURITY: Path traversal attempt detected in {field_name} path '{path}'. "
+                f"The '..' sequence is not allowed as a path component."
+            )
+
+        # Prevent command injection and other unsafe patterns
+        unsafe_chars = ['~', '$', '{', '}', '|', '&', ';', '<', '>', '`']
         if any(char in path for char in unsafe_chars):
             raise SecurityValidationError(
                 f"SECURITY: Invalid characters in {field_name} path '{path}'. "
-                f"Path contains unsafe characters that could be used for path traversal or command injection. "
-                f"Only alphanumeric characters, hyphens, underscores, dots, and forward slashes are allowed."
+                f"Path contains unsafe characters that could be used for command injection. "
+                f"Disallowed patterns: {', '.join(unsafe_chars)}."
             )
 
         # Prevent absolute paths that could escape intended directories
