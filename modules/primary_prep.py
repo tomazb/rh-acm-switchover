@@ -71,7 +71,7 @@ class PrimaryPreparation:
             logger.error("Primary hub preparation failed: %s", e)
             self.state.add_error(str(e), "primary_preparation")
             return False
-        except Exception as e:
+        except (RuntimeError, ValueError, Exception) as e:
             logger.error("Unexpected error during primary preparation: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "primary_preparation")
             return False
@@ -210,7 +210,7 @@ class PrimaryPreparation:
             else:
                 logger.info("Thanos compactor scaled down successfully")
 
-        except Exception as e:
+        except (RuntimeError, ValueError, Exception) as e:
             logger.error("Failed to scale down Thanos compactor: %s", e)
             # Don't fail the whole preparation if this is optional
             if "not found" in str(e).lower():

@@ -89,7 +89,7 @@ class Decommission:
         except SwitchoverError as e:
             logger.error("Decommission failed: %s", e)
             return False
-        except Exception as e:
+        except (RuntimeError, ValueError, Exception) as e:
             logger.error("Unexpected error during decommission: %s", e)
             return False
 

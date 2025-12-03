@@ -143,8 +143,9 @@ class StateManager:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
-        except Exception:
+        except (OSError, ValueError, TypeError) as e:
             os.close(fd)
+            logging.error("Failed to write state file %s: %s", self.state_file, e)
             raise
 
     def save_state(self) -> None:
