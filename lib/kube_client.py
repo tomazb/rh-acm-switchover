@@ -6,7 +6,6 @@ names, namespaces, and other parameters to improve security and reliability.
 """
 
 import logging
-import re
 import time
 from typing import Any, Dict, List, Optional
 

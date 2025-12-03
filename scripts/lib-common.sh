@@ -98,44 +98,11 @@ detect_cluster_cli() {
         CLUSTER_CLI_BIN="kubectl"
         CLUSTER_CLI_NAME="Kubernetes CLI (kubectl)"
         # Provide oc alias so the rest of the script can keep using oc invocations
+        # Note: Using "$@" is safe against shell injection because it correctly
+        # preserves each argument as a separate string, preventing the shell from
+        # interpreting metacharacters within them.
         oc() {
-            # Sanitize and validate all arguments before passing to kubectl
-            local sanitized_args=()
-            local arg
-
-            for arg in "$@"; do
-                # Validate argument doesn't contain dangerous shell metacharacters
-                # Check for pipe, ampersand, semicolon, backtick, dollar, quotes, parentheses, etc.
-                # Note: We allow '=' as it's used in flags like --context=value
-                if [[ "$arg" == *['|']* ]] || [[ "$arg" == *['&']* ]] || [[ "$arg" == *[';']* ]] || \
-                   [[ "$arg" == *['<']* ]] || [[ "$arg" == *['>']* ]] || [[ "$arg" == *['(']* ]] || \
-                   [[ "$arg" == *[')']* ]] || [[ "$arg" == *['$']* ]] || [[ "$arg" == *['`']* ]] || \
-                   [[ "$arg" == *['"']* ]] || [[ "$arg" == *["'"]* ]] || [[ "$arg" == *['\\']* ]]; then
-                    echo "Error: Invalid argument detected - potential shell injection attempt" >&2
-                    echo "Offending argument: '$arg'" >&2
-                    return 127
-                fi
-
-                # Escape any remaining special characters that could be problematic
-                # Use printf %q to properly quote/escape the argument
-                local escaped_arg
-                escaped_arg=$(printf '%q' "$arg")
-
-                # If printf %q fails or produces empty result, reject the argument
-                if [[ -z "$escaped_arg" ]]; then
-                    echo "Error: Cannot safely escape argument: '$arg'" >&2
-                    return 127
-                fi
-
-                sanitized_args+=("$escaped_arg")
-            done
-
-            # Execute kubectl with sanitized arguments
-            if [[ ${#sanitized_args[@]} -eq 0 ]]; then
-                kubectl
-            else
-                kubectl "${sanitized_args[@]}"
-            fi
+            kubectl "$@"
         }
         check_pass "$CLUSTER_CLI_NAME is installed"
     else

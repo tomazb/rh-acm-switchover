@@ -732,8 +732,9 @@ class PostActivationVerification:
                 for ctx in contexts:
                     if ctx.get("name") == cluster_name:
                         return cluster_name
-            except (config.ConfigException, Exception):
-                pass
+            except (config.ConfigException, Exception) as e:
+                # Failed to match context by name; returning empty string as fallback
+                logger.debug("Exception during name-based context matching for %s: %s", cluster_name, e)
             return ""
 
         # Normalize the API URL for comparison (extract host)

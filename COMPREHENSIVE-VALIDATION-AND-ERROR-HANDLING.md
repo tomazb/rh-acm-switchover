@@ -163,10 +163,10 @@ lib/validation.py
 ### Path Traversal Protection
 
 **Implemented Protections:**
-- ✅ Blocks `..`, `~`, `$`, `{`, `}`, `|`, `&`, `;`, `<`, `>`, `` ` `` characters
+- ✅ Blocks `..` as a path component (e.g., `../malicious`)
+- ✅ Blocks `~`, `$`, `{`, `}`, `|`, `&`, `;`, `<`, `>`, backtick characters
 - ✅ Prevents access to sensitive system directories (`/etc/`, `/root/`, etc.)
 - ✅ Restricts absolute paths to `/tmp/` and `/var/` only
-- ✅ Blocks hidden files and directories (starting with `.`)
 
 **Security Validation Examples:**
 
@@ -609,4 +609,3 @@ The comprehensive input validation implementation successfully delivers:
 **📚 Documentation:** 1,400+ lines of detailed documentation
 
 This implementation provides a solid foundation for secure, reliable, and user-friendly ACM switchover operations while maintaining full backward compatibility. The pull request is ready for review and represents a transformative improvement to the tool's security, reliability, and developer experience.
-The implementation provides a solid foundation for secure, reliable, and user-friendly ACM switchover operations while maintaining full backward compatibility and performance efficiency.
