@@ -60,7 +60,9 @@ class PrimaryPreparation:
                 else:
                     logger.info("Step already completed: scale_down_thanos")
             else:
-                logger.info("Skipping Thanos compactor scaling (Observability not detected)")
+                logger.info(
+                    "Skipping Thanos compactor scaling (Observability not detected)"
+                )
 
             logger.info("Primary hub preparation completed successfully")
             return True
@@ -153,11 +155,20 @@ class PrimaryPreparation:
             # Check if annotation already exists
             annotations = mc.get("metadata", {}).get("annotations", {})
             if "import.open-cluster-management.io/disable-auto-import" in annotations:
-                logger.debug("ManagedCluster %s already has disable-auto-import annotation", mc_name)
+                logger.debug(
+                    "ManagedCluster %s already has disable-auto-import annotation",
+                    mc_name,
+                )
                 continue
 
             # Add annotation
-            patch = {"metadata": {"annotations": {"import.open-cluster-management.io/disable-auto-import": ""}}}
+            patch = {
+                "metadata": {
+                    "annotations": {
+                        "import.open-cluster-management.io/disable-auto-import": ""
+                    }
+                }
+            }
 
             self.primary.patch_managed_cluster(name=mc_name, patch=patch)
 
@@ -193,7 +204,9 @@ class PrimaryPreparation:
             )
 
             if pods:
-                logger.warning("Thanos compactor still has %s pod(s) running", len(pods))
+                logger.warning(
+                    "Thanos compactor still has %s pod(s) running", len(pods)
+                )
             else:
                 logger.info("Thanos compactor scaled down successfully")
 
