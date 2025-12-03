@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence, Tuple
 
 from lib.validation import InputValidator, ValidationError
@@ -361,6 +362,55 @@ class BackupValidator:
     def __init__(self, reporter: ValidationReporter) -> None:
         self.reporter = reporter
 
+    def _get_backup_age_info(self, completion_timestamp: str | None) -> str:
+        """
+        Calculate backup age and return human-readable info with freshness indicator.
+        
+        Args:
+            completion_timestamp: ISO 8601 timestamp string from backup.status.completionTimestamp
+            
+        Returns:
+            Human-readable age string with freshness indicator, or empty string if timestamp unavailable
+        """
+        if not completion_timestamp:
+            return ""
+        
+        try:
+            # Parse ISO 8601 timestamp (Kubernetes format: 2025-12-03T10:15:30Z)
+            completion_dt = datetime.fromisoformat(completion_timestamp.replace('Z', '+00:00'))
+            now_dt = datetime.now(timezone.utc)
+            
+            # Calculate age
+            age_seconds = int((now_dt - completion_dt).total_seconds())
+            
+            # Format human-readable age
+            if age_seconds < 60:
+                age_display = f"{age_seconds}s"
+            elif age_seconds < 3600:
+                age_minutes = age_seconds // 60
+                age_display = f"{age_minutes}m"
+            elif age_seconds < 86400:
+                age_hours = age_seconds // 3600
+                age_minutes = (age_seconds % 3600) // 60
+                age_display = f"{age_hours}h{age_minutes}m"
+            else:
+                age_days = age_seconds // 86400
+                age_hours = (age_seconds % 86400) // 3600
+                age_display = f"{age_days}d{age_hours}h"
+            
+            # Determine freshness indicator
+            if age_seconds < 3600:  # < 1 hour
+                freshness = "FRESH"
+            elif age_seconds < 86400:  # < 24 hours
+                freshness = "acceptable"
+            else:  # >= 24 hours
+                freshness = "consider running a fresh backup"
+            
+            return f"age: {age_display}, {freshness}"
+        except (ValueError, AttributeError) as e:
+            logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
+            return ""
+
     def run(self, primary: KubeClient) -> None:
         try:
             backups = primary.list_custom_resources(
@@ -402,10 +452,18 @@ class BackupValidator:
                     critical=True,
                 )
             elif phase == "Completed":
+                # Get backup completion timestamp to calculate age
+                completion_ts = latest_backup.get("status", {}).get("completionTimestamp")
+                age_info = self._get_backup_age_info(completion_ts)
+                
+                message = f"latest backup {backup_name} completed successfully"
+                if age_info:
+                    message += f" ({age_info})"
+                
                 self.reporter.add_result(
                     "Backup status",
                     True,
-                    f"latest backup {backup_name} completed successfully",
+                    message,
                     critical=True,
                 )
             else:
