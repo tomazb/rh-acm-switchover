@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""
+Test cases for input validation in ACM switchover automation.
+
+This module tests the comprehensive validation functionality to ensure
+security, reliability, and proper error handling.
+"""
+
+import pytest
+import argparse
+from lib.validation import (
+    InputValidator,
+    ValidationError,
+    SecurityValidationError,
+)
+from lib.exceptions import ConfigurationError
+
+class MockArgs:
+    """Mock arguments object for testing."""
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+class TestCLIArgumentValidation:
+    """Test CLI argument validation."""
+
+    def test_valid_context_names(self):
+        """Test valid context names."""
+        valid_names = [
+            "primary-hub",
+            "secondary_hub",
+            "my-cluster-123",
+            "prod.acm.example.com",
+            "dev-hub-2024",
+        ]
+
+        for name in valid_names:
+            InputValidator.validate_context_name(name)
+
+    def test_invalid_context_names(self):
+        """Test invalid context names."""
+        invalid_names = [
+            "",  # empty
+            "my cluster",  # spaces
+            "my@cluster",  # invalid character
+            "123cluster",  # starts with number
+            "my-cluster-",  # ends with hyphen
+            "a" * 129,  # too long
+        ]
+
+        for name in invalid_names:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_context_name(name)
+
+    def test_valid_cli_methods(self):
+        """Test valid CLI methods."""
+        valid_methods = ["passive", "full"]
+
+        for method in valid_methods:
+            InputValidator.validate_cli_method(method)
+
+    def test_invalid_cli_methods(self):
+        """Test invalid CLI methods."""
+        invalid_methods = ["invalid", "passive-sync", "", "PASSIVE"]
+
+        for method in invalid_methods:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_cli_method(method)
+
+    def test_valid_old_hub_actions(self):
+        """Test valid old hub actions."""
+        valid_actions = ["secondary", "decommission", "none"]
+
+        for action in valid_actions:
+            InputValidator.validate_cli_old_hub_action(action)
+
+    def test_invalid_old_hub_actions(self):
+        """Test invalid old hub actions."""
+        invalid_actions = ["keep", "remove", "", "SECONDARY"]
+
+        for action in invalid_actions:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_cli_old_hub_action(action)
+
+    def test_valid_log_formats(self):
+        """Test valid log formats."""
+        valid_formats = ["text", "json"]
+
+        for fmt in valid_formats:
+            InputValidator.validate_cli_log_format(fmt)
+
+    def test_invalid_log_formats(self):
+        """Test invalid log formats."""
+        invalid_formats = ["xml", "html", "", "JSON"]
+
+        for fmt in invalid_formats:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_cli_log_format(fmt)
+
+    def test_validate_all_cli_args_success(self):
+        """Test successful validation of all CLI args."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+        )
+
+        # Should not raise any exceptions
+        InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_invalid_context(self):
+        """Test validation failure with invalid context."""
+        args = MockArgs(
+            primary_context="invalid context!",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+        )
+
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_missing_secondary(self):
+        """Test validation failure with missing secondary context."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context=None,
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+        )
+
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+class TestKubernetesResourceValidation:
+    """Test Kubernetes resource name validation."""
+
+    def test_valid_kubernetes_names(self):
+        """Test valid Kubernetes resource names."""
+        valid_names = [
+            "my-pod",
+            "my-pod-123",
+            "my.pod.name",
+            "my-pod-name",
+            "a" * 253,  # max length
+        ]
+
+        for name in valid_names:
+            InputValidator.validate_kubernetes_name(name)
+
+    def test_invalid_kubernetes_names(self):
+        """Test invalid Kubernetes resource names."""
+        invalid_names = [
+            "",  # empty
+            "My-Pod",  # uppercase
+            "my pod",  # space
+            "my@pod",  # invalid character
+            "123pod",  # starts with number
+            "my-pod-",  # ends with hyphen
+            "a" * 254,  # too long
+            "my..pod",  # consecutive dots
+            "-my-pod",  # starts with hyphen
+        ]
+
+        for name in invalid_names:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_kubernetes_name(name)
+
+    def test_valid_namespaces(self):
+        """Test valid Kubernetes namespace names."""
+        valid_namespaces = [
+            "default",
+            "kube-system",
+            "my-namespace",
+            "my-namespace-123",
+            "a" * 63,  # max length
+        ]
+
+        for namespace in valid_namespaces:
+            InputValidator.validate_kubernetes_namespace(namespace)
+
+    def test_invalid_namespaces(self):
+        """Test invalid Kubernetes namespace names."""
+        invalid_namespaces = [
+            "",  # empty
+            "My-Namespace",  # uppercase
+            "my namespace",  # space
+            "my@namespace",  # invalid character
+            "123namespace",  # starts with number
+            "my-namespace-",  # ends with hyphen
+            "a" * 64,  # too long
+            "my..namespace",  # consecutive dots
+            "-my-namespace",  # starts with hyphen
+        ]
+
+        for namespace in invalid_namespaces:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_kubernetes_namespace(namespace)
+
+    def test_valid_label_keys(self):
+        """Test valid Kubernetes label keys."""
+        valid_keys = [
+            "app",
+            "app.kubernetes.io/name",
+            "my-label",
+            "my-label-123",
+            "a" * 63,  # max length
+        ]
+
+        for key in valid_keys:
+            InputValidator.validate_kubernetes_label_key(key)
+
+    def test_invalid_label_keys(self):
+        """Test invalid Kubernetes label keys."""
+        invalid_keys = [
+            "",  # empty
+            "My-Label",  # uppercase
+            "my label",  # space
+            "my@label",  # invalid character
+            "123label",  # starts with number
+            "my-label-",  # ends with hyphen
+            "a" * 64,  # too long
+            "my..label",  # consecutive dots
+            "-my-label",  # starts with hyphen
+        ]
+
+        for key in invalid_keys:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_kubernetes_label_key(key)
+
+class TestFilesystemValidation:
+    """Test filesystem path validation."""
+
+    def test_valid_filesystem_paths(self):
+        """Test valid filesystem paths."""
+        valid_paths = [
+            "state-file.json",
+            ".state/switchover-state.json",
+            "relative/path/to/file",
+            "/tmp/valid-file",
+            "/var/log/app.log",
+            "my_file_123.txt",
+        ]
+
+        for path in valid_paths:
+            InputValidator.validate_safe_filesystem_path(path, "test")
+
+    def test_invalid_filesystem_paths(self):
+        """Test invalid filesystem paths."""
+        invalid_paths = [
+            ("../malicious", "path traversal"),
+            ("~/home/user", "home directory"),
+            ("$HOME/file", "environment variable"),
+            ("{malicious}", "curly braces"),
+            ("file|command", "pipe"),
+            ("file&command", "ampersand"),
+            ("file;command", "semicolon"),
+            ("<script>", "angle bracket"),
+            ("`command`", "backtick"),
+            ("/etc/passwd", "absolute path outside allowed"),
+            ("/root/.ssh", "absolute path outside allowed"),
+            (".hidden/file", "hidden file"),
+        ]
+
+        for path, reason in invalid_paths:
+            with pytest.raises(SecurityValidationError):
+                InputValidator.validate_safe_filesystem_path(path, "test")
+
+    def test_empty_filesystem_path(self):
+        """Test empty filesystem path."""
+        with pytest.raises(ValidationError):
+            InputValidator.validate_safe_filesystem_path("", "test")
+
+class TestStringValidation:
+    """Test string validation utilities."""
+
+    def test_valid_non_empty_strings(self):
+        """Test valid non-empty strings."""
+        valid_strings = [
+            "valid",
+            "valid string",
+            "123",
+            "a" * 100,
+        ]
+
+        for string in valid_strings:
+            InputValidator.validate_non_empty_string(string, "test")
+
+    def test_invalid_non_empty_strings(self):
+        """Test invalid non-empty strings."""
+        invalid_strings = [
+            "",
+            "   ",
+            "\t",
+            "\n",
+            " \t\n ",
+        ]
+
+        for string in invalid_strings:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_non_empty_string(string, "test")
+
+class TestSanitization:
+    """Test sanitization utilities."""
+
+    def test_sanitize_context_identifier(self):
+        """Test context identifier sanitization."""
+        test_cases = [
+            ("normal-context", "normal-context"),
+            ("my.context-123", "my.context-123"),
+            ("my context with spaces", "my_context_with_spaces"),
+            ("my@context!with@special!chars", "my_context_with_special_chars"),
+            ("", "unknown"),
+            ("My-Context", "My-Context"),
+            ("context/with/slashes", "context_with_slashes"),
+        ]
+
+        for input_str, expected in test_cases:
+            result = InputValidator.sanitize_context_identifier(input_str)
+            assert result == expected, f"Expected '{expected}', got '{result}' for input '{input_str}'"
+
+class TestErrorHandling:
+    """Test error handling and exception types."""
+
+    def test_validation_error_inheritance(self):
+        """Test that ValidationError inherits from ConfigurationError."""
+        assert issubclass(ValidationError, ConfigurationError)
+        assert issubclass(SecurityValidationError, ValidationError)
+        assert issubclass(SecurityValidationError, ConfigurationError)
+
+    def test_security_validation_error_type(self):
+        """Test that security errors are properly typed."""
+        with pytest.raises(SecurityValidationError):
+            InputValidator.validate_safe_filesystem_path("../malicious", "test")
+
+        with pytest.raises(SecurityValidationError):
+            InputValidator.validate_safe_filesystem_path("file;command", "test")
+
+    def test_validation_error_messages(self):
+        """Test that validation errors have descriptive messages."""
+        try:
+            InputValidator.validate_context_name("invalid context!")
+        except ValidationError as e:
+            assert "invalid context!" in str(e).lower()
+            assert "alphanumeric" in str(e).lower()
+
+        try:
+            InputValidator.validate_safe_filesystem_path("../malicious", "state-file")
+        except SecurityValidationError as e:
+            assert "security" in str(e).upper()
+            assert "path traversal" in str(e).lower()
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "--tb=short"])
