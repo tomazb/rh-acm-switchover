@@ -246,6 +246,45 @@ if [[ $BACKUPS -gt 0 ]]; then
     if [[ "$LATEST_PHASE" == "Finished" ]] || [[ "$LATEST_PHASE" == "Completed" ]]; then
         check_pass "Primary hub: Latest backup '$LATEST_BACKUP' completed successfully"
         
+        # Show backup age/freshness
+        BACKUP_COMPLETION=$(oc --context="$PRIMARY_CONTEXT" get backup "$LATEST_BACKUP" -n "$BACKUP_NAMESPACE" \
+            -o jsonpath='{.status.completionTimestamp}' 2>/dev/null || echo "")
+        
+        if [[ -n "$BACKUP_COMPLETION" ]]; then
+            # Convert timestamps to epoch seconds for age calculation
+            BACKUP_EPOCH=$(date -d "$BACKUP_COMPLETION" +%s 2>/dev/null || echo "0")
+            CURRENT_EPOCH=$(date +%s)
+            AGE_SECONDS=$((CURRENT_EPOCH - BACKUP_EPOCH))
+            
+            # Calculate human-readable age
+            if [[ $AGE_SECONDS -lt 60 ]]; then
+                AGE_DISPLAY="${AGE_SECONDS}s"
+            elif [[ $AGE_SECONDS -lt 3600 ]]; then
+                AGE_MINUTES=$((AGE_SECONDS / 60))
+                AGE_DISPLAY="${AGE_MINUTES}m"
+            elif [[ $AGE_SECONDS -lt 86400 ]]; then
+                AGE_HOURS=$((AGE_SECONDS / 3600))
+                AGE_MINUTES=$(( (AGE_SECONDS % 3600) / 60 ))
+                AGE_DISPLAY="${AGE_HOURS}h${AGE_MINUTES}m"
+            else
+                AGE_DAYS=$((AGE_SECONDS / 86400))
+                AGE_HOURS=$(( (AGE_SECONDS % 86400) / 3600 ))
+                AGE_DISPLAY="${AGE_DAYS}d${AGE_HOURS}h"
+            fi
+            
+            # Determine freshness status and color
+            # Fresh: < 1 hour (3600s), Acceptable: < 24 hours (86400s), Stale: >= 24 hours
+            if [[ $AGE_SECONDS -lt 3600 ]]; then
+                echo -e "${GREEN}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - FRESH${NC}"
+            elif [[ $AGE_SECONDS -lt 86400 ]]; then
+                echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - acceptable${NC}"
+            else
+                echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - consider running a fresh backup${NC}"
+            fi
+        else
+            check_warn "Primary hub: Could not determine backup age (completion timestamp unavailable)"
+        fi
+        
         # Check if all joined ManagedClusters existed before the latest managed clusters backup
         # This prevents data loss when clusters were imported after the last backup
         JOINED_CLUSTERS=$(oc --context="$PRIMARY_CONTEXT" get managedclusters -o json 2>/dev/null | \
