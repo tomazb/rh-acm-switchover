@@ -45,7 +45,7 @@ Run 3: All steps completed, no operations
 2. **Dry-run** - Preview mode for verification
 3. **Validate-only** - Check without execution
 4. **preserveOnDelete** - Mandatory check prevents cluster destruction
-5. **Rollback** - Revert to primary if issues occur
+5. **Reverse Switchover** - Return to original hub by swapping contexts
 6. **Interactive decommission** - Confirmation for destructive ops
 
 ## Project Structure
@@ -64,7 +64,8 @@ rh-acm-switchover/
 │   ├── primary_prep.py      # Primary preparation (143 lines)
 │   ├── activation.py        # Secondary activation (169 lines)
 │   ├── post_activation.py   # Post-activation verification (218 lines)
-│   ├── finalization.py      # Finalization & rollback (237 lines)
+│   ├── finalization.py      # Finalization & old hub handling (237 lines)
+│   ├── decommission.py      # ACM decommissioning module
 │   └── decommission.py      # Decommission old hub (144 lines)
 │
 └── docs/
@@ -85,7 +86,7 @@ rh-acm-switchover/
 - [x] Secondary hub activation (passive sync & full restore)
 - [x] Post-activation verification (clusters, observability)
 - [x] Finalization (enable backups, verify)
-- [x] Complete rollback capability
+- [x] Old hub handling (secondary/decommission/none)
 - [x] Interactive decommission workflow
 
 ### ✅ Safety & Validation
@@ -182,13 +183,11 @@ Validation Summary: 15/15 checks passed
 **Finalizes:**
 1. Enable BackupSchedule on secondary hub
 2. Verify new backups being created
-3. Generate completion report
-
-**Rollback:**
-- Deactivate secondary hub
-- Remove annotations on primary
-- Restart Thanos compactor on primary
-- Unpause BackupSchedule on primary
+3. Handle old hub based on `--old-hub-action`:
+   - `secondary`: Set up passive sync restore for reverse switchover
+   - `decommission`: Remove ACM components automatically
+   - `none`: Leave unchanged for manual handling
+4. Generate completion report
 
 ### Decommission (modules/decommission.py)
 
@@ -254,11 +253,19 @@ python acm_switchover.py \
   --primary-context primary --secondary-context secondary --verbose
 ```
 
-### Rollback
+### Reverse Switchover
+
+Return to original hub by swapping contexts:
+
 ```bash
-python acm_switchover.py --rollback \
-  --primary-context primary --secondary-context secondary
+python acm_switchover.py \
+  --primary-context secondary \
+  --secondary-context primary \
+  --old-hub-action secondary \
+  --method passive
 ```
+
+> **Note:** Requires original switchover used `--old-hub-action secondary` to enable passive sync.
 
 ### Decommission
 ```bash
@@ -293,7 +300,7 @@ except Exception as e:
 1. **Validation** - `--validate-only` before any execution
 2. **Dry-run** - `--dry-run` to preview actions
 3. **Non-production** - Test full workflow in test environment
-4. **Rollback testing** - Practice rollback procedure
+4. **Reverse switchover testing** - Practice returning to original hub
 5. **Production** - Execute with `--verbose` and monitoring
 
 ## Performance
@@ -341,7 +348,7 @@ except Exception as e:
 - ✅ Auto-detection of environment
 - ✅ Dry-run and validate-only modes
 - ✅ Comprehensive documentation
-- ✅ Rollback capability
+- ✅ Reverse switchover capability
 - ✅ Interactive decommission
 
 ## Lessons Learned

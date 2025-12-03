@@ -54,7 +54,7 @@ python acm_switchover.py \
   --verbose
 ```
 
-### Resume & Rollback
+### Resume & Reverse Switchover
 
 ```bash
 # Resume from interruption (same command as execution)
@@ -64,12 +64,13 @@ python acm_switchover.py \
   --old-hub-action secondary \
   --method passive
 
-# Rollback to primary hub
+# Reverse switchover (return to original hub)
+# Swap --primary-context and --secondary-context values
 python acm_switchover.py \
-  --rollback \
-  --primary-context <primary> \
-  --secondary-context <secondary> \
-  --old-hub-action none
+  --primary-context <secondary> \
+  --secondary-context <primary> \
+  --old-hub-action secondary \
+  --method passive
 ```
 
 ### Decommission
@@ -137,6 +138,11 @@ oc get clusterdeployment --all-namespaces \
 # Fix missing preserveOnDelete
 oc patch clusterdeployment <name> -n <namespace> \
   --type='merge' -p '{"spec":{"preserveOnDelete":true}}'
+
+# Check auto-import strategy (ACM 2.14+)
+oc get configmap import-controller -n multicluster-engine \
+  -o jsonpath='{.data.autoImportStrategy}'
+# If not found or returns empty, default (ImportOnly) is in use
 ```
 
 ## Post-Switchover Verification
@@ -191,7 +197,6 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--old-hub-action {secondary,decommission,none}` | Action for old hub after switchover (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
-| `--rollback` | Rollback to primary hub |
 | `--decommission` | Decommission old hub (interactive) |
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
 | `--reset-state` | Reset state file and start fresh |
@@ -227,9 +232,10 @@ oc rollout restart deployment/observability-observatorium-api \
 - [ ] All ManagedClusters included in latest backup
 - [ ] Latest backup completed successfully
 - [ ] ACM versions match between hubs
+- [ ] (ACM 2.14+) Verified `autoImportStrategy` configuration
 - [ ] Decided on `--old-hub-action` (secondary/decommission/none)
 - [ ] Stakeholders informed of maintenance window
-- [ ] Rollback procedure tested in non-production
+- [ ] Reverse switchover procedure tested in non-production
 - [ ] State file location noted for resume
 
 ## Support
