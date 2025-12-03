@@ -353,6 +353,26 @@ test_multiple_sourcing_prevented() {
     fi
 }
 
+test_get_auto_import_strategy_returns_zero_on_error() {
+    local output
+    local status
+    output=$(bash -c "
+        set -e
+        source '$CONSTANTS'
+        source '$LIB_COMMON'
+        oc() { return 1; }
+        VAL=\$(get_auto_import_strategy dummy 2>/dev/null)
+        echo \"rc=\$? value=\$VAL\"
+    " 2>/dev/null)
+    status=$?
+
+    if [[ $status -eq 0 ]] && [[ "$output" == "rc=0 value=error" ]]; then
+        test_pass "get_auto_import_strategy returns 0 even when oc fails"
+    else
+        test_fail "get_auto_import_strategy exited non-zero on oc failure" "status=$status output=$output"
+    fi
+}
+
 # =============================================================================
 # Main test runner
 # =============================================================================
@@ -397,6 +417,7 @@ run_test "print_summary failure return" test_print_summary_returns_failure_when_
 run_test "exit codes defined" test_exit_codes_defined
 run_test "exit codes values" test_exit_codes_values
 run_test "multiple sourcing prevented" test_multiple_sourcing_prevented
+run_test "auto import strategy returns zero on oc error" test_get_auto_import_strategy_returns_zero_on_error
 
 # Summary
 echo ""

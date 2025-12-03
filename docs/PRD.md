@@ -538,7 +538,7 @@ Automated Python tool that:
 
 | Component | Supported Versions | Status |
 |-----------|-------------------|--------|
-| Python | 3.8+ | ✓ |
+| Python | 3.9+ | ✓ |
 | ACM | 2.11+ (2.11, 2.12, 2.13+) | ✓ |
 | OpenShift | 4.14+ | ✓ |
 | Kubernetes | 1.24+ (via OpenShift) | ✓ |
@@ -757,7 +757,7 @@ Any phase can transition to: FAILED or ROLLBACK
 
 **Runtime**:
 
-- Python 3.8 or later
+- Python 3.9 or later
 - kubectl or oc CLI
 - Network access to both hub clusters
 - Appropriate RBAC permissions

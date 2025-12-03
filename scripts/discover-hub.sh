@@ -50,6 +50,7 @@ declare -a HUB_ROLES=()           # "primary", "secondary", "standby", "unknown"
 declare -a HUB_STATES=()          # Human-readable state description
 declare -a HUB_MC_COUNTS=()       # Number of available managed clusters
 declare -a HUB_BACKUP_STATES=()   # BackupSchedule state
+declare -a HUB_VERSIONS=()        # ACM version
 declare -a HUB_KLUSTERLET_COUNTS=()  # Number of clusters with klusterlet pointing to this hub
 declare -a ALL_MANAGED_CLUSTERS=()   # All managed cluster contexts discovered
 
@@ -105,8 +106,17 @@ is_acm_hub() {
     return $?
 }
 
+# Get ACM version for a context
+get_acm_version() {
+    local ctx="$1"
+    local version
+    version=$("$CLUSTER_CLI_BIN" --context="$ctx" get mch -n "$ACM_NAMESPACE" \
+        -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
+    echo "$version"
+}
+
 # Get BackupSchedule state for a context
-# Returns: "active", "paused", "collision", "none"
+# Returns: "active", "paused", "collision", or "none"
 get_backup_schedule_state() {
     local ctx="$1"
     
@@ -332,7 +342,7 @@ get_total_mc_count() {
     local ctx="$1"
     
     "$CLUSTER_CLI_BIN" --context="$ctx" get managedclusters --no-headers 2>/dev/null | \
-        grep -c -v "$LOCAL_CLUSTER_NAME" || echo "0"
+        grep -v "$LOCAL_CLUSTER_NAME" | wc -l
 }
 
 # Determine hub role based on collected information
@@ -409,7 +419,10 @@ analyze_context() {
         return 1
     fi
     
-    echo -e "${GREEN}ACM hub detected${NC}"
+    # Get ACM version
+    local acm_version
+    acm_version=$(get_acm_version "$ctx")
+    echo -e "${GREEN}ACM hub detected${NC} (version ${BLUE}${acm_version}${NC})"
     
     # Gather information
     local backup_state restore_state available_mc total_mc
@@ -430,6 +443,7 @@ analyze_context() {
     HUB_STATES+=("$state")
     HUB_MC_COUNTS+=("$available_mc/$total_mc")
     HUB_BACKUP_STATES+=("$backup_state")
+    HUB_VERSIONS+=("$acm_version")
     
     return 0
 }

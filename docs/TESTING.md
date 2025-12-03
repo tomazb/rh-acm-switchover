@@ -167,7 +167,7 @@ pip-audit --desc
 #### CI/CD Pipeline (`.github/workflows/ci-cd.yml`)
 
 Runs on every push and pull request:
-- ✅ Unit tests (Python 3.8-3.12)
+- ✅ Unit tests (Python 3.9-3.12)
 - ✅ Code quality checks
 - ✅ Security scanning
 - ✅ Syntax validation

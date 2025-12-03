@@ -135,7 +135,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
 ### GitHub Actions Workflows
 - ✅ **`.github/workflows/ci-cd.yml`**
   - **Jobs**: test, lint, security, syntax-check, documentation, integration-test, build-container, release-check
-  - **Python versions**: 3.8, 3.9, 3.10, 3.11, 3.12
+  - **Python versions**: 3.9, 3.10, 3.11, 3.12
   - **Triggers**: push, pull request
   - **Features**:
     - Unit tests with coverage
@@ -420,7 +420,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
 - ✅ License compliance
 
 ### CI/CD
-- ✅ Multi-version testing (Python 3.8-3.12)
+- ✅ Multi-version testing (Python 3.9-3.12)
 - ✅ Automated security scanning
 - ✅ Code coverage reporting
 - ✅ Container build verification

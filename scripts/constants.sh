@@ -27,6 +27,14 @@ export OBS_THANOS_COMPACT_POD="observability-thanos-compact"
 # Currently scripts detect some of these dynamically.
 export RESTORE_PASSIVE_SYNC_NAME="restore-acm-passive-sync"
 
+# Auto-Import Strategy (ACM 2.14+)
+export MCE_NAMESPACE="multicluster-engine"
+export IMPORT_CONTROLLER_CONFIGMAP="import-controller-config"
+export AUTO_IMPORT_STRATEGY_KEY="autoImportStrategy"
+export AUTO_IMPORT_STRATEGY_DEFAULT="ImportOnly"
+export AUTO_IMPORT_STRATEGY_SYNC="ImportAndSync"
+export AUTO_IMPORT_STRATEGY_DOC_URL="https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.14/html-single/clusters/index#custom-auto-import-strat"
+
 # Timeouts / Thresholds
 export RESTORE_AGE_WARNING_SECONDS=3600 # 1 hour
 

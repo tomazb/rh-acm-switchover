@@ -95,6 +95,12 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╚════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Analyzing Contexts
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Checking primary-hub... ACM hub detected (version 2.11.0)
+  Checking secondary-hub... ACM hub detected (version 2.11.0)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Discovered ACM Hubs
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -163,6 +169,10 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 8. **ClusterDeployment Safety** - **CRITICAL:** Verifies `preserveOnDelete=true` on ALL ClusterDeployments
 9. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
 10. **Observability** - Detects if observability is installed (optional) - Checks for CRs and secrets
+11. **Auto-Import Strategy** (ACM 2.14+) - Validates `autoImportStrategy` configuration:
+    - Warns if non-default strategy is set on either hub
+    - For secondary hubs with existing clusters: advises temporary `ImportAndSync` before restore
+    - Links to Red Hat documentation for guidance
 
 ### Example Output
 
@@ -231,7 +241,15 @@ graph TD
     T -->|No| U[FAIL: Passive Sync Not Ready]
     T -->|Yes| V[Check Observability CRs & Secrets]
     S --> V
-    V --> W[Generate Summary Report]
+    V --> V2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    V2 --> V3{Non-default<br/>Strategy?}
+    V3 -->|Yes| V4[WARN: Non-default Strategy]
+    V3 -->|No| V5{Secondary has<br/>existing clusters?}
+    V5 -->|Yes| V6[WARN: Consider ImportAndSync<br/>before restore]
+    V5 -->|No| W
+    V4 --> W
+    V6 --> W
+    W[Generate Summary Report]
     W --> X{Any Failures?}
     X -->|Yes| Y[Exit Code 1<br/>Display Failed Checks]
     X -->|No| Z[Exit Code 0<br/>Ready to Proceed]
@@ -280,6 +298,10 @@ Verifies that the ACM switchover completed successfully by validating all critic
 6. **ACM Hub Components** - Verifies MultiClusterHub and ACM pods are healthy
 7. **Old Hub Comparison** (if provided) - Checks old hub clusters are disconnected
 8. **Auto-Import Status** - Verifies no lingering disable-auto-import annotations
+9. **Auto-Import Strategy** (ACM 2.14+) - Ensures `autoImportStrategy` is reset to default post-switchover:
+    - Warns if non-default strategy remains configured
+    - Provides command to reset to default `ImportOnly`
+    - Also checks old hub if provided
 
 ### Example Output
 
@@ -373,9 +395,18 @@ graph TD
     Y --> AA{Old Hub Clusters<br/>Disconnected?}
     AA -->|No| AB[WARN: Old Hub Still Active]
     AA -->|Yes| AC[Check Old Hub Backup Paused]
-    AB --> AD
-    AC --> AD[Generate Summary Report]
-    Z --> AD
+    AB --> Y2
+    AC --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    Y2 --> Y3{Non-default<br/>Strategy?}
+    Y3 -->|Yes| Y4[WARN: Reset Strategy to Default]
+    Y3 -->|No| AD
+    Y4 --> AD
+    Z --> Z2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    Z2 --> Z3{Non-default<br/>Strategy?}
+    Z3 -->|Yes| Z4[WARN: Reset Strategy to Default]
+    Z3 -->|No| AD
+    Z4 --> AD
+    AD[Generate Summary Report]
     AD --> AE{Any Failures?}
     AE -->|Yes| AF[Exit Code 1<br/>Display Issues & Recommendations]
     AE -->|No| AG[Exit Code 0<br/>Switchover Successful]
@@ -504,6 +535,8 @@ Provides shared helper functions and utilities used by both `preflight-check.sh`
 | **`check_warn`** | Record a warning with yellow triangle, adds to warning messages |
 | **`section_header`** | Print a formatted section header |
 | **`detect_cluster_cli`** | Detect `oc`/`kubectl` and `jq`, set up aliases |
+| **`get_auto_import_strategy`** | Get autoImportStrategy value from a hub (returns "default" if not configured) |
+| **`is_acm_214_or_higher`** | Check if ACM version is 2.14+ (returns 0/1) |
 | **`print_summary`** | Print validation summary with mode-specific messaging |
 
 ### Usage
@@ -577,4 +610,4 @@ For issues or questions:
 
 ---
 
-**Last Updated:** 2025-11-28
+**Last Updated:** 2025-12-02

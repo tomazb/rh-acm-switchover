@@ -133,7 +133,7 @@ Includes:
 Tests run automatically on:
 - Every push to main/develop
 - Every pull request
-- Python versions: 3.8, 3.9, 3.10, 3.11, 3.12
+- Python versions: 3.9, 3.10, 3.11, 3.12
 
 See `.github/workflows/ci-cd.yml` for details.
 

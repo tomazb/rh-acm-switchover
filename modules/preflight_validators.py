@@ -1,10 +1,17 @@
-"""Helper classes for ACM pre-flight validation."""
+"""Helper classes for ACM pre-flight validation.
+
+This module includes comprehensive input validation for context names,
+namespaces, and other external inputs to improve security and reliability.
+"""
 
 from __future__ import annotations
 
 import logging
 import shutil
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence, Tuple
+
+from lib.validation import InputValidator, ValidationError
 
 from lib.constants import (
     ACM_NAMESPACE,
@@ -12,8 +19,14 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
     RESTORE_PASSIVE_SYNC_NAME,
     THANOS_OBJECT_STORAGE_SECRET,
+    MCE_NAMESPACE,
+    IMPORT_CONTROLLER_CONFIGMAP,
+    AUTO_IMPORT_STRATEGY_KEY,
+    AUTO_IMPORT_STRATEGY_DEFAULT,
+    AUTO_IMPORT_STRATEGY_SYNC,
 )
 from lib.kube_client import KubeClient
+from lib.utils import is_acm_version_ge
 
 logger = logging.getLogger("acm_switchover")
 
@@ -134,18 +147,29 @@ class NamespaceValidator:
         namespace: str,
         hub_label: str,
     ) -> None:
-        if kube_client.namespace_exists(namespace):
-            self.reporter.add_result(
-                f"Namespace {namespace} ({hub_label})",
-                True,
-                "exists",
-                critical=True,
-            )
-        else:
+        try:
+            # Validate namespace name before checking existence
+            InputValidator.validate_kubernetes_namespace(namespace)
+
+            if kube_client.namespace_exists(namespace):
+                self.reporter.add_result(
+                    f"Namespace {namespace} ({hub_label})",
+                    True,
+                    "exists",
+                    critical=True,
+                )
+            else:
+                self.reporter.add_result(
+                    f"Namespace {namespace} ({hub_label})",
+                    False,
+                    "not found",
+                    critical=True,
+                )
+        except ValidationError as e:
             self.reporter.add_result(
                 f"Namespace {namespace} ({hub_label})",
                 False,
-                "not found",
+                f"invalid namespace name: {str(e)}",
                 critical=True,
             )
 
@@ -199,7 +223,7 @@ class VersionValidator:
                 critical=True,
             )
             return "unknown"
-        except Exception as exc:  # pragma: no cover - kube errors
+        except (RuntimeError, ValueError, Exception) as exc:  # pragma: no cover - kube errors
             self.reporter.add_result(
                 f"ACM version ({hub_name})",
                 False,
@@ -273,7 +297,7 @@ class HubComponentValidator:
                     f"{BACKUP_NAMESPACE} namespace not found",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 f"OADP operator ({hub_name})",
                 False,
@@ -283,6 +307,9 @@ class HubComponentValidator:
 
     def _check_dpa(self, kube_client: KubeClient, hub_name: str) -> None:
         try:
+            # Validate namespace before using it
+            InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
+
             dpas = kube_client.list_custom_resources(
                 group="oadp.openshift.io",
                 version="v1alpha1",
@@ -294,7 +321,10 @@ class HubComponentValidator:
                 dpa = dpas[0]
                 dpa_name = dpa.get("metadata", {}).get("name", "unknown")
                 conditions = dpa.get("status", {}).get("conditions", [])
-                reconciled = any(c.get("type") == "Reconciled" and c.get("status") == "True" for c in conditions)
+                reconciled = any(
+                    c.get("type") == "Reconciled" and c.get("status") == "True"
+                    for c in conditions
+                )
 
                 if reconciled:
                     self.reporter.add_result(
@@ -317,7 +347,7 @@ class HubComponentValidator:
                     "no DataProtectionApplication found",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 f"DataProtectionApplication ({hub_name})",
                 False,
@@ -331,6 +361,55 @@ class BackupValidator:
 
     def __init__(self, reporter: ValidationReporter) -> None:
         self.reporter = reporter
+
+    def _get_backup_age_info(self, completion_timestamp: str | None) -> str:
+        """
+        Calculate backup age and return human-readable info with freshness indicator.
+        
+        Args:
+            completion_timestamp: ISO 8601 timestamp string from backup.status.completionTimestamp
+            
+        Returns:
+            Human-readable age string with freshness indicator, or empty string if timestamp unavailable
+        """
+        if not completion_timestamp:
+            return ""
+        
+        try:
+            # Parse ISO 8601 timestamp (Kubernetes format: 2025-12-03T10:15:30Z)
+            completion_dt = datetime.fromisoformat(completion_timestamp.replace('Z', '+00:00'))
+            now_dt = datetime.now(timezone.utc)
+            
+            # Calculate age
+            age_seconds = int((now_dt - completion_dt).total_seconds())
+            
+            # Format human-readable age
+            if age_seconds < 60:
+                age_display = f"{age_seconds}s"
+            elif age_seconds < 3600:
+                age_minutes = age_seconds // 60
+                age_display = f"{age_minutes}m"
+            elif age_seconds < 86400:
+                age_hours = age_seconds // 3600
+                age_minutes = (age_seconds % 3600) // 60
+                age_display = f"{age_hours}h{age_minutes}m"
+            else:
+                age_days = age_seconds // 86400
+                age_hours = (age_seconds % 86400) // 3600
+                age_display = f"{age_days}d{age_hours}h"
+            
+            # Determine freshness indicator
+            if age_seconds < 3600:  # < 1 hour
+                freshness = "FRESH"
+            elif age_seconds < 86400:  # < 24 hours
+                freshness = "acceptable"
+            else:  # >= 24 hours
+                freshness = "consider running a fresh backup"
+            
+            return f"age: {age_display}, {freshness}"
+        except (ValueError, AttributeError) as e:
+            logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
+            return ""
 
     def run(self, primary: KubeClient) -> None:
         try:
@@ -360,7 +439,9 @@ class BackupValidator:
             phase = latest_backup.get("status", {}).get("phase", "unknown")
 
             in_progress = [
-                b.get("metadata", {}).get("name") for b in backups if b.get("status", {}).get("phase") == "InProgress"
+                b.get("metadata", {}).get("name")
+                for b in backups
+                if b.get("status", {}).get("phase") == "InProgress"
             ]
 
             if in_progress:
@@ -371,10 +452,18 @@ class BackupValidator:
                     critical=True,
                 )
             elif phase == "Completed":
+                # Get backup completion timestamp to calculate age
+                completion_ts = latest_backup.get("status", {}).get("completionTimestamp")
+                age_info = self._get_backup_age_info(completion_ts)
+                
+                message = f"latest backup {backup_name} completed successfully"
+                if age_info:
+                    message += f" ({age_info})"
+                
                 self.reporter.add_result(
                     "Backup status",
                     True,
-                    f"latest backup {backup_name} completed successfully",
+                    message,
                     critical=True,
                 )
             else:
@@ -384,7 +473,7 @@ class BackupValidator:
                     f"latest backup {backup_name} in unexpected state: {phase}",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 "Backup status",
                 False,
@@ -440,7 +529,7 @@ class ClusterDeploymentValidator:
                     f"all {len(cluster_deployments)} ClusterDeployments have preserveOnDelete=true",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             if "404" in str(exc):
                 self.reporter.add_result(
                     "ClusterDeployment preserveOnDelete",
@@ -465,6 +554,10 @@ class PassiveSyncValidator:
 
     def run(self, secondary: KubeClient) -> None:
         try:
+            # Validate namespace and resource name before using them
+            InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
+            InputValidator.validate_kubernetes_name(RESTORE_PASSIVE_SYNC_NAME, "restore")
+
             restore = secondary.get_custom_resource(
                 group="cluster.open-cluster-management.io",
                 version="v1beta1",
@@ -502,7 +595,7 @@ class PassiveSyncValidator:
                     f"passive sync in unexpected state: {phase} - {message}",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 "Passive sync restore",
                 False,
@@ -518,6 +611,14 @@ class ObservabilityDetector:
         self.reporter = reporter
 
     def detect(self, primary: KubeClient, secondary: KubeClient) -> Tuple[bool, bool]:
+        try:
+            # Validate namespace before checking existence
+            InputValidator.validate_kubernetes_namespace(OBSERVABILITY_NAMESPACE)
+        except ValidationError:
+            # If observability namespace is invalid, it doesn't exist
+            logger.debug("Observability namespace validation failed: %s", OBSERVABILITY_NAMESPACE)
+            return False, False
+
         primary_has = primary.namespace_exists(OBSERVABILITY_NAMESPACE)
         secondary_has = secondary.namespace_exists(OBSERVABILITY_NAMESPACE)
 
@@ -578,7 +679,9 @@ class ManagedClusterBackupValidator:
                 # Check if cluster is joined (has Joined condition = True)
                 conditions = mc.get("status", {}).get("conditions", [])
                 is_joined = any(
-                    c.get("type") == "ManagedClusterJoined" and c.get("status") == "True" for c in conditions
+                    c.get("type") == "ManagedClusterJoined"
+                    and c.get("status") == "True"
+                    for c in conditions
                 )
                 if is_joined:
                     joined_clusters.append(mc_name)
@@ -593,6 +696,18 @@ class ManagedClusterBackupValidator:
                 return
 
             # Find the latest managed-clusters backup
+            try:
+                # Validate namespace before using it
+                InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
+            except ValidationError as e:
+                self.reporter.add_result(
+                    "ManagedClusters in backup",
+                    False,
+                    f"invalid backup namespace: {str(e)}",
+                    critical=True,
+                )
+                return
+
             backups = primary.list_custom_resources(
                 group="velero.io",
                 version="v1",
@@ -618,7 +733,9 @@ class ManagedClusterBackupValidator:
 
             latest_backup = backups[0]
             backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
-            backup_time = latest_backup.get("metadata", {}).get("creationTimestamp", "unknown")
+            backup_time = latest_backup.get("metadata", {}).get(
+                "creationTimestamp", "unknown"
+            )
             phase = latest_backup.get("status", {}).get("phase", "unknown")
 
             if phase != "Completed":
@@ -659,12 +776,116 @@ class ManagedClusterBackupValidator:
                     critical=True,
                 )
 
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 "ManagedClusters in backup",
                 False,
                 f"error checking ManagedClusters in backup: {exc}",
                 critical=True,
+            )
+
+
+class AutoImportStrategyValidator:
+    """Validate autoImportStrategy (ACM 2.14+) and provide guidance.
+
+    Behavior is detect-only; never fails preflight critically.
+    """
+
+    def __init__(self, reporter: ValidationReporter) -> None:
+        self.reporter = reporter
+
+    def _strategy_for(self, client: KubeClient) -> str:
+        try:
+            # Validate namespace and configmap name before using them
+            InputValidator.validate_kubernetes_namespace(MCE_NAMESPACE)
+            InputValidator.validate_kubernetes_name(IMPORT_CONTROLLER_CONFIGMAP, "configmap")
+        except ValidationError:
+            return "default"
+
+        cm = client.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+        if not cm:
+            return "default"
+        data = (cm or {}).get("data") or {}
+        strategy = data.get(AUTO_IMPORT_STRATEGY_KEY, "")
+        return strategy or "default"
+
+    def _non_local_cluster_count(self, client: KubeClient) -> int:
+        mcs = client.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+        return sum(
+            1 for mc in mcs if mc.get("metadata", {}).get("name") != "local-cluster"
+        )
+
+    def run(
+        self,
+        primary: KubeClient,
+        secondary: KubeClient,
+        primary_version: str,
+        secondary_version: str,
+    ) -> None:
+        # Primary hub
+        if is_acm_version_ge(primary_version, "2.14.0"):
+            strategy = self._strategy_for(primary)
+            if strategy in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
+                self.reporter.add_result(
+                    "Auto-Import Strategy (primary)",
+                    True,
+                    f"default ({AUTO_IMPORT_STRATEGY_DEFAULT}) in effect",
+                    critical=False,
+                )
+            else:
+                self.reporter.add_result(
+                    "Auto-Import Strategy (primary)",
+                    False,
+                    f"non-default strategy in use: {strategy}",
+                    critical=False,
+                )
+        else:
+            self.reporter.add_result(
+                "Auto-Import Strategy (primary)",
+                True,
+                f"ACM {primary_version} (< 2.14) - not applicable",
+                critical=False,
+            )
+
+        # Secondary hub
+        if is_acm_version_ge(secondary_version, "2.14.0"):
+            strategy = self._strategy_for(secondary)
+            count = self._non_local_cluster_count(secondary)
+            if count > 0 and strategy in ("default", AUTO_IMPORT_STRATEGY_DEFAULT):
+                self.reporter.add_result(
+                    "Auto-Import Strategy (secondary)",
+                    False,
+                    (
+                        f"secondary has {count} existing managed cluster(s) and strategy is default ({AUTO_IMPORT_STRATEGY_DEFAULT}). "
+                        f"Per runbook, consider temporarily setting {AUTO_IMPORT_STRATEGY_SYNC} on the destination hub before restore, "
+                        f"then reset to default afterward."
+                    ),
+                    critical=False,
+                )
+            elif strategy == AUTO_IMPORT_STRATEGY_SYNC:
+                self.reporter.add_result(
+                    "Auto-Import Strategy (secondary)",
+                    True,
+                    f"{AUTO_IMPORT_STRATEGY_SYNC} set (ensure to reset to default after activation)",
+                    critical=False,
+                )
+            else:
+                self.reporter.add_result(
+                    "Auto-Import Strategy (secondary)",
+                    True,
+                    f"default ({AUTO_IMPORT_STRATEGY_DEFAULT}) in effect",
+                    critical=False,
+                )
+        else:
+            self.reporter.add_result(
+                "Auto-Import Strategy (secondary)",
+                True,
+                f"ACM {secondary_version} (< 2.14) - not applicable",
+                critical=False,
             )
 
 
@@ -675,10 +896,20 @@ class ObservabilityPrereqValidator:
         self.reporter = reporter
 
     def run(self, secondary: KubeClient) -> None:
+        try:
+            # Validate namespace and secret name before checking existence
+            InputValidator.validate_kubernetes_namespace(OBSERVABILITY_NAMESPACE)
+            InputValidator.validate_kubernetes_name(THANOS_OBJECT_STORAGE_SECRET, "secret")
+        except ValidationError as e:
+            logger.debug("Observability validation failed: %s", e)
+            return
+
         if not secondary.namespace_exists(OBSERVABILITY_NAMESPACE):
             return
 
-        if secondary.secret_exists(OBSERVABILITY_NAMESPACE, THANOS_OBJECT_STORAGE_SECRET):
+        if secondary.secret_exists(
+            OBSERVABILITY_NAMESPACE, THANOS_OBJECT_STORAGE_SECRET
+        ):
             self.reporter.add_result(
                 "Observability object storage secret",
                 True,

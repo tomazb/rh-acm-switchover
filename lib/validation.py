@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""
+Input validation utilities for ACM switchover automation.
+
+This module provides comprehensive validation for CLI arguments, Kubernetes
+resource names, context names, and other external inputs to improve security
+and reliability.
+
+Features:
+- Kubernetes resource name validation (DNS-1123 subdomain rules)
+- Kubernetes namespace validation (DNS-1123 label rules)
+- Kubernetes label validation
+- Context name validation
+- CLI argument validation
+- Filesystem path validation
+- Comprehensive error handling with descriptive messages
+"""
+
+import re
+import logging
+from typing import Pattern
+from lib.exceptions import ConfigurationError
+
+logger = logging.getLogger("acm_switchover")
+
+# Kubernetes resource name validation patterns
+# Based on Kubernetes naming conventions: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
+# DNS-1123 subdomain format: contains only lowercase alphanumeric characters, '-' or '.',
+# starts with a lowercase letter or digit, ends with an alphanumeric character
+K8S_NAME_PATTERN: Pattern[str] = re.compile(
+    r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+)
+K8S_NAME_MAX_LENGTH = 253
+
+# Kubernetes namespace validation pattern
+# RFC 1123 label format: contains only lowercase alphanumeric characters or '-',
+# starts with an alphabetic character (Kubernetes requires this), ends with an alphanumeric character
+K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(
+    r'^[a-z]([-a-z0-9]*[a-z0-9])?$'
+)
+K8S_NAMESPACE_MAX_LENGTH = 63
+
+# Kubernetes label validation patterns
+# Label keys: optional prefix and name, separated by a slash (/),
+# where prefix must be a DNS subdomain and name must be a DNS label
+K8S_LABEL_KEY_PATTERN: Pattern[str] = re.compile(
+    r'^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$'
+    r'|^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$'
+)
+K8S_LABEL_VALUE_PATTERN: Pattern[str] = re.compile(
+    r'^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$'
+)
+K8S_LABEL_MAX_LENGTH = 63
+
+# Context name validation pattern (more permissive than K8s names)
+# Allows alphanumeric, hyphens, underscores, dots, forward slashes, and colons
+# This accommodates default oc login contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
+CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(
+    r'^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$'
+)
+CONTEXT_NAME_MAX_LENGTH = 128
+
+class ValidationError(ConfigurationError):
+    """Input validation failure.
+
+    This exception is raised when input validation fails, providing
+    detailed error messages to help users understand what went wrong
+    and how to fix it.
+    """
+    pass
+
+class SecurityValidationError(ValidationError):
+    """Security-related validation failure.
+
+    This exception is raised when validation fails due to potential
+    security issues (e.g., path traversal attempts, command injection).
+    """
+    pass
+
+class InputValidator:
+    """Comprehensive input validation for ACM switchover."""
+
+    @staticmethod
+    def validate_kubernetes_name(name: str, resource_type: str = "resource") -> None:
+        """
+        Validate Kubernetes resource name according to DNS-1123 subdomain rules.
+
+        Args:
+            name: The name to validate
+            resource_type: Type of resource for error messages
+
+        Raises:
+            ValidationError: If name is invalid
+        """
+        if not name:
+            raise ValidationError(f"{resource_type} name cannot be empty")
+
+        if len(name) > K8S_NAME_MAX_LENGTH:
+            raise ValidationError(
+                f"{resource_type} name '{name}' exceeds maximum length of {K8S_NAME_MAX_LENGTH} characters"
+            )
+
+        if not K8S_NAME_PATTERN.match(name):
+            raise ValidationError(
+                f"Invalid {resource_type} name '{name}'. "
+                f"Must consist of lower case alphanumeric characters, '-', or '.', "
+                f"and must start and end with an alphanumeric character"
+            )
+
+    @staticmethod
+    def validate_kubernetes_namespace(namespace: str) -> None:
+        """
+        Validate Kubernetes namespace name according to DNS-1123 label rules.
+
+        Args:
+            namespace: The namespace to validate
+
+        Raises:
+            ValidationError: If namespace is invalid
+        """
+        if not namespace:
+            raise ValidationError("Namespace cannot be empty")
+
+        if len(namespace) > K8S_NAMESPACE_MAX_LENGTH:
+            raise ValidationError(
+                f"Namespace '{namespace}' exceeds maximum length of {K8S_NAMESPACE_MAX_LENGTH} characters"
+            )
+
+        if not K8S_NAMESPACE_PATTERN.match(namespace):
+            raise ValidationError(
+                f"Invalid namespace '{namespace}'. "
+                f"Must consist of lower case alphanumeric characters or '-', "
+                f"and must start and end with an alphanumeric character"
+            )
+
+    @staticmethod
+    def validate_kubernetes_label_key(key: str) -> None:
+        """
+        Validate Kubernetes label key.
+
+        Args:
+            key: The label key to validate
+
+        Raises:
+            ValidationError: If label key is invalid
+        """
+        if not key:
+            raise ValidationError("Label key cannot be empty")
+
+        if len(key) > K8S_LABEL_MAX_LENGTH:
+            raise ValidationError(
+                f"Label key '{key}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters"
+            )
+
+        if not K8S_LABEL_KEY_PATTERN.match(key):
+            raise ValidationError(
+                f"Invalid label key '{key}'. "
+                f"Must be an optional prefix and name, separated by a slash (/), "
+                f"where prefix must be a DNS subdomain and name must be a DNS label"
+            )
+
+    @staticmethod
+    def validate_kubernetes_label_value(value: str) -> None:
+        """
+        Validate Kubernetes label value.
+
+        Args:
+            value: The label value to validate
+
+        Raises:
+            ValidationError: If label value is invalid
+        """
+        # None is not allowed, but empty string is valid per K8s spec
+        if value is None:
+            raise ValidationError("Label value cannot be None")
+
+        if len(value) > K8S_LABEL_MAX_LENGTH:
+            raise ValidationError(
+                f"Label value '{value}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters"
+            )
+
+        # Empty string is valid, only check pattern for non-empty values
+        if value and not K8S_LABEL_VALUE_PATTERN.match(value):
+            raise ValidationError(
+                f"Invalid label value '{value}'. "
+                f"Must be 63 characters or less and must be empty or begin and end with an alphanumeric character"
+            )
+
+    @staticmethod
+    def validate_context_name(context: str) -> None:
+        """
+        Validate Kubernetes context name.
+
+        Args:
+            context: The context name to validate
+
+        Raises:
+            ValidationError: If context name is invalid
+        """
+        if not context:
+            raise ValidationError("Context name cannot be empty")
+
+        if len(context) > CONTEXT_NAME_MAX_LENGTH:
+            raise ValidationError(
+                f"Context name '{context}' exceeds maximum length of {CONTEXT_NAME_MAX_LENGTH} characters"
+            )
+
+        if not CONTEXT_NAME_PATTERN.match(context):
+            raise ValidationError(
+                f"Invalid context name '{context}'. "
+                f"Must consist of alphanumeric characters, '-', '_', '.', ':', or '/', "
+                f"and must start and end with an alphanumeric character"
+            )
+
+    @staticmethod
+    def validate_cli_method(method: str) -> None:
+        """
+        Validate CLI method argument.
+
+        Args:
+            method: The method to validate
+
+        Raises:
+            ValidationError: If method is invalid
+        """
+        valid_methods = ["passive", "full"]
+        if method not in valid_methods:
+            raise ValidationError(
+                f"Invalid method '{method}'. Must be one of: {', '.join(valid_methods)}"
+            )
+
+    @staticmethod
+    def validate_cli_old_hub_action(action: str) -> None:
+        """
+        Validate CLI old-hub-action argument.
+
+        Args:
+            action: The action to validate
+
+        Raises:
+            ValidationError: If action is invalid
+        """
+        valid_actions = ["secondary", "decommission", "none"]
+        if action not in valid_actions:
+            raise ValidationError(
+                f"Invalid old-hub-action '{action}'. Must be one of: {', '.join(valid_actions)}"
+            )
+
+    @staticmethod
+    def validate_cli_log_format(log_format: str) -> None:
+        """
+        Validate CLI log format argument.
+
+        Args:
+            log_format: The log format to validate
+
+        Raises:
+            ValidationError: If log format is invalid
+        """
+        valid_formats = ["text", "json"]
+        if log_format not in valid_formats:
+            raise ValidationError(
+                f"Invalid log format '{log_format}'. Must be one of: {', '.join(valid_formats)}"
+            )
+
+    @staticmethod
+    def validate_non_empty_string(value: str, field_name: str) -> None:
+        """
+        Validate that a string is not empty or whitespace-only.
+
+        Args:
+            value: The string to validate
+            field_name: Name of the field for error messages
+
+        Raises:
+            ValidationError: If string is empty or whitespace-only
+        """
+        if not value or not value.strip():
+            raise ValidationError(f"{field_name} cannot be empty or whitespace-only")
+
+    @staticmethod
+    def validate_safe_filesystem_path(path: str, field_name: str) -> None:
+        """
+        Validate that a path is safe for filesystem operations.
+
+        Args:
+            path: The path to validate
+            field_name: Name of the field for error messages
+
+        Raises:
+            SecurityValidationError: If path contains unsafe characters or patterns
+            ValidationError: If path is empty
+        """
+        if not path:
+            raise ValidationError(f"{field_name} path cannot be empty")
+
+        # Prevent path traversal by checking for '..' as a path component
+        if '..' in path.split('/'):
+            raise SecurityValidationError(
+                f"SECURITY: Path traversal attempt detected in {field_name} path '{path}'. "
+                f"The '..' sequence is not allowed as a path component."
+            )
+
+        # Prevent command injection and other unsafe patterns
+        unsafe_chars = ['~', '$', '{', '}', '|', '&', ';', '<', '>', '`']
+        if any(char in path for char in unsafe_chars):
+            raise SecurityValidationError(
+                f"SECURITY: Invalid characters in {field_name} path '{path}'. "
+                f"Path contains unsafe characters that could be used for command injection. "
+                f"Disallowed patterns: {', '.join(unsafe_chars)}."
+            )
+
+        # Prevent absolute paths that could escape intended directories
+        if path.startswith('/') and not path.startswith('/tmp/') and not path.startswith('/var/'):
+            raise SecurityValidationError(
+                f"SECURITY: Absolute path '{path}' is not allowed for {field_name}. "
+                f"Use relative paths or paths within /tmp or /var directories to prevent filesystem escape attacks."
+            )
+
+    @staticmethod
+    def sanitize_context_identifier(value: str) -> str:
+        """
+        Sanitize context string to be filesystem friendly.
+
+        Args:
+            value: The context string to sanitize
+
+        Returns:
+            Sanitized string safe for filesystem use
+        """
+        if not value:
+            return "unknown"
+
+        # Replace any character that's not alphanumeric, dot, underscore, or dash with underscore
+        return re.sub(r"[^A-Za-z0-9._-]", "_", value)
+
+    @staticmethod
+    def validate_all_cli_args(args: object) -> None:
+        """
+        Validate all CLI arguments comprehensively.
+
+        Args:
+            args: Parsed CLI arguments object
+
+        Raises:
+            ValidationError: If any argument validation fails
+        """
+        # Validate required context arguments
+        if hasattr(args, 'primary_context') and args.primary_context:
+            InputValidator.validate_context_name(args.primary_context)
+            InputValidator.validate_non_empty_string(args.primary_context, "primary-context")
+
+        if hasattr(args, 'secondary_context') and args.secondary_context:
+            InputValidator.validate_context_name(args.secondary_context)
+            InputValidator.validate_non_empty_string(args.secondary_context, "secondary-context")
+
+        # Validate method
+        if hasattr(args, 'method') and args.method:
+            InputValidator.validate_cli_method(args.method)
+
+        # Validate old-hub-action
+        if hasattr(args, 'old_hub_action') and args.old_hub_action:
+            InputValidator.validate_cli_old_hub_action(args.old_hub_action)
+
+        # Validate log format
+        if hasattr(args, 'log_format') and args.log_format:
+            InputValidator.validate_cli_log_format(args.log_format)
+
+        # Validate state file path if provided
+        if hasattr(args, 'state_file') and args.state_file:
+            InputValidator.validate_safe_filesystem_path(args.state_file, "state-file")
+
+        # Validate that secondary context is provided when not in decommission mode
+        if hasattr(args, 'decommission') and not args.decommission:
+            if hasattr(args, 'secondary_context') and not args.secondary_context:
+                raise ValidationError("secondary-context is required for switchover operations")

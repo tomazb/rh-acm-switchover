@@ -192,6 +192,28 @@ RESTORE_JSON
         exit 0
         ;;
     
+    # ACM 2.14+ autoImportStrategy checks (Check 11)
+    "--context=primary-ok get namespace multicluster-engine")
+        exit 0
+        ;;
+    "--context=secondary-ok get namespace multicluster-engine")
+        exit 0
+        ;;
+    "--context=primary-ok get configmap import-controller-config -n multicluster-engine")
+        # ConfigMap not found means default ImportOnly is used (which is OK for ACM < 2.14)
+        exit 1
+        ;;
+    "--context=secondary-ok get configmap import-controller-config -n multicluster-engine")
+        # ConfigMap not found means default ImportOnly is used
+        exit 1
+        ;;
+    
+    # Secondary hub managed clusters for Check 11 cluster count  
+    "--context=secondary-ok get managedclusters --no-headers")
+        echo "local-cluster   True"
+        exit 0
+        ;;
+    
     # Postflight checks
     "--context=new-hub get restore -n open-cluster-management-backup --sort-by=.metadata.creationTimestamp -o jsonpath="*"")
         echo "restore-final Finished 2024-11-24T10:00:00Z"
@@ -308,6 +330,10 @@ EOF
         echo "multiclusterhub"
         exit 0
         ;;
+    "--context=new-hub get mch -n open-cluster-management -o jsonpath="*"currentVersion"*"")
+        echo "2.11.0"
+        exit 0
+        ;;
     "--context=new-hub get mch -n open-cluster-management -o jsonpath="*"items[0].metadata.name"*"")
         echo "multiclusterhub"
         exit 0
@@ -320,6 +346,15 @@ EOF
         echo "pod1   1/1   Running"
         echo "pod2   1/1   Running"
         exit 0
+        ;;
+    
+    # ACM 2.14+ autoImportStrategy checks for new-hub  
+    "--context=new-hub get namespace multicluster-engine")
+        exit 0
+        ;;
+    "--context=new-hub get configmap import-controller-config -n multicluster-engine")
+        # ConfigMap not found means default ImportOnly is used (which is OK for ACM < 2.14)
+        exit 1
         ;;
     
     *)
@@ -370,6 +405,28 @@ case "$*" in
         echo "2.10.5"
         exit 0
         ;;
+    # OADP checks - return empty output with exit 0 to avoid pipefail
+    *"get pods"*"velero"*"--no-headers"*) exit 0 ;;
+    # DPA checks - return empty output with exit 0 to avoid pipefail
+    *"get dpa"*"--no-headers"*) exit 0 ;;
+    *"get dpa"*"metadata.name"*) exit 0 ;;
+    # Backup checks - return empty output with exit 0 to avoid pipefail
+    *"get backup"*"--no-headers"*) exit 0 ;;
+    *"InProgress"*) exit 0 ;;
+    # Passive restore checks
+    *"get restore"*"-o json"*) echo '{"items":[]}'; exit 0 ;;
+    *"get restore restore-acm-passive-sync"*) exit 1 ;;
+    # ClusterDeployment
+    *"get clusterdeployment --all-namespaces --no-headers"*) exit 0 ;;
+    # Mocks needed for Check 11 (Auto-Import Strategy)
+    *"get configmap import-controller-config"*)
+        echo 'Error from server (NotFound): configmaps "import-controller-config" not found' >&2
+        exit 1
+        ;;
+    *"get managedclusters --no-headers"*)
+        echo "local-cluster   True"
+        exit 0
+        ;;
     *) exit 0 ;;
 esac
 """,
@@ -415,6 +472,20 @@ case "$*" in
         echo "backup-ongoing"
         exit 0
         ;;
+    # ClusterDeployment
+    *"get clusterdeployment --all-namespaces --no-headers"*) exit 0 ;;
+    # Passive restore checks (for method=passive tests)
+    *"get restore"*"-o json"*) echo '{"items":[{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}]}'; exit 0 ;;
+    *"get restore restore-acm-passive-sync"*"phase"*) echo "Enabled"; exit 0 ;;
+    # Mocks needed for Check 11 (Auto-Import Strategy)
+    *"get configmap import-controller-config"*)
+        echo 'Error from server (NotFound): configmaps "import-controller-config" not found' >&2
+        exit 1
+        ;;
+    *"get managedclusters --no-headers"*)
+        echo "local-cluster   True"
+        exit 0
+        ;;
     *) exit 0 ;;
 esac
 """,
@@ -453,7 +524,9 @@ def test_preflight_success_passive_method(mock_oc_success):
     assert code == 0, f"Expected exit 0, got {code}. Output:\n{out}"
     assert "ALL CRITICAL CHECKS PASSED" in out
     assert "Failed:          0" in out
-    assert "Passive sync" in out.lower() or "Method 1" in out  # Should check passive sync
+    assert (
+        "Passive sync" in out.lower() or "Method 1" in out
+    )  # Should check passive sync
     assert "Observability namespace exists" in out
     assert "MultiClusterObservability CR found" in out
     assert "'thanos-object-storage' secret exists" in out

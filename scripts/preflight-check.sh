@@ -246,6 +246,45 @@ if [[ $BACKUPS -gt 0 ]]; then
     if [[ "$LATEST_PHASE" == "Finished" ]] || [[ "$LATEST_PHASE" == "Completed" ]]; then
         check_pass "Primary hub: Latest backup '$LATEST_BACKUP' completed successfully"
         
+        # Show backup age/freshness
+        BACKUP_COMPLETION=$(oc --context="$PRIMARY_CONTEXT" get backup "$LATEST_BACKUP" -n "$BACKUP_NAMESPACE" \
+            -o jsonpath='{.status.completionTimestamp}' 2>/dev/null || echo "")
+        
+        if [[ -n "$BACKUP_COMPLETION" ]]; then
+            # Convert timestamps to epoch seconds for age calculation
+            BACKUP_EPOCH=$(date -d "$BACKUP_COMPLETION" +%s 2>/dev/null || echo "0")
+            CURRENT_EPOCH=$(date +%s)
+            AGE_SECONDS=$((CURRENT_EPOCH - BACKUP_EPOCH))
+            
+            # Calculate human-readable age
+            if [[ $AGE_SECONDS -lt 60 ]]; then
+                AGE_DISPLAY="${AGE_SECONDS}s"
+            elif [[ $AGE_SECONDS -lt 3600 ]]; then
+                AGE_MINUTES=$((AGE_SECONDS / 60))
+                AGE_DISPLAY="${AGE_MINUTES}m"
+            elif [[ $AGE_SECONDS -lt 86400 ]]; then
+                AGE_HOURS=$((AGE_SECONDS / 3600))
+                AGE_MINUTES=$(( (AGE_SECONDS % 3600) / 60 ))
+                AGE_DISPLAY="${AGE_HOURS}h${AGE_MINUTES}m"
+            else
+                AGE_DAYS=$((AGE_SECONDS / 86400))
+                AGE_HOURS=$(( (AGE_SECONDS % 86400) / 3600 ))
+                AGE_DISPLAY="${AGE_DAYS}d${AGE_HOURS}h"
+            fi
+            
+            # Determine freshness status and color
+            # Fresh: < 1 hour (3600s), Acceptable: < 24 hours (86400s), Stale: >= 24 hours
+            if [[ $AGE_SECONDS -lt 3600 ]]; then
+                echo -e "${GREEN}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - FRESH${NC}"
+            elif [[ $AGE_SECONDS -lt 86400 ]]; then
+                echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - acceptable${NC}"
+            else
+                echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - consider running a fresh backup${NC}"
+            fi
+        else
+            check_warn "Primary hub: Could not determine backup age (completion timestamp unavailable)"
+        fi
+        
         # Check if all joined ManagedClusters existed before the latest managed clusters backup
         # This prevents data loss when clusters were imported after the last backup
         JOINED_CLUSTERS=$(oc --context="$PRIMARY_CONTEXT" get managedclusters -o json 2>/dev/null | \
@@ -377,6 +416,73 @@ if oc --context="$PRIMARY_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
     fi
 else
     check_pass "Observability not detected (optional component)"
+fi
+
+# Check 11: Verify Auto-Import Strategy (ACM 2.14+)
+section_header "11. Checking Auto-Import Strategy (ACM 2.14+)"
+
+# Check primary hub
+if is_acm_214_or_higher "$PRIMARY_VERSION"; then
+    PRIMARY_STRATEGY=$(get_auto_import_strategy "$PRIMARY_CONTEXT")
+    if [[ "$PRIMARY_STRATEGY" == "error" ]]; then
+        check_fail "Primary hub: Could not retrieve autoImportStrategy (connection or API error)"
+    elif [[ "$PRIMARY_STRATEGY" == "default" ]]; then
+        check_pass "Primary hub: Using default autoImportStrategy ($AUTO_IMPORT_STRATEGY_DEFAULT)"
+    elif [[ "$PRIMARY_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
+        check_pass "Primary hub: autoImportStrategy explicitly set to $AUTO_IMPORT_STRATEGY_DEFAULT"
+    else
+        check_warn "Primary hub: autoImportStrategy is set to '$PRIMARY_STRATEGY' (non-default)"
+        echo -e "${YELLOW}       This should only be temporary for specific scenarios.${NC}"
+        echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
+    fi
+else
+    check_pass "Primary hub: ACM version $PRIMARY_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
+fi
+
+# Get secondary hub auto-import strategy
+SECONDARY_STRATEGY=$(get_auto_import_strategy "$SECONDARY_CONTEXT")
+
+# Count managed clusters on secondary hub (excluding local-cluster)
+# Capture oc output first, then count - this properly detects oc failures
+SECONDARY_CLUSTERS_OUTPUT=$(oc --context="$SECONDARY_CONTEXT" get managedclusters --no-headers 2>/dev/null)
+SECONDARY_CLUSTERS_EXIT=$?
+if [[ $SECONDARY_CLUSTERS_EXIT -ne 0 ]]; then
+    check_fail "Secondary hub: Could not list managed clusters. Cannot verify auto-import strategy requirements."
+    SECONDARY_CLUSTER_COUNT=0
+else
+    # grep -cv returns 1 when count is 0, so use || echo "0" to handle that case
+    SECONDARY_CLUSTER_COUNT=$(echo "$SECONDARY_CLUSTERS_OUTPUT" | grep -cv "$LOCAL_CLUSTER_NAME" || echo "0")
+fi
+
+# Check if secondary hub is ACM 2.14+
+if is_acm_214_or_higher "$SECONDARY_VERSION"; then
+    if [[ "$SECONDARY_STRATEGY" == "error" ]]; then
+        check_fail "Secondary hub: Could not retrieve autoImportStrategy (connection or API error)"
+    elif [[ "$SECONDARY_STRATEGY" == "default" ]]; then
+        check_pass "Secondary hub: Using default autoImportStrategy ($AUTO_IMPORT_STRATEGY_DEFAULT)"
+    elif [[ "$SECONDARY_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
+        check_pass "Secondary hub: autoImportStrategy explicitly set to $AUTO_IMPORT_STRATEGY_DEFAULT"
+    else
+        check_warn "Secondary hub: autoImportStrategy is set to '$SECONDARY_STRATEGY' (non-default)"
+        echo -e "${YELLOW}       This should only be temporary for specific scenarios.${NC}"
+        echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
+    fi
+    
+    # If secondary hub already has managed clusters (more than just local-cluster), warn about ImportAndSync
+    if [[ $SECONDARY_CLUSTER_COUNT -gt 0 ]]; then
+        check_warn "Secondary hub: Has $SECONDARY_CLUSTER_COUNT existing managed cluster(s)"
+        echo -e "${YELLOW}       IMPORTANT for ACM 2.14+ restore:${NC}"
+        echo -e "${YELLOW}       1. BEFORE restore: Change autoImportStrategy to '$AUTO_IMPORT_STRATEGY_SYNC'${NC}"
+        echo -e "${YELLOW}          oc -n $MCE_NAMESPACE create configmap $IMPORT_CONTROLLER_CONFIGMAP \\${NC}"
+        echo -e "${YELLOW}            --from-literal=$AUTO_IMPORT_STRATEGY_KEY=$AUTO_IMPORT_STRATEGY_SYNC --dry-run=client -o yaml | oc apply -f -${NC}"
+        echo -e "${YELLOW}       2. AFTER restore completes: Remove the configmap to restore default behavior${NC}"
+        echo -e "${YELLOW}          oc -n $MCE_NAMESPACE delete configmap $IMPORT_CONTROLLER_CONFIGMAP${NC}"
+        echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
+    else
+        check_pass "Secondary hub: No pre-existing managed clusters (ImportOnly is appropriate)"
+    fi
+else
+    check_pass "Secondary hub: ACM version $SECONDARY_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
 fi
 
 # Summary and exit

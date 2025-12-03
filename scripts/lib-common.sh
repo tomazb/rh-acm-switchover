@@ -98,6 +98,9 @@ detect_cluster_cli() {
         CLUSTER_CLI_BIN="kubectl"
         CLUSTER_CLI_NAME="Kubernetes CLI (kubectl)"
         # Provide oc alias so the rest of the script can keep using oc invocations
+        # Note: Using "$@" is safe against shell injection because it correctly
+        # preserves each argument as a separate string, preventing the shell from
+        # interpreting metacharacters within them.
         oc() {
             kubectl "$@"
         }
@@ -116,6 +119,76 @@ detect_cluster_cli() {
     # Print CLI info if available
     if [[ -n "$CLUSTER_CLI_BIN" ]]; then
         echo "Using CLI: $CLUSTER_CLI_NAME ($(command -v "$CLUSTER_CLI_BIN"))"
+    fi
+}
+
+# =============================================================================
+# Auto-Import Strategy Helpers (ACM 2.14+)
+# =============================================================================
+
+# Get the autoImportStrategy value from a hub
+# Returns: "ImportOnly", "ImportAndSync", "default" (if not configured), or "error"
+# Usage: get_auto_import_strategy "$CONTEXT"
+get_auto_import_strategy() {
+    local context="$1"
+    local output
+    local exit_code
+    
+    # Attempt to get the configmap, capturing stdout and stderr together
+    output=$(oc --context="$context" get configmap "$IMPORT_CONTROLLER_CONFIGMAP" -n "$MCE_NAMESPACE" \
+        -o jsonpath="{.data.${AUTO_IMPORT_STRATEGY_KEY}}" 2>&1)
+    exit_code=$?
+    
+    if [[ $exit_code -ne 0 ]]; then
+        if [[ "$output" == *"NotFound"* ]]; then
+            # ConfigMap doesn't exist, which is a valid "default" state
+            echo "default"
+            return 0
+        else
+            # A different error occurred (e.g., connection refused)
+            echo "error"
+            echo "$output" >&2
+            # Avoid aborting callers that use set -e and command substitution
+            return 0
+        fi
+    fi
+    
+    if [[ -z "$output" ]]; then
+        # ConfigMap exists but the key is missing or empty
+        echo "default"
+    else
+        echo "$output"
+    fi
+
+    return 0
+}
+
+# Check if ACM version is 2.14 or higher
+# Usage: is_acm_214_or_higher "$VERSION"
+# Returns 0 (true) if version >= 2.14, 1 (false) otherwise
+is_acm_214_or_higher() {
+    local version="$1"
+    
+    # Extract major and minor version (e.g., "2.14.0" -> major=2, minor=14)
+    local major minor
+    major=$(echo "$version" | cut -d'.' -f1)
+    minor=$(echo "$version" | cut -d'.' -f2)
+    
+    # Handle unknown versions
+    if [[ -z "$major" ]] || [[ -z "$minor" ]]; then
+        return 1
+    fi
+
+    # Validate that major and minor are numeric
+    if ! [[ "$major" =~ ^[0-9]+$ ]] || ! [[ "$minor" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    
+    # Check if version is 2.14 or higher
+    if [[ "$major" -gt 2 ]] || { [[ "$major" -eq 2 ]] && [[ "$minor" -ge 14 ]]; }; then
+        return 0
+    else
+        return 1
     fi
 }
 

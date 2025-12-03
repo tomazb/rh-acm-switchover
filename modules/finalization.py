@@ -11,16 +11,20 @@ from lib.constants import (
     BACKUP_NAMESPACE,
     BACKUP_SCHEDULE_DEFAULT_NAME,
     OBSERVABILITY_NAMESPACE,
-    RESTORE_FULL_NAME,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
+    MCE_NAMESPACE,
+    IMPORT_CONTROLLER_CONFIGMAP,
+    AUTO_IMPORT_STRATEGY_KEY,
+    AUTO_IMPORT_STRATEGY_DEFAULT,
+    AUTO_IMPORT_STRATEGY_SYNC,
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
-from lib.utils import StateManager
+from lib.utils import StateManager, is_acm_version_ge
 
 from .backup_schedule import BackupScheduleManager
 from .decommission import Decommission
@@ -40,6 +44,7 @@ class Finalization:
         primary_has_observability: bool = False,
         dry_run: bool = False,
         old_hub_action: str = "secondary",
+        manage_auto_import_strategy: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -48,6 +53,7 @@ class Finalization:
         self.primary_has_observability = primary_has_observability
         self.dry_run = dry_run
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
+        self.manage_auto_import_strategy = manage_auto_import_strategy
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -98,6 +104,9 @@ class Finalization:
             else:
                 logger.info("Step already completed: verify_mch_health")
 
+            # Ensure auto-import strategy reset to default (ACM 2.14+)
+            self._ensure_auto_import_default()
+
             # Handle old primary hub based on --old-hub-action
             if not self.state.is_step_completed("handle_old_hub"):
                 self._handle_old_hub()
@@ -115,7 +124,7 @@ class Finalization:
             logger.error("Finalization failed: %s", e)
             self.state.add_error(str(e), "finalization")
             return False
-        except Exception as e:
+        except (RuntimeError, ValueError, Exception) as e:
             logger.error("Unexpected error during finalization: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "finalization")
             return False
@@ -185,7 +194,7 @@ class Finalization:
                     namespace=BACKUP_NAMESPACE,
                 )
                 logger.info("Deleted restore resource: %s", restore_name)
-            except Exception as e:
+            except (RuntimeError, ValueError, Exception) as e:
                 # Not found is OK, other errors should be logged
                 if "not found" not in str(e).lower():
                     logger.warning("Error deleting restore %s: %s", restore_name, e)
@@ -193,7 +202,9 @@ class Finalization:
         # Save archived restores to state for audit trail
         if archived_restores:
             self.state.set_config("archived_restores", archived_restores)
-            logger.info("Saved %s restore record(s) to state file", len(archived_restores))
+            logger.info(
+                "Saved %s restore record(s) to state file", len(archived_restores)
+            )
 
     def _archive_restore_details(self, restore: dict) -> dict:
         """Extract and return important details from a Restore resource for archiving.
@@ -222,7 +233,9 @@ class Finalization:
             "archived_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             # Spec details
             "velero_backups": {
-                "veleroManagedClustersBackupName": spec.get("veleroManagedClustersBackupName"),
+                "veleroManagedClustersBackupName": spec.get(
+                    "veleroManagedClustersBackupName"
+                ),
                 "veleroCredentialsBackupName": spec.get("veleroCredentialsBackupName"),
                 "veleroResourcesBackupName": spec.get("veleroResourcesBackupName"),
             },
@@ -232,8 +245,12 @@ class Finalization:
             # Status details
             "phase": status.get("phase"),
             "last_message": status.get("lastMessage"),
-            "velero_managed_clusters_restore_name": status.get("veleroManagedClustersRestoreName"),
-            "velero_credentials_restore_name": status.get("veleroCredentialsRestoreName"),
+            "velero_managed_clusters_restore_name": status.get(
+                "veleroManagedClustersRestoreName"
+            ),
+            "velero_credentials_restore_name": status.get(
+                "veleroCredentialsRestoreName"
+            ),
             "velero_resources_restore_name": status.get("veleroResourcesRestoreName"),
         }
 
@@ -258,7 +275,9 @@ class Finalization:
             namespace=BACKUP_NAMESPACE,
         )
 
-        initial_backup_names = {b.get("metadata", {}).get("name") for b in initial_backups}
+        initial_backup_names = {
+            b.get("metadata", {}).get("name") for b in initial_backups
+        }
 
         logger.info("Found %s existing backup(s)", len(initial_backups))
         logger.info("Waiting for new backup to appear (this may take 5-10 minutes)...")
@@ -273,7 +292,9 @@ class Finalization:
                 namespace=BACKUP_NAMESPACE,
             )
 
-            current_backup_names = {b.get("metadata", {}).get("name") for b in current_backups}
+            current_backup_names = {
+                b.get("metadata", {}).get("name") for b in current_backups
+            }
 
             # Check for new backups
             new_backups = current_backup_names - initial_backup_names
@@ -284,7 +305,11 @@ class Finalization:
                 # Verify at least one is in progress or completed
                 for backup_name in new_backups:
                     backup = next(
-                        (b for b in current_backups if b.get("metadata", {}).get("name") == backup_name),
+                        (
+                            b
+                            for b in current_backups
+                            if b.get("metadata", {}).get("name") == backup_name
+                        ),
                         None,
                     )
 
@@ -302,7 +327,8 @@ class Finalization:
             time.sleep(30)
 
         logger.warning(
-            f"No new backups detected after {timeout}s. " "BackupSchedule may take time to create first backup."
+            f"No new backups detected after {timeout}s. "
+            "BackupSchedule may take time to create first backup."
         )
 
     def _verify_backup_schedule_enabled(self):
@@ -362,7 +388,9 @@ class Finalization:
         phase = mch.get("status", {}).get("phase", "unknown")
 
         if phase != "Running":
-            raise RuntimeError(f"MultiClusterHub {mch_name} is in phase '{phase}', expected Running")
+            raise RuntimeError(
+                f"MultiClusterHub {mch_name} is in phase '{phase}', expected Running"
+            )
 
         pods = self.secondary.get_pods(namespace=ACM_NAMESPACE)
         non_running = [
@@ -372,7 +400,9 @@ class Finalization:
         ]
 
         if non_running:
-            raise RuntimeError("ACM namespace still has non-running pods: " + ", ".join(non_running))
+            raise RuntimeError(
+                "ACM namespace still has non-running pods: " + ", ".join(non_running)
+            )
 
         logger.info("MultiClusterHub %s is Running and all pods are healthy", mch_name)
 
@@ -395,7 +425,9 @@ class Finalization:
             return
 
         if self.old_hub_action == "secondary":
-            logger.info("Setting up old primary hub as new secondary (for failback capability)...")
+            logger.info(
+                "Setting up old primary hub as new secondary (for failback capability)..."
+            )
             self._setup_old_hub_as_secondary()
             return
 
@@ -425,7 +457,9 @@ class Finalization:
         logger.warning("This will remove ACM components from the old hub!")
         logger.warning("=" * 60)
 
-        decom = Decommission(self.primary, self.primary_has_observability, dry_run=self.dry_run)
+        decom = Decommission(
+            self.primary, self.primary_has_observability, dry_run=self.dry_run
+        )
 
         # Run decommission non-interactively since we're in automated mode
         if decom.decommission(interactive=False):
@@ -449,7 +483,9 @@ class Finalization:
             return
 
         if self.dry_run:
-            logger.info("[DRY-RUN] Would set up old primary as secondary with passive sync")
+            logger.info(
+                "[DRY-RUN] Would set up old primary as secondary with passive sync"
+            )
             return
 
         logger.info("Setting up old primary hub as new secondary...")
@@ -494,8 +530,10 @@ class Finalization:
                 namespace=BACKUP_NAMESPACE,
             )
             logger.info("Created passive sync restore on old primary hub")
-        except Exception as e:
-            logger.warning("Failed to create passive sync restore on old primary: %s", e)
+        except (RuntimeError, ValueError, Exception) as e:
+            logger.warning(
+                "Failed to create passive sync restore on old primary: %s", e
+            )
             logger.warning("You may need to manually create it for failback capability")
 
     def _fix_backup_schedule_collision(self):
@@ -528,14 +566,18 @@ class Finalization:
             return
 
         schedule = schedules[0]
-        schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
+        schedule_name = schedule.get("metadata", {}).get(
+            "name", BACKUP_SCHEDULE_DEFAULT_NAME
+        )
         phase = schedule.get("status", {}).get("phase", "")
 
         # Proactively recreate to prevent collision, or fix if already in collision
         # The collision may not appear immediately - it only shows after Velero
         # schedules run and detect backups from a different cluster ID
         if phase == "BackupCollision":
-            logger.warning("BackupSchedule %s has collision, recreating...", schedule_name)
+            logger.warning(
+                "BackupSchedule %s has collision, recreating...", schedule_name
+            )
         else:
             logger.info(
                 "Proactively recreating BackupSchedule %s to prevent future collision "
@@ -579,11 +621,15 @@ class Finalization:
                 body=new_schedule,
                 namespace=BACKUP_NAMESPACE,
             )
-            logger.info("Recreated BackupSchedule %s to prevent collision", schedule_name)
+            logger.info(
+                "Recreated BackupSchedule %s to prevent collision", schedule_name
+            )
 
-        except Exception as e:
+        except (RuntimeError, ValueError, Exception) as e:
             logger.warning("Failed to recreate BackupSchedule: %s", e)
-            logger.warning("You may need to manually delete and recreate the BackupSchedule")
+            logger.warning(
+                "You may need to manually delete and recreate the BackupSchedule"
+            )
 
     def _verify_old_hub_state(self):
         """Run regression checks on the old (primary) hub."""
@@ -606,7 +652,9 @@ class Finalization:
 
             conditions = cluster.get("status", {}).get("conditions", [])
             available = any(
-                c.get("type") == "ManagedClusterConditionAvailable" and c.get("status") == "True" for c in conditions
+                c.get("type") == "ManagedClusterConditionAvailable"
+                and c.get("status") == "True"
+                for c in conditions
             )
             if available:
                 still_available.append(name or "unknown")
@@ -644,3 +692,41 @@ class Finalization:
                 )
             else:
                 logger.info("Thanos compactor is scaled down on old hub")
+
+    def _ensure_auto_import_default(self) -> None:
+        """Reset autoImportStrategy to default ImportOnly when applicable."""
+        try:
+            if not is_acm_version_ge(self.acm_version, "2.14.0"):
+                return
+            cm = self.secondary.get_configmap(
+                MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP
+            )
+            if not cm:
+                return
+            strategy = (cm.get("data") or {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
+            if strategy != AUTO_IMPORT_STRATEGY_SYNC:
+                return
+            if self.manage_auto_import_strategy or self.state.get_config(
+                "auto_import_strategy_set", False
+            ):
+                logger.info(
+                    "Removing %s/%s to restore default autoImportStrategy (%s)",
+                    MCE_NAMESPACE,
+                    IMPORT_CONTROLLER_CONFIGMAP,
+                    AUTO_IMPORT_STRATEGY_DEFAULT,
+                )
+                self.secondary.delete_configmap(
+                    MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP
+                )
+                if not self.state.is_step_completed("reset_auto_import_strategy"):
+                    self.state.mark_step_completed("reset_auto_import_strategy")
+            else:
+                logger.warning(
+                    "autoImportStrategy is %s; remove %s/%s to reset to default (%s)",
+                    AUTO_IMPORT_STRATEGY_SYNC,
+                    MCE_NAMESPACE,
+                    IMPORT_CONTROLLER_CONFIGMAP,
+                    AUTO_IMPORT_STRATEGY_DEFAULT,
+                )
+        except (RuntimeError, ValueError, Exception) as e:
+            logger.warning("Unable to verify/reset auto-import strategy: %s", e)

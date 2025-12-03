@@ -2,7 +2,7 @@
 
 **Passive (Continuous) and One-Time Full Restore**
 
-**Last Updated:** 2025-11-12
+**Last Updated:** 2025-12-02
 
 ---
 
@@ -132,6 +132,10 @@ graph TD
 - ✅ GitOps and ACM Observability on secondary hub need proper secrets/configuration before switchover
   - Use external syncing mechanisms (e.g., GitOps) to ensure ArgoCD and Observability have correct access details post-switchover
   - Or label those objects with `cluster.open-cluster-management.io/backup: cluster-activation` so they are included in the activation restore
+- ✅ **(ACM 2.14+)** Verify `autoImportStrategy` is set to the default `ImportOnly` unless there's a documented reason for `ImportAndSync`
+  - If changed to `ImportAndSync`, ensure this is intentional and temporary (e.g., for recovery scenarios)
+  - Check with: `oc get configmap import-controller-config -n multicluster-engine -o yaml` (if configmap doesn't exist, default `ImportOnly` is in use)
+  - See [Customizing the automatic import strategy](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.14/html-single/clusters/index#custom-auto-import-strat) for details
 
 ### Additional Prerequisites for Method 1
 
@@ -164,6 +168,16 @@ graph TD
 - [ ] Confirm OADP operator installed on both hubs
 - [ ] Verify DataProtectionApplication configured on both hubs
 - [ ] Check access to same S3 storage location from both hubs
+- [ ] BackupStorageLocation shows "Available" on both hubs
+  ```bash
+  oc get backupstoragelocation -n open-cluster-management-backup \
+    -o custom-columns=NAME:.metadata.name,PHASE:.status.phase
+  ```
+- [ ] DataProtectionApplication reports Ready/Available
+  ```bash
+  oc get dpa -n open-cluster-management-backup \
+    -o custom-columns=NAME:.metadata.name,CONDITION:.status.conditions[-1:].type,STATUS:.status.conditions[-1:].status
+  ```
 - [ ] Validate all operators from primary are installed on secondary
 - [ ] Ensure network connectivity between managed clusters and new hub
 - [ ] Nodes should be in ready state and cluster should be healthy
@@ -171,6 +185,10 @@ graph TD
   ```bash
   oc get restore restore-acm-passive-sync -n open-cluster-management-backup
   # Expected: Phase="Enabled", Message="Velero restores have run to completion..."
+  ```
+- [ ] **(ACM 2.14+)** Verify `autoImportStrategy` is default `ImportOnly` (if configmap doesn't exist, default is in use):
+  ```bash
+  oc get configmap import-controller-config -n multicluster-engine -o yaml 2>/dev/null || echo "ConfigMap not found - using default ImportOnly"
   ```
 - [ ] Inform stakeholders of planned switchover and expected downtime
 
@@ -233,9 +251,10 @@ Delete it:
 oc delete backupschedule schedule-rhacm -n open-cluster-management-backup
 ```
 
-**To restore later:** Clean up status and certain metadata fields (like uid, resourceVersions, managedFields), then:
+**To restore later:** Clean up status and certain metadata fields (uid, resourceVersion, managedFields, status), then re-apply. Example:
 ```bash
-oc apply -f schedule-rhacm.yaml
+yq 'del(.metadata.uid, .metadata.resourceVersion, .metadata.managedFields, .status)' \
+  schedule-rhacm.yaml | oc apply -f -
 ```
 
 ---
@@ -280,6 +299,12 @@ oc get pods -n open-cluster-management-observability | grep thanos-compact
 # Should show no resources
 ```
 
+**Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable only if you roll back.**
+```bash
+oc scale deployment observability-observatorium-api \
+  -n open-cluster-management-observability --replicas=0
+```
+
 ---
 
 ### Step 4: Verify Latest Passive Restore on Secondary Hub
@@ -308,16 +333,57 @@ oc get restore restore-acm-passive-sync -n open-cluster-management-backup \
 
 **Verify these match recent backups from primary:**
 ```bash
-for s in $(oc get backup -n open-cluster-management-backup --context mgmt1 -o json \
+for s in $(oc get backup -n open-cluster-management-backup --context <primary> -o json \
   | jq -r '.items[].metadata.labels["velero.io/schedule-name"]' | sort -u); do
   echo -n "$s: "
-  oc get backup -n open-cluster-management-backup --context mgmt1 \
+  oc get backup -n open-cluster-management-backup --context <primary> \
     -l velero.io/schedule-name="$s" \
     --sort-by=.metadata.creationTimestamp --no-headers | tail -n1 | awk '{print $1 " (" $2 ")"}'
 done
 ```
 
 > **IMPORTANT:** Do not proceed until passive sync shows latest data has been restored.
+
+---
+
+### Step 4b: Set Auto-Import Strategy to ImportAndSync (ACM 2.14+ with Existing Clusters)
+
+> **Perform this step on your destination hub if it has any non-local-cluster managed clusters and if you plan to switch back to the primary hub in the future.**
+>
+> **NOTE:** Starting with ACM 2.14, the auto-import strategy was changed to `ImportOnly`. With this option, once a managed cluster joins the hub, the import-controller stops applying the manifests and auto-import operations are skipped. This change was introduced to support situations when the primary hub goes down uncontrolled and comes back again after the clusters have moved to another hub—the default strategy prevents the primary hub from trying to recover the managed clusters. What this means for you is that after the restore of managed clusters to the new hub, those clusters will be imported once but will not be continuously synced unless you change the strategy to `ImportAndSync`.
+
+**On the destination hub**, update the import strategy to `ImportAndSync` by creating this ConfigMap:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: import-controller-config
+  namespace: multicluster-engine
+data:
+  autoImportStrategy: ImportAndSync
+```
+
+**Apply the ConfigMap:**
+```bash
+oc apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: import-controller-config
+  namespace: multicluster-engine
+data:
+  autoImportStrategy: ImportAndSync
+EOF
+```
+
+**Verify:**
+```bash
+oc get configmap import-controller-config -n multicluster-engine -o yaml
+```
+
+> Clarification: The ConfigMap affects only the hub where you create it. Use `ImportAndSync` only when you intentionally need continuous re-application on the hub you are promoting (typically for temporary switchback scenarios), and remove it after activation (see Step 7). If the ConfigMap does not exist, the hub uses the default `ImportOnly` behavior.
+> **IMPORTANT:** Do not perform this step if your destination hub has no existing managed clusters, as it is unnecessary.
 
 ---
 
@@ -418,7 +484,10 @@ Same as [Step 2](#step-2-prevent-auto-import-on-primary-hub)
 ### F3. (Optional) Shut down Thanos compactor on primary hub
 Same as [Step 3](#step-3-shut-down-thanos-compactor-on-primary-hub)
 
-### F4. Create full restore on SECONDARY hub
+### F4. (Optional) Set Auto-Import Strategy to ImportAndSync on destination hub (ACM 2.14+)
+Same as [Step 4b](#step-4b-set-auto-import-strategy-to-importandsync-acm-214-with-existing-clusters)
+
+### F5. Create full restore on SECONDARY hub
 
 Create `restore-acm-full.yaml`:
 ```yaml
@@ -443,7 +512,7 @@ oc describe restore restore-acm-full -n open-cluster-management-backup
 
 **Proceed ONLY when `Phase=Finished`.**
 
-### F5. Continue with POST-ACTIVATION COMMON STEPS below
+### F6. Continue with POST-ACTIVATION COMMON STEPS below
 
 ---
 
@@ -483,7 +552,24 @@ oc get managedclusters \
 
 ---
 
-### Step 7: Restart Observatorium API Gateway Pods
+### Step 7: Reset Auto-Import Strategy to Default (ACM 2.14+) if set on New Primary Hub
+
+After a successful restore with managed clusters properly attached, check if the `import-controller-config` ConfigMap exists on this hub. If this hub previously had `ImportAndSync` set (for example from a prior Step 4b), remove it to restore the default `ImportOnly` behavior:
+
+**On the NEW PRIMARY hub**, check and remove the ConfigMap if present:
+```bash
+# Check if ConfigMap exists
+oc get configmap import-controller-config -n multicluster-engine 2>/dev/null
+
+# If it exists, remove it to restore default ImportOnly behavior
+oc delete configmap import-controller-config -n multicluster-engine --ignore-not-found
+```
+
+> **NOTE:** This step prevents unintended continuous sync from this hub in the future. Only perform it if you previously set `ImportAndSync` on this hub. If the ConfigMap is absent, the default `ImportOnly` is already in effect.
+
+---
+
+### Step 8: Restart Observatorium API Gateway Pods
 
 > **CRITICAL FIX:** Due to a known issue in ACM 2.12, the Observatorium API gateway pods contain stale tenant data after restore because Kubernetes doesn't automatically refresh mounted ConfigMaps. This causes metrics to be rejected and Grafana dashboards to show no data.
 
@@ -508,7 +594,7 @@ oc wait --for=condition=Ready pod \
 
 ---
 
-### Step 8: Verify Observability Pods Are Running
+### Step 9: Verify Observability Pods Are Running
 
 Check all Observability components are deployed and running:
 
@@ -536,7 +622,7 @@ oc get pods -n open-cluster-management-observability | grep -v Running | grep -v
 
 ---
 
-### Step 9: Verify Metrics Collection from Managed Clusters
+### Step 10: Verify Metrics Collection from Managed Clusters
 
 Validate that metrics are flowing from managed clusters to the new hub.
 
@@ -567,7 +653,7 @@ oc get route grafana -n open-cluster-management-observability -o jsonpath='{.spe
 
 ---
 
-### Step 10: Enable BackupSchedule on New Active Hub
+### Step 11: Enable BackupSchedule on New Active Hub
 
 Now that the secondary hub is the active primary, enable the BackupSchedule to resume regular backups.
 
@@ -589,14 +675,72 @@ oc get backupschedule schedule-rhacm -n open-cluster-management-backup
 
 **Check that new backups are being created:**
 ```bash
-# Wait 5-10 minutes, then check:
-oc get backup -n open-cluster-management-backup | head -10
-# Should see new backups with recent timestamps
+# Wait 5-10 minutes, then check newest entries:
+oc get backup -n open-cluster-management-backup \
+  --sort-by=.metadata.creationTimestamp | tail -n10
+# Should show new backups with recent timestamps
 ```
 
+> **NOTE (OLD HUB Observatorium API):** If you paused the Observatorium API on the OLD hub in Step 3 and you are not decommissioning that hub, re-enable it now to restore normal behavior on the old hub:
+> ```bash
+> oc scale deployment observability-observatorium-api \
+>   -n open-cluster-management-observability --replicas=1
+> ```
+> If you are proceeding to Step 14 to decommission the OLD hub, you can skip this.
+
+---
+### Step 12: Verify Backup Integrity
+
+Before decommissioning the old hub, verify the backup integrity.
+
+```bash
+# Get the newest backup name by creationTimestamp
+BACKUP_NAME=$(oc get backup -n open-cluster-management-backup \
+  --sort-by=.metadata.creationTimestamp -o name | tail -n1 | cut -d/ -f2)
+
+# Verify backup status:
+oc get backup "$BACKUP_NAME" -n open-cluster-management-backup -o yaml | grep -A 5 "status:"
+
+# Check backup logs:
+oc logs -n open-cluster-management-backup deployment/velero -c velero | grep "$BACKUP_NAME"
+```
+
+**SUCCESS CRITERIA:**
+- Backup status shows "Completed" with no errors
+- No errors in backup logs
+- Backup timestamp is recent (within last 10 minutes)
+
+> **WARNING:** Do NOT decommission the old hub if backup integrity validation fails.
+>
+> Proceed only after you have a recent, successful backup.
+
+**Remediation steps:**
+1. Check Velero pod logs for specific error messages.
+   ```bash
+   # Recent logs
+   oc logs -n open-cluster-management-backup deployment/velero -c velero --since=10m
+   # Filter for the failing backup (uses BACKUP_NAME set above)
+   oc logs -n open-cluster-management-backup deployment/velero -c velero | grep "$BACKUP_NAME"
+   ```
+2. Attempt a fresh backup and verify its status.
+   - Create an on-demand backup using your standard process (e.g., Velero Backup CR) targeting the same storage location.
+   - Monitor until it completes successfully:
+   ```bash
+   oc get backup -n open-cluster-management-backup -w
+   ```
+3. Inspect storage backend connectivity and authentication.
+   ```bash
+   # BackupStorageLocation phase and messages
+   oc get backupstoragelocation -n open-cluster-management-backup -o yaml | grep -E "phase:|message:"
+   ```
+4. Check capacity and quotas; free space or adjust quotas if needed.
+   ```bash
+   oc get resourcequota -n open-cluster-management-backup 2>/dev/null || true
+   ```
+5. Repeat verification until a successful backup with a recent timestamp exists. Only then proceed to decommission the old hub.
 ---
 
-### Step 11: Inform Stakeholders
+### Step 13: Inform Stakeholders
 
 Notify stakeholders that:
 - ✅ Switchover is complete
@@ -620,13 +764,13 @@ Provide new hub cluster details and any relevant access information.
 
 ---
 
-### Step 12: Decommission Old Primary Hub *(Optional but Recommended)*
+### Step 14: Decommission Old Primary Hub *(Optional but Recommended)*
 
 If the old primary hub will no longer be used, remove ACM components to free resources and prevent confusion.
 
-> **CRITICAL WARNING:** Step 12.3 requires that ALL Hive ClusterDeployments have `spec.preserveOnDelete=true` (which should have been done in Prerequisites). Without this, deleting ManagedClusters can DESTROY your production clusters.
+> **CRITICAL WARNING:** Step 14.3 requires that ALL Hive ClusterDeployments have `spec.preserveOnDelete=true` (which should have been done in Prerequisites). Without this, deleting ManagedClusters can DESTROY your production clusters.
 
-#### Step 12.1: Delete MultiClusterObservability resource
+#### Step 14.1: Delete MultiClusterObservability resource
 
 ```bash
 # Find MCO resource:
@@ -639,14 +783,14 @@ oc delete mco observability -n open-cluster-management-observability
 oc get pods -n open-cluster-management-observability
 ```
 
-#### Step 12.2: Verify no Observability pods remain
+#### Step 14.2: Verify no Observability pods remain
 
 ```bash
 oc get pods -n open-cluster-management-observability
 # Should show: No resources found (or only terminating pods)
 ```
 
-#### Step 12.3: Delete ManagedClusters from old hub ⚠️ CRITICAL
+#### Step 14.3: Delete ManagedClusters from old hub ⚠️ CRITICAL
 
 **PREREQUISITE CHECK:** Verify ALL ClusterDeployments have `preserveOnDelete=true`
 ```bash
@@ -679,7 +823,7 @@ done
 
 > **IMPORTANT:** If clusters are still showing "Available" on old hub, STOP. This means they haven't fully moved to new hub. Wait and verify Step 6 succeeded.
 
-#### Step 12.4: Delete MultiClusterHub resource
+#### Step 14.4: Delete MultiClusterHub resource
 
 ```bash
 # Find MCH resource:
@@ -693,7 +837,7 @@ oc delete mch multiclusterhub -n open-cluster-management
 oc get mch -A
 ```
 
-#### Step 12.5: Verify ACM instance pods are removed
+#### Step 14.5: Verify ACM instance pods are removed
 
 ```bash
 oc get pods -n open-cluster-management
@@ -732,6 +876,12 @@ done
 **Restart Thanos compactor:**
 ```bash
 oc scale statefulset observability-thanos-compact \
+  -n open-cluster-management-observability --replicas=1
+```
+
+**Re-enable Observatorium API (only if you paused it in Step 3):**
+```bash
+oc scale deployment observability-observatorium-api \
   -n open-cluster-management-observability --replicas=1
 ```
 
@@ -797,6 +947,9 @@ oc describe restore <restore-name> -n open-cluster-management-backup
 
 ## Good Resources
 
+- **Official Red Hat Documentation on ACM Custom Auto-Import Strategy:**  
+  <https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.14/html-single/clusters/index#custom-auto-import-strat>
+
 - **Official Red Hat Documentation on ACM Uninstallation:**  
   https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.11/html/install/installing#uninstalling
 
@@ -815,14 +968,17 @@ oc describe restore <restore-name> -n open-cluster-management-backup
 - **GitHub - Cluster Backup Operator:**  
   https://github.com/stolostron/cluster-backup-operator
 
+- **GitHub - Managed Cluster Auto Import Strategy:**  
+  <https://github.com/stolostron/managedcluster-import-controller/blob/main/docs/managedcluster_auto_import.md#auto-import-strategy>
+
 ---
 
 ## Validation Notes
 
 This runbook has been validated against:
+
 - Red Hat ACM official documentation
 - Red Hat official HA/DR blog posts
 - stolostron/cluster-backup-operator source code and documentation
 - OpenShift Hive documentation
 
-**Last Updated:** 2025-11-24

@@ -71,6 +71,7 @@ STEP_INFO = {
     "verify_new_backups": "Verified new backups are being created",
     "verify_mch_health": "Verified MultiClusterHub health",
     "handle_old_hub": "Handled old hub (secondary/decommission/none)",
+    "reset_auto_import_strategy": "Reset auto-import strategy to default",
 }
 
 
@@ -87,7 +88,7 @@ def format_timestamp(iso_timestamp: str) -> str:
         dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
         delta = now - dt
-        
+
         if delta.days > 0:
             age = f"{delta.days}d ago"
         elif delta.seconds >= 3600:
@@ -96,7 +97,7 @@ def format_timestamp(iso_timestamp: str) -> str:
             age = f"{delta.seconds // 60}m ago"
         else:
             age = "just now"
-        
+
         return f"{dt.strftime('%Y-%m-%d %H:%M:%S')} ({age})"
     except (ValueError, TypeError):
         return iso_timestamp or "unknown"
@@ -138,36 +139,36 @@ def print_section(title: str, use_color: bool = True):
 
 def print_state(state: Dict[str, Any], use_color: bool = True):
     """Print formatted state information."""
-    
+
     # Header
     print_header("ACM Switchover State", use_color)
-    
+
     # Basic info
     print_section("Overview", use_color)
     print(f"  Version:      {state.get('version', 'unknown')}")
     print(f"  Created:      {format_timestamp(state.get('created_at', ''))}")
     print(f"  Last Updated: {format_timestamp(state.get('last_updated', ''))}")
-    
+
     # Contexts
     contexts = state.get("contexts", {})
     if contexts:
         print(f"  Primary:      {contexts.get('primary') or 'not set'}")
         print(f"  Secondary:    {contexts.get('secondary') or 'not set'}")
-    
+
     # Current phase
     print_section("Current Phase", use_color)
     phase = state.get("current_phase", "unknown")
     phase_name, phase_desc = PHASE_INFO.get(phase, (phase, "Unknown phase"))
-    
+
     phase_colors = {
         "completed": "green",
         "failed": "red",
         "rollback": "yellow",
     }
     phase_color = phase_colors.get(phase, "blue")
-    
+
     print(f"  {color(phase_name, phase_color, use_color)}: {phase_desc}")
-    
+
     # Completed steps
     print_section("Completed Steps", use_color)
     steps = state.get("completed_steps", [])
@@ -180,7 +181,7 @@ def print_state(state: Dict[str, Any], use_color: bool = True):
             print(f"       {color(step_time, 'gray', use_color)}")
     else:
         print(f"  {color('No steps completed yet', 'gray', use_color)}")
-    
+
     # Configuration
     config = state.get("config", {})
     if config:
@@ -197,7 +198,7 @@ def print_state(state: Dict[str, Any], use_color: bool = True):
                 print(f"  {key}: [{len(value)} items]")
             else:
                 print(f"  {key}: {value}")
-    
+
     # Errors
     errors = state.get("errors", [])
     if errors:
@@ -208,7 +209,7 @@ def print_state(state: Dict[str, Any], use_color: bool = True):
             err_time = format_timestamp(error.get("timestamp", ""))
             print(f"  {color('✗', 'red', use_color)} [{err_phase}] {err_msg}")
             print(f"       {color(err_time, 'gray', use_color)}")
-    
+
     print()
 
 
@@ -217,38 +218,40 @@ def print_archived_restores(restores: List[Dict], use_color: bool = True):
     if not restores:
         print(f"    {color('No archived restores', 'gray', use_color)}")
         return
-    
+
     for i, restore in enumerate(restores, 1):
         name = restore.get("name", "unknown")
         phase = restore.get("phase", "unknown")
         created = format_timestamp(restore.get("creation_timestamp", ""))
         archived = format_timestamp(restore.get("archived_at", ""))
-        
+
         phase_color = "green" if phase in ("Finished", "Completed") else "yellow"
-        
+
         print(f"    [{i}] {color(name, 'bold', use_color)}")
         print(f"        Phase: {color(phase, phase_color, use_color)}")
         print(f"        UID: {restore.get('uid', 'N/A')}")
         print(f"        Created: {created}")
         print(f"        Archived: {archived}")
-        
+
         # Velero backups
         velero_backups = restore.get("velero_backups", {})
         if velero_backups:
-            print(f"        Velero Backups:")
+            print("        Velero Backups:")
             for k, v in velero_backups.items():
                 if v:
                     print(f"          {k}: {v}")
-        
+
         # Velero restores created
-        for key in ["velero_managed_clusters_restore_name", 
-                    "velero_credentials_restore_name",
-                    "velero_resources_restore_name"]:
+        for key in [
+            "velero_managed_clusters_restore_name",
+            "velero_credentials_restore_name",
+            "velero_resources_restore_name",
+        ]:
             val = restore.get(key)
             if val:
                 short_key = key.replace("velero_", "").replace("_restore_name", "")
                 print(f"        Velero Restore ({short_key}): {val}")
-        
+
         # Last message
         last_msg = restore.get("last_message")
         if last_msg:
@@ -258,14 +261,14 @@ def print_archived_restores(restores: List[Dict], use_color: bool = True):
 def list_state_files(use_color: bool = True):
     """List all available state files."""
     state_files = find_state_files()
-    
+
     if not state_files:
         print("No state files found in .state/ directory")
         return
-    
+
     print_header("Available State Files", use_color)
     print()
-    
+
     for state_file in state_files:
         state = load_state(state_file)
         if state:
@@ -275,10 +278,10 @@ def list_state_files(use_color: bool = True):
             contexts = state.get("contexts", {})
             primary = contexts.get("primary", "?")
             secondary = contexts.get("secondary", "?")
-            
+
             phase_colors = {"completed": "green", "failed": "red", "rollback": "yellow"}
             phase_color = phase_colors.get(phase, "blue")
-            
+
             print(f"  {color(os.path.basename(state_file), 'bold', use_color)}")
             print(f"    Contexts: {primary} → {secondary}")
             print(f"    Phase: {color(phase_name, phase_color, use_color)}")
@@ -305,19 +308,21 @@ Examples:
   %(prog)s --json
         """,
     )
-    
+
     parser.add_argument(
         "state_file",
         nargs="?",
         help="Path to state file (default: most recent in .state/)",
     )
     parser.add_argument(
-        "--list", "-l",
+        "--list",
+        "-l",
         action="store_true",
         help="List all available state files",
     )
     parser.add_argument(
-        "--json", "-j",
+        "--json",
+        "-j",
         action="store_true",
         help="Output raw JSON instead of formatted view",
     )
@@ -326,36 +331,38 @@ Examples:
         action="store_true",
         help="Disable colored output",
     )
-    
+
     args = parser.parse_args()
     use_color = not args.no_color and sys.stdout.isatty()
-    
+
     if args.list:
         list_state_files(use_color)
         return 0
-    
+
     # Find state file
     if args.state_file:
         state_file = args.state_file
     else:
         state_files = find_state_files()
         if not state_files:
-            print("No state files found. Run a switchover first or specify a state file path.")
+            print(
+                "No state files found. Run a switchover first or specify a state file path."
+            )
             return 1
         # Use most recently modified
         state_file = max(state_files, key=os.path.getmtime)
         print(f"Using: {state_file}")
-    
+
     # Load and display state
     state = load_state(state_file)
     if state is None:
         return 1
-    
+
     if args.json:
         print(json.dumps(state, indent=2))
     else:
         print_state(state, use_color)
-    
+
     return 0
 
 

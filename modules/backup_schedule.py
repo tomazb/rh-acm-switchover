@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from lib.constants import BACKUP_NAMESPACE
 from lib.kube_client import KubeClient
@@ -94,7 +94,9 @@ class BackupScheduleManager:
             return
 
         if self.dry_run:
-            logger.info("[DRY-RUN] Would restore saved BackupSchedule on %s", self.hub_label)
+            logger.info(
+                "[DRY-RUN] Would restore saved BackupSchedule on %s", self.hub_label
+            )
         else:
             logger.info("Restoring saved BackupSchedule on %s", self.hub_label)
         body = copy.deepcopy(saved_bs)

@@ -102,7 +102,9 @@ class StateManager:
                 with open(self.state_file, "r", encoding="utf-8") as f:
                     return json.load(f)
             except json.JSONDecodeError as e:
-                logging.warning("Corrupted state file %s: %s, starting fresh", self.state_file, e)
+                logging.warning(
+                    "Corrupted state file %s: %s, starting fresh", self.state_file, e
+                )
             except OSError as e:
                 logging.error("Failed to read state file %s: %s", self.state_file, e)
 
@@ -133,12 +135,18 @@ class StateManager:
         """Write the provided state dict to disk without modifying it."""
         self._ensure_state_dir()
         # Use restrictive permissions (owner read/write only)
-        fd = os.open(self.state_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+        fd = os.open(
+            self.state_file,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            stat.S_IRUSR | stat.S_IWUSR,
+        )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
-        except Exception:
-            os.close(fd)
+        except (OSError, ValueError, TypeError) as e:
+            # Note: os.fdopen() takes ownership of the fd and closes it on exit,
+            # so we don't need to call os.close(fd) here
+            logging.error("Failed to write state file %s: %s", self.state_file, e)
             raise
 
     def save_state(self) -> None:
@@ -154,7 +162,9 @@ class StateManager:
     def mark_step_completed(self, step_name: str) -> None:
         """Mark a step as completed."""
         if not self.is_step_completed(step_name):
-            self.state["completed_steps"].append({"name": step_name, "timestamp": _utc_timestamp()})
+            self.state["completed_steps"].append(
+                {"name": step_name, "timestamp": _utc_timestamp()}
+            )
             self.save_state()
 
     def is_step_completed(self, step_name: str) -> bool:
@@ -201,7 +211,9 @@ class StateManager:
             self.save_state()
             return Phase.INIT
 
-    def ensure_contexts(self, primary_context: str, secondary_context: Optional[str]) -> None:
+    def ensure_contexts(
+        self, primary_context: str, secondary_context: Optional[str]
+    ) -> None:
         """Ensure stored contexts match the ones provided on the CLI."""
         stored = self.state.get("contexts") or {}
         desired = {"primary": primary_context, "secondary": secondary_context}
@@ -229,7 +241,9 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_record = {
-            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(
+                record.created, timezone.utc
+            ).isoformat(),
             "level": record.levelname,
             "message": record.getMessage(),
             "logger": record.name,

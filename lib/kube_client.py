@@ -1,10 +1,15 @@
 """
 Kubernetes client wrapper for ACM resources.
+
+This module includes comprehensive input validation for Kubernetes resource
+names, namespaces, and other parameters to improve security and reliability.
 """
 
 import logging
 import time
 from typing import Any, Dict, List, Optional
+
+from lib.validation import InputValidator, ValidationError
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -12,7 +17,6 @@ from tenacity import (
     before_sleep_log,
     retry,
     retry_if_exception,
-    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
@@ -109,8 +113,14 @@ class KubeClient:
 
         Returns:
             Namespace dict or None if not found
+
+        Raises:
+            ValidationError: If namespace name is invalid
         """
         try:
+            # Validate namespace name before making API call
+            InputValidator.validate_kubernetes_namespace(name)
+
             ns = self.core_v1.read_namespace(name)
             return ns.to_dict()
         except ApiException as e:
@@ -123,13 +133,38 @@ class KubeClient:
             raise
 
     def namespace_exists(self, name: str) -> bool:
-        """Check if namespace exists."""
+        """Check if namespace exists.
+
+        Args:
+            name: Namespace name
+
+        Returns:
+            True if namespace exists
+
+        Raises:
+            ValidationError: If namespace name is invalid
+        """
         return self.get_namespace(name) is not None
 
     @retry_api_call
     def secret_exists(self, namespace: str, name: str) -> bool:
-        """Check if a secret exists."""
+        """Check if a secret exists.
+
+        Args:
+            namespace: Namespace name
+            name: Secret name
+
+        Returns:
+            True if secret exists
+
+        Raises:
+            ValidationError: If namespace or secret name is invalid
+        """
         try:
+            # Validate inputs before making API call
+            InputValidator.validate_kubernetes_namespace(namespace)
+            InputValidator.validate_kubernetes_name(name, "secret")
+
             self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
             return True
         except ApiException as e:
@@ -140,10 +175,163 @@ class KubeClient:
             logger.error("Failed to read secret %s/%s: %s", namespace, name, e)
             raise
 
+    # =============================
+    # ConfigMap helpers (core/v1)
+    # =============================
+    @retry_api_call
+    def get_configmap(self, namespace: str, name: str) -> Optional[Dict]:
+        """Get a namespaced ConfigMap as dict or None if not found.
+
+        Args:
+            namespace: Namespace name
+            name: ConfigMap name
+
+        Returns:
+            ConfigMap dict or None if not found
+
+        Raises:
+            ValidationError: If namespace or ConfigMap name is invalid
+        """
+        try:
+            # Validate inputs before making API call
+            InputValidator.validate_kubernetes_namespace(namespace)
+            InputValidator.validate_kubernetes_name(name, "ConfigMap")
+
+            cm = self.core_v1.read_namespaced_config_map(name=name, namespace=namespace)
+            return cm.to_dict()
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            if is_retryable_error(e):
+                raise
+            logger.error("Failed to read configmap %s/%s: %s", namespace, name, e)
+            raise
+
+    def exists_configmap(self, namespace: str, name: str) -> bool:
+        """Check if ConfigMap exists.
+
+        Args:
+            namespace: Namespace name
+            name: ConfigMap name
+
+        Returns:
+            True if ConfigMap exists
+
+        Raises:
+            ValidationError: If namespace or ConfigMap name is invalid
+        """
+        return self.get_configmap(namespace, name) is not None
+
+    @retry_api_call
+    def create_or_patch_configmap(
+        self, namespace: str, name: str, data: Dict[str, str]
+    ) -> Dict:
+        """Create or patch a ConfigMap's data field.
+
+        If CM exists, patch data; otherwise create it.
+
+        Args:
+            namespace: Namespace name
+            name: ConfigMap name
+            data: ConfigMap data
+
+        Returns:
+            Created or patched ConfigMap dict
+
+        Raises:
+            ValidationError: If namespace or ConfigMap name is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_namespace(namespace)
+        InputValidator.validate_kubernetes_name(name, "ConfigMap")
+
+        if self.dry_run:
+            logger.info(
+                "[DRY-RUN] Would create/patch ConfigMap %s/%s with data keys: %s",
+                namespace,
+                name,
+                list(data.keys()),
+            )
+            return {"metadata": {"name": name, "namespace": namespace}, "data": data}
+
+        try:
+            existing = self.get_configmap(namespace, name)
+            if existing is None:
+                body = {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {"name": name, "namespace": namespace},
+                    "data": data,
+                }
+                result = self.core_v1.create_namespaced_config_map(
+                    namespace=namespace, body=body
+                )
+                return result.to_dict()
+            # Patch existing
+            body = {"data": data}
+            result = self.core_v1.patch_namespaced_config_map(
+                name=name, namespace=namespace, body=body
+            )
+            return result.to_dict()
+        except ApiException as e:
+            if is_retryable_error(e):
+                raise
+            logger.error(
+                "Failed to create/patch configmap %s/%s: %s", namespace, name, e
+            )
+            raise
+
+    @retry_api_call
+    def delete_configmap(self, namespace: str, name: str) -> bool:
+        """Delete a ConfigMap; return True if deleted or absent.
+
+        Args:
+            namespace: Namespace name
+            name: ConfigMap name
+
+        Returns:
+            True if deleted or absent
+
+        Raises:
+            ValidationError: If namespace or ConfigMap name is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_namespace(namespace)
+        InputValidator.validate_kubernetes_name(name, "ConfigMap")
+
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would delete ConfigMap %s/%s", namespace, name)
+            return True
+        try:
+            self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace)
+            return True
+        except ApiException as e:
+            if e.status == 404:
+                return True
+            if is_retryable_error(e):
+                raise
+            logger.error("Failed to delete configmap %s/%s: %s", namespace, name, e)
+            raise
+
     @retry_api_call
     def get_route_host(self, namespace: str, name: str) -> Optional[str]:
-        """Fetch the hostname for an OpenShift Route."""
+        """Fetch the hostname for an OpenShift Route.
+
+        Args:
+            namespace: Namespace name
+            name: Route name
+
+        Returns:
+            Route hostname or None if not found
+
+        Raises:
+            ValidationError: If namespace or Route name is invalid
+        """
         try:
+            # Validate inputs before making API call
+            InputValidator.validate_kubernetes_namespace(namespace)
+            InputValidator.validate_kubernetes_name(name, "Route")
+
             route = self.custom_api.get_namespaced_custom_object(
                 group="route.openshift.io",
                 version="v1",
@@ -181,8 +369,16 @@ class KubeClient:
 
         Returns:
             Resource dict or None if not found
+
+        Raises:
+            ValidationError: If resource name or namespace is invalid
         """
         try:
+            # Validate inputs before making API call
+            InputValidator.validate_kubernetes_name(name, "custom resource")
+            if namespace:
+                InputValidator.validate_kubernetes_namespace(namespace)
+
             if namespace:
                 resource = self.custom_api.get_namespaced_custom_object(
                     group=group,
@@ -287,7 +483,15 @@ class KubeClient:
 
         Returns:
             Patched resource dict
+
+        Raises:
+            ValidationError: If resource name or namespace is invalid
         """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_name(name, "custom resource")
+        if namespace:
+            InputValidator.validate_kubernetes_namespace(namespace)
+
         if self.dry_run:
             logger.info("[DRY-RUN] Would patch %s/%s with: %s", plural, name, patch)
             return {}
@@ -295,7 +499,12 @@ class KubeClient:
         logger.debug(
             "KUBE_CLIENT patch_custom_resource: group=%s, version=%s, "
             "plural=%s, name=%s, namespace=%s, patch=%s",
-            group, version, plural, name, namespace, patch,
+            group,
+            version,
+            plural,
+            name,
+            namespace,
+            patch,
         )
 
         try:
@@ -309,27 +518,40 @@ class KubeClient:
                     name=name,
                     body=patch,
                 )
-                logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
+                logger.debug(
+                    "KUBE_CLIENT: patch_namespaced_custom_object returned successfully"
+                )
             else:
                 logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
                 result = self.custom_api.patch_cluster_custom_object(
                     group=group, version=version, plural=plural, name=name, body=patch
                 )
-                logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
+                logger.debug(
+                    "KUBE_CLIENT: patch_cluster_custom_object returned successfully"
+                )
 
-            logger.debug("KUBE_CLIENT: Patch result keys: %s", list(result.keys()) if result else "None")
+            logger.debug(
+                "KUBE_CLIENT: Patch result keys: %s",
+                list(result.keys()) if result else "None",
+            )
             return result
         except ApiException as e:
             logger.error(
                 "KUBE_CLIENT: ApiException during patch: status=%s, reason=%s, body=%s",
-                e.status, e.reason, e.body[:500] if e.body else "None",
+                e.status,
+                e.reason,
+                e.body[:500] if e.body else "None",
             )
             if is_retryable_error(e):
                 raise
             logger.error("Failed to patch %s/%s: %s", plural, name, e)
             raise
         except Exception as e:
-            logger.error("KUBE_CLIENT: Unexpected exception during patch: %s: %s", type(e).__name__, e)
+            logger.error(
+                "KUBE_CLIENT: Unexpected exception during patch: %s: %s",
+                type(e).__name__,
+                e,
+            )
             raise
 
     @retry_api_call
@@ -341,9 +563,34 @@ class KubeClient:
         body: Dict[str, Any],
         namespace: Optional[str] = None,
     ) -> Dict:
-        """Create a custom resource."""
+        """Create a custom resource.
+
+        Args:
+            group: API group
+            version: API version
+            plural: Resource plural
+            body: Resource body dict
+            namespace: Namespace (None for cluster-scoped)
+
+        Returns:
+            Created resource dict
+
+        Raises:
+            ValidationError: If resource name or namespace is invalid
+        """
+        # Validate resource name from body
+        resource_name = body.get("metadata", {}).get("name")
+        if resource_name:
+            InputValidator.validate_kubernetes_name(resource_name, "custom resource")
+        if namespace:
+            InputValidator.validate_kubernetes_namespace(namespace)
+
         if self.dry_run:
-            logger.info("[DRY-RUN] Would create %s: %s", plural, body.get("metadata", {}).get("name"))
+            logger.info(
+                "[DRY-RUN] Would create %s: %s",
+                plural,
+                body.get("metadata", {}).get("name"),
+            )
             return body
 
         try:
@@ -375,7 +622,26 @@ class KubeClient:
         name: str,
         namespace: Optional[str] = None,
     ) -> bool:
-        """Delete a custom resource."""
+        """Delete a custom resource.
+
+        Args:
+            group: API group
+            version: API version
+            plural: Resource plural
+            name: Resource name
+            namespace: Namespace (None for cluster-scoped)
+
+        Returns:
+            True if deleted or absent
+
+        Raises:
+            ValidationError: If resource name or namespace is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_name(name, "custom resource")
+        if namespace:
+            InputValidator.validate_kubernetes_namespace(namespace)
+
         if self.dry_run:
             logger.info("[DRY-RUN] Would delete %s/%s", plural, name)
             return True
@@ -390,7 +656,9 @@ class KubeClient:
                     name=name,
                 )
             else:
-                self.custom_api.delete_cluster_custom_object(group=group, version=version, plural=plural, name=name)
+                self.custom_api.delete_cluster_custom_object(
+                    group=group, version=version, plural=plural, name=name
+                )
             return True
         except ApiException as e:
             if e.status == 404:
@@ -420,14 +688,37 @@ class KubeClient:
 
     @retry_api_call
     def scale_deployment(self, name: str, namespace: str, replicas: int) -> Dict:
-        """Scale a deployment."""
+        """Scale a deployment.
+
+        Args:
+            name: Deployment name
+            namespace: Namespace name
+            replicas: Number of replicas
+
+        Returns:
+            Scaled deployment dict
+
+        Raises:
+            ValidationError: If deployment name or namespace is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_name(name, "deployment")
+        InputValidator.validate_kubernetes_namespace(namespace)
+
         if self.dry_run:
-            logger.info("[DRY-RUN] Would scale deployment %s/%s to %s replicas", namespace, name, replicas)
+            logger.info(
+                "[DRY-RUN] Would scale deployment %s/%s to %s replicas",
+                namespace,
+                name,
+                replicas,
+            )
             return {}
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_deployment_scale(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_deployment_scale(
+                name=name, namespace=namespace, body=body
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -437,14 +728,37 @@ class KubeClient:
 
     @retry_api_call
     def scale_statefulset(self, name: str, namespace: str, replicas: int) -> Dict:
-        """Scale a statefulset."""
+        """Scale a statefulset.
+
+        Args:
+            name: StatefulSet name
+            namespace: Namespace name
+            replicas: Number of replicas
+
+        Returns:
+            Scaled StatefulSet dict
+
+        Raises:
+            ValidationError: If StatefulSet name or namespace is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_name(name, "statefulset")
+        InputValidator.validate_kubernetes_namespace(namespace)
+
         if self.dry_run:
-            logger.info("[DRY-RUN] Would scale statefulset %s/%s to %s replicas", namespace, name, replicas)
+            logger.info(
+                "[DRY-RUN] Would scale statefulset %s/%s to %s replicas",
+                namespace,
+                name,
+                replicas,
+            )
             return {}
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_stateful_set_scale(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_stateful_set_scale(
+                name=name, namespace=namespace, body=body
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -454,15 +768,40 @@ class KubeClient:
 
     @retry_api_call
     def rollout_restart_deployment(self, name: str, namespace: str) -> Dict:
-        """Restart a deployment by updating restart annotation."""
+        """Restart a deployment by updating restart annotation.
+
+        Args:
+            name: Deployment name
+            namespace: Namespace name
+
+        Returns:
+            Restarted deployment dict
+
+        Raises:
+            ValidationError: If deployment name or namespace is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_name(name, "deployment")
+        InputValidator.validate_kubernetes_namespace(namespace)
+
         if self.dry_run:
             logger.info("[DRY-RUN] Would restart deployment %s/%s", namespace, name)
             return {}
 
         try:
             now = time.strftime("%Y%m%d%H%M%S")
-            body = {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now}}}}}
-            result = self.apps_v1.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
+            body = {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {"kubectl.kubernetes.io/restartedAt": now}
+                        }
+                    }
+                }
+            }
+            result = self.apps_v1.patch_namespaced_deployment(
+                name=name, namespace=namespace, body=body
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -471,10 +810,35 @@ class KubeClient:
             raise
 
     @retry_api_call
-    def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict]:
-        """List pods in a namespace."""
+    def get_pods(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[Dict]:
+        """List pods in a namespace.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Optional label selector
+
+        Returns:
+            List of pod dicts
+
+        Raises:
+            ValidationError: If namespace is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_namespace(namespace)
+        if label_selector is not None:
+            # Basic validation - only check for non-empty string
+            # Full label selector validation is complex (supports =, ==, !=, in, notin, exists, !exists)
+            # and includes keys with prefixes like 'app.kubernetes.io/name'
+            # Let the Kubernetes API validate the selector and return appropriate errors
+            if not label_selector.strip():
+                raise ValidationError("Label selector cannot be empty or whitespace-only")
+
         try:
-            result = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
+            result = self.core_v1.list_namespaced_pod(
+                namespace=namespace, label_selector=label_selector
+            )
             return [pod.to_dict() for pod in result.items]
         except ApiException as e:
             if e.status == 404:
@@ -524,7 +888,10 @@ class KubeClient:
             for pod in pods:
                 conditions = pod.get("status", {}).get("conditions", [])
                 for condition in conditions:
-                    if condition.get("type") == "Ready" and condition.get("status") == "True":
+                    if (
+                        condition.get("type") == "Ready"
+                        and condition.get("status") == "True"
+                    ):
                         ready_count += 1
                         break
 

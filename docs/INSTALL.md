@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- **Python**: 3.8 or later
+- **Python**: 3.9 or later
 - **Kubernetes CLI**: `kubectl` or `oc` (OpenShift CLI)
 - **Access**: Kubernetes contexts configured for both hubs
 - **Permissions**: RBAC access to ACM resources on both clusters
@@ -14,7 +14,7 @@
 ```bash
 # Check Python version
 python3 --version
-# Should show: Python 3.8.x or later
+# Should show: Python 3.9.x or later
 
 # Check kubectl/oc
 kubectl version --client
@@ -26,6 +26,34 @@ kubectl config get-contexts
 # OR
 oc config get-contexts
 ```
+
+### Upgrading Python (if needed)
+
+If your system has Python 3.8 or earlier, you must upgrade to Python 3.9+:
+
+**RHEL 8 / CentOS 8:**
+```bash
+sudo dnf install python39 python39-pip
+python3.9 -m venv venv
+source venv/bin/activate
+```
+
+**Ubuntu 20.04+:**
+```bash
+sudo apt install python3.9 python3.9-venv
+python3.9 -m venv venv
+source venv/bin/activate
+```
+
+**Using pyenv:**
+```bash
+pyenv install 3.11.0
+pyenv local 3.11.0
+python -m venv venv
+source venv/bin/activate
+```
+
+Alternatively, use the [container image](CONTAINER_USAGE.md) which includes Python 3.9 and all dependencies.
 
 ## Installation Methods
 

@@ -5,7 +5,6 @@ Post-activation verification module for ACM switchover.
 import base64
 import logging
 import re
-from typing import List, Tuple
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -99,7 +98,9 @@ class PostActivationVerification:
             return False
         except Exception as e:
             logger.error("Unexpected error during post-activation verification: %s", e)
-            self.state.add_error(f"Unexpected: {str(e)}", "post_activation_verification")
+            self.state.add_error(
+                f"Unexpected: {str(e)}", "post_activation_verification"
+            )
             return False
 
     def _verify_managed_clusters_connected(self, timeout: int = CLUSTER_VERIFY_TIMEOUT):
@@ -144,11 +145,14 @@ class PostActivationVerification:
                 conditions = mc.get("status", {}).get("conditions", [])
 
                 is_available = any(
-                    c.get("type") == "ManagedClusterConditionAvailable" and c.get("status") == "True"
+                    c.get("type") == "ManagedClusterConditionAvailable"
+                    and c.get("status") == "True"
                     for c in conditions
                 )
                 is_joined = any(
-                    c.get("type") == "ManagedClusterJoined" and c.get("status") == "True" for c in conditions
+                    c.get("type") == "ManagedClusterJoined"
+                    and c.get("status") == "True"
+                    for c in conditions
                 )
 
                 if is_available:
@@ -167,10 +171,19 @@ class PostActivationVerification:
 
             # If there are no non-local ManagedClusters, that's OK - nothing to wait for
             if total_clusters == 0:
-                return True, "No non-local ManagedClusters to verify (only local-cluster exists)"
+                return (
+                    True,
+                    "No non-local ManagedClusters to verify (only local-cluster exists)",
+                )
 
-            is_ready = available_clusters == total_clusters and joined_clusters == total_clusters
-            detail = f"available={available_clusters}/{total_clusters}, " f"joined={joined_clusters}/{total_clusters}"
+            is_ready = (
+                available_clusters == total_clusters
+                and joined_clusters == total_clusters
+            )
+            detail = (
+                f"available={available_clusters}/{total_clusters}, "
+                f"joined={joined_clusters}/{total_clusters}"
+            )
             return is_ready, detail
 
         success = wait_for_condition(
@@ -220,7 +233,9 @@ class PostActivationVerification:
                     label_selector="app.kubernetes.io/name=observatorium-api",
                 )
                 start_times = [
-                    pod.get("status", {}).get("startTime") for pod in pods if pod.get("status", {}).get("startTime")
+                    pod.get("status", {}).get("startTime")
+                    for pod in pods
+                    if pod.get("status", {}).get("startTime")
                 ]
                 if start_times:
                     logger.info(
@@ -230,7 +245,7 @@ class PostActivationVerification:
             else:
                 logger.warning("observatorium-api pods did not become ready in time")
 
-        except Exception as e:
+        except (ApiException, Exception) as e:
             logger.error("Failed to restart observatorium-api: %s", e)
             if "not found" in str(e).lower():
                 logger.warning("observatorium-api deployment not found")
@@ -247,7 +262,11 @@ class PostActivationVerification:
             logger.warning("No Observability pods found")
             return
 
-        critical_waiting_reasons = {"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull"}
+        critical_waiting_reasons = {
+            "CrashLoopBackOff",
+            "ImagePullBackOff",
+            "ErrImagePull",
+        }
         critical_terminated_reasons = {"Error", "OOMKilled"}
 
         running_pods = 0
@@ -267,7 +286,10 @@ class PostActivationVerification:
             # Check ready condition
             conditions = pod.get("status", {}).get("conditions", [])
             for condition in conditions:
-                if condition.get("type") == "Ready" and condition.get("status") == "True":
+                if (
+                    condition.get("type") == "Ready"
+                    and condition.get("status") == "True"
+                ):
                     ready_pods += 1
                     break
 
@@ -287,15 +309,22 @@ class PostActivationVerification:
                 if terminated_state:
                     reason = terminated_state.get("reason", "terminated")
                     exit_code = terminated_state.get("exitCode")
-                    if reason in critical_terminated_reasons or (exit_code is not None and exit_code != 0):
-                        pod_errors.append(f"{container_name} terminated ({reason}, exit={exit_code})")
+                    if reason in critical_terminated_reasons or (
+                        exit_code is not None and exit_code != 0
+                    ):
+                        pod_errors.append(
+                            f"{container_name} terminated ({reason}, exit={exit_code})"
+                        )
 
             if pod_errors:
                 error_pods.append(f"{pod_name}: " + "; ".join(pod_errors))
 
         logger.info(
             "Observability pods: %d/%d running, %d/%d ready",
-            running_pods, len(pods), ready_pods, len(pods)
+            running_pods,
+            len(pods),
+            ready_pods,
+            len(pods),
         )
 
         if error_pods:
@@ -304,7 +333,8 @@ class PostActivationVerification:
         if ready_pods < len(pods) * 0.8:  # Allow 20% tolerance
             logger.warning(
                 "Only %d/%d pods ready. Some pods may still be starting.",
-                ready_pods, len(pods)
+                ready_pods,
+                len(pods),
             )
 
     def _verify_metrics_collection(self):
@@ -346,7 +376,7 @@ class PostActivationVerification:
                 )
             else:
                 logger.warning("Grafana route not found in Observability namespace")
-        except Exception as exc:
+        except (ApiException, Exception) as exc:
             logger.warning("Unable to query Grafana route: %s", exc)
 
     def _verify_disable_auto_import_cleared(self):
@@ -354,7 +384,9 @@ class PostActivationVerification:
 
         # Skip verification in dry-run mode since annotations weren't actually cleared
         if self.dry_run:
-            logger.info("[DRY-RUN] Skipping disable-auto-import annotation verification")
+            logger.info(
+                "[DRY-RUN] Skipping disable-auto-import annotation verification"
+            )
             return
 
         logger.info("Ensuring disable-auto-import annotations are cleared...")
@@ -375,7 +407,9 @@ class PostActivationVerification:
                 flagged.append(mc_name or "unknown")
 
         if flagged:
-            raise Exception("disable-auto-import annotation still present on: " + ", ".join(flagged))
+            raise Exception(
+                "disable-auto-import annotation still present on: " + ", ".join(flagged)
+            )
 
         logger.info("All ManagedClusters cleared disable-auto-import annotation")
 
@@ -402,13 +436,17 @@ class PostActivationVerification:
         # Get the new hub's API server URL
         new_hub_server = self._get_hub_api_server()
         if not new_hub_server:
-            logger.warning("Could not determine new hub API server URL, skipping klusterlet verification")
+            logger.warning(
+                "Could not determine new hub API server URL, skipping klusterlet verification"
+            )
             return
 
         # Load kubeconfig data for context lookup
         kubeconfig_data = self._load_kubeconfig_data()
         if not kubeconfig_data:
-            logger.warning("Could not load kubeconfig, skipping klusterlet verification")
+            logger.warning(
+                "Could not load kubeconfig, skipping klusterlet verification"
+            )
             return
 
         # Get list of managed clusters with their API server URLs
@@ -424,7 +462,9 @@ class PostActivationVerification:
             name = mc.get("metadata", {}).get("name")
             if name and name != "local-cluster":
                 # Get API server URL from ManagedCluster spec
-                client_configs = mc.get("spec", {}).get("managedClusterClientConfigs", [])
+                client_configs = mc.get("spec", {}).get(
+                    "managedClusterClientConfigs", []
+                )
                 api_url = client_configs[0].get("url", "") if client_configs else ""
                 cluster_info.append((name, api_url))
 
@@ -440,19 +480,23 @@ class PostActivationVerification:
         for cluster_name, cluster_api_url in cluster_info:
             try:
                 # Find context by matching API server URL
-                context_name = self._find_context_by_api_url(kubeconfig_data, cluster_api_url, cluster_name)
+                context_name = self._find_context_by_api_url(
+                    kubeconfig_data, cluster_api_url, cluster_name
+                )
                 if not context_name:
                     unreachable.append(cluster_name)
                     continue
 
-                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
+                result = self._check_klusterlet_connection(
+                    context_name, cluster_name, new_hub_server
+                )
                 if result == "verified":
                     verified.append(cluster_name)
                 elif result == "wrong_hub":
                     wrong_hub.append((cluster_name, context_name))
                 else:  # unreachable or error
                     unreachable.append(cluster_name)
-            except Exception as e:
+            except (ApiException, Exception) as e:
                 logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
                 unreachable.append(cluster_name)
 
@@ -518,10 +562,13 @@ class PostActivationVerification:
             True if successful, False otherwise
         """
         import time
+
         import yaml
 
         try:
-            logger.info("Force-reconnecting klusterlet for %s to new hub...", cluster_name)
+            logger.info(
+                "Force-reconnecting klusterlet for %s to new hub...", cluster_name
+            )
 
             # Step 1: Get the import secret from the new hub
             import_secret = self.secondary.get_secret(
@@ -534,7 +581,9 @@ class PostActivationVerification:
 
             import_yaml_b64 = import_secret.get("data", {}).get("import.yaml", "")
             if not import_yaml_b64:
-                logger.warning("Import secret for %s has no import.yaml data", cluster_name)
+                logger.warning(
+                    "Import secret for %s has no import.yaml data", cluster_name
+                )
                 return False
 
             import_yaml = base64.b64decode(import_yaml_b64).decode("utf-8")
@@ -548,18 +597,19 @@ class PostActivationVerification:
                     name="bootstrap-hub-kubeconfig",
                     namespace="open-cluster-management-agent",
                 )
-                logger.debug("Deleted bootstrap-hub-kubeconfig secret on %s", cluster_name)
+                logger.debug(
+                    "Deleted bootstrap-hub-kubeconfig secret on %s", cluster_name
+                )
             except ApiException as e:
                 if e.status != 404:
-                    logger.warning("Failed to delete bootstrap secret on %s: %s", cluster_name, e)
+                    logger.warning(
+                        "Failed to delete bootstrap secret on %s: %s", cluster_name, e
+                    )
 
             # Step 3: Apply the import manifest to recreate the bootstrap secret
             # Parse the import YAML and apply each resource
             import_docs = list(yaml.safe_load_all(import_yaml))
             apps_v1 = client.AppsV1Api()
-            rbac_v1 = client.RbacAuthorizationV1Api()
-            scheduling_v1 = client.SchedulingV1Api()
-            custom_api = client.CustomObjectsApi()
 
             for doc in import_docs:
                 if not doc:
@@ -575,7 +625,10 @@ class PostActivationVerification:
                             namespace=namespace,
                             body=doc,
                         )
-                        logger.debug("Created bootstrap-hub-kubeconfig secret on %s", cluster_name)
+                        logger.debug(
+                            "Created bootstrap-hub-kubeconfig secret on %s",
+                            cluster_name,
+                        )
                 except ApiException as e:
                     if e.status == 409:  # Already exists
                         pass
@@ -605,13 +658,17 @@ class PostActivationVerification:
                 )
                 logger.debug("Triggered klusterlet restart on %s", cluster_name)
             except ApiException as e:
-                logger.warning("Failed to restart klusterlet on %s: %s", cluster_name, e)
+                logger.warning(
+                    "Failed to restart klusterlet on %s: %s", cluster_name, e
+                )
 
             logger.info("Force-reconnected klusterlet for %s", cluster_name)
             return True
 
-        except Exception as e:
-            logger.warning("Failed to force-reconnect klusterlet for %s: %s", cluster_name, e)
+        except (ApiException, Exception) as e:
+            logger.warning(
+                "Failed to force-reconnect klusterlet for %s: %s", cluster_name, e
+            )
             return False
 
     def _get_hub_api_server(self) -> str:
@@ -629,7 +686,7 @@ class PostActivationVerification:
                     for cluster in kubeconfig_data.get("clusters", []):
                         if cluster.get("name") == cluster_name:
                             return cluster.get("cluster", {}).get("server", "")
-        except Exception as e:
+        except (ApiException, Exception) as e:
             logger.debug("Error getting hub API server: %s", e)
 
         return ""
@@ -639,16 +696,20 @@ class PostActivationVerification:
         try:
             import os
 
-            kubeconfig_path = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+            kubeconfig_path = os.environ.get(
+                "KUBECONFIG", os.path.expanduser("~/.kube/config")
+            )
             with open(kubeconfig_path) as f:
                 import yaml
 
                 return yaml.safe_load(f) or {}
-        except Exception as e:
+        except (OSError, yaml.YAMLError, Exception) as e:
             logger.debug("Error loading kubeconfig: %s", e)
             return {}
 
-    def _find_context_by_api_url(self, kubeconfig_data: dict, api_url: str, cluster_name: str) -> str:
+    def _find_context_by_api_url(
+        self, kubeconfig_data: dict, api_url: str, cluster_name: str
+    ) -> str:
         """
         Find a kubeconfig context that matches the given API server URL.
 
@@ -671,8 +732,9 @@ class PostActivationVerification:
                 for ctx in contexts:
                     if ctx.get("name") == cluster_name:
                         return cluster_name
-            except Exception:
-                pass
+            except (config.ConfigException, Exception) as e:
+                # Failed to match context by name; returning empty string as fallback
+                logger.debug("Exception during name-based context matching for %s: %s", cluster_name, e)
             return ""
 
         # Normalize the API URL for comparison (extract host)
@@ -706,7 +768,9 @@ class PostActivationVerification:
 
         return ""
 
-    def _check_klusterlet_connection(self, context_name: str, cluster_name: str, expected_hub: str) -> str:
+    def _check_klusterlet_connection(
+        self, context_name: str, cluster_name: str, expected_hub: str
+    ) -> str:
         """
         Check if a managed cluster's klusterlet is connected to the expected hub.
 
@@ -760,7 +824,9 @@ class PostActivationVerification:
             klusterlet_host = re.sub(r"https://([^:/]+).*", r"\1", klusterlet_hub)
 
             if expected_host == klusterlet_host:
-                logger.debug("Cluster %s klusterlet → %s (correct)", cluster_name, klusterlet_hub)
+                logger.debug(
+                    "Cluster %s klusterlet → %s (correct)", cluster_name, klusterlet_hub
+                )
                 return "verified"
             else:
                 logger.debug(
@@ -774,7 +840,6 @@ class PostActivationVerification:
         except config.ConfigException:
             # Context doesn't exist
             return "unreachable"
-        except Exception as e:
+        except (ApiException, config.ConfigException, Exception) as e:
             logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
-            return "unreachable"
             return "unreachable"

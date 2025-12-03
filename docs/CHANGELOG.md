@@ -7,9 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### ACM Version Display in Hub Discovery
+- **Enhanced discover-hub.sh output**: Now displays ACM version for each discovered hub during analysis
+  - Shows version inline with detection message: `ACM hub detected (version 2.11.8)`
+  - Stores version in `HUB_VERSIONS` array for potential future use
+  - Helps quickly identify version mismatches across hubs
+
+#### Auto-Import Strategy Validation (ACM 2.14+)
+- **New preflight check (Check 11)**: Validates `autoImportStrategy` configuration on both hubs
+  - Warns if non-default strategy is configured (should be temporary)
+  - For secondary hubs with existing managed clusters: provides guidance to temporarily change to `ImportAndSync` before restore
+  - Links to official Red Hat documentation for explanation
+- **New postflight check (Check 9)**: Ensures `autoImportStrategy` is reset to default after switchover
+  - Warns if non-default strategy remains configured
+  - Provides command to reset to default
+- **New constants**: Added `MCE_NAMESPACE`, `IMPORT_CONTROLLER_CONFIGMAP`, `AUTO_IMPORT_STRATEGY_*` constants
+- **New helper functions**: Added `get_auto_import_strategy()` and `is_acm_214_or_higher()` to `lib-common.sh`
+- **Documentation**: Updated runbook prerequisites and verification checklist for ACM 2.14+ autoImportStrategy
+
+### Breaking Changes
+
+#### Python 3.9+ Required
+
+- **Minimum Python version**: Python 3.9 is now the minimum supported version
+- **Package enforcement**: Added `python_requires=">=3.9"` to `setup.cfg` so pip will refuse installation on older Python versions
+- **Migration**: Users on Python 3.8 or earlier must upgrade. See [Migrating from Python 3.8 or Earlier](#migrating-from-python-38-or-earlier) in the Migration Guides section below.
+
 ### Removed
 
 #### Rollback Feature
+
 - **Removed `--rollback` CLI option**: The automated rollback feature has been removed as it was complex and error-prone
 - **Removed `modules/rollback.py`**: Rollback module and associated tests removed
 - **Removed `ROLLBACK` phase**: No longer tracked in state management
@@ -25,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dynamic restore discovery**: The passive sync restore is now discovered dynamically by looking for a Restore with `spec.syncRestoreWithNewBackups=true` instead of requiring a hardcoded name
 - **Backward compatibility**: Falls back to well-known name `restore-acm-passive-sync` if no restore with `syncRestoreWithNewBackups=true` is found
 - **Finalization cleanup**: During finalization, all Restore resources in the backup namespace are now listed and cleaned up dynamically
+
+### Fixed
+
+#### Hub Discovery Script
+- **Fixed duplicate output in get_total_mc_count**: Changed from `grep -c -v` with `|| echo "0"` fallback to `grep -v | wc -l` to prevent duplicate "0" output when no managed clusters exist
+  - Previously, `grep -c` would output "0" and exit with status 1, triggering the fallback which added another "0"
+  - This caused a stray "0" line to appear in the hub discovery output for hubs with zero managed clusters
 
 ### Added
 
@@ -212,7 +248,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - rich>=13.0.0 - Rich text formatting
 
 #### Supported Environments
-- Python 3.8+
+- Python 3.9+
 - ACM 2.11 and 2.12+
 - OpenShift 4.x
 - Both kubectl and oc CLI
@@ -343,6 +379,75 @@ Common issues documented in USAGE.md:
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+---
+
+---
+
+## Migration Guides
+
+### Migrating from Python 3.8 or Earlier
+
+Starting with this release, ACM Switchover requires **Python 3.9 or later**. Python 3.8 reached end-of-life in October 2024 and is no longer supported.
+
+#### Option 1: Upgrade System Python (Recommended)
+
+**RHEL 8 / CentOS 8:**
+```bash
+# Install Python 3.9 from AppStream
+sudo dnf install python39 python39-pip
+
+# Use python3.9 explicitly
+python3.9 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+**RHEL 9 / Fedora:**
+```bash
+# Python 3.9+ is available by default
+python3 --version  # Should show 3.9+
+```
+
+**Ubuntu 20.04+:**
+```bash
+sudo apt install python3.9 python3.9-venv
+python3.9 -m venv venv
+source venv/bin/activate
+```
+
+#### Option 2: Use Container Image
+
+The container image includes Python 3.9 and all dependencies:
+
+```bash
+podman run --rm -it \
+  -v ~/.kube:/root/.kube:ro \
+  quay.io/tomazborstnar/acm-switchover:latest \
+  --help
+```
+
+#### Option 3: Use pyenv for Multiple Python Versions
+
+```bash
+# Install pyenv
+curl https://pyenv.run | bash
+
+# Install Python 3.9+
+pyenv install 3.11.0
+pyenv local 3.11.0
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+#### Official Python Upgrade Resources
+
+- [Python Downloads](https://www.python.org/downloads/)
+- [Red Hat Python Guide](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/configuring_basic_system_settings/assembly_installing-and-using-python_configuring-basic-system-settings)
+- [pyenv Installation](https://github.com/pyenv/pyenv#installation)
 
 ---
 
