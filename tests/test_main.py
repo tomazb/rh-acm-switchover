@@ -27,12 +27,17 @@ class TestArgParsing:
                 parse_args()
 
         # old-hub-action is also required
-        with patch("sys.argv", ["script.py", "--primary-context", "p1", "--method", "passive"]):
+        with patch(
+            "sys.argv", ["script.py", "--primary-context", "p1", "--method", "passive"]
+        ):
             with pytest.raises(SystemExit):
                 parse_args()
 
         # method is also required
-        with patch("sys.argv", ["script.py", "--primary-context", "p1", "--old-hub-action", "secondary"]):
+        with patch(
+            "sys.argv",
+            ["script.py", "--primary-context", "p1", "--old-hub-action", "secondary"],
+        ):
             with pytest.raises(SystemExit):
                 parse_args()
 
@@ -61,7 +66,16 @@ class TestArgParsing:
         """Test parsing dry-run mode."""
         with patch(
             "sys.argv",
-            ["script.py", "--primary-context", "p1", "--old-hub-action", "none", "--method", "passive", "--dry-run"],
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--old-hub-action",
+                "none",
+                "--method",
+                "passive",
+                "--dry-run",
+            ],
         ):
             args = parse_args()
             assert args.dry_run is True
@@ -108,7 +122,16 @@ class TestArgParsing:
     def test_method_selection(self):
         """Test method selection argument."""
         with patch(
-            "sys.argv", ["script.py", "--primary-context", "p1", "--old-hub-action", "decommission", "--method", "full"]
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--old-hub-action",
+                "decommission",
+                "--method",
+                "full",
+            ],
         ):
             args = parse_args()
             assert args.method == "full"
@@ -120,14 +143,31 @@ class TestArgParsing:
         for method in ["passive", "full"]:
             with patch(
                 "sys.argv",
-                ["script.py", "--primary-context", "p1", "--old-hub-action", "secondary", "--method", method],
+                [
+                    "script.py",
+                    "--primary-context",
+                    "p1",
+                    "--old-hub-action",
+                    "secondary",
+                    "--method",
+                    method,
+                ],
             ):
                 args = parse_args()
                 assert args.method == method
 
         # Invalid choice
         with patch(
-            "sys.argv", ["script.py", "--primary-context", "p1", "--old-hub-action", "secondary", "--method", "invalid"]
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--old-hub-action",
+                "secondary",
+                "--method",
+                "invalid",
+            ],
         ):
             with pytest.raises(SystemExit):
                 parse_args()
@@ -137,14 +177,32 @@ class TestArgParsing:
         # Valid choices
         for action in ["secondary", "decommission", "none"]:
             with patch(
-                "sys.argv", ["script.py", "--primary-context", "p1", "--old-hub-action", action, "--method", "passive"]
+                "sys.argv",
+                [
+                    "script.py",
+                    "--primary-context",
+                    "p1",
+                    "--old-hub-action",
+                    action,
+                    "--method",
+                    "passive",
+                ],
             ):
                 args = parse_args()
                 assert args.old_hub_action == action
 
         # Invalid choice
         with patch(
-            "sys.argv", ["script.py", "--primary-context", "p1", "--old-hub-action", "invalid", "--method", "passive"]
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--old-hub-action",
+                "invalid",
+                "--method",
+                "passive",
+            ],
         ):
             with pytest.raises(SystemExit):
                 parse_args()

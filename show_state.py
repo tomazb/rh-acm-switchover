@@ -71,6 +71,7 @@ STEP_INFO = {
     "verify_new_backups": "Verified new backups are being created",
     "verify_mch_health": "Verified MultiClusterHub health",
     "handle_old_hub": "Handled old hub (secondary/decommission/none)",
+    "reset_auto_import_strategy": "Reset auto-import strategy to default",
 }
 
 
@@ -344,7 +345,9 @@ Examples:
     else:
         state_files = find_state_files()
         if not state_files:
-            print("No state files found. Run a switchover first or specify a state file path.")
+            print(
+                "No state files found. Run a switchover first or specify a state file path."
+            )
             return 1
         # Use most recently modified
         state_file = max(state_files, key=os.path.getmtime)

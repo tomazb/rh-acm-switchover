@@ -23,7 +23,9 @@ logger = logging.getLogger("acm_switchover")
 class Decommission:
     """Handles decommissioning of old primary hub."""
 
-    def __init__(self, primary_client: KubeClient, has_observability: bool, dry_run: bool = False):
+    def __init__(
+        self, primary_client: KubeClient, has_observability: bool, dry_run: bool = False
+    ):
         self.primary = primary_client
         self.has_observability = has_observability
         self.dry_run = dry_run
@@ -53,7 +55,9 @@ class Decommission:
         try:
             # Step 12.1-12.2: Delete MultiClusterObservability
             if self.has_observability:
-                if not interactive or confirm_action("\nDelete MultiClusterObservability resource?", default=False):
+                if not interactive or confirm_action(
+                    "\nDelete MultiClusterObservability resource?", default=False
+                ):
                     self._delete_observability()
                 else:
                     logger.info("Skipped: Delete MultiClusterObservability")
@@ -108,7 +112,9 @@ class Decommission:
             mco_name = mco.get("metadata", {}).get("name")
 
             if self.dry_run:
-                logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name)
+                logger.info(
+                    "[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name
+                )
                 continue
 
             logger.info("Deleting MultiClusterObservability: %s", mco_name)
@@ -248,4 +254,7 @@ class Decommission:
                 DECOMMISSION_POD_TIMEOUT,
             )
 
-        logger.info("Decommission complete. Backup data in object storage remains " "available for the new hub.")
+        logger.info(
+            "Decommission complete. Backup data in object storage remains "
+            "available for the new hub."
+        )

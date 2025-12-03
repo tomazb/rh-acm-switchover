@@ -11,7 +11,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge, setup_logging
+from lib.utils import (
+    Phase,
+    StateManager,
+    dry_run_skip,
+    is_acm_version_ge,
+    setup_logging,
+)
 
 
 @pytest.fixture
