@@ -1,10 +1,16 @@
-"""Helper classes for ACM pre-flight validation."""
+"""Helper classes for ACM pre-flight validation.
+
+This module includes comprehensive input validation for context names,
+namespaces, and other external inputs to improve security and reliability.
+"""
 
 from __future__ import annotations
 
 import logging
 import shutil
 from typing import Any, Dict, List, Sequence, Tuple
+
+from lib.validation import InputValidator, ValidationError
 
 from lib.constants import (
     ACM_NAMESPACE,
@@ -140,18 +146,29 @@ class NamespaceValidator:
         namespace: str,
         hub_label: str,
     ) -> None:
-        if kube_client.namespace_exists(namespace):
-            self.reporter.add_result(
-                f"Namespace {namespace} ({hub_label})",
-                True,
-                "exists",
-                critical=True,
-            )
-        else:
+        try:
+            # Validate namespace name before checking existence
+            InputValidator.validate_kubernetes_namespace(namespace)
+
+            if kube_client.namespace_exists(namespace):
+                self.reporter.add_result(
+                    f"Namespace {namespace} ({hub_label})",
+                    True,
+                    "exists",
+                    critical=True,
+                )
+            else:
+                self.reporter.add_result(
+                    f"Namespace {namespace} ({hub_label})",
+                    False,
+                    "not found",
+                    critical=True,
+                )
+        except ValidationError as e:
             self.reporter.add_result(
                 f"Namespace {namespace} ({hub_label})",
                 False,
-                "not found",
+                f"invalid namespace name: {str(e)}",
                 critical=True,
             )
 
@@ -205,7 +222,7 @@ class VersionValidator:
                 critical=True,
             )
             return "unknown"
-        except Exception as exc:  # pragma: no cover - kube errors
+        except (RuntimeError, ValueError, Exception) as exc:  # pragma: no cover - kube errors
             self.reporter.add_result(
                 f"ACM version ({hub_name})",
                 False,
@@ -279,7 +296,7 @@ class HubComponentValidator:
                     f"{BACKUP_NAMESPACE} namespace not found",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 f"OADP operator ({hub_name})",
                 False,
@@ -289,6 +306,9 @@ class HubComponentValidator:
 
     def _check_dpa(self, kube_client: KubeClient, hub_name: str) -> None:
         try:
+            # Validate namespace before using it
+            InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
+
             dpas = kube_client.list_custom_resources(
                 group="oadp.openshift.io",
                 version="v1alpha1",
@@ -326,7 +346,7 @@ class HubComponentValidator:
                     "no DataProtectionApplication found",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 f"DataProtectionApplication ({hub_name})",
                 False,
@@ -395,7 +415,7 @@ class BackupValidator:
                     f"latest backup {backup_name} in unexpected state: {phase}",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 "Backup status",
                 False,
@@ -451,7 +471,7 @@ class ClusterDeploymentValidator:
                     f"all {len(cluster_deployments)} ClusterDeployments have preserveOnDelete=true",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             if "404" in str(exc):
                 self.reporter.add_result(
                     "ClusterDeployment preserveOnDelete",
@@ -476,6 +496,10 @@ class PassiveSyncValidator:
 
     def run(self, secondary: KubeClient) -> None:
         try:
+            # Validate namespace and resource name before using them
+            InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
+            InputValidator.validate_kubernetes_name(RESTORE_PASSIVE_SYNC_NAME, "restore")
+
             restore = secondary.get_custom_resource(
                 group="cluster.open-cluster-management.io",
                 version="v1beta1",
@@ -513,7 +537,7 @@ class PassiveSyncValidator:
                     f"passive sync in unexpected state: {phase} - {message}",
                     critical=True,
                 )
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 "Passive sync restore",
                 False,
@@ -529,6 +553,13 @@ class ObservabilityDetector:
         self.reporter = reporter
 
     def detect(self, primary: KubeClient, secondary: KubeClient) -> Tuple[bool, bool]:
+        try:
+            # Validate namespace before checking existence
+            InputValidator.validate_kubernetes_namespace(OBSERVABILITY_NAMESPACE)
+        except ValidationError:
+            # If observability namespace is invalid, it doesn't exist
+            return False, False
+
         primary_has = primary.namespace_exists(OBSERVABILITY_NAMESPACE)
         secondary_has = secondary.namespace_exists(OBSERVABILITY_NAMESPACE)
 
@@ -606,6 +637,18 @@ class ManagedClusterBackupValidator:
                 return
 
             # Find the latest managed-clusters backup
+            try:
+                # Validate namespace before using it
+                InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
+            except ValidationError as e:
+                self.reporter.add_result(
+                    "ManagedClusters in backup",
+                    False,
+                    f"invalid backup namespace: {str(e)}",
+                    critical=True,
+                )
+                return
+
             backups = primary.list_custom_resources(
                 group="velero.io",
                 version="v1",
@@ -674,7 +717,7 @@ class ManagedClusterBackupValidator:
                     critical=True,
                 )
 
-        except Exception as exc:
+        except (RuntimeError, ValueError, Exception) as exc:
             self.reporter.add_result(
                 "ManagedClusters in backup",
                 False,
@@ -693,6 +736,13 @@ class AutoImportStrategyValidator:
         self.reporter = reporter
 
     def _strategy_for(self, client: KubeClient) -> str:
+        try:
+            # Validate namespace and configmap name before using them
+            InputValidator.validate_kubernetes_namespace(MCE_NAMESPACE)
+            InputValidator.validate_kubernetes_name(IMPORT_CONTROLLER_CONFIGMAP, "configmap")
+        except ValidationError:
+            return "default"
+
         cm = client.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
         if not cm:
             return "default"
@@ -787,6 +837,13 @@ class ObservabilityPrereqValidator:
         self.reporter = reporter
 
     def run(self, secondary: KubeClient) -> None:
+        try:
+            # Validate namespace and secret name before checking existence
+            InputValidator.validate_kubernetes_namespace(OBSERVABILITY_NAMESPACE)
+            InputValidator.validate_kubernetes_name(THANOS_OBJECT_STORAGE_SECRET, "secret")
+        except ValidationError:
+            return
+
         if not secondary.namespace_exists(OBSERVABILITY_NAMESPACE):
             return
 
