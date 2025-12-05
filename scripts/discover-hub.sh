@@ -462,6 +462,7 @@ print_discovered_hubs() {
         local state="${HUB_STATES[$i]}"
         local mc_count="${HUB_MC_COUNTS[$i]}"
         local klusterlet_count="${HUB_KLUSTERLET_COUNTS[$i]:-}"
+        local version="${HUB_VERSIONS[$i]:-unknown}"
         
         # Color based on role
         local role_color="$NC"
@@ -482,6 +483,7 @@ print_discovered_hubs() {
         
         echo -e "  ${role_color}●${NC} ${BLUE}$ctx${NC}"
         echo -e "    Role:     ${role_color}$role${NC}"
+        echo -e "    Version:  $version"
         
         # Show cluster counts - include klusterlet count if we verified
         if [[ -n "$klusterlet_count" ]] && [[ "${#HUB_KLUSTERLET_COUNTS[@]}" -gt 0 ]]; then
