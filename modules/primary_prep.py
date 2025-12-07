@@ -4,9 +4,16 @@ Primary hub preparation module for ACM switchover.
 
 import logging
 
+from lib.constants import (
+    BACKUP_NAMESPACE,
+    OBSERVABILITY_NAMESPACE,
+    THANOS_COMPACTOR_LABEL_SELECTOR,
+    THANOS_COMPACTOR_STATEFULSET,
+)
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
+from kubernetes.client.rest import ApiException
 
 logger = logging.getLogger("acm_switchover")
 
@@ -85,7 +92,7 @@ class PrimaryPreparation:
             group="cluster.open-cluster-management.io",
             version="v1beta1",
             plural="backupschedules",
-            namespace="open-cluster-management-backup",
+            namespace=BACKUP_NAMESPACE,
         )
 
         if not backup_schedules:
@@ -112,7 +119,7 @@ class PrimaryPreparation:
                 plural="backupschedules",
                 name=bs_name,
                 patch=patch,
-                namespace="open-cluster-management-backup",
+                namespace=BACKUP_NAMESPACE,
             )
 
             logger.info("BackupSchedule %s paused successfully", bs_name)
@@ -128,7 +135,7 @@ class PrimaryPreparation:
                 version="v1beta1",
                 plural="backupschedules",
                 name=bs_name,
-                namespace="open-cluster-management-backup",
+                namespace=BACKUP_NAMESPACE,
             )
 
             logger.info("BackupSchedule %s deleted (saved to state)", bs_name)
@@ -183,8 +190,8 @@ class PrimaryPreparation:
 
         try:
             self.primary.scale_statefulset(
-                name="observability-thanos-compact",
-                namespace="open-cluster-management-observability",
+                name=THANOS_COMPACTOR_STATEFULSET,
+                namespace=OBSERVABILITY_NAMESPACE,
                 replicas=0,
             )
 
@@ -199,8 +206,8 @@ class PrimaryPreparation:
             time.sleep(5)
 
             pods = self.primary.get_pods(
-                namespace="open-cluster-management-observability",
-                label_selector="app=thanos-compact",
+                namespace=OBSERVABILITY_NAMESPACE,
+                label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
             )
 
             if pods:
@@ -210,10 +217,16 @@ class PrimaryPreparation:
             else:
                 logger.info("Thanos compactor scaled down successfully")
 
-        except (RuntimeError, ValueError, Exception) as e:
+        except (RuntimeError, ValueError) as e:
             logger.error("Failed to scale down Thanos compactor: %s", e)
+            raise
+        except ApiException as e:
             # Don't fail the whole preparation if this is optional
-            if "not found" in str(e).lower():
+            if e.status == 404:
                 logger.warning("Thanos compactor StatefulSet not found (may not exist)")
             else:
+                logger.error("Failed to scale down Thanos compactor: %s", e)
                 raise
+        except Exception as e:
+            logger.error("Failed to scale down Thanos compactor: %s", e)
+            raise
