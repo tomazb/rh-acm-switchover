@@ -104,6 +104,21 @@ OADP backups contain sensitive data including:
 - Use encryption for backup storage
 - Regularly audit backup access logs
 
+### TLS Hostname Verification
+
+By default, the tool enforces TLS hostname verification for all Kubernetes API connections. However, the `--disable-hostname-verification` flag is available for non-production environments with self-signed certificates.
+
+**Security Implications**:
+- Disabling hostname verification makes connections vulnerable to man-in-the-middle attacks
+- Each KubeClient instance has isolated TLS settings (does not affect other clients)
+- Hostname verification status is logged for audit purposes
+
+**Recommendations**:
+- **Never** use `--disable-hostname-verification` in production environments
+- Use properly signed certificates from trusted CAs
+- If self-signed certificates are required, add them to the system trust store instead
+- Review logs to ensure hostname verification is enabled for production operations
+
 ## Disclosure Policy
 
 When a security vulnerability is reported:
