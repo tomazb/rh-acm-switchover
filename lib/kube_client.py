@@ -76,7 +76,7 @@ class KubeClient:
         # Load config for specific context
         config.load_kube_config(context=context)
 
-        # Configure default timeouts
+        # Create per-instance configuration to avoid affecting other clients
         configuration = client.Configuration.get_default_copy()
         configuration.retries = 3
 
@@ -87,11 +87,11 @@ class KubeClient:
                 context or "default",
             )
 
-        client.Configuration.set_default(configuration)
-
-        self.core_v1 = client.CoreV1Api()
-        self.apps_v1 = client.AppsV1Api()
-        self.custom_api = client.CustomObjectsApi()
+        # Create API clients with this specific configuration
+        api_client = client.ApiClient(configuration)
+        self.core_v1 = client.CoreV1Api(api_client)
+        self.apps_v1 = client.AppsV1Api(api_client)
+        self.custom_api = client.CustomObjectsApi(api_client)
 
         # Set timeout on API clients
         self.core_v1.api_client.configuration.timeout = request_timeout
@@ -147,6 +147,34 @@ class KubeClient:
         return self.get_namespace(name) is not None
 
     @retry_api_call
+    def get_secret(self, namespace: str, name: str) -> Optional[Dict]:
+        """Get a secret by name.
+
+        Args:
+            namespace: Namespace name
+            name: Secret name
+
+        Returns:
+            Secret dict or None if not found
+
+        Raises:
+            ValidationError: If namespace or secret name is invalid
+        """
+        try:
+            # Validate inputs before making API call
+            InputValidator.validate_kubernetes_namespace(namespace)
+            InputValidator.validate_kubernetes_name(name, "secret")
+
+            secret = self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
+            return secret.to_dict()
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            if is_retryable_error(e):
+                raise
+            logger.error("Failed to get secret %s/%s: %s", namespace, name, e)
+            raise
+
     def secret_exists(self, namespace: str, name: str) -> bool:
         """Check if a secret exists.
 
@@ -160,20 +188,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or secret name is invalid
         """
-        try:
-            # Validate inputs before making API call
-            InputValidator.validate_kubernetes_namespace(namespace)
-            InputValidator.validate_kubernetes_name(name, "secret")
-
-            self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
-            return True
-        except ApiException as e:
-            if e.status == 404:
-                return False
-            if is_retryable_error(e):
-                raise
-            logger.error("Failed to read secret %s/%s: %s", namespace, name, e)
-            raise
+        return self.get_secret(namespace, name) is not None
 
     # =============================
     # ConfigMap helpers (core/v1)
