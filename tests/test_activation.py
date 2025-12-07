@@ -94,7 +94,11 @@ class TestSecondaryActivation:
                 and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME
             ):
                 result = {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                    "metadata": {
+                        "name": RESTORE_PASSIVE_SYNC_NAME,
+                        # resourceVersion changes after patch is applied
+                        "resourceVersion": "200" if patch_applied["value"] else "100",
+                    },
                     "status": {
                         "phase": "Enabled",
                         "lastMessage": "Synced",

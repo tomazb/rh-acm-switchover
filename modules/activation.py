@@ -20,6 +20,8 @@ from lib.constants import (
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_SYNC,
+    PATCH_VERIFY_MAX_RETRIES,
+    PATCH_VERIFY_RETRY_DELAY,
 )
 from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
@@ -280,49 +282,90 @@ class SecondaryActivation:
             logger.info("Patched %s to activate managed clusters", restore_name)
             return
 
-        # Verify the patch was actually applied by re-reading the resource
-        time.sleep(1)  # Brief pause to allow API to sync
-
-        restore_after = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
-            name=restore_name,
-            namespace=BACKUP_NAMESPACE,
+        # Get resourceVersion from before patch for comparison
+        before_resource_version = restore_before.get("metadata", {}).get(
+            "resourceVersion", ""
         )
 
-        if restore_after:
+        # Verify patch with retry loop and resourceVersion comparison
+        # This handles API sync delays more robustly than a single sleep
+        for attempt in range(1, PATCH_VERIFY_MAX_RETRIES + 1):
+            time.sleep(PATCH_VERIFY_RETRY_DELAY)
+
+            restore_after = self.secondary.get_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                name=restore_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+
+            if not restore_after:
+                logger.error("AFTER PATCH: %s not found after patching!", restore_name)
+                raise FatalError(f"{restore_name} disappeared after patching")
+
+            after_resource_version = restore_after.get("metadata", {}).get(
+                "resourceVersion", ""
+            )
             after_mc_backup = restore_after.get("spec", {}).get(
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>"
             )
-            logger.info(
-                "AFTER PATCH (re-read): %s = %s",
+
+            logger.debug(
+                "Patch verify attempt %d/%d: resourceVersion %s -> %s, %s = %s",
+                attempt,
+                PATCH_VERIFY_MAX_RETRIES,
+                before_resource_version,
+                after_resource_version,
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
                 after_mc_backup,
             )
-            logger.debug(
-                "AFTER PATCH (re-read): Full spec = %s", restore_after.get("spec", {})
-            )
 
-            if after_mc_backup != VELERO_BACKUP_LATEST:
-                logger.error(
-                    "PATCH VERIFICATION FAILED: Expected '%s', got '%s'",
-                    VELERO_BACKUP_LATEST,
-                    after_mc_backup,
+            # Check if resourceVersion changed (patch was processed)
+            if after_resource_version != before_resource_version:
+                if after_mc_backup == VELERO_BACKUP_LATEST:
+                    logger.info(
+                        "AFTER PATCH (re-read): %s = %s",
+                        SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
+                        after_mc_backup,
+                    )
+                    logger.info(
+                        "PATCH VERIFICATION SUCCESS: %s is now '%s' (resourceVersion: %s -> %s)",
+                        SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
+                        VELERO_BACKUP_LATEST,
+                        before_resource_version,
+                        after_resource_version,
+                    )
+                    return  # Success!
+                else:
+                    # resourceVersion changed but value is wrong
+                    logger.error(
+                        "PATCH VERIFICATION FAILED: Expected '%s', got '%s'",
+                        VELERO_BACKUP_LATEST,
+                        after_mc_backup,
+                    )
+                    raise FatalError(
+                        f"Patch verification failed: {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} is '{after_mc_backup}', "
+                        f"expected '{VELERO_BACKUP_LATEST}'. The patch may not have been applied correctly."
+                    )
+
+            # resourceVersion hasn't changed yet, continue retry loop
+            if attempt < PATCH_VERIFY_MAX_RETRIES:
+                logger.debug(
+                    "resourceVersion unchanged, retrying (%d/%d)...",
+                    attempt,
+                    PATCH_VERIFY_MAX_RETRIES,
                 )
-                raise FatalError(
-                    f"Patch verification failed: {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} is '{after_mc_backup}', "
-                    f"expected '{VELERO_BACKUP_LATEST}'. The patch may not have been applied correctly."
-                )
-            else:
-                logger.info(
-                    "PATCH VERIFICATION SUCCESS: %s is now '%s'",
-                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-                    VELERO_BACKUP_LATEST,
-                )
-        else:
-            logger.error("AFTER PATCH: %s not found after patching!", restore_name)
-            raise FatalError(f"{restore_name} disappeared after patching")
+
+        # Exhausted retries without seeing resourceVersion change
+        logger.error(
+            "PATCH VERIFICATION FAILED: resourceVersion did not change after %d attempts",
+            PATCH_VERIFY_MAX_RETRIES,
+        )
+        raise FatalError(
+            f"Patch verification failed: resourceVersion remained {before_resource_version} after "
+            f"{PATCH_VERIFY_MAX_RETRIES} retries. The API may not have processed the patch."
+        )
 
     def _maybe_set_auto_import_strategy(self) -> None:
         """If requested, set ImportAndSync on secondary for ACM 2.14+ with existing clusters."""
