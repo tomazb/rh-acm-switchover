@@ -33,6 +33,10 @@ RESTORE_PASSIVE_SYNC_NAME = "restore-acm-passive-sync"
 RESTORE_FULL_NAME = "restore-acm-full"
 BACKUP_SCHEDULE_DEFAULT_NAME = "acm-hub-backup"
 
+# Observability Components
+THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
+THANOS_COMPACTOR_LABEL_SELECTOR = "app=thanos-compact"
+
 # ACM Spec Field Names
 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME = "veleroManagedClustersBackupName"
 SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS = "syncRestoreWithNewBackups"
@@ -40,6 +44,10 @@ SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS = "syncRestoreWithNewBackups"
 # ACM Spec Field Values
 VELERO_BACKUP_LATEST = "latest"
 VELERO_BACKUP_SKIP = "skip"
+
+# Patch verification settings
+PATCH_VERIFY_MAX_RETRIES = 5
+PATCH_VERIFY_RETRY_DELAY = 1  # seconds between retries
 
 # Auto-import strategy (ACM 2.14+)
 IMPORT_CONTROLLER_CONFIGMAP = "import-controller-config"
