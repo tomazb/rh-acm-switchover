@@ -26,9 +26,10 @@ logger = logging.getLogger("acm_switchover")
 # Kubernetes resource name validation patterns
 # Based on Kubernetes naming conventions: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
 # DNS-1123 subdomain format: contains only lowercase alphanumeric characters, '-' or '.',
-# starts with a lowercase letter or digit, ends with an alphanumeric character
+# starts with a lowercase letter (first segment), subsequent segments can start with letter or digit,
+# ends with an alphanumeric character
 K8S_NAME_PATTERN: Pattern[str] = re.compile(
-    r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+    r'^[a-z]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
 )
 K8S_NAME_MAX_LENGTH = 253
 
@@ -310,12 +311,25 @@ class InputValidator:
                 f"Disallowed patterns: {', '.join(unsafe_chars)}."
             )
 
-        # Prevent absolute paths that could escape intended directories
-        if path.startswith('/') and not path.startswith('/tmp/') and not path.startswith('/var/'):
-            raise SecurityValidationError(
-                f"SECURITY: Absolute path '{path}' is not allowed for {field_name}. "
-                f"Use relative paths or paths within /tmp or /var directories to prevent filesystem escape attacks."
-            )
+        # Allow absolute paths in safe directories or workspace-relative paths
+        # Permit /tmp, /var, and absolute paths under current working directory or $HOME
+        if path.startswith('/'):
+            import os
+            safe_prefixes = ['/tmp/', '/var/']
+            # Allow paths under current working directory
+            cwd = os.getcwd()
+            if cwd:
+                safe_prefixes.append(cwd + '/')
+            # Allow paths under home directory
+            home = os.path.expanduser('~')
+            if home and home != '~':
+                safe_prefixes.append(home + '/')
+            
+            if not any(path.startswith(prefix) for prefix in safe_prefixes):
+                raise SecurityValidationError(
+                    f"SECURITY: Absolute path '{path}' is not allowed for {field_name}. "
+                    f"Use relative paths or paths within /tmp, /var, workspace root, or home directory to prevent filesystem escape attacks."
+                )
 
     @staticmethod
     def sanitize_context_identifier(value: str) -> str:
