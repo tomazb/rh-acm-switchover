@@ -10,6 +10,7 @@ from .exceptions import (
     ValidationError,
 )
 from .kube_client import KubeClient
+from .rbac_validator import RBACValidator, validate_rbac_permissions
 from .utils import (
     Phase,
     StateManager,
@@ -34,4 +35,6 @@ __all__ = [
     "is_acm_version_ge",
     "format_duration",
     "confirm_action",
+    "RBACValidator",
+    "validate_rbac_permissions",
 ]

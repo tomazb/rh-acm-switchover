@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### RBAC Model and Security
+- **Comprehensive RBAC model**: Complete role-based access control for least privilege access
+  - `docs/RBAC_REQUIREMENTS.md`: Detailed RBAC requirements documentation
+  - `docs/RBAC_DEPLOYMENT.md`: Step-by-step deployment guide
+  - `lib/rbac_validator.py`: RBAC permission validation module
+  - `check_rbac.py`: Standalone RBAC checker tool
+
+#### Deployment Options
+- **Kustomize integration**: Base and overlay configurations in `deploy/kustomize/`
+  - Base RBAC manifests for all environments
+  - Production and development overlays
+  - Comprehensive Kustomize README
+  
+- **Helm chart**: Full-featured Helm chart in `deploy/helm/acm-switchover-rbac/`
+  - Templated RBAC resources
+  - Configurable values for all settings
+  - Production-ready defaults
+  - Detailed Helm chart README
+
+- **ACM Policy enforcement**: Governance policies in `deploy/acm-policies/`
+  - Policy for RBAC validation and enforcement
+  - PlacementRule for multi-cluster distribution
+  - PlacementBinding for policy application
+  - ACM Policy README with examples
+
+#### Service Accounts
+- **Operator service account**: Full operational permissions for switchover execution
+- **Validator service account**: Read-only permissions for validation and dry-run
+
+#### CLI Enhancements
+- **`--skip-rbac-validation`**: Flag to skip RBAC validation during pre-flight checks
+- **RBAC pre-flight validation**: Automatic permission checks before switchover execution
+
+#### Documentation
+- Added RBAC section to main README
+- Updated prerequisites to include RBAC permissions
+- Added links to RBAC deployment guides
+
 #### KubeClient Improvements
 - **`get_secret()` method**: New method to retrieve Kubernetes secrets with proper validation, retry logic, and 404→None handling
 - **Per-instance TLS configuration**: Each KubeClient instance now uses its own Configuration object, preventing `--disable-hostname-verification` from affecting other clients process-wide

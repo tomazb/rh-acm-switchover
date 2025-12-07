@@ -152,6 +152,11 @@ Examples:
         help="Skip Observability-related steps even if detected",
     )
     parser.add_argument(
+        "--skip-rbac-validation",
+        action="store_true",
+        help="Skip RBAC permission validation during pre-flight checks",
+    )
+    parser.add_argument(
         "--non-interactive",
         action="store_true",
         help="Non-interactive mode for decommission (dangerous)",
@@ -247,7 +252,9 @@ def _run_phase_preflight(
 
     state.set_phase(Phase.PREFLIGHT)
 
-    validator = PreflightValidator(primary, secondary, args.method)
+    validator = PreflightValidator(
+        primary, secondary, args.method, skip_rbac_validation=args.skip_rbac_validation
+    )
     passed, config = cast(
         Tuple[bool, Dict[str, Any]],
         validator.validate_all(),

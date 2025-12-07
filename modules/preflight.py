@@ -6,6 +6,7 @@ import logging
 from typing import Dict, Tuple
 
 from lib.kube_client import KubeClient
+from lib.rbac_validator import validate_rbac_permissions
 
 from .preflight_validators import (
     BackupValidator,
@@ -33,10 +34,12 @@ class PreflightValidator:
         primary_client: KubeClient,
         secondary_client: KubeClient,
         method: str = "passive",
+        skip_rbac_validation: bool = False,
     ) -> None:
         self.primary = primary_client
         self.secondary = secondary_client
         self.method = method
+        self.skip_rbac_validation = skip_rbac_validation
 
         self.reporter = ValidationReporter()
         self.namespace_validator = NamespaceValidator(self.reporter)
@@ -58,6 +61,36 @@ class PreflightValidator:
         """Run all validation checks and return pass/fail with detected config."""
 
         logger.info("Starting pre-flight validation...")
+
+        # RBAC validation (unless explicitly skipped)
+        if not self.skip_rbac_validation:
+            try:
+                logger.info("Validating RBAC permissions...")
+                validate_rbac_permissions(
+                    primary_client=self.primary,
+                    secondary_client=self.secondary,
+                    include_decommission=False,  # Checked separately if needed
+                    skip_observability=False,  # Will be checked
+                )
+                self.reporter.record_check(
+                    "RBAC Permissions",
+                    True,
+                    "✓ All required RBAC permissions validated",
+                    severity="critical",
+                )
+            except Exception as e:
+                self.reporter.record_check(
+                    "RBAC Permissions",
+                    False,
+                    f"✗ RBAC validation failed: {str(e)}",
+                    severity="critical",
+                )
+                logger.warning(
+                    "RBAC validation failed. You can skip this check with --skip-rbac-validation "
+                    "if you're confident you have the required permissions."
+                )
+        else:
+            logger.info("RBAC validation skipped (--skip-rbac-validation specified)")
 
         self.tooling_validator.run()
         self.namespace_validator.run(self.primary, self.secondary)
