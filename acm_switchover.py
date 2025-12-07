@@ -180,11 +180,11 @@ def validate_args(args):
         InputValidator.validate_all_cli_args(args)
 
     except ValidationError as e:
-        print(f"Error: {str(e)}")
-        sys.exit(1)
+        logger.error("Validation error: %s", str(e))
+        sys.exit(EXIT_FAILURE)
     except Exception as e:
-        print(f"Unexpected validation error: {str(e)}")
-        sys.exit(1)
+        logger.error("Unexpected validation error: %s", str(e))
+        sys.exit(EXIT_FAILURE)
 
 
 def run_switchover(
