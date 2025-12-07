@@ -414,6 +414,28 @@ python acm_switchover.py \
   --state-file .state/hub-a-to-hub-b.json
 ```
 
+**Path Validation Rules**:
+- Relative paths are allowed and recommended (e.g., `.state/myfile.json`)
+- Absolute paths permitted under:
+  - `/tmp/` directory
+  - `/var/` directory  
+  - Current workspace directory
+  - User home directory
+- Path traversal (`../`) and command injection characters are blocked
+- See `docs/VALIDATION_RULES.md` for complete details
+
+**Examples**:
+```bash
+# Relative path (recommended)
+--state-file .state/custom-state.json
+
+# Absolute path under workspace
+--state-file /home/user/acm-project/.state/state.json
+
+# Temporary file
+--state-file /tmp/switchover-state.json
+```
+
 ## Best Practices
 
 ### 1. Always Validate First
