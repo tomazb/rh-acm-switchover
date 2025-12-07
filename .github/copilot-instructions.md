@@ -1,122 +1,104 @@
-<!-- CLAVIX:START -->
-# Clavix Workflows for GitHub Copilot
+# ACM Switchover - AI Agent Instructions
 
-These instructions enhance GitHub Copilot's understanding of Clavix Intelligence™ and workflow commands available in this project.
+## Project Overview
 
-## About Clavix
+This is a Python CLI tool for automating Red Hat Advanced Cluster Management (ACM) hub switchover. It orchestrates a phased workflow to migrate from a primary ACM hub to a secondary hub with idempotent execution and comprehensive validation.
 
-Clavix provides **Clavix Intelligence™** that helps improve prompts, generate PRDs, and manage implementation workflows. It automatically detects intent and applies quality-based optimization patterns without requiring users to learn any specific framework.
+## Architecture
 
-## Available Commands
+**Entry Point**: `acm_switchover.py` - Main orchestrator using `Phase` enum and `StateManager`
 
-When working with this project, you can use the following Clavix commands:
+**Core Libraries** (`lib/`):
+- `kube_client.py` - Kubernetes API wrapper with `@retry_api_call` decorator, validation, dry-run support
+- `utils.py` - `StateManager` for idempotent state tracking, `Phase` enum, `@dry_run_skip` decorator
+- `constants.py` - Centralized namespaces, timeouts, ACM spec field names
+- `exceptions.py` - Hierarchy: `SwitchoverError` → `TransientError`/`FatalError` → `ValidationError`/`ConfigurationError`
+- `validation.py` - Input validation with `InputValidator` class and `SecurityValidationError`
 
-### Prompt Improvement
-- `clavix fast "<prompt>"` - Quick quality assessment (5 dimensions) with improved prompt output. CLI auto-saves; slash commands require manual saving per template instructions.
-- `clavix deep "<prompt>"` - Comprehensive analysis with alternatives, edge cases, and validation checklists. CLI auto-saves; slash commands require manual saving per template instructions.
+**Workflow Modules** (`modules/`):
+- `preflight.py` / `preflight_validators.py` - Pre-flight validation checks
+- `primary_prep.py` - Pause backups, disable auto-import, scale down Thanos
+- `activation.py` - Patch restore resource to activate managed clusters
+- `post_activation.py` - Verify cluster connections, fix klusterlet agents
+- `finalization.py` - Set up old hub as secondary or prepare for decommission
+- `decommission.py` - Remove ACM from old hub
 
-### Strategic Planning
-- `clavix prd` - Interactive PRD generation through Socratic questioning
-- `clavix plan` - Transform PRDs into phase-based implementation tasks
-- `clavix implement [--commit-strategy=<type>]` - Execute tasks with progress tracking (git: per-task, per-5-tasks, per-phase, none [default])
-- `clavix task-complete <taskId>` - Mark task as completed with validation and optional git commit
+## Phase Flow
 
-### Conversational Workflows
-- `clavix start` - Begin conversational session for requirements gathering
-- `clavix summarize [session-id]` - Extract mini-PRD and optimized prompts from sessions
+The switchover executes phases sequentially, with state tracking for resume capability:
 
-### Project Management
-- `clavix list` - List sessions and output projects
-- `clavix show [session-id]` - Inspect session or project details
-- `clavix archive [project]` - Archive or restore completed projects
-- `clavix update` - Refresh Clavix documentation and commands
+```
+INIT → PREFLIGHT → PRIMARY_PREP → ACTIVATION → POST_ACTIVATION → FINALIZATION → COMPLETED
+```
 
-### Prompt Lifecycle Management (v2.7+)
-Clavix now automatically saves optimized prompts from fast/deep commands for later execution:
+| Phase | Module | Key Actions |
+|-------|--------|-------------|
+| `PREFLIGHT` | `preflight.py` | Validate both hubs, check ACM versions, verify backups |
+| `PRIMARY_PREP` | `primary_prep.py` | Pause BackupSchedule, add disable-auto-import annotations, scale Thanos |
+| `ACTIVATION` | `activation.py` | Patch restore with `veleroManagedClustersBackupName: latest` |
+| `POST_ACTIVATION` | `post_activation.py` | Wait for ManagedClusters to connect, verify klusterlet agents |
+| `FINALIZATION` | `finalization.py` | Configure old hub as secondary or prepare for decommission |
 
-- `clavix execute [--latest]` - Execute saved prompts from fast/deep optimization
-  - Interactive selection from saved prompts
-  - `--latest` flag for most recent prompt
-  - `--fast` / `--deep` filters with `--latest`
-  - `--id <prompt-id>` for specific prompt execution
+Each phase handler checks `state.get_current_phase()` before executing. Failed phases set `Phase.FAILED`.
 
-- `clavix prompts list` - View all saved prompts with lifecycle status
-  - Status indicators: NEW, EXECUTED, OLD (>7 days), STALE (>30 days)
-  - Storage statistics dashboard
-  - Age warnings and hygiene recommendations
+## Key Patterns
 
-- `clavix prompts clear` - Manage prompt cleanup with safety checks
-  - `--executed` - Clear executed prompts only (safe cleanup)
-  - `--stale` - Clear prompts >30 days old
-  - `--fast` - Clear fast mode prompts
-  - `--deep` - Clear deep mode prompts
-  - `--all` - Clear all prompts (with confirmation)
-  - `--force` - Skip confirmation prompts
+### Idempotent Step Execution
+```python
+if not self.state.is_step_completed("step_name"):
+    self._do_step()
+    self.state.mark_step_completed("step_name")
+```
 
-**Prompt Lifecycle Workflow:**
-1. Optimize: `clavix fast/deep "<prompt>"` → CLI auto-saves; slash commands require manual saving
-2. Review: `clavix prompts list` → View all saved prompts with status
-3. Execute: `clavix execute --latest` → Implement when ready
-4. Cleanup: `clavix prompts clear --executed` → Remove completed prompts
+### Dry-Run Decorator
+```python
+@dry_run_skip(message="Would scale deployment", return_value={})
+def scale_deployment(self, name, namespace, replicas):
+    # Only executes when self.dry_run is False
+```
 
-## Workflow Patterns
+### Exception Hierarchy
+- Use `SwitchoverError` for domain-specific workflow errors
+- Use `FatalError` for non-recoverable errors (e.g., missing resources)
+- Wrapper methods (e.g., `secret_exists`) should NOT have `@retry_api_call` if they call methods that already have it
 
-### Quick Prompt Improvement
-1. User provides a rough prompt
-2. Run `clavix fast "<prompt>"` for quick quality-based improvements
-3. Use the optimized prompt for better results
+### Constants Usage
+Import from `lib/constants.py` - never hard-code namespaces (`BACKUP_NAMESPACE`, `OBSERVABILITY_NAMESPACE`) or resource names
 
-### Comprehensive Prompt Analysis
-1. User has a complex requirement
-2. Run `clavix deep "<prompt>"` for comprehensive analysis
-3. Review alternative variations and validation checklists
-4. Select the best approach
+### KubeClient Pattern
+- Methods return `Optional[Dict]` for get operations (None = not found)
+- Use `e.status == 404` to check ApiException, not string matching
+- Per-instance TLS configuration to avoid global side effects
 
-### Strategic Project Planning
-1. Run `clavix prd` to generate a comprehensive PRD through guided questions
-2. Run `clavix plan` to break down the PRD into implementation tasks
-3. Run `clavix implement` to execute tasks systematically
-4. Archive completed work with `clavix archive`
+## Testing
 
-### Conversational Requirements Gathering
-1. Run `clavix start` to begin capturing a conversation
-2. Discuss requirements naturally with the user
-3. Run `clavix summarize` to extract structured requirements and prompts
+```bash
+# Run all tests with coverage
+./run_tests.sh
 
-## Quality Dimensions
+# Quick pytest run
+pytest tests/ -v
 
-When analyzing or improving prompts, consider these 5 quality dimensions:
+# Run specific test file
+pytest tests/test_kube_client.py -v
 
-- **Clarity**: Is the objective clear and unambiguous?
-- **Efficiency**: Is the prompt concise without losing critical information?
-- **Structure**: Is information organized logically (context → requirements → constraints → output)?
-- **Completeness**: Are all necessary specifications provided (persona, format, tone, success criteria)?
-- **Actionability**: Can AI take immediate action on this prompt?
+# Run with markers
+pytest -m unit tests/      # Unit tests only
+pytest -m integration tests/  # Integration tests
+```
 
-## Output Locations
+Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock responses should include `resourceVersion` in metadata for patch verification tests.
 
-Clavix stores artifacts in the `.clavix/` directory:
-- `.clavix/outputs/<project>/` - PRDs, tasks, and optimized prompts
-- `.clavix/sessions/` - Captured conversational sessions
-- `.clavix/templates/` - Custom template overrides
-- `.clavix/config.json` - Project configuration
+## Common Tasks
 
-## Best Practices
+**Adding a new constant**: Add to `lib/constants.py`, import where needed
+**Adding a KubeClient method**: Add `@retry_api_call` for API calls, return `Optional[Dict]` for gets, handle 404→None
+**New workflow step**: Follow idempotent pattern with `state.is_step_completed()` / `mark_step_completed()`
+**New validation**: Add to `lib/validation.py` with `InputValidator` static method
 
-1. **Start with the right mode**: Use fast mode for simple prompts, deep mode for complex requirements, and PRD mode for strategic planning
-2. **Focus on quality**: Always consider the 5 quality dimensions (Clarity, Efficiency, Structure, Completeness, Actionability) when crafting prompts
-3. **Document requirements**: Use PRD workflow for significant features to ensure clear requirements
-4. **Track progress**: Use implement command to maintain structured task execution
-5. **Archive completed work**: Keep project organized by archiving finished projects
+## Files to Know
 
-## Integration with GitHub Copilot
-
-When users ask for help with prompts or requirements:
-1. Suggest running the appropriate Clavix command
-2. Explain the expected output and benefits
-3. Help interpret Clavix-generated outputs
-4. Apply quality assessment principles in your responses
-
-This integration makes GitHub Copilot aware of Clavix workflows and can suggest using Clavix commands when appropriate.
-
-<!-- CLAVIX:END -->
+- `docs/CHANGELOG.md` - Update `[Unreleased]` section for changes
+- `docs/ARCHITECTURE.md` - Design decisions and module descriptions
+- `lib/constants.py` - All magic strings centralized here
+- `setup.cfg` - pytest, flake8, mypy configuration
