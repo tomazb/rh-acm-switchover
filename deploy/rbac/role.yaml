@@ -1,0 +1,181 @@
+---
+# Role for ACM Switchover Operator in open-cluster-management-backup namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acm-switchover-operator
+  namespace: open-cluster-management-backup
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+rules:
+  # Core API - ConfigMaps for state management
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  
+  # Core API - Secrets (read-only for Thanos config)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  
+  # ACM Backup/Restore - BackupSchedules
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["backupschedules"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  
+  # ACM Backup/Restore - Restores
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["restores"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  
+  # Velero - Backups (read-only for validation)
+  - apiGroups: ["velero.io"]
+    resources: ["backups"]
+    verbs: ["get", "list"]
+  
+  # Velero - Restores (read-only for monitoring)
+  - apiGroups: ["velero.io"]
+    resources: ["restores"]
+    verbs: ["get", "list"]
+  
+  # OADP - DataProtectionApplications (read-only for validation)
+  - apiGroups: ["oadp.openshift.io"]
+    resources: ["dataprotectionapplications"]
+    verbs: ["get", "list"]
+
+---
+# Role for ACM Switchover Operator in open-cluster-management-observability namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acm-switchover-operator
+  namespace: open-cluster-management-observability
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+rules:
+  # Core API - Pods (read-only for health checks)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  
+  # Core API - Secrets (read-only for Thanos config)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  
+  # Apps API - Deployments (patch for restart)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+  
+  # Apps API - StatefulSets (patch for scaling)
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "patch"]
+
+---
+# Role for ACM Switchover Operator in multicluster-engine namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acm-switchover-operator
+  namespace: multicluster-engine
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+rules:
+  # Core API - ConfigMaps (for auto-import strategy)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+
+---
+# Role for ACM Switchover Validator in open-cluster-management-backup namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acm-switchover-validator
+  namespace: open-cluster-management-backup
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+rules:
+  # Core API - ConfigMaps (read-only)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  
+  # ACM Backup/Restore - BackupSchedules (read-only)
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["backupschedules"]
+    verbs: ["get", "list"]
+  
+  # ACM Backup/Restore - Restores (read-only)
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["restores"]
+    verbs: ["get", "list"]
+  
+  # Velero - Backups (read-only)
+  - apiGroups: ["velero.io"]
+    resources: ["backups"]
+    verbs: ["get", "list"]
+  
+  # Velero - Restores (read-only)
+  - apiGroups: ["velero.io"]
+    resources: ["restores"]
+    verbs: ["get", "list"]
+  
+  # OADP - DataProtectionApplications (read-only)
+  - apiGroups: ["oadp.openshift.io"]
+    resources: ["dataprotectionapplications"]
+    verbs: ["get", "list"]
+
+---
+# Role for ACM Switchover Validator in open-cluster-management-observability namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acm-switchover-validator
+  namespace: open-cluster-management-observability
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+rules:
+  # Core API - Pods (read-only)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  
+  # Apps API - Deployments (read-only)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  
+  # Apps API - StatefulSets (read-only)
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list"]
+
+---
+# Role for ACM Switchover Validator in multicluster-engine namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acm-switchover-validator
+  namespace: multicluster-engine
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+rules:
+  # Core API - ConfigMaps (read-only)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]

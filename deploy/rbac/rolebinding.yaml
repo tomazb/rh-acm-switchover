@@ -1,0 +1,119 @@
+---
+# RoleBinding for ACM Switchover Operator in open-cluster-management-backup
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acm-switchover-operator
+  namespace: open-cluster-management-backup
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acm-switchover-operator
+subjects:
+  - kind: ServiceAccount
+    name: acm-switchover-operator
+    namespace: acm-switchover
+
+---
+# RoleBinding for ACM Switchover Operator in open-cluster-management-observability
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acm-switchover-operator
+  namespace: open-cluster-management-observability
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acm-switchover-operator
+subjects:
+  - kind: ServiceAccount
+    name: acm-switchover-operator
+    namespace: acm-switchover
+
+---
+# RoleBinding for ACM Switchover Operator in multicluster-engine
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acm-switchover-operator
+  namespace: multicluster-engine
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acm-switchover-operator
+subjects:
+  - kind: ServiceAccount
+    name: acm-switchover-operator
+    namespace: acm-switchover
+
+---
+# RoleBinding for ACM Switchover Validator in open-cluster-management-backup (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acm-switchover-validator
+  namespace: open-cluster-management-backup
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acm-switchover-validator
+subjects:
+  - kind: ServiceAccount
+    name: acm-switchover-validator
+    namespace: acm-switchover
+
+---
+# RoleBinding for ACM Switchover Validator in open-cluster-management-observability (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acm-switchover-validator
+  namespace: open-cluster-management-observability
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acm-switchover-validator
+subjects:
+  - kind: ServiceAccount
+    name: acm-switchover-validator
+    namespace: acm-switchover
+
+---
+# RoleBinding for ACM Switchover Validator in multicluster-engine (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acm-switchover-validator
+  namespace: multicluster-engine
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acm-switchover-validator
+subjects:
+  - kind: ServiceAccount
+    name: acm-switchover-validator
+    namespace: acm-switchover

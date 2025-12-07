@@ -1,0 +1,73 @@
+---
+# ClusterRole for ACM Switchover Operator
+# Provides full operational permissions for switchover execution
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: acm-switchover-operator
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+rules:
+  # Core API - Namespace validation
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+  
+  # ACM Cluster Management - ManagedClusters
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["get", "list", "patch", "delete"]
+  
+  # Hive - ClusterDeployment validation
+  - apiGroups: ["hive.openshift.io"]
+    resources: ["clusterdeployments"]
+    verbs: ["get", "list"]
+  
+  # ACM Operator - Hub detection and decommission
+  - apiGroups: ["operator.open-cluster-management.io"]
+    resources: ["multiclusterhubs"]
+    verbs: ["get", "list", "delete"]
+  
+  # Observability - Auto-detection and decommission
+  - apiGroups: ["observability.open-cluster-management.io"]
+    resources: ["multiclusterobservabilities"]
+    verbs: ["get", "list", "delete"]
+
+---
+# ClusterRole for ACM Switchover Validator (Read-Only)
+# Provides read-only permissions for validation and dry-run operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: acm-switchover-validator
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+rules:
+  # Core API - Namespace validation
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+  
+  # ACM Cluster Management - ManagedClusters (read-only)
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["get", "list"]
+  
+  # Hive - ClusterDeployment validation
+  - apiGroups: ["hive.openshift.io"]
+    resources: ["clusterdeployments"]
+    verbs: ["get", "list"]
+  
+  # ACM Operator - Hub detection
+  - apiGroups: ["operator.open-cluster-management.io"]
+    resources: ["multiclusterhubs"]
+    verbs: ["get", "list"]
+  
+  # Observability - Auto-detection
+  - apiGroups: ["observability.open-cluster-management.io"]
+    resources: ["multiclusterobservabilities"]
+    verbs: ["get", "list"]

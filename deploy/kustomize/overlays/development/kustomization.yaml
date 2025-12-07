@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: acm-switchover-rbac-development
+
+bases:
+  - ../../base
+
+# Development-specific labels
+commonLabels:
+  environment: development
+  
+# Development-specific annotations
+commonAnnotations:
+  environment: development
+  deployment.date: "2024-12-07"
+
+# Development may have additional debugging permissions
+patches:
+  - patch: |-
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: acm-switchover-operator
+        annotations:
+          description: "Development service account for ACM switchover operations"
+    target:
+      kind: ServiceAccount
+      name: acm-switchover-operator
+  
+  - patch: |-
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: acm-switchover-validator
+        annotations:
+          description: "Development service account for ACM validation (read-only)"
+    target:
+      kind: ServiceAccount
+      name: acm-switchover-validator

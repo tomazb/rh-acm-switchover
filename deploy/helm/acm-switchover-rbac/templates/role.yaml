@@ -1,0 +1,121 @@
+{{- if and .Values.rbac.enabled .Values.role.create -}}
+---
+# Role for ACM Switchover Operator in backup namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.clusterRole.operator.name }}
+  namespace: {{ .Values.role.namespaces.backup }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["backupschedules", "restores"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: ["velero.io"]
+    resources: ["backups", "restores"]
+    verbs: ["get", "list"]
+  - apiGroups: ["oadp.openshift.io"]
+    resources: ["dataprotectionapplications"]
+    verbs: ["get", "list"]
+
+---
+# Role for ACM Switchover Operator in observability namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.clusterRole.operator.name }}
+  namespace: {{ .Values.role.namespaces.observability }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "patch"]
+
+---
+# Role for ACM Switchover Operator in MCE namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.clusterRole.operator.name }}
+  namespace: {{ .Values.role.namespaces.mce }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+
+---
+# Role for ACM Switchover Validator in backup namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.clusterRole.validator.name }}
+  namespace: {{ .Values.role.namespaces.backup }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["backupschedules", "restores"]
+    verbs: ["get", "list"]
+  - apiGroups: ["velero.io"]
+    resources: ["backups", "restores"]
+    verbs: ["get", "list"]
+  - apiGroups: ["oadp.openshift.io"]
+    resources: ["dataprotectionapplications"]
+    verbs: ["get", "list"]
+
+---
+# Role for ACM Switchover Validator in observability namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.clusterRole.validator.name }}
+  namespace: {{ .Values.role.namespaces.observability }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list"]
+
+---
+# Role for ACM Switchover Validator in MCE namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.clusterRole.validator.name }}
+  namespace: {{ .Values.role.namespaces.mce }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+{{- end }}

@@ -1,0 +1,96 @@
+# Default values for acm-switchover-rbac Helm chart
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Namespace where service accounts will be created
+namespace: acm-switchover
+
+# ServiceAccount configuration
+serviceAccount:
+  # Create service accounts
+  create: true
+  
+  operator:
+    # Name of the operator service account
+    name: acm-switchover-operator
+    # Annotations for operator service account
+    annotations: {}
+    # Labels for operator service account
+    labels: {}
+  
+  validator:
+    # Name of the validator service account
+    name: acm-switchover-validator
+    # Annotations for validator service account
+    annotations: {}
+    # Labels for validator service account
+    labels: {}
+
+# ClusterRole configuration
+clusterRole:
+  # Create cluster roles
+  create: true
+  
+  operator:
+    # Name of the operator cluster role
+    name: acm-switchover-operator
+  
+  validator:
+    # Name of the validator cluster role
+    name: acm-switchover-validator
+
+# ClusterRoleBinding configuration
+clusterRoleBinding:
+  # Create cluster role bindings
+  create: true
+
+# Namespace-scoped Role configuration
+role:
+  # Create namespace-scoped roles
+  create: true
+  
+  # ACM namespaces where roles should be created
+  # Adjust these if your ACM installation uses custom namespaces
+  namespaces:
+    backup: open-cluster-management-backup
+    observability: open-cluster-management-observability
+    mce: multicluster-engine
+
+# RoleBinding configuration
+roleBinding:
+  # Create role bindings
+  create: true
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: acm-switchover
+  app.kubernetes.io/part-of: acm-switchover
+  app.kubernetes.io/managed-by: helm
+
+# Common annotations applied to all resources
+commonAnnotations: {}
+
+# Environment-specific settings
+environment: production
+
+# RBAC security settings
+rbac:
+  # Whether to create RBAC resources
+  enabled: true
+  
+  # Additional custom rules for operator ClusterRole
+  # Example:
+  # customOperatorRules:
+  #   - apiGroups: ["custom.api.group"]
+  #     resources: ["customresources"]
+  #     verbs: ["get", "list"]
+  customOperatorRules: []
+  
+  # Additional custom rules for validator ClusterRole
+  customValidatorRules: []
+  
+  # Additional custom namespaces for Role creation
+  # Example:
+  # customNamespaces:
+  #   - custom-acm-namespace
+  customNamespaces: []
