@@ -257,6 +257,34 @@ class TestKubeClient:
 
         assert result is False
 
+    def test_get_secret(self, kube_client, mock_k8s_apis):
+        """Test getting a secret successfully."""
+        mock_secret = MagicMock()
+        mock_secret.to_dict.return_value = {
+            "metadata": {"name": "test-secret", "namespace": "test-ns"},
+            "data": {"key": "dmFsdWU="}
+        }
+        mock_k8s_apis["core_api"].read_namespaced_secret.return_value = mock_secret
+        
+        result = kube_client.get_secret("test-ns", "test-secret")
+        
+        assert result is not None
+        assert result["metadata"]["name"] == "test-secret"
+        assert result["data"]["key"] == "dmFsdWU="
+        mock_k8s_apis["core_api"].read_namespaced_secret.assert_called_once_with(
+            name="test-secret", namespace="test-ns"
+        )
+
+    def test_get_secret_not_found(self, kube_client, mock_k8s_apis):
+        """Test getting a non-existent secret returns None."""
+        mock_k8s_apis["core_api"].read_namespaced_secret.side_effect = ApiException(
+            status=404
+        )
+        
+        result = kube_client.get_secret("test-ns", "nonexistent")
+        
+        assert result is None
+
     def test_secret_exists(self, kube_client, mock_k8s_apis):
         """Test checking if secret exists."""
         mock_k8s_apis["core_api"].read_namespaced_secret.return_value = MagicMock()
