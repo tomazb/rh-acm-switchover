@@ -158,7 +158,11 @@ The ACM switchover automation tool implements comprehensive input validation to:
 **Security Rules**:
 - **Path Traversal Prevention**: Blocks `..` as a path component (prevents `../malicious`)
 - **Command Injection Prevention**: Blocks `~`, `$`, `{`, `}`, `|`, `&`, `;`, `<`, `>`, backtick characters
-- **Absolute Path Restriction**: Only allows `/tmp/` and `/var/` prefixes for absolute paths
+- **Absolute Path Allowance**: Permits absolute paths under:
+  - `/tmp/` - Temporary files directory
+  - `/var/` - Variable data directory
+  - Current working directory (workspace root)
+  - User home directory (`$HOME`)
 - **Empty Path Prevention**: Rejects empty or whitespace-only paths
 
 **Valid Examples**:
@@ -167,15 +171,19 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `relative/path/to/file`
 - `/tmp/valid-file`
 - `/var/log/app.log`
+- `/home/user/workspace/config.json` (under home)
+- `/path/to/workspace/data.json` (under cwd)
 - `my_file_123.txt`
 
 **Invalid Examples**:
 - `../malicious` (path traversal)
-- `~/home/user` (home directory)
+- `~/home/user` (tilde expansion blocked)
 - `$HOME/file` (environment variable)
 - `file|command` (pipe)
-- `/etc/passwd` (absolute path outside allowed)
-- `.hidden/file` (hidden file)
+- `/etc/passwd` (absolute path outside allowed directories)
+- `.hidden/file` (hidden file - blocked by dot check)
+
+**Note**: Relative paths are always permitted and are resolved relative to the current working directory.
 
 ### 7. String Validation
 
