@@ -4,7 +4,9 @@ Post-activation verification module for ACM switchover.
 
 import base64
 import logging
+import os
 import re
+import yaml
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -195,7 +197,7 @@ class PostActivationVerification:
         )
 
         if not success:
-            raise Exception(
+            raise SwitchoverError(
                 "Timeout waiting for ManagedClusters to connect. "
                 f"{latest_status['available']}/{latest_status['total']} available, "
                 f"{latest_status['joined']}/{latest_status['total']} joined"
@@ -256,7 +258,12 @@ class PostActivationVerification:
         """Verify all Observability pods are running and ready."""
         logger.info("Verifying Observability pod health...")
 
-        pods = self.secondary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
+        # Use label selector to filter for app.kubernetes.io/part-of=observability
+        # This reduces the data volume by focusing on observability components
+        pods = self.secondary.get_pods(
+            namespace=OBSERVABILITY_NAMESPACE,
+            label_selector="app.kubernetes.io/part-of=observability"
+        )
 
         if not pods:
             logger.warning("No Observability pods found")
@@ -407,7 +414,7 @@ class PostActivationVerification:
                 flagged.append(mc_name or "unknown")
 
         if flagged:
-            raise Exception(
+            raise SwitchoverError(
                 "disable-auto-import annotation still present on: " + ", ".join(flagged)
             )
 
@@ -554,6 +561,11 @@ class PostActivationVerification:
         3. Re-applying the import manifest (which recreates the bootstrap secret)
         4. Restarting the klusterlet deployment
 
+        Note: This method intentionally uses raw kubernetes client APIs instead of
+        KubeClient because it connects to managed clusters (not the hub) using
+        dynamically-loaded kubeconfig contexts. KubeClient is designed for persistent
+        hub connections with specific retry/validation behavior that doesn't apply here.
+
         Args:
             cluster_name: Name of the ManagedCluster
             context_name: Kubeconfig context to use for connecting to the cluster
@@ -694,14 +706,10 @@ class PostActivationVerification:
     def _load_kubeconfig_data(self) -> dict:
         """Load and return the kubeconfig data as a dictionary."""
         try:
-            import os
-
             kubeconfig_path = os.environ.get(
                 "KUBECONFIG", os.path.expanduser("~/.kube/config")
             )
             with open(kubeconfig_path) as f:
-                import yaml
-
                 return yaml.safe_load(f) or {}
         except (OSError, yaml.YAMLError, Exception) as e:
             logger.debug("Error loading kubeconfig: %s", e)
@@ -773,6 +781,10 @@ class PostActivationVerification:
     ) -> str:
         """
         Check if a managed cluster's klusterlet is connected to the expected hub.
+
+        Note: This method intentionally uses raw kubernetes client APIs instead of
+        KubeClient because it connects to managed clusters (not the hub) using
+        dynamically-loaded kubeconfig contexts.
 
         Args:
             context_name: Kubeconfig context name to use for connecting

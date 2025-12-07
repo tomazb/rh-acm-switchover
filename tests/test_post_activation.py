@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -427,6 +428,71 @@ class TestPostActivationVerification:
 
         with pytest.raises(Exception):
             post_verify_with_obs._verify_disable_auto_import_cleared()
+
+
+@pytest.mark.unit
+class TestKlusterletReconnect:
+    """Test cases for force klusterlet reconnect functionality."""
+
+    def test_force_klusterlet_reconnect_success(self, mock_secondary_client, mock_state_manager):
+        """Test successful klusterlet reconnect with import secret."""
+        verify = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+        )
+
+        # Mock get_secret to return valid import secret with bootstrap secret
+        import base64
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        # Mock Kubernetes client methods
+        with patch('modules.post_activation.config.load_kube_config'):
+            with patch('modules.post_activation.client.CoreV1Api') as mock_core_api:
+                with patch('modules.post_activation.client.AppsV1Api') as mock_apps_api:
+                    mock_core_instance = mock_core_api.return_value
+                    mock_apps_instance = mock_apps_api.return_value
+                    
+                    # Mock the delete to raise 404 (not found)
+                    mock_core_instance.delete_namespaced_secret.side_effect = ApiException(status=404)
+                    # Mock the create
+                    mock_core_instance.create_namespaced_secret.return_value = None
+                    # Mock the deployment patch
+                    mock_apps_instance.patch_namespaced_deployment.return_value = None
+                    
+                    result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+                    
+                    assert result is True
+                    mock_secondary_client.get_secret.assert_called_once_with(
+                        namespace="test-cluster",
+                        name="test-cluster-import"
+                    )
+
+    def test_force_klusterlet_reconnect_no_secret(self, mock_secondary_client, mock_state_manager):
+        """Test klusterlet reconnect when import secret not found."""
+        verify = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+        )
+
+        # Mock get_secret to return None (not found)
+        mock_secondary_client.get_secret.return_value = None
+
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+        
+        assert result is False
 
 
 @pytest.mark.integration
