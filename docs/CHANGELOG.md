@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### KubeClient Improvements
+- **`get_secret()` method**: New method to retrieve Kubernetes secrets with proper validation, retry logic, and 404→None handling
+- **Per-instance TLS configuration**: Each KubeClient instance now uses its own Configuration object, preventing `--disable-hostname-verification` from affecting other clients process-wide
+
+#### Patch Verification Improvements
+- **Retry loop with resourceVersion**: Patch verification now uses a bounded retry loop (5 attempts) instead of a single sleep, comparing `resourceVersion` to detect when the API has processed the patch
+- **Better error messages**: Patch verification errors now include resourceVersion information for debugging
+
+#### Test Coverage
+- Added unit tests for `get_secret()` and `get_secret_not_found` scenarios
+- Added tests for `_force_klusterlet_reconnect` functionality
+
+### Fixed
+
+#### Security & Robustness
+- **Nested retry prevention**: Removed `@retry_api_call` decorator from `secret_exists()` to avoid 5×5=25 retry attempts (it calls `get_secret()` which already has retries)
+- **Explicit boolean check in dry-run decorator**: Changed from truthy check (`if obj:`) to explicit (`if obj is True:`) to prevent skipping execution when dot-path resolves to a truthy non-boolean object
+- **YAML import safety**: Moved `import yaml` to module scope in `post_activation.py` to prevent `NameError` if import fails inside try block
+- **Missing ApiException import**: Added missing import in `primary_prep.py` that would cause `NameError` at runtime
+- **Consistent error logging**: Replaced `print()` with `logger.error()` in validation error handling for proper JSON logging support
+
+#### Error Handling
+- **Proper ApiException checks**: Changed from substring matching (`"not found" in str(e)`) to explicit status code checks (`e.status == 404`) in `primary_prep.py`
+- **Domain-specific exceptions**: Replaced generic `Exception` raises with `SwitchoverError` in `post_activation.py` for better error taxonomy
+
+#### Performance
+- **Label selectors for pod queries**: Added `label_selector="app.kubernetes.io/part-of=observability"` when querying observability pods to reduce data volume
+
+### Changed
+
+#### Constants Centralization
+- Added `THANOS_COMPACTOR_STATEFULSET` and `THANOS_COMPACTOR_LABEL_SELECTOR` to `lib/constants.py`
+- Added `PATCH_VERIFY_MAX_RETRIES` and `PATCH_VERIFY_RETRY_DELAY` constants
+- Replaced hard-coded namespace/name strings in `primary_prep.py` with constants
+
+#### Path Validation
+- Expanded allowed absolute paths to include current working directory and `$HOME` in addition to `/tmp` and `/var`
+- Updated `K8S_NAME_PATTERN` to require first segment start with a letter (stricter DNS-1123 compliance)
+
+### Documentation
+
+- **TLS hostname verification**: Added dedicated section in `SECURITY.md` documenting security implications and recommendations for `--disable-hostname-verification`
+- **Path validation rules**: Updated `docs/VALIDATION_RULES.md` with expanded path allowances
+
 ## [1.3.0] - 2025-12-03
 
 ### Added
