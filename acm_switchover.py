@@ -419,9 +419,16 @@ def run_decommission(
     logger: logging.Logger,
 ):
     """Execute decommission of old hub."""
+    # Detect observability directly from the cluster, not from state file
+    # The state file path may differ when running decommission standalone
+    from lib.constants import OBSERVABILITY_NAMESPACE
+    has_observability = primary.namespace_exists(OBSERVABILITY_NAMESPACE)
+    if has_observability:
+        logger.info("Observability detected on hub (namespace %s exists)", OBSERVABILITY_NAMESPACE)
+
     decom = Decommission(
         primary,
-        state.get_config("primary_has_observability", False),
+        has_observability,
         dry_run=args.dry_run,
     )
 
@@ -438,6 +445,10 @@ def run_decommission(
 def main():
     """Main entry point."""
     args = parse_args()
+
+    # Set up logging early so validate_args can use logger
+    logger = setup_logging(args.verbose, args.log_format)
+
     validate_args(args)
     resolved_state_file = _resolve_state_file(
         args.state_file or DEFAULT_STATE_FILE,
@@ -446,7 +457,6 @@ def main():
     )
     args.state_file = resolved_state_file
 
-    logger = setup_logging(args.verbose, args.log_format)
     logger.info("ACM Hub Switchover Automation")
     logger.info("Started at: %s", datetime.now(timezone.utc).isoformat())
     logger.info("Using state file: %s", resolved_state_file)

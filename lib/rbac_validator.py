@@ -128,13 +128,14 @@ class RBACValidator:
             return False, f"Error checking permission: {str(e)}"
 
     def validate_cluster_permissions(
-        self, include_decommission: bool = False
+        self, include_decommission: bool = False, skip_observability: bool = False
     ) -> Tuple[bool, List[str]]:
         """
         Validate cluster-scoped permissions.
 
         Args:
             include_decommission: Whether to check decommission permissions
+            skip_observability: Whether to skip observability permission checks
 
         Returns:
             Tuple of (all_valid, list of error messages)
@@ -146,6 +147,11 @@ class RBACValidator:
 
         # Check standard cluster permissions
         for api_group, resource, verbs in self.CLUSTER_PERMISSIONS:
+            # Skip observability permissions if requested
+            if skip_observability and "observability" in api_group:
+                logger.info("Skipping observability permission: %s/%s", api_group, resource)
+                continue
+
             for verb in verbs:
                 has_perm, error = self.check_permission(api_group, resource, verb)
                 if not has_perm:
@@ -253,7 +259,9 @@ class RBACValidator:
         all_errors: Dict[str, List[str]] = {}
 
         # Validate cluster permissions
-        cluster_valid, cluster_errors = self.validate_cluster_permissions(include_decommission)
+        cluster_valid, cluster_errors = self.validate_cluster_permissions(
+            include_decommission, skip_observability
+        )
         if cluster_errors:
             all_errors["cluster"] = cluster_errors
 
