@@ -136,6 +136,72 @@ case "$*" in
         exit 0
         ;;
     
+    # BackupStorageLocation checks (Check 7)
+    "--context=primary-ok get backupstoragelocation -n open-cluster-management-backup --no-headers")
+        echo "default   Available"
+        exit 0
+        ;;
+    "--context=secondary-ok get backupstoragelocation -n open-cluster-management-backup --no-headers")
+        echo "default   Available"
+        exit 0
+        ;;
+    *"get backupstoragelocation"*"open-cluster-management-backup"*"status.phase"*)
+        echo "Available"
+        exit 0
+        ;;
+    
+    # Cluster Health checks (Check 8) - nodes and clusteroperators
+    "--context=primary-ok get nodes --no-headers")
+        echo "master-0   Ready   control-plane   10d   v1.28.0"
+        echo "master-1   Ready   control-plane   10d   v1.28.0"
+        echo "master-2   Ready   control-plane   10d   v1.28.0"
+        echo "worker-0   Ready   worker          10d   v1.28.0"
+        exit 0
+        ;;
+    "--context=secondary-ok get nodes --no-headers")
+        echo "master-0   Ready   control-plane   10d   v1.28.0"
+        echo "master-1   Ready   control-plane   10d   v1.28.0"
+        echo "master-2   Ready   control-plane   10d   v1.28.0"
+        echo "worker-0   Ready   worker          10d   v1.28.0"
+        exit 0
+        ;;
+    "--context=primary-ok get clusteroperators --no-headers")
+        echo "authentication                      True   False   False   10d"
+        echo "console                             True   False   False   10d"
+        echo "etcd                                True   False   False   10d"
+        echo "kube-apiserver                      True   False   False   10d"
+        echo "machine-config                      True   False   False   10d"
+        exit 0
+        ;;
+    "--context=secondary-ok get clusteroperators --no-headers")
+        echo "authentication                      True   False   False   10d"
+        echo "console                             True   False   False   10d"
+        echo "etcd                                True   False   False   10d"
+        echo "kube-apiserver                      True   False   False   10d"
+        echo "machine-config                      True   False   False   10d"
+        exit 0
+        ;;
+    *"get clusteroperators"*"-o json"*)
+        # JSON output for clusteroperators - all healthy
+        cat << 'CO_JSON'
+{"items":[
+  {"metadata":{"name":"authentication"},"status":{"conditions":[{"type":"Available","status":"True"},{"type":"Degraded","status":"False"},{"type":"Progressing","status":"False"}]}},
+  {"metadata":{"name":"console"},"status":{"conditions":[{"type":"Available","status":"True"},{"type":"Degraded","status":"False"},{"type":"Progressing","status":"False"}]}},
+  {"metadata":{"name":"etcd"},"status":{"conditions":[{"type":"Available","status":"True"},{"type":"Degraded","status":"False"},{"type":"Progressing","status":"False"}]}}
+]}
+CO_JSON
+        exit 0
+        ;;
+    
+    # ClusterVersion checks (for upgrade status)
+    *"get clusterversion version -o json"*)
+        # ClusterVersion output - stable, no upgrade in progress
+        cat << 'CV_JSON'
+{"status":{"desired":{"version":"4.14.10"},"conditions":[{"type":"Available","status":"True"},{"type":"Progressing","status":"False","message":"Cluster version is 4.14.10"},{"type":"Degraded","status":"False"}]}}
+CV_JSON
+        exit 0
+        ;;
+    
     # Backup checks
     "--context=primary-ok get backup -n open-cluster-management-backup --no-headers")
         echo "backup-20241124   Finished"
@@ -324,6 +390,14 @@ EOF
         ;;
     "--context=new-hub get backup -n open-cluster-management-backup --sort-by=.metadata.creationTimestamp -o jsonpath="*"")
         echo "backup-3 Completed 2024-11-24T12:00:00Z"
+        exit 0
+        ;;
+    "--context=new-hub get backupstoragelocation -n open-cluster-management-backup --no-headers")
+        echo "default   Available"
+        exit 0
+        ;;
+    "--context=new-hub get backupstoragelocation default -n open-cluster-management-backup -o jsonpath="*"status.phase"*"")
+        echo "Available"
         exit 0
         ;;
     "--context=new-hub get mch -n open-cluster-management --no-headers")

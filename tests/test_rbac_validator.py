@@ -30,7 +30,7 @@ class TestRBACValidator:
         validator = RBACValidator(mock_client)
         assert validator.client == mock_client
 
-    @patch('lib.rbac_validator.client')
+    @patch('kubernetes.client')
     def test_check_permission_allowed(self, mock_k8s_client, validator):
         """Test check_permission when permission is allowed."""
         # Mock SelfSubjectAccessReview response
@@ -47,7 +47,7 @@ class TestRBACValidator:
         assert has_perm is True
         assert error == ""
 
-    @patch('lib.rbac_validator.client')
+    @patch('kubernetes.client')
     def test_check_permission_denied(self, mock_k8s_client, validator):
         """Test check_permission when permission is denied."""
         # Mock SelfSubjectAccessReview response
@@ -109,7 +109,8 @@ class TestRBACValidator:
 
         all_valid, errors = validator.validate_namespace_permissions()
 
-        # Should have warnings about missing namespaces
+        # Missing namespaces should cause validation failure
+        assert all_valid is False
         assert len(errors) > 0
         assert any("does not exist" in error for error in errors)
 
