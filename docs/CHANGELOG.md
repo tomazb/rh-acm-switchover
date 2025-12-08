@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Production-ready defaults
   - Detailed Helm chart README
 
+### Planned
+
+#### Python Preflight/Postflight Enhancements (Future)
+- Add `BackupStorageLocationValidator` to Python preflight checks
+- Add `ClusterHealthValidator` (nodes, clusteroperators, clusterversion) to Python preflight
+- Add BSL validation to Python post-activation verification
+- Note: These checks are currently implemented in bash scripts (`preflight-check.sh`, `postflight-check.sh`)
+
 - **ACM Policy enforcement**: Governance policies in `deploy/acm-policies/`
   - Policy for RBAC validation and enforcement
   - PlacementRule for multi-cluster distribution
@@ -46,6 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added RBAC section to main README
 - Updated prerequisites to include RBAC permissions
 - Added links to RBAC deployment guides
+
+#### Preflight Script Enhancements
+- **Check 7: BackupStorageLocation validation**: Verifies BSL is in "Available" phase on both hubs before switchover
+- **Check 8: Cluster Health validation**: Comprehensive cluster health checks per runbook requirements
+  - Verifies all nodes are in Ready state on both hubs
+  - Checks ClusterOperators are healthy (Available=True, Degraded=False) on OpenShift clusters
+  - Validates no cluster upgrade is in progress via ClusterVersion status
+  - Displays cluster version information
+- Added RBAC permissions for new checks: `nodes`, `clusteroperators`, `clusterversions`, `backupstoragelocations`
+
+#### Postflight Script Enhancements  
+- **Check 5b: BackupStorageLocation validation**: Verifies BSL is "Available" on new hub after switchover
 
 #### KubeClient Improvements
 - **`get_secret()` method**: New method to retrieve Kubernetes secrets with proper validation, retry logic, and 404→None handling

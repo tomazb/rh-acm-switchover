@@ -91,6 +91,10 @@ def main():
             logger.info("PRIMARY HUB (%s)", args.primary_context)
             logger.info("=" * 80)
             primary_validator = RBACValidator(primary_client)
+            primary_valid, _ = primary_validator.validate_all_permissions(
+                include_decommission=args.include_decommission,
+                skip_observability=args.skip_observability,
+            )
             primary_report = primary_validator.generate_permission_report(
                 include_decommission=args.include_decommission,
                 skip_observability=args.skip_observability,
@@ -102,6 +106,10 @@ def main():
             logger.info("SECONDARY HUB (%s)", args.secondary_context)
             logger.info("=" * 80)
             secondary_validator = RBACValidator(secondary_client)
+            secondary_valid, _ = secondary_validator.validate_all_permissions(
+                include_decommission=False,
+                skip_observability=args.skip_observability,
+            )
             secondary_report = secondary_validator.generate_permission_report(
                 include_decommission=False,  # Decommission only on primary
                 skip_observability=args.skip_observability,
@@ -109,14 +117,6 @@ def main():
             print(secondary_report)
             
             # Check if both passed
-            primary_valid, _ = primary_validator.validate_all_permissions(
-                include_decommission=args.include_decommission,
-                skip_observability=args.skip_observability,
-            )
-            secondary_valid, _ = secondary_validator.validate_all_permissions(
-                include_decommission=False,
-                skip_observability=args.skip_observability,
-            )
             
             if primary_valid and secondary_valid:
                 logger.info("\n✓ All permissions validated on both hubs")
@@ -127,7 +127,7 @@ def main():
                 
         else:
             # Check single context
-            context = args.context or args.primary_context
+            context = args.context or args.primary_context or args.secondary_context
             if context:
                 logger.info("Checking RBAC permissions on context: %s", context)
             else:
@@ -136,6 +136,11 @@ def main():
             client = KubeClient(context=context)
             validator = RBACValidator(client)
             
+            # Validate and generate report
+            all_valid, _ = validator.validate_all_permissions(
+                include_decommission=args.include_decommission,
+                skip_observability=args.skip_observability,
+            )
             report = validator.generate_permission_report(
                 include_decommission=args.include_decommission,
                 skip_observability=args.skip_observability,
@@ -144,11 +149,6 @@ def main():
             print(report)
             
             # Exit with appropriate code
-            all_valid, _ = validator.validate_all_permissions(
-                include_decommission=args.include_decommission,
-                skip_observability=args.skip_observability,
-            )
-            
             if all_valid:
                 sys.exit(0)
             else:
