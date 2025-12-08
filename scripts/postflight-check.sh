@@ -321,6 +321,22 @@ else
     check_fail "No BackupSchedule found on new hub"
 fi
 
+# Check 5b: Verify BackupStorageLocation is available
+BSL_OUTPUT=$(oc --context="$NEW_HUB_CONTEXT" get backupstoragelocation -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null || true)
+if [[ -n "$BSL_OUTPUT" ]]; then
+    BSL_NAME=$(echo "$BSL_OUTPUT" | awk '{print $1}' | head -1)
+    BSL_PHASE=$(oc --context="$NEW_HUB_CONTEXT" get backupstoragelocation "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "unknown")
+    
+    if [[ "$BSL_PHASE" == "Available" ]]; then
+        check_pass "BackupStorageLocation '$BSL_NAME' is Available (storage accessible)"
+    else
+        check_fail "BackupStorageLocation '$BSL_NAME' is in '$BSL_PHASE' state (should be Available)"
+        echo -e "${RED}       Backup storage may be inaccessible - verify credentials and connectivity${NC}"
+    fi
+else
+    check_warn "No BackupStorageLocation found (OADP may not be configured)"
+fi
+
 # Check 6: Verify ACM hub components
 section_header "6. Checking ACM Hub Components"
 
