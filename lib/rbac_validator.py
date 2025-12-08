@@ -32,12 +32,13 @@ class RBACValidator:
     # Required namespace-scoped permissions by namespace
     NAMESPACE_PERMISSIONS = {
         "open-cluster-management-backup": [
-            ("", "configmaps", ["get", "list", "create", "patch"]),
+            ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
             ("", "secrets", ["get"]),
             ("", "pods", ["get", "list"]),  # For Velero pod health checks
-            ("cluster.open-cluster-management.io", "backupschedules", ["get", "list", "patch", "delete"]),
-            ("cluster.open-cluster-management.io", "restores", ["get", "list", "create", "patch"]),
+            ("cluster.open-cluster-management.io", "backupschedules", ["get", "list", "create", "patch", "delete"]),
+            ("cluster.open-cluster-management.io", "restores", ["get", "list", "create", "patch", "delete"]),
             ("velero.io", "backups", ["get", "list"]),
+            ("velero.io", "restores", ["get", "list"]),  # For monitoring restore status
             ("velero.io", "backupstoragelocations", ["get", "list"]),  # For storage health check
             ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
         ],

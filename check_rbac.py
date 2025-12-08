@@ -73,8 +73,7 @@ def main():
     args = parse_args()
 
     # Set up logging
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    setup_logging(log_level=log_level, log_format="text")
+    setup_logging(verbose=args.verbose, log_format="text")
     logger = logging.getLogger("acm_switchover")
 
     try:
