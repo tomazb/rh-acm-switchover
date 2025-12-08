@@ -5,6 +5,7 @@ Pre-flight validation module for ACM switchover.
 import logging
 from typing import Dict, Tuple
 
+from lib.constants import OBSERVABILITY_NAMESPACE
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
 
@@ -66,24 +67,39 @@ class PreflightValidator:
         if not self.skip_rbac_validation:
             try:
                 logger.info("Validating RBAC permissions...")
+                # Check if observability namespace exists on either hub
+                # If not installed, skip observability permission checks
+                primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
+                secondary_has_obs = (
+                    self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE)
+                    if self.secondary
+                    else False
+                )
+                skip_obs = not (primary_has_obs or secondary_has_obs)
+                if skip_obs:
+                    logger.info(
+                        "Observability namespace not found on either hub, "
+                        "skipping observability permission checks"
+                    )
+
                 validate_rbac_permissions(
                     primary_client=self.primary,
                     secondary_client=self.secondary,
                     include_decommission=False,  # Checked separately if needed
-                    skip_observability=False,  # Will be checked
+                    skip_observability=skip_obs,
                 )
-                self.reporter.record_check(
+                self.reporter.add_result(
                     "RBAC Permissions",
                     True,
-                    "✓ All required RBAC permissions validated",
-                    severity="critical",
+                    "All required RBAC permissions validated",
+                    critical=True,
                 )
             except Exception as e:
-                self.reporter.record_check(
+                self.reporter.add_result(
                     "RBAC Permissions",
                     False,
-                    f"✗ RBAC validation failed: {str(e)}",
-                    severity="critical",
+                    f"RBAC validation failed: {str(e)}",
+                    critical=True,
                 )
                 logger.warning(
                     "RBAC validation failed. You can skip this check with --skip-rbac-validation "

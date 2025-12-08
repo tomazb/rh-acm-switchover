@@ -20,6 +20,9 @@ class RBACValidator:
     # Required cluster-scoped permissions
     CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
+        ("", "nodes", ["get", "list"]),  # For cluster health validation per runbook
+        ("config.openshift.io", "clusteroperators", ["get", "list"]),  # For OpenShift health
+        ("config.openshift.io", "clusterversions", ["get", "list"]),  # For upgrade status check
         ("cluster.open-cluster-management.io", "managedclusters", ["get", "list", "patch"]),
         ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
@@ -31,15 +34,26 @@ class RBACValidator:
         "open-cluster-management-backup": [
             ("", "configmaps", ["get", "list", "create", "patch"]),
             ("", "secrets", ["get"]),
-            ("cluster.open-cluster-management.io", "backupschedules", ["get", "list", "patch"]),
+            ("", "pods", ["get", "list"]),  # For Velero pod health checks
+            ("cluster.open-cluster-management.io", "backupschedules", ["get", "list", "patch", "delete"]),
             ("cluster.open-cluster-management.io", "restores", ["get", "list", "create", "patch"]),
             ("velero.io", "backups", ["get", "list"]),
+            ("velero.io", "backupstoragelocations", ["get", "list"]),  # For storage health check
             ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
+        ],
+        "open-cluster-management": [
+            ("", "pods", ["get", "list"]),  # For ACM pod health checks
+        ],
+        "open-cluster-management-agent": [
+            ("", "secrets", ["create", "delete"]),  # For klusterlet reconnection
+            ("apps", "deployments", ["patch"]),  # For klusterlet restart
         ],
         "open-cluster-management-observability": [
             ("", "pods", ["get", "list"]),
+            ("", "secrets", ["get"]),  # For Thanos object storage config
             ("apps", "deployments", ["get", "patch"]),
             ("apps", "statefulsets", ["get", "patch"]),
+            ("route.openshift.io", "routes", ["get"]),  # For Grafana route access
         ],
         "multicluster-engine": [
             ("", "configmaps", ["get", "list", "create", "patch"]),
@@ -193,6 +207,7 @@ class RBACValidator:
                 warning = f"Namespace {namespace} does not exist - skipping permission checks"
                 logger.warning(warning)
                 errors.append(warning)
+                all_valid = False
                 continue
 
             logger.info("Checking permissions in namespace: %s", namespace)
