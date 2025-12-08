@@ -225,8 +225,151 @@ else
     check_fail "Secondary hub: No DataProtectionApplication found"
 fi
 
-# Check 7: Verify backup status
-section_header "7. Checking Backup Status"
+# Check 7: Verify BackupStorageLocation status
+section_header "7. Checking BackupStorageLocation Status"
+
+# Check primary hub BSL
+PRIMARY_BSL=$(oc --context="$PRIMARY_CONTEXT" get backupstoragelocation -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l)
+if [[ $PRIMARY_BSL -gt 0 ]]; then
+    BSL_NAME=$(oc --context="$PRIMARY_CONTEXT" get backupstoragelocation -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    BSL_PHASE=$(oc --context="$PRIMARY_CONTEXT" get backupstoragelocation "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
+    if [[ "$BSL_PHASE" == "Available" ]]; then
+        check_pass "Primary hub: BackupStorageLocation '$BSL_NAME' is Available"
+    else
+        check_fail "Primary hub: BackupStorageLocation '$BSL_NAME' phase is '$BSL_PHASE' (expected: Available)"
+    fi
+else
+    check_fail "Primary hub: No BackupStorageLocation found"
+fi
+
+# Check secondary hub BSL
+SECONDARY_BSL=$(oc --context="$SECONDARY_CONTEXT" get backupstoragelocation -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l)
+if [[ $SECONDARY_BSL -gt 0 ]]; then
+    BSL_NAME=$(oc --context="$SECONDARY_CONTEXT" get backupstoragelocation -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    BSL_PHASE=$(oc --context="$SECONDARY_CONTEXT" get backupstoragelocation "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
+    if [[ "$BSL_PHASE" == "Available" ]]; then
+        check_pass "Secondary hub: BackupStorageLocation '$BSL_NAME' is Available"
+    else
+        check_fail "Secondary hub: BackupStorageLocation '$BSL_NAME' phase is '$BSL_PHASE' (expected: Available)"
+    fi
+else
+    check_fail "Secondary hub: No BackupStorageLocation found"
+fi
+
+# Check 8: Verify Cluster Health (Nodes and ClusterOperators)
+section_header "8. Checking Cluster Health"
+
+# Check primary hub nodes
+PRIMARY_NODES_TOTAL=$(oc --context="$PRIMARY_CONTEXT" get nodes --no-headers 2>/dev/null | wc -l)
+if [[ $PRIMARY_NODES_TOTAL -gt 0 ]]; then
+    PRIMARY_NODES_READY=$(oc --context="$PRIMARY_CONTEXT" get nodes --no-headers 2>/dev/null | grep -c " Ready" || true)
+    if [[ $PRIMARY_NODES_READY -eq $PRIMARY_NODES_TOTAL ]]; then
+        check_pass "Primary hub: All $PRIMARY_NODES_TOTAL node(s) are Ready"
+    else
+        NOT_READY=$((PRIMARY_NODES_TOTAL - PRIMARY_NODES_READY))
+        check_fail "Primary hub: $NOT_READY of $PRIMARY_NODES_TOTAL node(s) are not Ready"
+    fi
+else
+    check_fail "Primary hub: Could not retrieve nodes (insufficient permissions or cluster issue)"
+fi
+
+# Check secondary hub nodes
+SECONDARY_NODES_TOTAL=$(oc --context="$SECONDARY_CONTEXT" get nodes --no-headers 2>/dev/null | wc -l)
+if [[ $SECONDARY_NODES_TOTAL -gt 0 ]]; then
+    SECONDARY_NODES_READY=$(oc --context="$SECONDARY_CONTEXT" get nodes --no-headers 2>/dev/null | grep -c " Ready" || true)
+    if [[ $SECONDARY_NODES_READY -eq $SECONDARY_NODES_TOTAL ]]; then
+        check_pass "Secondary hub: All $SECONDARY_NODES_TOTAL node(s) are Ready"
+    else
+        NOT_READY=$((SECONDARY_NODES_TOTAL - SECONDARY_NODES_READY))
+        check_fail "Secondary hub: $NOT_READY of $SECONDARY_NODES_TOTAL node(s) are not Ready"
+    fi
+else
+    check_fail "Secondary hub: Could not retrieve nodes (insufficient permissions or cluster issue)"
+fi
+
+# Check primary hub ClusterOperators (OpenShift specific)
+PRIMARY_CO_OUTPUT=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators --no-headers 2>/dev/null || true)
+if [[ -n "$PRIMARY_CO_OUTPUT" ]]; then
+    PRIMARY_CO_TOTAL=$(echo "$PRIMARY_CO_OUTPUT" | wc -l)
+    # ClusterOperators are healthy if Available=True, Progressing=False, Degraded=False
+    PRIMARY_CO_DEGRADED=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
+        jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' | wc -l || true)
+    PRIMARY_CO_UNAVAILABLE=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
+        jq -r '.items[] | select(.status.conditions[]? | select(.type=="Available" and .status=="False")) | .metadata.name' | wc -l || true)
+    
+    if [[ $PRIMARY_CO_DEGRADED -eq 0 ]] && [[ $PRIMARY_CO_UNAVAILABLE -eq 0 ]]; then
+        check_pass "Primary hub: All $PRIMARY_CO_TOTAL ClusterOperator(s) are healthy"
+    else
+        UNHEALTHY=$((PRIMARY_CO_DEGRADED + PRIMARY_CO_UNAVAILABLE))
+        check_fail "Primary hub: $UNHEALTHY ClusterOperator(s) are degraded or unavailable"
+        # Show which operators are unhealthy
+        DEGRADED_LIST=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
+            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' || true)
+        if [[ -n "$DEGRADED_LIST" ]]; then
+            echo -e "${RED}       Degraded operators: $(echo $DEGRADED_LIST | tr '\n' ' ')${NC}"
+        fi
+    fi
+else
+    check_pass "Primary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
+fi
+
+# Check secondary hub ClusterOperators (OpenShift specific)
+SECONDARY_CO_OUTPUT=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators --no-headers 2>/dev/null || true)
+if [[ -n "$SECONDARY_CO_OUTPUT" ]]; then
+    SECONDARY_CO_TOTAL=$(echo "$SECONDARY_CO_OUTPUT" | wc -l)
+    SECONDARY_CO_DEGRADED=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
+        jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' | wc -l || true)
+    SECONDARY_CO_UNAVAILABLE=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
+        jq -r '.items[] | select(.status.conditions[]? | select(.type=="Available" and .status=="False")) | .metadata.name' | wc -l || true)
+    
+    if [[ $SECONDARY_CO_DEGRADED -eq 0 ]] && [[ $SECONDARY_CO_UNAVAILABLE -eq 0 ]]; then
+        check_pass "Secondary hub: All $SECONDARY_CO_TOTAL ClusterOperator(s) are healthy"
+    else
+        UNHEALTHY=$((SECONDARY_CO_DEGRADED + SECONDARY_CO_UNAVAILABLE))
+        check_fail "Secondary hub: $UNHEALTHY ClusterOperator(s) are degraded or unavailable"
+        DEGRADED_LIST=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
+            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' || true)
+        if [[ -n "$DEGRADED_LIST" ]]; then
+            echo -e "${RED}       Degraded operators: $(echo $DEGRADED_LIST | tr '\n' ' ')${NC}"
+        fi
+    fi
+else
+    check_pass "Secondary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
+fi
+
+# Check primary hub upgrade status (ClusterVersion)
+PRIMARY_CV_OUTPUT=$(oc --context="$PRIMARY_CONTEXT" get clusterversion version -o json 2>/dev/null || true)
+if [[ -n "$PRIMARY_CV_OUTPUT" ]]; then
+    # Check if cluster is upgrading (Progressing=True means upgrade in progress)
+    PRIMARY_UPGRADING=$(echo "$PRIMARY_CV_OUTPUT" | jq -r '.status.conditions[]? | select(.type=="Progressing" and .status=="True") | .message' || true)
+    PRIMARY_VERSION=$(echo "$PRIMARY_CV_OUTPUT" | jq -r '.status.desired.version // "unknown"' || true)
+    if [[ -n "$PRIMARY_UPGRADING" && "$PRIMARY_UPGRADING" != "null" ]]; then
+        check_fail "Primary hub: Cluster upgrade in progress (version: $PRIMARY_VERSION)"
+        echo -e "${RED}       Message: $PRIMARY_UPGRADING${NC}"
+    else
+        check_pass "Primary hub: Cluster is stable (version: $PRIMARY_VERSION, no upgrade in progress)"
+    fi
+else
+    check_pass "Primary hub: ClusterVersion not available (non-OpenShift cluster or insufficient permissions)"
+fi
+
+# Check secondary hub upgrade status (ClusterVersion)
+SECONDARY_CV_OUTPUT=$(oc --context="$SECONDARY_CONTEXT" get clusterversion version -o json 2>/dev/null || true)
+if [[ -n "$SECONDARY_CV_OUTPUT" ]]; then
+    SECONDARY_UPGRADING=$(echo "$SECONDARY_CV_OUTPUT" | jq -r '.status.conditions[]? | select(.type=="Progressing" and .status=="True") | .message' || true)
+    SECONDARY_VERSION=$(echo "$SECONDARY_CV_OUTPUT" | jq -r '.status.desired.version // "unknown"' || true)
+    if [[ -n "$SECONDARY_UPGRADING" && "$SECONDARY_UPGRADING" != "null" ]]; then
+        check_fail "Secondary hub: Cluster upgrade in progress (version: $SECONDARY_VERSION)"
+        echo -e "${RED}       Message: $SECONDARY_UPGRADING${NC}"
+    else
+        check_pass "Secondary hub: Cluster is stable (version: $SECONDARY_VERSION, no upgrade in progress)"
+    fi
+else
+    check_pass "Secondary hub: ClusterVersion not available (non-OpenShift cluster or insufficient permissions)"
+fi
+
+# Check 9: Verify backup status
+section_header "9. Checking Backup Status"
 
 BACKUPS=$(oc --context="$PRIMARY_CONTEXT" get backup -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l)
 if [[ $BACKUPS -gt 0 ]]; then
@@ -338,8 +481,8 @@ else
     check_fail "Primary hub: No backups found"
 fi
 
-# Check 8: Verify ClusterDeployment preserveOnDelete (CRITICAL)
-section_header "8. Checking ClusterDeployment preserveOnDelete (CRITICAL)"
+# Check 10: Verify ClusterDeployment preserveOnDelete (CRITICAL)
+section_header "10. Checking ClusterDeployment preserveOnDelete (CRITICAL)"
 
 CDS=$(oc --context="$PRIMARY_CONTEXT" get clusterdeployment --all-namespaces --no-headers 2>/dev/null | wc -l)
 if [[ $CDS -eq 0 ]]; then
@@ -358,9 +501,9 @@ else
     fi
 fi
 
-# Check 9: Method-specific checks
+# Check 11: Method-specific checks
 if [[ "$METHOD" == "passive" ]]; then
-    section_header "9. Checking Passive Sync (Method 1)"
+    section_header "11. Checking Passive Sync (Method 1)"
     
     # Find passive sync restore by looking for syncRestoreWithNewBackups=true
     # This matches the Python discovery logic in modules/activation.py
@@ -385,12 +528,12 @@ if [[ "$METHOD" == "passive" ]]; then
         check_fail "Secondary hub: No passive sync restore found (required for Method 1). Expected a Restore with spec.syncRestoreWithNewBackups=true or named '$RESTORE_PASSIVE_SYNC_NAME'"
     fi
 else
-    section_header "9. Method 2 (Full Restore) - No passive sync check needed"
+    section_header "11. Method 2 (Full Restore) - No passive sync check needed"
     check_pass "Method 2 selected - passive sync not required"
 fi
 
-# Check 10: Verify Observability (optional)
-section_header "10. Checking ACM Observability (Optional)"
+# Check 12: Verify Observability (optional)
+section_header "12. Checking ACM Observability (Optional)"
 
 if oc --context="$PRIMARY_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
     check_pass "Primary hub: Observability namespace exists"
@@ -418,8 +561,8 @@ else
     check_pass "Observability not detected (optional component)"
 fi
 
-# Check 11: Verify Auto-Import Strategy (ACM 2.14+)
-section_header "11. Checking Auto-Import Strategy (ACM 2.14+)"
+# Check 13: Verify Auto-Import Strategy (ACM 2.14+)
+section_header "13. Checking Auto-Import Strategy (ACM 2.14+)"
 
 # Check primary hub
 if is_acm_214_or_higher "$PRIMARY_VERSION"; then

@@ -165,11 +165,17 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 4. **ACM Versions** - Ensures versions match between hubs
 5. **OADP Operator** - Checks OADP is installed and Velero pods running
 6. **DataProtectionApplication** - Verifies DPA is configured and reconciled
-7. **Backup Status** - Confirms latest backup completed, no in-progress backups
-8. **ClusterDeployment Safety** - **CRITICAL:** Verifies `preserveOnDelete=true` on ALL ClusterDeployments
-9. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
-10. **Observability** - Detects if observability is installed (optional) - Checks for CRs and secrets
-11. **Auto-Import Strategy** (ACM 2.14+) - Validates `autoImportStrategy` configuration:
+7. **BackupStorageLocation** - Validates BSL is in "Available" phase (storage accessible)
+8. **Cluster Health** - Comprehensive cluster health validation per runbook requirements:
+   - Verifies all nodes are in Ready state
+   - Checks ClusterOperators are healthy (Available=True, Degraded=False)
+   - Validates no cluster upgrade is in progress (ClusterVersion Progressing=False)
+   - Displays current cluster version
+9. **Backup Status** - Confirms latest backup completed, no in-progress backups
+10. **ClusterDeployment Safety** - **CRITICAL:** Verifies `preserveOnDelete=true` on ALL ClusterDeployments
+11. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
+12. **Observability** - Detects if observability is installed (optional) - Checks for CRs and secrets
+13. **Auto-Import Strategy** (ACM 2.14+) - Validates `autoImportStrategy` configuration:
     - Warns if non-default strategy is set on either hub
     - For secondary hubs with existing clusters: advises temporary `ImportAndSync` before restore
     - Links to Red Hat documentation for guidance
@@ -228,7 +234,15 @@ graph TD
     G -->|No| H[FAIL: Version Mismatch]
     G -->|Yes| I[Check OADP Operator]
     I --> J[Verify DataProtectionApplication]
-    J --> K[Check Backup Status]
+    J --> J2[Check BackupStorageLocation]
+    J2 --> J3{BSL Available?}
+    J3 -->|No| J4[FAIL: Storage Inaccessible]
+    J3 -->|Yes| J5[Check Cluster Health]
+    J5 --> J6{Nodes Ready &<br/>ClusterOps Healthy?}
+    J6 -->|No| J7[FAIL: Cluster Unhealthy]
+    J6 -->|Yes| J8{Upgrade in<br/>Progress?}
+    J8 -->|Yes| J9[FAIL: Upgrade in Progress]
+    J8 -->|No| K[Check Backup Status]
     K --> L{Backups OK?}
     L -->|No| M[FAIL: Backup Issues]
     L -->|Yes| N[CRITICAL: Check preserveOnDelete]
@@ -258,6 +272,9 @@ graph TD
     style H fill:#ff6b6b
     style M fill:#ff6b6b
     style U fill:#ff6b6b
+    style J4 fill:#ff6b6b
+    style J7 fill:#ff6b6b
+    style J9 fill:#ff6b6b
     style Z fill:#51cf66
 ```
 
@@ -296,6 +313,7 @@ Verifies that the ACM switchover completed successfully by validating all critic
 3. **Observability Components** - Checks all observability pods are running (Grafana, Observatorium, Thanos)
 4. **Metrics Collection** - Validates Grafana route and observatorium-api status
 5. **Backup Configuration** - Ensures BackupSchedule is enabled and creating backups
+5b. **BackupStorageLocation** - Verifies BSL is in "Available" phase (storage accessible for backups)
 6. **ACM Hub Components** - Verifies MultiClusterHub and ACM pods are healthy
 7. **Old Hub Comparison** (if `--old-hub-context` provided) - Checks old hub clusters are disconnected
 8. **Auto-Import Status** - Verifies no lingering disable-auto-import annotations
@@ -394,7 +412,10 @@ graph TD
     Q --> R[Verify BackupSchedule Enabled]
     R --> S{BackupSchedule<br/>Enabled?}
     S -->|No| T[FAIL: Backups Not Enabled]
-    S -->|Yes| U[Check ACM Hub Components]
+    S -->|Yes| S2[Check BackupStorageLocation]
+    S2 --> S3{BSL Available?}
+    S3 -->|No| S4[FAIL: Storage Inaccessible]
+    S3 -->|Yes| U[Check ACM Hub Components]
     U --> V{MultiClusterHub<br/>Running?}
     V -->|No| W[FAIL: MCH Not Running]
     V -->|Yes| X{Old Hub<br/>Provided?}
@@ -423,6 +444,7 @@ graph TD
     style H fill:#ff6b6b
     style O fill:#ff6b6b
     style T fill:#ff6b6b
+    style S4 fill:#ff6b6b
     style W fill:#ff6b6b
     style AG fill:#51cf66
     style D4 fill:#51cf66

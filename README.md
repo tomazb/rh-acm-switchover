@@ -6,6 +6,7 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 
 - ✅ **Idempotent execution** - Resume from last successful step
 - ✅ **Comprehensive validation** - Pre-flight checks for safety
+- ✅ **RBAC enforcement** - Least privilege access control with validation
 - ✅ **Data protection** - Verifies `preserveOnDelete` on ClusterDeployments
 - ✅ **Auto-detection** - Automatically detects ACM Observability and version
 - ✅ **Dry-run mode** - Preview actions without making changes
@@ -13,9 +14,12 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - ✅ **State tracking** - JSON state file for resume capability
 - ✅ **Two methods supported** - Continuous passive restore (Method 1) or one-time full restore (Method 2)
 - ✅ **Container image** - Ready-to-use image with all prerequisites included
+- ✅ **Multi-deployment support** - RBAC via Kustomize, Helm, or ACM Policies
 
 ## Documentation
 
+- **[RBAC Requirements](docs/RBAC_REQUIREMENTS.md)** - Complete RBAC permissions guide
+- **[RBAC Deployment](docs/RBAC_DEPLOYMENT.md)** - Step-by-step RBAC deployment instructions
 - **[ACM Switchover Runbook](docs/ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational procedures
 - **[Quick Reference](docs/QUICKREF.md)** - Command cheat sheet and common tasks
 - **[Detailed Usage Guide](docs/USAGE.md)** - Complete examples and scenarios
@@ -53,6 +57,7 @@ See [scripts/README.md](scripts/README.md) for detailed usage and workflow diagr
 - ACM Backup configured on both hubs
 - OADP operator installed on both hubs
 - Network access to both Kubernetes clusters
+- **RBAC permissions**: Required permissions for switchover operations (see [RBAC Requirements](docs/RBAC_REQUIREMENTS.md))
 
 **OR** use the container image with all prerequisites included (recommended).
 
@@ -170,6 +175,7 @@ python acm_switchover.py --decommission \
 | `--state-file` | Path to state file (default: `.state/switchover-<primary>__<secondary>.json`) |
 | `--decommission` | Decommission old hub (interactive) |
 | `--skip-observability-checks` | Skip Observability-related steps even if detected |
+| `--skip-rbac-validation` | Skip RBAC permission validation during pre-flight checks |
 | `--verbose` | Enable verbose logging |
 
 ## How It Works

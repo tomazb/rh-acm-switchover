@@ -1,0 +1,153 @@
+{{- if and .Values.rbac.enabled .Values.roleBinding.create -}}
+---
+# RoleBinding for ACM Switchover Operator in backup namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.clusterRole.operator.name }}
+  namespace: {{ .Values.role.namespaces.backup }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.clusterRole.operator.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.operator.name }}
+    namespace: {{ .Values.namespace }}
+
+---
+# RoleBinding for ACM Switchover Operator in observability namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.clusterRole.operator.name }}
+  namespace: {{ .Values.role.namespaces.observability }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.clusterRole.operator.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.operator.name }}
+    namespace: {{ .Values.namespace }}
+
+---
+# RoleBinding for ACM Switchover Operator in MCE namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.clusterRole.operator.name }}
+  namespace: {{ .Values.role.namespaces.mce }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.clusterRole.operator.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.operator.name }}
+    namespace: {{ .Values.namespace }}
+
+---
+# RoleBinding for ACM Switchover Operator in ACM namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.clusterRole.operator.name }}
+  namespace: {{ .Values.role.namespaces.acm }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.clusterRole.operator.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.operator.name }}
+    namespace: {{ .Values.namespace }}
+
+---
+# RoleBinding for ACM Switchover Validator in backup namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.clusterRole.validator.name }}
+  namespace: {{ .Values.role.namespaces.backup }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.clusterRole.validator.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.validator.name }}
+    namespace: {{ .Values.namespace }}
+
+---
+# RoleBinding for ACM Switchover Validator in observability namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.clusterRole.validator.name }}
+  namespace: {{ .Values.role.namespaces.observability }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.clusterRole.validator.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.validator.name }}
+    namespace: {{ .Values.namespace }}
+
+---
+# RoleBinding for ACM Switchover Validator in MCE namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.clusterRole.validator.name }}
+  namespace: {{ .Values.role.namespaces.mce }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.clusterRole.validator.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.validator.name }}
+    namespace: {{ .Values.namespace }}
+
+---
+# RoleBinding for ACM Switchover Validator in ACM namespace (Read-Only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.clusterRole.validator.name }}
+  namespace: {{ .Values.role.namespaces.acm }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.clusterRole.validator.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.validator.name }}
+    namespace: {{ .Values.namespace }}
+{{- end }}

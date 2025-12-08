@@ -388,3 +388,8 @@ class InputValidator:
         if hasattr(args, 'decommission') and not args.decommission:
             if hasattr(args, 'secondary_context') and not args.secondary_context:
                 raise ValidationError("secondary-context is required for switchover operations")
+
+        # Validate that --non-interactive only makes sense with --decommission
+        if hasattr(args, 'non_interactive') and args.non_interactive:
+            if not (hasattr(args, 'decommission') and args.decommission):
+                raise ValidationError("--non-interactive can only be used with --decommission")

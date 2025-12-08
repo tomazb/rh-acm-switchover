@@ -23,8 +23,11 @@ Welcome to the ACM Switchover Automation documentation.
 2. **[Product Requirements (PRD)](PRD.md)** - Complete requirements specification
 3. **[Project Summary](PROJECT_SUMMARY.md)** - Comprehensive project overview
 4. **[Deliverables](DELIVERABLES.md)** - Complete project inventory
+5. **[RBAC Requirements](RBAC_REQUIREMENTS.md)** - Complete RBAC permissions documentation
+6. **[RBAC Deployment Guide](RBAC_DEPLOYMENT.md)** - Step-by-step RBAC deployment
+7. **[RBAC Implementation Summary](RBAC_IMPLEMENTATION_SUMMARY.md)** - Overview of RBAC features
 
-### Development
+### Security
 
 1. **[Contributing (CONTRIBUTING)](CONTRIBUTING.md)** - Development guidelines
 2. **[GitHub Actions Setup](GITHUB_ACTIONS_SETUP.md)** - CI/CD pipeline configuration
@@ -62,10 +65,11 @@ Welcome to the ACM Switchover Automation documentation.
 
 ## 📊 Documentation Statistics
 
-- **Total documentation**: 10 markdown files
-- **Total lines**: ~8,000+ lines
+- **Total documentation**: 13 markdown files
+- **Total lines**: ~12,000+ lines
 - **User guides**: 4 documents
-- **Technical docs**: 4 documents
+- **Technical docs**: 7 documents
+- **Security**: 3 documents
 - **Development**: 2 documents
 
 ---
@@ -85,7 +89,12 @@ Welcome to the ACM Switchover Automation documentation.
 - Detailed usage: [USAGE](USAGE.md)
 - Troubleshooting: [USAGE](USAGE.md)
 
-#### Development Resources
+#### Security
+
+1. **[Security Policy](../SECURITY.md)** - Security policy and vulnerability reporting
+2. **[RBAC Requirements](RBAC_REQUIREMENTS.md)** - RBAC permissions and security controls
+
+### Development Resources
 
 - Architecture: [ARCHITECTURE](ARCHITECTURE.md)
 - Contributing: [CONTRIBUTING](CONTRIBUTING.md)
