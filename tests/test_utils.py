@@ -4,9 +4,7 @@ Modernized pytest tests with fixtures, markers, and better organization.
 Tests cover StateManager, Phase enum, version comparison, and logging setup.
 """
 
-import json
-import os
-import tempfile
+
 from unittest.mock import MagicMock, patch
 
 import pytest

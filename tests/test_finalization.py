@@ -4,7 +4,7 @@ Tests cover Finalization class for completing the switchover.
 """
 
 import sys
-import time
+
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 

@@ -19,7 +19,7 @@ Features:
 import argparse
 import logging
 import os
-import re
+
 import sys
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, cast

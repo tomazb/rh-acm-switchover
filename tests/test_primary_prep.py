@@ -5,7 +5,7 @@ Tests cover PrimaryPreparation class for preparing the primary hub.
 
 import sys
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.primary_prep as primary_prep_module
-from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
+from lib.constants import OBSERVABILITY_NAMESPACE
 
 PrimaryPreparation = primary_prep_module.PrimaryPreparation
 

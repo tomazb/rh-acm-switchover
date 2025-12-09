@@ -12,7 +12,6 @@ import os
 import re
 import stat
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest

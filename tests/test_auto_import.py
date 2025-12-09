@@ -15,9 +15,9 @@ from lib.constants import (
     MCE_NAMESPACE,
     IMPORT_CONTROLLER_CONFIGMAP,
     AUTO_IMPORT_STRATEGY_KEY,
-    AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_SYNC,
 )
+from lib.constants import AUTO_IMPORT_STRATEGY_DEFAULT  # noqa: F401
 
 
 @pytest.mark.unit

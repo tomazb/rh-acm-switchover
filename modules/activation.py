@@ -18,11 +18,11 @@ from lib.constants import (
     MCE_NAMESPACE,
     IMPORT_CONTROLLER_CONFIGMAP,
     AUTO_IMPORT_STRATEGY_KEY,
-    AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_SYNC,
     PATCH_VERIFY_MAX_RETRIES,
     PATCH_VERIFY_RETRY_DELAY,
 )
+from lib.constants import AUTO_IMPORT_STRATEGY_DEFAULT  # noqa: F401
 from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge

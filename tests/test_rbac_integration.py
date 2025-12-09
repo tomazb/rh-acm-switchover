@@ -7,11 +7,8 @@ These tests verify that:
 3. check_rbac.py argument parsing handles all context combinations
 """
 
-import argparse
-import os
-import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import List
 
 import pytest
 import yaml
