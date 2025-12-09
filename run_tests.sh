@@ -15,14 +15,20 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Check if virtual environment exists
-if [ ! -d "venv" ]; then
-    echo -e "${YELLOW}Virtual environment not found. Creating...${NC}"
-    python3 -m venv venv
+# Use existing virtual environment if active, else prefer .venv then venv
+if [ -n "$VIRTUAL_ENV" ]; then
+    echo -e "${GREEN}Using active virtualenv: $VIRTUAL_ENV${NC}"
+elif [ -d ".venv" ]; then
+    echo -e "${GREEN}Activating .venv${NC}"
+    source .venv/bin/activate
+elif [ -d "venv" ]; then
+    echo -e "${GREEN}Activating venv${NC}"
+    source venv/bin/activate
+else
+    echo -e "${YELLOW}No virtualenv found. Creating .venv...${NC}"
+    python3 -m venv .venv
+    source .venv/bin/activate
 fi
-
-# Activate virtual environment
-source venv/bin/activate
 
 # Install dependencies
 echo -e "${GREEN}Installing dependencies...${NC}"
