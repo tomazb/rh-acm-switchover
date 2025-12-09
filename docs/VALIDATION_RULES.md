@@ -181,7 +181,6 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `$HOME/file` (environment variable)
 - `file|command` (pipe)
 - `/etc/passwd` (absolute path outside allowed directories)
-- `.hidden/file` (hidden file - blocked by dot check)
 
 **Note**: Relative paths are always permitted and are resolved relative to the current working directory.
 
@@ -293,6 +292,15 @@ except ValidationError as e:
     print(f"Error: {e}")
     sys.exit(1)
 ```
+
+### Cross-Argument Rules
+
+- Secondary context requirement: `secondary-context` is required for switchover operations unless `--decommission` is set.
+- Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
+
+### Utilities
+
+- Context sanitization: `InputValidator.sanitize_context_identifier(value)` returns a filesystem-friendly identifier derived from a context string.
 
 ### Integration with Existing Code
 
