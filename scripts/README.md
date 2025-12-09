@@ -11,6 +11,7 @@ These scripts automate the validation process before and after switchover, ensur
 | [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
 | [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
 | [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
+| [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
 | [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
 | [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts |
 
@@ -454,6 +455,75 @@ graph TD
 
 ---
 
+## Service Account kubeconfig Generator
+
+**File:** `generate-sa-kubeconfig.sh`
+
+### Purpose
+
+Generates a kubeconfig file that can be used to authenticate as a specific Kubernetes service account. The generated kubeconfig uses a short-lived token (24 hours by default) created via `kubectl create token`, providing secure temporary access without storing permanent credentials.
+
+### Usage
+
+```bash
+# Generate kubeconfig for a service account
+./scripts/generate-sa-kubeconfig.sh <namespace> <service-account-name> [duration] [--context <context>]
+
+# Examples:
+# Default 24-hour token from current context
+./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
+
+# Specify explicit cluster context
+./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 24h --context prod-hub > operator-kubeconfig.yaml
+
+# Custom token duration (8 hours)
+./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 8h > operator-kubeconfig.yaml
+
+# Custom token duration with explicit context
+./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 8h --context staging-hub > operator-kubeconfig.yaml
+
+# With the generated kubeconfig
+export KUBECONFIG=operator-kubeconfig.yaml
+oc get managedclusters
+```
+
+**Arguments:**
+
+- `<namespace>` - Kubernetes namespace where the service account exists (required)
+- `<service-account-name>` - Name of the service account (required)
+- `[duration]` - Token lifetime: `1h`, `8h`, `24h` (default: `24h`)
+- `[--context <context>]` - Kubernetes context to use (optional, uses current context if not specified)
+
+### What It Does
+
+1. Validates that the service account exists in the specified (or current) namespace
+2. Creates a short-lived token via `kubectl create token` with the specified duration
+3. Extracts cluster information from the specified (or current) kubeconfig context
+4. Generates a new kubeconfig file using the service account token
+5. Outputs the kubeconfig to stdout (redirect to file as needed)
+
+### Prerequisites
+
+- `kubectl` configured with cluster access
+- Service account must exist in the target namespace
+- User must have permission to create tokens for the service account
+
+### Use Cases
+
+- **Temporary access for automation**: Service account with limited token lifetime
+- **CI/CD pipelines**: Generate tokens on-the-fly without storing credentials
+- **Audit trails**: Short-lived tokens provide better security than permanent credentials
+- **Multi-cluster access**: Different kubeconfigs for different service accounts
+
+### Exit Codes
+
+- `0` - kubeconfig generated successfully
+- `1` - Missing required arguments
+- `2` - Service account not found
+- `3` - Token creation failed
+
+---
+
 ## Complete Switchover Workflow
 
 This diagram shows how both scripts fit into the overall switchover process:
@@ -640,4 +710,4 @@ For issues or questions:
 
 ---
 
-**Last Updated:** 2025-12-02
+**Last Updated:** 2025-12-09
