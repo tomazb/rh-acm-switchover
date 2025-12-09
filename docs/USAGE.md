@@ -14,6 +14,8 @@ python acm_switchover.py \
   --method passive
 ```
 
+Note: `--secondary-context` is required for all switchover operations unless you are using `--decommission`.
+
 **What this checks:**
 - ✓ Required namespaces exist on both hubs
 - ✓ ACM versions match between hubs
@@ -297,7 +299,7 @@ python acm_switchover.py \
   --non-interactive
 ```
 
-⚠️ **WARNING:** Non-interactive mode proceeds without confirmation. Use only in fully automated environments.
+⚠️ **WARNING:** Non-interactive mode proceeds without confirmation and can only be used together with `--decommission`. Use only in fully automated environments.
 
 ## Troubleshooting
 
