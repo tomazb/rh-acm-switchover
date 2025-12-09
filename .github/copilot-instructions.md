@@ -104,6 +104,13 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 **New workflow step**: Follow idempotent pattern with `state.is_step_completed()` / `mark_step_completed()`
 **New validation**: Add to `lib/validation.py` with `InputValidator` static method
 
+### CLI Validation Guidance (Contributor note)
+- CLI validation is implemented in `lib/validation.py` (class `InputValidator`). When changing existing arguments or adding new ones, update the validator accordingly and add tests in `tests/test_validation.py`.
+- Current important cross-argument rules (enforced by `InputValidator.validate_all_cli_args`):
+    - `--secondary-context` is required for switchover operations unless `--decommission` is set.
+    - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
+- If you change these rules, update `docs/VALIDATION_RULES.md`, `docs/USAGE.md`, and `docs/QUICKREF.md` to match.
+
 ## Files to Know
 
 - `docs/CHANGELOG.md` - Update `[Unreleased]` section for changes
