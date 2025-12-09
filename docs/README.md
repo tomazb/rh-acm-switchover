@@ -1,5 +1,7 @@
 # Documentation Index
 
+Last Updated: 2025-12-09
+
 Welcome to the ACM Switchover Automation documentation.
 
 ## 📖 Documentation Overview
@@ -47,6 +49,35 @@ Welcome to the ACM Switchover Automation documentation.
 2. Review [QUICKREF](QUICKREF.md)
 3. Follow [INSTALL](INSTALL.md)
 4. Try examples from [USAGE](USAGE.md)
+
+### Modes Overview
+
+- **Switchover Mode**: Migrates from the current primary hub to a secondary hub.
+	- Requires `--secondary-context` to target the new hub.
+	- Phases: INIT → PREFLIGHT → PRIMARY_PREP → ACTIVATION → POST_ACTIVATION → FINALIZATION → COMPLETED.
+	- Use `--old-hub-action` to decide treatment of the old hub (`secondary`, `decommission`, `none`).
+
+- **Decommission Mode**: Removes ACM components from a hub.
+	- Enabled with `--decommission`; operates on the hub provided by `--primary-context`.
+	- Does not require `--secondary-context`.
+	- `--non-interactive` is only valid together with `--decommission` for unattended cleanup.
+
+Quick examples:
+
+```bash
+# Switchover to secondary hub
+python acm_switchover.py \
+	--primary-context hub-A \
+	--secondary-context hub-B \
+	--method passive \
+	--old-hub-action secondary
+
+# Decommission old hub (no secondary context needed)
+python acm_switchover.py \
+	--decommission \
+	--primary-context hub-A \
+	--non-interactive
+```
 
 ### For Developers
 
@@ -126,5 +157,4 @@ See [CONTRIBUTING](CONTRIBUTING.md) for more details.
 
 ---
 
-**Last Updated**: November 24, 2025  
-**Version**: 1.0.0
+ 
