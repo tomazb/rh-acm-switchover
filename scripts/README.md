@@ -467,20 +467,20 @@ Generates a kubeconfig file that can be used to authenticate as a specific Kuber
 
 ```bash
 # Generate kubeconfig for a service account
-./scripts/generate-sa-kubeconfig.sh <namespace> <service-account-name> [duration] [--context <context>]
+./scripts/generate-sa-kubeconfig.sh [--context <context>] <namespace> <service-account-name> [duration]
 
 # Examples:
 # Default 24-hour token from current context
 ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
-# Specify explicit cluster context
-./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 24h --context prod-hub > operator-kubeconfig.yaml
+# Specify explicit cluster context (flag comes first)
+./scripts/generate-sa-kubeconfig.sh --context prod-hub acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # Custom token duration (8 hours)
 ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 8h > operator-kubeconfig.yaml
 
-# Custom token duration with explicit context
-./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 8h --context staging-hub > operator-kubeconfig.yaml
+# Combine context and custom duration
+./scripts/generate-sa-kubeconfig.sh --context staging-hub acm-switchover acm-switchover-operator 8h > operator-kubeconfig.yaml
 
 # With the generated kubeconfig
 export KUBECONFIG=operator-kubeconfig.yaml
@@ -489,10 +489,10 @@ oc get managedclusters
 
 **Arguments:**
 
+- `[--context <context>]` - Kubernetes context to use (optional, uses current context if not specified)
 - `<namespace>` - Kubernetes namespace where the service account exists (required)
 - `<service-account-name>` - Name of the service account (required)
 - `[duration]` - Token lifetime: `1h`, `8h`, `24h` (default: `24h`)
-- `[--context <context>]` - Kubernetes context to use (optional, uses current context if not specified)
 
 ### What It Does
 
@@ -521,6 +521,38 @@ oc get managedclusters
 - `1` - Missing required arguments
 - `2` - Service account not found
 - `3` - Token creation failed
+
+### Workflow Diagram
+
+```mermaid
+graph TD
+    A[Start] --> B{--help flag?}
+    B -->|Yes| C[Show Usage]
+    C --> D[Exit 0]
+    B -->|No| E[Parse --context flag]
+    E --> F{Namespace &<br/>SA provided?}
+    F -->|No| G[Show Usage Error]
+    G --> H[Exit 1]
+    F -->|Yes| I{Service Account<br/>exists?}
+    I -->|No| J[Error: SA not found]
+    J --> K[Exit 2]
+    I -->|Yes| L[Extract cluster info<br/>from context]
+    L --> M{Server URL<br/>found?}
+    M -->|No| N[Error: No cluster URL]
+    N --> K
+    M -->|Yes| O[Generate token<br/>with duration]
+    O --> P{Token<br/>created?}
+    P -->|No| Q[Error: Token failed]
+    Q --> R[Exit 3]
+    P -->|Yes| S[Output kubeconfig<br/>to stdout]
+    S --> T[Exit 0]
+    
+    style D fill:#51cf66
+    style T fill:#51cf66
+    style H fill:#ff6b6b
+    style K fill:#ff6b6b
+    style R fill:#ff6b6b
+```
 
 ---
 
