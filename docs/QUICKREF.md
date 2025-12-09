@@ -201,7 +201,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
 | `--reset-state` | Reset state file and start fresh |
 | `--skip-observability-checks` | Skip Observability steps even if detected |
-| `--non-interactive` | Non-interactive mode for decommission |
+| `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--verbose, -v` | Enable verbose logging |
 
 ## Exit Codes
