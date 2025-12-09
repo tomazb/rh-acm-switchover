@@ -2,6 +2,8 @@
 
 All notable changes to the ACM Switchover Automation project will be documented in this file.
 
+Last Updated: 2025-12-09
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -9,14 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+ 
 #### RBAC Model and Security
+
 - **Comprehensive RBAC model**: Complete role-based access control for least privilege access
   - `docs/RBAC_REQUIREMENTS.md`: Detailed RBAC requirements documentation
   - `docs/RBAC_DEPLOYMENT.md`: Step-by-step deployment guide
   - `lib/rbac_validator.py`: RBAC permission validation module
   - `check_rbac.py`: Standalone RBAC checker tool
 
+ 
 #### Deployment Options
+
 - **Kustomize integration**: Base and overlay configurations in `deploy/kustomize/`
   - Base RBAC manifests for all environments
   - Production and development overlays
@@ -30,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 
+ 
 #### Python Preflight/Postflight Enhancements (Future)
+
 - Add `BackupStorageLocationValidator` to Python preflight checks
 - Add `ClusterHealthValidator` (nodes, clusteroperators, clusterversion) to Python preflight
 - Add BSL validation to Python post-activation verification
@@ -42,20 +50,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - PlacementBinding for policy application
   - ACM Policy README with examples
 
+ 
 #### Service Accounts
+
 - **Operator service account**: Full operational permissions for switchover execution
 - **Validator service account**: Read-only permissions for validation and dry-run
 
+ 
 #### CLI Enhancements
+
 - **`--skip-rbac-validation`**: Flag to skip RBAC validation during pre-flight checks
 - **RBAC pre-flight validation**: Automatic permission checks before switchover execution
 
+ 
 #### Documentation
+
 - Added RBAC section to main README
 - Updated prerequisites to include RBAC permissions
 - Added links to RBAC deployment guides
 
+ 
 #### Preflight Script Enhancements
+
 - **Check 7: BackupStorageLocation validation**: Verifies BSL is in "Available" phase on both hubs before switchover
 - **Check 8: Cluster Health validation**: Comprehensive cluster health checks per runbook requirements
   - Verifies all nodes are in Ready state on both hubs
@@ -64,24 +80,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Displays cluster version information
 - Added RBAC permissions for new checks: `nodes`, `clusteroperators`, `clusterversions`, `backupstoragelocations`
 
+ 
 #### Postflight Script Enhancements  
+
 - **Check 5b: BackupStorageLocation validation**: Verifies BSL is "Available" on new hub after switchover
 
-#### KubeClient Improvements
+ 
+- #### KubeClient Improvements
+
 - **`get_secret()` method**: New method to retrieve Kubernetes secrets with proper validation, retry logic, and 404→None handling
 - **Per-instance TLS configuration**: Each KubeClient instance now uses its own Configuration object, preventing `--disable-hostname-verification` from affecting other clients process-wide
 
-#### Patch Verification Improvements
+ 
+- #### Patch Verification Improvements
+
 - **Retry loop with resourceVersion**: Patch verification now uses a bounded retry loop (5 attempts) instead of a single sleep, comparing `resourceVersion` to detect when the API has processed the patch
 - **Better error messages**: Patch verification errors now include resourceVersion information for debugging
 
-#### Test Coverage
+- #### Test Coverage
+
 - Added unit tests for `get_secret()` and `get_secret_not_found` scenarios
 - Added tests for `_force_klusterlet_reconnect` functionality
 
 ### Fixed
 
 #### Security & Robustness
+
 - **Nested retry prevention**: Removed `@retry_api_call` decorator from `secret_exists()` to avoid 5×5=25 retry attempts (it calls `get_secret()` which already has retries)
 - **Explicit boolean check in dry-run decorator**: Changed from truthy check (`if obj:`) to explicit (`if obj is True:`) to prevent skipping execution when dot-path resolves to a truthy non-boolean object
 - **YAML import safety**: Moved `import yaml` to module scope in `post_activation.py` to prevent `NameError` if import fails inside try block
@@ -89,20 +113,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Consistent error logging**: Replaced `print()` with `logger.error()` in validation error handling for proper JSON logging support
 
 #### Error Handling
+
 - **Proper ApiException checks**: Changed from substring matching (`"not found" in str(e)`) to explicit status code checks (`e.status == 404`) in `primary_prep.py`
 - **Domain-specific exceptions**: Replaced generic `Exception` raises with `SwitchoverError` in `post_activation.py` for better error taxonomy
 
 #### Performance
+
 - **Label selectors for pod queries**: Added `label_selector="app.kubernetes.io/part-of=observability"` when querying observability pods to reduce data volume
 
 ### Changed
 
 #### Constants Centralization
+
 - Added `THANOS_COMPACTOR_STATEFULSET` and `THANOS_COMPACTOR_LABEL_SELECTOR` to `lib/constants.py`
 - Added `PATCH_VERIFY_MAX_RETRIES` and `PATCH_VERIFY_RETRY_DELAY` constants
 - Replaced hard-coded namespace/name strings in `primary_prep.py` with constants
 
 #### Path Validation
+
 - Expanded allowed absolute paths to include current working directory and `$HOME` in addition to `/tmp` and `/var`
 - Updated `K8S_NAME_PATTERN` to require first segment start with a letter (stricter DNS-1123 compliance)
 
@@ -116,6 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 #### ACM Version Display in Hub Discovery
+
 - **Enhanced discover-hub.sh output**: Now displays ACM version for each discovered hub during analysis
   - Shows version inline with detection message: `ACM hub detected (version 2.11.8)`
   - Stores version in `HUB_VERSIONS` array for potential future use
@@ -152,11 +181,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 #### Reverse Switchover (Replaces Rollback)
+
 - **Recommended approach**: To return to the original hub, perform a reverse switchover by swapping `--primary-context` and `--secondary-context` values
 - **`--old-hub-action secondary` emphasized**: This option is now marked as **recommended** as it enables seamless reverse switchover by setting up passive sync on the old hub
 - **Documentation updated**: All rollback references replaced with reverse switchover guidance
 
 #### Passive Sync Restore Discovery
+
 - **Dynamic restore discovery**: The passive sync restore is now discovered dynamically by looking for a Restore with `spec.syncRestoreWithNewBackups=true` instead of requiring a hardcoded name
 - **Backward compatibility**: Falls back to well-known name `restore-acm-passive-sync` if no restore with `syncRestoreWithNewBackups=true` is found
 - **Finalization cleanup**: During finalization, all Restore resources in the backup namespace are now listed and cleaned up dynamically

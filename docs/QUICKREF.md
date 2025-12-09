@@ -3,6 +3,7 @@
 ## Installation
 
 ```bash
+
 # Clone repository
 git clone https://github.com/tomazb/rh-acm-switchover.git
 cd rh-acm-switchover
@@ -12,6 +13,7 @@ pip install -r requirements.txt
 
 # OR use interactive quick-start
 ./quick-start.sh
+
 ```
 
 ## Common Commands
@@ -19,6 +21,7 @@ pip install -r requirements.txt
 ### Validation & Dry-Run
 
 ```bash
+
 # Validate everything (recommended first step)
 python acm_switchover.py \
   --validate-only \
@@ -32,11 +35,13 @@ python acm_switchover.py \
   --secondary-context <secondary> \
   --old-hub-action secondary \
   --method passive
+
 ```
 
 ### Switchover Execution
 
 ```bash
+
 # Method 1: Passive sync (continuous restore)
 python acm_switchover.py \
   --primary-context <primary> \
@@ -52,11 +57,13 @@ python acm_switchover.py \
   --method full \
   --old-hub-action decommission \
   --verbose
+
 ```
 
 ### Resume & Reverse Switchover
 
 ```bash
+
 # Resume from interruption (same command as execution)
 python acm_switchover.py \
   --primary-context <primary> \
@@ -71,11 +78,13 @@ python acm_switchover.py \
   --secondary-context <primary> \
   --old-hub-action secondary \
   --method passive
+
 ```
 
 ### Decommission
 
 ```bash
+
 # Interactive decommission
 python acm_switchover.py \
   --decommission \
@@ -86,11 +95,13 @@ python acm_switchover.py \
   --decommission \
   --primary-context <old-hub> \
   --non-interactive
+
 ```
 
 ### State Management
 
 ```bash
+
 # View current state
 cat .state/switchover-<primary>__<secondary>.json | python -m json.tool
 
@@ -106,11 +117,12 @@ python acm_switchover.py \
   --validate-only \
   --primary-context <primary> \
   --secondary-context <secondary>
+
 ```
 
 ## Workflow Cheat Sheet
 
-```
+```text
 1. VALIDATE    →  --validate-only          (2-3 min)
 2. DRY-RUN     →  --dry-run                (2-3 min)
 3. EXECUTE     →  (no flags)               (30-45 min)
@@ -241,6 +253,7 @@ oc rollout restart deployment/observability-observatorium-api \
 ## Support
 
 For issues or questions:
+
 - Review `USAGE.md` for detailed examples
 - Check `ARCHITECTURE.md` for design details
 - Inspect `.state/switchover-<primary>__<secondary>.json` for progress
@@ -249,11 +262,13 @@ For issues or questions:
 ## Quick Start (New Users)
 
 ```bash
+
 # Interactive setup and execution
 ./quick-start.sh
 ```
 
 This guides you through:
+
 1. Dependency installation
 2. Context selection
 3. Method selection

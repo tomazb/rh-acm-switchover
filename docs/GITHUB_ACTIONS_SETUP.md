@@ -42,14 +42,16 @@ The container images are published to Quay.io registry.
 4. Add the following secrets:
 
 **QUAY_USERNAME**
-```
+
+```text
 Value: <your-quay-username>
 # Example: tomazborstnar+acm_switchover_publisher (for robot account)
 # Or: tomazborstnar (for personal account)
 ```
 
 **QUAY_PASSWORD**
-```
+
+```text
 Value: <your-quay-token>
 # Example: ABC123XYZ... (the encrypted password or robot token)
 ```
