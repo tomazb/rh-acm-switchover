@@ -41,8 +41,16 @@ CONTEXT=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --context)
-            CONTEXT="${2:-}"
-            shift 2
+            # Validate that a context value is provided and doesn't look like a flag
+            if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+                CONTEXT="${2}"
+                shift 2
+            else
+                echo "Error: --context requires a value (context name)" >&2
+                echo "" >&2
+                echo "Usage: $0 [--context <context>] <namespace> <service-account-name> [duration]" >&2
+                exit 1
+            fi
             ;;
         --help|-h)
             echo "Usage: $0 [--context <context>] <namespace> <service-account-name> [duration]"
