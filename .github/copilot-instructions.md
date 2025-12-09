@@ -89,6 +89,14 @@ pytest -m integration tests/  # Integration tests
 
 Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock responses should include `resourceVersion` in metadata for patch verification tests.
 
+### Virtual Environment Usage
+- Prefer activating an existing virtual environment before running tooling.
+- The test runner (`run_tests.sh`) will detect an active `$VIRTUAL_ENV`, otherwise it will try `.venv/` first, then `venv/`, and create `.venv/` if none exist.
+- Recommended setup:
+    - Create `.venv` once: `python3 -m venv .venv`
+    - Activate: `source .venv/bin/activate`
+    - Then run: `./run_tests.sh`
+
 ## Common Tasks
 
 **Adding a new constant**: Add to `lib/constants.py`, import where needed
