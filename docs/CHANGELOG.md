@@ -2,10 +2,75 @@
 
 All notable changes to the ACM Switchover Automation project will be documented in this file.
 
-Last Updated: 2025-12-09
+Last Updated: 2025-12-11
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.3.1] - 2025-12-11
+
+### Added
+
+#### Script Version Tracking
+
+- **Version display in all scripts**: Scripts now display version number in output header for troubleshooting
+  - `preflight-check.sh v1.3.1 (2025-12-11)` shown after banner
+  - `postflight-check.sh v1.3.1 (2025-12-11)` shown after banner
+  - `discover-hub.sh v1.3.1 (2025-12-11)` shown after banner
+- **Version constants in `constants.sh`**:
+  - `SCRIPT_VERSION="1.3.1"` - Semantic version number
+  - `SCRIPT_VERSION_DATE="2025-12-11"` - Version release date
+- **Version helper functions in `lib-common.sh`**:
+  - `print_script_version()` - Print version line for script headers
+
+#### Python Version Tracking
+
+- **Version constants in `lib/__init__.py`**:
+  - `__version__ = "1.3.1"` - Semantic version number
+  - `__version_date__ = "2025-12-11"` - Version release date
+- **Version display at startup**: `ACM Hub Switchover Automation v1.3.1 (2025-12-11)`
+- **Version stored in state files**: `tool_version` field added to state JSON for troubleshooting
+
+#### Hub Summary Section in Preflight
+
+- **New Hub Summary display**: After ACM version checks, shows a clear summary of both hubs:
+  ```
+  Hub Summary
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ● primary-hub
+      Role:     primary
+      Version:  2.11.8
+      Clusters: 5/5 (available/total)
+      State:    Active primary hub (BackupSchedule running)
+
+    ● secondary-hub
+      Role:     secondary
+      Version:  2.11.8
+      Clusters: 0/8 (available/total)
+      State:    Secondary hub (clusters in Unknown state)
+  ```
+- **New helper functions in `lib-common.sh`**:
+  - `get_total_mc_count()` - Get total managed cluster count (excluding local-cluster)
+  - `get_available_mc_count()` - Get count of available/connected managed clusters
+  - `get_backup_schedule_state()` - Get BackupSchedule state (running/paused/none)
+  - `print_hub_summary()` - Print a hub summary card with role, version, clusters, state
+
+#### Improved Secondary Hub Managed Cluster Check
+
+- **New Section 13: "Checking Secondary Hub Managed Clusters"**: Separate check for pre-existing clusters
+  - Shows available/total count (e.g., "0/8 available") for better visibility
+  - Specific messaging based on cluster state (all Unknown, some Unknown, all available)
+  - Runs for all ACM versions (not just 2.14+)
+- **Section 14: Auto-Import Strategy** now only shows for ACM 2.14+
+  - Clear skip message for older versions: "ACM 2.11.8 (autoImportStrategy not applicable, requires 2.14+)"
+
+### Fixed
+
+- **Managed cluster count parsing**: Fixed issue where cluster count could include newlines causing arithmetic errors
+  - Changed `grep -cv` to `grep -v | wc -l` for more reliable counting
+  - Added `tr -d '[:space:]'` to sanitize output
+  - Added `${count:-0}` fallback for empty results
 
 ## [Unreleased]
 
