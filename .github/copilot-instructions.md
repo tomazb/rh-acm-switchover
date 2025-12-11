@@ -115,5 +115,78 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 
 - `docs/CHANGELOG.md` - Update `[Unreleased]` section for changes
 - `docs/ARCHITECTURE.md` - Design decisions and module descriptions
-- `lib/constants.py` - All magic strings centralized here
+- `lib/constants.py` - All magic strings centralized here (Python)
+- `scripts/constants.sh` - All magic strings centralized here (Bash)
 - `setup.cfg` - pytest, flake8, mypy configuration
+
+## Version Management
+
+**IMPORTANT**: Python and Bash versions MUST always be in sync. When making changes to either Python or Bash code, update BOTH version files to the same version.
+
+### Version Locations
+
+| Component | File | Variables |
+|-----------|------|-----------|
+| **Bash Scripts** | `scripts/constants.sh` | `SCRIPT_VERSION`, `SCRIPT_VERSION_DATE` |
+| **Python Tool** | `lib/__init__.py` | `__version__`, `__version_date__` |
+| **README** | `README.md` | Version badge at top of file |
+
+### Bash Scripts Version
+
+Location: `scripts/constants.sh`
+
+```bash
+export SCRIPT_VERSION="X.Y.Z"
+export SCRIPT_VERSION_DATE="YYYY-MM-DD"
+```
+
+**When to bump**:
+- **PATCH (X.Y.Z → X.Y.Z+1)**: Bug fixes, minor improvements, documentation updates
+- **MINOR (X.Y.Z → X.Y+1.0)**: New checks, new features, significant improvements
+- **MAJOR (X.Y.Z → X+1.0.0)**: Breaking changes to script behavior or output format
+
+**Files that use this version**:
+- `scripts/preflight-check.sh` - displays via `print_script_version`
+- `scripts/postflight-check.sh` - displays via `print_script_version`
+- `scripts/discover-hub.sh` - displays via `print_script_version`
+
+### Python Tool Version
+
+Location: `lib/__init__.py`
+
+```python
+__version__ = "X.Y.Z"
+__version_date__ = "YYYY-MM-DD"
+```
+
+**When to bump**: Same rules as bash scripts (PATCH/MINOR/MAJOR).
+
+**Files that use this version**:
+- `acm_switchover.py` - displays at startup: `ACM Hub Switchover Automation vX.Y.Z (YYYY-MM-DD)`
+- `lib/utils.py` - stores `tool_version` in state files for troubleshooting
+- `check_rbac.py` - can import and display version
+- `show_state.py` - can import and display version
+
+### Changelog Updates
+
+Location: `docs/CHANGELOG.md`
+
+1. For new releases, create a new section: `## [X.Y.Z] - YYYY-MM-DD`
+2. For ongoing work, add entries under `## [Unreleased]`
+3. Group changes by: `### Added`, `### Changed`, `### Fixed`, `### Removed`
+
+### Version Update Checklist
+
+When making script changes:
+1. [ ] Update `SCRIPT_VERSION` in `scripts/constants.sh`
+2. [ ] Update `SCRIPT_VERSION_DATE` to current date
+3. [ ] Update version in `README.md` (top of file)
+4. [ ] Add changelog entry in `docs/CHANGELOG.md`
+5. [ ] Update `scripts/README.md` if new features/checks added
+
+When making Python code changes:
+1. [ ] Update `__version__` in `lib/__init__.py`
+2. [ ] Update `__version_date__` to current date
+3. [ ] Update version in `README.md` (top of file)
+4. [ ] Add changelog entry in `docs/CHANGELOG.md`
+5. [ ] Keep Python and Bash versions in sync if changes affect both
