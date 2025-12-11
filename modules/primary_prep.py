@@ -101,7 +101,11 @@ class PrimaryPreparation:
 
         # Assume first BackupSchedule (typically only one exists)
         bs = backup_schedules[0]
-        bs_name = bs.get("metadata", {}).get("name", "schedule-rhacm")
+        bs_name = bs.get("metadata", {}).get("name")
+        
+        if not bs_name:
+            logger.error("BackupSchedule found but has no name in metadata")
+            return
 
         # Check if already paused
         if bs.get("spec", {}).get("paused") is True:

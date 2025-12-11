@@ -161,7 +161,7 @@ graph TD
 
 - [ ] Most recent backup completed successfully
   ```bash
-  oc get backup -n open-cluster-management-backup
+  oc get backup.velero.io -n open-cluster-management-backup
   ```
 - [ ] Confirm no backups are in "InProgress" state
 - [ ] Verify secondary hub has same ACM version as primary
@@ -170,7 +170,7 @@ graph TD
 - [ ] Check access to same S3 storage location from both hubs
 - [ ] BackupStorageLocation shows "Available" on both hubs
   ```bash
-  oc get backupstoragelocation -n open-cluster-management-backup \
+  oc get backupstoragelocation.velero.io -n open-cluster-management-backup \
     -o custom-columns=NAME:.metadata.name,PHASE:.status.phase
   ```
 - [ ] DataProtectionApplication reports Ready/Available
@@ -204,8 +204,20 @@ oc get clusterdeployment --all-namespaces \
 
 **For ANY ClusterDeployment showing "false" or "<none>", patch it immediately:**
 ```bash
-oc patch clusterdeployment <cluster-deployment-name> -n <namespace> \
+# Example: Patch a single ClusterDeployment
+oc patch clusterdeployment.hive.openshift.io <cluster-deployment-name> -n <namespace> \
   --type='merge' -p '{"spec":{"preserveOnDelete":true}}'
+
+# Example: Batch update all ClusterDeployments with preserveOnDelete set to false or missing
+for cd in $(oc get clusterdeployment.hive.openshift.io --all-namespaces \
+  -o json | jq -r '.items[] | select(.spec.preserveOnDelete != true) | 
+  "\(.metadata.namespace)/\(.metadata.name)"'); do
+  namespace=$(echo "$cd" | cut -d/ -f1)
+  name=$(echo "$cd" | cut -d/ -f2)
+  echo "Patching ClusterDeployment $name in namespace $namespace"
+  oc patch clusterdeployment.hive.openshift.io "$name" -n "$namespace" \
+    --type='merge' -p '{"spec":{"preserveOnDelete":true}}'
+done
 ```
 
 **Verify all show "true" before proceeding with switchover.**
@@ -222,19 +234,27 @@ Pause the BackupSchedule resources on the current primary hub to prevent new bac
 
 **Find the BackupSchedule:**
 ```bash
-oc get backupschedule -n open-cluster-management-backup
+# Use full API group to avoid ambiguity
+oc get backupschedule.cluster.open-cluster-management.io -n open-cluster-management-backup
+
+# Get the BackupSchedule name (common names: schedule-rhacm, acm-backup-schedule)
+BACKUP_SCHEDULE_NAME=$(oc get backupschedule.cluster.open-cluster-management.io \
+  -n open-cluster-management-backup -o jsonpath='{.items[0].metadata.name}')
+
+echo "BackupSchedule name: $BACKUP_SCHEDULE_NAME"
 ```
 
 #### For ACM 2.12+:
 ```bash
-oc patch backupschedule schedule-rhacm -n open-cluster-management-backup \
-  --type='merge' -p '{"spec":{"paused":true}}'
+# Use the variable set above or replace $BACKUP_SCHEDULE_NAME with actual name
+oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+  -n open-cluster-management-backup --type='merge' -p '{"spec":{"paused":true}}'
 ```
 
 **Verify:**
 ```bash
-oc get backupschedule schedule-rhacm -n open-cluster-management-backup \
-  -o jsonpath='{.spec.paused}'
+oc get backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+  -n open-cluster-management-backup -o jsonpath='{.spec.paused}'
 # Should return: true
 ```
 
@@ -242,19 +262,21 @@ oc get backupschedule schedule-rhacm -n open-cluster-management-backup \
 
 Save the BackupSchedule first:
 ```bash
-oc get backupschedule schedule-rhacm -n open-cluster-management-backup \
-  -o yaml > schedule-rhacm.yaml
+# Use the variable set above or replace $BACKUP_SCHEDULE_NAME with actual name
+oc get backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+  -n open-cluster-management-backup -o yaml > "${BACKUP_SCHEDULE_NAME}.yaml"
 ```
 
 Delete it:
 ```bash
-oc delete backupschedule schedule-rhacm -n open-cluster-management-backup
+oc delete backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+  -n open-cluster-management-backup
 ```
 
 **To restore later:** Clean up status and certain metadata fields (uid, resourceVersion, managedFields, status), then re-apply. Example:
 ```bash
 yq 'del(.metadata.uid, .metadata.resourceVersion, .metadata.managedFields, .status)' \
-  schedule-rhacm.yaml | oc apply -f -
+  "${BACKUP_SCHEDULE_NAME}.yaml" | oc apply -f -
 ```
 
 ---
@@ -333,10 +355,10 @@ oc get restore restore-acm-passive-sync -n open-cluster-management-backup \
 
 **Verify these match recent backups from primary:**
 ```bash
-for s in $(oc get backup -n open-cluster-management-backup --context <primary> -o json \
+for s in $(oc get backup.velero.io -n open-cluster-management-backup --context <primary> -o json \
   | jq -r '.items[].metadata.labels["velero.io/schedule-name"]' | sort -u); do
   echo -n "$s: "
-  oc get backup -n open-cluster-management-backup --context <primary> \
+  oc get backup.velero.io -n open-cluster-management-backup --context <primary> \
     -l velero.io/schedule-name="$s" \
     --sort-by=.metadata.creationTimestamp --no-headers | tail -n1 | awk '{print $1 " (" $2 ")"}'
 done
@@ -475,7 +497,7 @@ oc describe restore restore-acm-activate -n open-cluster-management-backup
 Use when passive sync was NOT running. If the primary hub is still accessible, you may still perform steps 1–3 on the primary (pause backups, disable auto-import, stop Thanos compactor) as pre-restore safety measures.
 
 ### F1. (Optional, primary reachable) Pause BackupSchedule on primary hub
-- **2.12+:** `oc patch backupschedule schedule-rhacm ... paused=true`
+- **2.12+:** Use variable-based approach from Step 1 to pause BackupSchedule
 - **2.11:** Save YAML then delete BackupSchedule (same commands as step 1)
 
 ### F2. (Optional) Prevent auto-import on primary hub
@@ -525,7 +547,7 @@ After activation completes, verify that ManagedClusters are connecting to the ne
 **Check ManagedCluster status:**
 ```bash
 oc get managedclusters \
-  -o custom-columns=NAME:.metadata.name,AVAILABLE:.status.conditions[?(@.type==\"ManagedClusterConditionAvailable\")].status
+  -o custom-columns='NAME:.metadata.name,AVAILABLE:.status.conditions[?(@.type=="ManagedClusterConditionAvailable")].status'
 ```
 
 **Check for clusters in Pending Import state:**
@@ -545,7 +567,7 @@ oc get secrets -n <cluster-namespace> | grep import
 **Verify cluster join status:**
 ```bash
 oc get managedclusters \
-  -o custom-columns=NAME:.metadata.name,JOINED:.status.conditions[?(@.type==\"ManagedClusterJoined\")].status
+  -o custom-columns='NAME:.metadata.name,JOINED:.status.conditions[?(@.type=="ManagedClusterJoined")].status'
 ```
 
 **All clusters should show `AVAILABLE=True` and `JOINED=True` within 5-10 minutes.**
@@ -657,26 +679,57 @@ oc get route grafana -n open-cluster-management-observability -o jsonpath='{.spe
 
 Now that the secondary hub is the active primary, enable the BackupSchedule to resume regular backups.
 
+> **NOTE:** This step applies to ACM 2.12+ when using the patch method. For ACM 2.11, see note below.
+
 ```bash
-oc patch backupschedule schedule-rhacm -n open-cluster-management-backup \
-  --type='merge' -p '{"spec":{"paused":false}}'
+# Use the BackupSchedule name from Step 1, or find it dynamically
+BACKUP_SCHEDULE_NAME=$(oc get backupschedule.cluster.open-cluster-management.io \
+  -n open-cluster-management-backup -o jsonpath='{.items[0].metadata.name}')
+
+oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+  -n open-cluster-management-backup --type='merge' -p '{"spec":{"paused":false}}'
 ```
 
 > **Note (ACM 2.11):** If you deleted the BackupSchedule in step 1, re-apply the saved YAML (after cleaning metadata) instead of patching:
 > ```bash
-> oc apply -f schedule-rhacm.yaml
+> oc apply -f "${BACKUP_SCHEDULE_NAME}.yaml"
 > ```
+
+**If BackupSchedule does not exist on the new hub**, create one. Here's an example BackupSchedule configuration with `useManagedServiceAccount` option:
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: BackupSchedule
+metadata:
+  name: schedule-rhacm
+  namespace: open-cluster-management-backup
+spec:
+  # Schedule in cron format (this example: every 4 hours)
+  veleroSchedule: "0 */4 * * *"
+  
+  # Retention policy - keep backups for 7 days
+  veleroTtl: 168h
+  
+  # Use managed service account for backup operations (ACM 2.11+)
+  useManagedServiceAccount: true
+```
+
+Apply the BackupSchedule:
+```bash
+oc apply -f backupschedule.yaml
+```
 
 **Verify backups resume:**
 ```bash
-oc get backupschedule schedule-rhacm -n open-cluster-management-backup
+oc get backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+  -n open-cluster-management-backup
 # Phase should be "Enabled"
 ```
 
 **Check that new backups are being created:**
 ```bash
 # Wait 5-10 minutes, then check newest entries:
-oc get backup -n open-cluster-management-backup \
+oc get backup.velero.io -n open-cluster-management-backup \
   --sort-by=.metadata.creationTimestamp | tail -n10
 # Should show new backups with recent timestamps
 ```
@@ -695,11 +748,11 @@ Before decommissioning the old hub, verify the backup integrity.
 
 ```bash
 # Get the newest backup name by creationTimestamp
-BACKUP_NAME=$(oc get backup -n open-cluster-management-backup \
+BACKUP_NAME=$(oc get backup.velero.io -n open-cluster-management-backup \
   --sort-by=.metadata.creationTimestamp -o name | tail -n1 | cut -d/ -f2)
 
 # Verify backup status:
-oc get backup "$BACKUP_NAME" -n open-cluster-management-backup -o yaml | grep -A 5 "status:"
+oc get backup.velero.io "$BACKUP_NAME" -n open-cluster-management-backup -o yaml | grep -A 5 "status:"
 
 # Check backup logs:
 oc logs -n open-cluster-management-backup deployment/velero -c velero | grep "$BACKUP_NAME"
@@ -726,12 +779,12 @@ oc logs -n open-cluster-management-backup deployment/velero -c velero | grep "$B
    - Create an on-demand backup using your standard process (e.g., Velero Backup CR) targeting the same storage location.
    - Monitor until it completes successfully:
    ```bash
-   oc get backup -n open-cluster-management-backup -w
+   oc get backup.velero.io -n open-cluster-management-backup -w
    ```
 3. Inspect storage backend connectivity and authentication.
    ```bash
    # BackupStorageLocation phase and messages
-   oc get backupstoragelocation -n open-cluster-management-backup -o yaml | grep -E "phase:|message:"
+   oc get backupstoragelocation.velero.io -n open-cluster-management-backup -o yaml | grep -E "phase:|message:"
    ```
 4. Check capacity and quotas; free space or adjust quotas if needed.
    ```bash
@@ -803,7 +856,7 @@ oc get clusterdeployment --all-namespaces \
 ```bash
 # On NEW HUB:
 oc get managedclusters \
-  -o custom-columns=NAME:.metadata.name,AVAILABLE:.status.conditions[?(@.type==\"ManagedClusterConditionAvailable\")].status
+  -o custom-columns='NAME:.metadata.name,AVAILABLE:.status.conditions[?(@.type=="ManagedClusterConditionAvailable")].status'
 # All should show AVAILABLE=True on new hub before proceeding
 ```
 
@@ -887,8 +940,12 @@ oc scale deployment observability-observatorium-api \
 
 **Unpause BackupSchedule:**
 ```bash
-oc patch backupschedule schedule-rhacm -n open-cluster-management-backup \
-  --type='merge' -p '{"spec":{"paused":false}}'
+# Find the BackupSchedule name dynamically
+BACKUP_SCHEDULE_NAME=$(oc get backupschedule.cluster.open-cluster-management.io \
+  -n open-cluster-management-backup -o jsonpath='{.items[0].metadata.name}')
+
+oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+  -n open-cluster-management-backup --type='merge' -p '{"spec":{"paused":false}}'
 ```
 
 ### 3. Wait for managed clusters to reconnect to primary hub (5-10 minutes)

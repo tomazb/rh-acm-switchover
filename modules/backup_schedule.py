@@ -36,7 +36,11 @@ class BackupScheduleManager:
             return
 
         schedule = schedules[0]
-        schedule_name = schedule.get("metadata", {}).get("name", "schedule-rhacm")
+        schedule_name = schedule.get("metadata", {}).get("name")
+        if not schedule_name:
+            logger.error("BackupSchedule found but has no name in metadata")
+            return
+
         paused = schedule.get("spec", {}).get("paused")
 
         if paused is False or "paused" not in schedule.get("spec", {}):
