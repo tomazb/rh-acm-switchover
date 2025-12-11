@@ -687,6 +687,7 @@ echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║   ACM Hub Discovery                                        ║"
 echo "╚════════════════════════════════════════════════════════════╝"
+print_script_version "discover-hub.sh"
 echo ""
 
 # Check CLI tools (using function from lib-common.sh)

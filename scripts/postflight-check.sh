@@ -77,6 +77,7 @@ echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║   ACM Switchover Post-flight Verification                 ║"
 echo "╚════════════════════════════════════════════════════════════╝"
+print_script_version "postflight-check.sh"
 echo ""
 echo "New Hub:        $NEW_HUB_CONTEXT"
 if [[ -n "$OLD_HUB_CONTEXT" ]]; then
