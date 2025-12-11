@@ -95,6 +95,7 @@ echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║   ACM Switchover Pre-flight Validation                    ║"
 echo "╚════════════════════════════════════════════════════════════╝"
+print_script_version "preflight-check.sh"
 echo ""
 echo "Primary Hub:    $PRIMARY_CONTEXT"
 echo "Secondary Hub:  $SECONDARY_CONTEXT"
@@ -170,6 +171,44 @@ if [[ "$PRIMARY_VERSION" == "$SECONDARY_VERSION" ]] && [[ "$PRIMARY_VERSION" != 
 else
     check_fail "ACM version mismatch: Primary=$PRIMARY_VERSION, Secondary=$SECONDARY_VERSION"
 fi
+
+# Gather managed cluster counts for both hubs (used in summary and later checks)
+PRIMARY_MC_TOTAL=$(get_total_mc_count "$PRIMARY_CONTEXT")
+PRIMARY_MC_AVAILABLE=$(get_available_mc_count "$PRIMARY_CONTEXT")
+SECONDARY_MC_TOTAL=$(get_total_mc_count "$SECONDARY_CONTEXT")
+SECONDARY_MC_AVAILABLE=$(get_available_mc_count "$SECONDARY_CONTEXT")
+
+# Get backup schedule states
+PRIMARY_BACKUP_STATE=$(get_backup_schedule_state "$PRIMARY_CONTEXT")
+SECONDARY_BACKUP_STATE=$(get_backup_schedule_state "$SECONDARY_CONTEXT")
+
+# Determine hub states for summary
+PRIMARY_STATE_DESC="Active primary hub"
+if [[ "$PRIMARY_BACKUP_STATE" == "running" ]]; then
+    PRIMARY_STATE_DESC="Active primary hub (BackupSchedule running)"
+elif [[ "$PRIMARY_BACKUP_STATE" == "paused" ]]; then
+    PRIMARY_STATE_DESC="Primary hub with paused backups"
+fi
+
+SECONDARY_STATE_DESC="Secondary hub"
+if [[ "$SECONDARY_BACKUP_STATE" == "running" ]]; then
+    SECONDARY_STATE_DESC="Secondary hub (BackupSchedule running - unexpected)"
+elif [[ "$SECONDARY_MC_TOTAL" -eq 0 ]]; then
+    SECONDARY_STATE_DESC="Secondary hub (clean, ready for restore)"
+elif [[ "$SECONDARY_MC_AVAILABLE" -eq 0 ]] && [[ "$SECONDARY_MC_TOTAL" -gt 0 ]]; then
+    SECONDARY_STATE_DESC="Secondary hub (clusters in Unknown state)"
+else
+    SECONDARY_STATE_DESC="Secondary hub (has existing clusters)"
+fi
+
+# Print Hub Summary
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}Hub Summary${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+print_hub_summary "$PRIMARY_CONTEXT" "$PRIMARY_VERSION" "primary" "$PRIMARY_MC_AVAILABLE" "$PRIMARY_MC_TOTAL" "$PRIMARY_STATE_DESC"
+print_hub_summary "$SECONDARY_CONTEXT" "$SECONDARY_VERSION" "secondary" "$SECONDARY_MC_AVAILABLE" "$SECONDARY_MC_TOTAL" "$SECONDARY_STATE_DESC"
+echo ""
 
 # Check 5: Verify OADP operator
 section_header "5. Checking OADP Operator"
@@ -561,8 +600,30 @@ else
     check_pass "Observability not detected (optional component)"
 fi
 
-# Check 13: Verify Auto-Import Strategy (ACM 2.14+)
-section_header "13. Checking Auto-Import Strategy (ACM 2.14+)"
+# Check 13: Verify Secondary Hub Pre-existing Managed Clusters
+section_header "13. Checking Secondary Hub Managed Clusters"
+
+# Use already-gathered managed cluster counts from hub summary
+if [[ "$SECONDARY_MC_TOTAL" -gt 0 ]]; then
+    if [[ "$SECONDARY_MC_AVAILABLE" -eq 0 ]]; then
+        check_warn "Secondary hub: Has $SECONDARY_MC_TOTAL existing managed cluster(s) - all in Unknown state (0/${SECONDARY_MC_TOTAL} available)"
+        echo -e "${YELLOW}       These clusters may be remnants from a previous restore or test.${NC}"
+        echo -e "${YELLOW}       They will likely reconnect after switchover, or may need cleanup.${NC}"
+    elif [[ "$SECONDARY_MC_AVAILABLE" -lt "$SECONDARY_MC_TOTAL" ]]; then
+        check_warn "Secondary hub: Has $SECONDARY_MC_TOTAL existing managed cluster(s) (${SECONDARY_MC_AVAILABLE}/${SECONDARY_MC_TOTAL} available)"
+        echo -e "${YELLOW}       Some clusters are not available - review before restore.${NC}"
+        echo -e "${YELLOW}       They may conflict with clusters being restored from the primary hub.${NC}"
+    else
+        check_warn "Secondary hub: Has $SECONDARY_MC_TOTAL existing managed cluster(s) (${SECONDARY_MC_AVAILABLE}/${SECONDARY_MC_TOTAL} available)"
+        echo -e "${YELLOW}       Review these clusters before restore - they may conflict with${NC}"
+        echo -e "${YELLOW}       clusters being restored from the primary hub.${NC}"
+    fi
+else
+    check_pass "Secondary hub: No pre-existing managed clusters (clean restore target)"
+fi
+
+# Check 14: Verify Auto-Import Strategy (ACM 2.14+ only)
+section_header "14. Checking Auto-Import Strategy (ACM 2.14+ only)"
 
 # Check primary hub
 if is_acm_214_or_higher "$PRIMARY_VERSION"; then
@@ -579,29 +640,12 @@ if is_acm_214_or_higher "$PRIMARY_VERSION"; then
         echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
     fi
 else
-    check_pass "Primary hub: ACM version $PRIMARY_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
+    check_pass "Primary hub: ACM $PRIMARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
 fi
 
-# Get secondary hub auto-import strategy
-SECONDARY_STRATEGY=$(get_auto_import_strategy "$SECONDARY_CONTEXT")
-
-# Count managed clusters on secondary hub (excluding local-cluster)
-# Capture oc output first, then count - this properly detects oc failures
-SECONDARY_CLUSTERS_OUTPUT=$(oc --context="$SECONDARY_CONTEXT" get managedclusters --no-headers 2>/dev/null)
-SECONDARY_CLUSTERS_EXIT=$?
-if [[ $SECONDARY_CLUSTERS_EXIT -ne 0 ]]; then
-    check_fail "Secondary hub: Could not list managed clusters. Cannot verify auto-import strategy requirements."
-    SECONDARY_CLUSTER_COUNT=0
-else
-    # Count managed clusters excluding local-cluster
-    # grep -cv returns 1 when count is 0, so use || true to handle that case, then default to 0 if empty
-    SECONDARY_CLUSTER_COUNT=$(echo "$SECONDARY_CLUSTERS_OUTPUT" | grep -cv "$LOCAL_CLUSTER_NAME" || true)
-    # Ensure we have a valid number (handle empty output or other edge cases)
-    SECONDARY_CLUSTER_COUNT=${SECONDARY_CLUSTER_COUNT:-0}
-fi
-
-# Check if secondary hub is ACM 2.14+
+# Check secondary hub
 if is_acm_214_or_higher "$SECONDARY_VERSION"; then
+    SECONDARY_STRATEGY=$(get_auto_import_strategy "$SECONDARY_CONTEXT")
     if [[ "$SECONDARY_STRATEGY" == "error" ]]; then
         check_fail "Secondary hub: Could not retrieve autoImportStrategy (connection or API error)"
     elif [[ "$SECONDARY_STRATEGY" == "default" ]]; then
@@ -614,21 +658,19 @@ if is_acm_214_or_higher "$SECONDARY_VERSION"; then
         echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
     fi
     
-    # If secondary hub already has managed clusters (more than just local-cluster), warn about ImportAndSync
-    if [[ $SECONDARY_CLUSTER_COUNT -gt 0 ]]; then
-        check_warn "Secondary hub: Has $SECONDARY_CLUSTER_COUNT existing managed cluster(s)"
-        echo -e "${YELLOW}       IMPORTANT for ACM 2.14+ restore:${NC}"
+    # If secondary hub already has managed clusters, provide ImportAndSync guidance
+    if [[ $SECONDARY_MC_TOTAL -gt 0 ]]; then
+        check_warn "Secondary hub: Pre-existing clusters require autoImportStrategy change for restore"
+        echo -e "${YELLOW}       IMPORTANT for ACM 2.14+ restore with existing clusters:${NC}"
         echo -e "${YELLOW}       1. BEFORE restore: Change autoImportStrategy to '$AUTO_IMPORT_STRATEGY_SYNC'${NC}"
         echo -e "${YELLOW}          oc -n $MCE_NAMESPACE create configmap $IMPORT_CONTROLLER_CONFIGMAP \\${NC}"
         echo -e "${YELLOW}            --from-literal=$AUTO_IMPORT_STRATEGY_KEY=$AUTO_IMPORT_STRATEGY_SYNC --dry-run=client -o yaml | oc apply -f -${NC}"
         echo -e "${YELLOW}       2. AFTER restore completes: Remove the configmap to restore default behavior${NC}"
         echo -e "${YELLOW}          oc -n $MCE_NAMESPACE delete configmap $IMPORT_CONTROLLER_CONFIGMAP${NC}"
         echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
-    else
-        check_pass "Secondary hub: No pre-existing managed clusters (ImportOnly is appropriate)"
     fi
 else
-    check_pass "Secondary hub: ACM version $SECONDARY_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
+    check_pass "Secondary hub: ACM $SECONDARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
 fi
 
 # Summary and exit
