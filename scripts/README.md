@@ -15,6 +15,24 @@ These scripts automate the validation process before and after switchover, ensur
 | [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
 | [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts |
 
+## Version Tracking
+
+All scripts display their version number in the output header for troubleshooting purposes:
+
+```
+╔════════════════════════════════════════════════════════════╗
+║   ACM Switchover Pre-flight Validation                    ║
+╚════════════════════════════════════════════════════════════╝
+preflight-check.sh v1.3.0 (2025-12-11)
+```
+
+The version is defined in `constants.sh` and follows [Semantic Versioning](https://semver.org/):
+- **MAJOR**: Breaking changes to script behavior or output format
+- **MINOR**: New features, new checks, significant improvements
+- **PATCH**: Bug fixes, minor improvements
+
+When reporting issues, always include the script version from the output.
+
 ## Idempotency & Safety
 
 **Scripts are fully idempotent and safe to run multiple times:**
@@ -94,6 +112,7 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Hub Discovery                                        ║
 ╚════════════════════════════════════════════════════════════╝
+discover-hub.sh v1.3.0 (2025-12-11)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts
@@ -164,6 +183,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 2. **Kubernetes Contexts** - Confirms contexts exist and are accessible
 3. **Namespace Access** - Validates required namespaces on both hubs
 4. **ACM Versions** - Ensures versions match between hubs
+   - Also gathers managed cluster counts and displays a **Hub Summary**
 5. **OADP Operator** - Checks OADP is installed and Velero pods running
 6. **DataProtectionApplication** - Verifies DPA is configured and reconciled
 7. **BackupStorageLocation** - Validates BSL is in "Available" phase (storage accessible)
@@ -176,7 +196,11 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 10. **ClusterDeployment Safety** - **CRITICAL:** Verifies `preserveOnDelete=true` on ALL ClusterDeployments
 11. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
 12. **Observability** - Detects if observability is installed (optional) - Checks for CRs and secrets
-13. **Auto-Import Strategy** (ACM 2.14+) - Validates `autoImportStrategy` configuration:
+13. **Secondary Hub Managed Clusters** - Checks for pre-existing clusters on secondary:
+    - Shows available/total count (e.g., "0/8 available")
+    - Warns if clusters exist in Unknown state (may need cleanup)
+14. **Auto-Import Strategy** (ACM 2.14+ only) - Validates `autoImportStrategy` configuration:
+    - Skipped for ACM versions < 2.14
     - Warns if non-default strategy is set on either hub
     - For secondary hubs with existing clusters: advises temporary `ImportAndSync` before restore
     - Links to Red Hat documentation for guidance
@@ -187,6 +211,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                    ║
 ╚════════════════════════════════════════════════════════════╝
+preflight-check.sh v1.3.0 (2025-12-11)
 
 Primary Hub:    primary-hub
 Secondary Hub:  secondary-hub
@@ -200,12 +225,37 @@ Method:         passive
 
 [... additional checks ...]
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. Checking ACM Versions
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ Primary hub ACM version: 2.11.0
+✓ Secondary hub ACM version: 2.11.0
+✓ ACM versions match between hubs
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Hub Summary
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ● primary-hub
+    Role:     primary
+    Version:  2.11.0
+    Clusters: 5/5 (available/total)
+    State:    Active primary hub (BackupSchedule running)
+
+  ● secondary-hub
+    Role:     secondary
+    Version:  2.11.0
+    Clusters: 0/0 (available/total)
+    State:    Secondary hub (clean, ready for restore)
+
+[... additional checks ...]
+
 ╔════════════════════════════════════════════════════════════╗
 ║   Validation Summary                                       ║
 ╚════════════════════════════════════════════════════════════╝
 
-Total Checks:    28
-Passed:          28
+Total Checks:    30
+Passed:          30
 Failed:          0
 Warnings:        0
 
@@ -659,9 +709,11 @@ Provides shared helper functions and utilities used by both `preflight-check.sh`
 
 | Component | Description |
 |-----------|-------------|
+| **Version Variables** | `SCRIPT_VERSION`, `SCRIPT_VERSION_DATE` for version tracking |
 | **Color Variables** | `RED`, `GREEN`, `YELLOW`, `BLUE`, `NC` for formatted output |
 | **Counter Variables** | `TOTAL_CHECKS`, `PASSED_CHECKS`, `FAILED_CHECKS`, `WARNING_CHECKS` |
 | **Message Arrays** | `FAILED_MESSAGES`, `WARNING_MESSAGES` for summary reporting |
+| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.3.0 (2025-12-11)`) |
 | **`check_pass`** | Record a passing check with green checkmark |
 | **`check_fail`** | Record a failing check with red X, adds to failed messages |
 | **`check_warn`** | Record a warning with yellow triangle, adds to warning messages |
@@ -669,6 +721,10 @@ Provides shared helper functions and utilities used by both `preflight-check.sh`
 | **`detect_cluster_cli`** | Detect `oc`/`kubectl` and `jq`, set up aliases |
 | **`get_auto_import_strategy`** | Get autoImportStrategy value from a hub (returns "default" if not configured) |
 | **`is_acm_214_or_higher`** | Check if ACM version is 2.14+ (returns 0/1) |
+| **`get_total_mc_count`** | Get total managed cluster count (excluding local-cluster) |
+| **`get_available_mc_count`** | Get count of available/connected managed clusters |
+| **`get_backup_schedule_state`** | Get BackupSchedule state (running/paused/none) |
+| **`print_hub_summary`** | Print a hub summary card with role, version, clusters, state |
 | **`print_summary`** | Print validation summary with mode-specific messaging |
 
 ### Usage
@@ -742,4 +798,4 @@ For issues or questions:
 
 ---
 
-**Last Updated:** 2025-12-09
+**Last Updated:** 2025-12-11
