@@ -183,6 +183,7 @@ When making script changes:
 3. [ ] Update version in `README.md` (top of file)
 4. [ ] Add changelog entry in `docs/CHANGELOG.md`
 5. [ ] Update `scripts/README.md` if new features/checks added
+6. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
 
 When making Python code changes:
 1. [ ] Update `__version__` in `lib/__init__.py`
@@ -190,3 +191,4 @@ When making Python code changes:
 3. [ ] Update version in `README.md` (top of file)
 4. [ ] Add changelog entry in `docs/CHANGELOG.md`
 5. [ ] Keep Python and Bash versions in sync if changes affect both
+6. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
