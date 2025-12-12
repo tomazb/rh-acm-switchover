@@ -2,10 +2,33 @@
 
 All notable changes to the ACM Switchover Automation project will be documented in this file.
 
-Last Updated: 2025-12-11
+Last Updated: 2025-12-12
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.4.0] - 2025-12-12
+
+### Added
+
+- **Atomic state file persistence**: State files are now written atomically using a temp-file + rename pattern. If the process crashes during write, the previous valid state is preserved instead of leaving a corrupted file.
+
+- **KUBECONFIG multi-file support**: The `_load_kubeconfig_data()` method now properly handles colon-separated `KUBECONFIG` paths (e.g., `/path/one:/path/two`), merging contexts, clusters, and users from all files. Missing files are gracefully skipped.
+
+- **Standardized dry-run handling**: Converted 7 methods across `finalization.py` and `post_activation.py` to use the `@dry_run_skip` decorator for consistent dry-run behavior:
+  - `_verify_new_backups`
+  - `_verify_backup_schedule_enabled`
+  - `_verify_multiclusterhub_health`
+  - `_decommission_old_hub`
+  - `_setup_old_hub_as_secondary`
+  - `_fix_backup_schedule_collision`
+  - `_verify_managed_clusters_connected`
+  - `_verify_klusterlet_connections`
+
+### Changed
+
+- Improved state file write safety with `fsync()` before atomic rename
+- Better error handling for kubeconfig file loading edge cases
 
 ## [1.3.1] - 2025-12-11
 
