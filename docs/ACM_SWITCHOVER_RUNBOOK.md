@@ -328,7 +328,7 @@ oc get pods -n open-cluster-management-observability -l app.kubernetes.io/name=t
 # Should return: 0
 ```
 
-**Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable only if you roll back.**
+**Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable both only if you roll back.**
 ```bash
 oc scale deployment observability-observatorium-api \
   -n open-cluster-management-observability --replicas=0
