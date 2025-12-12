@@ -277,8 +277,12 @@ oc delete backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NA
 
 **To restore later:** Clean up status and certain metadata fields (uid, resourceVersion, managedFields, status), then re-apply. Example:
 ```bash
+# Option 1: Using yq (install via: pip install yq, or brew install yq)
 yq 'del(.metadata.uid, .metadata.resourceVersion, .metadata.managedFields, .status)' \
   "${BACKUP_SCHEDULE_NAME}.yaml" | oc apply -f -
+
+# Option 2: Using oc/kubectl only (no yq required)
+oc create -f "${BACKUP_SCHEDULE_NAME}.yaml" --dry-run=client -o yaml | oc apply -f -
 ```
 
 ---
@@ -319,8 +323,9 @@ oc scale statefulset observability-thanos-compact \
 
 **Verify compactor is stopped:**
 ```bash
-oc get pods -n open-cluster-management-observability | grep thanos-compact
-# Should show no resources
+oc get pods -n open-cluster-management-observability -l app.kubernetes.io/name=thanos-compact \
+  --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l
+# Should return: 0
 ```
 
 **Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable only if you roll back.**
@@ -363,6 +368,7 @@ oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n op
 
 **Verify these match recent backups from primary:**
 ```bash
+# Replace <primary> with your primary hub kubeconfig context name (e.g., "hub1-admin")
 for s in $(oc get backup.velero.io -n open-cluster-management-backup --context <primary> -o json \
   | jq -r '.items[].metadata.labels["velero.io/schedule-name"]' | sort -u); do
   echo -n "$s: "
@@ -663,8 +669,8 @@ Validate that metrics are flowing from managed clusters to the new hub.
 **Access Grafana:**
 ```bash
 # From ACM console, navigate to: Overview > Grafana
-# Or get Grafana route:
-oc get route grafana -n open-cluster-management-observability -o jsonpath='{.spec.host}'
+# Or get Grafana route (using label selector for compatibility across ACM versions):
+oc get route -n open-cluster-management-observability -l app=multicluster-observability-grafana -o jsonpath='{.items[0].spec.host}'
 ```
 
 **In Grafana:**
@@ -681,7 +687,7 @@ oc get route grafana -n open-cluster-management-observability -o jsonpath='{.spe
 **SUCCESS CRITERIA:** Recent metrics (within 5-10 minutes) are visible for all expected managed clusters in Grafana dashboards.
 
 **TROUBLESHOOTING:** If no metrics appear after 10 minutes:
-- Verify observatorium-api pods were restarted (Step 7)
+- Verify observatorium-api pods were restarted (Step 8)
 - Check metrics-collector pods on managed clusters are running
 - Verify network connectivity from managed clusters to hub
 
@@ -696,10 +702,14 @@ Now that the secondary hub is the active primary, enable the BackupSchedule to r
 ```bash
 # Use the BackupSchedule name from Step 1, or find it dynamically
 BACKUP_SCHEDULE_NAME=$(oc get backupschedule.cluster.open-cluster-management.io \
-  -n open-cluster-management-backup -o jsonpath='{.items[0].metadata.name}')
+  -n open-cluster-management-backup -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
-oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
-  -n open-cluster-management-backup --type='merge' -p '{"spec":{"paused":false}}'
+if [ -z "$BACKUP_SCHEDULE_NAME" ]; then
+  echo "No BackupSchedule found on this hub. Create one using the example YAML below."
+else
+  oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+    -n open-cluster-management-backup --type='merge' -p '{"spec":{"paused":false}}'
+fi
 ```
 
 > **Note (ACM 2.11):** If you deleted the BackupSchedule in step 1, re-apply the saved YAML (after cleaning metadata) instead of patching:
@@ -934,12 +944,16 @@ If issues occur during switchover and you need to rollback to the primary hub:
 
 Delete or pause the activation restore:
 ```bash
-oc delete restore.cluster.open-cluster-management.io restore-acm-activate -n open-cluster-management-backup
+oc delete restore.cluster.open-cluster-management.io restore-acm-activate -n open-cluster-management-backup --ignore-not-found
 # OR
-oc delete restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup
+oc delete restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup --ignore-not-found
 ```
 
-> **Note:** If you used METHOD 2 (one-time full restore), there is no passive sync restore to delete. Proceed to step 2 on the PRIMARY hub to allow clusters to reconnect there.
+> **Note:** If you used METHOD 2 (one-time full restore), delete the full restore instead:
+> ```bash
+> oc delete restore.cluster.open-cluster-management.io restore-acm-full -n open-cluster-management-backup --ignore-not-found
+> ```
+> Then proceed to step 2 on the PRIMARY hub to allow clusters to reconnect there.
 
 ### 2. On PRIMARY hub (original):
 
