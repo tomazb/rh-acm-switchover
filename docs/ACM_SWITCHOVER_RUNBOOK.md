@@ -328,7 +328,7 @@ oc get pods -n open-cluster-management-observability -l app.kubernetes.io/name=t
 # Should return: 0
 ```
 
-**Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable both only if you roll back.**
+**Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable both only if you roll/switch back.**
 ```bash
 oc scale deployment observability-observatorium-api \
   -n open-cluster-management-observability --replicas=0
@@ -669,8 +669,10 @@ Validate that metrics are flowing from managed clusters to the new hub.
 **Access Grafana:**
 ```bash
 # From ACM console, navigate to: Overview > Grafana
-# Or get Grafana route (using label selector for compatibility across ACM versions):
-oc get route -n open-cluster-management-observability -l app=multicluster-observability-grafana -o jsonpath='{.items[0].spec.host}'
+# Or get Grafana route:
+oc get route grafana -n open-cluster-management-observability -o jsonpath='{.spec.host}'
+# If route name differs in your ACM version, list all routes and find grafana:
+# oc get routes -n open-cluster-management-observability
 ```
 
 **In Grafana:**
