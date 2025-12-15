@@ -174,7 +174,10 @@ class KubeClient:
                 return None
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to get secret %s/%s: status=%s reason=%s", namespace, name, e.status, e.reason)
+            # Secret name is a resource identifier, not sensitive data (CodeQL false positive)
+            logger.error(  # nosec - logging secret name, not secret data
+                "Failed to get secret %s/%s: status=%s reason=%s", namespace, name, e.status, e.reason
+            )
             raise
 
     def secret_exists(self, namespace: str, name: str) -> bool:
