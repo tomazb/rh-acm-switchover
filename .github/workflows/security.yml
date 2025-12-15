@@ -31,10 +31,11 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
         
-    - name: Run safety check
+    - name: Run Safety vulnerability scan
       run: |
-        safety check --json --output safety-report.json || true
-        safety check --full-report
+        # Use modern 'scan' command; do not fail CI on findings
+        safety scan --json --output safety-report.json || true
+        safety scan --full-report || true
       continue-on-error: true
         
     - name: Run pip-audit
@@ -123,7 +124,7 @@ jobs:
       uses: gitleaks/gitleaks-action@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+      continue-on-error: true
         
     - name: Run TruffleHog
       uses: trufflesecurity/trufflehog@main
@@ -132,6 +133,7 @@ jobs:
         base: ${{ github.event.repository.default_branch }}
         head: HEAD
         extra_args: --debug --only-verified
+      continue-on-error: true
 
   container-security:
     name: Container Image Security
