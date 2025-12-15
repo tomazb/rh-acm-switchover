@@ -22,7 +22,6 @@ from typing import Any, Dict, List, Optional
 from lib import __version__, __version_date__
 from lib.validation import InputValidator, ValidationError
 
-
 STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
 
 # ANSI colors for terminal output
@@ -113,9 +112,7 @@ def _default_state_dir() -> str:
     env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
     if env_state_dir and env_state_dir.strip():
         try:
-            InputValidator.validate_safe_filesystem_path(
-                env_state_dir.strip(), STATE_DIR_ENV_VAR
-            )
+            InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
             return env_state_dir.strip()
         except ValidationError:
             # Viewer tool: ignore unsafe env var and fall back to default
@@ -376,9 +373,7 @@ Examples:
     else:
         state_files = find_state_files()
         if not state_files:
-            print(
-                "No state files found. Run a switchover first or specify a state file path."
-            )
+            print("No state files found. Run a switchover first or specify a state file path.")
             return 1
         # Use most recently modified
         state_file = max(state_files, key=os.path.getmtime)

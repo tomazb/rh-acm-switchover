@@ -10,6 +10,7 @@ from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
 
 from .preflight_validators import (
+    AutoImportStrategyValidator,
     BackupValidator,
     ClusterDeploymentValidator,
     HubComponentValidator,
@@ -21,7 +22,6 @@ from .preflight_validators import (
     ToolingValidator,
     ValidationReporter,
     VersionValidator,
-    AutoImportStrategyValidator,
 )
 
 logger = logging.getLogger("acm_switchover")
@@ -48,14 +48,10 @@ class PreflightValidator:
         self.hub_component_validator = HubComponentValidator(self.reporter)
         self.backup_validator = BackupValidator(self.reporter)
         self.cluster_deployment_validator = ClusterDeploymentValidator(self.reporter)
-        self.managed_cluster_backup_validator = ManagedClusterBackupValidator(
-            self.reporter
-        )
+        self.managed_cluster_backup_validator = ManagedClusterBackupValidator(self.reporter)
         self.passive_sync_validator = PassiveSyncValidator(self.reporter)
         self.observability_detector = ObservabilityDetector(self.reporter)
-        self.observability_prereq_validator = ObservabilityPrereqValidator(
-            self.reporter
-        )
+        self.observability_prereq_validator = ObservabilityPrereqValidator(self.reporter)
         self.tooling_validator = ToolingValidator(self.reporter)
 
     def validate_all(self) -> Tuple[bool, Dict[str, object]]:
@@ -71,15 +67,12 @@ class PreflightValidator:
                 # If not installed, skip observability permission checks
                 primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
                 secondary_has_obs = (
-                    self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE)
-                    if self.secondary
-                    else False
+                    self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.secondary else False
                 )
                 skip_obs = not (primary_has_obs or secondary_has_obs)
                 if skip_obs:
                     logger.info(
-                        "Observability namespace not found on either hub, "
-                        "skipping observability permission checks"
+                        "Observability namespace not found on either hub, " "skipping observability permission checks"
                     )
 
                 validate_rbac_permissions(
@@ -133,11 +126,9 @@ class PreflightValidator:
         if self.method == "passive":
             self.passive_sync_validator.run(self.secondary)
 
-        primary_observability, secondary_observability = (
-            self.observability_detector.detect(
-                self.primary,
-                self.secondary,
-            )
+        primary_observability, secondary_observability = self.observability_detector.detect(
+            self.primary,
+            self.secondary,
         )
 
         if secondary_observability:
