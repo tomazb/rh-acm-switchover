@@ -35,8 +35,10 @@ def is_retryable_error(exception: BaseException) -> bool:
     return False
 
 
-def _should_retry(exception: Exception) -> bool:
+def _should_retry(exception: BaseException) -> bool:
     """Custom retry condition using is_retryable_error."""
+    if not isinstance(exception, Exception):
+        return False
     return is_retryable_error(exception)
 
 
