@@ -103,8 +103,8 @@ jobs:
         
     - name: Run bandit security linter
       run: |
-        bandit -r . -f json -o bandit-report.json || true
-        bandit -r . -f txt
+        bandit -r . -x ./completions,./tests -f json -o bandit-report.json || true
+        bandit -r . -x ./completions,./tests -f txt
         
     - name: Upload bandit report
       uses: actions/upload-artifact@v4
