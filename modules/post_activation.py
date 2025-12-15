@@ -665,7 +665,7 @@ class PostActivationVerification:
             for path in paths:
                 expanded_path = os.path.expanduser(path)
                 if not os.path.exists(expanded_path):
-                    logger.debug("Kubeconfig path does not exist: %s", expanded_path)
+                    logger.debug("Kubeconfig path does not exist: %s", os.path.basename(expanded_path))
                     continue
 
                 try:
@@ -675,7 +675,7 @@ class PostActivationVerification:
                         merged["clusters"].extend(data.get("clusters", []))
                         merged["users"].extend(data.get("users", []))
                 except (OSError, yaml.YAMLError) as e:
-                    logger.debug("Error loading kubeconfig %s: %s", expanded_path, e)
+                    logger.debug("Error loading kubeconfig %s: %s", os.path.basename(expanded_path), e)
                     continue
 
             return merged
