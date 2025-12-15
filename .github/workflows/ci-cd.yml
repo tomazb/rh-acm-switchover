@@ -91,7 +91,7 @@ jobs:
         
     - name: Check code formatting with black
       run: |
-        black --check --line-length 120 --diff .
+        black --check --line-length 120 --diff . --exclude '(^|/)completions(/|$)'
         
     - name: Check import sorting with isort
       run: |
