@@ -174,7 +174,7 @@ class KubeClient:
                 return None
             if is_retryable_error(e):
                 raise
-            logger.error("Failed to get secret %s/%s: %s", namespace, name, e)
+            logger.error("Failed to get secret %s/%s: status=%s reason=%s", namespace, name, e.status, e.reason)
             raise
 
     def secret_exists(self, namespace: str, name: str) -> bool:
