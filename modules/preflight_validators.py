@@ -11,22 +11,21 @@ import shutil
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence, Tuple
 
-from lib.validation import InputValidator, ValidationError
-
 from lib.constants import (
     ACM_NAMESPACE,
+    AUTO_IMPORT_STRATEGY_DEFAULT,
+    AUTO_IMPORT_STRATEGY_KEY,
+    AUTO_IMPORT_STRATEGY_SYNC,
     BACKUP_NAMESPACE,
+    IMPORT_CONTROLLER_CONFIGMAP,
+    MCE_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
     RESTORE_PASSIVE_SYNC_NAME,
     THANOS_OBJECT_STORAGE_SECRET,
-    MCE_NAMESPACE,
-    IMPORT_CONTROLLER_CONFIGMAP,
-    AUTO_IMPORT_STRATEGY_KEY,
-    AUTO_IMPORT_STRATEGY_DEFAULT,
-    AUTO_IMPORT_STRATEGY_SYNC,
 )
 from lib.kube_client import KubeClient
 from lib.utils import is_acm_version_ge
+from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
 
@@ -321,10 +320,7 @@ class HubComponentValidator:
                 dpa = dpas[0]
                 dpa_name = dpa.get("metadata", {}).get("name", "unknown")
                 conditions = dpa.get("status", {}).get("conditions", [])
-                reconciled = any(
-                    c.get("type") == "Reconciled" and c.get("status") == "True"
-                    for c in conditions
-                )
+                reconciled = any(c.get("type") == "Reconciled" and c.get("status") == "True" for c in conditions)
 
                 if reconciled:
                     self.reporter.add_result(
@@ -365,24 +361,24 @@ class BackupValidator:
     def _get_backup_age_info(self, completion_timestamp: str | None) -> str:
         """
         Calculate backup age and return human-readable info with freshness indicator.
-        
+
         Args:
             completion_timestamp: ISO 8601 timestamp string from backup.status.completionTimestamp
-            
+
         Returns:
             Human-readable age string with freshness indicator, or empty string if timestamp unavailable
         """
         if not completion_timestamp:
             return ""
-        
+
         try:
             # Parse ISO 8601 timestamp (Kubernetes format: 2025-12-03T10:15:30Z)
-            completion_dt = datetime.fromisoformat(completion_timestamp.replace('Z', '+00:00'))
+            completion_dt = datetime.fromisoformat(completion_timestamp.replace("Z", "+00:00"))
             now_dt = datetime.now(timezone.utc)
-            
+
             # Calculate age
             age_seconds = int((now_dt - completion_dt).total_seconds())
-            
+
             # Format human-readable age
             if age_seconds < 60:
                 age_display = f"{age_seconds}s"
@@ -397,7 +393,7 @@ class BackupValidator:
                 age_days = age_seconds // 86400
                 age_hours = (age_seconds % 86400) // 3600
                 age_display = f"{age_days}d{age_hours}h"
-            
+
             # Determine freshness indicator
             if age_seconds < 3600:  # < 1 hour
                 freshness = "FRESH"
@@ -405,7 +401,7 @@ class BackupValidator:
                 freshness = "acceptable"
             else:  # >= 24 hours
                 freshness = "consider running a fresh backup"
-            
+
             return f"age: {age_display}, {freshness}"
         except (ValueError, AttributeError) as e:
             logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
@@ -439,9 +435,7 @@ class BackupValidator:
             phase = latest_backup.get("status", {}).get("phase", "unknown")
 
             in_progress = [
-                b.get("metadata", {}).get("name")
-                for b in backups
-                if b.get("status", {}).get("phase") == "InProgress"
+                b.get("metadata", {}).get("name") for b in backups if b.get("status", {}).get("phase") == "InProgress"
             ]
 
             if in_progress:
@@ -455,11 +449,11 @@ class BackupValidator:
                 # Get backup completion timestamp to calculate age
                 completion_ts = latest_backup.get("status", {}).get("completionTimestamp")
                 age_info = self._get_backup_age_info(completion_ts)
-                
+
                 message = f"latest backup {backup_name} completed successfully"
                 if age_info:
                     message += f" ({age_info})"
-                
+
                 self.reporter.add_result(
                     "Backup status",
                     True,
@@ -679,9 +673,7 @@ class ManagedClusterBackupValidator:
                 # Check if cluster is joined (has Joined condition = True)
                 conditions = mc.get("status", {}).get("conditions", [])
                 is_joined = any(
-                    c.get("type") == "ManagedClusterJoined"
-                    and c.get("status") == "True"
-                    for c in conditions
+                    c.get("type") == "ManagedClusterJoined" and c.get("status") == "True" for c in conditions
                 )
                 if is_joined:
                     joined_clusters.append(mc_name)
@@ -733,9 +725,7 @@ class ManagedClusterBackupValidator:
 
             latest_backup = backups[0]
             backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
-            backup_time = latest_backup.get("metadata", {}).get(
-                "creationTimestamp", "unknown"
-            )
+            backup_time = latest_backup.get("metadata", {}).get("creationTimestamp", "unknown")
             phase = latest_backup.get("status", {}).get("phase", "unknown")
 
             if phase != "Completed":
@@ -826,9 +816,7 @@ class AutoImportStrategyValidator:
             logger.debug("Error listing managedclusters for auto-import check: %s", exc)
             return 0
 
-        return sum(
-            1 for mc in mcs if mc.get("metadata", {}).get("name") != "local-cluster"
-        )
+        return sum(1 for mc in mcs if mc.get("metadata", {}).get("name") != "local-cluster")
 
     def run(
         self,
@@ -934,9 +922,7 @@ class ObservabilityPrereqValidator:
         if not secondary.namespace_exists(OBSERVABILITY_NAMESPACE):
             return
 
-        if secondary.secret_exists(
-            OBSERVABILITY_NAMESPACE, THANOS_OBJECT_STORAGE_SECRET
-        ):
+        if secondary.secret_exists(OBSERVABILITY_NAMESPACE, THANOS_OBJECT_STORAGE_SECRET):
             self.reporter.add_result(
                 "Observability object storage secret",
                 True,

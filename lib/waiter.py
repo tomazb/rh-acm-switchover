@@ -34,9 +34,7 @@ def wait_for_condition(
 
         elapsed = int(time.time() - start_time)
         if detail:
-            logger.debug(
-                "%s in progress: %s (elapsed: %ss)", description, detail, elapsed
-            )
+            logger.debug("%s in progress: %s (elapsed: %ss)", description, detail, elapsed)
         else:
             logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 

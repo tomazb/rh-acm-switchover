@@ -9,8 +9,6 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from lib.validation import InputValidator, ValidationError
-
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from tenacity import (
@@ -21,6 +19,8 @@ from tenacity import (
     wait_exponential,
 )
 from urllib3.exceptions import HTTPError
+
+from lib.validation import InputValidator, ValidationError
 
 logger = logging.getLogger("acm_switchover")
 
@@ -238,9 +238,7 @@ class KubeClient:
         return self.get_configmap(namespace, name) is not None
 
     @retry_api_call
-    def create_or_patch_configmap(
-        self, namespace: str, name: str, data: Dict[str, str]
-    ) -> Dict:
+    def create_or_patch_configmap(self, namespace: str, name: str, data: Dict[str, str]) -> Dict:
         """Create or patch a ConfigMap's data field.
 
         If CM exists, patch data; otherwise create it.
@@ -278,22 +276,16 @@ class KubeClient:
                     "metadata": {"name": name, "namespace": namespace},
                     "data": data,
                 }
-                result = self.core_v1.create_namespaced_config_map(
-                    namespace=namespace, body=body
-                )
+                result = self.core_v1.create_namespaced_config_map(namespace=namespace, body=body)
                 return result.to_dict()
             # Patch existing
             body = {"data": data}
-            result = self.core_v1.patch_namespaced_config_map(
-                name=name, namespace=namespace, body=body
-            )
+            result = self.core_v1.patch_namespaced_config_map(name=name, namespace=namespace, body=body)
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
                 raise
-            logger.error(
-                "Failed to create/patch configmap %s/%s: %s", namespace, name, e
-            )
+            logger.error("Failed to create/patch configmap %s/%s: %s", namespace, name, e)
             raise
 
     @retry_api_call
@@ -512,8 +504,7 @@ class KubeClient:
             return {}
 
         logger.debug(
-            "KUBE_CLIENT patch_custom_resource: group=%s, version=%s, "
-            "plural=%s, name=%s, namespace=%s, patch=%s",
+            "KUBE_CLIENT patch_custom_resource: group=%s, version=%s, " "plural=%s, name=%s, namespace=%s, patch=%s",
             group,
             version,
             plural,
@@ -533,17 +524,13 @@ class KubeClient:
                     name=name,
                     body=patch,
                 )
-                logger.debug(
-                    "KUBE_CLIENT: patch_namespaced_custom_object returned successfully"
-                )
+                logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
             else:
                 logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
                 result = self.custom_api.patch_cluster_custom_object(
                     group=group, version=version, plural=plural, name=name, body=patch
                 )
-                logger.debug(
-                    "KUBE_CLIENT: patch_cluster_custom_object returned successfully"
-                )
+                logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
 
             logger.debug(
                 "KUBE_CLIENT: Patch result keys: %s",
@@ -671,9 +658,7 @@ class KubeClient:
                     name=name,
                 )
             else:
-                self.custom_api.delete_cluster_custom_object(
-                    group=group, version=version, plural=plural, name=name
-                )
+                self.custom_api.delete_cluster_custom_object(group=group, version=version, plural=plural, name=name)
             return True
         except ApiException as e:
             if e.status == 404:
@@ -731,9 +716,7 @@ class KubeClient:
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_deployment_scale(
-                name=name, namespace=namespace, body=body
-            )
+            result = self.apps_v1.patch_namespaced_deployment_scale(name=name, namespace=namespace, body=body)
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -771,9 +754,7 @@ class KubeClient:
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_stateful_set_scale(
-                name=name, namespace=namespace, body=body
-            )
+            result = self.apps_v1.patch_namespaced_stateful_set_scale(name=name, namespace=namespace, body=body)
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -805,18 +786,8 @@ class KubeClient:
 
         try:
             now = time.strftime("%Y%m%d%H%M%S")
-            body = {
-                "spec": {
-                    "template": {
-                        "metadata": {
-                            "annotations": {"kubectl.kubernetes.io/restartedAt": now}
-                        }
-                    }
-                }
-            }
-            result = self.apps_v1.patch_namespaced_deployment(
-                name=name, namespace=namespace, body=body
-            )
+            body = {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now}}}}}
+            result = self.apps_v1.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -825,9 +796,7 @@ class KubeClient:
             raise
 
     @retry_api_call
-    def get_pods(
-        self, namespace: str, label_selector: Optional[str] = None
-    ) -> List[Dict]:
+    def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict]:
         """List pods in a namespace.
 
         Args:
@@ -851,9 +820,7 @@ class KubeClient:
                 raise ValidationError("Label selector cannot be empty or whitespace-only")
 
         try:
-            result = self.core_v1.list_namespaced_pod(
-                namespace=namespace, label_selector=label_selector
-            )
+            result = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
             return [pod.to_dict() for pod in result.items]
         except ApiException as e:
             if e.status == 404:
@@ -903,10 +870,7 @@ class KubeClient:
             for pod in pods:
                 conditions = pod.get("status", {}).get("conditions", [])
                 for condition in conditions:
-                    if (
-                        condition.get("type") == "Ready"
-                        and condition.get("status") == "True"
-                    ):
+                    if condition.get("type") == "Ready" and condition.get("status") == "True":
                         ready_count += 1
                         break
 

@@ -16,9 +16,10 @@ Features:
 - Comprehensive error handling with descriptive messages
 """
 
-import re
 import logging
+import re
 from typing import Pattern
+
 from lib.exceptions import ConfigurationError
 
 logger = logging.getLogger("acm_switchover")
@@ -28,38 +29,31 @@ logger = logging.getLogger("acm_switchover")
 # DNS-1123 subdomain format: contains only lowercase alphanumeric characters, '-' or '.',
 # starts with a lowercase letter (first segment), subsequent segments can start with letter or digit,
 # ends with an alphanumeric character
-K8S_NAME_PATTERN: Pattern[str] = re.compile(
-    r'^[a-z]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
-)
+K8S_NAME_PATTERN: Pattern[str] = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
 K8S_NAME_MAX_LENGTH = 253
 
 # Kubernetes namespace validation pattern
 # RFC 1123 label format: contains only lowercase alphanumeric characters or '-',
 # starts with an alphabetic character (Kubernetes requires this), ends with an alphanumeric character
-K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(
-    r'^[a-z]([-a-z0-9]*[a-z0-9])?$'
-)
+K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?$")
 K8S_NAMESPACE_MAX_LENGTH = 63
 
 # Kubernetes label validation patterns
 # Label keys: optional prefix and name, separated by a slash (/),
 # where prefix must be a DNS subdomain and name must be a DNS label
 K8S_LABEL_KEY_PATTERN: Pattern[str] = re.compile(
-    r'^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$'
-    r'|^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$'
+    r"^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$"
+    r"|^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$"
 )
-K8S_LABEL_VALUE_PATTERN: Pattern[str] = re.compile(
-    r'^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$'
-)
+K8S_LABEL_VALUE_PATTERN: Pattern[str] = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$")
 K8S_LABEL_MAX_LENGTH = 63
 
 # Context name validation pattern (more permissive than K8s names)
 # Allows alphanumeric, hyphens, underscores, dots, forward slashes, and colons
 # This accommodates default oc login contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
-CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(
-    r'^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$'
-)
+CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
 CONTEXT_NAME_MAX_LENGTH = 128
+
 
 class ValidationError(ConfigurationError):
     """Input validation failure.
@@ -68,7 +62,9 @@ class ValidationError(ConfigurationError):
     detailed error messages to help users understand what went wrong
     and how to fix it.
     """
+
     pass
+
 
 class SecurityValidationError(ValidationError):
     """Security-related validation failure.
@@ -76,7 +72,9 @@ class SecurityValidationError(ValidationError):
     This exception is raised when validation fails due to potential
     security issues (e.g., path traversal attempts, command injection).
     """
+
     pass
+
 
 class InputValidator:
     """Comprehensive input validation for ACM switchover."""
@@ -149,9 +147,7 @@ class InputValidator:
             raise ValidationError("Label key cannot be empty")
 
         if len(key) > K8S_LABEL_MAX_LENGTH:
-            raise ValidationError(
-                f"Label key '{key}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters"
-            )
+            raise ValidationError(f"Label key '{key}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters")
 
         if not K8S_LABEL_KEY_PATTERN.match(key):
             raise ValidationError(
@@ -176,9 +172,7 @@ class InputValidator:
             raise ValidationError("Label value cannot be None")
 
         if len(value) > K8S_LABEL_MAX_LENGTH:
-            raise ValidationError(
-                f"Label value '{value}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters"
-            )
+            raise ValidationError(f"Label value '{value}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters")
 
         # Empty string is valid, only check pattern for non-empty values
         if value and not K8S_LABEL_VALUE_PATTERN.match(value):
@@ -226,9 +220,7 @@ class InputValidator:
         """
         valid_methods = ["passive", "full"]
         if method not in valid_methods:
-            raise ValidationError(
-                f"Invalid method '{method}'. Must be one of: {', '.join(valid_methods)}"
-            )
+            raise ValidationError(f"Invalid method '{method}'. Must be one of: {', '.join(valid_methods)}")
 
     @staticmethod
     def validate_cli_old_hub_action(action: str) -> None:
@@ -243,9 +235,7 @@ class InputValidator:
         """
         valid_actions = ["secondary", "decommission", "none"]
         if action not in valid_actions:
-            raise ValidationError(
-                f"Invalid old-hub-action '{action}'. Must be one of: {', '.join(valid_actions)}"
-            )
+            raise ValidationError(f"Invalid old-hub-action '{action}'. Must be one of: {', '.join(valid_actions)}")
 
     @staticmethod
     def validate_cli_log_format(log_format: str) -> None:
@@ -260,9 +250,7 @@ class InputValidator:
         """
         valid_formats = ["text", "json"]
         if log_format not in valid_formats:
-            raise ValidationError(
-                f"Invalid log format '{log_format}'. Must be one of: {', '.join(valid_formats)}"
-            )
+            raise ValidationError(f"Invalid log format '{log_format}'. Must be one of: {', '.join(valid_formats)}")
 
     @staticmethod
     def validate_non_empty_string(value: str, field_name: str) -> None:
@@ -296,14 +284,14 @@ class InputValidator:
             raise ValidationError(f"{field_name} path cannot be empty")
 
         # Prevent path traversal by checking for '..' as a path component
-        if '..' in path.split('/'):
+        if ".." in path.split("/"):
             raise SecurityValidationError(
                 f"SECURITY: Path traversal attempt detected in {field_name} path '{path}'. "
                 f"The '..' sequence is not allowed as a path component."
             )
 
         # Prevent command injection and other unsafe patterns
-        unsafe_chars = ['~', '$', '{', '}', '|', '&', ';', '<', '>', '`']
+        unsafe_chars = ["~", "$", "{", "}", "|", "&", ";", "<", ">", "`"]
         if any(char in path for char in unsafe_chars):
             raise SecurityValidationError(
                 f"SECURITY: Invalid characters in {field_name} path '{path}'. "
@@ -313,18 +301,19 @@ class InputValidator:
 
         # Allow absolute paths in safe directories or workspace-relative paths
         # Permit /tmp, /var, and absolute paths under current working directory or $HOME
-        if path.startswith('/'):
+        if path.startswith("/"):
             import os
-            safe_prefixes = ['/tmp/', '/var/']
+
+            safe_prefixes = ["/tmp/", "/var/"]
             # Allow paths under current working directory
             cwd = os.getcwd()
             if cwd:
-                safe_prefixes.append(cwd + '/')
+                safe_prefixes.append(cwd + "/")
             # Allow paths under home directory
-            home = os.path.expanduser('~')
-            if home and home != '~':
-                safe_prefixes.append(home + '/')
-            
+            home = os.path.expanduser("~")
+            if home and home != "~":
+                safe_prefixes.append(home + "/")
+
             if not any(path.startswith(prefix) for prefix in safe_prefixes):
                 raise SecurityValidationError(
                     f"SECURITY: Absolute path '{path}' is not allowed for {field_name}. "
@@ -360,36 +349,36 @@ class InputValidator:
             ValidationError: If any argument validation fails
         """
         # Validate required context arguments
-        if hasattr(args, 'primary_context') and args.primary_context:
+        if hasattr(args, "primary_context") and args.primary_context:
             InputValidator.validate_context_name(args.primary_context)
             InputValidator.validate_non_empty_string(args.primary_context, "primary-context")
 
-        if hasattr(args, 'secondary_context') and args.secondary_context:
+        if hasattr(args, "secondary_context") and args.secondary_context:
             InputValidator.validate_context_name(args.secondary_context)
             InputValidator.validate_non_empty_string(args.secondary_context, "secondary-context")
 
         # Validate method
-        if hasattr(args, 'method') and args.method:
+        if hasattr(args, "method") and args.method:
             InputValidator.validate_cli_method(args.method)
 
         # Validate old-hub-action
-        if hasattr(args, 'old_hub_action') and args.old_hub_action:
+        if hasattr(args, "old_hub_action") and args.old_hub_action:
             InputValidator.validate_cli_old_hub_action(args.old_hub_action)
 
         # Validate log format
-        if hasattr(args, 'log_format') and args.log_format:
+        if hasattr(args, "log_format") and args.log_format:
             InputValidator.validate_cli_log_format(args.log_format)
 
         # Validate state file path if provided
-        if hasattr(args, 'state_file') and args.state_file:
+        if hasattr(args, "state_file") and args.state_file:
             InputValidator.validate_safe_filesystem_path(args.state_file, "state-file")
 
         # Validate that secondary context is provided when not in decommission mode
-        if hasattr(args, 'decommission') and not args.decommission:
-            if hasattr(args, 'secondary_context') and not args.secondary_context:
+        if hasattr(args, "decommission") and not args.decommission:
+            if hasattr(args, "secondary_context") and not args.secondary_context:
                 raise ValidationError("secondary-context is required for switchover operations")
 
         # Validate that --non-interactive only makes sense with --decommission
-        if hasattr(args, 'non_interactive') and args.non_interactive:
-            if not (hasattr(args, 'decommission') and args.decommission):
+        if hasattr(args, "non_interactive") and args.non_interactive:
+            if not (hasattr(args, "decommission") and args.decommission):
                 raise ValidationError("--non-interactive can only be used with --decommission")

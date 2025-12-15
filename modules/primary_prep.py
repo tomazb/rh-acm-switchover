@@ -4,6 +4,8 @@ Primary hub preparation module for ACM switchover.
 
 import logging
 
+from kubernetes.client.rest import ApiException
+
 from lib.constants import (
     BACKUP_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
@@ -13,7 +15,6 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
-from kubernetes.client.rest import ApiException
 
 logger = logging.getLogger("acm_switchover")
 
@@ -67,9 +68,7 @@ class PrimaryPreparation:
                 else:
                     logger.info("Step already completed: scale_down_thanos")
             else:
-                logger.info(
-                    "Skipping Thanos compactor scaling (Observability not detected)"
-                )
+                logger.info("Skipping Thanos compactor scaling (Observability not detected)")
 
             logger.info("Primary hub preparation completed successfully")
             return True
@@ -102,7 +101,7 @@ class PrimaryPreparation:
         # Assume first BackupSchedule (typically only one exists)
         bs = backup_schedules[0]
         bs_name = bs.get("metadata", {}).get("name")
-        
+
         if not bs_name:
             logger.error("BackupSchedule found but has no name in metadata")
             return
@@ -173,13 +172,7 @@ class PrimaryPreparation:
                 continue
 
             # Add annotation
-            patch = {
-                "metadata": {
-                    "annotations": {
-                        "import.open-cluster-management.io/disable-auto-import": ""
-                    }
-                }
-            }
+            patch = {"metadata": {"annotations": {"import.open-cluster-management.io/disable-auto-import": ""}}}
 
             self.primary.patch_managed_cluster(name=mc_name, patch=patch)
 
@@ -215,9 +208,7 @@ class PrimaryPreparation:
             )
 
             if pods:
-                logger.warning(
-                    "Thanos compactor still has %s pod(s) running", len(pods)
-                )
+                logger.warning("Thanos compactor still has %s pod(s) running", len(pods))
             else:
                 logger.info("Thanos compactor scaled down successfully")
 

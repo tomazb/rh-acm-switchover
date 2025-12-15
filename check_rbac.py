@@ -10,7 +10,7 @@ import argparse
 import logging
 import sys
 
-from lib import KubeClient, RBACValidator, setup_logging, __version__, __version_date__
+from lib import KubeClient, RBACValidator, __version__, __version_date__, setup_logging
 
 
 def parse_args():
@@ -60,7 +60,8 @@ Examples:
         help="Skip observability namespace checks",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable verbose logging",
     )
@@ -83,10 +84,10 @@ def main():
         if args.primary_context and args.secondary_context:
             # Check both hubs
             logger.info("Checking RBAC permissions on both hubs...")
-            
+
             primary_client = KubeClient(context=args.primary_context)
             secondary_client = KubeClient(context=args.secondary_context)
-            
+
             # Validate primary
             logger.info("\n" + "=" * 80)
             logger.info("PRIMARY HUB (%s)", args.primary_context)
@@ -101,7 +102,7 @@ def main():
                 skip_observability=args.skip_observability,
             )
             print(primary_report)
-            
+
             # Validate secondary
             logger.info("\n" + "=" * 80)
             logger.info("SECONDARY HUB (%s)", args.secondary_context)
@@ -116,16 +117,16 @@ def main():
                 skip_observability=args.skip_observability,
             )
             print(secondary_report)
-            
+
             # Check if both passed
-            
+
             if primary_valid and secondary_valid:
                 logger.info("\n✓ All permissions validated on both hubs")
                 sys.exit(0)
             else:
                 logger.error("\n✗ Permission validation failed on one or more hubs")
                 sys.exit(1)
-                
+
         else:
             # Check single context
             context = args.context or args.primary_context or args.secondary_context
@@ -133,10 +134,10 @@ def main():
                 logger.info("Checking RBAC permissions on context: %s", context)
             else:
                 logger.info("Checking RBAC permissions on current context")
-            
+
             client = KubeClient(context=context)
             validator = RBACValidator(client)
-            
+
             # Validate and generate report
             all_valid, _ = validator.validate_all_permissions(
                 include_decommission=args.include_decommission,
@@ -146,9 +147,9 @@ def main():
                 include_decommission=args.include_decommission,
                 skip_observability=args.skip_observability,
             )
-            
+
             print(report)
-            
+
             # Exit with appropriate code
             if all_valid:
                 sys.exit(0)
@@ -159,6 +160,7 @@ def main():
         logger.error("Error during RBAC validation: %s", str(e))
         if args.verbose:
             import traceback
+
             traceback.print_exc()
         sys.exit(1)
 

@@ -98,9 +98,7 @@ class BackupScheduleManager:
             return
 
         if self.dry_run:
-            logger.info(
-                "[DRY-RUN] Would restore saved BackupSchedule on %s", self.hub_label
-            )
+            logger.info("[DRY-RUN] Would restore saved BackupSchedule on %s", self.hub_label)
         else:
             logger.info("Restoring saved BackupSchedule on %s", self.hub_label)
         body = copy.deepcopy(saved_bs)

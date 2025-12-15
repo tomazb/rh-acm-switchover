@@ -19,7 +19,6 @@ Features:
 import argparse
 import logging
 import os
-
 import sys
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, cast
@@ -28,9 +27,9 @@ from lib import (
     KubeClient,
     Phase,
     StateManager,
-    setup_logging,
     __version__,
     __version_date__,
+    setup_logging,
 )
 from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
 from lib.validation import InputValidator, ValidationError
@@ -42,7 +41,6 @@ from modules import (
     PrimaryPreparation,
     SecondaryActivation,
 )
-
 
 STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
 
@@ -80,9 +78,7 @@ Examples:
     )
 
     # Context arguments
-    parser.add_argument(
-        "--primary-context", required=True, help="Kubernetes context for primary hub"
-    )
+    parser.add_argument("--primary-context", required=True, help="Kubernetes context for primary hub")
     parser.add_argument(
         "--secondary-context",
         help="Kubernetes context for secondary hub (required for switchover)",
@@ -100,9 +96,7 @@ Examples:
         action="store_true",
         help="Show planned actions without executing them",
     )
-    mode_group.add_argument(
-        "--decommission", action="store_true", help="Decommission old hub (interactive)"
-    )
+    mode_group.add_argument("--decommission", action="store_true", help="Decommission old hub (interactive)")
 
     # Switchover options
     parser.add_argument(
@@ -168,9 +162,7 @@ Examples:
     )
 
     # Logging
-    parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Enable verbose logging"
-    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument(
         "--log-format",
         choices=["text", "json"],
@@ -193,9 +185,7 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         if not getattr(args, "state_file", None):
             env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
             if env_state_dir and env_state_dir.strip():
-                InputValidator.validate_safe_filesystem_path(
-                    env_state_dir.strip(), STATE_DIR_ENV_VAR
-                )
+                InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
 
     except ValidationError as e:
         logger.error("Validation error: %s", str(e))
@@ -241,9 +231,7 @@ def run_switchover(
     logger.info("\n" + "=" * 60)
     logger.info("SWITCHOVER COMPLETED SUCCESSFULLY!")
     logger.info("=" * 60)
-    logger.info(
-        "\nSwitchover completed at: %s", datetime.now().astimezone().isoformat()
-    )
+    logger.info("\nSwitchover completed at: %s", datetime.now().astimezone().isoformat())
     logger.info("State file: %s", args.state_file)
     logger.info("\nNext steps:")
     logger.info("  1. Inform stakeholders that switchover is complete")
@@ -265,9 +253,7 @@ def _run_phase_preflight(
 
     state.set_phase(Phase.PREFLIGHT)
 
-    validator = PreflightValidator(
-        primary, secondary, args.method, skip_rbac_validation=args.skip_rbac_validation
-    )
+    validator = PreflightValidator(primary, secondary, args.method, skip_rbac_validation=args.skip_rbac_validation)
     passed, config = cast(
         Tuple[bool, Dict[str, Any]],
         validator.validate_all(),
@@ -289,13 +275,8 @@ def _run_phase_preflight(
         config["secondary_observability_detected"],
     )
 
-    primary_obs_enabled = (
-        config["primary_observability_detected"] and not args.skip_observability_checks
-    )
-    secondary_obs_enabled = (
-        config["secondary_observability_detected"]
-        and not args.skip_observability_checks
-    )
+    primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
+    secondary_obs_enabled = config["secondary_observability_detected"] and not args.skip_observability_checks
 
     state.set_config("primary_has_observability", primary_obs_enabled)
     state.set_config("secondary_has_observability", secondary_obs_enabled)
@@ -435,6 +416,7 @@ def run_decommission(
     # Detect observability directly from the cluster, not from state file
     # The state file path may differ when running decommission standalone
     from lib.constants import OBSERVABILITY_NAMESPACE
+
     has_observability = primary.namespace_exists(OBSERVABILITY_NAMESPACE)
     if has_observability:
         logger.info("Observability detected on hub (namespace %s exists)", OBSERVABILITY_NAMESPACE)
@@ -446,9 +428,7 @@ def run_decommission(
     )
 
     if args.dry_run:
-        logger.info(
-            "[DRY-RUN] Starting decommission workflow (no changes will be made)"
-        )
+        logger.info("[DRY-RUN] Starting decommission workflow (no changes will be made)")
     else:
         logger.info("Starting decommission workflow")
 
@@ -523,6 +503,7 @@ def _initialize_clients(
 
     return primary, secondary
 
+
 def _sanitize_context_identifier(value: str) -> str:
     """Sanitize context string to be filesystem friendly."""
     return InputValidator.sanitize_context_identifier(value)
@@ -535,9 +516,7 @@ def _get_default_state_dir() -> str:
     return ".state"
 
 
-def _resolve_state_file(
-    requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]
-) -> str:
+def _resolve_state_file(requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]) -> str:
     """Derive the state file path based on contexts unless user provided one."""
     if requested_path:
         return requested_path
