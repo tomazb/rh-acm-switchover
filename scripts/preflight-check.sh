@@ -593,6 +593,35 @@ if oc --context="$PRIMARY_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
         else
             check_fail "Secondary hub: '$THANOS_OBJECT_STORAGE_SECRET' secret missing! (Required for Observability)"
         fi
+
+        # Secondary hub observability safety:
+        # - If MCO is present, it must NOT be active on the secondary hub during switchover.
+        #   It's OK for MCO to exist if both Thanos compactor and observatorium-api are scaled to 0.
+        # - If MCO is absent but observability pods still exist, warn (likely incomplete decommission).
+        if oc --context="$SECONDARY_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
+            SECONDARY_COMPACTOR_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=thanos-compact" --no-headers 2>/dev/null | wc -l || true)
+            if [[ $SECONDARY_COMPACTOR_PODS -eq 0 ]]; then
+                SECONDARY_COMPACTOR_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep -c "^${OBS_THANOS_COMPACT_POD}" || true)
+            fi
+
+            SECONDARY_OBSERVATORIUM_API_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=observatorium-api" --no-headers 2>/dev/null | wc -l || true)
+            if [[ $SECONDARY_OBSERVATORIUM_API_PODS -eq 0 ]]; then
+                SECONDARY_OBSERVATORIUM_API_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep -c "^${OBS_API_POD}" || true)
+            fi
+
+            if [[ $SECONDARY_COMPACTOR_PODS -gt 0 ]] || [[ $SECONDARY_OBSERVATORIUM_API_PODS -gt 0 ]]; then
+                check_fail "Secondary hub: MultiClusterObservability is active (thanos-compact=$SECONDARY_COMPACTOR_PODS, observatorium-api=$SECONDARY_OBSERVATORIUM_API_PODS). Scale both to 0 before switchover."
+            else
+                check_pass "Secondary hub: MultiClusterObservability present but compactor/observatorium-api are scaled to 0 (OK)"
+            fi
+        else
+            SECONDARY_OBS_PODS_TOTAL=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
+            if [[ $SECONDARY_OBS_PODS_TOTAL -gt 0 ]]; then
+                check_warn "Secondary hub: Observability pods exist ($SECONDARY_OBS_PODS_TOTAL) but MultiClusterObservability CR not found (hub may not be properly decommissioned)"
+            else
+                check_pass "Secondary hub: MultiClusterObservability CR not found"
+            fi
+        fi
     else
         check_warn "Secondary hub: Observability namespace not found (may need manual setup)"
     fi

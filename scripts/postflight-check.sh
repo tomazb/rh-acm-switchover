@@ -395,12 +395,28 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
         fi
     fi
     
-    # Check Thanos compactor on old hub
-    OLD_COMPACTOR=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=thanos-compact" --no-headers 2>/dev/null | wc -l || true)
-    if [[ $OLD_COMPACTOR -eq 0 ]]; then
-        check_pass "Old hub Thanos compactor is stopped (expected)"
-    else
-        check_warn "Old hub Thanos compactor is still running (should be scaled to 0)"
+    # Old hub observability safety:
+    # The previous primary must either have no MCO, or (if MCO exists) have key components scaled down.
+    if oc --context="$OLD_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
+        if oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
+            OLD_COMPACTOR=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=thanos-compact" --no-headers 2>/dev/null | wc -l || true)
+            if [[ $OLD_COMPACTOR -eq 0 ]]; then
+                OLD_COMPACTOR=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep -c "^${OBS_THANOS_COMPACT_POD}" || true)
+            fi
+
+            OLD_OBSERVATORIUM_API_PODS=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=observatorium-api" --no-headers 2>/dev/null | wc -l || true)
+            if [[ $OLD_OBSERVATORIUM_API_PODS -eq 0 ]]; then
+                OLD_OBSERVATORIUM_API_PODS=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep -c "^${OBS_API_POD}" || true)
+            fi
+
+            if [[ $OLD_COMPACTOR -eq 0 ]] && [[ $OLD_OBSERVATORIUM_API_PODS -eq 0 ]]; then
+                check_pass "Old hub: MultiClusterObservability present but Thanos compactor and observatorium-api are scaled to 0 (expected)"
+            else
+                check_fail "Old hub: MultiClusterObservability is still active (thanos-compact=$OLD_COMPACTOR, observatorium-api=$OLD_OBSERVATORIUM_API_PODS). Scale both to 0 or remove MCO."
+            fi
+        else
+            check_pass "Old hub: MultiClusterObservability CR not present (expected)"
+        fi
     fi
     
     # Check if old hub has passive sync restore configured (for failback capability)
