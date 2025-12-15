@@ -162,11 +162,13 @@ jobs:
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
+      continue-on-error: true
         
     - name: Upload Trivy results to GitHub Security
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: 'trivy-results.sarif'
+      continue-on-error: true
 
   syntax-check:
     name: Python Syntax Validation

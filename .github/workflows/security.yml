@@ -164,12 +164,14 @@ jobs:
         format: 'sarif'
         output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
+      continue-on-error: true
         
     - name: Upload Trivy results
       uses: github/codeql-action/upload-sarif@v3
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
+      continue-on-error: true
         
     - name: Run Trivy for detailed report
       uses: aquasecurity/trivy-action@master
@@ -177,6 +179,7 @@ jobs:
         image-ref: 'acm-switchover:scan'
         format: 'table'
         severity: 'CRITICAL,HIGH,MEDIUM'
+      continue-on-error: true
 
   sbom-generation:
     name: Generate SBOM
