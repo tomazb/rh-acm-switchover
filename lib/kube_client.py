@@ -174,17 +174,9 @@ class KubeClient:
                 return None
             if is_retryable_error(e):
                 raise
-            # Log error with sanitized info - only resource identifiers, no secret content
-            # The 'name' variable is a Kubernetes resource name (like "thanos-object-storage"),
-            # not actual secret data. CodeQL flags this as a false positive.
-            resource_name = name  # Reassign to break taint tracking
-            logger.error(
-                "Failed to get secret %s/%s: status=%s reason=%s",
-                namespace,
-                resource_name,
-                e.status,
-                e.reason,
-            )
+            # Avoid logging secret identifiers (namespace/name). Even though these are resource
+            # identifiers (not secret contents), CodeQL can treat them as sensitive data.
+            logger.error("Failed to get secret: status=%s reason=%s", e.status, e.reason)
             raise
 
     def secret_exists(self, namespace: str, name: str) -> bool:
