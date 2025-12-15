@@ -28,9 +28,7 @@ def test_env_state_dir_used_for_default_state_file(monkeypatch: pytest.MonkeyPat
         secondary_ctx="secondary-b",
     )
 
-    assert resolved == os.path.join(
-        "/tmp/acm-switchover-state", "switchover-primary-a__secondary-b.json"
-    )
+    assert resolved == os.path.join("/tmp/acm-switchover-state", "switchover-primary-a__secondary-b.json")
 
 
 def test_empty_env_state_dir_ignored(monkeypatch: pytest.MonkeyPatch):
@@ -42,9 +40,7 @@ def test_empty_env_state_dir_ignored(monkeypatch: pytest.MonkeyPatch):
         secondary_ctx="secondary-b",
     )
 
-    assert resolved == os.path.join(
-        ".state", "switchover-primary-a__secondary-b.json"
-    )
+    assert resolved == os.path.join(".state", "switchover-primary-a__secondary-b.json")
 
 
 def test_invalid_env_state_dir_rejected_when_state_file_not_set(

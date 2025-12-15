@@ -44,9 +44,7 @@ class TestDecommission:
 
     def test_initialization(self, mock_primary_client):
         """Test Decommission initialization."""
-        decomm = Decommission(
-            primary_client=mock_primary_client, has_observability=True
-        )
+        decomm = Decommission(primary_client=mock_primary_client, has_observability=True)
 
         assert decomm.primary == mock_primary_client
         assert decomm.has_observability is True
@@ -59,12 +57,8 @@ class TestDecommission:
         mock_wait.return_value = True
 
         # Mock resources
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "observability"}}
-        ]
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}}
-        ]
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "observability"}}]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
         mock_primary_client.delete_custom_resource.return_value = True
 
         result = decommission_with_obs.decommission(interactive=False)
@@ -97,9 +91,7 @@ class TestDecommission:
 
     @patch("modules.decommission.confirm_action")
     @patch("modules.decommission.wait_for_condition")
-    def test_decommission_interactive_user_cancels(
-        self, mock_wait, mock_confirm, decommission_with_obs
-    ):
+    def test_decommission_interactive_user_cancels(self, mock_wait, mock_confirm, decommission_with_obs):
         """Test interactive decommission when user cancels."""
         mock_confirm.return_value = False  # User cancels
 
@@ -125,9 +117,7 @@ class TestDecommission:
         assert result is True
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_with_resources(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_observability_with_resources(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test deleting observability resources."""
         mock_wait.return_value = True
 
@@ -145,9 +135,7 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_called_once()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_not_found(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_observability_not_found(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test when no observability resources exist."""
         mock_primary_client.list_custom_resources.return_value = []
 
@@ -156,9 +144,7 @@ class TestDecommission:
 
         mock_primary_client.delete_custom_resource.assert_not_called()
 
-    def test_delete_managed_clusters_excludes_local(
-        self, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_managed_clusters_excludes_local(self, decommission_with_obs, mock_primary_client):
         """Test that local-cluster is excluded from deletion."""
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "cluster1"}},
@@ -176,9 +162,7 @@ class TestDecommission:
         # Should delete cluster1 and cluster2, but not local-cluster
         assert mock_primary_client.delete_custom_resource.call_count == 2
 
-    def test_delete_managed_clusters_none_found(
-        self, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_managed_clusters_none_found(self, decommission_with_obs, mock_primary_client):
         """Test when no managed clusters exist."""
         mock_primary_client.list_custom_resources.return_value = []
         mock_primary_client.list_managed_clusters.return_value = []
@@ -188,9 +172,7 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_not_called()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_multiclusterhub(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_multiclusterhub(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test deleting MultiClusterHub resource."""
         mock_wait.return_value = True
 
@@ -203,9 +185,7 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_called_once()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_multiclusterhub_timeout(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_multiclusterhub_timeout(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test when MultiClusterHub deletion times out."""
         mock_wait.return_value = False  # Timeout
 
@@ -220,9 +200,7 @@ class TestDecommission:
         # Verify deletion was attempted
         mock_primary_client.delete_custom_resource.assert_called_once()
 
-    def test_decommission_error_handling(
-        self, decommission_with_obs, mock_primary_client
-    ):
+    def test_decommission_error_handling(self, decommission_with_obs, mock_primary_client):
         """Test error handling during decommission."""
         mock_primary_client.list_custom_resources.side_effect = Exception("API error")
 
@@ -233,9 +211,7 @@ class TestDecommission:
     @pytest.mark.parametrize("has_obs", [True, False])
     def test_decommission_observability_conditional(self, mock_primary_client, has_obs):
         """Test that observability deletion is conditional."""
-        decomm = Decommission(
-            primary_client=mock_primary_client, has_observability=has_obs
-        )
+        decomm = Decommission(primary_client=mock_primary_client, has_observability=has_obs)
 
         mock_primary_client.list_custom_resources.return_value = []
 
@@ -257,9 +233,7 @@ class TestDecommissionIntegration:
         """Test complete decommission workflow."""
         mock_wait.return_value = True
 
-        decomm = Decommission(
-            primary_client=mock_primary_client, has_observability=True
-        )
+        decomm = Decommission(primary_client=mock_primary_client, has_observability=True)
 
         # Mock all resources
         mock_primary_client.list_custom_resources.side_effect = [
@@ -267,9 +241,7 @@ class TestDecommissionIntegration:
             [{"metadata": {"name": "cluster1"}}],  # ManagedClusters
             [{"metadata": {"name": "multiclusterhub"}}],  # MCH
         ]
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}}
-        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
         mock_primary_client.delete_custom_resource.return_value = True
 
         result = decomm.decommission(interactive=False)

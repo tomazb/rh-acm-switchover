@@ -7,17 +7,17 @@ import pytest
 # Allow direct imports from repo root
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from modules.preflight_validators import AutoImportStrategyValidator, ValidationReporter
-from modules.activation import SecondaryActivation
-from modules.finalization import Finalization
-from lib.utils import StateManager
+from lib.constants import AUTO_IMPORT_STRATEGY_DEFAULT  # noqa: F401
 from lib.constants import (
-    MCE_NAMESPACE,
-    IMPORT_CONTROLLER_CONFIGMAP,
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
+    IMPORT_CONTROLLER_CONFIGMAP,
+    MCE_NAMESPACE,
 )
-from lib.constants import AUTO_IMPORT_STRATEGY_DEFAULT  # noqa: F401
+from lib.utils import StateManager
+from modules.activation import SecondaryActivation
+from modules.finalization import Finalization
+from modules.preflight_validators import AutoImportStrategyValidator, ValidationReporter
 
 
 @pytest.mark.unit
@@ -38,16 +38,10 @@ class TestAutoImportPreflight:
             {"metadata": {"name": "local-cluster"}},
         ]
 
-        validator.run(
-            primary, secondary, primary_version="2.14.0", secondary_version="2.14.1"
-        )
+        validator.run(primary, secondary, primary_version="2.14.0", secondary_version="2.14.1")
 
         # Expect a warning (non-critical) on secondary suggesting ImportAndSync
-        msgs = [
-            r
-            for r in reporter.results
-            if r["check"].startswith("Auto-Import Strategy (secondary)")
-        ]
+        msgs = [r for r in reporter.results if r["check"].startswith("Auto-Import Strategy (secondary)")]
         assert msgs, "Expected secondary auto-import strategy message"
         assert msgs[0]["passed"] is False
         assert "ImportAndSync" in msgs[0]["message"]
@@ -58,20 +52,12 @@ class TestAutoImportPreflight:
         primary = Mock()
         secondary = Mock()
 
-        primary.get_configmap.return_value = {
-            "data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}
-        }
+        primary.get_configmap.return_value = {"data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}}
         secondary.get_configmap.return_value = None
         secondary.list_custom_resources.return_value = []
 
-        validator.run(
-            primary, secondary, primary_version="2.14.0", secondary_version="2.14.0"
-        )
-        msgs = [
-            r
-            for r in reporter.results
-            if r["check"].startswith("Auto-Import Strategy (primary)")
-        ]
+        validator.run(primary, secondary, primary_version="2.14.0", secondary_version="2.14.0")
+        msgs = [r for r in reporter.results if r["check"].startswith("Auto-Import Strategy (primary)")]
         assert msgs and msgs[0]["passed"] is False
 
 
@@ -116,13 +102,9 @@ class TestFinalizationReset:
             manage_auto_import_strategy=True,
         )
         # Pretend ImportAndSync is set
-        fin.secondary.get_configmap.return_value = {
-            "data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}
-        }
+        fin.secondary.get_configmap.return_value = {"data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}}
 
         # Access the private method via name mangling to avoid lint warnings
         fin._ensure_auto_import_default()
 
-        fin.secondary.delete_configmap.assert_called_once_with(
-            MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP
-        )
+        fin.secondary.delete_configmap.assert_called_once_with(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
