@@ -174,8 +174,9 @@ class KubeClient:
                 return None
             if is_retryable_error(e):
                 raise
-            # Secret name is a resource identifier, not sensitive data (CodeQL false positive)
-            logger.error(  # nosec - logging secret name, not secret data
+            # Secret name is a resource identifier, not sensitive data
+            # Logging namespace/name for debugging - no actual secret content is logged
+            logger.error(  # lgtm[py/clear-text-logging-sensitive-data] nosec
                 "Failed to get secret %s/%s: status=%s reason=%s", namespace, name, e.status, e.reason
             )
             raise
