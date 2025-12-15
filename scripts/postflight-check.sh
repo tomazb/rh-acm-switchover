@@ -93,7 +93,7 @@ detect_cluster_cli
 section_header "1. Checking Restore Status"
 
 # Try to find passive sync restore by syncRestoreWithNewBackups=true first
-PASSIVE_SYNC_RESTORE=$(oc --context="$NEW_HUB_CONTEXT" get restore -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+PASSIVE_SYNC_RESTORE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_RESTORE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
     jq -r '.items[] | select(.spec.syncRestoreWithNewBackups == true) | "\(.metadata.name) \(.status.phase // "unknown") \(.metadata.creationTimestamp)"' | head -1 || true)
 
 if [[ -n "$PASSIVE_SYNC_RESTORE" ]]; then
@@ -101,12 +101,12 @@ if [[ -n "$PASSIVE_SYNC_RESTORE" ]]; then
     IS_PASSIVE_SYNC=true
 else
     # Fallback: get the most recent restore (sort by creation timestamp)
-    read -r RESTORE_NAME RESTORE_PHASE RESTORE_TIME <<< "$(oc --context="$NEW_HUB_CONTEXT" get restore -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name} {.items[-1].status.phase} {.items[-1].metadata.creationTimestamp}' 2>/dev/null || true)"
+    read -r RESTORE_NAME RESTORE_PHASE RESTORE_TIME <<< "$(oc --context="$NEW_HUB_CONTEXT" get $RES_RESTORE -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name} {.items[-1].status.phase} {.items[-1].metadata.creationTimestamp}' 2>/dev/null || true)"
     IS_PASSIVE_SYNC=false
 fi
 
 # Check if BackupSchedule is enabled (which deletes Restore objects)
-BACKUP_SCHEDULE_ENABLED=$(oc --context="$NEW_HUB_CONTEXT" get backupschedule -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].spec.paused}' 2>/dev/null || echo "")
+BACKUP_SCHEDULE_ENABLED=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].spec.paused}' 2>/dev/null || echo "")
 
 if [[ -n "$RESTORE_NAME" ]]; then
     if [[ "$RESTORE_PHASE" == "Finished" ]] || [[ "$RESTORE_PHASE" == "Completed" ]]; then
@@ -145,7 +145,7 @@ fi
 # Check 2: Verify ManagedClusters are connected
 section_header "2. Checking ManagedCluster Status"
 
-TOTAL_CLUSTERS=$(oc --context="$NEW_HUB_CONTEXT" get managedclusters --no-headers 2>/dev/null | grep -c -v "$LOCAL_CLUSTER_NAME" || true)
+TOTAL_CLUSTERS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MANAGED_CLUSTER --no-headers 2>/dev/null | grep -c -v "$LOCAL_CLUSTER_NAME" || true)
 if [[ $TOTAL_CLUSTERS -gt 0 ]]; then
     check_pass "Found $TOTAL_CLUSTERS managed cluster(s) (excluding $LOCAL_CLUSTER_NAME)"
     
@@ -153,7 +153,7 @@ if [[ $TOTAL_CLUSTERS -gt 0 ]]; then
     # Check Available status
     # Identify clusters that are NOT Available (single API call)
     # This correctly catches clusters with Available=False, Unknown, or missing status
-    UNAVAILABLE_LIST=$(oc --context="$NEW_HUB_CONTEXT" get managedclusters -o json 2>/dev/null | \
+    UNAVAILABLE_LIST=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
         jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" '.items[] | select(.metadata.name != $LOCAL) | select(
             ([.status.conditions[]? | select(.type=="ManagedClusterConditionAvailable" and .status=="True")] | length) == 0
         ) | .metadata.name')
@@ -170,7 +170,7 @@ if [[ $TOTAL_CLUSTERS -gt 0 ]]; then
     fi
     
     # Check Joined status
-    JOINED_CLUSTERS=$(oc --context="$NEW_HUB_CONTEXT" get managedclusters -o json 2>/dev/null | \
+    JOINED_CLUSTERS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
         jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" '.items[] | select(.metadata.name != $LOCAL) | select(.status.conditions[]? | select(.type=="ManagedClusterJoined" and .status=="True")) | .metadata.name' | wc -l)
     
     if [[ $JOINED_CLUSTERS -eq $TOTAL_CLUSTERS ]]; then
@@ -180,7 +180,7 @@ if [[ $TOTAL_CLUSTERS -gt 0 ]]; then
     fi
     
     # Check for Pending Import
-    PENDING_IMPORT=$(oc --context="$NEW_HUB_CONTEXT" get managedclusters 2>/dev/null | grep -c "Pending Import" || true)
+    PENDING_IMPORT=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MANAGED_CLUSTER 2>/dev/null | grep -c "Pending Import" || true)
     if [[ $PENDING_IMPORT -eq 0 ]]; then
         check_pass "No clusters stuck in Pending Import"
     else
@@ -197,7 +197,7 @@ if oc --context="$NEW_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
     check_pass "Observability namespace exists"
 
     # Check MCO CR status
-    MCO_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get mco observability -n "$OBSERVABILITY_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
+    MCO_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
     
     if [[ "$MCO_STATUS" == "True" ]]; then
         check_pass "MultiClusterObservability CR is Ready"
@@ -281,16 +281,16 @@ fi
 # Check 5: Verify BackupSchedule is enabled
 section_header "5. Checking Backup Configuration"
 
-BACKUP_SCHEDULE=$(oc --context="$NEW_HUB_CONTEXT" get backupschedule -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
+BACKUP_SCHEDULE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
 if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
-    SCHEDULE_NAME=$(oc --context="$NEW_HUB_CONTEXT" get backupschedule -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    PAUSED=$(oc --context="$NEW_HUB_CONTEXT" get backupschedule "$SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.paused}' 2>/dev/null)
+    SCHEDULE_NAME=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    PAUSED=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE "$SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.paused}' 2>/dev/null)
     
     if [[ "$PAUSED" == "false" ]] || [[ -z "$PAUSED" ]]; then
         check_pass "BackupSchedule '$SCHEDULE_NAME' is enabled (not paused)"
         
         # Check for BackupCollision state (indicates scheduling conflict)
-        COLLISION_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get backupschedule "$SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+        COLLISION_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE "$SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
         if [[ "$COLLISION_STATUS" == "BackupCollision" ]]; then
             check_fail "BackupSchedule in BackupCollision state (needs recreation)"
             echo -e "${RED}       The BackupSchedule was likely restored from primary hub and conflicts with existing backups${NC}"
@@ -303,10 +303,10 @@ if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
     fi
     
     # Check for recent backups
-    RECENT_BACKUPS=$(oc --context="$NEW_HUB_CONTEXT" get backup -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp --no-headers 2>/dev/null | tail -3 | wc -l || true)
+    RECENT_BACKUPS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp --no-headers 2>/dev/null | tail -3 | wc -l || true)
     if [[ $RECENT_BACKUPS -gt 0 ]]; then
         # Get details of the latest backup in a single call
-        read -r LATEST_BACKUP LATEST_PHASE LATEST_TIME <<< "$(oc --context="$NEW_HUB_CONTEXT" get backup -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name} {.items[-1].status.phase} {.items[-1].metadata.creationTimestamp}' 2>/dev/null)"
+        read -r LATEST_BACKUP LATEST_PHASE LATEST_TIME <<< "$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name} {.items[-1].status.phase} {.items[-1].metadata.creationTimestamp}' 2>/dev/null)"
         
         if [[ "$LATEST_PHASE" == "Completed" ]] || [[ "$LATEST_PHASE" == "Finished" ]]; then
             check_pass "Latest backup: '$LATEST_BACKUP' (Phase: $LATEST_PHASE, Created: $LATEST_TIME)"
@@ -323,10 +323,10 @@ else
 fi
 
 # Check 5b: Verify BackupStorageLocation is available
-BSL_OUTPUT=$(oc --context="$NEW_HUB_CONTEXT" get backupstoragelocation -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null || true)
+BSL_OUTPUT=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BSL -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null || true)
 if [[ -n "$BSL_OUTPUT" ]]; then
     BSL_NAME=$(echo "$BSL_OUTPUT" | awk '{print $1}' | head -1)
-    BSL_PHASE=$(oc --context="$NEW_HUB_CONTEXT" get backupstoragelocation "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "unknown")
+    BSL_PHASE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BSL "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "unknown")
     
     if [[ "$BSL_PHASE" == "Available" ]]; then
         check_pass "BackupStorageLocation '$BSL_NAME' is Available (storage accessible)"
@@ -341,10 +341,10 @@ fi
 # Check 6: Verify ACM hub components
 section_header "6. Checking ACM Hub Components"
 
-MCH_COUNT=$(oc --context="$NEW_HUB_CONTEXT" get mch -n "$ACM_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
+MCH_COUNT=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
 if [[ $MCH_COUNT -eq 1 ]]; then
-    MCH_NAME=$(oc --context="$NEW_HUB_CONTEXT" get mch -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    MCH_PHASE=$(oc --context="$NEW_HUB_CONTEXT" get mch "$MCH_NAME" -n "$ACM_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
+    MCH_NAME=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    MCH_PHASE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH "$MCH_NAME" -n "$ACM_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
     
     if [[ "$MCH_PHASE" == "Running" ]]; then
         check_pass "MultiClusterHub '$MCH_NAME' is Running"
@@ -370,9 +370,9 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
     section_header "7. Comparing with Old Hub"
     
     # Check old hub cluster status
-    OLD_CLUSTERS=$(oc --context="$OLD_HUB_CONTEXT" get managedclusters --no-headers 2>/dev/null | grep -c -v "$LOCAL_CLUSTER_NAME" || true)
+    OLD_CLUSTERS=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MANAGED_CLUSTER --no-headers 2>/dev/null | grep -c -v "$LOCAL_CLUSTER_NAME" || true)
     if [[ $OLD_CLUSTERS -gt 0 ]]; then
-        OLD_UNKNOWN=$(oc --context="$OLD_HUB_CONTEXT" get managedclusters -o json 2>/dev/null | \
+        OLD_UNKNOWN=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
             jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" '.items[] | select(.metadata.name != $LOCAL) | select(.status.conditions[]? | select(.type=="ManagedClusterConditionAvailable" and .status!="True")) | .metadata.name' | wc -l)
         
         if [[ $OLD_UNKNOWN -eq $OLD_CLUSTERS ]]; then
@@ -383,10 +383,10 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
     fi
     
     # Check if old hub BackupSchedule is paused
-    OLD_SCHEDULE=$(oc --context="$OLD_HUB_CONTEXT" get backupschedule -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
+    OLD_SCHEDULE=$(oc --context="$OLD_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
     if [[ $OLD_SCHEDULE -gt 0 ]]; then
-        OLD_SCHEDULE_NAME=$(oc --context="$OLD_HUB_CONTEXT" get backupschedule -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-        OLD_PAUSED=$(oc --context="$OLD_HUB_CONTEXT" get backupschedule "$OLD_SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.paused}' 2>/dev/null)
+        OLD_SCHEDULE_NAME=$(oc --context="$OLD_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        OLD_PAUSED=$(oc --context="$OLD_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE "$OLD_SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.paused}' 2>/dev/null)
         
         if [[ "$OLD_PAUSED" == "true" ]]; then
             check_pass "Old hub BackupSchedule is paused (expected)"
@@ -404,10 +404,10 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
     fi
     
     # Check if old hub has passive sync restore configured (for failback capability)
-    OLD_RESTORE=$(oc --context="$OLD_HUB_CONTEXT" get restore -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)
+    OLD_RESTORE=$(oc --context="$OLD_HUB_CONTEXT" get $RES_RESTORE -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)
     if [[ -n "$OLD_RESTORE" ]]; then
-        OLD_RESTORE_PHASE=$(oc --context="$OLD_HUB_CONTEXT" get restore "$OLD_RESTORE" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-        OLD_RESTORE_SYNC=$(oc --context="$OLD_HUB_CONTEXT" get restore "$OLD_RESTORE" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.syncRestoreWithNewBackups}' 2>/dev/null || echo "false")
+        OLD_RESTORE_PHASE=$(oc --context="$OLD_HUB_CONTEXT" get $RES_RESTORE "$OLD_RESTORE" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+        OLD_RESTORE_SYNC=$(oc --context="$OLD_HUB_CONTEXT" get $RES_RESTORE "$OLD_RESTORE" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.syncRestoreWithNewBackups}' 2>/dev/null || echo "false")
         
         if [[ "$OLD_RESTORE_SYNC" == "true" ]] && [[ "$OLD_RESTORE_PHASE" == "Enabled" || "$OLD_RESTORE_PHASE" == "Finished" ]]; then
             check_pass "Old hub has passive sync restore '$OLD_RESTORE' (Phase: $OLD_RESTORE_PHASE) - ready for failback"
@@ -421,7 +421,7 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
     fi
     
     # Check if old hub ACM is still installed (for decommission status)
-    OLD_MCH=$(oc --context="$OLD_HUB_CONTEXT" get mch -n "$ACM_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
+    OLD_MCH=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
     if [[ $OLD_MCH -gt 0 ]]; then
         check_pass "Old hub: ACM still installed (expected if keeping as secondary)"
     else
@@ -432,7 +432,7 @@ fi
 # Check 8: Verify no auto-import disabled annotations
 section_header "8. Checking Auto-Import Status"
 
-DISABLED_AUTO_IMPORT=$(oc --context="$NEW_HUB_CONTEXT" get managedclusters -o json 2>/dev/null | \
+DISABLED_AUTO_IMPORT=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
     jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" '.items[] | select(.metadata.name != $LOCAL) | select(.metadata.annotations["import.open-cluster-management.io/disable-auto-import"] != null) | .metadata.name' 2>/dev/null | wc -l || true)
 
 if [[ $DISABLED_AUTO_IMPORT -eq 0 ]]; then
@@ -445,7 +445,7 @@ fi
 section_header "9. Checking Auto-Import Strategy (ACM 2.14+)"
 
 # Get ACM version on new hub
-if ! NEW_HUB_VERSION=$(oc --context="$NEW_HUB_CONTEXT" get mch -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$NEW_HUB_VERSION" ]]; then
+if ! NEW_HUB_VERSION=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$NEW_HUB_VERSION" ]]; then
     check_fail "New hub: Could not determine ACM version. Skipping auto-import strategy check."
     NEW_HUB_VERSION="unknown"
 fi
@@ -473,7 +473,7 @@ fi
 
 # Also check old hub if provided
 if [[ -n "$OLD_HUB_CONTEXT" ]]; then
-    if ! OLD_HUB_VERSION=$(oc --context="$OLD_HUB_CONTEXT" get mch -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$OLD_HUB_VERSION" ]]; then
+    if ! OLD_HUB_VERSION=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$OLD_HUB_VERSION" ]]; then
         check_warn "Old hub: Could not determine ACM version. Skipping auto-import strategy check."
         OLD_HUB_VERSION="unknown"
     fi
