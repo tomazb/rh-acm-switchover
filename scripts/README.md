@@ -195,7 +195,10 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 9. **Backup Status** - Confirms latest backup completed, no in-progress backups
 10. **ClusterDeployment Safety** - **CRITICAL:** Verifies `preserveOnDelete=true` on ALL ClusterDeployments
 11. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
-12. **Observability** - Detects if observability is installed (optional) - Checks for CRs and secrets
+12. **Observability** - If observability is installed on the primary:
+  - Confirms required CRs/secrets exist
+  - **Fails if the secondary hub has an active MCO** unless **Thanos compactor** and **observatorium-api** are scaled to `0`
+  - **Warns** if the secondary has observability pods but no MCO CR (likely incomplete decommission)
 13. **Secondary Hub Managed Clusters** - Checks for pre-existing clusters on secondary:
     - Shows available/total count (e.g., "0/8 available")
     - Warns if clusters exist in Unknown state (may need cleanup)
@@ -304,7 +307,7 @@ graph TD
     Q -->|Full| S[Skip Passive Check]
     R --> T{Passive Sync<br/>Enabled?}
     T -->|No| U[FAIL: Passive Sync Not Ready]
-    T -->|Yes| V[Check Observability CRs & Secrets]
+    T -->|Yes| V[Check Observability CRs & Secrets\n+ Secondary MCO Safety]
     S --> V
     V --> V2[Check Auto-Import Strategy<br/>ACM 2.14+]
     V2 --> V3{Non-default<br/>Strategy?}
@@ -366,7 +369,8 @@ Verifies that the ACM switchover completed successfully by validating all critic
 5. **Backup Configuration** - Ensures BackupSchedule is enabled and creating backups
 5b. **BackupStorageLocation** - Verifies BSL is in "Available" phase (storage accessible for backups)
 6. **ACM Hub Components** - Verifies MultiClusterHub and ACM pods are healthy
-7. **Old Hub Comparison** (if `--old-hub-context` provided) - Checks old hub clusters are disconnected
+7. **Old Hub Comparison** (if `--old-hub-context` provided) - Checks old hub clusters are disconnected and that the old hub is not still acting as an active observability hub:
+  - Passes if **MCO is absent**, or if **Thanos compactor** and **observatorium-api** are scaled to `0`
 8. **Auto-Import Status** - Verifies no lingering disable-auto-import annotations
 9. **Auto-Import Strategy** (ACM 2.14+) - Ensures `autoImportStrategy` is reset to default post-switchover:
     - Warns if non-default strategy remains configured
@@ -476,7 +480,8 @@ graph TD
     AA -->|No| AB[WARN: Old Hub Still Active]
     AA -->|Yes| AC[Check Old Hub Backup Paused]
     AB --> Y2
-    AC --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    AC --> AC2[Check Old Hub MCO or\nScaled-down Observability]
+    AC2 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
     Y2 --> Y3{Non-default<br/>Strategy?}
     Y3 -->|Yes| Y4[WARN: Reset Strategy to Default]
     Y3 -->|No| AD
