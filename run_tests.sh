@@ -77,8 +77,8 @@ echo "--- Bandit (Security Linter) ---"
 bandit -r acm_switchover.py lib/ modules/ -ll || true
 
 echo ""
-echo "--- Safety (Dependency Vulnerabilities) ---"
-safety check || true
+echo "--- pip-audit (Dependency Vulnerabilities) ---"
+pip-audit || true
 
 echo ""
 echo "======================================"
