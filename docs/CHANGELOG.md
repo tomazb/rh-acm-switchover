@@ -9,23 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- State file defaults now honor `ACM_SWITCHOVER_STATE_DIR` when `--state-file` is not provided; explicit `--state-file` always takes precedence. The state viewer aligns with the same default, and docs were updated to describe the order.
+- Packaging and distribution work is planned; `1.4.0` is reserved for that release.
 
-#### Documentation
+## [1.3.3] - 2025-12-15
 
-- Added RBAC section to main README
-- Updated prerequisites to include RBAC permissions
-- Added links to RBAC deployment guides
+### Fixed
 
-## [1.4.0] - 2025-12-12
+- Security: pin `urllib3>=2.5.0` to address CVE-2025-50181 and CVE-2025-50182.
+
+### Changed
+
+- Replace Safety CLI with `pip-audit` in `run_tests.sh` (avoids interactive auth prompts and deprecated `safety check`).
+
+## [1.3.2] - 2025-12-15
 
 ### Added
+
+- State file defaults now honor `ACM_SWITCHOVER_STATE_DIR` when `--state-file` is not provided; explicit `--state-file` always takes precedence. The state viewer aligns with the same default, and docs were updated to describe the order.
 
 - **Atomic state file persistence**: State files are now written atomically using a temp-file + rename pattern. If the process crashes during write, the previous valid state is preserved instead of leaving a corrupted file.
 
 - **KUBECONFIG multi-file support**: The `_load_kubeconfig_data()` method now properly handles colon-separated `KUBECONFIG` paths (e.g., `/path/one:/path/two`), merging contexts, clusters, and users from all files. Missing files are gracefully skipped.
 
-- **Standardized dry-run handling**: Converted 7 methods across `finalization.py` and `post_activation.py` to use the `@dry_run_skip` decorator for consistent dry-run behavior:
+- **Standardized dry-run handling**: Converted 8 methods across `finalization.py` and `post_activation.py` to use the `@dry_run_skip` decorator for consistent dry-run behavior:
   - `_verify_new_backups`
   - `_verify_backup_schedule_enabled`
   - `_verify_multiclusterhub_health`
@@ -39,6 +45,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Improved state file write safety with `fsync()` before atomic rename
 - Better error handling for kubeconfig file loading edge cases
+
+- Scripts use fully qualified API group names for `oc`/`kubectl` resources to avoid ambiguity.
+
+### Fixed
+
+- Security: sanitize kubeconfig path logging.
+- Security: avoid logging secret identifiers (CodeQL-driven hardening).
+
+#### Documentation
+
+- Added RBAC section to main README
+- Updated prerequisites to include RBAC permissions
+- Added links to RBAC deployment guides
+
+- Runbook clarifications around re-enabling Observatorium API and rollback guidance.
 
 ## [1.3.1] - 2025-12-11
 
