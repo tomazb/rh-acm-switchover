@@ -304,7 +304,7 @@ class InputValidator:
         if path.startswith("/"):
             import os
 
-            safe_prefixes = ["/tmp/", "/var/"]
+            safe_prefixes = ["/tmp/", "/var/"]  # nosec B108 - path validation, not temp file usage
             # Allow paths under current working directory
             cwd = os.getcwd()
             if cwd:
