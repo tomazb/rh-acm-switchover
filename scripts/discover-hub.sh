@@ -110,7 +110,7 @@ is_acm_hub() {
 get_acm_version() {
     local ctx="$1"
     local version
-    version=$("$CLUSTER_CLI_BIN" --context="$ctx" get mch -n "$ACM_NAMESPACE" \
+    version=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MCH -n "$ACM_NAMESPACE" \
         -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
     echo "$version"
 }
@@ -121,7 +121,7 @@ get_backup_schedule_state() {
     local ctx="$1"
     
     local schedule_name
-    schedule_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get backupschedule -n "$BACKUP_NAMESPACE" \
+    schedule_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" \
         -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
     
     if [[ -z "$schedule_name" ]]; then
@@ -130,11 +130,11 @@ get_backup_schedule_state() {
     fi
     
     local paused
-    paused=$("$CLUSTER_CLI_BIN" --context="$ctx" get backupschedule "$schedule_name" -n "$BACKUP_NAMESPACE" \
+    paused=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE "$schedule_name" -n "$BACKUP_NAMESPACE" \
         -o jsonpath='{.spec.paused}' 2>/dev/null || echo "")
     
     local phase
-    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get backupschedule "$schedule_name" -n "$BACKUP_NAMESPACE" \
+    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE "$schedule_name" -n "$BACKUP_NAMESPACE" \
         -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
     
     if [[ "$phase" == "BackupCollision" ]]; then
@@ -153,7 +153,7 @@ get_restore_state() {
     
     # Get latest restore
     local restore_name
-    restore_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get restore -n "$BACKUP_NAMESPACE" \
+    restore_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_RESTORE -n "$BACKUP_NAMESPACE" \
         --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || echo "")
     
     if [[ -z "$restore_name" ]]; then
@@ -162,11 +162,11 @@ get_restore_state() {
     fi
     
     local phase
-    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get restore "$restore_name" -n "$BACKUP_NAMESPACE" \
+    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_RESTORE "$restore_name" -n "$BACKUP_NAMESPACE" \
         -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
     
     local sync_enabled
-    sync_enabled=$("$CLUSTER_CLI_BIN" --context="$ctx" get restore "$restore_name" -n "$BACKUP_NAMESPACE" \
+    sync_enabled=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_RESTORE "$restore_name" -n "$BACKUP_NAMESPACE" \
         -o jsonpath='{.spec.syncRestoreWithNewBackups}' 2>/dev/null || echo "false")
     
     if [[ "$sync_enabled" == "true" ]] && [[ "$phase" == "Enabled" ]]; then
@@ -184,7 +184,7 @@ get_restore_state() {
 get_available_mc_count() {
     local ctx="$1"
     
-    "$CLUSTER_CLI_BIN" --context="$ctx" get managedclusters -o json 2>/dev/null | \
+    "$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
         jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" \
         '[.items[] | select(.metadata.name != $LOCAL) | select(.status.conditions[]? | select(.type=="ManagedClusterConditionAvailable" and .status=="True"))] | length' \
         2>/dev/null || echo "0"
@@ -194,7 +194,7 @@ get_available_mc_count() {
 get_managed_cluster_names() {
     local ctx="$1"
     
-    "$CLUSTER_CLI_BIN" --context="$ctx" get managedclusters -o json 2>/dev/null | \
+    "$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
         jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" \
         '.items[] | select(.metadata.name != $LOCAL) | .metadata.name' \
         2>/dev/null || echo ""
@@ -325,7 +325,7 @@ verify_klusterlet_connections() {
 get_cluster_details() {
     local ctx="$1"
     
-    "$CLUSTER_CLI_BIN" --context="$ctx" get managedclusters -o json 2>/dev/null | \
+    "$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
         jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" '
             .items[] | select(.metadata.name != $LOCAL) |
             {
@@ -341,7 +341,7 @@ get_cluster_details() {
 get_total_mc_count() {
     local ctx="$1"
     
-    "$CLUSTER_CLI_BIN" --context="$ctx" get managedclusters --no-headers 2>/dev/null | \
+    "$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER --no-headers 2>/dev/null | \
         grep -v "$LOCAL_CLUSTER_NAME" | wc -l
 }
 

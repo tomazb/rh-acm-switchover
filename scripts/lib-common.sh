@@ -225,7 +225,7 @@ get_total_mc_count() {
     local ctx="$1"
     local count
     
-    count=$("$CLUSTER_CLI_BIN" --context="$ctx" get managedclusters --no-headers 2>/dev/null | \
+    count=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER --no-headers 2>/dev/null | \
         grep -v "$LOCAL_CLUSTER_NAME" | wc -l)
     
     # Trim whitespace and ensure numeric
@@ -239,7 +239,7 @@ get_available_mc_count() {
     local ctx="$1"
     local count
     
-    count=$("$CLUSTER_CLI_BIN" --context="$ctx" get managedclusters -o json 2>/dev/null | \
+    count=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
         jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" \
         '[.items[] | select(.metadata.name != $LOCAL) | select(.status.conditions[]? | select(.type=="ManagedClusterConditionAvailable" and .status=="True"))] | length' \
         2>/dev/null)
@@ -255,7 +255,7 @@ get_backup_schedule_state() {
     local ctx="$1"
     
     local phase
-    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get backupschedule -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
     
     if [[ -z "$phase" ]]; then
         echo "none"

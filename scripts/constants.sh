@@ -37,6 +37,27 @@ export OBS_THANOS_COMPACT_POD="observability-thanos-compact"
 # Currently scripts detect some of these dynamically.
 export RESTORE_PASSIVE_SYNC_NAME="restore-acm-passive-sync"
 
+# =============================================================================
+# Fully Qualified API Resource Types
+# =============================================================================
+# Use these constants instead of short names to avoid ambiguity
+# and ensure consistency with the runbook documentation.
+
+# ACM Resources
+export RES_MCH="multiclusterhub.operator.open-cluster-management.io"
+export RES_MCO="multiclusterobservability.observability.open-cluster-management.io"
+export RES_MANAGED_CLUSTER="managedcluster.cluster.open-cluster-management.io"
+export RES_BACKUP_SCHEDULE="backupschedule.cluster.open-cluster-management.io"
+export RES_RESTORE="restore.cluster.open-cluster-management.io"
+
+# Velero/OADP Resources
+export RES_DPA="dataprotectionapplication.oadp.openshift.io"
+export RES_BSL="backupstoragelocation.velero.io"
+export RES_BACKUP="backup.velero.io"
+
+# Hive Resources
+export RES_CLUSTER_DEPLOYMENT="clusterdeployment.hive.openshift.io"
+
 # Auto-Import Strategy (ACM 2.14+)
 export MCE_NAMESPACE="multicluster-engine"
 export IMPORT_CONTROLLER_CONFIGMAP="import-controller-config"
