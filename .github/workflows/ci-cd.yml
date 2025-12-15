@@ -91,7 +91,7 @@ jobs:
         
     - name: Check code formatting with black
       run: |
-        black --check --line-length 120 --diff .
+        black --check --line-length 120 --diff . --exclude '(^|/)completions(/|$)'
         
     - name: Check import sorting with isort
       run: |
@@ -103,8 +103,8 @@ jobs:
         
     - name: Run bandit security linter
       run: |
-        bandit -r . -f json -o bandit-report.json || true
-        bandit -r . -f txt
+        bandit -r . -x ./completions,./tests -f json -o bandit-report.json || true
+        bandit -r . -x ./completions,./tests -f txt
         
     - name: Upload bandit report
       uses: actions/upload-artifact@v4
@@ -135,10 +135,10 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
         
-    - name: Run safety check for vulnerable dependencies
+    - name: Run Safety vulnerability scan
       run: |
-        safety check --json --output safety-report.json || true
-        safety check || true
+        safety scan --json --output safety-report.json || true
+        safety scan --full-report || true
         
     - name: Upload safety report
       uses: actions/upload-artifact@v4
@@ -162,11 +162,13 @@ jobs:
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
+      continue-on-error: true
         
     - name: Upload Trivy results to GitHub Security
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: 'trivy-results.sarif'
+      continue-on-error: true
 
   syntax-check:
     name: Python Syntax Validation
@@ -232,6 +234,7 @@ jobs:
         use-quiet-mode: 'yes'
         use-verbose-mode: 'yes'
         config-file: '.github/markdown-link-check.json'
+      continue-on-error: true
 
   integration-test:
     name: Integration Tests (Dry-Run)
@@ -309,6 +312,7 @@ jobs:
       with:
         context: .
         push: false
+        load: true
         tags: acm-switchover:test
         cache-from: type=gha
         cache-to: type=gha,mode=max

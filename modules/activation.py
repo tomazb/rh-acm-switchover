@@ -6,8 +6,15 @@ import logging
 import time
 from typing import Dict, Optional
 
+from lib.constants import AUTO_IMPORT_STRATEGY_DEFAULT  # noqa: F401
 from lib.constants import (
+    AUTO_IMPORT_STRATEGY_KEY,
+    AUTO_IMPORT_STRATEGY_SYNC,
     BACKUP_NAMESPACE,
+    IMPORT_CONTROLLER_CONFIGMAP,
+    MCE_NAMESPACE,
+    PATCH_VERIFY_MAX_RETRIES,
+    PATCH_VERIFY_RETRY_DELAY,
     RESTORE_FULL_NAME,
     RESTORE_PASSIVE_SYNC_NAME,
     RESTORE_POLL_INTERVAL,
@@ -15,14 +22,7 @@ from lib.constants import (
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
     VELERO_BACKUP_LATEST,
-    MCE_NAMESPACE,
-    IMPORT_CONTROLLER_CONFIGMAP,
-    AUTO_IMPORT_STRATEGY_KEY,
-    AUTO_IMPORT_STRATEGY_SYNC,
-    PATCH_VERIFY_MAX_RETRIES,
-    PATCH_VERIFY_RETRY_DELAY,
 )
-from lib.constants import AUTO_IMPORT_STRATEGY_DEFAULT  # noqa: F401
 from lib.exceptions import FatalError, SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
@@ -35,9 +35,7 @@ logger = logging.getLogger("acm_switchover")
 MIN_MANAGED_CLUSTERS = 0
 
 
-def find_passive_sync_restore(
-    client: KubeClient, namespace: str = BACKUP_NAMESPACE
-) -> Optional[Dict]:
+def find_passive_sync_restore(client: KubeClient, namespace: str = BACKUP_NAMESPACE) -> Optional[Dict]:
     """
     Find an existing passive sync restore on the cluster.
 
@@ -76,9 +74,7 @@ def find_passive_sync_restore(
         namespace=namespace,
     )
     if fallback:
-        logger.debug(
-            "Found passive sync restore by fallback name: %s", RESTORE_PASSIVE_SYNC_NAME
-        )
+        logger.debug("Found passive sync restore by fallback name: %s", RESTORE_PASSIVE_SYNC_NAME)
     return fallback
 
 
@@ -124,9 +120,7 @@ class SecondaryActivation:
             )
 
         self._passive_sync_restore_name = restore.get("metadata", {}).get("name")
-        logger.info(
-            "Discovered passive sync restore: %s", self._passive_sync_restore_name
-        )
+        logger.info("Discovered passive sync restore: %s", self._passive_sync_restore_name)
         return self._passive_sync_restore_name
 
     def activate(self) -> bool:
@@ -241,9 +235,7 @@ class SecondaryActivation:
             raise FatalError(f"{restore_name} not found before patching")
 
         # Patch existing restore with veleroManagedClustersBackupName: latest
-        patch = {
-            "spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}
-        }
+        patch = {"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}}
         logger.info("PATCHING: Applying patch = %s", patch)
 
         result = self.secondary.patch_custom_resource(
@@ -260,21 +252,15 @@ class SecondaryActivation:
             type(result).__name__,
         )
         if result:
-            result_mc_backup = result.get("spec", {}).get(
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>"
-            )
+            result_mc_backup = result.get("spec", {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>")
             logger.info(
                 "PATCH RESULT: %s in response = %s",
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
                 result_mc_backup,
             )
-            logger.debug(
-                "PATCH RESULT: Full spec in response = %s", result.get("spec", {})
-            )
+            logger.debug("PATCH RESULT: Full spec in response = %s", result.get("spec", {}))
         else:
-            logger.warning(
-                "PATCH RESULT: patch_custom_resource returned empty/None result"
-            )
+            logger.warning("PATCH RESULT: patch_custom_resource returned empty/None result")
 
         # Skip verification in dry-run mode since the patch wasn't actually applied
         if self.secondary.dry_run:
@@ -283,9 +269,7 @@ class SecondaryActivation:
             return
 
         # Get resourceVersion from before patch for comparison
-        before_resource_version = restore_before.get("metadata", {}).get(
-            "resourceVersion", ""
-        )
+        before_resource_version = restore_before.get("metadata", {}).get("resourceVersion", "")
 
         # Verify patch with retry loop and resourceVersion comparison
         # This handles API sync delays more robustly than a single sleep
@@ -304,12 +288,8 @@ class SecondaryActivation:
                 logger.error("AFTER PATCH: %s not found after patching!", restore_name)
                 raise FatalError(f"{restore_name} disappeared after patching")
 
-            after_resource_version = restore_after.get("metadata", {}).get(
-                "resourceVersion", ""
-            )
-            after_mc_backup = restore_after.get("spec", {}).get(
-                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>"
-            )
+            after_resource_version = restore_after.get("metadata", {}).get("resourceVersion", "")
+            after_mc_backup = restore_after.get("spec", {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, "<not set>")
 
             logger.debug(
                 "Patch verify attempt %d/%d: resourceVersion %s -> %s, %s = %s",
@@ -379,18 +359,12 @@ class SecondaryActivation:
                 version="v1",
                 plural="managedclusters",
             )
-            has_non_local = any(
-                mc.get("metadata", {}).get("name") != "local-cluster" for mc in mcs
-            )
+            has_non_local = any(mc.get("metadata", {}).get("name") != "local-cluster" for mc in mcs)
             if not has_non_local:
                 return
             # Determine current strategy
-            cm = self.secondary.get_configmap(
-                MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP
-            )
-            current = (
-                (cm or {}).get("data", {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
-            )
+            cm = self.secondary.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+            current = (cm or {}).get("data", {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
             if current == AUTO_IMPORT_STRATEGY_SYNC:
                 return
             if not self.manage_auto_import_strategy:
@@ -464,11 +438,7 @@ class SecondaryActivation:
             logger.info("[DRY-RUN] Skipping wait for restore completion")
             return
 
-        restore_name = (
-            self._get_passive_sync_restore_name()
-            if self.method == "passive"
-            else RESTORE_FULL_NAME
-        )
+        restore_name = self._get_passive_sync_restore_name() if self.method == "passive" else RESTORE_FULL_NAME
 
         def _poll_restore():
             restore = self.secondary.get_custom_resource(
@@ -506,17 +476,13 @@ class SecondaryActivation:
         )
 
         if not completed:
-            raise FatalError(
-                f"Timeout waiting for restore to complete after {timeout}s"
-            )
+            raise FatalError(f"Timeout waiting for restore to complete after {timeout}s")
 
         # For passive sync, wait for the managed clusters Velero restore to actually complete
         if self.method == "passive":
             # Skip waiting for Velero restore in dry-run mode since the patch wasn't applied
             if self.secondary.dry_run:
-                logger.info(
-                    "[DRY-RUN] Skipping wait for Velero managed clusters restore"
-                )
+                logger.info("[DRY-RUN] Skipping wait for Velero managed clusters restore")
             else:
                 self._wait_for_managed_clusters_velero_restore(timeout)
 
@@ -571,20 +537,14 @@ class SecondaryActivation:
             velero_phase = velero_restore.get("status", {}).get("phase", "unknown")
 
             if velero_phase == "Completed":
-                items_restored = (
-                    velero_restore.get("status", {})
-                    .get("progress", {})
-                    .get("itemsRestored", 0)
-                )
+                items_restored = velero_restore.get("status", {}).get("progress", {}).get("itemsRestored", 0)
                 logger.info(
                     "Velero managed clusters restore completed: %s items restored",
                     items_restored,
                 )
                 return True, f"completed ({items_restored} items)"
             if velero_phase in ("Failed", "PartiallyFailed"):
-                raise FatalError(
-                    f"Velero managed clusters restore failed: {velero_phase}"
-                )
+                raise FatalError(f"Velero managed clusters restore failed: {velero_phase}")
 
             return False, f"Velero restore phase: {velero_phase}"
 
@@ -597,9 +557,7 @@ class SecondaryActivation:
         )
 
         if not completed:
-            raise FatalError(
-                f"Timeout waiting for Velero managed clusters restore after {timeout}s"
-            )
+            raise FatalError(f"Timeout waiting for Velero managed clusters restore after {timeout}s")
 
         # Verify ManagedCluster resources actually exist
         self._verify_managed_clusters_restored()

@@ -25,8 +25,8 @@ ACM_NAMESPACE = "open-cluster-management"
 # MCE (used for auto-import strategy ConfigMap)
 MCE_NAMESPACE = "multicluster-engine"
 
-# Secrets
-THANOS_OBJECT_STORAGE_SECRET = "thanos-object-storage"
+# Secrets (these are Kubernetes secret names, not passwords)
+THANOS_OBJECT_STORAGE_SECRET = "thanos-object-storage"  # nosec B105
 
 # ACM Resource Names
 RESTORE_PASSIVE_SYNC_NAME = "restore-acm-passive-sync"

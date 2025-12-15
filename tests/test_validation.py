@@ -7,18 +7,22 @@ security, reliability, and proper error handling.
 """
 
 import pytest
+
+from lib.exceptions import ConfigurationError
 from lib.validation import (
     InputValidator,
-    ValidationError,
     SecurityValidationError,
+    ValidationError,
 )
-from lib.exceptions import ConfigurationError
+
 
 class MockArgs:
     """Mock arguments object for testing."""
+
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             setattr(self, key, value)
+
 
 class TestCLIArgumentValidation:
     """Test CLI argument validation."""
@@ -151,6 +155,7 @@ class TestCLIArgumentValidation:
 
         with pytest.raises(ValidationError):
             InputValidator.validate_all_cli_args(args)
+
 
 class TestKubernetesResourceValidation:
     """Test Kubernetes resource name validation."""
@@ -303,6 +308,7 @@ class TestKubernetesResourceValidation:
         with pytest.raises(ValidationError):
             InputValidator.validate_kubernetes_label_value(None)
 
+
 class TestFilesystemValidation:
     """Test filesystem path validation."""
 
@@ -345,6 +351,7 @@ class TestFilesystemValidation:
         with pytest.raises(ValidationError):
             InputValidator.validate_safe_filesystem_path("", "test")
 
+
 class TestStringValidation:
     """Test string validation utilities."""
 
@@ -374,6 +381,7 @@ class TestStringValidation:
             with pytest.raises(ValidationError):
                 InputValidator.validate_non_empty_string(string, "test")
 
+
 class TestSanitization:
     """Test sanitization utilities."""
 
@@ -392,6 +400,7 @@ class TestSanitization:
         for input_str, expected in test_cases:
             result = InputValidator.sanitize_context_identifier(input_str)
             assert result == expected, f"Expected '{expected}', got '{result}' for input '{input_str}'"
+
 
 class TestErrorHandling:
     """Test error handling and exception types."""
@@ -423,6 +432,7 @@ class TestErrorHandling:
         except SecurityValidationError as e:
             assert "security" in str(e).lower()
             assert "path traversal" in str(e).lower()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

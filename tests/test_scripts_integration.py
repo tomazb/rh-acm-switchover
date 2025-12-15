@@ -89,12 +89,12 @@ case "$*" in
         exit 0
         ;;
     
-    # ACM version checks
-    "--context=primary-ok get mch -n open-cluster-management -o jsonpath="*"currentVersion"*"")
+    # ACM version checks - match both short (mch) and full API group names
+    *"--context=primary-ok"*"get "*"multiclusterhub"*"-n open-cluster-management"*"currentVersion"*)
         echo "2.11.0"
         exit 0
         ;;
-    "--context=secondary-ok get mch -n open-cluster-management -o jsonpath="*"currentVersion"*"")
+    *"--context=secondary-ok"*"get "*"multiclusterhub"*"-n open-cluster-management"*"currentVersion"*)
         echo "2.11.0"
         exit 0
         ;;
@@ -109,42 +109,42 @@ case "$*" in
         exit 0
         ;;
     
-    # DPA checks
-    "--context=primary-ok get dpa -n open-cluster-management-backup --no-headers")
+    # DPA checks - match both short 'dpa' and full API group name
+    *"--context=primary-ok"*"get "*"dataprotectionapplication"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "dpa-config   Reconciled"
         exit 0
         ;;
-    "--context=secondary-ok get dpa -n open-cluster-management-backup --no-headers")
+    *"--context=secondary-ok"*"get "*"dataprotectionapplication"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "dpa-config   Reconciled"
         exit 0
         ;;
-    "--context=primary-ok get dpa -n open-cluster-management-backup -o jsonpath="*"items[0].metadata.name"*"")
+    *"--context=primary-ok"*"get "*"dataprotectionapplication"*"-n open-cluster-management-backup"*"items[0].metadata.name"*)
         echo "dpa-config"
         exit 0
         ;;
-    "--context=secondary-ok get dpa -n open-cluster-management-backup -o jsonpath="*"items[0].metadata.name"*"")
+    *"--context=secondary-ok"*"get "*"dataprotectionapplication"*"-n open-cluster-management-backup"*"items[0].metadata.name"*)
         echo "dpa-config"
         exit 0
         ;;
-    "--context=primary-ok get dpa dpa-config -n open-cluster-management-backup -o jsonpath="*"Reconciled"*"")
+    *"--context=primary-ok"*"get "*"dataprotectionapplication"*"dpa-config"*"-n open-cluster-management-backup"*"Reconciled"*)
         echo "True"
         exit 0
         ;;
-    "--context=secondary-ok get dpa dpa-config -n open-cluster-management-backup -o jsonpath="*"Reconciled"*"")
+    *"--context=secondary-ok"*"get "*"dataprotectionapplication"*"dpa-config"*"-n open-cluster-management-backup"*"Reconciled"*)
         echo "True"
         exit 0
         ;;
     
-    # BackupStorageLocation checks (Check 7)
-    "--context=primary-ok get backupstoragelocation -n open-cluster-management-backup --no-headers")
+    # BackupStorageLocation checks (Check 7) - match both short and full API group names
+    *"--context=primary-ok"*"get "*"backupstoragelocation"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "default   Available"
         exit 0
         ;;
-    "--context=secondary-ok get backupstoragelocation -n open-cluster-management-backup --no-headers")
+    *"--context=secondary-ok"*"get "*"backupstoragelocation"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "default   Available"
         exit 0
         ;;
-    *"get backupstoragelocation"*"open-cluster-management-backup"*"status.phase"*)
+    *"get "*"backupstoragelocation"*"open-cluster-management-backup"*"status.phase"*)
         echo "Available"
         exit 0
         ;;
@@ -201,8 +201,8 @@ CV_JSON
         exit 0
         ;;
     
-    # Backup checks
-    "--context=primary-ok get backup -n open-cluster-management-backup --no-headers")
+    # Backup checks - match both short 'backup' and full API group name
+    *"--context=primary-ok"*"get "*"backup"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "backup-20241124   Finished"
         exit 0
         ;;
@@ -215,7 +215,7 @@ CV_JSON
         echo "backup-20241124"
         exit 0
         ;;
-    *"get backup backup-20241124"*"status.phase"*)
+    *"get "*"backup"*"backup-20241124"*"-n open-cluster-management-backup"*"status.phase"*)
         # Latest backup phase query
         echo "Finished"
         exit 0
@@ -227,19 +227,20 @@ CV_JSON
         exit 0
         ;;
     
-    # Passive sync restore check - discovery by syncRestoreWithNewBackups=true
-    "--context=secondary-ok get restore -n open-cluster-management-backup -o json")
+    # Passive sync restore check - discovery by syncRestoreWithNewBackups=true (match both short and full API group)
+    # Order matters: more specific patterns first
+    *"--context=secondary-ok"*"get "*"restore"*"restore-acm-passive-sync"*"-n open-cluster-management-backup"*"jsonpath"*"phase"*)
+        echo "Enabled"
+        exit 0
+        ;;
+    *"--context=secondary-ok"*"get "*"restore"*"-n open-cluster-management-backup"*"-o json"*)
         cat << 'RESTORE_JSON'
 {"items":[{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}]}
 RESTORE_JSON
         exit 0
         ;;
-    "--context=secondary-ok get restore restore-acm-passive-sync -n open-cluster-management-backup -o jsonpath="*"phase"*"")
-        echo "Enabled"
-        exit 0
-        ;;
     # Fallback check for well-known name (not needed since discovery finds it, but keep for robustness)
-    "--context=secondary-ok get restore restore-acm-passive-sync -n open-cluster-management-backup")
+    *"--context=secondary-ok"*"get "*"restore"*"restore-acm-passive-sync"*"-n open-cluster-management-backup"*)
         exit 0
         ;;
     
@@ -284,13 +285,14 @@ RESTORE_JSON
         echo "restore-final Finished 2024-11-24T10:00:00Z"
         exit 0
         ;;
-    "--context=new-hub get managedclusters --no-headers")
+    # ManagedCluster checks - match both short and full API group names
+    *"--context=new-hub"*"get "*"managedcluster"*"--no-headers"*)
         echo "local-cluster   True"
         echo "cluster1        True"
         echo "cluster2        True"
         exit 0
         ;;
-    "--context=new-hub get managedclusters -o json")
+    *"--context=new-hub"*"get "*"managedcluster"*"-o json"*)
         cat << 'EOF'
 {
   "items": [
@@ -326,7 +328,8 @@ RESTORE_JSON
 EOF
         exit 0
         ;;
-    "--context=new-hub get managedclusters")
+    # Simple get managedclusters without options (may be either old or new format)
+    *"--context=new-hub"*"get "*"managedcluster"*)
         echo "NAME           STATUS   AGE"
         echo "local-cluster  True     30d"
         echo "cluster1       True     20d"
@@ -336,7 +339,7 @@ EOF
     "--context=new-hub get namespace open-cluster-management-observability")
         exit 0
         ;;
-    "--context=new-hub get mco observability -n open-cluster-management-observability -o jsonpath="*"")
+    *"--context=new-hub"*"get "*"multiclusterobservability"*"observability"*"-n open-cluster-management-observability"*)
         echo "True"
         exit 0
         ;;
@@ -369,49 +372,50 @@ EOF
         echo "grafana.example.com"
         exit 0
         ;;
-    "--context=new-hub get backupschedule -n open-cluster-management-backup --no-headers")
+    *"--context=new-hub"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "schedule-acm"
         exit 0
         ;;
-    "--context=new-hub get backupschedule -n open-cluster-management-backup -o jsonpath="*"items[0].metadata.name"*"")
+    *"--context=new-hub"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"items[0].metadata.name"*)
         echo "schedule-acm"
         exit 0
         ;;
-    "--context=new-hub get backupschedule schedule-acm -n open-cluster-management-backup -o jsonpath="*"spec.paused"*"")
+    *"--context=new-hub"*"get "*"backupschedule"*"schedule-acm"*"-n open-cluster-management-backup"*"spec.paused"*)
         echo "false"
         exit 0
         ;;
-    "--context=new-hub get backup -n open-cluster-management-backup --sort-by=.metadata.creationTimestamp --no-headers")
+    *"--context=new-hub"*"get "*"backup"*"-n open-cluster-management-backup"*"--sort-by"*"--no-headers"*)
         echo "backup-1"
         echo "backup-2"
         echo "backup-3"
         exit 0
         ;;
-    "--context=new-hub get backup -n open-cluster-management-backup --sort-by=.metadata.creationTimestamp -o jsonpath="*"")
+    *"--context=new-hub"*"get "*"backup"*"-n open-cluster-management-backup"*"--sort-by"*)
         echo "backup-3 Completed 2024-11-24T12:00:00Z"
         exit 0
         ;;
-    "--context=new-hub get backupstoragelocation -n open-cluster-management-backup --no-headers")
+    *"--context=new-hub"*"get "*"backupstoragelocation"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "default   Available"
         exit 0
         ;;
-    "--context=new-hub get backupstoragelocation default -n open-cluster-management-backup -o jsonpath="*"status.phase"*"")
+    *"--context=new-hub"*"get "*"backupstoragelocation"*"default"*"-n open-cluster-management-backup"*"status.phase"*)
         echo "Available"
         exit 0
         ;;
-    "--context=new-hub get mch -n open-cluster-management --no-headers")
+    # MCH checks for new-hub - match both short and full API group names
+    *"--context=new-hub"*"get "*"multiclusterhub"*"-n open-cluster-management"*"--no-headers"*)
         echo "multiclusterhub"
         exit 0
         ;;
-    "--context=new-hub get mch -n open-cluster-management -o jsonpath="*"currentVersion"*"")
+    *"--context=new-hub"*"get "*"multiclusterhub"*"-n open-cluster-management"*"currentVersion"*)
         echo "2.11.0"
         exit 0
         ;;
-    "--context=new-hub get mch -n open-cluster-management -o jsonpath="*"items[0].metadata.name"*"")
+    *"--context=new-hub"*"get "*"multiclusterhub"*"-n open-cluster-management"*"items[0].metadata.name"*)
         echo "multiclusterhub"
         exit 0
         ;;
-    "--context=new-hub get mch multiclusterhub -n open-cluster-management -o jsonpath="*"status.phase"*"")
+    *"--context=new-hub"*"get "*"multiclusterhub"*"multiclusterhub"*"-n open-cluster-management"*"status.phase"*)
         echo "Running"
         exit 0
         ;;
@@ -470,33 +474,36 @@ def mock_oc_version_mismatch(tmp_path):
 case "$*" in
     "config get-contexts"*) exit 0 ;;
     *"get namespace"*) exit 0 ;;
-    "--context=primary-ok get mch -n open-cluster-management -o jsonpath="*"currentVersion"*"")
+    # Match both short (mch) and full API group names for MCH version check
+    *"--context=primary-ok"*"get "*"multiclusterhub"*"-n open-cluster-management"*"currentVersion"*)
         echo "2.11.0"
         exit 0
         ;;
-    "--context=secondary-ok get mch -n open-cluster-management -o jsonpath="*"currentVersion"*"")
+    *"--context=secondary-ok"*"get "*"multiclusterhub"*"-n open-cluster-management"*"currentVersion"*)
         echo "2.10.5"
         exit 0
         ;;
     # OADP checks - return empty output with exit 0 to avoid pipefail
     *"get pods"*"velero"*"--no-headers"*) exit 0 ;;
     # DPA checks - return empty output with exit 0 to avoid pipefail
+    *"get "*"dataprotectionapplication"*"--no-headers"*) exit 0 ;;
+    *"get "*"dataprotectionapplication"*"metadata.name"*) exit 0 ;;
     *"get dpa"*"--no-headers"*) exit 0 ;;
     *"get dpa"*"metadata.name"*) exit 0 ;;
     # Backup checks - return empty output with exit 0 to avoid pipefail
-    *"get backup"*"--no-headers"*) exit 0 ;;
+    *"get "*"backup"*"--no-headers"*) exit 0 ;;
     *"InProgress"*) exit 0 ;;
     # Passive restore checks
     *"get restore"*"-o json"*) echo '{"items":[]}'; exit 0 ;;
     *"get restore restore-acm-passive-sync"*) exit 1 ;;
     # ClusterDeployment
-    *"get clusterdeployment --all-namespaces --no-headers"*) exit 0 ;;
+    *"get "*"clusterdeployment"*"--all-namespaces --no-headers"*) exit 0 ;;
     # Mocks needed for Check 11 (Auto-Import Strategy)
     *"get configmap import-controller-config"*)
         echo 'Error from server (NotFound): configmaps "import-controller-config" not found' >&2
         exit 1
         ;;
-    *"get managedclusters --no-headers"*)
+    *"get "*"managedcluster"*"--no-headers"*)
         echo "local-cluster   True"
         exit 0
         ;;
@@ -529,15 +536,19 @@ def mock_oc_backup_in_progress(tmp_path):
 case "$*" in
     "config get-contexts"*) exit 0 ;;
     *"get namespace"*) exit 0 ;;
-    *"get mch"*"currentVersion"*)
+    # Match both short (mch) and full API group names for MCH version
+    *"get "*"multiclusterhub"*"currentVersion"*)
         echo "2.11.0"
         exit 0
         ;;
     *"get pods"*"velero"*) echo "velero-xyz   1/1   Running"; exit 0 ;;
+    *"get "*"dataprotectionapplication"*"--no-headers"*) echo "dpa-config"; exit 0 ;;
+    *"get "*"dataprotectionapplication"*"metadata.name"*) echo "dpa-config"; exit 0 ;;
+    *"get "*"dataprotectionapplication"*"Reconciled"*) echo "True"; exit 0 ;;
     *"get dpa"*"--no-headers"*) echo "dpa-config"; exit 0 ;;
     *"get dpa"*"metadata.name"*) echo "dpa-config"; exit 0 ;;
     *"get dpa"*"Reconciled"*) echo "True"; exit 0 ;;
-    *"get backup"*"--no-headers"*)
+    *"get "*"backup"*"--no-headers"*)
         echo "backup-ongoing   InProgress"
         exit 0
         ;;
@@ -546,7 +557,7 @@ case "$*" in
         exit 0
         ;;
     # ClusterDeployment
-    *"get clusterdeployment --all-namespaces --no-headers"*) exit 0 ;;
+    *"get "*"clusterdeployment"*"--all-namespaces --no-headers"*) exit 0 ;;
     # Passive restore checks (for method=passive tests)
     *"get restore"*"-o json"*) echo '{"items":[{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}]}'; exit 0 ;;
     *"get restore restore-acm-passive-sync"*"phase"*) echo "Enabled"; exit 0 ;;
@@ -555,7 +566,7 @@ case "$*" in
         echo 'Error from server (NotFound): configmaps "import-controller-config" not found' >&2
         exit 1
         ;;
-    *"get managedclusters --no-headers"*)
+    *"get "*"managedcluster"*"--no-headers"*)
         echo "local-cluster   True"
         exit 0
         ;;
@@ -597,9 +608,7 @@ def test_preflight_success_passive_method(mock_oc_success):
     assert code == 0, f"Expected exit 0, got {code}. Output:\n{out}"
     assert "ALL CRITICAL CHECKS PASSED" in out
     assert "Failed:          0" in out
-    assert (
-        "Passive sync" in out.lower() or "Method 1" in out
-    )  # Should check passive sync
+    assert "Passive sync" in out.lower() or "Method 1" in out  # Should check passive sync
     assert "Observability namespace exists" in out
     assert "MultiClusterObservability CR found" in out
     assert "'thanos-object-storage' secret exists" in out

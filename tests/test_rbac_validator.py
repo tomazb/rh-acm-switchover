@@ -2,11 +2,12 @@
 Unit tests for RBAC validator module.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from lib.rbac_validator import RBACValidator, validate_rbac_permissions
+import pytest
+
 from lib.exceptions import ValidationError
+from lib.rbac_validator import RBACValidator, validate_rbac_permissions
 
 
 class TestRBACValidator:
@@ -30,7 +31,7 @@ class TestRBACValidator:
         validator = RBACValidator(mock_client)
         assert validator.client == mock_client
 
-    @patch('kubernetes.client')
+    @patch("kubernetes.client")
     def test_check_permission_allowed(self, mock_k8s_client, validator):
         """Test check_permission when permission is allowed."""
         # Mock SelfSubjectAccessReview response
@@ -47,7 +48,7 @@ class TestRBACValidator:
         assert has_perm is True
         assert error == ""
 
-    @patch('kubernetes.client')
+    @patch("kubernetes.client")
     def test_check_permission_denied(self, mock_k8s_client, validator):
         """Test check_permission when permission is denied."""
         # Mock SelfSubjectAccessReview response
@@ -76,6 +77,7 @@ class TestRBACValidator:
 
     def test_validate_cluster_permissions_failure(self, validator):
         """Test validate_cluster_permissions when some permissions missing."""
+
         # Mock check_permission to return False for specific permission
         def mock_check(api_group, resource, verb, namespace=None):
             if resource == "managedclusters" and verb == "patch":
@@ -125,9 +127,7 @@ class TestRBACValidator:
         # Should not check observability namespace
         validator.client.namespace_exists.assert_any_call("open-cluster-management-backup")
         # This will not be called for observability namespace when skipped
-        namespaces_checked = [
-            call[0][0] for call in validator.client.namespace_exists.call_args_list
-        ]
+        namespaces_checked = [call[0][0] for call in validator.client.namespace_exists.call_args_list]
         assert "open-cluster-management-observability" not in namespaces_checked
 
     def test_validate_all_permissions_success(self, validator):
@@ -142,6 +142,7 @@ class TestRBACValidator:
 
     def test_validate_all_permissions_failure(self, validator):
         """Test validate_all_permissions when checks fail."""
+
         # Some permissions fail
         def mock_check(api_group, resource, verb, namespace=None):
             if resource == "managedclusters":
@@ -170,6 +171,7 @@ class TestRBACValidator:
 
     def test_generate_permission_report_with_errors(self, validator):
         """Test generate_permission_report with validation errors."""
+
         def mock_check(api_group, resource, verb, namespace=None):
             return (False, "Permission denied")
 
@@ -202,10 +204,8 @@ class TestValidateRBACPermissions:
         client.namespace_exists = MagicMock(return_value=True)
         return client
 
-    @patch('lib.rbac_validator.RBACValidator')
-    def test_validate_primary_only_success(
-        self, mock_validator_class, mock_primary_client
-    ):
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_primary_only_success(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions with only primary hub."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
@@ -214,10 +214,8 @@ class TestValidateRBACPermissions:
         # Should not raise exception
         validate_rbac_permissions(mock_primary_client)
 
-    @patch('lib.rbac_validator.RBACValidator')
-    def test_validate_both_hubs_success(
-        self, mock_validator_class, mock_primary_client, mock_secondary_client
-    ):
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_both_hubs_success(self, mock_validator_class, mock_primary_client, mock_secondary_client):
         """Test validate_rbac_permissions with both hubs."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
@@ -226,10 +224,8 @@ class TestValidateRBACPermissions:
         # Should not raise exception
         validate_rbac_permissions(mock_primary_client, mock_secondary_client)
 
-    @patch('lib.rbac_validator.RBACValidator')
-    def test_validate_primary_failure(
-        self, mock_validator_class, mock_primary_client
-    ):
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_primary_failure(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions when primary validation fails."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (
@@ -244,11 +240,10 @@ class TestValidateRBACPermissions:
 
         assert "primary hub" in str(exc_info.value)
 
-    @patch('lib.rbac_validator.RBACValidator')
-    def test_validate_secondary_failure(
-        self, mock_validator_class, mock_primary_client, mock_secondary_client
-    ):
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_secondary_failure(self, mock_validator_class, mock_primary_client, mock_secondary_client):
         """Test validate_rbac_permissions when secondary validation fails."""
+
         # Primary succeeds, secondary fails
         def mock_validate(include_decommission=False, skip_observability=False):
             if mock_validator_class.call_count == 1:
@@ -268,38 +263,26 @@ class TestValidateRBACPermissions:
 
         assert "secondary hub" in str(exc_info.value)
 
-    @patch('lib.rbac_validator.RBACValidator')
-    def test_validate_with_decommission(
-        self, mock_validator_class, mock_primary_client
-    ):
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_with_decommission(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions with decommission permissions."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
         mock_validator_class.return_value = mock_validator
 
-        validate_rbac_permissions(
-            mock_primary_client, include_decommission=True
-        )
+        validate_rbac_permissions(mock_primary_client, include_decommission=True)
 
         # Verify decommission was passed
-        mock_validator.validate_all_permissions.assert_called_with(
-            include_decommission=True, skip_observability=False
-        )
+        mock_validator.validate_all_permissions.assert_called_with(include_decommission=True, skip_observability=False)
 
-    @patch('lib.rbac_validator.RBACValidator')
-    def test_validate_skip_observability(
-        self, mock_validator_class, mock_primary_client
-    ):
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_skip_observability(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions with skip_observability."""
         mock_validator = MagicMock()
         mock_validator.validate_all_permissions.return_value = (True, {})
         mock_validator_class.return_value = mock_validator
 
-        validate_rbac_permissions(
-            mock_primary_client, skip_observability=True
-        )
+        validate_rbac_permissions(mock_primary_client, skip_observability=True)
 
         # Verify skip_observability was passed
-        mock_validator.validate_all_permissions.assert_called_with(
-            include_decommission=False, skip_observability=True
-        )
+        mock_validator.validate_all_permissions.assert_called_with(include_decommission=False, skip_observability=True)

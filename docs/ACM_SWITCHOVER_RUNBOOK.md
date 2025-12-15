@@ -175,7 +175,7 @@ graph TD
   ```
 - [ ] DataProtectionApplication reports Ready/Available
   ```bash
-  oc get dpa -n open-cluster-management-backup \
+  oc get dataprotectionapplication.oadp.openshift.io -n open-cluster-management-backup \
     -o custom-columns=NAME:.metadata.name,CONDITION:.status.conditions[-1:].type,STATUS:.status.conditions[-1:].status
   ```
 - [ ] Validate all operators from primary are installed on secondary
@@ -183,7 +183,7 @@ graph TD
 - [ ] Nodes should be in ready state and cluster should be healthy
 - [ ] **If using Method 1:** Verify passive sync restore is running and up-to-date on secondary hub:
   ```bash
-  oc get restore restore-acm-passive-sync -n open-cluster-management-backup
+  oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup
   # Expected: Phase="Enabled", Message="Velero restores have run to completion..."
   ```
 - [ ] **(ACM 2.14+)** Verify `autoImportStrategy` is default `ImportOnly` (if configmap doesn't exist, default is in use):
@@ -198,7 +198,7 @@ graph TD
 
 **Check current status:**
 ```bash
-oc get clusterdeployment --all-namespaces \
+oc get clusterdeployment.hive.openshift.io --all-namespaces \
   -o custom-columns=NAME:.metadata.name,NAMESPACE:.metadata.namespace,PRESERVE:.spec.preserveOnDelete
 ```
 
@@ -227,6 +227,8 @@ done
 ---
 
 ## Method 1: Continuous Passive Restore (Activation Path)
+
+> **Note on Step Numbering:** Method 1 uses sequential numbering (Step 1, 2, 3...) for the main switchover path. Method 2 uses "F" prefixed numbering (F1, F2, F3...) to distinguish its full-restore approach from the continuous passive restore path.
 
 ### Step 1: Pause BackupSchedule on Primary Hub
 
@@ -275,8 +277,12 @@ oc delete backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NA
 
 **To restore later:** Clean up status and certain metadata fields (uid, resourceVersion, managedFields, status), then re-apply. Example:
 ```bash
+# Option 1: Using yq (install via: pip install yq, or brew install yq)
 yq 'del(.metadata.uid, .metadata.resourceVersion, .metadata.managedFields, .status)' \
   "${BACKUP_SCHEDULE_NAME}.yaml" | oc apply -f -
+
+# Option 2: Using oc/kubectl only (no yq required)
+oc create -f "${BACKUP_SCHEDULE_NAME}.yaml" --dry-run=client -o yaml | oc apply -f -
 ```
 
 ---
@@ -287,20 +293,20 @@ Add the `disable-auto-import` annotation to ALL ManagedCluster objects on the pr
 
 **Single cluster:**
 ```bash
-oc annotate managedcluster <managed-cluster-name> \
+oc annotate managedcluster.cluster.open-cluster-management.io <managed-cluster-name> \
   import.open-cluster-management.io/disable-auto-import=''
 ```
 
 **Batch command (all except local-cluster):**
 ```bash
-for cluster in $(oc get managedclusters -o name | grep -v local-cluster); do
+for cluster in $(oc get managedcluster.cluster.open-cluster-management.io -o name | grep -v local-cluster); do
   oc annotate $cluster import.open-cluster-management.io/disable-auto-import=''
 done
 ```
 
 **Verify:**
 ```bash
-oc get managedclusters \
+oc get managedcluster.cluster.open-cluster-management.io \
   -o custom-columns=NAME:.metadata.name,DISABLE-IMPORT:.metadata.annotations.import\\.open-cluster-management\\.io/disable-auto-import
 ```
 
@@ -317,11 +323,12 @@ oc scale statefulset observability-thanos-compact \
 
 **Verify compactor is stopped:**
 ```bash
-oc get pods -n open-cluster-management-observability | grep thanos-compact
-# Should show no resources
+oc get pods -n open-cluster-management-observability -l app.kubernetes.io/name=thanos-compact \
+  --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l
+# Should return: 0
 ```
 
-**Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable only if you roll back.**
+**Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable both only if you roll/switch back.**
 ```bash
 oc scale deployment observability-observatorium-api \
   -n open-cluster-management-observability --replicas=0
@@ -333,9 +340,15 @@ oc scale deployment observability-observatorium-api \
 
 Before activation, ensure the secondary hub has received and restored the latest backup data from the primary hub.
 
+> **💡 Tip:** If your passive restore has a different name, discover it with:
+> ```bash
+> oc get restore.cluster.open-cluster-management.io -n open-cluster-management-backup
+> ```
+> Look for a restore with `syncRestoreWithNewBackups: true` in its spec.
+
 **On SECONDARY HUB, verify passive sync status:**
 ```bash
-oc get restore restore-acm-passive-sync -n open-cluster-management-backup
+oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup
 ```
 
 **Expected output:**
@@ -346,15 +359,16 @@ restore-acm-passive-sync    Enabled   Velero restores have run to completion, re
 
 **Check the timestamp of the last restored backup:**
 ```bash
-oc get restore restore-acm-passive-sync -n open-cluster-management-backup \
+oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup \
   -o jsonpath='{.status.veleroCredentialsRestoreName}'
   
-oc get restore restore-acm-passive-sync -n open-cluster-management-backup \
+oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup \
   -o jsonpath='{.status.veleroResourcesRestoreName}'
 ```
 
 **Verify these match recent backups from primary:**
 ```bash
+# Replace <primary> with your primary hub kubeconfig context name (e.g., "hub1-admin")
 for s in $(oc get backup.velero.io -n open-cluster-management-backup --context <primary> -o json \
   | jq -r '.items[].metadata.labels["velero.io/schedule-name"]' | sort -u); do
   echo -n "$s: "
@@ -404,6 +418,8 @@ EOF
 oc get configmap import-controller-config -n multicluster-engine -o yaml
 ```
 
+> **Cross-reference:** This ConfigMap will be removed in [Step 7](#step-7-reset-auto-import-strategy-to-default-acm-214-if-set-on-new-primary-hub) after activation to restore the default `ImportOnly` behavior.
+>
 > Clarification: The ConfigMap affects only the hub where you create it. Use `ImportAndSync` only when you intentionally need continuous re-application on the hub you are promoting (typically for temporary switchback scenarios), and remove it after activation (see Step 7). If the ConfigMap does not exist, the hub uses the default `ImportOnly` behavior.
 > **IMPORTANT:** Do not perform this step if your destination hub has no existing managed clusters, as it is unnecessary.
 
@@ -420,7 +436,7 @@ oc get configmap import-controller-config -n multicluster-engine -o yaml
 Activate by patching `veleroManagedClustersBackupName` to `'latest'`:
 
 ```bash
-oc patch restore restore-acm-passive-sync \
+oc patch restore.cluster.open-cluster-management.io restore-acm-passive-sync \
   -n open-cluster-management-backup \
   --type='merge' \
   -p '{"spec":{"veleroManagedClustersBackupName":"latest"}}'
@@ -429,7 +445,7 @@ oc patch restore restore-acm-passive-sync \
 **Monitor status:**
 ```bash
 # Watch for transition to Finished state
-oc get restore restore-acm-passive-sync -n open-cluster-management-backup -w
+oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup -w
 ```
 
 **Expected output:**
@@ -440,7 +456,7 @@ restore-acm-passive-sync   Finished   All Velero restores have run successfully
 
 **Verify activation completed:**
 ```bash
-oc describe restore restore-acm-passive-sync -n open-cluster-management-backup
+oc describe restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup
 ```
 
 > **NOTE:** When `veleroManagedClustersBackupName` changes to `'latest'`, managed clusters are activated and the restore transitions to "Finished" status. The continuous sync (`syncRestoreWithNewBackups`) is automatically disabled upon activation.
@@ -449,12 +465,12 @@ oc describe restore restore-acm-passive-sync -n open-cluster-management-backup
 
 **Step 5a:** Verify current passive sync restore status:
 ```bash
-oc get restore restore-acm-passive-sync -n open-cluster-management-backup
+oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup
 ```
 
 **Step 5b:** Delete the existing passive sync restore:
 ```bash
-oc delete restore restore-acm-passive-sync -n open-cluster-management-backup
+oc delete restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup
 ```
 
 **Step 5c:** Create activation restore manifest (`restore-acm-activate.yaml`):
@@ -479,14 +495,14 @@ oc apply -f restore-acm-activate.yaml
 **Step 5e:** Monitor activation progress:
 ```bash
 # Watch restore status (Ctrl+C to exit)
-oc get restore restore-acm-activate -n open-cluster-management-backup -w
+oc get restore.cluster.open-cluster-management.io restore-acm-activate -n open-cluster-management-backup -w
 
 # Check for completion
-oc get restore restore-acm-activate -n open-cluster-management-backup
+oc get restore.cluster.open-cluster-management.io restore-acm-activate -n open-cluster-management-backup
 # Expected: Phase should transition to "Finished"
 
 # Check for any errors
-oc describe restore restore-acm-activate -n open-cluster-management-backup
+oc describe restore.cluster.open-cluster-management.io restore-acm-activate -n open-cluster-management-backup
 # Review Events section for any issues
 ```
 
@@ -528,8 +544,8 @@ spec:
 **Apply & monitor:**
 ```bash
 oc apply -f restore-acm-full.yaml
-oc get restore restore-acm-full -n open-cluster-management-backup -w
-oc describe restore restore-acm-full -n open-cluster-management-backup
+oc get restore.cluster.open-cluster-management.io restore-acm-full -n open-cluster-management-backup -w
+oc describe restore.cluster.open-cluster-management.io restore-acm-full -n open-cluster-management-backup
 ```
 
 **Proceed ONLY when `Phase=Finished`.**
@@ -546,13 +562,13 @@ After activation completes, verify that ManagedClusters are connecting to the ne
 
 **Check ManagedCluster status:**
 ```bash
-oc get managedclusters \
+oc get managedcluster.cluster.open-cluster-management.io \
   -o custom-columns='NAME:.metadata.name,AVAILABLE:.status.conditions[?(@.type=="ManagedClusterConditionAvailable")].status'
 ```
 
 **Check for clusters in Pending Import state:**
 ```bash
-oc get managedclusters | grep "Pending Import"
+oc get managedcluster.cluster.open-cluster-management.io | grep "Pending Import"
 # Hive-provisioned clusters should auto-connect
 # Manually imported clusters may require reimport
 ```
@@ -566,7 +582,7 @@ oc get secrets -n <cluster-namespace> | grep import
 
 **Verify cluster join status:**
 ```bash
-oc get managedclusters \
+oc get managedcluster.cluster.open-cluster-management.io \
   -o custom-columns='NAME:.metadata.name,JOINED:.status.conditions[?(@.type=="ManagedClusterJoined")].status'
 ```
 
@@ -587,13 +603,15 @@ oc get configmap import-controller-config -n multicluster-engine 2>/dev/null
 oc delete configmap import-controller-config -n multicluster-engine --ignore-not-found
 ```
 
-> **NOTE:** This step prevents unintended continuous sync from this hub in the future. Only perform it if you previously set `ImportAndSync` on this hub. If the ConfigMap is absent, the default `ImportOnly` is already in effect.
+> **NOTE:** This step removes the ConfigMap created in [Step 4b](#step-4b-set-auto-import-strategy-to-importandsync-acm-214-with-existing-clusters) and prevents unintended continuous sync from this hub in the future. Only perform it if you previously set `ImportAndSync` on this hub. If the ConfigMap is absent, the default `ImportOnly` is already in effect.
 
 ---
 
 ### Step 8: Restart Observatorium API Gateway Pods
 
-> **CRITICAL FIX:** Due to a known issue in ACM 2.12, the Observatorium API gateway pods contain stale tenant data after restore because Kubernetes doesn't automatically refresh mounted ConfigMaps. This causes metrics to be rejected and Grafana dashboards to show no data.
+> **Version Note:** This fix addresses a known issue in ACM 2.12 where Observatorium API gateway pods contain stale tenant data after restore. While this issue was identified in ACM 2.12, the fix (restarting the pods) is recommended for all ACM versions to ensure proper metrics collection after switchover, as Kubernetes doesn't automatically refresh mounted ConfigMaps.
+
+The Observatorium API gateway pods contain stale tenant data after restore because Kubernetes doesn't automatically refresh mounted ConfigMaps. This causes metrics to be rejected and Grafana dashboards to show no data.
 
 ```bash
 oc rollout restart deployment observability-observatorium-api \
@@ -653,6 +671,8 @@ Validate that metrics are flowing from managed clusters to the new hub.
 # From ACM console, navigate to: Overview > Grafana
 # Or get Grafana route:
 oc get route grafana -n open-cluster-management-observability -o jsonpath='{.spec.host}'
+# If route name differs in your ACM version, list all routes and find grafana:
+# oc get routes -n open-cluster-management-observability
 ```
 
 **In Grafana:**
@@ -669,7 +689,7 @@ oc get route grafana -n open-cluster-management-observability -o jsonpath='{.spe
 **SUCCESS CRITERIA:** Recent metrics (within 5-10 minutes) are visible for all expected managed clusters in Grafana dashboards.
 
 **TROUBLESHOOTING:** If no metrics appear after 10 minutes:
-- Verify observatorium-api pods were restarted (Step 7)
+- Verify observatorium-api pods were restarted (Step 8)
 - Check metrics-collector pods on managed clusters are running
 - Verify network connectivity from managed clusters to hub
 
@@ -684,10 +704,14 @@ Now that the secondary hub is the active primary, enable the BackupSchedule to r
 ```bash
 # Use the BackupSchedule name from Step 1, or find it dynamically
 BACKUP_SCHEDULE_NAME=$(oc get backupschedule.cluster.open-cluster-management.io \
-  -n open-cluster-management-backup -o jsonpath='{.items[0].metadata.name}')
+  -n open-cluster-management-backup -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
-oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
-  -n open-cluster-management-backup --type='merge' -p '{"spec":{"paused":false}}'
+if [ -z "$BACKUP_SCHEDULE_NAME" ]; then
+  echo "No BackupSchedule found on this hub. Create one using the example YAML below."
+else
+  oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \
+    -n open-cluster-management-backup --type='merge' -p '{"spec":{"paused":false}}'
+fi
 ```
 
 > **Note (ACM 2.11):** If you deleted the BackupSchedule in step 1, re-apply the saved YAML (after cleaning metadata) instead of patching:
@@ -734,12 +758,24 @@ oc get backup.velero.io -n open-cluster-management-backup \
 # Should show new backups with recent timestamps
 ```
 
-> **NOTE (OLD HUB Observatorium API):** If you paused the Observatorium API on the OLD hub in Step 3 and you are not decommissioning that hub, re-enable it now to restore normal behavior on the old hub:
-> ```bash
-> oc scale deployment observability-observatorium-api \
->   -n open-cluster-management-observability --replicas=1
-> ```
-> If you are proceeding to Step 14 to decommission the OLD hub, you can skip this.
+> **⚠️ CRITICAL - OLD HUB THANOS/OBSERVATORIUM GUIDANCE:**
+>
+> **DO NOT re-enable Thanos Compactor or Observatorium API on the old hub after switchover!**
+>
+> Both hubs share the same object storage backend. Re-enabling these components on the old hub while the new hub is active will cause:
+> - **Data corruption** - Two Thanos Compactors writing to the same storage
+> - **Write conflicts** - Both hubs attempting to manage the same metrics data
+> - **Split-brain scenarios** - Inconsistent state between hubs
+>
+> **Correct sequence for re-enablement:**
+> 1. **Only re-enable when switching back** to that hub as the primary
+> 2. **Before re-enabling:** Shut down Thanos Compactor on the current active hub (Step 3)
+> 3. **Then perform restore** on the target hub to make it the new primary
+> 4. **Only after restore completes:** Re-enable Thanos Compactor and Observatorium API on the newly activated hub
+>
+> **Exception:** If you paused the Observatorium API on the old hub in Step 3 and are **decommissioning** it (Step 14), you can leave it scaled to 0 - it will be removed during decommissioning.
+>
+> **For rollback scenarios:** See the [Rollback Procedure](#rollback-procedure-if-needed) which includes the correct sequence for re-enabling components.
 
 ---
 ### Step 12: Verify Backup Integrity
@@ -827,10 +863,10 @@ If the old primary hub will no longer be used, remove ACM components to free res
 
 ```bash
 # Find MCO resource:
-oc get mco -A
+oc get multiclusterobservability.observability.open-cluster-management.io -A
 
 # Delete it:
-oc delete mco observability -n open-cluster-management-observability
+oc delete multiclusterobservability.observability.open-cluster-management.io observability -n open-cluster-management-observability
 
 # Wait for Observability pods to terminate (may take 2-5 minutes):
 oc get pods -n open-cluster-management-observability
@@ -847,7 +883,7 @@ oc get pods -n open-cluster-management-observability
 
 **PREREQUISITE CHECK:** Verify ALL ClusterDeployments have `preserveOnDelete=true`
 ```bash
-oc get clusterdeployment --all-namespaces \
+oc get clusterdeployment.hive.openshift.io --all-namespaces \
   -o custom-columns=NAME:.metadata.name,PRESERVE:.spec.preserveOnDelete
 # ALL must show "true" - if any show "false" or "<none>", STOP and fix them first!
 ```
@@ -855,20 +891,20 @@ oc get clusterdeployment --all-namespaces \
 **SAFETY CHECK:** Verify clusters are already managed by NEW hub
 ```bash
 # On NEW HUB:
-oc get managedclusters \
+oc get managedcluster.cluster.open-cluster-management.io \
   -o custom-columns='NAME:.metadata.name,AVAILABLE:.status.conditions[?(@.type=="ManagedClusterConditionAvailable")].status'
 # All should show AVAILABLE=True on new hub before proceeding
 ```
 
 **On OLD HUB, check cluster status:**
 ```bash
-oc get managedclusters
+oc get managedcluster.cluster.open-cluster-management.io
 # Clusters should be in "Unknown" state since they're connected to new hub
 ```
 
 **Delete ManagedClusters (keep local-cluster):**
 ```bash
-for cluster in $(oc get managedclusters -o name | grep -v local-cluster); do
+for cluster in $(oc get managedcluster.cluster.open-cluster-management.io -o name | grep -v local-cluster); do
   echo "Deleting $cluster"
   oc delete $cluster
 done
@@ -880,14 +916,14 @@ done
 
 ```bash
 # Find MCH resource:
-oc get mch -A
+oc get multiclusterhub.operator.open-cluster-management.io -A
 
 # Delete it:
-oc delete mch multiclusterhub -n open-cluster-management
+oc delete multiclusterhub.operator.open-cluster-management.io multiclusterhub -n open-cluster-management
 
 # This process can take up to 20 minutes
 # Monitor deletion:
-oc get mch -A
+oc get multiclusterhub.operator.open-cluster-management.io -A
 ```
 
 #### Step 14.5: Verify ACM instance pods are removed
@@ -910,18 +946,22 @@ If issues occur during switchover and you need to rollback to the primary hub:
 
 Delete or pause the activation restore:
 ```bash
-oc delete restore restore-acm-activate -n open-cluster-management-backup
+oc delete restore.cluster.open-cluster-management.io restore-acm-activate -n open-cluster-management-backup --ignore-not-found
 # OR
-oc delete restore restore-acm-passive-sync -n open-cluster-management-backup
+oc delete restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup --ignore-not-found
 ```
 
-> **Note:** If you used METHOD 2 (one-time full restore), there is no passive sync restore to delete. Proceed to step 2 on the PRIMARY hub to allow clusters to reconnect there.
+> **Note:** If you used METHOD 2 (one-time full restore), delete the full restore instead:
+> ```bash
+> oc delete restore.cluster.open-cluster-management.io restore-acm-full -n open-cluster-management-backup --ignore-not-found
+> ```
+> Then proceed to step 2 on the PRIMARY hub to allow clusters to reconnect there.
 
 ### 2. On PRIMARY hub (original):
 
 **Remove disable-auto-import annotations from ManagedClusters:**
 ```bash
-for cluster in $(oc get managedclusters -o name | grep -v local-cluster); do
+for cluster in $(oc get managedcluster.cluster.open-cluster-management.io -o name | grep -v local-cluster); do
   oc annotate $cluster import.open-cluster-management.io/disable-auto-import-
 done
 ```
@@ -951,6 +991,42 @@ oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAM
 ### 3. Wait for managed clusters to reconnect to primary hub (5-10 minutes)
 
 ### 4. Verify all clusters show Available status on primary hub
+
+### 5. (Optional) Recreate Passive Sync Restore on SECONDARY Hub for Future DR Readiness
+
+If you want to maintain disaster recovery capability and keep the secondary hub ready for future switchover, recreate the passive sync restore:
+
+**On SECONDARY hub:**
+```bash
+# Create restore-acm-passive-sync.yaml
+cat > restore-acm-passive-sync.yaml <<EOF
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Restore
+metadata:
+  name: restore-acm-passive-sync
+  namespace: open-cluster-management-backup
+spec:
+  cleanupBeforeRestore: CleanupRestored
+  syncRestoreWithNewBackups: true
+  veleroManagedClustersBackupName: skip  # Skip managed clusters in passive mode
+  veleroCredentialsBackupName: latest
+  veleroResourcesBackupName: latest
+EOF
+
+# Apply the passive restore
+oc apply -f restore-acm-passive-sync.yaml
+
+# Monitor status - should reach Phase="Enabled"
+oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup -w
+```
+
+**Verify passive sync is running:**
+```bash
+oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup
+# Expected: Phase="Enabled", Message="Velero restores have run to completion..."
+```
+
+> **Note:** This restores the secondary hub to its original passive sync state, continuously receiving and applying backups from the primary hub (except managed clusters) for future switchover readiness.
 
 ---
 
@@ -986,8 +1062,8 @@ If missing, clusters may need manual reimport.
 
 **Solution:** Check Velero restore logs:
 ```bash
-oc get restore -n open-cluster-management-backup
-oc describe restore <restore-name> -n open-cluster-management-backup
+oc get restore.cluster.open-cluster-management.io -n open-cluster-management-backup
+oc describe restore.cluster.open-cluster-management.io <restore-name> -n open-cluster-management-backup
 # Check Events section for errors
 ```
 

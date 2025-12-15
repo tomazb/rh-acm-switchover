@@ -57,9 +57,7 @@ class TestBackupScheduleManager:
         # Should not try to patch if already enabled
         mock_kube_client.patch_custom_resource.assert_not_called()
 
-    def test_schedule_not_paused_field_missing(
-        self, schedule_manager, mock_kube_client
-    ):
+    def test_schedule_not_paused_field_missing(self, schedule_manager, mock_kube_client):
         """Test when paused field is missing (implicitly enabled)."""
         mock_kube_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {}}  # No paused field
@@ -70,9 +68,7 @@ class TestBackupScheduleManager:
         # Should not patch if paused field doesn't exist (default enabled)
         mock_kube_client.patch_custom_resource.assert_not_called()
 
-    def test_unpause_schedule_acm_212_and_above(
-        self, schedule_manager, mock_kube_client
-    ):
+    def test_unpause_schedule_acm_212_and_above(self, schedule_manager, mock_kube_client):
         """Test unpausing schedule for ACM 2.12.0+."""
         mock_kube_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
@@ -101,9 +97,7 @@ class TestBackupScheduleManager:
         # Should not patch for older ACM versions (handled via restore)
         mock_kube_client.patch_custom_resource.assert_not_called()
 
-    def test_restore_saved_schedule_when_missing(
-        self, schedule_manager, mock_kube_client, mock_state_manager
-    ):
+    def test_restore_saved_schedule_when_missing(self, schedule_manager, mock_kube_client, mock_state_manager):
         """Test restoring saved schedule when none exists."""
         mock_kube_client.list_custom_resources.return_value = []  # No schedules
 
@@ -118,9 +112,7 @@ class TestBackupScheduleManager:
         # Should create the saved schedule
         mock_kube_client.create_custom_resource.assert_called_once()
 
-    def test_no_schedule_and_none_saved(
-        self, schedule_manager, mock_kube_client, mock_state_manager
-    ):
+    def test_no_schedule_and_none_saved(self, schedule_manager, mock_kube_client, mock_state_manager):
         """Test warning when no schedule exists and none saved."""
         mock_kube_client.list_custom_resources.return_value = []
         mock_state_manager.get_config.return_value = None
@@ -140,9 +132,7 @@ class TestBackupScheduleManager:
             ("2.10.0", False),
         ],
     )
-    def test_version_based_pause_handling(
-        self, schedule_manager, mock_kube_client, acm_version, should_patch
-    ):
+    def test_version_based_pause_handling(self, schedule_manager, mock_kube_client, acm_version, should_patch):
         """Test pause handling for different ACM versions."""
         mock_kube_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
@@ -183,9 +173,7 @@ class TestBackupScheduleManagerIntegration:
             {"metadata": {"name": "saved"}, "spec": {"schedule": "0 */6 * * *"}},
         )
 
-        manager = BackupScheduleManager(
-            kube_client=mock_kube_client, state_manager=state, hub_label="secondary"
-        )
+        manager = BackupScheduleManager(kube_client=mock_kube_client, state_manager=state, hub_label="secondary")
 
         # Test restore from saved config
         mock_kube_client.list_custom_resources.return_value = []

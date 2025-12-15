@@ -109,9 +109,7 @@ class RBACValidator:
 
             # Create SelfSubjectAccessReview
             body = k8s_client.V1SelfSubjectAccessReview(
-                spec=k8s_client.V1SelfSubjectAccessReviewSpec(
-                    resource_attributes=resource_attrs
-                )
+                spec=k8s_client.V1SelfSubjectAccessReviewSpec(resource_attributes=resource_attrs)
             )
 
             # Check permission
@@ -171,9 +169,7 @@ class RBACValidator:
                     if not has_perm:
                         all_valid = False
                         group_name = api_group if api_group else "core"
-                        error_msg = (
-                            f"Missing decommission permission: {verb} {group_name}/{resource}"
-                        )
+                        error_msg = f"Missing decommission permission: {verb} {group_name}/{resource}"
                         if error:
                             error_msg += f" - {error}"
                         errors.append(error_msg)
@@ -186,9 +182,7 @@ class RBACValidator:
 
         return all_valid, errors
 
-    def validate_namespace_permissions(
-        self, skip_observability: bool = False
-    ) -> Tuple[bool, List[str]]:
+    def validate_namespace_permissions(self, skip_observability: bool = False) -> Tuple[bool, List[str]]:
         """
         Validate namespace-scoped permissions.
 
@@ -221,16 +215,11 @@ class RBACValidator:
 
             for api_group, resource, verbs in permissions:
                 for verb in verbs:
-                    has_perm, error = self.check_permission(
-                        api_group, resource, verb, namespace
-                    )
+                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
                     if not has_perm:
                         all_valid = False
                         group_name = api_group if api_group else "core"
-                        error_msg = (
-                            f"Missing permission in {namespace}: "
-                            f"{verb} {group_name}/{resource}"
-                        )
+                        error_msg = f"Missing permission in {namespace}: " f"{verb} {group_name}/{resource}"
                         if error:
                             error_msg += f" - {error}"
                         errors.append(error_msg)
@@ -259,16 +248,12 @@ class RBACValidator:
         all_errors: Dict[str, List[str]] = {}
 
         # Validate cluster permissions
-        cluster_valid, cluster_errors = self.validate_cluster_permissions(
-            include_decommission, skip_observability
-        )
+        cluster_valid, cluster_errors = self.validate_cluster_permissions(include_decommission, skip_observability)
         if cluster_errors:
             all_errors["cluster"] = cluster_errors
 
         # Validate namespace permissions
-        namespace_valid, namespace_errors = self.validate_namespace_permissions(
-            skip_observability
-        )
+        namespace_valid, namespace_errors = self.validate_namespace_permissions(skip_observability)
         if namespace_errors:
             all_errors["namespaces"] = namespace_errors
 
@@ -284,9 +269,7 @@ class RBACValidator:
 
         return all_valid, all_errors
 
-    def generate_permission_report(
-        self, include_decommission: bool = False, skip_observability: bool = False
-    ) -> str:
+    def generate_permission_report(self, include_decommission: bool = False, skip_observability: bool = False) -> str:
         """
         Generate a detailed permission validation report.
 
@@ -297,9 +280,7 @@ class RBACValidator:
         Returns:
             Formatted report string
         """
-        all_valid, all_errors = self.validate_all_permissions(
-            include_decommission, skip_observability
-        )
+        all_valid, all_errors = self.validate_all_permissions(include_decommission, skip_observability)
 
         report = ["=" * 80]
         report.append("RBAC PERMISSION VALIDATION REPORT")
@@ -364,14 +345,9 @@ def validate_rbac_permissions(
     )
 
     if not primary_valid:
-        report = primary_validator.generate_permission_report(
-            include_decommission, skip_observability
-        )
+        report = primary_validator.generate_permission_report(include_decommission, skip_observability)
         logger.error("\n%s", report)
-        raise ValidationError(
-            "RBAC permission validation failed on primary hub. "
-            "See report above for details."
-        )
+        raise ValidationError("RBAC permission validation failed on primary hub. " "See report above for details.")
 
     # Validate secondary hub if provided
     if secondary_client:
@@ -388,8 +364,7 @@ def validate_rbac_permissions(
             )
             logger.error("\n%s", report)
             raise ValidationError(
-                "RBAC permission validation failed on secondary hub. "
-                "See report above for details."
+                "RBAC permission validation failed on secondary hub. " "See report above for details."
             )
 
     logger.info("✓ RBAC permission validation completed successfully")

@@ -3,7 +3,6 @@
 Tests argument parsing and basic entry point logic.
 """
 
-
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -27,9 +26,7 @@ class TestArgParsing:
                 parse_args()
 
         # old-hub-action is also required
-        with patch(
-            "sys.argv", ["script.py", "--primary-context", "p1", "--method", "passive"]
-        ):
+        with patch("sys.argv", ["script.py", "--primary-context", "p1", "--method", "passive"]):
             with pytest.raises(SystemExit):
                 parse_args()
 

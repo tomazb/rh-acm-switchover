@@ -81,9 +81,7 @@ class TestValidationReporter:
         reporter.print_summary()
 
         # Verify info log calls
-        assert any(
-            "2/2 checks passed" in str(call) for call in mock_logger.info.call_args_list
-        )
+        assert any("2/2 checks passed" in str(call) for call in mock_logger.info.call_args_list)
 
     @patch("modules.preflight_validators.logger")
     def test_print_summary_with_failures(self, mock_logger, reporter):
@@ -174,9 +172,7 @@ class TestObservabilityDetector:
             (False, False, "not detected (optional component)"),
         ],
     )
-    def test_detect_reports_per_hub_presence(
-        self, reporter, primary_has, secondary_has, expected_message
-    ):
+    def test_detect_reports_per_hub_presence(self, reporter, primary_has, secondary_has, expected_message):
         primary = Mock()
         secondary = Mock()
         primary.namespace_exists.return_value = primary_has
