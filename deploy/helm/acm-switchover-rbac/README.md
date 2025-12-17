@@ -271,5 +271,5 @@ MIT License - See repository LICENSE file
 ## Links
 
 - [GitHub Repository](https://github.com/tomazb/rh-acm-switchover)
-- [RBAC Requirements Documentation](../../docs/RBAC_REQUIREMENTS.md)
+- [RBAC Requirements Documentation](../../../docs/deployment/rbac-requirements.md)
 - [ACM Documentation](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes/)

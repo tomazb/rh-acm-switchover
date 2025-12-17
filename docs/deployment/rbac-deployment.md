@@ -235,7 +235,7 @@ kubectl get policy policy-acm-switchover-rbac \
   -o jsonpath='{.status.status[*].clustername}'
 ```
 
-For detailed ACM Policy usage, see [deploy/acm-policies/README.md](../deploy/acm-policies/README.md).
+For detailed ACM Policy usage, see [deploy/acm-policies/README.md](../../deploy/acm-policies/README.md).
 
 ## Validation
 
@@ -475,11 +475,11 @@ kubectl delete namespace acm-switchover
 
 ## Next Steps
 
-- Review [RBAC Requirements](./RBAC_REQUIREMENTS.md)
-- Check [Kustomize README](../deploy/kustomize/README.md)
-- Check [Helm Chart README](../deploy/helm/acm-switchover-rbac/README.md)
-- Check [ACM Policy README](../deploy/acm-policies/README.md)
-- Run [RBAC validation](./check_rbac.py)
+- Review [RBAC Requirements](rbac-requirements.md)
+- Check [Kustomize README](../../deploy/kustomize/README.md)
+- Check [Helm Chart README](../../deploy/helm/acm-switchover-rbac/README.md)
+- Check [ACM Policy README](../../deploy/acm-policies/README.md)
+- Run [RBAC validation](../../check_rbac.py)
 
 ## Support
 

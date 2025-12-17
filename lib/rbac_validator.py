@@ -311,7 +311,7 @@ class RBACValidator:
             report.append("  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/")
             report.append("  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/")
             report.append("")
-            report.append("For more information, see docs/RBAC_REQUIREMENTS.md")
+            report.append("For more information, see docs/deployment/rbac-requirements.md")
 
         report.append("=" * 80)
         return "\n".join(report)

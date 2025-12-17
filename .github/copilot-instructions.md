@@ -109,12 +109,12 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 - Current important cross-argument rules (enforced by `InputValidator.validate_all_cli_args`):
     - `--secondary-context` is required for switchover operations unless `--decommission` is set.
     - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
-- If you change these rules, update `docs/VALIDATION_RULES.md`, `docs/USAGE.md`, and `docs/QUICKREF.md` to match.
+- If you change these rules, update `docs/reference/validation-rules.md`, `docs/operations/usage.md`, and `docs/operations/quickref.md` to match.
 
 ## Files to Know
 
-- `docs/CHANGELOG.md` - Update `[Unreleased]` section for changes
-- `docs/ARCHITECTURE.md` - Design decisions and module descriptions
+- `CHANGELOG.md` - Update `[Unreleased]` section for changes
+- `docs/development/architecture.md` - Design decisions and module descriptions
 - `lib/constants.py` - All magic strings centralized here (Python)
 - `scripts/constants.sh` - All magic strings centralized here (Bash)
 - `setup.cfg` - pytest, flake8, mypy configuration
@@ -169,7 +169,7 @@ __version_date__ = "YYYY-MM-DD"
 
 ### Changelog Updates
 
-Location: `docs/CHANGELOG.md`
+Location: `CHANGELOG.md`
 
 1. For new releases, create a new section: `## [X.Y.Z] - YYYY-MM-DD`
 2. For ongoing work, add entries under `## [Unreleased]`
@@ -181,7 +181,7 @@ When making script changes:
 1. [ ] Update `SCRIPT_VERSION` in `scripts/constants.sh`
 2. [ ] Update `SCRIPT_VERSION_DATE` to current date
 3. [ ] Update version in `README.md` (top of file)
-4. [ ] Add changelog entry in `docs/CHANGELOG.md`
+4. [ ] Add changelog entry in `CHANGELOG.md`
 5. [ ] Update `scripts/README.md` if new features/checks added
 6. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
 
@@ -189,6 +189,6 @@ When making Python code changes:
 1. [ ] Update `__version__` in `lib/__init__.py`
 2. [ ] Update `__version_date__` to current date
 3. [ ] Update version in `README.md` (top of file)
-4. [ ] Add changelog entry in `docs/CHANGELOG.md`
+4. [ ] Add changelog entry in `CHANGELOG.md`
 5. [ ] Keep Python and Bash versions in sync if changes affect both
 6. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)

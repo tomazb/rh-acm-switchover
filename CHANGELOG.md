@@ -200,7 +200,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - **TLS hostname verification**: Added dedicated section in `SECURITY.md` documenting security implications and recommendations for `--disable-hostname-verification`
-- **Path validation rules**: Updated `docs/VALIDATION_RULES.md` with expanded path allowances
+- **Path validation rules**: Updated `docs/reference/validation-rules.md` with expanded path allowances
 
 ## [1.3.0] - 2025-12-03
 
@@ -228,8 +228,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### RBAC Model and Security
 
 - **Comprehensive RBAC model**: Complete role-based access control for least privilege access
-  - `docs/RBAC_REQUIREMENTS.md`: Detailed RBAC requirements documentation
-  - `docs/RBAC_DEPLOYMENT.md`: Step-by-step deployment guide
+  - `docs/deployment/rbac-requirements.md`: Detailed RBAC requirements documentation
+  - `docs/deployment/rbac-deployment.md`: Step-by-step deployment guide
   - `lib/rbac_validator.py`: RBAC permission validation module
   - `check_rbac.py`: Standalone RBAC checker tool
 
@@ -391,7 +391,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Documentation
 
 - Updated `scripts/README.md` with corrected Mermaid diagrams for preflight and postflight workflows.
-- Updated `docs/CONTAINER_USAGE.md` to reflect new build context location.
+- Updated `docs/getting-started/container.md` to reflect new build context location.
 - Updated `.github/workflows/container-build.yml` to use `container-bootstrap/` context.
 
 ### Added

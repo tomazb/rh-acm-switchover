@@ -424,7 +424,7 @@ python acm_switchover.py \
   - Current workspace directory
   - User home directory
 - Path traversal (`../`) and command injection characters are blocked
-- See `docs/VALIDATION_RULES.md` for complete details
+- See `docs/reference/validation-rules.md` for complete details
 
 **Examples**:
 ```bash

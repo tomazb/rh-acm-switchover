@@ -7,7 +7,7 @@ This document summarizes the comprehensive RBAC (Role-Based Access Control) impl
 ## What Was Implemented
 
 ### 1. RBAC Requirements Documentation
-- **File**: `docs/RBAC_REQUIREMENTS.md`
+- **File**: `docs/deployment/rbac-requirements.md`
 - Comprehensive analysis of all Kubernetes API operations
 - Detailed permission requirements by API group
 - Security considerations and risk mitigation strategies
@@ -92,8 +92,8 @@ This document summarizes the comprehensive RBAC (Role-Based Access Control) impl
   - Edge cases (missing namespaces, etc.)
 
 ### 10. Documentation
-- **RBAC Requirements**: `docs/RBAC_REQUIREMENTS.md`
-- **RBAC Deployment Guide**: `docs/RBAC_DEPLOYMENT.md`
+- **RBAC Requirements**: `docs/deployment/rbac-requirements.md`
+- **RBAC Deployment Guide**: `docs/deployment/rbac-deployment.md`
 - **Kustomize README**: `deploy/kustomize/README.md`
 - **Helm Chart README**: `deploy/helm/acm-switchover-rbac/README.md`
 - **ACM Policy README**: `deploy/acm-policies/README.md`
@@ -246,9 +246,9 @@ lib/rbac_validator.py
 check_rbac.py
 tests/test_rbac_validator.py
 
-docs/RBAC_REQUIREMENTS.md
-docs/RBAC_DEPLOYMENT.md
-docs/RBAC_IMPLEMENTATION_SUMMARY.md (this file)
+docs/deployment/rbac-requirements.md
+docs/deployment/rbac-deployment.md
+docs/development/rbac-implementation.md (this file)
 ```
 
 ### Modified Files (5 total)
@@ -257,7 +257,7 @@ lib/__init__.py - Added RBAC validator exports
 modules/preflight.py - Integrated RBAC validation
 acm_switchover.py - Added --skip-rbac-validation flag
 README.md - Added RBAC documentation links and prerequisites
-docs/CHANGELOG.md - Documented all RBAC changes
+CHANGELOG.md - Documented all RBAC changes
 ```
 
 ## Future Enhancements
@@ -278,8 +278,8 @@ This RBAC implementation provides a comprehensive, production-ready solution for
 
 ## References
 
-- [RBAC Requirements Documentation](./RBAC_REQUIREMENTS.md)
-- [RBAC Deployment Guide](./RBAC_DEPLOYMENT.md)
+- [RBAC Requirements Documentation](../deployment/rbac-requirements.md)
+- [RBAC Deployment Guide](../deployment/rbac-deployment.md)
 - [Kubernetes RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
 - [ACM Security](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes/)
 - [NIST 800-53](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r5.pdf)

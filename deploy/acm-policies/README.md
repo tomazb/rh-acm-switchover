@@ -311,5 +311,5 @@ kubectl get policy -n open-cluster-management-policies
 
 - [ACM Policy Documentation](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes/2.11/html/governance/governance)
 - [Policy Examples](https://github.com/open-cluster-management-io/policy-collection)
-- [RBAC Requirements](../docs/RBAC_REQUIREMENTS.md)
+- [RBAC Requirements](../../docs/deployment/rbac-requirements.md)
 - [Governance Risk and Compliance](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes/2.11/html/governance/governance)
