@@ -1181,8 +1181,8 @@ Any phase can transition to: FAILED or ROLLBACK
 - `Containerfile` - Multi-stage build with all prerequisites
 - `.containerignore` - Build optimization
 - `.github/workflows/container-build.yml` - CI/CD pipeline
-- `docs/CONTAINER_USAGE.md` - Complete usage guide
-- `docs/GITHUB_ACTIONS_SETUP.md` - Repository setup guide
+- `docs/getting-started/container.md` - Complete usage guide
+- `docs/development/ci.md` - Repository setup guide
 
 **PRD Updates**:
 - Enhanced NFR-8.3 with detailed container specifications
@@ -1219,4 +1219,3 @@ Any phase can transition to: FAILED or ROLLBACK
 - Initial PRD creation
 - Documented implemented features
 - Defined functional and non-functional requirements
-

@@ -18,7 +18,7 @@ feat: implement comprehensive input validation and error handling
 - **Context and namespace validation** (`modules/preflight_validators.py`)
 - **Enhanced error handling** with `ValidationError` and `SecurityValidationError`
 - **Comprehensive test suite** (`tests/test_validation.py`) with 26 test cases
-- **Detailed documentation** (`docs/VALIDATION_RULES.md`)
+- **Detailed documentation** (`docs/reference/validation-rules.md`)
 - **Implementation report** (`COMPREHENSIVE-VALIDATION-AND-ERROR-HANDLING.md`)
 
 ### 2. Error Handling Enhancements (Commit 54f891e)
@@ -88,7 +88,7 @@ The comprehensive input validation implementation addresses the following key ob
 | Context/Namespace Validation | ✅ Complete | Integrated validation in `modules/preflight_validators.py` |
 | Error Handling Framework | ✅ Complete | `ValidationError` and `SecurityValidationError` classes |
 | Test Suite | ✅ Complete | 26 comprehensive test cases in `tests/test_validation.py` |
-| Documentation | ✅ Complete | Detailed validation rules in `docs/VALIDATION_RULES.md` |
+| Documentation | ✅ Complete | Detailed validation rules in `docs/reference/validation-rules.md` |
 
 ## Validation Architecture
 
@@ -482,14 +482,14 @@ print(f"1000 validations: {(end - start)*1000:.2f}ms")
 ### Documentation Deliverables
 
 **Created Documentation:**
-- ✅ `docs/VALIDATION_RULES.md` - Comprehensive validation rules (300+ lines)
+- ✅ `docs/reference/validation-rules.md` - Comprehensive validation rules (300+ lines)
 - ✅ Inline code documentation - Detailed docstrings and comments
 - ✅ Error message documentation - Clear, actionable guidance
 - ✅ Usage examples - Practical implementation patterns
 
 **Documentation Structure:**
 ```
-docs/VALIDATION_RULES.md
+docs/reference/validation-rules.md
 ├── Overview and Architecture
 ├── Validation Categories
 │   ├── Kubernetes Resource Validation
