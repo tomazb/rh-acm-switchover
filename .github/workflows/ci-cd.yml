@@ -209,15 +209,23 @@ jobs:
         required_docs=(
           "README.md"
           "LICENSE"
+          "CHANGELOG.md"
+          "CONTRIBUTING.md"
           "docs/README.md"
-          "docs/QUICKREF.md"
-          "docs/USAGE.md"
-          "docs/ARCHITECTURE.md"
-          "docs/INSTALL.md"
-          "docs/CONTRIBUTING.md"
-          "docs/CHANGELOG.md"
-          "docs/PRD.md"
-          "docs/TESTING.md"
+          "docs/operations/quickref.md"
+          "docs/operations/usage.md"
+          "docs/getting-started/install.md"
+          "docs/getting-started/container.md"
+          "docs/deployment/rbac-requirements.md"
+          "docs/deployment/rbac-deployment.md"
+          "docs/development/architecture.md"
+          "docs/development/testing.md"
+          "docs/development/ci.md"
+          "docs/reference/validation-rules.md"
+          "docs/project/prd.md"
+          "docs/project/summary.md"
+          "docs/project/deliverables.md"
+          "docs/ACM_SWITCHOVER_RUNBOOK.md"
         )
         
         for doc in "${required_docs[@]}"; do
@@ -337,13 +345,13 @@ jobs:
         echo "Checking version consistency..."
         
         # Extract versions from different sources
-        grep -o "Version.*[0-9]\+\.[0-9]\+\.[0-9]\+" docs/CHANGELOG.md | head -1
-        grep -o "Version.*[0-9]\+\.[0-9]\+\.[0-9]\+" docs/PRD.md | head -1
-        grep -o "version.*[0-9]\+\.[0-9]\+\.[0-9]\+" acm_switchover.py | head -1
+        grep -o "\\[[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+\\]" CHANGELOG.md | head -1
+        grep -o "Version.*[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+" docs/project/prd.md | head -1
+        grep -o "__version__.*[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+" lib/__init__.py | head -1
         
     - name: Verify CHANGELOG updated
       run: |
-        if ! grep -q "$(date +%Y-%m-%d)" docs/CHANGELOG.md; then
+        if ! grep -q "$(date +%Y-%m-%d)" CHANGELOG.md; then
           echo "Warning: CHANGELOG may not be updated for today's date"
         fi
         
