@@ -20,16 +20,16 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 
 ## Documentation
 
-- **[RBAC Requirements](docs/RBAC_REQUIREMENTS.md)** - Complete RBAC permissions guide
-- **[RBAC Deployment](docs/RBAC_DEPLOYMENT.md)** - Step-by-step RBAC deployment instructions
+- **[RBAC Requirements](docs/deployment/rbac-requirements.md)** - Complete RBAC permissions guide
+- **[RBAC Deployment](docs/deployment/rbac-deployment.md)** - Step-by-step RBAC deployment instructions
 - **[ACM Switchover Runbook](docs/ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational procedures
-- **[Quick Reference](docs/QUICKREF.md)** - Command cheat sheet and common tasks
-- **[Detailed Usage Guide](docs/USAGE.md)** - Complete examples and scenarios
-- **[Container Usage Guide](docs/CONTAINER_USAGE.md)** - Container-based deployment and usage
-- **[Installation Guide](docs/INSTALL.md)** - Detailed installation instructions
-- **[Architecture](docs/ARCHITECTURE.md)** - Design and implementation details
-- **[Testing Guide](docs/TESTING.md)** - How to run tests and CI/CD
-- **[Contributing](docs/CONTRIBUTING.md)** - Development guidelines
+- **[Quick Reference](docs/operations/quickref.md)** - Command cheat sheet and common tasks
+- **[Detailed Usage Guide](docs/operations/usage.md)** - Complete examples and scenarios
+- **[Container Usage Guide](docs/getting-started/container.md)** - Container-based deployment and usage
+- **[Installation Guide](docs/getting-started/install.md)** - Detailed installation instructions
+- **[Architecture](docs/development/architecture.md)** - Design and implementation details
+- **[Testing Guide](docs/development/testing.md)** - How to run tests and CI/CD
+- **[Contributing](CONTRIBUTING.md)** - Development guidelines
 
 See [docs/README.md](docs/README.md) for complete documentation index.
 
@@ -59,7 +59,7 @@ See [scripts/README.md](scripts/README.md) for detailed usage and workflow diagr
 - ACM Backup configured on both hubs
 - OADP operator installed on both hubs
 - Network access to both Kubernetes clusters
-- **RBAC permissions**: Required permissions for switchover operations (see [RBAC Requirements](docs/RBAC_REQUIREMENTS.md))
+- **RBAC permissions**: Required permissions for switchover operations (see [RBAC Requirements](docs/deployment/rbac-requirements.md))
 
 **OR** use the container image with all prerequisites included (recommended).
 
@@ -93,7 +93,7 @@ podman run -it --rm \
   --secondary-context secondary-hub
 ```
 
-See **[Container Usage Guide](docs/CONTAINER_USAGE.md)** for complete examples.
+See **[Container Usage Guide](docs/getting-started/container.md)** for complete examples.
 
 ## Usage
 
@@ -281,7 +281,7 @@ python -m pytest tests/ -v --cov=. --cov-report=html
 - Type checking (mypy)
 - CI/CD integration with GitHub Actions
 
-See [TESTING.md](docs/TESTING.md) for detailed testing guide.
+See [docs/development/testing.md](docs/development/testing.md) for detailed testing guide.
 
 ### CI/CD Pipelines
 
@@ -304,16 +304,16 @@ See [TESTING.md](docs/TESTING.md) for detailed testing guide.
 
 ## Related Resources
 
-- **[Quick Reference](docs/QUICKREF.md)** - Command cheat sheet and examples
-- **[Usage Guide](docs/USAGE.md)** - Detailed usage guide with scenarios
-- **[Installation Guide](docs/INSTALL.md)** - Installation and deployment
-- **[Architecture](docs/ARCHITECTURE.md)** - Design and implementation details
-- **[Testing Guide](docs/TESTING.md)** - Testing strategy and CI/CD
-- **[Contributing](docs/CONTRIBUTING.md)** - Development guidelines
-- **[Changelog](docs/CHANGELOG.md)** - Version history and changes
-- **[PRD](docs/PRD.md)** - Product Requirements Document
-- **[Project Summary](docs/PROJECT_SUMMARY.md)** - Comprehensive overview
-- **[Deliverables](docs/DELIVERABLES.md)** - Complete project inventory
+- **[Quick Reference](docs/operations/quickref.md)** - Command cheat sheet and examples
+- **[Usage Guide](docs/operations/usage.md)** - Detailed usage guide with scenarios
+- **[Installation Guide](docs/getting-started/install.md)** - Installation and deployment
+- **[Architecture](docs/development/architecture.md)** - Design and implementation details
+- **[Testing Guide](docs/development/testing.md)** - Testing strategy and CI/CD
+- **[Contributing](CONTRIBUTING.md)** - Development guidelines
+- **[Changelog](CHANGELOG.md)** - Version history and changes
+- **[PRD](docs/project/prd.md)** - Product Requirements Document
+- **[Project Summary](docs/project/summary.md)** - Comprehensive overview
+- **[Deliverables](docs/project/deliverables.md)** - Complete project inventory
 
 ## References
 
@@ -322,7 +322,7 @@ See [TESTING.md](docs/TESTING.md) for detailed testing guide.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
