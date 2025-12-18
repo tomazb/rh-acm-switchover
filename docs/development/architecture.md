@@ -39,7 +39,6 @@ rh-acm-switchover/
 │   ├── post_activation.py     # Post-activation verification
 │   ├── finalization.py        # Finalization & rollback
 │   ├── decommission.py        # Old hub decommission
-│   ├── rollback.py            # Rollback orchestration
 │   └── backup_schedule.py     # Backup schedule management
 │
 ├── scripts/                   # Shell helper scripts
@@ -63,10 +62,14 @@ rh-acm-switchover/
 │   └── ...
 │
 └── docs/                      # Documentation
+    ├── README.md
     ├── ACM_SWITCHOVER_RUNBOOK.md
-    ├── ARCHITECTURE.md
-    ├── CONTAINER_USAGE.md
-    ├── PRD.md
+    ├── getting-started/install.md
+    ├── getting-started/container.md
+    ├── operations/quickref.md
+    ├── operations/usage.md
+    ├── development/architecture.md
+    ├── project/prd.md
     └── ...
 ```
 
@@ -584,7 +587,7 @@ cat .state/switchover-<primary>__<secondary>.json | python -m json.tool
 - Review timestamps in state file for duration analysis
 
 ### Common Issues
-- See USAGE.md "Troubleshooting" section
+- See docs/operations/usage.md "Troubleshooting" section
 - Check state file for error messages
 - Verify Kubernetes contexts are accessible
 - Ensure RBAC permissions are sufficient

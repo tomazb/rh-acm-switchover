@@ -16,8 +16,10 @@ tests/
 ├── test_primary_prep.py      # Tests for modules/primary_prep.py
 ├── test_decommission.py      # Tests for modules/decommission.py
 ├── test_post_activation.py   # Tests for modules/post_activation.py
-├── test_rollback.py          # Tests for modules/rollback.py
 ├── test_finalization.py      # Tests for modules/finalization.py
+├── test_activation.py        # Tests for modules/activation.py
+├── test_validation.py        # Tests for lib/validation.py
+├── test_rbac_validator.py    # Tests for lib/rbac_validator.py
 ├── test_waiter.py            # Tests for lib/waiter.py
 ├── test_main.py              # Tests for acm_switchover.py (args)
 ├── test_scripts.py           # Unit tests for bash scripts

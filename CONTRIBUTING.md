@@ -237,9 +237,9 @@ Before submitting a PR:
 When adding features:
 
 1. **Update README.md** - Add to feature list if significant
-2. **Update USAGE.md** - Add usage examples
-3. **Update QUICKREF.md** - Add commands if new flags
-4. **Update ARCHITECTURE.md** - Explain design decisions
+2. **Update docs/operations/usage.md** - Add usage examples
+3. **Update docs/operations/quickref.md** - Add commands if new flags
+4. **Update docs/development/architecture.md** - Explain design decisions
 5. **Add inline comments** - Explain complex logic
 6. **Update docstrings** - Document function behavior
 
@@ -322,7 +322,7 @@ Looking for contribution ideas? Consider:
 
 - Open an issue for discussion
 - Review existing issues and PRs
-- Check ARCHITECTURE.md for design context
+- Check docs/development/architecture.md for design context
 
 ## License
 
