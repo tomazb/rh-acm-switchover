@@ -450,12 +450,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Documentation
 - README.md - Project overview
-- QUICKREF.md - Command reference card
-- USAGE.md - Detailed usage examples and scenarios
-- ARCHITECTURE.md - Design and implementation details
-- INSTALL.md - Installation and deployment guide
+- docs/README.md - Documentation index
+- docs/operations/quickref.md - Command reference card
+- docs/operations/usage.md - Detailed usage examples and scenarios
+- docs/development/architecture.md - Design and implementation details
+- docs/getting-started/install.md - Installation and deployment guide
+- docs/getting-started/container.md - Container usage guide
 - CONTRIBUTING.md - Development guidelines
-- PROJECT_SUMMARY.md - Comprehensive project summary
+- docs/project/summary.md - Comprehensive project summary
+- docs/project/prd.md - Product requirements document
 
 #### Tools
 - `quick-start.sh` - Interactive setup wizard
@@ -570,7 +573,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Troubleshooting
 
-Common issues documented in USAGE.md:
+Common issues documented in docs/operations/usage.md:
 - Clusters stuck in "Pending Import"
 - No metrics in Grafana after switchover
 - Restore stuck in "Running" phase

@@ -18,18 +18,19 @@ This plan is aligned with the current repo state (Python tool + bash scripts + d
 - Root-level Markdown:
   - `README.md` (main entrypoint; already links into `docs/`)
   - `SECURITY.md` (policy)
-  - `COMPREHENSIVE-VALIDATION-AND-ERROR-HANDLING.md` (implementation report)
-  - `EXCEPTION_HANDLING_IMPROVEMENTS.md` (implementation note)
-  - `SECURITY_FIX_DOCUMENTATION.md` (security note)
+  - `CHANGELOG.md`
+  - `CONTRIBUTING.md`
+  - `LICENSE`
 
 - `docs/` contains many “product docs” (operator guides, architecture, PRD, etc):
+  - `docs/README.md` (documentation index)
   - `docs/ACM_SWITCHOVER_RUNBOOK.md`
-  - `docs/USAGE.md`, `docs/INSTALL.md`
-  - `docs/QUICKREF.md`, `docs/CONTAINER_QUICKREF.md`, `docs/CONTAINER_USAGE.md`
-  - `docs/RBAC_REQUIREMENTS.md`, `docs/RBAC_DEPLOYMENT.md`, `docs/RBAC_IMPLEMENTATION_SUMMARY.md`
-  - `docs/VALIDATION_RULES.md`, `docs/TESTING.md`, `docs/ARCHITECTURE.md`, `docs/GITHUB_ACTIONS_SETUP.md`
-  - `docs/CHANGELOG.md`, `docs/CONTRIBUTING.md`, plus `docs/DELIVERABLES.md`, `docs/PRD.md`, `docs/PROJECT_SUMMARY.md`
-  - `docs/README.md` exists as an index, but its “stats” section and categorization should be treated as **non-canonical** and potentially out of sync with actual files.
+  - `docs/getting-started/install.md`, `docs/getting-started/container.md`
+  - `docs/operations/quickref.md`, `docs/operations/usage.md`
+  - `docs/deployment/rbac-requirements.md`, `docs/deployment/rbac-deployment.md`
+  - `docs/development/architecture.md`, `docs/development/ci.md`, `docs/development/testing.md`, `docs/development/rbac-implementation.md`
+  - `docs/project/prd.md`, `docs/project/deliverables.md`, `docs/project/summary.md`
+  - `docs/reference/validation-rules.md`
 
 - “Docs next to code” already exist and should remain close to their implementation:
   - `scripts/README.md` (bash operational scripts)
@@ -43,11 +44,10 @@ This plan is aligned with the current repo state (Python tool + bash scripts + d
 
 - Overlap/duplication across:
   - `README.md` vs `docs/README.md`
-  - `docs/USAGE.md` vs `docs/ACM_SWITCHOVER_RUNBOOK.md`
-  - `docs/QUICKREF.md` vs `docs/CONTAINER_QUICKREF.md`
+  - `docs/operations/usage.md` vs `docs/ACM_SWITCHOVER_RUNBOOK.md`
+  - Quick reference content spread across multiple places instead of one canonical doc
   - RBAC docs split between requirements/deployment/implementation summary plus deploy-method READMEs
 - “Implementation-report” documents at repo root are easy to confuse with user-facing docs.
-- A stale or redundant doc exists: `tests/README.old.md` (should be archived or removed).
 
 ---
 
@@ -122,7 +122,7 @@ Use subdirectories to make scanning easy:
 
 ### File naming
 
-- Prefer lowercase + hyphens: `docs/operations/quickref.md`, not `QUICKREF.md`.
+- Prefer lowercase + hyphens: `docs/operations/quickref.md`, not uppercase filenames.
 - Prefer stable, descriptive names (avoid version/date in filenames unless it’s an archival snapshot).
 - If a doc must remain uppercase due to external references, add a stub file at the old uppercase path.
 
@@ -148,12 +148,12 @@ Use subdirectories to make scanning easy:
 
 ## Concrete reorg proposal (moves/merges)
 
-### 1) Move “repo root reports” into `docs/development/notes/`
+### 1) Keep implementation notes under `docs/development/notes/`
 
-Move these from the root into a “notes” section:
-- `COMPREHENSIVE-VALIDATION-AND-ERROR-HANDLING.md` → `docs/development/notes/validation-and-error-handling.md`
-- `EXCEPTION_HANDLING_IMPROVEMENTS.md` → `docs/development/notes/exception-handling.md`
-- `SECURITY_FIX_DOCUMENTATION.md` → `docs/development/notes/shell-safety.md`
+Implementation notes live under:
+- `docs/development/notes/validation-and-error-handling.md`
+- `docs/development/notes/exception-handling.md`
+- `docs/development/notes/shell-safety.md`
 
 Optionally merge them later into one “Security & reliability notes” doc, but **do not merge** in the first pass unless it reduces duplication materially without losing important detail.
 
@@ -167,22 +167,21 @@ Keep `docs/` copies as compatibility stubs (see “Compatibility stubs”).
 ### 3) Merge quick references
 
 Create one canonical quick reference:
-- Merge `docs/QUICKREF.md` + `docs/CONTAINER_QUICKREF.md` → `docs/operations/quickref.md`
-  - Include “Local install” and “Container” sections
-  - Keep examples concise; link to `docs/operations/usage.md` for depth
+- Use `docs/operations/quickref.md` for concise commands (include both “Local install” and “Container” sections)
+- Link to `docs/operations/usage.md` for depth
 
 ### 4) Keep runbook and usage separate, but reduce overlap
 
-Rename and clarify responsibilities:
-- `docs/USAGE.md` → `docs/operations/usage.md` (scenario-driven commands)
-- `docs/ACM_SWITCHOVER_RUNBOOK.md` → `docs/operations/runbook.md` (procedural runbook + decision points)
+Clarify responsibilities:
+- `docs/operations/usage.md` is scenario-driven commands
+- `docs/ACM_SWITCHOVER_RUNBOOK.md` remains the procedural runbook + decision points
 
 Update both docs to link to each other rather than repeating the same steps.
 
 ### 5) Restructure installation and container docs
 
-- `docs/INSTALL.md` → `docs/getting-started/install.md`
-- `docs/CONTAINER_USAGE.md` → `docs/getting-started/container.md`
+- `docs/getting-started/install.md` is the canonical installation guide
+- `docs/getting-started/container.md` is the canonical container guide
 
 Ensure `README.md` and `docs/README.md` point to these new canonical paths.
 
@@ -208,9 +207,9 @@ Create a high-level “which method should I use?” doc and keep deep details i
 
 ### 8) Developer docs
 
-- `docs/ARCHITECTURE.md` → `docs/development/architecture.md`
-- `docs/TESTING.md` → `docs/development/testing.md`
-- `docs/GITHUB_ACTIONS_SETUP.md` → `docs/development/ci.md`
+- `docs/development/architecture.md`
+- `docs/development/testing.md`
+- `docs/development/ci.md`
 
 Link out to “next to code” docs:
 - `scripts/README.md`
@@ -220,15 +219,15 @@ Link out to “next to code” docs:
 ### 9) Project/spec docs (optional but recommended)
 
 Move planning/spec content out of the main operator flow:
-- `docs/PRD.md` → `docs/project/prd.md`
-- `docs/DELIVERABLES.md` → `docs/project/deliverables.md`
-- `docs/PROJECT_SUMMARY.md` → `docs/project/summary.md`
+- `docs/project/prd.md`
+- `docs/project/deliverables.md`
+- `docs/project/summary.md`
 
 ---
 
-## Compatibility stubs (to preserve links)
+## Compatibility stubs (optional)
 
-For each moved/renamed doc, keep a small stub at the old location for 1–2 releases:
+If stable links are required in the future, add small stubs at old locations for 1–2 releases.
 
 - Old file path remains and contains:
   - A short notice: “This document moved to `new/path.md`.”
@@ -243,15 +242,7 @@ Example stub:
 This document moved to `docs/operations/quickref.md`.
 ```
 
-Use this for:
-- `docs/QUICKREF.md`
-- `docs/CONTAINER_QUICKREF.md`
-- `docs/INSTALL.md`
-- `docs/USAGE.md`
-- `docs/ACM_SWITCHOVER_RUNBOOK.md`
-- `docs/CHANGELOG.md`
-- `docs/CONTRIBUTING.md`
-- Any root doc moved under `docs/development/notes/`
+Use this sparingly; prefer updating links directly within the repo.
 
 ---
 
@@ -266,8 +257,7 @@ Use this for:
    - Cross-links between docs
 5. Ensure “next to code” docs are linked from the canonical indexes:
    - `deploy/**/README.md`, `scripts/README.md`, `tests/*.md`
-6. Remove or archive `tests/README.old.md`:
-   - Prefer delete if clearly obsolete; otherwise move to `docs/project/archive/tests-readme-old.md` with a prominent “ARCHIVED” header.
+6. Keep the documentation index (`docs/README.md`) accurate and concise.
 7. Sanity-check that there are no broken internal links:
    - At minimum, search for old paths and update references.
 
@@ -288,4 +278,3 @@ Use this for:
 
 - Add a lightweight “docs link check” script (grep-based) or CI job to prevent broken links on future changes.
 - Introduce a small “docs update policy” section in `CONTRIBUTING.md` (e.g., “when you change CLI flags, update `docs/reference/cli.md`”).
-

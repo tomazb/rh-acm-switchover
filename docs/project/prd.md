@@ -1157,7 +1157,7 @@ Any phase can transition to: FAILED or ROLLBACK
 - Consolidated shell scripts into `scripts/` directory with shared `constants.sh`
 - Moved container build resources to `container-bootstrap/`
 - Refactored Python modules to use centralized `KubeClient` helper methods
-- Reduced code duplication in `primary_prep.py`, `rollback.py`, and `decommission.py`
+- Reduced code duplication in `primary_prep.py` and `decommission.py`
 - Updated `setup.cfg` for Python 3.9+ compatibility
 - Applied global code formatting (Black) and type checking (MyPy)
 - Consolidated documentation structure
