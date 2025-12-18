@@ -65,14 +65,18 @@ rh-acm-switchover/
 │   ├── activation.py        # Secondary activation (169 lines)
 │   ├── post_activation.py   # Post-activation verification (218 lines)
 │   ├── finalization.py      # Finalization & old hub handling (237 lines)
-│   ├── decommission.py      # ACM decommissioning module
 │   └── decommission.py      # Decommission old hub (144 lines)
 │
 └── docs/
-    ├── README.md            # Project overview
-    ├── QUICKREF.md          # Command reference
-    ├── USAGE.md             # Detailed examples
-    └── ARCHITECTURE.md      # Design documentation
+    ├── README.md                    # Documentation index
+    ├── ACM_SWITCHOVER_RUNBOOK.md    # Operator runbook
+    ├── getting-started/             # Installation and container usage
+    │   ├── install.md
+    │   └── container.md
+    ├── operations/                  # Operator guides
+    │   ├── quickref.md
+    │   └── usage.md
+    └── ...
 ```
 
 **Total Python code: ~2,156 lines**
@@ -118,9 +122,9 @@ rh-acm-switchover/
 ### ✅ Documentation
 
 - [x] README with overview
-- [x] Quick reference card (QUICKREF.md)
-- [x] Detailed usage guide (USAGE.md)
-- [x] Architecture documentation (ARCHITECTURE.md)
+- [x] Quick reference card (docs/operations/quickref.md)
+- [x] Detailed usage guide (docs/operations/usage.md)
+- [x] Architecture documentation (docs/development/architecture.md)
 - [x] Interactive quick-start script
 - [x] Inline code comments
 
