@@ -117,8 +117,9 @@ discover-hub.sh v1.3.0 (2025-12-11)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Checking primary-hub... ACM hub detected (version 2.11.0)
-  Checking secondary-hub... ACM hub detected (version 2.11.0)
+  Checking primary-hub... ACM hub detected (ACM 2.11.0)
+  Checking secondary-hub... ACM hub detected (ACM 2.11.0)
+  Checking prod1... not an ACM hub (skipped) (OCP: 4.14.12, channel: stable-4.14)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Discovered ACM Hubs
@@ -126,11 +127,15 @@ Discovered ACM Hubs
 
   ● primary-hub
     Role:     primary
+    ACM:      2.11.0
+    OCP:      4.14.12 (channel: stable-4.14)
     Clusters: 5/5
     State:    Active primary hub (BackupSchedule running, 5/5 clusters available)
 
   ● secondary-hub
     Role:     secondary
+    ACM:      2.11.0
+    OCP:      4.14.12 (channel: stable-4.14)
     Clusters: 0/5
     State:    Secondary hub in passive-sync mode (ready for switchover)
 
