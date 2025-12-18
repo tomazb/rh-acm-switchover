@@ -270,26 +270,36 @@ source venv/bin/activate
 # Run help command
 python acm_switchover.py --help
 
+# Expected output: Help text with all options
+```
 
 ### Enable Bash Completions (oc/kubectl)
 
 We ship bash completions for all executables (Python entry points and scripts under `scripts/`).
 
 ```bash
-# Install system-wide (requires root; SELinux relabel via restorecon if enabled)
-# Expected output: Help text with all options
+# Install completions (auto-detects system vs user install)
+./scripts/install-completions.sh
+
+# Or explicitly choose install location:
+./scripts/install-completions.sh --user    # ~/.local/share/bash-completion/completions
+sudo ./scripts/install-completions.sh --system  # /usr/share/bash-completion/completions
+
+# Verify installation
+./scripts/install-completions.sh test-completion
 ```
+
+Notes:
+- Supports both `oc` and `kubectl` automatically.
+- Context suggestions are cached for 60s and refreshed automatically.
+- SELinux: `restorecon` runs automatically when available; directory defaults pick the context type.
+- After install, open a new shell or source your bash completion file.
 
 ### Validation Test
 
 ```bash
 # Run validation against your hubs
 python acm_switchover.py \
-
-Notes:
-- Supports both `oc` and `kubectl` automatically.
-- Context suggestions are cached for 60s and refreshed automatically.
-- SELinux: `restorecon` runs automatically when available; directory defaults pick the context type.
   --validate-only \
   --primary-context your-primary-hub \
   --secondary-context your-secondary-hub
@@ -339,7 +349,7 @@ rh-acm-switchover/
 │
 ├── docs/                      # Documentation
 │   ├── ACM_SWITCHOVER_RUNBOOK.md
-│   ├── CONTAINER_USAGE.md
+│   ├── getting-started/container.md
 │   └── ...
 │
 ├── .state/                    # State files (created at runtime)
