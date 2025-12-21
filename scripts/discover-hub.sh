@@ -51,6 +51,8 @@ declare -a HUB_STATES=()          # Human-readable state description
 declare -a HUB_MC_COUNTS=()       # Number of available managed clusters
 declare -a HUB_BACKUP_STATES=()   # BackupSchedule state
 declare -a HUB_VERSIONS=()        # ACM version
+declare -a HUB_OCP_VERSIONS=()    # OCP / Kubernetes server version (if available)
+declare -a HUB_OCP_CHANNELS=()    # OpenShift update channel (if available)
 declare -a HUB_KLUSTERLET_COUNTS=()  # Number of clusters with klusterlet pointing to this hub
 declare -a ALL_MANAGED_CLUSTERS=()   # All managed cluster contexts discovered
 
@@ -113,6 +115,41 @@ get_acm_version() {
     version=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MCH -n "$ACM_NAMESPACE" \
         -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
     echo "$version"
+}
+
+# Get OCP / Kubernetes server version (prefer ClusterVersion on OpenShift)
+get_ocp_version() {
+    local ctx="$1"
+    local cv_ver
+
+    # Try ClusterVersion resource (OpenShift)
+    cv_ver=$("$CLUSTER_CLI_BIN" --context="$ctx" get clusterversion version -o jsonpath='{.status.desired.version}' 2>/dev/null || echo "")
+    if [[ -n "$cv_ver" ]]; then
+        echo "$cv_ver"
+        return
+    fi
+
+    # Fallback to server version from the CLI (using JSON output for k8s 1.29+ compatibility)
+    local server_ver
+    server_ver=$("$CLUSTER_CLI_BIN" --context="$ctx" version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // empty' || echo "")
+    if [[ -n "$server_ver" ]]; then
+        echo "$server_ver"
+        return
+    fi
+
+    echo "unknown"
+}
+
+# Get OpenShift update channel (if available)
+get_ocp_channel() {
+    local ctx="$1"
+    local channel
+    channel=$("$CLUSTER_CLI_BIN" --context="$ctx" get clusterversion version -o jsonpath='{.spec.channel}' 2>/dev/null || echo "")
+    if [[ -n "$channel" ]]; then
+        echo "$channel"
+    else
+        echo "n/a"
+    fi
 }
 
 # Get BackupSchedule state for a context
@@ -415,14 +452,23 @@ analyze_context() {
     
     # Check if it's an ACM hub
     if ! is_acm_hub "$ctx"; then
-        echo -e "${GRAY}not an ACM hub (skipped)${NC}"
+        # Try to report OCP version and update channel even when ACM is not present
+        local ocp_version ocp_channel
+        ocp_version=$(get_ocp_version "$ctx")
+        ocp_channel=$(get_ocp_channel "$ctx")
+        echo -e "${GRAY}not an ACM hub (skipped)${NC} (OCP: ${ocp_version}, channel: ${ocp_channel})"
         return 1
     fi
     
     # Get ACM version
     local acm_version
     acm_version=$(get_acm_version "$ctx")
-    echo -e "${GREEN}ACM hub detected${NC} (version ${BLUE}${acm_version}${NC})"
+    echo -e "${GREEN}ACM hub detected${NC} (ACM ${BLUE}${acm_version}${NC})"
+
+    # Get OCP version and update channel
+    local ocp_version ocp_channel
+    ocp_version=$(get_ocp_version "$ctx")
+    ocp_channel=$(get_ocp_channel "$ctx")
     
     # Gather information
     local backup_state restore_state available_mc total_mc
@@ -444,6 +490,8 @@ analyze_context() {
     HUB_MC_COUNTS+=("$available_mc/$total_mc")
     HUB_BACKUP_STATES+=("$backup_state")
     HUB_VERSIONS+=("$acm_version")
+    HUB_OCP_VERSIONS+=("$ocp_version")
+    HUB_OCP_CHANNELS+=("$ocp_channel")
     
     return 0
 }
@@ -483,7 +531,10 @@ print_discovered_hubs() {
         
         echo -e "  ${role_color}●${NC} ${BLUE}$ctx${NC}"
         echo -e "    Role:     ${role_color}$role${NC}"
-        echo -e "    Version:  $version"
+        local ocp_version="${HUB_OCP_VERSIONS[$i]:-unknown}"
+        local ocp_channel="${HUB_OCP_CHANNELS[$i]:-n/a}"
+        echo -e "    ACM:      $version"
+        echo -e "    OCP:      ${ocp_version} (channel: ${ocp_channel})"
         
         # Show cluster counts - include klusterlet count if we verified
         if [[ -n "$klusterlet_count" ]] && [[ "${#HUB_KLUSTERLET_COUNTS[@]}" -gt 0 ]]; then

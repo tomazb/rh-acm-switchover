@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Packaging and distribution work is planned; `1.4.0` is reserved for that release.
 
+- **`discover-hub.sh` now displays OCP version and update channel**:
+  - For ACM hubs: shows OCP version and channel alongside ACM version in Discovered ACM Hubs section
+  - For non-ACM clusters: displays OCP version and channel in the "not an ACM hub (skipped)" message
+  - Uses OpenShift ClusterVersion resource with fallback to server version for non-OCP clusters
+
 ## [1.3.3] - 2025-12-15
 
 ### Fixed
