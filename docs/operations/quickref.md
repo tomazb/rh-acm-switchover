@@ -246,8 +246,8 @@ oc rollout restart deployment/observability-observatorium-api \
 | `.state/switchover-<primary>__<secondary>.json` | State tracking (auto-created) |
 | `requirements.txt` | Python dependencies |
 | `README.md` | Project overview |
-| `docs/operations/usage.md` | Detailed examples |
-| `docs/development/architecture.md` | Design documentation |
+| [usage.md](usage.md) | Detailed examples |
+| [../development/architecture.md](../development/architecture.md) | Design documentation |
 
 ## Safety Checklist
 
@@ -267,8 +267,8 @@ oc rollout restart deployment/observability-observatorium-api \
 
 For issues or questions:
 
-- Review `docs/operations/usage.md` for detailed examples
-- Check `docs/development/architecture.md` for design details
+- Review [usage.md](usage.md) for detailed examples
+- Check [../development/architecture.md](../development/architecture.md) for design details
 - Inspect `.state/switchover-<primary>__<secondary>.json` for progress
 - Enable `--verbose` for detailed logging
 
