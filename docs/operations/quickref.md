@@ -434,4 +434,4 @@ podman run --rm \
 
 - Full documentation: [Container Usage Guide](../getting-started/container.md)
 - Setup guide: [CI/CD Setup](../development/ci.md)
-- Source code: https://github.com/tomazb/rh-acm-switchover
+- Source code: [https://github.com/tomazb/rh-acm-switchover](https://github.com/tomazb/rh-acm-switchover)
