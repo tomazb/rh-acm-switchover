@@ -10,6 +10,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from kubernetes import client, config
+from kubernetes.config.config_exception import ConfigException
 from kubernetes.client.rest import ApiException
 from tenacity import (
     before_sleep_log,
@@ -75,17 +76,26 @@ class KubeClient:
         self.dry_run = dry_run
         self.disable_hostname_verification = disable_hostname_verification
 
-        # Load config for specific context
-        config.load_kube_config(context=context)
+        # Load config for specific context with clearer error handling
+        try:
+            config.load_kube_config(context=context)
+        except ConfigException as exc:
+            logger.error("Failed to load kubeconfig for context %s: %s", context or "default", exc)
+            raise
 
         # Create per-instance configuration to avoid affecting other clients
         configuration = client.Configuration.get_default_copy()
-        configuration.retries = 3
+        # Tenacity handles retries for API calls; disable urllib3 retries to avoid double retry layers.
+        # NOTE: With this setting, the underlying HTTP client will not retry failed requests on its own.
+        #       Any operation that is not wrapped by the Tenacity-based retry decorator (e.g., @retry_api_call),
+        #       or if Tenacity is disabled/misconfigured, will perform no automatic retries and may fail on
+        #       transient network or server errors.
+        configuration.retries = 0
 
         if disable_hostname_verification and hasattr(configuration, "assert_hostname"):
             configuration.assert_hostname = False
             logger.warning(
-                "Hostname verification disabled for context: %s",
+                "INSECURE TLS: Hostname verification disabled for context %s. Only use in trusted labs.",
                 context or "default",
             )
 
