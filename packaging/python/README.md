@@ -77,7 +77,7 @@ After installation, three commands are available:
 The version is read dynamically from `lib.__version__` at build time. To update:
 
 ```bash
-./packaging/common/version-bump.sh 1.6.0
+./packaging/common/version-bump.sh 1.5.0
 ```
 
 ## Publishing to PyPI (Optional)

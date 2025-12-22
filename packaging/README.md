@@ -52,7 +52,7 @@ The authoritative version is stored in `packaging/common/VERSION`. All other ver
 
 ```bash
 # Bump to a new version
-./packaging/common/version-bump.sh 1.6.0
+./packaging/common/version-bump.sh 1.5.0
 
 # Validate all versions are in sync
 ./packaging/common/validate-versions.sh

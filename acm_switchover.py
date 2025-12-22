@@ -77,6 +77,13 @@ Examples:
         """,
     )
 
+    # Version
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__} ({__version_date__})",
+    )
+
     # Context arguments
     parser.add_argument("--primary-context", required=True, help="Kubernetes context for primary hub")
     parser.add_argument(

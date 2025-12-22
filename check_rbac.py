@@ -50,6 +50,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__} ({__version_date__})",
+    )
+
+    parser.add_argument(
         "--context",
         help="Kubernetes context to check (uses current context if not specified)",
     )
