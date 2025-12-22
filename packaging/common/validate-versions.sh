@@ -49,16 +49,16 @@ check_version() {
     fi
 }
 
-# 1. lib/__init__.py
-check_version "${REPO_ROOT}/lib/__init__.py" \
+# 1. lib/_version.py (lightweight version module)
+check_version "${REPO_ROOT}/lib/_version.py" \
     '(?<=__version__ = ")[^"]+' \
     "${EXPECTED_VERSION}" \
-    "lib/__init__.py __version__"
+    "lib/_version.py __version__"
 
-check_version "${REPO_ROOT}/lib/__init__.py" \
+check_version "${REPO_ROOT}/lib/_version.py" \
     '(?<=__version_date__ = ")[^"]+' \
     "${EXPECTED_DATE}" \
-    "lib/__init__.py __version_date__"
+    "lib/_version.py __version_date__"
 
 # 2. scripts/constants.sh
 check_version "${REPO_ROOT}/scripts/constants.sh" \
@@ -100,6 +100,11 @@ fi
 # 6. deploy/helm/acm-switchover-rbac/Chart.yaml
 RBAC_CHART="${REPO_ROOT}/deploy/helm/acm-switchover-rbac/Chart.yaml"
 if [[ -f "${RBAC_CHART}" ]]; then
+    check_version "${RBAC_CHART}" \
+        '(?<=^version: )[^\s]+' \
+        "${EXPECTED_VERSION}" \
+        "RBAC Helm chart version"
+    
     check_version "${RBAC_CHART}" \
         '(?<=^appVersion: ")[^"]+' \
         "${EXPECTED_VERSION}" \

@@ -57,7 +57,16 @@ echo "✓ Updated: packaging/common/VERSION"
 echo "${NEW_DATE}" > "${SCRIPT_DIR}/VERSION_DATE"
 echo "✓ Updated: packaging/common/VERSION_DATE"
 
-# 2. Update lib/__init__.py
+# 2. Update lib/_version.py (lightweight version module)
+update_file "${REPO_ROOT}/lib/_version.py" \
+    '^__version__ = ".*"$' \
+    "__version__ = \"${NEW_VERSION}\""
+
+update_file "${REPO_ROOT}/lib/_version.py" \
+    '^__version_date__ = ".*"$' \
+    "__version_date__ = \"${NEW_DATE}\""
+
+# 3. Update lib/__init__.py (for backward compatibility if version is still there)
 update_file "${REPO_ROOT}/lib/__init__.py" \
     '^__version__ = ".*"$' \
     "__version__ = \"${NEW_VERSION}\""
@@ -97,9 +106,13 @@ if [[ -f "${HELM_CHART}" ]]; then
         "appVersion: \"${NEW_VERSION}\""
 fi
 
-# 7. Update deploy/helm/acm-switchover-rbac/Chart.yaml appVersion
+# 7. Update deploy/helm/acm-switchover-rbac/Chart.yaml version and appVersion
 RBAC_CHART="${REPO_ROOT}/deploy/helm/acm-switchover-rbac/Chart.yaml"
 if [[ -f "${RBAC_CHART}" ]]; then
+    update_file "${RBAC_CHART}" \
+        '^version: .*$' \
+        "version: ${NEW_VERSION}"
+    
     update_file "${RBAC_CHART}" \
         '^appVersion: .*$' \
         "appVersion: \"${NEW_VERSION}\""
