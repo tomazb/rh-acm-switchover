@@ -7,9 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Notes
+
+- Version 1.5.x is reserved for packaging and distribution work.
+
+## [1.4.0] - 2025-12-22
+
 ### Added
 
-- Packaging and distribution work is planned; `1.4.0` is reserved for that release.
+- **Parallel cluster verification**: Klusterlet connection verification and reconnection now run in parallel using `ThreadPoolExecutor` with up to 10 concurrent workers (configurable via `CLUSTER_VERIFY_MAX_WORKERS`). This significantly speeds up post-activation for environments with many managed clusters.
+
+- **New timeout constants** in `lib/constants.py`:
+  - `OBSERVABILITY_POD_TIMEOUT` (300s) - Observability pod readiness wait
+  - `VELERO_RESTORE_TIMEOUT` (300s) - Velero restore wait
+  - `SECRET_VISIBILITY_TIMEOUT` (10s) - Bootstrap secret visibility polling
+  - `SECRET_VISIBILITY_INTERVAL` (1s) - Polling interval for secret checks
+  - `CLUSTER_VERIFY_MAX_WORKERS` (10) - Max parallel workers for cluster verification
+
+### Changed
+
+- **Replaced `time.sleep()` with proper polling**: The klusterlet reconnect flow now uses `wait_for_condition()` to poll for the `bootstrap-hub-kubeconfig` secret visibility instead of a hardcoded 2-second sleep.
+
+- Hardcoded timeout values in `post_activation.py` now use centralized constants from `lib/constants.py`.
 
 - **`discover-hub.sh` now displays OCP version and update channel**:
   - For ACM hubs: shows OCP version and channel alongside ACM version in Discovered ACM Hubs section
