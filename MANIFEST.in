@@ -1,0 +1,49 @@
+# MANIFEST.in - Controls what goes into the source distribution (sdist)
+
+# Include essential project files
+include LICENSE
+include README.md
+include CHANGELOG.md
+include SECURITY.md
+include CONTRIBUTING.md
+include requirements.txt
+include requirements-dev.txt
+include setup.cfg
+include pyproject.toml
+
+# Include shell scripts
+recursive-include scripts *.sh
+include quick-start.sh
+include run_tests.sh
+
+# Include shell completions
+recursive-include completions *
+
+# Include deployment manifests
+recursive-include deploy *
+
+# Include documentation
+recursive-include docs *.md *.rst *.txt
+
+# Include man pages (pre-generated)
+recursive-include packaging/common/man *.1.gz *.md Makefile
+
+# Exclude test files from distribution
+recursive-exclude tests *
+exclude .coverage
+exclude coverage.xml
+recursive-exclude htmlcov *
+
+# Exclude development/CI files
+exclude .gitignore
+exclude .pre-commit-config.yaml
+recursive-exclude .github *
+
+# Exclude Python cache
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude .DS_Store
+
+# Exclude container build files (separate distribution)
+recursive-exclude container-bootstrap *

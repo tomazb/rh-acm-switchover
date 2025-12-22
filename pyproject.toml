@@ -1,0 +1,165 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acm-switchover"
+dynamic = ["version"]
+description = "Automated Red Hat Advanced Cluster Management (ACM) Hub Switchover Tool"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Tomaz Borstnar", email = "tomaz@borstnar.com"}
+]
+maintainers = [
+    {name = "Tomaz Borstnar", email = "tomaz@borstnar.com"}
+]
+keywords = [
+    "acm",
+    "advanced-cluster-management",
+    "openshift",
+    "kubernetes",
+    "disaster-recovery",
+    "backup",
+    "restore",
+    "switchover",
+    "failover",
+    "red-hat"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Systems Administration",
+    "Topic :: System :: Clustering",
+    "Topic :: System :: Recovery Tools",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "kubernetes>=28.0.0",
+    "PyYAML>=6.0",
+    "rich>=13.0.0",
+    "tenacity>=8.2.0",
+    "urllib3>=2.5.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
+    "coverage>=7.0.0",
+    "flake8>=6.0.0",
+    "pylint>=2.17.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+    "bandit>=1.7.0",
+    "pip-audit>=2.6.0",
+    "types-PyYAML>=6.0.0",
+]
+
+[project.scripts]
+acm-switchover = "acm_switchover:main"
+acm-switchover-rbac = "check_rbac:main"
+acm-switchover-state = "show_state:main"
+
+[project.urls]
+Homepage = "https://github.com/tomazb/rh-acm-switchover"
+Documentation = "https://github.com/tomazb/rh-acm-switchover/tree/main/docs"
+Repository = "https://github.com/tomazb/rh-acm-switchover.git"
+Issues = "https://github.com/tomazb/rh-acm-switchover/issues"
+Changelog = "https://github.com/tomazb/rh-acm-switchover/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+py-modules = ["acm_switchover", "check_rbac", "show_state"]
+packages = ["lib", "modules"]
+
+[tool.setuptools.dynamic]
+version = {attr = "lib.__version__"}
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+# Tool configurations (migrated from setup.cfg where applicable)
+
+[tool.black]
+line-length = 120
+target-version = ["py39", "py310", "py311", "py312"]
+exclude = '''
+/(
+    \.git
+    | __pycache__
+    | \.venv
+    | venv
+    | build
+    | dist
+    | completions
+    | \.eggs
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+skip = [".venv", "venv", "env", "build", "dist", "completions"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[tool.bandit]
+exclude_dirs = ["tests", "completions"]
+skips = ["B101", "B601"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "integration: Integration tests with mocked binaries",
+    "unit: Unit tests for individual components",
+    "slow: Slower running tests",
+]
+addopts = "-v --strict-markers"
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/env/*",
+    "*/.venv/*",
+    "setup.py",
+    "tests/test_scripts.py",
+    "tests/test_scripts_integration.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
