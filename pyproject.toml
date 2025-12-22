@@ -87,7 +87,7 @@ py-modules = ["acm_switchover", "check_rbac", "show_state"]
 packages = ["lib", "modules"]
 
 [tool.setuptools.dynamic]
-version = {attr = "lib.__version__"}
+version = {attr = "lib._version.__version__"}
 
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
