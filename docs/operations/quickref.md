@@ -246,8 +246,8 @@ oc rollout restart deployment/observability-observatorium-api \
 | `.state/switchover-<primary>__<secondary>.json` | State tracking (auto-created) |
 | `requirements.txt` | Python dependencies |
 | `README.md` | Project overview |
-| `USAGE.md` | Detailed examples |
-| `ARCHITECTURE.md` | Design documentation |
+| [usage.md](usage.md) | Detailed examples |
+| [../development/architecture.md](../development/architecture.md) | Design documentation |
 
 ## Safety Checklist
 
@@ -267,8 +267,8 @@ oc rollout restart deployment/observability-observatorium-api \
 
 For issues or questions:
 
-- Review `USAGE.md` for detailed examples
-- Check `ARCHITECTURE.md` for design details
+- Review [usage.md](usage.md) for detailed examples
+- Check [../development/architecture.md](../development/architecture.md) for design details
 - Inspect `.state/switchover-<primary>__<secondary>.json` for progress
 - Enable `--verbose` for detailed logging
 
@@ -288,3 +288,150 @@ This guides you through:
 4. Validation
 5. Dry-run
 6. Execution (optional)
+
+---
+
+## Container Usage
+
+This section covers using the ACM Switchover container image.
+
+### Pull Image
+
+```bash
+podman pull quay.io/tomazborstnar/acm-switchover:latest
+```
+
+### Container Basic Commands
+
+#### Help
+
+```bash
+podman run --rm quay.io/tomazborstnar/acm-switchover:latest --help
+```
+
+#### Validate Only (Container)
+
+```bash
+podman run -it --rm \
+  -v ~/.kube:/app/.kube:ro \
+  quay.io/tomazborstnar/acm-switchover:latest \
+  --validate-only \
+  --primary-context primary-hub \
+  --secondary-context secondary-hub
+```
+
+#### Dry Run (Container)
+
+```bash
+podman run -it --rm \
+  -v ~/.kube:/app/.kube:ro \
+  -v $(pwd)/state:/var/lib/acm-switchover \
+  quay.io/tomazborstnar/acm-switchover:latest \
+  --dry-run \
+  --primary-context primary-hub \
+  --secondary-context secondary-hub \
+  --method passive
+```
+
+#### Execute Switchover (Container)
+
+```bash
+podman run -it --rm \
+  -v ~/.kube:/app/.kube:ro \
+  -v $(pwd)/state:/var/lib/acm-switchover \
+  quay.io/tomazborstnar/acm-switchover:latest \
+  --primary-context primary-hub \
+  --secondary-context secondary-hub \
+  --method passive
+```
+
+#### Rollback (Container)
+
+```bash
+podman run -it --rm \
+  -v ~/.kube:/app/.kube:ro \
+  -v $(pwd)/state:/var/lib/acm-switchover \
+  quay.io/tomazborstnar/acm-switchover:latest \
+  --rollback \
+  --primary-context primary-hub \
+  --secondary-context secondary-hub
+```
+
+### Container Volume Mounts
+
+| Mount | Path | Mode | Purpose |
+|-------|------|------|---------|
+| Kubeconfig | `-v ~/.kube:/app/.kube:ro` | Read-only | Cluster access |
+| State | `-v $(pwd)/state:/var/lib/acm-switchover` | Read-write | State persistence |
+
+### Container Common Flags
+
+| Flag | Description |
+|------|-------------|
+| `--validate-only` | Run validations only, no changes |
+| `--dry-run` | Preview actions without executing |
+| `--method passive` | Use passive sync method (required) |
+| `--method full` | Use full restore method (required) |
+| `--rollback` | Revert to primary hub |
+| `--verbose` | Enable debug logging |
+
+### Container Aliases (Optional)
+
+Add to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+alias acm-switchover='podman run -it --rm \
+  -v ~/.kube:/app/.kube:ro \
+  -v $(pwd)/state:/var/lib/acm-switchover \
+  quay.io/tomazborstnar/acm-switchover:latest'
+```
+
+Then use:
+
+```bash
+acm-switchover --validate-only --primary-context primary-hub --secondary-context secondary-hub
+```
+
+### Container Environment Variables
+
+```bash
+podman run -it --rm \
+  -v /path/to/kubeconfig:/config:ro \
+  -e KUBECONFIG=/config/kubeconfig \
+  quay.io/tomazborstnar/acm-switchover:latest \
+  --help
+```
+
+### Container Troubleshooting
+
+#### Check Prerequisites
+
+```bash
+podman run --rm quay.io/tomazborstnar/acm-switchover:latest \
+  sh -c "oc version --client && jq --version && python3 --version"
+```
+
+#### Interactive Shell
+
+```bash
+podman run -it --rm \
+  -v ~/.kube:/app/.kube:ro \
+  --entrypoint /bin/bash \
+  quay.io/tomazborstnar/acm-switchover:latest
+```
+
+#### List Contexts
+
+```bash
+podman run --rm \
+  -v ~/.kube:/app/.kube:ro \
+  --entrypoint oc \
+  quay.io/tomazborstnar/acm-switchover:latest \
+  config get-contexts
+```
+
+### More Container Information
+
+- Full documentation: [Container Usage Guide](../getting-started/container.md)
+- Setup guide: [CI/CD Setup](../development/ci.md)
+- Source code: [https://github.com/tomazb/rh-acm-switchover](https://github.com/tomazb/rh-acm-switchover)

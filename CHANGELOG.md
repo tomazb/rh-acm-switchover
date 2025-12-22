@@ -205,7 +205,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - **TLS hostname verification**: Added dedicated section in `SECURITY.md` documenting security implications and recommendations for `--disable-hostname-verification`
-- **Path validation rules**: Updated `docs/VALIDATION_RULES.md` with expanded path allowances
+- **Path validation rules**: Updated `docs/reference/validation-rules.md` with expanded path allowances
 
 ## [1.3.0] - 2025-12-03
 
@@ -233,8 +233,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### RBAC Model and Security
 
 - **Comprehensive RBAC model**: Complete role-based access control for least privilege access
-  - `docs/RBAC_REQUIREMENTS.md`: Detailed RBAC requirements documentation
-  - `docs/RBAC_DEPLOYMENT.md`: Step-by-step deployment guide
+  - `docs/deployment/rbac-requirements.md`: Detailed RBAC requirements documentation
+  - `docs/deployment/rbac-deployment.md`: Step-by-step deployment guide
   - `lib/rbac_validator.py`: RBAC permission validation module
   - `check_rbac.py`: Standalone RBAC checker tool
 
@@ -396,7 +396,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Documentation
 
 - Updated `scripts/README.md` with corrected Mermaid diagrams for preflight and postflight workflows.
-- Updated `docs/CONTAINER_USAGE.md` to reflect new build context location.
+- Updated `docs/getting-started/container.md` to reflect new build context location.
 - Updated `.github/workflows/container-build.yml` to use `container-bootstrap/` context.
 
 ### Added
@@ -455,12 +455,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Documentation
 - README.md - Project overview
-- QUICKREF.md - Command reference card
-- USAGE.md - Detailed usage examples and scenarios
-- ARCHITECTURE.md - Design and implementation details
-- INSTALL.md - Installation and deployment guide
+- docs/README.md - Documentation index
+- docs/operations/quickref.md - Command reference card
+- docs/operations/usage.md - Detailed usage examples and scenarios
+- docs/development/architecture.md - Design and implementation details
+- docs/getting-started/install.md - Installation and deployment guide
+- docs/getting-started/container.md - Container usage guide
 - CONTRIBUTING.md - Development guidelines
-- PROJECT_SUMMARY.md - Comprehensive project summary
+- docs/project/summary.md - Comprehensive project summary
+- docs/project/prd.md - Product requirements document
 
 #### Tools
 - `quick-start.sh` - Interactive setup wizard
@@ -575,7 +578,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Troubleshooting
 
-Common issues documented in USAGE.md:
+Common issues documented in docs/operations/usage.md:
 - Clusters stuck in "Pending Import"
 - No metrics in Grafana after switchover
 - Restore stuck in "Running" phase

@@ -804,7 +804,7 @@ These scripts are compatible with:
 For issues or questions:
 - Review the [ACM Switchover Runbook](../docs/ACM_SWITCHOVER_RUNBOOK.md)
 - Check the [Troubleshooting section](../docs/ACM_SWITCHOVER_RUNBOOK.md#troubleshooting-common-issues)
-- Consult the [Architecture documentation](../docs/ARCHITECTURE.md)
+- Consult the [Architecture documentation](../docs/development/architecture.md)
 
 ---
 

@@ -312,4 +312,4 @@ spec:
 
 - [Kustomize Documentation](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/)
 - [Kubernetes RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
-- [ACM Switchover RBAC Requirements](../../docs/RBAC_REQUIREMENTS.md)
+- [ACM Switchover RBAC Requirements](../../docs/deployment/rbac-requirements.md)

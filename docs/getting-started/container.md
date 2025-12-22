@@ -457,9 +457,9 @@ podman build \
 
 ## Related Documentation
 
-- **[Container Quick Reference](CONTAINER_QUICKREF.md)** - Cheat sheet for common commands
-- **[GitHub Actions Setup](GITHUB_ACTIONS_SETUP.md)** - Guide for setting up the build pipeline
-- **[Usage Guide](USAGE.md)** - General usage scenarios and examples
+- **[Quick Reference](../operations/quickref.md)** - Command cheat sheet (includes container commands)
+- **[CI/CD Setup](../development/ci.md)** - Guide for setting up the build pipeline
+- **[Usage Guide](../operations/usage.md)** - General usage scenarios and examples
 
 
 ## Support

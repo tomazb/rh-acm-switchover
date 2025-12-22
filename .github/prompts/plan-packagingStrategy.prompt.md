@@ -33,7 +33,7 @@ This plan is aligned with the current repo state (v1.4.0, 2025-12-12) including 
 
 ## Steps
 
-### 1. Create unified `packaging/` directory structure ([packaging/](packaging/))
+### 1. Create unified `packaging/` directory structure (`packaging/`)
 
 Introduce `packaging/` for packaging artifacts and docs, while keeping existing repo layout stable.
 

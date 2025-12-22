@@ -225,13 +225,13 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
   - Basic usage examples
   - Links to detailed docs
 
-- ✅ **`QUICKREF.md`** (~250 lines)
+- ✅ **`docs/operations/quickref.md`** (~250 lines)
   - Command cheat sheet
   - Common scenarios
   - Quick troubleshooting
   - Essential concepts
 
-- ✅ **`USAGE.md`** (~500 lines)
+- ✅ **`docs/operations/usage.md`** (~500 lines)
   - Detailed usage guide
   - All command options
   - Advanced scenarios
@@ -239,7 +239,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
   - Troubleshooting guide
   - FAQ section
 
-- ✅ **`INSTALL.md`** (~400 lines)
+- ✅ **`docs/getting-started/install.md`** (~400 lines)
   - System requirements
   - Installation methods (pip, venv, container)
   - RBAC permissions
@@ -249,7 +249,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
 
 ### Technical Documentation
 
-- ✅ **`ARCHITECTURE.md`** (~500 lines)
+- ✅ **`docs/development/architecture.md`** (~500 lines)
   - Project structure
   - Design principles
   - Component architecture
@@ -259,7 +259,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
   - Data flow diagrams
   - API abstractions
 
-- ✅ **`PRD.md`** (~1,200 lines)
+- ✅ **`docs/project/prd.md`** (~1,200 lines)
   - Product Requirements Document
   - Executive summary
   - User personas and use cases
@@ -271,7 +271,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
   - Future roadmap
   - Stakeholder information
 
-- ✅ **`PROJECT_SUMMARY.md`** (~800 lines)
+- ✅ **`docs/project/summary.md`** (~800 lines)
   - Comprehensive project overview
   - Architecture summary
   - Statistics (LOC, modules, features)
@@ -291,7 +291,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
   - Documentation standards
   - Best practices
 
-- ✅ **`TESTING.md`** (~600 lines)
+- ✅ **`docs/development/testing.md`** (~600 lines)
   - Testing strategy
   - Test structure
   - Running tests
@@ -361,7 +361,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
 
 ## Source Documentation
 
-- ✅ **[`docs/ACM_SWITCHOVER_RUNBOOK.md`](ACM_SWITCHOVER_RUNBOOK.md)**
+- ✅ **[`docs/ACM_SWITCHOVER_RUNBOOK.md`](../ACM_SWITCHOVER_RUNBOOK.md)**
   - Original runbook used as basis
   - Manual switchover procedures
   - Reference material
@@ -605,7 +605,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
 
 ### Immediate Actions
 
-1. **Review documentation**: Start with README.md, then QUICKREF.md
+1. **Review documentation**: Start with README.md, then docs/README.md and docs/operations/quickref.md
 2. **Install dependencies**: `pip install -r requirements.txt`
 3. **Run validation**: Use `--validate-only` mode against test clusters
 4. **Test dry-run**: Execute with `--dry-run` flag
@@ -621,7 +621,7 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
 
 ### Production Deployment
 
-1. Review PRD and ARCHITECTURE documents
+1. Review docs/project/prd.md and docs/development/architecture.md documents
 2. Ensure RBAC permissions configured
 3. Test in non-production environment first
 4. Plan maintenance window
@@ -635,8 +635,8 @@ Complete Python-based automation tool for Red Hat Advanced Cluster Management (A
 
 ### Getting Help
 
-- Review USAGE.md for detailed examples
-- Check TROUBLESHOOTING section in USAGE.md
+- Review docs/operations/usage.md for detailed examples
+- Check "Troubleshooting" section in docs/operations/usage.md
 - Review test cases for implementation examples
 - Check CI/CD logs for validation patterns
 
