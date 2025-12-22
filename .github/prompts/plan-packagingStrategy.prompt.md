@@ -7,7 +7,7 @@ A production-ready packaging strategy for rh-acm-switchover supporting:
 - Debian/Ubuntu (.deb)
 - Kubernetes/OpenShift deployment via Helm
 
-This plan is aligned with the current repo state (v1.4.0, 2025-12-12) including improved state-file defaults and atomic state persistence.
+This plan is aligned with the current repo state (v1.4.0, 2025-12-22) including improved state-file defaults and atomic state persistence.
 
 ## Current repo facts (baseline)
 
@@ -16,8 +16,8 @@ This plan is aligned with the current repo state (v1.4.0, 2025-12-12) including 
   - Python packages: `lib/`, `modules/`
 
 - **Version constants already exist**:
-  - `lib/__init__.py`: `__version__ = "1.4.0"`, `__version_date__ = "2025-12-12"`
-  - `scripts/constants.sh`: `SCRIPT_VERSION="1.4.0"`, `SCRIPT_VERSION_DATE="2025-12-12"`
+  - `lib/__init__.py`: `__version__ = "1.4.0"`, `__version_date__ = "2025-12-22"`
+  - `scripts/constants.sh`: `SCRIPT_VERSION="1.4.0"`, `SCRIPT_VERSION_DATE="2025-12-22"`
   - Some repo files still contain older version strings (e.g. `setup.cfg`, `README.md`) and must be treated as **needing sync**, not canonical.
 
 - **State file handling has been improved**:
@@ -91,6 +91,7 @@ Yes: we can keep the current layout and still add solid Python packaging.
 - Create root `pyproject.toml` with:
   - `requires-python = ">=3.9"`
   - Dependencies matching `requirements.txt` (`kubernetes`, `PyYAML`, `rich`, `tenacity`)
+  - Dev dependencies: `pip-audit` (replaced Safety CLI in v1.3.3 for vulnerability scanning)
   - Console scripts:
     - `acm-switchover = "acm_switchover:main"`
     - `acm-switchover-rbac = "check_rbac:main"`
@@ -259,7 +260,7 @@ Keep `container-bootstrap/Containerfile` as the CI build input (since workflows 
 
 4. **`--version` flags missing on Python CLIs** — CI currently treats this as optional; make it deterministic and testable.
 
-5. **State viewer default dir should align with code** — `show_state.py` should honor `ACM_SWITCHOVER_STATE_DIR` when listing/locating state files.
+5. ~~**State viewer default dir should align with code**~~ — ✅ RESOLVED in v1.3.2: `show_state.py` now honors `ACM_SWITCHOVER_STATE_DIR` when listing/locating state files.
 
 ---
 
