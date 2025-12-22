@@ -21,7 +21,11 @@ echo ""
 
 ERRORS=0
 
-# Function to check version in a file
+# check_version checks that a value extracted from a file using a regex matches the expected string and increments ERRORS on mismatch.
+# @param file Path to the file to inspect.
+# @param pattern Perl-compatible regex (used with grep -oP); the first match is compared.
+# @param expected Expected string to compare against.
+# @param description Human-readable label included in status messages.
 check_version() {
     local file="$1"
     local pattern="$2"

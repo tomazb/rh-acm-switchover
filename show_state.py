@@ -311,6 +311,16 @@ def list_state_files(use_color: bool = True):
 
 
 def main():
+    """
+    Run the command-line interface for viewing ACM switchover state files.
+    
+    Parses command-line arguments (positional state_file, --list, --json, --no-color, --version), prints a version header, and either:
+    - lists available state files and exits, or
+    - selects a state file (positional argument or the most recently modified file in the default state directory), loads and parses it, and outputs either the raw JSON (--json) or a human-readable formatted view.
+    
+    Returns:
+        int: Exit code: 0 on success, 1 on error (e.g., no state files found or failed to load the selected state).
+    """
     parser = argparse.ArgumentParser(
         description="View and explain ACM switchover state files",
         formatter_class=argparse.RawDescriptionHelpFormatter,

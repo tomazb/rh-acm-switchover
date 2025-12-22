@@ -21,7 +21,7 @@ echo "Version: ${NEW_VERSION}"
 echo "Date:    ${NEW_DATE}"
 echo ""
 
-# Cross-platform sed -i helper (works on macOS and Linux)
+# safe_sed applies a sed substitution pattern to a file in-place with portability between macOS (Darwin) and Linux.
 safe_sed() {
     local pattern="$1"
     local file="$2"
@@ -32,7 +32,7 @@ safe_sed() {
     fi
 }
 
-# Function to update a file with sed
+# update_file updates a file by replacing all occurrences of a pattern with a replacement using safe_sed, prints a status message, and returns non-zero on failure.
 update_file() {
     local file="$1"
     local pattern="$2"

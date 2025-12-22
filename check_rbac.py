@@ -14,7 +14,22 @@ from lib import KubeClient, RBACValidator, __version__, __version_date__, setup_
 
 
 def parse_args():
-    """Parse command line arguments."""
+    """
+    Create and parse command-line arguments for the RBAC permission validation CLI.
+    
+    Recognized options:
+    - --version: print tool version and exit
+    - --context: Kubernetes context to check (uses current if omitted)
+    - --primary-context / --secondary-context: contexts for dual-hub checks
+    - --include-decommission: include decommission permission checks
+    - --skip-observability: skip observability namespace checks
+    - --verbose / -v: enable verbose logging
+    
+    Returns:
+        argparse.Namespace: Parsed arguments with attributes
+        `context`, `primary_context`, `secondary_context`, `include_decommission`,
+        `skip_observability`, and `verbose`.
+    """
     parser = argparse.ArgumentParser(
         description="Validate RBAC permissions for ACM Switchover",
         formatter_class=argparse.RawDescriptionHelpFormatter,

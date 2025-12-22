@@ -22,10 +22,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m' # info prints an informational message prefixed with a green [INFO] tag to stdout.
 
 info() { echo -e "${GREEN}[INFO]${NC} $*"; }
+#warn prints a warning message prefixed with "[WARN]" in yellow to stdout.
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+# error prints its arguments as an error message to stderr prefixed with a red "[ERROR]" tag.
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 VERSION=$(cat "$REPO_ROOT/packaging/common/VERSION" 2>/dev/null || echo "unknown")

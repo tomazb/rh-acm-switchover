@@ -51,7 +51,22 @@ PhaseHandler = Callable[
 
 
 def parse_args():
-    """Parse command line arguments."""
+    """
+    Builds and parses the command-line interface for the ACM Hub Switchover Automation tool.
+    
+    Parses and validates CLI options for switchover and decommission workflows and returns an argparse.Namespace containing the selected configuration. The returned namespace includes:
+    - primary_context, secondary_context
+    - operation mode flags: validate_only, dry_run, decommission
+    - method (passive|full)
+    - manage_auto_import_strategy, skip_observability_checks, skip_rbac_validation, non_interactive
+    - state_file, reset_state
+    - old_hub_action (secondary|decommission|none)
+    - logging options: verbose, log_format
+    - a built-in --version action that prints program version and exits
+    
+    Returns:
+        argparse.Namespace: Parsed command-line arguments.
+    """
     parser = argparse.ArgumentParser(
         description="ACM Hub Switchover Automation",
         formatter_class=argparse.RawDescriptionHelpFormatter,

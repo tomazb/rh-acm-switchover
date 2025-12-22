@@ -23,7 +23,11 @@ class TestVersionConstants:
     """Test version constants are properly defined."""
 
     def test_lib_version_defined(self):
-        """Test that lib/__init__.py has __version__ defined."""
+        """
+        Verify that the package exposes a non-empty `__version__` string and a `__version_date__` string in `YYYY-MM-DD` format.
+        
+        Asserts that `__version__` is a non-empty `str` and that `__version_date__` is a `str` matching the pattern `YYYY-MM-DD`.
+        """
         from lib import __version__, __version_date__
 
         assert __version__ is not None
@@ -64,7 +68,13 @@ class TestVersionSync:
     """Test that all version sources are in sync."""
 
     def test_canonical_version_file_exists(self):
-        """Test that the canonical VERSION file exists."""
+        """
+        Verify that the canonical VERSION and VERSION_DATE files exist under packaging/common.
+        
+        This test asserts the presence of:
+        - packaging/common/VERSION
+        - packaging/common/VERSION_DATE
+        """
         version_file = PROJECT_ROOT / "packaging" / "common" / "VERSION"
         assert version_file.exists(), "packaging/common/VERSION should exist"
 
@@ -72,7 +82,11 @@ class TestVersionSync:
         assert version_date_file.exists(), "packaging/common/VERSION_DATE should exist"
 
     def test_canonical_version_matches_lib(self):
-        """Test that canonical VERSION matches lib/__init__.py."""
+        """
+        Verify canonical VERSION and VERSION_DATE files match lib's __version__ and __version_date__ when present.
+        
+        If either canonical file exists in packaging/common, assert that its trimmed contents equal the corresponding value exported by lib; the test fails via assertion on mismatch.
+        """
         from lib import __version__, __version_date__
 
         version_file = PROJECT_ROOT / "packaging" / "common" / "VERSION"
@@ -93,7 +107,11 @@ class TestVersionSync:
             )
 
     def test_setup_cfg_version_matches(self):
-        """Test that setup.cfg version matches lib version."""
+        """
+        Ensure the `version` value in PROJECT_ROOT/setup.cfg, if present, equals lib.__version__.
+        
+        If setup.cfg does not exist or does not contain a `version = ...` line, the test does nothing.
+        """
         from lib import __version__
 
         setup_cfg = PROJECT_ROOT / "setup.cfg"
@@ -228,7 +246,11 @@ class TestValidateVersionsScript:
         assert script.stat().st_mode & 0o111, "validate-versions.sh should be executable"
 
     def test_validate_versions_passes(self):
-        """Test that validate-versions.sh passes (all versions in sync)."""
+        """
+        Run packaging/common/validate-versions.sh and assert it exits with code 0 and prints "All versions are consistent".
+        
+        If the script is missing, the test is skipped.
+        """
         script = PROJECT_ROOT / "packaging" / "common" / "validate-versions.sh"
 
         if not script.exists():
