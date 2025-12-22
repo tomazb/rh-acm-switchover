@@ -2,8 +2,8 @@
 
 ## ACM Hub Switchover Automation
 
-**Version**: 1.3.0  
-**Date**: December 23, 2025  
+**Version**: 1.5.0  
+**Date**: December 22, 2025  
 **Status**: In Testing - Not Yet Production Ready  
 **Owner**: Platform Engineering Team
 
@@ -391,26 +391,26 @@ Automated Python tool that:
 ### FR-10: Packaging & Distribution
 
 **Priority**: High  
-**Status**: Planned for v1.1 ⏳
+**Status**: ✅ Implemented in v1.5.0
 
 #### Requirements
 
 1. **FR-10.1**: RPM Package Creation
-   - Create `.spec` file for RPM builds
-   - Define proper dependencies (python3, python3-kubernetes, etc.)
-   - Include all required files (scripts, modules, docs)
-   - Set appropriate file permissions
-   - Include post-install scripts (if needed)
-   - Support RHEL 8, RHEL 9, Fedora 40+
-   - **Status**: ⏳ Planned v1.1
+   - Create `.spec` file for RPM builds ✓
+   - Define proper dependencies (python3, python3-kubernetes, etc.) ✓
+   - Include all required files (scripts, modules, docs) ✓
+   - Set appropriate file permissions ✓
+   - Include post-install scripts (if needed) ✓
+   - Support RHEL 8, RHEL 9, Fedora 40+ ✓
+   - **Status**: ✅ Implemented (packaging/rpm/)
 
 2. **FR-10.2**: COPR Repository Setup
    - Create COPR project: `@tomazborstnar/acm-switchover`
    - Configure automatic builds from git tags
    - Enable for RHEL 8, RHEL 9, Fedora 40+
    - Set up GPG key for package signing
-   - Create repository documentation
-   - **Status**: ⏳ Planned v1.1
+   - Create repository documentation ✓
+   - **Status**: ⏳ Infrastructure ready, COPR project pending
 
 3. **FR-10.3**: Container Image
    - Create Containerfile/Dockerfile ✓
@@ -448,21 +448,23 @@ Automated Python tool that:
    - **Status**: ✅ Workflow Implemented (requires QUAY_USERNAME and QUAY_PASSWORD secrets)
 
 6. **FR-10.6**: PyPI Package (future)
-   - Create `setup.py` or `pyproject.toml`
+   - Create `setup.py` or `pyproject.toml` ✓
    - Register on PyPI as `acm-switchover`
    - Enable `pip install acm-switchover`
-   - Version management via git tags
-   - **Status**: ⏳ Planned v1.2
+   - Version management via git tags ✓
+   - Console scripts (`acm-switchover`, `acm-switchover-rbac`, `acm-switchover-state`) ✓
+   - **Status**: ✅ pyproject.toml implemented, PyPI publishing pending
 
 7. **FR-10.7**: Installation Documentation
-   - Document all installation methods
-   - Provide platform-specific instructions
-   - Include troubleshooting guide
-   - Add verification steps
-   - Container usage examples
-   - Volume mount configurations
-   - Environment variable reference
-   - **Status**: ⏳ Planned v1.1
+   - Document all installation methods ✓
+   - Provide platform-specific instructions ✓
+   - Include troubleshooting guide ✓
+   - Add verification steps ✓
+   - Container usage examples ✓
+   - Volume mount configurations ✓
+   - Environment variable reference ✓
+   - Packaging README with format details ✓
+   - **Status**: ✅ Implemented (packaging/README.md, docs/)
 
 ### FR-11: RBAC Setup and Kubeconfig Management
 
@@ -614,11 +616,11 @@ Automated Python tool that:
 ### NFR-8: Distribution & Packaging
 
 **Priority**: High  
-**Status**: Planned for v1.1 ⏳
+**Status**: ✅ Implemented in v1.5.0
 
 #### Package Formats
 
-**NFR-8.1: RPM Package**
+**NFR-8.1: RPM Package** ✅
 - Target distributions: RHEL 8+, Fedora 40+
 - Package name: `acm-switchover`
 - Install location: `/usr/bin/acm-switchover`
@@ -626,9 +628,9 @@ Automated Python tool that:
 - State directory: `/var/lib/acm-switchover/`
 - Documentation: `/usr/share/doc/acm-switchover/`
 - Man pages: `/usr/share/man/man1/acm-switchover.1.gz`
-- Dependencies properly declared in spec file
-- SELinux policy included (if needed)
-- Systemd service file (optional, for daemon mode v2.0)
+- Dependencies properly declared in spec file ✓
+- SELinux policy documented (semanage guidance)
+- Wrapper scripts set `ACM_SWITCHOVER_STATE_DIR` default
 
 **NFR-8.2: COPR Repository**
 - Repository: `@tomazborstnar/acm-switchover`
@@ -1071,14 +1073,19 @@ Any phase can transition to: FAILED or ROLLBACK
 - [x] SBOM generation (SPDX format)
 - [x] Image signing (cosign/sigstore)
 - [x] Automated GitHub releases
+- [x] RPM package creation (`.spec` file) ✅ v1.5.0
+- [x] Debian packaging (control, rules, changelog) ✅ v1.5.0
+- [x] pyproject.toml with console scripts ✅ v1.5.0
+- [x] Version sync tooling (version-bump.sh, validate-versions.sh) ✅ v1.5.0
+- [x] Man page infrastructure (Makefile + Markdown sources) ✅ v1.5.0
+- [x] Full application Helm chart ✅ v1.5.0
 - [ ] COPR repository setup and automation
-- [ ] RPM package creation (`.spec` file)
 - [ ] Package signing (GPG for RPM)
 - [ ] Container image publishing to Quay.io (requires secrets)
-- [ ] Installation documentation update
+- [x] Installation documentation update ✅ v1.5.0
 
 **Operational Enhancements**:
-- [ ] Parallel validation checks
+- [x] Parallel validation checks ✅ v1.4.0
 - [ ] Progress bars with rich library
 - [ ] Email/Slack notifications
 - [ ] Enhanced logging (JSON format)
@@ -1088,10 +1095,11 @@ Any phase can transition to: FAILED or ROLLBACK
 **Focus**: Advanced packaging and observability
 
 **Advanced Distribution**:
-- [ ] PyPI package (`pip install acm-switchover`)
-- [ ] Container image signing (cosign)
-- [ ] SBOM (Software Bill of Materials) generation
-- [ ] Vulnerability scanning automation
+- [x] PyPI package infrastructure (`pyproject.toml`) ✅ v1.5.0
+- [ ] PyPI publishing (`pip install acm-switchover`)
+- [x] Container image signing (cosign) ✅
+- [x] SBOM (Software Bill of Materials) generation ✅
+- [x] Vulnerability scanning automation ✅
 - [ ] Brew/Tap for macOS (optional)
 - [ ] Snap package for Ubuntu (optional)
 
