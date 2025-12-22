@@ -22,7 +22,7 @@ FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
 LABEL name="acm-switchover" \
       vendor="Red Hat" \
-      version="1.0.0" \
+      version="1.5.0" \
       release="1" \
       summary="ACM Hub Switchover Automation Tool" \
       description="Automated, idempotent tool for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster." \
@@ -81,9 +81,12 @@ WORKDIR /app
 
 # Copy application code
 COPY --chown=1001:0 acm_switchover.py /app/
+COPY --chown=1001:0 check_rbac.py /app/
+COPY --chown=1001:0 show_state.py /app/
 COPY --chown=1001:0 lib/ /app/lib/
 COPY --chown=1001:0 modules/ /app/modules/
 COPY --chown=1001:0 scripts/ /app/scripts/
+COPY --chown=1001:0 completions/ /app/completions/
 COPY --chown=1001:0 requirements.txt /app/
 COPY --chown=1001:0 LICENSE /app/
 COPY --chown=1001:0 README.md /app/
@@ -99,11 +102,11 @@ USER 1001
 ENV PATH="/app:/app/scripts:${PATH}" \
     PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=UTF-8 \
-    STATE_DIR=/var/lib/acm-switchover \
+    ACM_SWITCHOVER_STATE_DIR=/var/lib/acm-switchover \
     HOME=/app
 
 # Create state directory structure
-RUN mkdir -p ${STATE_DIR}/.state
+RUN mkdir -p ${ACM_SWITCHOVER_STATE_DIR}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

@@ -2,7 +2,7 @@
 Library package for ACM switchover automation.
 """
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 __version_date__ = "2025-12-22"
 
 from .exceptions import (
