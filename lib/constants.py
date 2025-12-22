@@ -18,6 +18,19 @@ OBSERVABILITY_TERMINATE_INTERVAL = 10
 DECOMMISSION_POD_TIMEOUT = 1200
 DECOMMISSION_POD_INTERVAL = 30
 
+# Observability pod readiness timeout
+OBSERVABILITY_POD_TIMEOUT = 300
+
+# Velero restore wait timeout
+VELERO_RESTORE_TIMEOUT = 300
+
+# Secret visibility wait (for klusterlet bootstrap secret)
+SECRET_VISIBILITY_TIMEOUT = 10
+SECRET_VISIBILITY_INTERVAL = 1
+
+# Parallel cluster verification settings
+CLUSTER_VERIFY_MAX_WORKERS = 10
+
 # Namespaces
 BACKUP_NAMESPACE = "open-cluster-management-backup"
 OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"

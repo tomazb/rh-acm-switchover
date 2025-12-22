@@ -6,6 +6,7 @@ import base64
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import yaml
 from kubernetes import client, config
@@ -13,8 +14,13 @@ from kubernetes.client.rest import ApiException
 
 from lib.constants import (
     CLUSTER_VERIFY_INTERVAL,
+    CLUSTER_VERIFY_MAX_WORKERS,
     CLUSTER_VERIFY_TIMEOUT,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_POD_TIMEOUT,
+    SECRET_VISIBILITY_INTERVAL,
+    SECRET_VISIBILITY_TIMEOUT,
+    VELERO_RESTORE_TIMEOUT,
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
@@ -210,7 +216,7 @@ class PostActivationVerification:
             ready = self.secondary.wait_for_pods_ready(
                 namespace=OBSERVABILITY_NAMESPACE,
                 label_selector="app.kubernetes.io/name=observatorium-api",
-                timeout=300,
+                timeout=OBSERVABILITY_POD_TIMEOUT,
             )
 
             if ready:
@@ -442,29 +448,40 @@ class PostActivationVerification:
             logger.info("No managed clusters to verify klusterlet connections")
             return
 
-        # Try to verify each cluster's klusterlet connection
+        # Try to verify each cluster's klusterlet connection in parallel
+        def check_cluster(cluster_name: str, cluster_api_url: str) -> tuple:
+            """Check a single cluster's klusterlet connection. Returns (cluster_name, result, context_name)."""
+            try:
+                context_name = self._find_context_by_api_url(kubeconfig_data, cluster_api_url, cluster_name)
+                if not context_name:
+                    return (cluster_name, "no_context", None)
+
+                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
+                return (cluster_name, result, context_name)
+            except (ApiException, Exception) as e:
+                logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
+                return (cluster_name, "unreachable", None)
+
+        logger.info("Checking klusterlet connections for %d cluster(s) in parallel...", len(cluster_info))
+        
+        # Collect results from futures to avoid shared mutable state
         verified = []
         wrong_hub = []
         unreachable = []
-
-        for cluster_name, cluster_api_url in cluster_info:
-            try:
-                # Find context by matching API server URL
-                context_name = self._find_context_by_api_url(kubeconfig_data, cluster_api_url, cluster_name)
-                if not context_name:
-                    unreachable.append(cluster_name)
-                    continue
-
-                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
+        
+        with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
+            futures = [
+                executor.submit(check_cluster, name, api_url)
+                for name, api_url in cluster_info
+            ]
+            for future in as_completed(futures):
+                cluster_name, result, context_name = future.result()
                 if result == "verified":
                     verified.append(cluster_name)
                 elif result == "wrong_hub":
                     wrong_hub.append((cluster_name, context_name))
-                else:  # unreachable or error
+                else:  # unreachable, no_context, or error
                     unreachable.append(cluster_name)
-            except (ApiException, Exception) as e:
-                logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
-                unreachable.append(cluster_name)
 
         # Log initial results
         if verified:
@@ -474,20 +491,34 @@ class PostActivationVerification:
                 ", ".join(verified),
             )
 
-        # Fix clusters connected to wrong hub
+        def fix_cluster(cluster_name: str, context_name: str) -> tuple:
+            """Fix a single cluster's klusterlet connection. Returns (cluster_name, success)."""
+            success = self._force_klusterlet_reconnect(cluster_name, context_name)
+            return (cluster_name, success)
+
+        # Fix clusters connected to wrong hub (also in parallel)
         if wrong_hub:
             logger.warning(
                 "Klusterlet connected to wrong hub for %d cluster(s): %s - attempting to fix...",
                 len(wrong_hub),
                 ", ".join([c[0] for c in wrong_hub]),
             )
+
+            # Collect results from futures to avoid shared mutable state
             fixed = []
             fix_failed = []
-            for cluster_name, context_name in wrong_hub:
-                if self._force_klusterlet_reconnect(cluster_name, context_name):
-                    fixed.append(cluster_name)
-                else:
-                    fix_failed.append(cluster_name)
+
+            with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
+                futures = [
+                    executor.submit(fix_cluster, name, ctx)
+                    for name, ctx in wrong_hub
+                ]
+                for future in as_completed(futures):
+                    cluster_name, success = future.result()
+                    if success:
+                        fixed.append(cluster_name)
+                    else:
+                        fix_failed.append(cluster_name)
 
             if fixed:
                 logger.info(
@@ -532,9 +563,7 @@ class PostActivationVerification:
         Returns:
             True if successful, False otherwise
         """
-        import time
-
-        import yaml
+        import time as time_module
 
         try:
             logger.info("Force-reconnecting klusterlet for %s to new hub...", cluster_name)
@@ -598,14 +627,36 @@ class PostActivationVerification:
                     else:
                         logger.debug("Error applying %s/%s: %s", kind, name, e)
 
-            # Step 4: Restart the klusterlet deployment
-            time.sleep(2)  # Brief pause for secret to be visible
+            # Step 4: Wait for secret to be visible, then restart the klusterlet deployment
+            def secret_exists() -> tuple:
+                """Check if bootstrap-hub-kubeconfig secret exists."""
+                try:
+                    v1.read_namespaced_secret(
+                        name="bootstrap-hub-kubeconfig",
+                        namespace="open-cluster-management-agent",
+                    )
+                    return (True, "secret exists")
+                except ApiException as e:
+                    if e.status == 404:
+                        return (False, "secret not found")
+                    return (False, f"error: {e.status}")
+
+            secret_ready = wait_for_condition(
+                description=f"bootstrap-hub-kubeconfig secret on {cluster_name}",
+                condition_fn=secret_exists,
+                timeout=SECRET_VISIBILITY_TIMEOUT,
+                interval=SECRET_VISIBILITY_INTERVAL,
+                logger=logger,
+            )
+
+            if not secret_ready:
+                logger.warning("bootstrap-hub-kubeconfig secret not visible on %s after timeout", cluster_name)
 
             try:
                 # Trigger a rollout restart by patching the deployment
                 patch = {
                     "spec": {
-                        "template": {"metadata": {"annotations": {"acm-switchover/restart": str(int(time.time()))}}}
+                        "template": {"metadata": {"annotations": {"acm-switchover/restart": str(int(time_module.time()))}}}
                     }
                 }
                 apps_v1.patch_namespaced_deployment(
