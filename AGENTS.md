@@ -119,6 +119,9 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 - `lib/constants.py` - All magic strings centralized here (Python)
 - `scripts/constants.sh` - All magic strings centralized here (Bash)
 - `setup.cfg` - pytest, flake8, mypy configuration
+- `pyproject.toml` - Python packaging, dependencies, console scripts
+- `packaging/README.md` - Packaging formats, build process, state dir defaults
+- `packaging/common/VERSION` - Canonical version source
 
 ## Version Management
 
@@ -130,11 +133,17 @@ Container image and Helm chart metadata follow the same version: the Containerfi
 
 | Component | File | Variables |
 |-----------|------|-----------|
+| **Canonical Source** | `packaging/common/VERSION`, `VERSION_DATE` | Single source of truth |
 | **Bash Scripts** | `scripts/constants.sh` | `SCRIPT_VERSION`, `SCRIPT_VERSION_DATE` |
 | **Python Tool** | `lib/__init__.py` | `__version__`, `__version_date__` |
-| **README** | `README.md` | Version badge at top of file |
-| **Container Image** | `container-bootstrap/Containerfile` | `LABEL version` |
-| **Helm Chart** | `deploy/helm/Chart.yaml` | `version`, `appVersion` (appVersion = tool version) |
+| **README** | `README.md` | Version at top of file |
+| **setup.cfg** | `setup.cfg` | `version` in `[metadata]` |
+| **Containerfile** | `container-bootstrap/Containerfile` | `version` label |
+| **Helm Charts** | `packaging/helm/*/Chart.yaml`, `deploy/helm/*/Chart.yaml` | `version`, `appVersion` |
+
+**Version sync tooling**:
+- `./packaging/common/version-bump.sh <version> [date]` - Update all version sources
+- `./packaging/common/validate-versions.sh` - Verify all sources are in sync (used by CI)
 
 ### Bash Scripts Version
 
@@ -182,6 +191,14 @@ Location: `CHANGELOG.md`
 
 ### Version Update Checklist
 
+**Preferred method** (uses version-bump tooling):
+```bash
+./packaging/common/version-bump.sh 1.6.0 2025-01-15
+./packaging/common/validate-versions.sh
+# Add changelog entry
+git tag v1.6.0 && git push origin v1.6.0
+```
+
 When making script changes:
 1. [ ] Update `SCRIPT_VERSION` in `scripts/constants.sh`
 2. [ ] Update `SCRIPT_VERSION_DATE` to current date
@@ -193,11 +210,14 @@ When making script changes:
 8. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
 
 When making Python code changes:
-1. [ ] Update `__version__` in `lib/__init__.py`
-2. [ ] Update `__version_date__` to current date
-3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
-4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/Chart.yaml](deploy/helm/Chart.yaml)
-5. [ ] Update version in `README.md` (top of file)
-6. [ ] Add changelog entry in `CHANGELOG.md`
-7. [ ] Keep Python and Bash versions in sync if changes affect both
-8. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+1. [ ] Run `./packaging/common/version-bump.sh <new-version>` to update all sources
+2. [ ] Verify with `./packaging/common/validate-versions.sh`
+3. [ ] Add changelog entry in `CHANGELOG.md`
+4. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+
+**Alternative (manual updates)**:
+1. [ ] Update `packaging/common/VERSION` and `VERSION_DATE`
+2. [ ] Update `__version__` in `lib/__init__.py`
+3. [ ] Update `SCRIPT_VERSION` in `scripts/constants.sh`
+4. [ ] Update version in `README.md`, `setup.cfg`, Containerfile, Helm charts
+5. [ ] Run `./packaging/common/validate-versions.sh` to verify
