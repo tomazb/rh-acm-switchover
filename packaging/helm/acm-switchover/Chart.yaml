@@ -1,0 +1,22 @@
+apiVersion: v2
+name: acm-switchover
+description: ACM Hub Switchover Automation Tool
+type: application
+version: 1.5.0
+appVersion: "1.5.0"
+keywords:
+  - acm
+  - advanced-cluster-management
+  - openshift
+  - kubernetes
+  - disaster-recovery
+  - backup
+  - restore
+  - switchover
+home: https://github.com/tomazb/rh-acm-switchover
+sources:
+  - https://github.com/tomazb/rh-acm-switchover
+maintainers:
+  - name: Tomaz Borstnar
+    email: tomaz@borstnar.com
+icon: https://avatars.githubusercontent.com/u/tomazb

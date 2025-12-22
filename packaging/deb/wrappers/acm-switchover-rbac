@@ -1,0 +1,5 @@
+#!/bin/sh
+# ACM Switchover RBAC checker wrapper script (Debian/Ubuntu)
+[ -r /etc/default/acm-switchover ] && . /etc/default/acm-switchover
+export PYTHONPATH="/usr/share/acm-switchover:${PYTHONPATH}"
+exec /usr/bin/python3 -c "from check_rbac import main; main()" "$@"
