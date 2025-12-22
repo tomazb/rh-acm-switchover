@@ -2,8 +2,8 @@
 Library package for ACM switchover automation.
 """
 
-__version__ = "1.5.0"
-__version_date__ = "2025-12-22"
+# Import version from lightweight module (avoids importing heavy deps at build time)
+from ._version import __version__, __version_date__
 
 from .exceptions import (
     ConfigurationError,
