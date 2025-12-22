@@ -186,6 +186,9 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
             env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
             if env_state_dir and env_state_dir.strip():
                 InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
+        else:
+            # Validate user-specified state file path to prevent unsafe locations
+            InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
 
     except ValidationError as e:
         logger.error("Validation error: %s", str(e))
