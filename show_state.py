@@ -352,6 +352,11 @@ Examples:
         action="store_true",
         help="Disable colored output",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__} ({__version_date__})",
+    )
 
     args = parser.parse_args()
     use_color = not args.no_color and sys.stdout.isatty()
