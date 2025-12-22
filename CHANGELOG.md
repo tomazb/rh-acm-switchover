@@ -29,7 +29,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- Version 1.5.x is reserved for packaging and distribution work.
+## [1.5.0] - 2025-12-22
+
+### Added
+
+#### Packaging and Distribution
+
+- **Complete packaging infrastructure** in `packaging/` directory:
+  - `packaging/common/` - Version sync tooling (`version-bump.sh`, `validate-versions.sh`), build helpers, man page sources
+  - `packaging/python/` - Python packaging documentation
+  - `packaging/rpm/` - RPM spec file and COPR setup docs
+  - `packaging/deb/` - Debian packaging (control, rules, changelog, postinst)
+  - `packaging/container/` - Container security documentation for OpenShift
+  - `packaging/helm/acm-switchover/` - Full application Helm chart (Job/CronJob, PVC, RBAC templates)
+
+- **Python packaging** (`pyproject.toml`, `MANIFEST.in`):
+  - PEP 517/518 compliant build system
+  - Console scripts: `acm-switchover`, `acm-switchover-rbac`, `acm-switchover-state`
+  - Proper sdist includes scripts, completions, deploy manifests
+
+- **`--version` flag** added to all Python CLIs:
+  - `acm_switchover.py --version`
+  - `check_rbac.py --version`
+  - `show_state.py --version`
+
+- **CI workflow** `.github/workflows/version-sync.yml` to validate version consistency across all sources
+
+- **Man page infrastructure** in `packaging/common/man/`:
+  - Markdown sources for `acm-switchover.1`, `acm-switchover-rbac.1`, `acm-switchover-state.1`
+  - Makefile to generate man pages via pandoc
+
+### Changed
+
+- **Containerfile improvements**:
+  - Added missing `check_rbac.py`, `show_state.py`, `completions/` to container image
+  - Set `ENV ACM_SWITCHOVER_STATE_DIR=/var/lib/acm-switchover` for proper state persistence
+  - Updated version label to 1.5.0
+
+- **Version management**:
+  - Single source of truth: `packaging/common/VERSION` and `VERSION_DATE`
+  - Automated sync via `packaging/common/version-bump.sh`
+  - Validation via `packaging/common/validate-versions.sh`
+
+### Fixed
+
+- **Version drift**: All version sources now consistent (was: `setup.cfg` at 1.3.0, Helm chart at 1.0.0/1.2.0, Containerfile at 1.0.0)
 
 ## [1.4.6] - 2025-12-25
 
