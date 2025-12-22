@@ -10,31 +10,39 @@ The test suite uses **pytest** with modern fixtures, markers, and parameterizati
 - High code coverage with minimal maintenance overhead
 
 **Test Statistics:**
-- **Total Tests**: 136
-- **Unit Tests**: ~120 (fast, no external dependencies)
-- **Integration Tests**: ~16 (mocked external commands)
-- **Execution Time**: ~46 seconds (all tests)
-- **Coverage**: 61% kube_client, 75% utils, comprehensive module coverage
+- **Total Tests**: 320
+- **Unit Tests**: ~290 (fast, no external dependencies)
+- **Integration Tests**: ~30 (mocked external commands)
+- **Execution Time**: ~90-95 seconds (all tests)
+- **Overall Coverage**: 67%
 
 ## Test Organization
 
 ### Python Unit Tests (pytest style)
 Located in `tests/test_*.py`:
 
-- `test_kube_client.py` - KubeClient operations (19 tests)
+- `test_kube_client.py` - KubeClient operations (28 tests)
 - `test_utils.py` - StateManager, Phase enum, utilities (28 tests)
-- `test_preflight.py` - Validation reporters and validators (10 tests)
+- `test_preflight.py` - Validation reporters and validators (18 tests)
 - `test_backup_schedule.py` - BackupSchedule management (13 tests)
 - `test_primary_prep.py` - Primary hub preparation (16 tests)
-- `test_activation.py` - Secondary hub activation (7 tests)
+- `test_activation.py` - Secondary hub activation (11 tests)
 - `test_decommission.py` - Old hub decommissioning (15 tests)
-- `test_post_activation.py` - Post-activation verification (15 tests)
-- `test_finalization.py` - Finalization workflow (6 tests)
+- `test_post_activation.py` - Post-activation verification (25 tests)
+- `test_finalization.py` - Finalization workflow (11 tests)
 - `test_waiter.py` - Wait/poll utilities (4 tests)
 - `test_main.py` - Argument parsing (8 tests)
+- `test_validation.py` - Input validation (28 tests)
+- `test_version.py` - Version sync and CLI (10 tests)
+- `test_rbac_validator.py` - RBAC validator (13 tests)
+- `test_rbac_integration.py` - RBAC manifest consistency (17 tests)
+- `test_reliability.py` - Retry logic (5 tests)
+- `test_auto_import.py` - Auto-import strategy (4 tests)
+- `test_cli_auto_import.py` - CLI flag for auto-import (1 test)
+- `test_state_dir_env_var.py` - State directory env var (4 tests)
 
 ### Bash Script Tests
-- `test_scripts.py` - Argument validation, error handling (12 tests)
+- `test_scripts.py` - Argument validation, error handling (20 tests)
 - `test_scripts_integration.py` - End-to-end with mocked `oc`/`jq` (8 tests)
 
 See `README-scripts-tests.md` for detailed bash test documentation.
@@ -148,14 +156,30 @@ markers =
 
 ## Test Coverage Goals
 
-### Current Coverage
-- `lib/kube_client.py`: 61%
-- `lib/utils.py`: 75%
-- `modules/backup_schedule.py`: Well covered
-- `modules/primary_prep.py`: Well covered
-- `modules/decommission.py`: Well covered
-- `modules/post_activation.py`: Well covered
-- Bash scripts: Comprehensive argument/integration coverage
+### Current Coverage (December 2025)
+- `lib/__init__.py`: 100%
+- `lib/constants.py`: 100%
+- `lib/exceptions.py`: 100%
+- `lib/validation.py`: 98%
+- `lib/rbac_validator.py`: 90%
+- `lib/waiter.py`: 90%
+- `modules/backup_schedule.py`: 90%
+- `lib/utils.py`: 84%
+- `modules/primary_prep.py`: 81%
+- `modules/activation.py`: 76%
+- `modules/decommission.py`: 76%
+- `modules/finalization.py`: 69%
+- `lib/kube_client.py`: 60%
+- `modules/post_activation.py`: 54%
+- `modules/preflight_validators.py`: 42%
+- `modules/preflight.py`: 17%
+
+### Priority Areas for Improvement
+- [ ] `modules/preflight.py` - Test `PreflightValidator.validate_all()` orchestration
+- [ ] `modules/preflight_validators.py` - Add tests for VersionValidator, HubComponentValidator, BackupValidator, PassiveSyncValidator
+- [ ] `modules/post_activation.py` - Test klusterlet reconnection logic
+- [ ] `lib/kube_client.py` - Test configmap operations (get, create, patch, delete)
+- [ ] `modules/finalization.py` - Test old hub handling and backup collision fix
 
 ### Future Enhancements
 - [ ] Integration tests for multi-step workflows
@@ -165,7 +189,7 @@ markers =
 ## Continuous Integration
 
 Tests are designed for CI/CD integration:
-- Fast execution (~46s for full suite)
+- Execution time (~90-95 seconds for full suite)
 - No external dependencies (all mocked)
 - Clear pass/fail signals
 - Detailed error reporting
