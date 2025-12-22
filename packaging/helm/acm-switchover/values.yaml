@@ -1,0 +1,146 @@
+# Default values for acm-switchover Helm chart
+
+# Container image configuration
+image:
+  repository: quay.io/tomazb/acm-switchover
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Switchover configuration
+switchover:
+  # Primary hub context name (REQUIRED)
+  primaryContext: ""
+  # Secondary hub context name (REQUIRED for switchover, not for decommission)
+  secondaryContext: ""
+  # Switchover method: passive-sync or full-restore
+  method: "passive-sync"
+  # Action for old hub: secondary, decommission, or none
+  oldHubAction: "secondary"
+  # Enable dry-run mode (no changes made)
+  dryRun: false
+  # Skip preflight checks
+  skipPreflight: false
+  # Enable verbose logging
+  verbose: false
+  # Log format: text or json
+  logFormat: "text"
+  # Additional arguments to pass to acm-switchover
+  extraArgs: []
+
+# Decommission mode (mutually exclusive with normal switchover)
+decommission:
+  enabled: false
+  # Run non-interactively
+  nonInteractive: true
+
+# Kubeconfig secret configuration
+kubeconfig:
+  # Name of the secret containing kubeconfig (REQUIRED)
+  secretName: ""
+  # Key within the secret
+  key: "config"
+  # Mount path for kubeconfig
+  mountPath: "/app/.kube"
+
+# State file persistence
+persistence:
+  enabled: true
+  # Storage class (empty = default)
+  storageClass: ""
+  # PVC size
+  size: 100Mi
+  # Access mode
+  accessModes:
+    - ReadWriteOnce
+  # Existing PVC name (optional, overrides dynamic provisioning)
+  existingClaim: ""
+
+# Job configuration (for one-time switchover)
+job:
+  enabled: true
+  # Backoff limit (0 = no retries, rely on state-based resume)
+  backoffLimit: 0
+  # Active deadline in seconds (0 = no deadline)
+  activeDeadlineSeconds: 3600
+  # TTL for completed jobs (seconds, 0 = never delete)
+  ttlSecondsAfterFinished: 86400
+  # Restart policy
+  restartPolicy: Never
+
+# CronJob configuration (for scheduled validation)
+cronjob:
+  enabled: false
+  # Cron schedule
+  schedule: "0 0 * * 0"  # Weekly on Sunday at midnight
+  # Concurrency policy: Allow, Forbid, Replace
+  concurrencyPolicy: Forbid
+  # Suspend the cronjob
+  suspend: false
+  # Successful job history limit
+  successfulJobsHistoryLimit: 3
+  # Failed job history limit
+  failedJobsHistoryLimit: 3
+
+# Service account configuration
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod security context (OpenShift compatible)
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+# Resource limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels
+podLabels: {}
+
+# RBAC configuration
+rbac:
+  # Create RBAC resources
+  create: true
+  # Include decommission permissions
+  includeDecommission: false
+  # Include observability permissions
+  includeObservability: true
+
+# Namespace configuration
+namespace:
+  # Create the namespace
+  create: false

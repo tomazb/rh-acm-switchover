@@ -1,0 +1,61 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+export PYBUILD_NAME = acm-switchover
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_build:
+	dh_auto_build
+	# Build man pages
+	$(MAKE) -C packaging/common/man
+
+override_dh_auto_install:
+	dh_auto_install
+	
+	# Create directories
+	mkdir -p debian/acm-switchover/usr/bin
+	mkdir -p debian/acm-switchover/usr/libexec/acm-switchover
+	mkdir -p debian/acm-switchover/usr/share/acm-switchover
+	mkdir -p debian/acm-switchover/usr/share/acm-switchover/lib
+	mkdir -p debian/acm-switchover/usr/share/acm-switchover/modules
+	mkdir -p debian/acm-switchover/usr/share/acm-switchover/deploy
+	mkdir -p debian/acm-switchover/usr/share/bash-completion/completions
+	mkdir -p debian/acm-switchover/usr/share/man/man1
+	mkdir -p debian/acm-switchover/etc/default
+	mkdir -p debian/acm-switchover/var/lib/acm-switchover
+	
+	# Install Python modules
+	install -m 644 acm_switchover.py debian/acm-switchover/usr/share/acm-switchover/
+	install -m 644 check_rbac.py debian/acm-switchover/usr/share/acm-switchover/
+	install -m 644 show_state.py debian/acm-switchover/usr/share/acm-switchover/
+	cp -rp lib/* debian/acm-switchover/usr/share/acm-switchover/lib/
+	cp -rp modules/* debian/acm-switchover/usr/share/acm-switchover/modules/
+	
+	# Install helper scripts
+	install -m 755 quick-start.sh debian/acm-switchover/usr/libexec/acm-switchover/
+	install -m 755 scripts/*.sh debian/acm-switchover/usr/libexec/acm-switchover/
+	
+	# Install deploy manifests
+	cp -rp deploy/* debian/acm-switchover/usr/share/acm-switchover/deploy/
+	
+	# Install wrapper scripts
+	install -m 755 packaging/deb/wrappers/acm-switchover debian/acm-switchover/usr/bin/
+	install -m 755 packaging/deb/wrappers/acm-switchover-rbac debian/acm-switchover/usr/bin/
+	install -m 755 packaging/deb/wrappers/acm-switchover-state debian/acm-switchover/usr/bin/
+	
+	# Install bash completions
+	install -m 644 completions/acm_switchover.py debian/acm-switchover/usr/share/bash-completion/completions/acm-switchover
+	install -m 644 completions/check_rbac.py debian/acm-switchover/usr/share/bash-completion/completions/acm-switchover-rbac
+	install -m 644 completions/show_state.py debian/acm-switchover/usr/share/bash-completion/completions/acm-switchover-state
+	
+	# Install man pages
+	install -m 644 packaging/common/man/*.1.gz debian/acm-switchover/usr/share/man/man1/
+	
+	# Install default config
+	install -m 644 packaging/deb/default/acm-switchover debian/acm-switchover/etc/default/
+
+override_dh_fixperms:
+	dh_fixperms
+	chmod 0750 debian/acm-switchover/var/lib/acm-switchover
