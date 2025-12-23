@@ -10,12 +10,29 @@ ACM Policies provide automated governance and compliance for Kubernetes resource
 
 ### policy-rbac.yaml
 
-Main policy file that includes:
-- **Policy**: Defines RBAC validation and enforcement rules
-- **PlacementRule**: Determines which clusters the policy applies to
+Main hub cluster RBAC policy that includes:
+- **Policy**: Defines RBAC validation and enforcement rules for hub clusters
+- **PlacementRule**: Targets OpenShift clusters (can be customized)
 - **PlacementBinding**: Binds the policy to the placement rule
 
-## What the Policy Validates
+This policy deploys RBAC resources needed for switchover operations on hub clusters.
+
+### policy-managed-cluster-rbac.yaml
+
+Managed cluster RBAC policy for klusterlet reconnection operations:
+- **Policy**: Deploys RBAC for `open-cluster-management-agent` namespace
+- **PlacementRule**: Targets managed clusters only (excludes local-cluster/hub)
+- **PlacementBinding**: Binds the policy to managed clusters
+
+This policy is required for the klusterlet reconnection feature during hub switchover.
+The `open-cluster-management-agent` namespace exists only on managed clusters and contains
+the klusterlet agent. During switchover, the tool may need to:
+- Delete and recreate the `bootstrap-hub-kubeconfig` secret
+- Restart the klusterlet deployment to connect to the new hub
+
+## What the Policies Validate
+
+### Hub Cluster Policy (policy-rbac.yaml)
 
 The policy checks for the presence and correct configuration of:
 
@@ -30,6 +47,17 @@ The policy checks for the presence and correct configuration of:
 5. **Roles**: Namespace-scoped roles in ACM namespaces
 6. **RoleBindings**: Binds namespace-scoped roles to ServiceAccounts
 
+### Managed Cluster Policy (policy-managed-cluster-rbac.yaml)
+
+The policy deploys RBAC for klusterlet management:
+
+1. **Namespace**: `acm-switchover`
+2. **Service Accounts**: `acm-switchover-operator`, `acm-switchover-validator`
+3. **Roles** in `open-cluster-management-agent` namespace:
+   - `acm-switchover-operator`: secrets (get, create, delete), deployments (get, patch)
+   - `acm-switchover-validator`: secrets (get), deployments (get)
+4. **RoleBindings**: Binds Roles to ServiceAccounts
+
 ## Deployment
 
 ### Prerequisites
@@ -37,21 +65,41 @@ The policy checks for the presence and correct configuration of:
 - ACM 2.11+ installed on hub cluster
 - Access to ACM hub cluster with policy creation permissions
 
-### Deploy the Policy
+### Deploy Hub Cluster Policy
 
 ```bash
-# Apply the policy to ACM hub
+# Apply the hub cluster RBAC policy
 kubectl apply -f deploy/acm-policies/policy-rbac.yaml
 
 # Verify policy created
 kubectl get policy -n open-cluster-management-policies
 ```
 
+### Deploy Managed Cluster Policy
+
+```bash
+# Apply the managed cluster RBAC policy (for klusterlet operations)
+kubectl apply -f deploy/acm-policies/policy-managed-cluster-rbac.yaml
+
+# Verify both policies created
+kubectl get policy -n open-cluster-management-policies
+
+# Check managed cluster policy targets (should exclude local-cluster)
+kubectl get placementrule placement-policy-acm-switchover-managed-cluster-rbac \
+  -n open-cluster-management-policies \
+  -o jsonpath='{.status.decisions[*].clusterName}'
+```
+
 ### Check Policy Status
 
 ```bash
-# View policy status
+# View hub policy status
 kubectl get policy policy-acm-switchover-rbac \
+  -n open-cluster-management-policies \
+  -o yaml
+
+# View managed cluster policy status
+kubectl get policy policy-acm-switchover-managed-cluster-rbac \
   -n open-cluster-management-policies \
   -o yaml
 
