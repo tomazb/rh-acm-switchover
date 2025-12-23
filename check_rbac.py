@@ -193,7 +193,7 @@ def main():
                     report.append("")
                     report.append("Deploy managed cluster RBAC using one of:")
                     report.append("  1. ACM Policy: kubectl apply -f deploy/acm-policies/policy-managed-cluster-rbac.yaml")
-                    report.append("  2. Direct apply: See docs/deployment/rbac-deployment.md")
+                    report.append("  2. Direct apply: See docs/deployment/rbac-deployment.md#managed-cluster-rbac")
 
                 report.append("=" * 80)
                 print("\n".join(report))
