@@ -195,52 +195,113 @@ class KubeconfigValidator:
     def _check_token_expiration(self, client: KubeClient, hub_label: str) -> None:
         """Check if the token for this context is expired or near expiry.
 
-        Parses JWT token to extract expiration time.
+        Parses JWT token to extract expiration time. Uses direct YAML parsing
+        to avoid relying on private kubernetes client internals.
+
+        Supports:
+        - Static token authentication (JWT tokens in kubeconfig)
+
+        Warns for unsupported auth types:
+        - exec/auth-provider based authentication
+        - Client certificate authentication
         """
         try:
             import base64
             import json
+            import os
 
-            from kubernetes import config as k8s_config
+            import yaml
 
-            # Get the token for this context
-            contexts, _ = k8s_config.list_kube_config_contexts()
-            context_config = next((c for c in contexts if c["name"] == client.context_name), None)
+            # Load kubeconfig using direct YAML parsing (public, stable approach)
+            kubeconfig_paths = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+            
+            # Handle multiple kubeconfig paths (colon-separated)
+            kubeconfig_data: Dict[str, Any] = {"users": [], "contexts": [], "clusters": []}
+            for kc_path in kubeconfig_paths.split(":"):
+                kc_path = kc_path.strip()
+                if kc_path and os.path.exists(kc_path):
+                    with open(kc_path, "r") as f:
+                        kc = yaml.safe_load(f)
+                        if kc:
+                            kubeconfig_data["users"].extend(kc.get("users", []))
+                            kubeconfig_data["contexts"].extend(kc.get("contexts", []))
+                            kubeconfig_data["clusters"].extend(kc.get("clusters", []))
+
+            # Find the context and associated user
+            context_config = next(
+                (c for c in kubeconfig_data.get("contexts", []) if c.get("name") == client.context),
+                None,
+            )
             if not context_config:
+                logger.debug("Context %s not found in kubeconfig", client.context)
                 return
 
             user_name = context_config.get("context", {}).get("user", "")
             if not user_name:
                 return
 
-            # Load raw kubeconfig to get token
-            import os
-            kubeconfig_path = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
-            kubeconfig_data = k8s_config.kube_config.load_kube_config_from_dict(
-                k8s_config.kube_config._get_kube_config_loader_for_yaml_file(kubeconfig_path)._config
-            ) if False else None  # Placeholder - we'll use a different approach
+            # Find the user configuration
+            user_config = next(
+                (u for u in kubeconfig_data.get("users", []) if u.get("name") == user_name),
+                None,
+            )
+            if not user_config:
+                return
 
-            # Actually, let's use the simpler approach - try to decode the token from config
-            loader = k8s_config.kube_config._get_kube_config_loader_for_yaml_file(kubeconfig_path)
-            loader.set_active_context(client.context_name)
+            user_data = user_config.get("user", {})
 
-            token = None
-            for user in loader._config.get("users", []):
-                if user.get("name") == user_name:
-                    token = user.get("user", {}).get("token")
-                    break
+            # Check for unsupported auth types and warn explicitly
+            if user_data.get("exec"):
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    True,  # Pass - exec handles its own token refresh
+                    "Using exec-based authentication (token refresh handled by exec plugin)",
+                    critical=False,
+                )
+                return
 
+            if user_data.get("auth-provider"):
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    True,  # Pass - auth-provider handles its own token refresh
+                    "Using auth-provider authentication (token refresh handled by provider)",
+                    critical=False,
+                )
+                return
+
+            if user_data.get("client-certificate") or user_data.get("client-certificate-data"):
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    True,  # Pass - certs have their own expiry but we don't check them here
+                    "Using client certificate authentication (certificate expiry not checked)",
+                    critical=False,
+                )
+                return
+
+            # Get the token
+            token = user_data.get("token")
             if not token:
-                # No token found - might be using client certs or other auth
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    True,  # Pass but note
+                    "No token found in kubeconfig - authentication method not determined",
+                    critical=False,
+                )
                 return
 
             # Parse JWT (format: header.payload.signature)
             parts = token.split(".")
             if len(parts) != 3:
-                return  # Not a JWT
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    True,  # Pass but note
+                    "Token is not a JWT - expiration cannot be determined",
+                    critical=False,
+                )
+                return
 
             # Decode payload (middle part)
-            # Add padding if needed
+            # Add padding if needed for base64 decoding
             payload_b64 = parts[1]
             padding = 4 - len(payload_b64) % 4
             if padding != 4:
@@ -249,6 +310,12 @@ class KubeconfigValidator:
             payload = json.loads(base64.urlsafe_b64decode(payload_b64))
             exp_timestamp = payload.get("exp")
             if not exp_timestamp:
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    True,  # Pass but note
+                    "Token has no expiration claim (may be a long-lived token)",
+                    critical=False,
+                )
                 return
 
             exp_time = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
