@@ -485,6 +485,19 @@ def run_setup(
     """
     import subprocess
 
+    # Validate required arguments for setup mode
+    if not args.admin_kubeconfig:
+        logger.error("--admin-kubeconfig is required for --setup mode")
+        logger.error("")
+        logger.error("Usage: acm_switchover.py --setup --admin-kubeconfig <path> --primary-context <context>")
+        logger.error("")
+        logger.error("The admin kubeconfig must have cluster-admin privileges to deploy RBAC resources.")
+        return False
+
+    if not os.path.isfile(args.admin_kubeconfig):
+        logger.error("Admin kubeconfig file not found: %s", args.admin_kubeconfig)
+        return False
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     setup_script = os.path.join(script_dir, "scripts", "setup-rbac.sh")
 
