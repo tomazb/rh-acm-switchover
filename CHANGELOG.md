@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version 1.5.x is reserved for packaging and distribution work.
 
+## [1.4.5] - 2025-12-23
+
+### Added
+
+- **Role-aware RBAC validation with `--role` flag**: The `check_rbac.py` tool now supports `--role operator` (default) and `--role validator` flags to validate permissions for the appropriate service account role. Validators have read-only access while operators have full switchover permissions.
+
+- **Managed cluster RBAC Policy**: New ACM Policy (`deploy/acm-policies/policy-managed-cluster-rbac.yaml`) to automatically deploy RBAC resources to managed clusters for klusterlet reconnection operations. Includes both operator (full access) and validator (read-only) roles in the `open-cluster-management-agent` namespace.
+
+- **Validator secrets access in backup namespace**: Added `secrets:get` permission for the validator role in the backup namespace, enabling validators to read backup-related secrets for validation purposes.
+
+### Fixed
+
+- **Missing `statefulsets/scale` permission for Thanos compactor**: Fixed RBAC to include the `/scale` subresource permission for StatefulSets in the observability namespace. The Kubernetes Python client uses `patch_namespaced_stateful_set_scale()` which requires this subresource permission.
+
+- **Policy name length compliance**: Shortened managed cluster RBAC policy name from `policy-acm-switchover-managed-cluster-rbac` to `policy-switchover-mc-rbac` to comply with the 62-character limit for ACM policy names.
+
+### Changed
+
+- **RBAC documentation updates**: Enhanced `docs/deployment/rbac-deployment.md` with kubeconfig merge best practices, guidance on generating unique user names to prevent credential collisions, and troubleshooting section for ACM governance addon issues.
+
 ## [1.4.4] - 2025-12-23
 
 ### Fixed
