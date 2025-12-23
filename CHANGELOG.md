@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **RBAC bootstrap script (`setup-rbac.sh`)**: New automated script that deploys RBAC manifests, generates SA kubeconfigs with unique user names, and validates permissions using `check_rbac.py` - all in one command. Requires explicit `--admin-kubeconfig` flag for safety.
+
+- **Merged kubeconfig generator (`generate-merged-kubeconfig.sh`)**: New script that generates and merges kubeconfigs for multiple clusters/contexts into a single file. Accepts comma-separated `context:role` pairs (e.g., `hub1:operator,hub2:operator`) and creates unique user names to prevent credential collisions.
+
+- **`--user` and `--token-duration` flags for `generate-sa-kubeconfig.sh`**: Enhanced the kubeconfig generator with `--user <name>` flag to specify custom user names (default: `<context>-<sa-name>`) and `--token-duration <dur>` flag (default: 48h) for explicit token lifetime control. This prevents credential collisions when merging kubeconfigs from multiple clusters.
+
+- **`--setup` mode for `acm_switchover.py`**: Added `--setup` flag as a mutually exclusive mode that orchestrates RBAC deployment and kubeconfig generation using the bootstrap scripts. Requires `--admin-kubeconfig` flag.
+
+- **Kubeconfig validation in preflight**: New `KubeconfigValidator` that checks for duplicate user credentials across merged configs, expired/near-expiry SA tokens (parsed from JWT), and API connectivity issues - with actionable remediation messages.
+
+### Changed
+
+- **Default token duration increased to 48h**: Changed the default token validity from 24h to 48h in `generate-sa-kubeconfig.sh` to accommodate longer switchover operations on large clusters.
+
+- **Updated documentation**: Enhanced `docs/deployment/rbac-deployment.md` with new "Automated Setup" quick start section and comprehensive documentation for new scripts and flags. Updated `scripts/README.md` with documentation for `setup-rbac.sh` and `generate-merged-kubeconfig.sh`.
+
 ### Notes
 
 - Version 1.5.x is reserved for packaging and distribution work.
