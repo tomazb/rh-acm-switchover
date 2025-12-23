@@ -330,9 +330,12 @@ for kubeconfig_file in ${KUBECONFIG_PATHS//:/ }; do
                 if command -v yq &>/dev/null; then
                     yq -i "(.clusters[0].name = \"$new_cluster\") | (.contexts[0].context.cluster = \"$new_cluster\")" "$kubeconfig_file" 2>/dev/null || true
                 else
-                    # Fallback: kubectl doesn't support renaming clusters directly
-                    # Create a new kubeconfig with renamed cluster
-                    sed -i "s/cluster: ${current_cluster}/cluster: ${new_cluster}/g; s/name: ${current_cluster}/name: ${new_cluster}/g" "$kubeconfig_file" 2>/dev/null || true
+                    # Fallback: Use sed with escaped regex metacharacters
+                    # Escape sed-special characters: . * [ ] ^ $ / \ ? + ( ) { } |
+                    # shellcheck disable=SC2016 # Single quotes intentional - we want literal regex, not expansion
+                    escaped_current=$(printf '%s\n' "$current_cluster" | sed 's/[.[\*^$()+?{|]/\\&/g; s/]/\\]/g')
+                    escaped_new=$(printf '%s\n' "$new_cluster" | sed 's/[&/\]/\\&/g')
+                    sed -i "s/cluster: ${escaped_current}/cluster: ${escaped_new}/g; s/name: ${escaped_current}/name: ${escaped_new}/g" "$kubeconfig_file" 2>/dev/null || true
                 fi
             fi
         fi
