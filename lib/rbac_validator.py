@@ -304,7 +304,7 @@ class RBACValidator:
         namespace_permissions = self._get_hub_namespace_permissions()
 
         for namespace, permissions in namespace_permissions.items():
-            # Skip observability if requested
+            # Skip observability namespace if requested
             if skip_observability and "observability" in namespace:
                 logger.info("Skipping observability namespace: %s", namespace)
                 continue

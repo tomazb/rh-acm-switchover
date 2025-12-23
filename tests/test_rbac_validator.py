@@ -235,7 +235,10 @@ class TestRBACValidator:
         assert all_valid is True
         # Validator should only check get verbs, not create/delete
         calls = validator.check_permission.call_args_list
-        verbs_checked = [call[0][2] for call in calls]
+        verbs_checked = [
+            c.args[2] if len(c.args) > 2 else c.kwargs.get("verb")
+            for c in calls
+        ]
         assert "create" not in verbs_checked
         assert "delete" not in verbs_checked
         assert "get" in verbs_checked

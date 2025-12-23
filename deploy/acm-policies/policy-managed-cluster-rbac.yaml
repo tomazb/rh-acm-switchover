@@ -237,9 +237,10 @@ spec:
 
 ---
 # PlacementRule to apply policy to managed clusters only (exclude local-cluster/hub)
-# Note: We intentionally do NOT require ManagedClusterConditionAvailable=True
-# because during switchover preparation, managed clusters may show Unknown status
-# when they're registered but not yet connected to the active hub.
+# Note: This PlacementRule does NOT filter on any ManagedCluster conditions
+# (including ManagedClusterConditionAvailable=True). During switchover preparation,
+# managed clusters may show Unknown status when they're registered but not yet
+# connected to the active hub, so we rely only on label-based selection below.
 apiVersion: apps.open-cluster-management.io/v1
 kind: PlacementRule
 metadata:
