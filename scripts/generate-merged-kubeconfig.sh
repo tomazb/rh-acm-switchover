@@ -49,13 +49,15 @@ source "${SCRIPT_DIR}/lib-common.sh"
 ADMIN_KUBECONFIG=""
 TOKEN_DURATION="48h"
 OUTPUT_FILE="./merged-kubeconfig.yaml"
-NAMESPACE="acm-switchover"
+# Use centralized namespace from constants.sh (SWITCHOVER_NAMESPACE)
+NAMESPACE="${SWITCHOVER_NAMESPACE:-acm-switchover}"
 MANAGED_CLUSTER_MODE=false
 CONTEXT_LIST=""
 
-# Service account names
-OPERATOR_SA="acm-switchover-operator"
-VALIDATOR_SA="acm-switchover-validator"
+# Service account names from constants.sh
+# These are exported by constants.sh, use defaults as fallback
+OPERATOR_SA="${OPERATOR_SA:-acm-switchover-operator}"
+VALIDATOR_SA="${VALIDATOR_SA:-acm-switchover-validator}"
 
 # =============================================================================
 # Parse arguments
@@ -175,6 +177,9 @@ echo "  Namespace: $NAMESPACE"
 if [[ -n "$ADMIN_KUBECONFIG" ]]; then
     echo "  Admin kubeconfig: $ADMIN_KUBECONFIG"
 fi
+if $MANAGED_CLUSTER_MODE; then
+    echo "  Mode: managed-cluster (using klusterlet namespace pattern)"
+fi
 echo ""
 
 # Create temporary directory for individual kubeconfigs
@@ -189,9 +194,11 @@ GENERATED_COUNT=0
 FAILED_COUNT=0
 
 # Build admin kubeconfig args if specified
-ADMIN_ARGS=""
 if [[ -n "$ADMIN_KUBECONFIG" ]]; then
-    # The generate-sa-kubeconfig.sh uses the current kubeconfig, so we need to set env
+    # Set KUBECONFIG for child process (generate-sa-kubeconfig.sh) to use admin credentials
+    # NOTE: This export only affects this script's subshell and child processes.
+    # The parent shell that invoked this script is NOT affected because exports
+    # do not propagate upward to parent processes.
     export KUBECONFIG="$ADMIN_KUBECONFIG"
 fi
 
@@ -221,11 +228,27 @@ for entry in "${CONTEXTS[@]}"; do
         continue
     fi
     
-    # Determine service account
-    if [[ "$role" == "operator" ]]; then
-        sa_name="$OPERATOR_SA"
+    # Determine service account and namespace based on mode
+    sa_namespace="$NAMESPACE"
+    sa_name=""
+    
+    if $MANAGED_CLUSTER_MODE; then
+        # For managed clusters, use the klusterlet namespace and service account
+        # Managed clusters use 'open-cluster-management-agent' namespace
+        # with klusterlet service accounts for validation operations
+        sa_namespace="open-cluster-management-agent"
+        if [[ "$role" == "operator" ]]; then
+            sa_name="klusterlet"
+        else
+            sa_name="klusterlet"  # Validator uses same SA on managed clusters
+        fi
     else
-        sa_name="$VALIDATOR_SA"
+        # Hub clusters use the standard switchover service accounts
+        if [[ "$role" == "operator" ]]; then
+            sa_name="$OPERATOR_SA"
+        else
+            sa_name="$VALIDATOR_SA"
+        fi
     fi
     
     # Generate unique user name: context-role pattern
@@ -236,13 +259,16 @@ for entry in "${CONTEXTS[@]}"; do
     
     echo ""
     echo "Generating kubeconfig for: $context ($role)"
+    if $MANAGED_CLUSTER_MODE; then
+        echo "  Mode: managed-cluster (namespace: $sa_namespace, SA: $sa_name)"
+    fi
     
-    # Generate kubeconfig
+    # Generate kubeconfig using the determined namespace and service account
     if "${SCRIPT_DIR}/generate-sa-kubeconfig.sh" \
         --context "$context" \
         --user "$user_name" \
         --token-duration "$TOKEN_DURATION" \
-        "$NAMESPACE" "$sa_name" > "$output_path" 2>/dev/null; then
+        "$sa_namespace" "$sa_name" > "$output_path" 2>/dev/null; then
         
         check_pass "Generated: $context ($role) -> user: $user_name"
         
@@ -257,7 +283,7 @@ for entry in "${CONTEXTS[@]}"; do
         check_fail "Failed to generate kubeconfig for $context"
         echo "  Verify that:" >&2
         echo "    - Context '$context' exists in your kubeconfig" >&2
-        echo "    - ServiceAccount '$sa_name' exists in namespace '$NAMESPACE'" >&2
+        echo "    - ServiceAccount '$sa_name' exists in namespace '$sa_namespace'" >&2
         echo "    - You have permission to create tokens" >&2
         ((FAILED_COUNT++)) || true
     fi
@@ -284,8 +310,38 @@ if [[ ! -d "$OUTPUT_DIR" ]]; then
     mkdir -p "$OUTPUT_DIR"
 fi
 
+# Rename cluster names in each kubeconfig to avoid collision
+# When merging kubeconfigs with identical cluster names (e.g., multiple clusters
+# with cluster name "kubernetes"), tokens may overwrite each other.
+# We rename each cluster to <context>-cluster for safety.
+echo "Renaming cluster names to avoid collisions..."
+for kubeconfig_file in ${KUBECONFIG_PATHS//:/ }; do
+    if [[ -f "$kubeconfig_file" ]]; then
+        # Get context name from filename (e.g., hub1-operator.yaml -> hub1)
+        filename=$(basename "$kubeconfig_file" .yaml)
+        context_name="${filename%-*}"  # Remove -operator or -validator suffix
+        
+        # Get current cluster name and rename it
+        current_cluster=$(KUBECONFIG="$kubeconfig_file" kubectl config view -o jsonpath='{.clusters[0].name}' 2>/dev/null || echo "")
+        if [[ -n "$current_cluster" ]]; then
+            new_cluster="${context_name}-cluster"
+            if [[ "$current_cluster" != "$new_cluster" ]]; then
+                # Use yq if available for safer YAML manipulation, otherwise use sed
+                if command -v yq &>/dev/null; then
+                    yq -i "(.clusters[0].name = \"$new_cluster\") | (.contexts[0].context.cluster = \"$new_cluster\")" "$kubeconfig_file" 2>/dev/null || true
+                else
+                    # Fallback: kubectl doesn't support renaming clusters directly
+                    # Create a new kubeconfig with renamed cluster
+                    sed -i "s/cluster: ${current_cluster}/cluster: ${new_cluster}/g; s/name: ${current_cluster}/name: ${new_cluster}/g" "$kubeconfig_file" 2>/dev/null || true
+                fi
+            fi
+        fi
+    fi
+done
+
 # Merge using KUBECONFIG path stacking
 # kubectl config view --merge --flatten combines all configs
+# NOTE: KUBECONFIG is set only for this subcommand and does not affect the parent shell
 if KUBECONFIG="$KUBECONFIG_PATHS" kubectl config view --merge --flatten > "$OUTPUT_FILE"; then
     check_pass "Merged kubeconfig written to: $OUTPUT_FILE"
 else
