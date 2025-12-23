@@ -86,6 +86,9 @@ rules:
   - apiGroups: ["apps"]
     resources: ["statefulsets"]
     verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets/scale"]
+    verbs: ["get", "patch"]
   
   # OpenShift Routes API - Routes (read-only for Grafana access)
   - apiGroups: ["route.openshift.io"]
