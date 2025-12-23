@@ -1,13 +1,13 @@
 # ACM Hub Switchover Automation
 
-**Version 1.4.4** (2025-12-23)
+**Version 1.4.5** (2025-12-23)
 
 Automated, idempotent script for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster.
 
 ## Features
 
 - ✅ **Idempotent execution** - Resume from last successful step
-- ✅ **Comprehensive validation** - Pre-flight checks for safety
+- ✅ **Comprehensive validation** - Pre-flight and post-flight checks for safety
 - ✅ **RBAC enforcement** - Least privilege access control with validation
 - ✅ **Data protection** - Verifies `preserveOnDelete` on ClusterDeployments
 - ✅ **Auto-detection** - Automatically detects ACM Observability and version
@@ -18,13 +18,75 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - ✅ **Container image** - Ready-to-use image with all prerequisites included
 - ✅ **Multi-deployment support** - RBAC via Kustomize, Helm, or ACM Policies
 
+---
+
+## 🔒 RBAC Security Model
+
+The ACM Switchover tool uses a **least-privilege RBAC model** with two distinct roles:
+
+| Role | Purpose | Access Level |
+|------|---------|--------------|
+| **Operator** | Execute switchovers | Full read/write to ACM resources |
+| **Validator** | Pre-flight validation, dry-runs | Read-only access |
+
+### Quick RBAC Setup
+
+```bash
+# Deploy RBAC to both hubs (requires cluster-admin)
+kubectl --context primary-hub apply -f deploy/rbac/
+kubectl --context secondary-hub apply -f deploy/rbac/
+
+# Deploy managed cluster RBAC via ACM Policy (optional, for klusterlet operations)
+kubectl --context primary-hub apply -f deploy/acm-policies/policy-managed-cluster-rbac.yaml
+
+# Validate RBAC permissions
+python check_rbac.py --context primary-hub --role operator
+python check_rbac.py --context secondary-hub --role operator
+
+# Validate managed cluster RBAC
+python check_rbac.py --context prod1 --managed-cluster --role operator
+```
+
+📖 **Full Guide:** [RBAC Deployment Guide](docs/deployment/rbac-deployment.md) | [RBAC Requirements](docs/deployment/rbac-requirements.md)
+
+---
+
+## ✅ Pre-flight & Post-flight Validation
+
+Standalone validation scripts ensure safe and successful switchovers:
+
+### Pre-flight Checks (Before Switchover)
+
+```bash
+# Auto-discover ACM hubs from kubeconfig
+./scripts/discover-hub.sh --auto
+
+# Run comprehensive pre-flight validation
+./scripts/preflight-check.sh --primary-context primary-hub --secondary-context secondary-hub
+```
+
+**Validates:** ACM versions match, backups complete, OADP healthy, passive sync ready, ClusterDeployments protected, ManagedClusters in backup
+
+### Post-flight Checks (After Switchover)
+
+```bash
+# Verify switchover completed successfully
+./scripts/postflight-check.sh --old-hub-context primary-hub --new-hub-context secondary-hub
+```
+
+**Verifies:** ManagedClusters connected, backups running on new hub, Observability healthy, old hub properly configured
+
+📖 **Full Guide:** [Scripts README](scripts/README.md) | [Quick Reference](docs/operations/quickref.md)
+
+---
+
 ## Documentation
 
+- **[Quick Reference](docs/operations/quickref.md)** - Command cheat sheet and common tasks
+- **[Detailed Usage Guide](docs/operations/usage.md)** - Complete examples and scenarios
 - **[RBAC Requirements](docs/deployment/rbac-requirements.md)** - Complete RBAC permissions guide
 - **[RBAC Deployment](docs/deployment/rbac-deployment.md)** - Step-by-step RBAC deployment instructions
 - **[ACM Switchover Runbook](docs/ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational procedures
-- **[Quick Reference](docs/operations/quickref.md)** - Command cheat sheet and common tasks
-- **[Detailed Usage Guide](docs/operations/usage.md)** - Complete examples and scenarios
 - **[Container Usage Guide](docs/getting-started/container.md)** - Container-based deployment and usage
 - **[Installation Guide](docs/getting-started/install.md)** - Detailed installation instructions
 - **[Architecture](docs/development/architecture.md)** - Design and implementation details
@@ -32,25 +94,6 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - **[Contributing](CONTRIBUTING.md)** - Development guidelines
 
 See [docs/README.md](docs/README.md) for complete documentation index.
-
-## Automation Scripts
-
-Automated validation scripts to ensure safe and successful switchovers:
-
-- **[Hub Discovery](scripts/discover-hub.sh)** - Auto-discover ACM hubs and determine primary/secondary roles
-- **[Pre-flight Validation](scripts/preflight-check.sh)** - Verify all prerequisites before switchover
-- **[Post-flight Validation](scripts/postflight-check.sh)** - Confirm switchover completed successfully
-- **[Shared Configuration](scripts/constants.sh)** - Centralized configuration for validation scripts
-
-```bash
-# Auto-discover ACM hubs from kubeconfig contexts
-./scripts/discover-hub.sh --auto
-
-# Discover and immediately run the proposed check
-./scripts/discover-hub.sh --auto --run
-```
-
-See [scripts/README.md](scripts/README.md) for detailed usage and workflow diagrams.
 
 ## Prerequisites
 

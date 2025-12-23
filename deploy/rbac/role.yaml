@@ -86,6 +86,9 @@ rules:
   - apiGroups: ["apps"]
     resources: ["statefulsets"]
     verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets/scale"]
+    verbs: ["get", "patch"]
   
   # OpenShift Routes API - Routes (read-only for Grafana access)
   - apiGroups: ["route.openshift.io"]
@@ -142,6 +145,11 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list"]
+  
+  # Core API - Secrets (read-only for Thanos config validation)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
   
   # Core API - Pods (read-only for Velero health checks)
   - apiGroups: [""]

@@ -184,6 +184,65 @@ class TestRBACValidator:
         assert "REMEDIATION" in report
         assert "deploy/rbac/" in report
 
+    def test_validate_managed_cluster_permissions_success(self, validator):
+        """Test validate_managed_cluster_permissions when all permissions exist."""
+        validator.client.namespace_exists.return_value = True
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_managed_cluster_permissions()
+
+        assert all_valid is True
+        assert len(errors) == 0
+        # Verify it checked the agent namespace
+        validator.client.namespace_exists.assert_called_with("open-cluster-management-agent")
+
+    def test_validate_managed_cluster_permissions_namespace_missing(self, validator):
+        """Test validate_managed_cluster_permissions when namespace doesn't exist."""
+        validator.client.namespace_exists.return_value = False
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_managed_cluster_permissions()
+
+        assert all_valid is False
+        assert len(errors) > 0
+        assert any("does not exist" in error for error in errors)
+
+    def test_validate_managed_cluster_permissions_failure(self, validator):
+        """Test validate_managed_cluster_permissions when some permissions missing."""
+        validator.client.namespace_exists.return_value = True
+
+        def mock_check(api_group, resource, verb, namespace=None):
+            if resource == "secrets" and verb == "create":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=mock_check)
+
+        all_valid, errors = validator.validate_managed_cluster_permissions()
+
+        assert all_valid is False
+        assert len(errors) > 0
+        assert any("secrets" in error for error in errors)
+
+    def test_validate_managed_cluster_permissions_validator_role(self, mock_client):
+        """Test validate_managed_cluster_permissions with validator role (read-only)."""
+        validator = RBACValidator(mock_client, role="validator")
+        validator.client.namespace_exists.return_value = True
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_managed_cluster_permissions()
+
+        assert all_valid is True
+        # Validator should only check get verbs, not create/delete
+        calls = validator.check_permission.call_args_list
+        verbs_checked = [
+            c.args[2] if len(c.args) > 2 else c.kwargs.get("verb")
+            for c in calls
+        ]
+        assert "create" not in verbs_checked
+        assert "delete" not in verbs_checked
+        assert "get" in verbs_checked
+
 
 class TestValidateRBACPermissions:
     """Test cases for validate_rbac_permissions function."""
