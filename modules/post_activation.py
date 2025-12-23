@@ -20,7 +20,6 @@ from lib.constants import (
     OBSERVABILITY_POD_TIMEOUT,
     SECRET_VISIBILITY_INTERVAL,
     SECRET_VISIBILITY_TIMEOUT,
-    VELERO_RESTORE_TIMEOUT,
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
@@ -463,17 +462,14 @@ class PostActivationVerification:
                 return (cluster_name, "unreachable", None)
 
         logger.info("Checking klusterlet connections for %d cluster(s) in parallel...", len(cluster_info))
-        
+
         # Collect results from futures to avoid shared mutable state
         verified = []
         wrong_hub = []
         unreachable = []
-        
+
         with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-            futures = [
-                executor.submit(check_cluster, name, api_url)
-                for name, api_url in cluster_info
-            ]
+            futures = [executor.submit(check_cluster, name, api_url) for name, api_url in cluster_info]
             for future in as_completed(futures):
                 cluster_name, result, context_name = future.result()
                 if result == "verified":
@@ -509,10 +505,7 @@ class PostActivationVerification:
             fix_failed = []
 
             with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-                futures = [
-                    executor.submit(fix_cluster, name, ctx)
-                    for name, ctx in wrong_hub
-                ]
+                futures = [executor.submit(fix_cluster, name, ctx) for name, ctx in wrong_hub]
                 for future in as_completed(futures):
                     cluster_name, success = future.result()
                     if success:
@@ -656,7 +649,9 @@ class PostActivationVerification:
                 # Trigger a rollout restart by patching the deployment
                 patch = {
                     "spec": {
-                        "template": {"metadata": {"annotations": {"acm-switchover/restart": str(int(time_module.time()))}}}
+                        "template": {
+                            "metadata": {"annotations": {"acm-switchover/restart": str(int(time_module.time()))}}
+                        }
                     }
                 }
                 apps_v1.patch_namespaced_deployment(

@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version 1.5.x is reserved for packaging and distribution work.
 
+## [1.4.3] - 2025-12-22
+
+### Added
+
+- **BackupSchedule useManagedServiceAccount preflight check (CRITICAL)**: Added a new preflight check that validates the `useManagedServiceAccount` setting in the BackupSchedule resource. This setting is critical for the passive sync method - when enabled, the hub creates a ManagedServiceAccount for each managed cluster, allowing klusterlet agents to automatically reconnect to the new hub after switchover. Without this setting, managed clusters would require manual re-import because the klusterlet bootstrap-hub-kubeconfig still points to the old hub. Both Python preflight validation and bash `preflight-check.sh` (Check 10) now verify this setting.
+
+### Changed
+
+- **Renumbered preflight checks**: The new BackupSchedule check is Check 10, shifting ClusterDeployment (now 11), Method-specific (12), Observability (13), Secondary Hub MCs (14), and Auto-Import Strategy (15) accordingly.
+
+## [1.4.2] - 2025-12-22
+
+### Fixed
+
+- **Decommission fails with "ManagedCluster resource(s) exist" error**: Fixed a race condition in the decommission workflow where the MultiClusterHub deletion was attempted before ManagedCluster finalizers completed. The MCH admission webhook would reject the deletion because ManagedClusters were still present (in deletion but not fully removed). The tool now waits up to 300 seconds for all ManagedClusters (except local-cluster) to be fully deleted before attempting to delete the MultiClusterHub.
+
+- **Decommission considers operator pods as failure**: Fixed an issue where the decommission completion check would report failure if ACM operator pods (`multiclusterhub-operator-*`) were still running. These pods are expected to remain after MCH deletion because the operator is installed separately from the MultiClusterHub. The tool now excludes operator pods from the removal check and logs a clear message that they remain as expected.
+
+## [1.4.1] - 2025-12-22
+
+### Fixed
+
+- **BackupSchedule not created on new hub in passive sync mode**: Fixed a bug where the finalization phase would fail with "No BackupSchedule found while verifying finalization" when the secondary hub was in passive sync mode (had only a Restore resource, no BackupSchedule). The tool now saves the BackupSchedule from the primary hub during PRIMARY_PREP phase (for all ACM versions, not just 2.11), allowing it to be restored on the new hub during finalization.
+
 ## [1.4.0] - 2025-12-22
 
 ### Added

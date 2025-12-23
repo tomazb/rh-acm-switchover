@@ -10,8 +10,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from kubernetes import client, config
-from kubernetes.config.config_exception import ConfigException
 from kubernetes.client.rest import ApiException
+from kubernetes.config.config_exception import ConfigException
 from tenacity import (
     before_sleep_log,
     retry,
