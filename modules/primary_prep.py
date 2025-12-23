@@ -109,7 +109,15 @@ class PrimaryPreparation:
         # Check if already paused
         if bs.get("spec", {}).get("paused") is True:
             logger.info("BackupSchedule %s is already paused", bs_name)
+            # Still save to state for finalization (in case new hub needs it)
+            if not self.state.get_config("saved_backup_schedule"):
+                self.state.set_config("saved_backup_schedule", bs)
             return
+
+        # Always save the BackupSchedule to state for finalization
+        # This allows the new hub to recreate the schedule if it doesn't have one
+        # (common in passive sync scenarios where secondary only had a Restore)
+        self.state.set_config("saved_backup_schedule", bs)
 
         # ACM 2.12+ supports pausing via spec.paused
         if is_acm_version_ge(self.acm_version, "2.12.0"):
@@ -125,13 +133,10 @@ class PrimaryPreparation:
                 namespace=BACKUP_NAMESPACE,
             )
 
-            logger.info("BackupSchedule %s paused successfully", bs_name)
+            logger.info("BackupSchedule %s paused successfully (saved to state)", bs_name)
         else:
             # ACM 2.11: Need to delete BackupSchedule
             logger.info("ACM %s requires deleting BackupSchedule", self.acm_version)
-
-            # Save the BackupSchedule YAML to state for later restoration
-            self.state.set_config("saved_backup_schedule", bs)
 
             self.primary.delete_custom_resource(
                 group="cluster.open-cluster-management.io",
