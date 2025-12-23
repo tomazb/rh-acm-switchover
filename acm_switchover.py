@@ -97,6 +97,11 @@ Examples:
         help="Show planned actions without executing them",
     )
     mode_group.add_argument("--decommission", action="store_true", help="Decommission old hub (interactive)")
+    mode_group.add_argument(
+        "--setup",
+        action="store_true",
+        help="Deploy RBAC resources and generate kubeconfigs for switchover",
+    )
 
     # Switchover options
     parser.add_argument(
@@ -142,6 +147,34 @@ Examples:
             "'decommission' removes ACM components, "
             "'none' leaves it unchanged for manual handling"
         ),
+    )
+
+    # Setup mode options (only used with --setup)
+    setup_group = parser.add_argument_group("Setup Options (used with --setup)")
+    setup_group.add_argument(
+        "--admin-kubeconfig",
+        help="Path to kubeconfig with cluster-admin privileges (required for --setup)",
+    )
+    setup_group.add_argument(
+        "--role",
+        choices=["operator", "validator", "both"],
+        default="operator",
+        help="RBAC role to deploy: operator, validator, or both (default: operator)",
+    )
+    setup_group.add_argument(
+        "--token-duration",
+        default="48h",
+        help="Token validity duration for generated kubeconfigs (default: 48h)",
+    )
+    setup_group.add_argument(
+        "--output-dir",
+        default="./kubeconfigs",
+        help="Output directory for generated kubeconfigs (default: ./kubeconfigs)",
+    )
+    setup_group.add_argument(
+        "--skip-kubeconfig-generation",
+        action="store_true",
+        help="Skip kubeconfig generation during setup (deploy RBAC only)",
     )
 
     # Optional features
@@ -438,6 +471,64 @@ def run_decommission(
     return decom.decommission(interactive=not args.non_interactive)
 
 
+def run_setup(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+) -> bool:
+    """Execute RBAC setup using the setup-rbac.sh script.
+
+    This mode deploys RBAC resources and optionally generates kubeconfigs
+    for the switchover tool using cluster-admin credentials.
+
+    Returns:
+        True if setup completed successfully, False otherwise.
+    """
+    import subprocess
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    setup_script = os.path.join(script_dir, "scripts", "setup-rbac.sh")
+
+    if not os.path.isfile(setup_script):
+        logger.error("Setup script not found: %s", setup_script)
+        return False
+
+    # Build command
+    cmd = [
+        setup_script,
+        "--admin-kubeconfig", args.admin_kubeconfig,
+        "--context", args.primary_context,
+        "--role", args.role,
+        "--token-duration", args.token_duration,
+        "--output-dir", args.output_dir,
+    ]
+
+    if args.skip_kubeconfig_generation:
+        cmd.append("--skip-kubeconfig")
+
+    if args.dry_run:
+        cmd.append("--dry-run")
+
+    logger.info("Running RBAC setup...")
+    logger.info("  Context: %s", args.primary_context)
+    logger.info("  Role: %s", args.role)
+    logger.info("  Token duration: %s", args.token_duration)
+    logger.info("  Output directory: %s", args.output_dir)
+
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            text=True,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        logger.error("Failed to execute setup script. Ensure bash is available.")
+        return False
+    except Exception as e:
+        logger.error("Setup failed: %s", str(e))
+        return False
+
+
 def main():
     """Main entry point."""
     args = parse_args()
@@ -537,6 +628,9 @@ def _execute_operation(
     logger: logging.Logger,
 ) -> bool:
     """Execute the operation requested by CLI flags."""
+
+    if args.setup:
+        return run_setup(args, logger)
 
     if args.decommission:
         return run_decommission(args, primary, state, logger)
