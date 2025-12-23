@@ -12,7 +12,7 @@
 apiVersion: policy.open-cluster-management.io/v1
 kind: Policy
 metadata:
-  name: policy-acm-switchover-managed-cluster-rbac
+  name: policy-switchover-mc-rbac
   namespace: open-cluster-management-policies
   annotations:
     policy.open-cluster-management.io/standards: NIST-CSF
@@ -240,7 +240,7 @@ spec:
 apiVersion: apps.open-cluster-management.io/v1
 kind: PlacementRule
 metadata:
-  name: placement-policy-acm-switchover-managed-cluster-rbac
+  name: placement-policy-switchover-mc-rbac
   namespace: open-cluster-management-policies
 spec:
   clusterConditions:
@@ -264,13 +264,13 @@ spec:
 apiVersion: policy.open-cluster-management.io/v1
 kind: PlacementBinding
 metadata:
-  name: binding-policy-acm-switchover-managed-cluster-rbac
+  name: binding-policy-switchover-mc-rbac
   namespace: open-cluster-management-policies
 placementRef:
-  name: placement-policy-acm-switchover-managed-cluster-rbac
+  name: placement-policy-switchover-mc-rbac
   kind: PlacementRule
   apiGroup: apps.open-cluster-management.io
 subjects:
-  - name: policy-acm-switchover-managed-cluster-rbac
+  - name: policy-switchover-mc-rbac
     kind: Policy
     apiGroup: policy.open-cluster-management.io
