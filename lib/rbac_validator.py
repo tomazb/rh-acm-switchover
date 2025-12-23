@@ -3,6 +3,10 @@ RBAC validation module for ACM Switchover.
 
 This module provides functions to validate that the current user or service account
 has the required RBAC permissions to execute ACM switchover operations.
+
+The module supports two roles:
+- operator: Full permissions for executing switchover operations
+- validator: Read-only permissions for validation and dry-run operations
 """
 
 import logging
@@ -13,12 +17,15 @@ from lib.exceptions import ValidationError
 
 logger = logging.getLogger("acm_switchover")
 
+# Valid roles for RBAC validation
+VALID_ROLES = ("operator", "validator")
+
 
 class RBACValidator:
     """Validates RBAC permissions for ACM switchover operations."""
 
-    # Required cluster-scoped permissions
-    CLUSTER_PERMISSIONS = [
+    # Required cluster-scoped permissions for OPERATOR role
+    OPERATOR_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
         ("", "nodes", ["get", "list"]),  # For cluster health validation per runbook
         ("config.openshift.io", "clusteroperators", ["get", "list"]),  # For OpenShift health
@@ -29,8 +36,23 @@ class RBACValidator:
         ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
     ]
 
-    # Required namespace-scoped permissions by namespace
-    NAMESPACE_PERMISSIONS = {
+    # Required cluster-scoped permissions for VALIDATOR role (read-only)
+    VALIDATOR_CLUSTER_PERMISSIONS = [
+        ("", "namespaces", ["get"]),
+        ("", "nodes", ["get", "list"]),
+        ("config.openshift.io", "clusteroperators", ["get", "list"]),
+        ("config.openshift.io", "clusterversions", ["get", "list"]),
+        ("cluster.open-cluster-management.io", "managedclusters", ["get", "list"]),  # No patch
+        ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
+        ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
+        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+    ]
+
+    # Alias for backwards compatibility
+    CLUSTER_PERMISSIONS = OPERATOR_CLUSTER_PERMISSIONS
+
+    # Required namespace-scoped permissions for OPERATOR role on HUB clusters
+    OPERATOR_HUB_NAMESPACE_PERMISSIONS = {
         "open-cluster-management-backup": [
             ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
             ("", "secrets", ["get"]),
@@ -45,10 +67,6 @@ class RBACValidator:
         "open-cluster-management": [
             ("", "pods", ["get", "list"]),  # For ACM pod health checks
         ],
-        "open-cluster-management-agent": [
-            ("", "secrets", ["create", "delete"]),  # For klusterlet reconnection
-            ("apps", "deployments", ["patch"]),  # For klusterlet restart
-        ],
         "open-cluster-management-observability": [
             ("", "pods", ["get", "list"]),
             ("", "secrets", ["get"]),  # For Thanos object storage config
@@ -57,25 +75,100 @@ class RBACValidator:
             ("route.openshift.io", "routes", ["get"]),  # For Grafana route access
         ],
         "multicluster-engine": [
-            ("", "configmaps", ["get", "list", "create", "patch"]),
+            ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
         ],
     }
 
-    # Permissions required for decommission operation
+    # Required namespace-scoped permissions for VALIDATOR role on HUB clusters (read-only)
+    VALIDATOR_HUB_NAMESPACE_PERMISSIONS = {
+        "open-cluster-management-backup": [
+            ("", "configmaps", ["get", "list"]),
+            ("", "secrets", ["get"]),  # For Thanos config validation
+            ("", "pods", ["get", "list"]),
+            ("cluster.open-cluster-management.io", "backupschedules", ["get", "list"]),
+            ("cluster.open-cluster-management.io", "restores", ["get", "list"]),
+            ("velero.io", "backups", ["get", "list"]),
+            ("velero.io", "restores", ["get", "list"]),
+            ("velero.io", "backupstoragelocations", ["get", "list"]),
+            ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
+        ],
+        "open-cluster-management": [
+            ("", "pods", ["get", "list"]),
+        ],
+        "open-cluster-management-observability": [
+            ("", "pods", ["get", "list"]),
+            ("", "secrets", ["get"]),
+            ("apps", "deployments", ["get"]),  # No patch for validator
+            ("apps", "statefulsets", ["get"]),  # No patch for validator
+            ("route.openshift.io", "routes", ["get"]),
+        ],
+        "multicluster-engine": [
+            ("", "configmaps", ["get", "list"]),  # No create/patch/delete for validator
+        ],
+    }
+
+    # Required namespace-scoped permissions for OPERATOR role on MANAGED clusters
+    # These are only needed when connecting to managed clusters for klusterlet operations
+    OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS = {
+        "open-cluster-management-agent": [
+            ("", "secrets", ["get", "create", "delete"]),  # For klusterlet reconnection
+            ("apps", "deployments", ["get", "patch"]),  # For klusterlet restart
+        ],
+    }
+
+    # Required namespace-scoped permissions for VALIDATOR role on MANAGED clusters (read-only)
+    VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS = {
+        "open-cluster-management-agent": [
+            ("", "secrets", ["get"]),  # Read-only for validation
+            ("apps", "deployments", ["get"]),  # Read-only for validation
+        ],
+    }
+
+    # Alias for backwards compatibility - combines hub permissions only
+    # (agent namespace is on managed clusters, not hubs)
+    NAMESPACE_PERMISSIONS = OPERATOR_HUB_NAMESPACE_PERMISSIONS
+
+    # Permissions required for decommission operation (operator only)
     DECOMMISSION_PERMISSIONS = [
         ("cluster.open-cluster-management.io", "managedclusters", ["delete"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["delete"]),
         ("observability.open-cluster-management.io", "multiclusterobservabilities", ["delete"]),
     ]
 
-    def __init__(self, client: KubeClient):
+    def __init__(self, client: KubeClient, role: str = "operator"):
         """
         Initialize RBAC validator.
 
         Args:
             client: KubeClient instance to use for validation
+            role: Role to validate for ("operator" or "validator")
         """
+        if role not in VALID_ROLES:
+            raise ValueError(f"Invalid role '{role}'. Must be one of: {VALID_ROLES}")
         self.client = client
+        self.role = role
+
+    def _get_cluster_permissions(self) -> List[Tuple[str, str, List[str]]]:
+        """Get cluster permissions based on role."""
+        if self.role == "validator":
+            return self.VALIDATOR_CLUSTER_PERMISSIONS
+        return self.OPERATOR_CLUSTER_PERMISSIONS
+
+    def _get_hub_namespace_permissions(self) -> Dict[str, List[Tuple[str, str, List[str]]]]:
+        """Get hub namespace permissions based on role."""
+        if self.role == "validator":
+            return self.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+        return self.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+
+    def _get_managed_cluster_namespace_permissions(self) -> Dict[str, List[Tuple[str, str, List[str]]]]:
+        """Get managed cluster namespace permissions based on role."""
+        if self.role == "validator":
+            return self.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+        return self.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+
+    def _is_write_verb(self, verb: str) -> bool:
+        """Check if a verb is a write operation."""
+        return verb in ("create", "patch", "delete", "update")
 
     def check_permission(
         self, api_group: str, resource: str, verb: str, namespace: Optional[str] = None
@@ -129,10 +222,10 @@ class RBACValidator:
         self, include_decommission: bool = False, skip_observability: bool = False
     ) -> Tuple[bool, List[str]]:
         """
-        Validate cluster-scoped permissions.
+        Validate cluster-scoped permissions based on role.
 
         Args:
-            include_decommission: Whether to check decommission permissions
+            include_decommission: Whether to check decommission permissions (operator only)
             skip_observability: Whether to skip observability permission checks
 
         Returns:
@@ -141,10 +234,13 @@ class RBACValidator:
         errors = []
         all_valid = True
 
-        logger.info("Validating cluster-scoped RBAC permissions...")
+        logger.info("Validating cluster-scoped RBAC permissions for role: %s", self.role)
+
+        # Get permissions based on role
+        cluster_permissions = self._get_cluster_permissions()
 
         # Check standard cluster permissions
-        for api_group, resource, verbs in self.CLUSTER_PERMISSIONS:
+        for api_group, resource, verbs in cluster_permissions:
             # Skip observability permissions if requested
             if skip_observability and "observability" in api_group:
                 logger.info("Skipping observability permission: %s/%s", api_group, resource)
@@ -161,8 +257,8 @@ class RBACValidator:
                     errors.append(error_msg)
                     logger.error(error_msg)
 
-        # Check decommission permissions if requested
-        if include_decommission:
+        # Check decommission permissions if requested (operator role only)
+        if include_decommission and self.role == "operator":
             for api_group, resource, verbs in self.DECOMMISSION_PERMISSIONS:
                 for verb in verbs:
                     has_perm, error = self.check_permission(api_group, resource, verb)
@@ -174,20 +270,26 @@ class RBACValidator:
                             error_msg += f" - {error}"
                         errors.append(error_msg)
                         logger.error(error_msg)
+        elif include_decommission and self.role == "validator":
+            logger.info("Skipping decommission permission checks (validator role is read-only)")
 
         if all_valid:
-            logger.info("✓ All cluster-scoped permissions validated")
+            logger.info("✓ All cluster-scoped permissions validated for role: %s", self.role)
         else:
-            logger.error("✗ Cluster-scoped permission validation failed")
+            logger.error("✗ Cluster-scoped permission validation failed for role: %s", self.role)
 
         return all_valid, errors
 
-    def validate_namespace_permissions(self, skip_observability: bool = False) -> Tuple[bool, List[str]]:
+    def validate_namespace_permissions(
+        self, skip_observability: bool = False, skip_agent_namespace: bool = True
+    ) -> Tuple[bool, List[str]]:
         """
-        Validate namespace-scoped permissions.
+        Validate namespace-scoped permissions on hub clusters.
 
         Args:
             skip_observability: Whether to skip observability namespace checks
+            skip_agent_namespace: Whether to skip open-cluster-management-agent namespace
+                                  (it exists on managed clusters, not hubs). Default True.
 
         Returns:
             Tuple of (all_valid, list of error messages)
@@ -195,12 +297,20 @@ class RBACValidator:
         errors = []
         all_valid = True
 
-        logger.info("Validating namespace-scoped RBAC permissions...")
+        logger.info("Validating namespace-scoped RBAC permissions for role: %s", self.role)
 
-        for namespace, permissions in self.NAMESPACE_PERMISSIONS.items():
+        # Get permissions based on role
+        namespace_permissions = self._get_hub_namespace_permissions()
+
+        for namespace, permissions in namespace_permissions.items():
             # Skip observability if requested
             if skip_observability and "observability" in namespace:
                 logger.info("Skipping observability namespace: %s", namespace)
+                continue
+
+            # Skip agent namespace on hubs (it exists on managed clusters)
+            if skip_agent_namespace and namespace == "open-cluster-management-agent":
+                logger.info("Skipping agent namespace: %s (exists on managed clusters only)", namespace)
                 continue
 
             # Check if namespace exists first
