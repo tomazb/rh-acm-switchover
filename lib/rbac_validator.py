@@ -99,8 +99,8 @@ class RBACValidator:
         "open-cluster-management-observability": [
             ("", "pods", ["get", "list"]),
             ("", "secrets", ["get"]),
-            ("apps", "deployments", ["get"]),  # No patch for validator
-            ("apps", "statefulsets", ["get"]),  # No patch for validator
+            ("apps", "deployments", ["get", "list"]),  # No patch for validator
+            ("apps", "statefulsets", ["get", "list"]),  # No patch for validator
             ("route.openshift.io", "routes", ["get"]),
         ],
         "multicluster-engine": [
