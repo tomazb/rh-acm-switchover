@@ -548,6 +548,25 @@ def main():
     logger.info("Started at: %s", datetime.now(timezone.utc).isoformat())
     logger.info("Using state file: %s", resolved_state_file)
 
+    # Setup mode doesn't need state tracking or Kubernetes clients
+    # It uses the admin-kubeconfig directly via the shell script
+    if args.setup:
+        try:
+            success = run_setup(args, logger)
+        except KeyboardInterrupt:
+            logger.warning("\n\nSetup interrupted by user")
+            sys.exit(EXIT_INTERRUPT)
+        except Exception as exc:
+            logger.error("\n✗ Setup failed: %s", exc, exc_info=args.verbose)
+            sys.exit(EXIT_FAILURE)
+
+        if success:
+            logger.info("\n✓ Setup completed successfully!")
+            sys.exit(EXIT_SUCCESS)
+        else:
+            logger.error("\n✗ Setup failed!")
+            sys.exit(EXIT_FAILURE)
+
     state = StateManager(resolved_state_file)
 
     if args.reset_state:
@@ -628,9 +647,6 @@ def _execute_operation(
     logger: logging.Logger,
 ) -> bool:
     """Execute the operation requested by CLI flags."""
-
-    if args.setup:
-        return run_setup(args, logger)
 
     if args.decommission:
         return run_decommission(args, primary, state, logger)
