@@ -143,6 +143,11 @@ rules:
     resources: ["configmaps"]
     verbs: ["get", "list"]
   
+  # Core API - Secrets (read-only for Thanos config validation)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  
   # Core API - Pods (read-only for Velero health checks)
   - apiGroups: [""]
     resources: ["pods"]
