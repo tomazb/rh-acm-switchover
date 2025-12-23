@@ -1,13 +1,15 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.2.0  
-**Last Updated**: November 27, 2025
+**Version**: 1.3.0  
+**Last Updated**: December 23, 2025
 
 ## Project Structure
 
 ```
 rh-acm-switchover/
 ├── acm_switchover.py          # Main orchestrator script
+├── check_rbac.py              # RBAC permission validation tool
+├── show_state.py              # State file viewer utility
 ├── quick-start.sh             # Interactive setup wizard
 ├── run_tests.sh               # Test execution wrapper
 ├── requirements.txt           # Python dependencies
@@ -27,7 +29,9 @@ rh-acm-switchover/
 │   ├── constants.py           # Shared constants
 │   ├── exceptions.py          # Custom exception hierarchy
 │   ├── kube_client.py         # Kubernetes API wrapper
+│   ├── rbac_validator.py      # RBAC permission validation
 │   ├── utils.py               # State management, logging, helpers
+│   ├── validation.py          # Input validation and sanitization
 │   └── waiter.py              # Resource polling and waiting logic
 │
 ├── modules/                   # Switchover modules
@@ -43,8 +47,19 @@ rh-acm-switchover/
 │
 ├── scripts/                   # Shell helper scripts
 │   ├── constants.sh           # Shared shell variables
+│   ├── lib-common.sh          # Shared helper functions
 │   ├── preflight-check.sh     # Standalone pre-flight check
-│   └── postflight-check.sh    # Standalone post-flight check
+│   ├── postflight-check.sh    # Standalone post-flight check
+│   ├── discover-hub.sh        # Auto-discover ACM hubs
+│   ├── setup-rbac.sh          # RBAC bootstrap and kubeconfig generation
+│   ├── generate-sa-kubeconfig.sh     # Service account kubeconfig generator
+│   └── generate-merged-kubeconfig.sh # Multi-cluster kubeconfig merger
+│
+├── deploy/                    # Deployment manifests
+│   ├── rbac/                  # RBAC resources (SA, roles, bindings)
+│   ├── kustomize/             # Kustomize overlays
+│   ├── helm/                  # Helm chart
+│   └── acm-policies/          # ACM governance policies
 │
 ├── tests/                     # Unit and integration tests
 │   ├── __init__.py
@@ -68,6 +83,7 @@ rh-acm-switchover/
     ├── getting-started/container.md
     ├── operations/quickref.md
     ├── operations/usage.md
+    ├── deployment/rbac-deployment.md
     ├── development/architecture.md
     ├── project/prd.md
     └── ...

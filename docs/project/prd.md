@@ -2,8 +2,8 @@
 
 ## ACM Hub Switchover Automation
 
-**Version**: 1.2.0  
-**Date**: November 27, 2025  
+**Version**: 1.3.0  
+**Date**: December 23, 2025  
 **Status**: In Testing - Not Yet Production Ready  
 **Owner**: Platform Engineering Team
 
@@ -464,6 +464,54 @@ Automated Python tool that:
    - Environment variable reference
    - **Status**: ⏳ Planned v1.1
 
+### FR-11: RBAC Setup and Kubeconfig Management
+
+**Priority**: High  
+**Status**: Implemented ✓
+
+#### Requirements
+
+1. **FR-11.1**: Automated RBAC Bootstrap
+   - Single-command RBAC deployment (`setup-rbac.sh`)
+   - Requires explicit admin kubeconfig for safety
+   - Supports role selection (operator/validator/both)
+   - Handles missing namespaces gracefully
+   - **Status**: ✓ Implemented
+
+2. **FR-11.2**: Kubeconfig Generation with Unique User Names
+   - `--user` flag to prevent credential collisions
+   - `--token-duration` flag for explicit token lifetime
+   - Default token duration of 48 hours
+   - Auto-generate unique names: `<context>-<sa-name>`
+   - **Status**: ✓ Implemented
+
+3. **FR-11.3**: Multi-Cluster Kubeconfig Merging
+   - Generate merged kubeconfigs for multiple hubs (`generate-merged-kubeconfig.sh`)
+   - Accept `context:role` pairs (e.g., `hub1:operator,hub2:operator`)
+   - Support managed cluster contexts for klusterlet validation
+   - Prevent user credential collisions automatically
+   - **Status**: ✓ Implemented
+
+4. **FR-11.4**: Python Setup Mode
+   - `--setup` flag in main tool for RBAC deployment
+   - Orchestrates shell scripts or native Python deployment
+   - Integrated kubeconfig generation
+   - **Status**: ✓ Implemented
+
+5. **FR-11.5**: Kubeconfig Validation in Preflight
+   - Detect duplicate user credentials in merged configs
+   - Check for expired/near-expiry SA tokens (JWT parsing)
+   - Verify API connectivity to both hubs
+   - Provide actionable remediation messages
+   - **Status**: ✓ Implemented
+
+6. **FR-11.6**: RBAC Permission Validation
+   - Role-aware validation (`--role operator|validator`)
+   - Support for managed cluster RBAC validation
+   - Comprehensive permission matrix checking
+   - Clear success/failure reporting
+   - **Status**: ✓ Implemented
+
 ---
 
 ## Non-Functional Requirements
@@ -527,6 +575,9 @@ Automated Python tool that:
 
 - No credentials in code or state ✓
 - RBAC-based authorization ✓
+- Role-aware permission model (operator/validator) ✓
+- Automated RBAC bootstrap with safety checks ✓
+- Kubeconfig validation (token expiry, credential collisions) ✓
 - Dry-run for safety ✓
 - Validation before execution ✓
 - Audit trail in state file ✓
