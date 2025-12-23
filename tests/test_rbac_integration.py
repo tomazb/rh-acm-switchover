@@ -29,7 +29,9 @@ class TestRBACPermissionCoverage:
         """Get all permissions defined in RBACValidator."""
         return {
             "cluster": RBACValidator.CLUSTER_PERMISSIONS,
-            "namespace": RBACValidator.NAMESPACE_PERMISSIONS,
+            "namespace": RBACValidator.NAMESPACE_PERMISSIONS,  # Alias for hub permissions
+            "hub_namespace": RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS,
+            "managed_cluster_namespace": RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS,
             "decommission": RBACValidator.DECOMMISSION_PERMISSIONS,
         }
 
@@ -83,12 +85,16 @@ class TestRBACPermissionCoverage:
         assert "list" in pods_perm[0][2], "Expected 'list' verb for pods"
 
     def test_namespace_permissions_include_agent_namespace(self, validator_permissions):
-        """Test that open-cluster-management-agent namespace is covered for klusterlet operations."""
+        """Test that open-cluster-management-agent namespace is covered for klusterlet operations.
+        
+        Note: Agent namespace is in MANAGED_CLUSTER_NAMESPACE_PERMISSIONS since it exists
+        on managed clusters, not on hub clusters.
+        """
         assert (
-            "open-cluster-management-agent" in validator_permissions["namespace"]
-        ), "Expected open-cluster-management-agent namespace in NAMESPACE_PERMISSIONS"
+            "open-cluster-management-agent" in validator_permissions["managed_cluster_namespace"]
+        ), "Expected open-cluster-management-agent namespace in MANAGED_CLUSTER_NAMESPACE_PERMISSIONS"
 
-        agent_perms = validator_permissions["namespace"]["open-cluster-management-agent"]
+        agent_perms = validator_permissions["managed_cluster_namespace"]["open-cluster-management-agent"]
 
         # Check secrets permission for klusterlet reconnection
         secrets_perm = [p for p in agent_perms if p[1] == "secrets"]
@@ -111,18 +117,25 @@ class TestRBACPermissionCoverage:
         assert "delete" in bs_perm[0][2], "Expected 'delete' verb for backupschedules (used in primary_prep.py)"
 
     def test_all_expected_namespaces_covered(self, validator_permissions):
-        """Test that all expected namespaces are covered in NAMESPACE_PERMISSIONS."""
-        expected_namespaces = {
+        """Test that all expected namespaces are covered in hub and managed cluster permissions."""
+        # Hub namespaces (on ACM hub clusters)
+        expected_hub_namespaces = {
             "open-cluster-management",
-            "open-cluster-management-agent",
             "open-cluster-management-backup",
             "open-cluster-management-observability",
             "multicluster-engine",
         }
-        actual_namespaces = set(validator_permissions["namespace"].keys())
+        actual_hub_namespaces = set(validator_permissions["hub_namespace"].keys())
+        missing_hub = expected_hub_namespaces - actual_hub_namespaces
+        assert not missing_hub, f"Missing namespaces in HUB_NAMESPACE_PERMISSIONS: {missing_hub}"
 
-        missing = expected_namespaces - actual_namespaces
-        assert not missing, f"Missing namespaces in NAMESPACE_PERMISSIONS: {missing}"
+        # Managed cluster namespaces (on spoke clusters)
+        expected_managed_namespaces = {
+            "open-cluster-management-agent",
+        }
+        actual_managed_namespaces = set(validator_permissions["managed_cluster_namespace"].keys())
+        missing_managed = expected_managed_namespaces - actual_managed_namespaces
+        assert not missing_managed, f"Missing namespaces in MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: {missing_managed}"
 
     def test_cluster_permissions_include_managed_clusters(self, validator_permissions):
         """Test that cluster permissions include managedclusters for core functionality."""
@@ -405,3 +418,74 @@ class TestRBACValidatorPermissionStructure:
                 key = (perm[0], perm[1])
                 assert key not in seen_ns, f"Duplicate namespace permission in {namespace}: {key}"
                 seen_ns.add(key)
+
+
+class TestRBACValidatorRoleAware:
+    """Test role-aware RBAC validation functionality."""
+
+    def test_valid_roles_defined(self):
+        """Test that valid roles are defined."""
+        from lib.rbac_validator import VALID_ROLES
+        assert VALID_ROLES == ("operator", "validator")
+
+    def test_operator_role_has_more_permissions_than_validator(self):
+        """Test that operator role has more permissions than validator."""
+        # Cluster permissions - operator should have patch on managedclusters
+        operator_mc = next(
+            (p for p in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"),
+            None
+        )
+        validator_mc = next(
+            (p for p in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"),
+            None
+        )
+
+        assert operator_mc is not None
+        assert validator_mc is not None
+        assert "patch" in operator_mc[2], "Operator should have patch on managedclusters"
+        assert "patch" not in validator_mc[2], "Validator should NOT have patch on managedclusters"
+
+    def test_validator_namespace_permissions_are_read_only(self):
+        """Test that validator namespace permissions are read-only."""
+        write_verbs = {"create", "patch", "delete", "update"}
+
+        for namespace, perms in RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.items():
+            for api_group, resource, verbs in perms:
+                has_write = any(v in write_verbs for v in verbs)
+                assert not has_write, (
+                    f"Validator should not have write permissions in {namespace}: "
+                    f"{resource} has {verbs}"
+                )
+
+    def test_operator_hub_permissions_include_write_verbs(self):
+        """Test that operator hub permissions include write verbs where needed."""
+        backup_perms = RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS.get(
+            "open-cluster-management-backup", []
+        )
+        configmaps_perm = next(
+            (p for p in backup_perms if p[1] == "configmaps"),
+            None
+        )
+
+        assert configmaps_perm is not None
+        assert "create" in configmaps_perm[2], "Operator should have create on configmaps"
+        assert "patch" in configmaps_perm[2], "Operator should have patch on configmaps"
+        assert "delete" in configmaps_perm[2], "Operator should have delete on configmaps"
+
+    def test_managed_cluster_permissions_exist_for_both_roles(self):
+        """Test that managed cluster permissions are defined for both roles."""
+        assert "open-cluster-management-agent" in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+        assert "open-cluster-management-agent" in RBACValidator.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+
+    def test_validator_backup_namespace_has_secrets_get(self):
+        """Test that validator backup namespace includes secrets get permission."""
+        backup_perms = RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.get(
+            "open-cluster-management-backup", []
+        )
+        secrets_perm = next(
+            (p for p in backup_perms if p[1] == "secrets"),
+            None
+        )
+
+        assert secrets_perm is not None, "Validator should have secrets permission in backup namespace"
+        assert "get" in secrets_perm[2], "Validator should have 'get' verb for secrets"
