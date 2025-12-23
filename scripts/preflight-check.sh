@@ -520,8 +520,29 @@ else
     check_fail "Primary hub: No backups found"
 fi
 
-# Check 10: Verify ClusterDeployment preserveOnDelete (CRITICAL)
-section_header "10. Checking ClusterDeployment preserveOnDelete (CRITICAL)"
+# Check 10: Verify BackupSchedule useManagedServiceAccount (CRITICAL for auto-reconnect)
+section_header "10. Checking BackupSchedule useManagedServiceAccount (CRITICAL)"
+
+BACKUP_SCHEDULE=$(oc --context="$PRIMARY_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null)
+if [[ -n "$BACKUP_SCHEDULE" ]] && echo "$BACKUP_SCHEDULE" | jq -e '.items[0]' &>/dev/null; then
+    SCHEDULE_NAME=$(echo "$BACKUP_SCHEDULE" | jq -r '.items[0].metadata.name')
+    USE_MSA=$(echo "$BACKUP_SCHEDULE" | jq -r '.items[0].spec.useManagedServiceAccount // false')
+    
+    if [[ "$USE_MSA" == "true" ]]; then
+        check_pass "Primary hub: BackupSchedule '$SCHEDULE_NAME' has useManagedServiceAccount=true"
+        echo -e "${GREEN}       Managed clusters will auto-reconnect to new hub after switchover${NC}"
+    else
+        check_fail "Primary hub: BackupSchedule '$SCHEDULE_NAME' does NOT have useManagedServiceAccount=true"
+        echo -e "${RED}       WITHOUT THIS SETTING, managed clusters will NOT auto-reconnect after switchover!${NC}"
+        echo -e "${RED}       Fix: oc --context=$PRIMARY_CONTEXT patch $RES_BACKUP_SCHEDULE/$SCHEDULE_NAME -n $BACKUP_NAMESPACE --type=merge -p '{\"spec\":{\"useManagedServiceAccount\":true}}'${NC}"
+        echo -e "${RED}       Then wait for a new backup to be created before proceeding with switchover.${NC}"
+    fi
+else
+    check_fail "Primary hub: No BackupSchedule found in $BACKUP_NAMESPACE namespace"
+fi
+
+# Check 11: Verify ClusterDeployment preserveOnDelete (CRITICAL)
+section_header "11. Checking ClusterDeployment preserveOnDelete (CRITICAL)"
 
 CDS=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces --no-headers 2>/dev/null | wc -l)
 if [[ $CDS -eq 0 ]]; then
@@ -540,9 +561,9 @@ else
     fi
 fi
 
-# Check 11: Method-specific checks
+# Check 12: Method-specific checks
 if [[ "$METHOD" == "passive" ]]; then
-    section_header "11. Checking Passive Sync (Method 1)"
+    section_header "12. Checking Passive Sync (Method 1)"
     
     # Find passive sync restore by looking for syncRestoreWithNewBackups=true
     # This matches the Python discovery logic in modules/activation.py
@@ -567,12 +588,12 @@ if [[ "$METHOD" == "passive" ]]; then
         check_fail "Secondary hub: No passive sync restore found (required for Method 1). Expected a Restore with spec.syncRestoreWithNewBackups=true or named '$RESTORE_PASSIVE_SYNC_NAME'"
     fi
 else
-    section_header "11. Method 2 (Full Restore) - No passive sync check needed"
+    section_header "12. Method 2 (Full Restore) - No passive sync check needed"
     check_pass "Method 2 selected - passive sync not required"
 fi
 
-# Check 12: Verify Observability (optional)
-section_header "12. Checking ACM Observability (Optional)"
+# Check 13: Verify Observability (optional)
+section_header "13. Checking ACM Observability (Optional)"
 
 if oc --context="$PRIMARY_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
     check_pass "Primary hub: Observability namespace exists"
@@ -629,8 +650,8 @@ else
     check_pass "Observability not detected (optional component)"
 fi
 
-# Check 13: Verify Secondary Hub Pre-existing Managed Clusters
-section_header "13. Checking Secondary Hub Managed Clusters"
+# Check 14: Verify Secondary Hub Pre-existing Managed Clusters
+section_header "14. Checking Secondary Hub Managed Clusters"
 
 # Use already-gathered managed cluster counts from hub summary
 if [[ "$SECONDARY_MC_TOTAL" -gt 0 ]]; then
@@ -651,8 +672,8 @@ else
     check_pass "Secondary hub: No pre-existing managed clusters (clean restore target)"
 fi
 
-# Check 14: Verify Auto-Import Strategy (ACM 2.14+ only)
-section_header "14. Checking Auto-Import Strategy (ACM 2.14+ only)"
+# Check 15: Verify Auto-Import Strategy (ACM 2.14+ only)
+section_header "15. Checking Auto-Import Strategy (ACM 2.14+ only)"
 
 # Check primary hub
 if is_acm_214_or_higher "$PRIMARY_VERSION"; then

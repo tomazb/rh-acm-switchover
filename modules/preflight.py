@@ -11,6 +11,7 @@ from lib.rbac_validator import validate_rbac_permissions
 
 from .preflight_validators import (
     AutoImportStrategyValidator,
+    BackupScheduleValidator,
     BackupValidator,
     ClusterDeploymentValidator,
     HubComponentValidator,
@@ -47,6 +48,7 @@ class PreflightValidator:
         self.version_validator = VersionValidator(self.reporter)
         self.hub_component_validator = HubComponentValidator(self.reporter)
         self.backup_validator = BackupValidator(self.reporter)
+        self.backup_schedule_validator = BackupScheduleValidator(self.reporter)
         self.cluster_deployment_validator = ClusterDeploymentValidator(self.reporter)
         self.managed_cluster_backup_validator = ManagedClusterBackupValidator(self.reporter)
         self.passive_sync_validator = PassiveSyncValidator(self.reporter)
@@ -120,6 +122,7 @@ class PreflightValidator:
             self.hub_component_validator.run(client, label)
 
         self.backup_validator.run(self.primary)
+        self.backup_schedule_validator.run(self.primary)
         self.cluster_deployment_validator.run(self.primary)
         self.managed_cluster_backup_validator.run(self.primary)
 

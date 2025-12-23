@@ -17,10 +17,12 @@ from lib.constants import (
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
     BACKUP_NAMESPACE,
+    BACKUP_SCHEDULE_DEFAULT_NAME,
     IMPORT_CONTROLLER_CONFIGMAP,
     MCE_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
     RESTORE_PASSIVE_SYNC_NAME,
+    SPEC_USE_MANAGED_SERVICE_ACCOUNT,
     THANOS_OBJECT_STORAGE_SECRET,
 )
 from lib.kube_client import KubeClient
@@ -472,6 +474,78 @@ class BackupValidator:
                 "Backup status",
                 False,
                 f"error checking backups: {exc}",
+                critical=True,
+            )
+
+
+class BackupScheduleValidator:
+    """Validates BackupSchedule has useManagedServiceAccount enabled for passive sync.
+
+    The useManagedServiceAccount setting is critical for passive sync switchover.
+    When enabled, the hub creates a ManagedServiceAccount for each managed cluster,
+    allowing klusterlet agents to automatically reconnect to the new hub after
+    the restore activates managed clusters.
+
+    Without this setting, managed clusters would require manual re-import after
+    switchover because the klusterlet bootstrap-hub-kubeconfig still points to
+    the old hub.
+    """
+
+    def __init__(self, reporter: ValidationReporter) -> None:
+        self.reporter = reporter
+
+    def run(self, primary: KubeClient) -> None:
+        """Check that BackupSchedule has useManagedServiceAccount enabled.
+
+        Args:
+            primary: KubeClient for the primary hub
+        """
+        try:
+            # Try to find a BackupSchedule resource
+            backup_schedules = primary.list_custom_resources(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="backupschedules",
+                namespace=BACKUP_NAMESPACE,
+            )
+
+            if not backup_schedules:
+                self.reporter.add_result(
+                    "BackupSchedule configuration",
+                    False,
+                    "no BackupSchedule found - required for passive sync",
+                    critical=True,
+                )
+                return
+
+            # Check the first (typically only) BackupSchedule
+            schedule = backup_schedules[0]
+            schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
+            spec = schedule.get("spec", {})
+            use_msa = spec.get(SPEC_USE_MANAGED_SERVICE_ACCOUNT, False)
+
+            if use_msa:
+                self.reporter.add_result(
+                    "BackupSchedule configuration",
+                    True,
+                    f"{schedule_name}: useManagedServiceAccount=true (managed clusters will auto-reconnect)",
+                    critical=True,
+                )
+            else:
+                self.reporter.add_result(
+                    "BackupSchedule configuration",
+                    False,
+                    f"{schedule_name}: useManagedServiceAccount is not enabled. "
+                    "Managed clusters will NOT auto-reconnect to new hub after switchover. "
+                    "Set spec.useManagedServiceAccount=true in BackupSchedule.",
+                    critical=True,
+                )
+
+        except (RuntimeError, ValueError, Exception) as exc:
+            self.reporter.add_result(
+                "BackupSchedule configuration",
+                False,
+                f"error checking BackupSchedule: {exc}",
                 critical=True,
             )
 

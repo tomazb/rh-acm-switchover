@@ -201,6 +201,14 @@ CV_JSON
         exit 0
         ;;
     
+    # BackupSchedule checks (for useManagedServiceAccount) - MUST be before backup patterns!
+    *"--context=primary-ok"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BACKUPSCHEDULE_JSON'
+{"items":[{"metadata":{"name":"schedule-acm"},"spec":{"useManagedServiceAccount":true,"veleroSchedule":"0 */4 * * *"}}]}
+BACKUPSCHEDULE_JSON
+        exit 0
+        ;;
+    
     # Backup checks - match both short 'backup' and full API group name
     *"--context=primary-ok"*"get "*"backup"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "backup-20241124   Finished"
@@ -444,12 +452,12 @@ esac
     )
     oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
 
-    # Create mock jq
+    # Create mock jq - just pass through to real jq
     jq_script = mock_bin / "jq"
     jq_script.write_text(
         """#!/bin/bash
-# Mock jq - just succeed
-exit 0
+# Mock jq - pass through to real jq
+exec /usr/bin/jq "$@"
 """,
         encoding="utf-8",
     )

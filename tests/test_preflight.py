@@ -10,6 +10,7 @@ import pytest
 
 from lib.constants import ACM_NAMESPACE, BACKUP_NAMESPACE
 from modules.preflight_validators import (
+    BackupScheduleValidator,
     NamespaceValidator,
     ObservabilityDetector,
     ObservabilityPrereqValidator,
@@ -241,3 +242,82 @@ class TestObservabilityPrereqValidator:
         validator.run(secondary)
 
         assert reporter.results[-1]["passed"] is False
+
+
+@pytest.mark.unit
+class TestBackupScheduleValidator:
+    """Tests for the BackupScheduleValidator."""
+
+    def test_usemanagedserviceaccount_enabled(self, reporter):
+        """Test that validation passes when useManagedServiceAccount is true."""
+        primary = Mock()
+        primary.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule-rhacm"},
+                "spec": {"useManagedServiceAccount": True, "veleroSchedule": "0 */4 * * *"},
+            }
+        ]
+
+        validator = BackupScheduleValidator(reporter)
+        validator.run(primary)
+
+        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
+        assert result["passed"] is True
+        assert "useManagedServiceAccount=true" in result["message"]
+
+    def test_usemanagedserviceaccount_disabled(self, reporter):
+        """Test that validation fails when useManagedServiceAccount is false or missing."""
+        primary = Mock()
+        primary.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule-rhacm"},
+                "spec": {"veleroSchedule": "0 */4 * * *"},
+            }
+        ]
+
+        validator = BackupScheduleValidator(reporter)
+        validator.run(primary)
+
+        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
+        assert result["passed"] is False
+        assert "useManagedServiceAccount is not enabled" in result["message"]
+
+    def test_usemanagedserviceaccount_explicitly_false(self, reporter):
+        """Test that validation fails when useManagedServiceAccount is explicitly false."""
+        primary = Mock()
+        primary.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule-rhacm"},
+                "spec": {"useManagedServiceAccount": False, "veleroSchedule": "0 */4 * * *"},
+            }
+        ]
+
+        validator = BackupScheduleValidator(reporter)
+        validator.run(primary)
+
+        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
+        assert result["passed"] is False
+
+    def test_no_backupschedule_found(self, reporter):
+        """Test that validation fails when no BackupSchedule exists."""
+        primary = Mock()
+        primary.list_custom_resources.return_value = []
+
+        validator = BackupScheduleValidator(reporter)
+        validator.run(primary)
+
+        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
+        assert result["passed"] is False
+        assert "no BackupSchedule found" in result["message"]
+
+    def test_api_error(self, reporter):
+        """Test that validation fails gracefully on API error."""
+        primary = Mock()
+        primary.list_custom_resources.side_effect = RuntimeError("API error")
+
+        validator = BackupScheduleValidator(reporter)
+        validator.run(primary)
+
+        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
+        assert result["passed"] is False
+        assert "error" in result["message"]
