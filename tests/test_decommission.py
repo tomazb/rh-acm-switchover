@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.decommission as decommission_module
 from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
+from lib.exceptions import SwitchoverError
 
 Decommission = decommission_module.Decommission
 
@@ -144,8 +145,13 @@ class TestDecommission:
 
         mock_primary_client.delete_custom_resource.assert_not_called()
 
-    def test_delete_managed_clusters_excludes_local(self, decommission_with_obs, mock_primary_client):
+    @patch("modules.decommission.wait_for_condition")
+    def test_delete_managed_clusters_excludes_local(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
         """Test that local-cluster is excluded from deletion."""
+        mock_wait.return_value = True  # Simulate successful wait for deletion
+
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "cluster1"}},
             {"metadata": {"name": "local-cluster"}},
@@ -161,6 +167,25 @@ class TestDecommission:
 
         # Should delete cluster1 and cluster2, but not local-cluster
         assert mock_primary_client.delete_custom_resource.call_count == 2
+        # Should have waited for ManagedCluster removal
+        mock_wait.assert_called_once()
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_delete_managed_clusters_timeout(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
+        """Test that deletion fails when ManagedClusters are not removed in time."""
+        mock_wait.return_value = False  # Simulate timeout
+
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "local-cluster"}},
+        ]
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            decommission_with_obs._delete_managed_clusters()
+
+        assert "ManagedClusters not fully removed" in str(exc_info.value)
 
     def test_delete_managed_clusters_none_found(self, decommission_with_obs, mock_primary_client):
         """Test when no managed clusters exist."""
@@ -227,6 +252,55 @@ class TestDecommission:
 @pytest.mark.integration
 class TestDecommissionIntegration:
     """Integration tests for Decommission workflows."""
+
+    def test_operator_pods_excluded_from_removal_check(self, mock_primary_client):
+        """Test that operator pods are excluded from removal check.
+
+        When only operator pods remain (multiclusterhub-operator-*), the
+        decommission should consider ACM removed successfully.
+        """
+        decomm = Decommission(primary_client=mock_primary_client, has_observability=False)
+
+        # Set up MCH to exist so deletion is attempted
+        mch_listed = False
+
+        def list_side_effect(*args, **kwargs):
+            nonlocal mch_listed
+            if kwargs.get("plural") == "multiclusterhubs":
+                if not mch_listed:
+                    mch_listed = True
+                    return [{"metadata": {"name": "multiclusterhub", "namespace": ACM_NAMESPACE}}]
+                return []  # MCH deleted
+            return []
+
+        mock_primary_client.list_custom_resources.side_effect = list_side_effect
+        mock_primary_client.list_managed_clusters.return_value = []
+        mock_primary_client.delete_custom_resource.return_value = True
+
+        # Only operator pods remain after MCH deletion
+        mock_primary_client.get_pods.return_value = [
+            {"metadata": {"name": "multiclusterhub-operator-597d5cfb4f-v8dl7"}},
+            {"metadata": {"name": "multiclusterhub-operator-597d5cfb4f-wchrt"}},
+        ]
+
+        # The wait_for_condition will call the check function
+        # We need to capture the actual check logic
+        with patch("modules.decommission.wait_for_condition") as mock_wait:
+            # Simulate calling the condition function
+            def capture_condition_call(name, condition_fn, **kwargs):
+                if "pod removal" in name.lower():
+                    success, msg = condition_fn()
+                    assert success is True, f"Expected success but got: {msg}"
+                    assert "operator" in msg.lower(), f"Expected operator mention in: {msg}"
+                return True
+
+            mock_wait.side_effect = capture_condition_call
+
+            decomm._delete_multiclusterhub()
+
+            # Verify wait_for_condition was called for pod removal
+            calls = [str(c) for c in mock_wait.call_args_list]
+            assert any("pod removal" in c.lower() for c in calls), f"Expected pod removal call in: {calls}"
 
     @patch("modules.decommission.wait_for_condition")
     def test_full_decommission_workflow(self, mock_wait, mock_primary_client):

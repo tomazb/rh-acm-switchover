@@ -6,8 +6,11 @@ import logging
 
 from lib.constants import (
     ACM_NAMESPACE,
+    ACM_OPERATOR_POD_PREFIX,
     DECOMMISSION_POD_INTERVAL,
     DECOMMISSION_POD_TIMEOUT,
+    MANAGED_CLUSTER_DELETE_INTERVAL,
+    MANAGED_CLUSTER_DELETE_TIMEOUT,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
@@ -184,7 +187,39 @@ class Decommission:
         else:
             logger.info("Deleted %s ManagedCluster(s)", deleted_count)
 
-        # Note: We don't wait for deletion as clusters should have preserveOnDelete=true
+        # Wait for ManagedClusters to be fully removed (finalizers to complete)
+        # This is required before MCH deletion because the MCH admission webhook
+        # rejects deletion when ManagedCluster resources still exist
+        if deleted_count > 0 and not self.dry_run:
+            logger.info("Waiting for ManagedCluster finalizers to complete...")
+
+            def _managed_clusters_removed():
+                remaining = self.primary.list_managed_clusters()
+                # Filter out local-cluster
+                non_local = [
+                    mc for mc in remaining if mc.get("metadata", {}).get("name") != "local-cluster"
+                ]
+                if not non_local:
+                    return True, "all ManagedClusters removed (except local-cluster)"
+                names = [mc.get("metadata", {}).get("name") for mc in non_local]
+                return False, f"{len(non_local)} ManagedCluster(s) remaining: {', '.join(names)}"
+
+            success = wait_for_condition(
+                "ManagedCluster removal",
+                _managed_clusters_removed,
+                timeout=MANAGED_CLUSTER_DELETE_TIMEOUT,
+                interval=MANAGED_CLUSTER_DELETE_INTERVAL,
+                logger=logger,
+            )
+
+            if not success:
+                raise SwitchoverError(
+                    f"ManagedClusters not fully removed after {MANAGED_CLUSTER_DELETE_TIMEOUT}s. "
+                    "Cannot proceed with MultiClusterHub deletion."
+                )
+
+            logger.info("All ManagedClusters removed successfully")
+
         logger.info(
             "Note: ClusterDeployments should have preserveOnDelete=true, "
             "so underlying cluster infrastructure will not be affected."
@@ -203,7 +238,12 @@ class Decommission:
         )
 
         if not mchs:
-            logger.info("No MultiClusterHub resources found")
+            logger.info("No MultiClusterHub resources found (already deleted or never created)")
+            logger.info(
+                "Note: ACM operator pods (%s-*) may still be running - "
+                "this is expected as the operator is installed separately",
+                ACM_OPERATOR_POD_PREFIX,
+            )
             return
 
         for mch in mchs:
@@ -229,10 +269,19 @@ class Decommission:
             return
 
         def _acm_pods_removed():
+            """Check if ACM pods are removed (excluding operator pods which remain)."""
             pods = self.primary.get_pods(namespace=ACM_NAMESPACE)
             if not pods:
                 return True, "all ACM pods removed"
-            return False, f"{len(pods)} pod(s) remaining"
+            # Filter out operator pods - they remain after MCH deletion
+            non_operator_pods = [
+                p for p in pods
+                if not p.get("metadata", {}).get("name", "").startswith(ACM_OPERATOR_POD_PREFIX)
+            ]
+            if not non_operator_pods:
+                operator_count = len(pods)
+                return True, f"all ACM pods removed (except {operator_count} operator pod(s) which remain)"
+            return False, f"{len(non_operator_pods)} non-operator pod(s) remaining"
 
         success = wait_for_condition(
             "ACM pod removal",
@@ -247,5 +296,10 @@ class Decommission:
                 "Some ACM pods still running after %ss",
                 DECOMMISSION_POD_TIMEOUT,
             )
+        else:
+            logger.info(
+                "ACM components removed. Operator pods (%s-*) remain as expected.",
+                ACM_OPERATOR_POD_PREFIX,
+            )
 
-        logger.info("Decommission complete. Backup data in object storage remains " "available for the new hub.")
+        logger.info("Decommission complete. Backup data in object storage remains available for the new hub.")

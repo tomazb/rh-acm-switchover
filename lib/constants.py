@@ -18,6 +18,13 @@ OBSERVABILITY_TERMINATE_INTERVAL = 10
 DECOMMISSION_POD_TIMEOUT = 1200
 DECOMMISSION_POD_INTERVAL = 30
 
+# ManagedCluster deletion wait (for finalizers to complete before MCH deletion)
+MANAGED_CLUSTER_DELETE_TIMEOUT = 300
+MANAGED_CLUSTER_DELETE_INTERVAL = 10
+
+# ACM operator pod prefix (these pods remain after MCH deletion)
+ACM_OPERATOR_POD_PREFIX = "multiclusterhub-operator"
+
 # Observability pod readiness timeout
 OBSERVABILITY_POD_TIMEOUT = 300
 
@@ -53,6 +60,7 @@ THANOS_COMPACTOR_LABEL_SELECTOR = "app=thanos-compact"
 # ACM Spec Field Names
 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME = "veleroManagedClustersBackupName"
 SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS = "syncRestoreWithNewBackups"
+SPEC_USE_MANAGED_SERVICE_ACCOUNT = "useManagedServiceAccount"
 
 # ACM Spec Field Values
 VELERO_BACKUP_LATEST = "latest"
