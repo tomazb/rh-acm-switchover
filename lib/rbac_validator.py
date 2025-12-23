@@ -343,6 +343,55 @@ class RBACValidator:
 
         return all_valid, errors
 
+    def validate_managed_cluster_permissions(self) -> Tuple[bool, List[str]]:
+        """
+        Validate namespace-scoped permissions on managed clusters.
+
+        This validates permissions in the open-cluster-management-agent namespace,
+        which exists on managed clusters (not hubs) and is used for klusterlet
+        reconnection operations during switchover.
+
+        Returns:
+            Tuple of (all_valid, list of error messages)
+        """
+        errors = []
+        all_valid = True
+
+        logger.info("Validating managed cluster RBAC permissions for role: %s", self.role)
+
+        # Get managed cluster permissions based on role
+        namespace_permissions = self._get_managed_cluster_namespace_permissions()
+
+        for namespace, permissions in namespace_permissions.items():
+            # Check if namespace exists first
+            if not self.client.namespace_exists(namespace):
+                warning = f"Namespace {namespace} does not exist - this may not be a managed cluster"
+                logger.warning(warning)
+                errors.append(warning)
+                all_valid = False
+                continue
+
+            logger.info("Checking permissions in namespace: %s", namespace)
+
+            for api_group, resource, verbs in permissions:
+                for verb in verbs:
+                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                    if not has_perm:
+                        all_valid = False
+                        group_name = api_group if api_group else "core"
+                        error_msg = f"Missing permission in {namespace}: {verb} {group_name}/{resource}"
+                        if error:
+                            error_msg += f" - {error}"
+                        errors.append(error_msg)
+                        logger.error(error_msg)
+
+        if all_valid:
+            logger.info("✓ All managed cluster permissions validated")
+        else:
+            logger.error("✗ Managed cluster permission validation failed")
+
+        return all_valid, errors
+
     def validate_all_permissions(
         self, include_decommission: bool = False, skip_observability: bool = False
     ) -> Tuple[bool, Dict[str, List[str]]]:

@@ -40,6 +40,12 @@ Examples:
 
   # Check as operator role (full permissions)
   %(prog)s --role operator --include-decommission
+
+  # Check RBAC on a managed cluster (spoke)
+  %(prog)s --context prod1 --managed-cluster --role operator
+
+  # Validate read-only access on managed cluster
+  %(prog)s --context prod1 --managed-cluster --role validator
         """,
     )
 
@@ -64,6 +70,12 @@ Examples:
         "--skip-observability",
         action="store_true",
         help="Skip observability namespace checks",
+    )
+    parser.add_argument(
+        "--managed-cluster",
+        action="store_true",
+        help="Validate as a managed cluster (check open-cluster-management-agent namespace "
+             "instead of hub namespaces). Use this when checking RBAC on spoke clusters.",
     )
     parser.add_argument(
         "--role",
@@ -153,17 +165,49 @@ def main():
 
             logger.info("Validating for role: %s", args.role)
 
-            # Validate and generate report
-            all_valid, _ = validator.validate_all_permissions(
-                include_decommission=args.include_decommission,
-                skip_observability=args.skip_observability,
-            )
-            report = validator.generate_permission_report(
-                include_decommission=args.include_decommission,
-                skip_observability=args.skip_observability,
-            )
+            # Check if this is a managed cluster validation
+            if args.managed_cluster:
+                logger.info("Validating as managed cluster (open-cluster-management-agent namespace)")
+                all_valid, errors = validator.validate_managed_cluster_permissions()
 
-            print(report)
+                # Generate a simple report for managed cluster
+                report = ["=" * 80]
+                report.append("MANAGED CLUSTER RBAC PERMISSION VALIDATION REPORT")
+                report.append("=" * 80)
+                report.append("")
+
+                if all_valid:
+                    report.append("✓ STATUS: ALL PERMISSIONS VALIDATED")
+                    report.append("")
+                    report.append("The current user/service account has all required permissions")
+                    report.append("for klusterlet operations on this managed cluster.")
+                else:
+                    report.append("✗ STATUS: PERMISSION VALIDATION FAILED")
+                    report.append("")
+                    report.append("The following permissions are missing:")
+                    report.append("")
+                    for error in errors:
+                        report.append(f"  - {error}")
+                    report.append("")
+                    report.append("REMEDIATION:")
+                    report.append("")
+                    report.append("Deploy managed cluster RBAC using one of:")
+                    report.append("  1. ACM Policy: kubectl apply -f deploy/acm-policies/policy-managed-cluster-rbac.yaml")
+                    report.append("  2. Direct apply: See docs/deployment/rbac-deployment.md")
+
+                report.append("=" * 80)
+                print("\n".join(report))
+            else:
+                # Validate hub permissions
+                all_valid, _ = validator.validate_all_permissions(
+                    include_decommission=args.include_decommission,
+                    skip_observability=args.skip_observability,
+                )
+                report = validator.generate_permission_report(
+                    include_decommission=args.include_decommission,
+                    skip_observability=args.skip_observability,
+                )
+                print(report)
 
             # Exit with appropriate code
             if all_valid:

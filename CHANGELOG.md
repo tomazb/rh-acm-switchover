@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Managed cluster RBAC Policy**: New ACM Policy (`deploy/acm-policies/policy-managed-cluster-rbac.yaml`) to automatically deploy RBAC resources to managed clusters for klusterlet reconnection operations. Includes both operator (full access) and validator (read-only) roles in the `open-cluster-management-agent` namespace.
 
+- **Managed cluster RBAC validation with `--managed-cluster` flag**: The `check_rbac.py` tool now supports `--managed-cluster` flag to validate permissions in the `open-cluster-management-agent` namespace on spoke clusters. This enables validation of RBAC deployed via ACM Policy on managed clusters.
+
 - **Validator secrets access in backup namespace**: Added `secrets:get` permission for the validator role in the backup namespace, enabling validators to read backup-related secrets for validation purposes.
 
 ### Fixed
