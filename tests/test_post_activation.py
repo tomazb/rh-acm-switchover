@@ -201,6 +201,58 @@ class TestPostActivationVerification:
         with pytest.raises(Exception, match="timeout|Timeout"):
             post_verify_with_obs._verify_managed_clusters_connected()
 
+    @patch("modules.post_activation.wait_for_condition")
+    def test_verify_clusters_triggers_klusterlet_fix_on_timeout(
+        self, mock_wait, post_verify_no_obs, mock_secondary_client, mock_state_manager
+    ):
+        """Test that klusterlet fix is triggered when initial cluster wait times out.
+
+        This simulates a switchover where klusterlets are still connected to the old hub.
+        The verify() method should:
+        1. Wait briefly (120s) for clusters - timeout
+        2. Trigger klusterlet verification/fix
+        3. Wait again for clusters to reconnect
+        """
+        call_count = [0]
+
+        def wait_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call (brief wait) - timeout
+                return False
+            else:
+                # Subsequent calls - success
+                return True
+
+        mock_wait.side_effect = wait_side_effect
+
+        # Mock list_custom_resources for managed clusters
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "cluster1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
+                "status": {
+                    "conditions": [
+                        {"type": "ManagedClusterConditionAvailable", "status": "True"},
+                        {"type": "ManagedClusterJoined", "status": "True"},
+                    ]
+                },
+            }
+        ]
+
+        # Mock state manager to allow all steps to run
+        mock_state_manager.is_step_completed.return_value = False
+
+        result = post_verify_no_obs.verify()
+
+        assert result is True
+        # wait_for_condition should be called at least twice
+        # (initial brief wait + wait after klusterlet fix)
+        assert mock_wait.call_count >= 2
+        # verify_klusterlet_connections step should be marked completed
+        calls = [call[0][0] for call in mock_state_manager.mark_step_completed.call_args_list]
+        assert "verify_klusterlet_connections" in calls
+
     def test_verify_no_clusters(self, post_verify_with_obs, mock_secondary_client):
         """Test when no managed clusters exist."""
         mock_secondary_client.list_custom_resources.return_value = []
