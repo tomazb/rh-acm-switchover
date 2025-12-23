@@ -23,7 +23,7 @@ metadata:
       This policy creates Role and RoleBinding in the open-cluster-management-agent namespace
       to allow the switchover tool to manage klusterlet bootstrap secrets and restart deployments.
 spec:
-  remediationAction: inform
+  remediationAction: enforce
   disabled: false
   policy-templates:
     # Ensure ACM Switchover namespace exists on managed clusters
@@ -33,7 +33,7 @@ spec:
         metadata:
           name: policy-acm-switchover-managed-namespace
         spec:
-          remediationAction: inform
+          remediationAction: enforce
           severity: high
           namespaceSelector:
             exclude:
@@ -59,7 +59,7 @@ spec:
         metadata:
           name: policy-acm-switchover-managed-operator-sa
         spec:
-          remediationAction: inform
+          remediationAction: enforce
           severity: high
           namespaceSelector:
             include:
@@ -84,7 +84,7 @@ spec:
         metadata:
           name: policy-acm-switchover-managed-validator-sa
         spec:
-          remediationAction: inform
+          remediationAction: enforce
           severity: medium
           namespaceSelector:
             include:
@@ -110,7 +110,7 @@ spec:
         metadata:
           name: policy-acm-switchover-agent-role-operator
         spec:
-          remediationAction: inform
+          remediationAction: enforce
           severity: high
           namespaceSelector:
             include:
@@ -144,7 +144,7 @@ spec:
         metadata:
           name: policy-acm-switchover-agent-role-validator
         spec:
-          remediationAction: inform
+          remediationAction: enforce
           severity: medium
           namespaceSelector:
             include:
@@ -178,7 +178,7 @@ spec:
         metadata:
           name: policy-acm-switchover-agent-rb-operator
         spec:
-          remediationAction: inform
+          remediationAction: enforce
           severity: high
           namespaceSelector:
             include:
@@ -210,7 +210,7 @@ spec:
         metadata:
           name: policy-acm-switchover-agent-rb-validator
         spec:
-          remediationAction: inform
+          remediationAction: enforce
           severity: medium
           namespaceSelector:
             include:
@@ -237,15 +237,15 @@ spec:
 
 ---
 # PlacementRule to apply policy to managed clusters only (exclude local-cluster/hub)
+# Note: We intentionally do NOT require ManagedClusterConditionAvailable=True
+# because during switchover preparation, managed clusters may show Unknown status
+# when they're registered but not yet connected to the active hub.
 apiVersion: apps.open-cluster-management.io/v1
 kind: PlacementRule
 metadata:
   name: placement-policy-switchover-mc-rbac
   namespace: open-cluster-management-policies
 spec:
-  clusterConditions:
-    - status: "True"
-      type: ManagedClusterConditionAvailable
   clusterSelector:
     matchExpressions:
       # Exclude local-cluster (the hub itself)
