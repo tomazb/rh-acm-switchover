@@ -55,9 +55,31 @@ class PostActivationVerification:
 
         try:
             # Step 6: Verify ManagedClusters connected
+            # First, try a brief wait to see if clusters connect on their own
             if not self.state.is_step_completed("verify_clusters_connected"):
-                self._verify_managed_clusters_connected()
-                self.state.mark_step_completed("verify_clusters_connected")
+                try:
+                    # Initial brief wait (120s) - clusters may connect automatically
+                    self._verify_managed_clusters_connected(timeout=120)
+                    self.state.mark_step_completed("verify_clusters_connected")
+                except SwitchoverError as e:
+                    # Timeout - clusters not connected yet
+                    logger.warning(
+                        "ManagedClusters not connected after initial wait: %s",
+                        e,
+                    )
+                    logger.info(
+                        "Checking if klusterlets need to be fixed (may be pointing to old hub)..."
+                    )
+                    # Try to fix klusterlet connections first
+                    self._verify_klusterlet_connections()
+                    self.state.mark_step_completed("verify_klusterlet_connections")
+
+                    # Now wait longer for clusters to reconnect after fix
+                    logger.info(
+                        "Waiting for ManagedClusters to reconnect after klusterlet fix..."
+                    )
+                    self._verify_managed_clusters_connected()
+                    self.state.mark_step_completed("verify_clusters_connected")
             else:
                 logger.info("Step already completed: verify_clusters_connected")
 
@@ -68,6 +90,7 @@ class PostActivationVerification:
                 logger.info("Step already completed: verify_auto_import_cleanup")
 
             # Optional: Verify klusterlet connections (non-blocking)
+            # This may have already been done above if clusters didn't connect initially
             if not self.state.is_step_completed("verify_klusterlet_connections"):
                 self._verify_klusterlet_connections()
                 self.state.mark_step_completed("verify_klusterlet_connections")
