@@ -32,6 +32,62 @@ Choose the deployment method that best fits your environment:
 
 ## Quick Start
 
+### Automated Setup (Recommended)
+
+The easiest way to deploy RBAC and generate kubeconfigs is using the bootstrap script:
+
+```bash
+# Clone repository
+git clone https://github.com/tomazb/rh-acm-switchover.git
+cd rh-acm-switchover
+
+# Setup RBAC on a hub with your admin kubeconfig
+./scripts/setup-rbac.sh \
+  --admin-kubeconfig ~/.kube/admin.yaml \
+  --context primary-hub \
+  --role operator
+
+# The script will:
+# 1. Deploy all RBAC resources (namespace, SA, roles, bindings)
+# 2. Generate a kubeconfig with unique user name
+# 3. Validate permissions with check_rbac.py
+```
+
+For multi-hub setup:
+
+```bash
+# Setup both hubs
+./scripts/setup-rbac.sh --admin-kubeconfig ~/.kube/admin.yaml --context hub1 --role operator
+./scripts/setup-rbac.sh --admin-kubeconfig ~/.kube/admin.yaml --context hub2 --role operator
+
+# Generate merged kubeconfig for both hubs
+./scripts/generate-merged-kubeconfig.sh \
+  --output ~/switchover.yaml \
+  hub1:operator,hub2:operator
+
+# Use merged kubeconfig for switchover
+export KUBECONFIG=~/switchover.yaml
+python acm_switchover.py \
+  --primary-context hub1-operator@... \
+  --secondary-context hub2-operator@... \
+  --method passive \
+  --validate-only
+```
+
+### Python-Based Setup
+
+You can also use the Python tool directly:
+
+```bash
+python acm_switchover.py \
+  --setup \
+  --admin-kubeconfig ~/.kube/admin.yaml \
+  --primary-context primary-hub \
+  --role operator \
+  --method passive \
+  --old-hub-action secondary
+```
+
 ### Option 1: Direct kubectl/oc Apply
 
 ```bash
@@ -298,54 +354,96 @@ kubectl auth can-i --list \
 ### Generate Service Account Token
 
 ```bash
-# Create long-lived token (24 hours)
+# Create long-lived token (48 hours - recommended default)
 kubectl create token acm-switchover-operator \
   -n acm-switchover \
-  --duration=24h
+  --duration=48h
 
 # Store in variable
 SA_TOKEN=$(kubectl create token acm-switchover-operator \
   -n acm-switchover \
-  --duration=24h)
+  --duration=48h)
 ```
 
 ### Generate kubeconfig for Service Account
 
-Use the included helper script:
+Use the included helper script with the new `--user` and `--token-duration` flags:
 
 ```bash
 # Generate kubeconfig for operator on current context
 ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator \
   > /tmp/operator-kubeconfig.yaml
 
-# Generate with specific context
-./scripts/generate-sa-kubeconfig.sh --context primary-hub \
+# Generate with specific context and custom user name (prevents collisions)
+./scripts/generate-sa-kubeconfig.sh \
+  --context primary-hub \
+  --user primary-operator \
   acm-switchover acm-switchover-operator \
   > /tmp/primary-operator.kubeconfig
 
-# Generate with custom token duration (8 hours)
-./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 8h \
+# Generate with custom token duration (72 hours for long operations)
+./scripts/generate-sa-kubeconfig.sh \
+  --context prod-hub \
+  --user prod-operator \
+  --token-duration 72h \
+  acm-switchover acm-switchover-operator \
   > /tmp/operator-kubeconfig.yaml
 
 # Test it
 kubectl --kubeconfig=/tmp/operator-kubeconfig.yaml get managedclusters
 ```
 
+#### Script Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--context <ctx>` | Kubernetes context to use | Current context |
+| `--user <name>` | Custom user name in kubeconfig | `<context>-<sa-name>` |
+| `--token-duration <dur>` | Token validity duration | `48h` |
+
+> **Tip**: Always use `--user` with unique names when generating kubeconfigs for
+> multiple clusters to prevent credential collisions when merging.
+
 ### Merging Kubeconfigs for Multi-Hub Operations
 
-When running switchover between two hubs, you need a merged kubeconfig with both contexts.
-
-> **Important**: Each kubeconfig must use unique user names. When generating kubeconfigs
-> from different clusters with the same service account name, the user entries can collide
-> and cause authentication failures.
+Use the `generate-merged-kubeconfig.sh` script for easy multi-hub kubeconfig creation:
 
 ```bash
-# Generate kubeconfigs for both hubs (use unique names)
-./scripts/generate-sa-kubeconfig.sh --context primary-hub \
+# Generate merged kubeconfig for two hubs with operator role
+./scripts/generate-merged-kubeconfig.sh hub1:operator,hub2:operator
+
+# Specify custom output file and token duration
+./scripts/generate-merged-kubeconfig.sh \
+  --output ~/switchover-kubeconfig.yaml \
+  --token-duration 72h \
+  hub1:operator,hub2:operator
+
+# Include managed clusters for klusterlet validation
+./scripts/generate-merged-kubeconfig.sh \
+  --output ~/full-kubeconfig.yaml \
+  hub1:operator,hub2:operator,managed1:operator
+```
+
+#### Merge Script Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--admin-kubeconfig <path>` | Admin kubeconfig for token generation | Current kubeconfig |
+| `--output <file>` | Output merged kubeconfig file | `./merged-kubeconfig.yaml` |
+| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--namespace <ns>` | Namespace where SAs exist | `acm-switchover` |
+
+#### Manual Merging (Alternative)
+
+If you prefer manual control:
+
+```bash
+# Generate kubeconfigs with unique user names
+./scripts/generate-sa-kubeconfig.sh --context primary-hub --user primary-operator \
   acm-switchover acm-switchover-operator \
   > /tmp/primary-operator.kubeconfig
 
-./scripts/generate-sa-kubeconfig.sh --context secondary-hub \
+./scripts/generate-sa-kubeconfig.sh --context secondary-hub --user secondary-operator \
   acm-switchover acm-switchover-operator \
   > /tmp/secondary-operator.kubeconfig
 
@@ -356,9 +454,6 @@ KUBECONFIG="/tmp/primary-operator.kubeconfig:/tmp/secondary-operator.kubeconfig"
 # Verify contexts are available
 kubectl --kubeconfig=/tmp/merged-operator.kubeconfig config get-contexts
 ```
-
-If you encounter authentication issues after merging, verify that user names in the
-merged kubeconfig are unique (check the `users:` section).
 
 ### Run Switchover with Service Account
 
@@ -372,6 +467,63 @@ python acm_switchover.py \
   --secondary-context default \
   --method passive \
   --old-hub-action secondary
+```
+
+## Bootstrap Scripts Reference
+
+### setup-rbac.sh
+
+Automated RBAC deployment and kubeconfig generation.
+
+```bash
+./scripts/setup-rbac.sh --admin-kubeconfig <path> --context <context> [OPTIONS]
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--admin-kubeconfig <path>` | **Required.** Path to kubeconfig with cluster-admin privileges | - |
+| `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
+| `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
+| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
+| `--skip-kubeconfig` | Skip kubeconfig generation | - |
+| `--skip-validation` | Skip RBAC validation after deployment | - |
+| `--dry-run` | Show what would be deployed without changes | - |
+
+**Example - Full setup for production:**
+
+```bash
+./scripts/setup-rbac.sh \
+  --admin-kubeconfig ~/.kube/admin.yaml \
+  --context prod-hub \
+  --role operator \
+  --token-duration 72h \
+  --output-dir ~/prod-kubeconfigs
+```
+
+### generate-merged-kubeconfig.sh
+
+Generate and merge kubeconfigs for multiple clusters.
+
+```bash
+./scripts/generate-merged-kubeconfig.sh [OPTIONS] <context:role>[,<context:role>...]
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--admin-kubeconfig <path>` | Admin kubeconfig for token generation | Current kubeconfig |
+| `--output <file>` | Output merged kubeconfig file | `./merged-kubeconfig.yaml` |
+| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--namespace <ns>` | Namespace where SAs exist | `acm-switchover` |
+| `--managed-cluster` | Flag for managed cluster contexts | - |
+
+**Example - Two hubs with different roles:**
+
+```bash
+./scripts/generate-merged-kubeconfig.sh \
+  --output ~/switchover.yaml \
+  --token-duration 48h \
+  hub1:operator,hub2:operator,hub3:validator
 ```
 
 ## Troubleshooting

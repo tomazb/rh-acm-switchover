@@ -11,7 +11,9 @@ These scripts automate the validation process before and after switchover, ensur
 | [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
 | [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
 | [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
+| [`setup-rbac.sh`](setup-rbac.sh) | Deploy RBAC and generate kubeconfigs | Initial setup of switchover access |
 | [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
+| [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access |
 | [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
 | [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts |
 
@@ -521,45 +523,60 @@ graph TD
 
 ### Purpose
 
-Generates a kubeconfig file that can be used to authenticate as a specific Kubernetes service account. The generated kubeconfig uses a short-lived token (24 hours by default) created via `kubectl create token`, providing secure temporary access without storing permanent credentials.
+Generates a kubeconfig file that can be used to authenticate as a specific Kubernetes service account. The generated kubeconfig uses a short-lived token (48 hours by default) created via `kubectl create token`, providing secure temporary access without storing permanent credentials.
 
 ### Usage
 
 ```bash
 # Generate kubeconfig for a service account
-./scripts/generate-sa-kubeconfig.sh [--context <context>] <namespace> <service-account-name> [duration]
+./scripts/generate-sa-kubeconfig.sh [OPTIONS] <namespace> <service-account-name>
 
 # Examples:
-# Default 24-hour token from current context
+# Default 48-hour token from current context
 ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
-# Specify explicit cluster context (flag comes first)
-./scripts/generate-sa-kubeconfig.sh --context prod-hub acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
+# Specify explicit cluster context with custom user name (prevents collisions)
+./scripts/generate-sa-kubeconfig.sh --context prod-hub --user prod-operator \
+  acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
-# Custom token duration (8 hours)
-./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 8h > operator-kubeconfig.yaml
+# Custom token duration (72 hours for long operations)
+./scripts/generate-sa-kubeconfig.sh --token-duration 72h \
+  acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
-# Combine context and custom duration
-./scripts/generate-sa-kubeconfig.sh --context staging-hub acm-switchover acm-switchover-operator 8h > operator-kubeconfig.yaml
+# Full example with all options
+./scripts/generate-sa-kubeconfig.sh \
+  --context staging-hub \
+  --user staging-operator \
+  --token-duration 8h \
+  acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # With the generated kubeconfig
 export KUBECONFIG=operator-kubeconfig.yaml
 oc get managedclusters
 ```
 
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--context <context>` | Kubernetes context to use | Current context |
+| `--user <name>` | Custom user name in kubeconfig | `<context>-<sa-name>` |
+| `--token-duration <dur>` | Token lifetime (e.g., `8h`, `48h`, `72h`) | `48h` |
+
 **Arguments:**
 
-- `[--context <context>]` - Kubernetes context to use (optional, uses current context if not specified)
 - `<namespace>` - Kubernetes namespace where the service account exists (required)
 - `<service-account-name>` - Name of the service account (required)
-- `[duration]` - Token lifetime: `1h`, `8h`, `24h` (default: `24h`)
+
+> **Tip**: Always use `--user` with unique names when generating kubeconfigs for multiple
+> clusters to prevent credential collisions when merging.
 
 ### What It Does
 
 1. Validates that the service account exists in the specified (or current) namespace
 2. Creates a short-lived token via `kubectl create token` with the specified duration
 3. Extracts cluster information from the specified (or current) kubeconfig context
-4. Generates a new kubeconfig file using the service account token
+4. Generates a new kubeconfig file using the service account token with unique user name
 5. Outputs the kubeconfig to stdout (redirect to file as needed)
 
 ### Prerequisites
@@ -616,9 +633,219 @@ graph TD
 
 ---
 
+## RBAC Bootstrap Script
+
+**File:** `setup-rbac.sh`
+
+### Purpose
+
+Automates the complete RBAC setup for the ACM switchover tool. This script deploys RBAC manifests (namespace, service accounts, roles, bindings), generates SA kubeconfigs with unique user names, and validates permissions - all in one command.
+
+### Usage
+
+```bash
+./scripts/setup-rbac.sh --admin-kubeconfig <path> --context <context> [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--admin-kubeconfig <path>` | **Required.** Path to kubeconfig with cluster-admin privileges | - |
+| `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
+| `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
+| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
+| `--skip-kubeconfig` | Skip kubeconfig generation | - |
+| `--skip-validation` | Skip RBAC validation after deployment | - |
+| `--dry-run` | Show what would be deployed without changes | - |
+
+**Examples:**
+
+```bash
+# Full setup for operator role
+./scripts/setup-rbac.sh \
+  --admin-kubeconfig ~/.kube/admin.yaml \
+  --context prod-hub \
+  --role operator
+
+# Setup both roles with custom token duration
+./scripts/setup-rbac.sh \
+  --admin-kubeconfig ~/.kube/admin.yaml \
+  --context prod-hub \
+  --token-duration 72h
+
+# Dry-run to preview changes
+./scripts/setup-rbac.sh \
+  --admin-kubeconfig ~/.kube/admin.yaml \
+  --context prod-hub \
+  --dry-run
+```
+
+### What It Does
+
+1. **Validates** cluster connection and admin privileges
+2. **Deploys** RBAC namespace and service accounts
+3. **Deploys** ClusterRoles and ClusterRoleBindings
+4. **Deploys** namespace-scoped Roles and RoleBindings (handles missing namespaces gracefully)
+5. **Generates** kubeconfigs with unique user names (using `generate-sa-kubeconfig.sh`)
+6. **Validates** permissions using `check_rbac.py`
+
+### Exit Codes
+
+- `0` - Setup completed successfully
+- `1` - Validation or deployment failed
+
+---
+
+## Merged Kubeconfig Generator
+
+**File:** `generate-merged-kubeconfig.sh`
+
+### Purpose
+
+Generates and merges kubeconfigs for multiple clusters/contexts into a single file. This simplifies multi-hub operations by providing a single kubeconfig with all necessary contexts and unique user names to prevent credential collisions.
+
+### Usage
+
+```bash
+./scripts/generate-merged-kubeconfig.sh [OPTIONS] <context:role>[,<context:role>...]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--admin-kubeconfig <path>` | Admin kubeconfig for token generation | Current kubeconfig |
+| `--output <file>` | Output merged kubeconfig file | `./merged-kubeconfig.yaml` |
+| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--namespace <ns>` | Namespace where SAs exist | `acm-switchover` |
+| `--managed-cluster` | Flag for managed cluster contexts | - |
+
+**Context List Format:**
+
+Comma-separated list of `context:role` pairs where:
+- `context` is the Kubernetes context name
+- `role` is either `operator` or `validator`
+
+**Examples:**
+
+```bash
+# Generate merged kubeconfig for two hubs with operator role
+./scripts/generate-merged-kubeconfig.sh hub1:operator,hub2:operator
+
+# Specify custom output file and token duration
+./scripts/generate-merged-kubeconfig.sh \
+  --output ~/switchover-kubeconfig.yaml \
+  --token-duration 72h \
+  hub1:operator,hub2:operator
+
+# Include managed clusters for klusterlet validation
+./scripts/generate-merged-kubeconfig.sh \
+  --output ~/full-kubeconfig.yaml \
+  hub1:operator,hub2:operator,managed1:operator
+
+# Using explicit admin kubeconfig
+./scripts/generate-merged-kubeconfig.sh \
+  --admin-kubeconfig ~/.kube/admin.yaml \
+  --output ~/switchover.yaml \
+  hub1:operator,hub2:validator
+```
+
+### What It Does
+
+1. Parses the context:role list
+2. For each entry, calls `generate-sa-kubeconfig.sh` with a unique user name (`<context>-<role>`)
+3. Merges all individual kubeconfigs using `kubectl config view --flatten`
+4. Outputs the merged kubeconfig to the specified file
+
+### Workflow Diagram
+
+```mermaid
+graph TD
+    A[Start] --> B{Context list<br/>provided?}
+    B -->|No| C[Error: Context list required]
+    C --> D[Exit 1]
+    B -->|Yes| E[Parse context:role pairs]
+    E --> F[Create temp directory]
+    F --> G[For each context:role]
+    G --> H{Valid role?}
+    H -->|No| I[Error: Invalid role]
+    I --> J[Increment failed count]
+    H -->|Yes| K[Call generate-sa-kubeconfig.sh]
+    K --> L{Generation<br/>successful?}
+    L -->|No| M[Log failure]
+    M --> J
+    L -->|Yes| N[Add to merge list]
+    N --> O[Increment success count]
+    J --> P{More entries?}
+    O --> P
+    P -->|Yes| G
+    P -->|No| Q{Any successful?}
+    Q -->|No| R[Error: No kubeconfigs generated]
+    R --> D
+    Q -->|Yes| S[Merge kubeconfigs]
+    S --> T[Write to output file]
+    T --> U[Print summary]
+    U --> V[Exit 0]
+    
+    style C fill:#ff6b6b
+    style I fill:#ffd43b
+    style R fill:#ff6b6b
+    style V fill:#51cf66
+```
+
+### Exit Codes
+
+- `0` - Merged kubeconfig generated successfully
+- `1` - One or more kubeconfigs failed to generate
+
+### Workflow Diagram
+
+```mermaid
+graph TD
+    A[Start] --> B{Admin kubeconfig<br/>provided?}
+    B -->|No| C[Error: --admin-kubeconfig required]
+    C --> D[Exit 1]
+    B -->|Yes| E{Context<br/>provided?}
+    E -->|No| F[Error: --context required]
+    F --> D
+    E -->|Yes| G[Validate cluster connection]
+    G --> H{Connected?}
+    H -->|No| I[Error: Cannot connect]
+    I --> D
+    H -->|Yes| J[Verify admin privileges]
+    J --> K{Has admin?}
+    K -->|No| L[Error: Insufficient privileges]
+    L --> D
+    K -->|Yes| M[Deploy RBAC manifests]
+    M --> N{Skip kubeconfig?}
+    N -->|Yes| O[Skip kubeconfig generation]
+    N -->|No| P[Generate SA kubeconfigs]
+    P --> Q{Skip validation?}
+    O --> Q
+    Q -->|Yes| R[Skip RBAC validation]
+    Q -->|No| S[Run check_rbac.py]
+    S --> T{Validation<br/>passed?}
+    T -->|No| U[Warning: Validation failed]
+    T -->|Yes| V[Success]
+    R --> V
+    U --> V
+    V --> W[Exit 0]
+    
+    style C fill:#ff6b6b
+    style F fill:#ff6b6b
+    style I fill:#ff6b6b
+    style L fill:#ff6b6b
+    style U fill:#ffd43b
+    style W fill:#51cf66
+```
+
+---
+
 ## Complete Switchover Workflow
 
-This diagram shows how both scripts fit into the overall switchover process:
+This diagram shows how the validation and switchover scripts fit into the overall process:
 
 ```mermaid
 graph TD
@@ -647,6 +874,10 @@ graph TD
     style L fill:#ff6b6b
     style R fill:#51cf66
 ```
+
+> **Note**: RBAC setup (`setup-rbac.sh`) and kubeconfig generation are **one-time prerequisites** 
+> done during initial deployment, not part of the operational switchover workflow. 
+> See [RBAC Deployment Guide](../docs/deployment/rbac-deployment.md) for setup instructions.
 
 ---
 
