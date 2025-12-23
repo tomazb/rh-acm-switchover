@@ -83,6 +83,208 @@ class ValidationReporter:
         logger.info("=" * 60 + "\n")
 
 
+class KubeconfigValidator:
+    """Validates kubeconfig structure and token expiration for switchover contexts.
+
+    Checks for:
+    - Duplicate user credentials across merged configs (causes auth failures)
+    - Expired or near-expiry SA tokens (parsed from JWT)
+    - Connectivity to API servers
+    """
+
+    # Warn if token expires within this many hours
+    TOKEN_EXPIRY_WARNING_HOURS = 4
+
+    def __init__(self, reporter: ValidationReporter) -> None:
+        self.reporter = reporter
+
+    def run(self, primary: KubeClient, secondary: KubeClient) -> None:
+        """Run kubeconfig validation checks."""
+        # Check connectivity (implicitly validated by KubeClient init, but verify)
+        self._check_connectivity(primary, "primary")
+        self._check_connectivity(secondary, "secondary")
+
+        # Check for duplicate users in merged kubeconfig
+        self._check_duplicate_users(primary, secondary)
+
+        # Check token expiration
+        self._check_token_expiration(primary, "primary")
+        self._check_token_expiration(secondary, "secondary")
+
+    def _check_connectivity(self, client: KubeClient, hub_label: str) -> None:
+        """Verify API server is reachable."""
+        try:
+            # A simple API call to verify connectivity
+            # The KubeClient should have already validated this, but let's confirm
+            client.list_namespaces()
+            self.reporter.add_result(
+                f"API Connectivity ({hub_label})",
+                True,
+                f"Successfully connected to {hub_label} hub API server",
+                critical=True,
+            )
+        except Exception as e:
+            self.reporter.add_result(
+                f"API Connectivity ({hub_label})",
+                False,
+                f"Cannot connect to {hub_label} hub: {str(e)}",
+                critical=True,
+            )
+
+    def _check_duplicate_users(self, primary: KubeClient, secondary: KubeClient) -> None:
+        """Check for duplicate user names across merged kubeconfigs.
+
+        When merging kubeconfigs from multiple clusters with the same SA names,
+        credentials can collide and cause authentication failures.
+        """
+        try:
+            from kubernetes import config as k8s_config
+
+            # Load the current kubeconfig to check for duplicates
+            contexts, active_context = k8s_config.list_kube_config_contexts()
+            if not contexts:
+                return
+
+            # Extract user names and check for potential collisions
+            user_to_contexts: Dict[str, List[str]] = {}
+            for ctx in contexts:
+                ctx_name = ctx.get("name", "unknown")
+                user_name = ctx.get("context", {}).get("user", "unknown")
+                if user_name not in user_to_contexts:
+                    user_to_contexts[user_name] = []
+                user_to_contexts[user_name].append(ctx_name)
+
+            # Find duplicate user names (potential credential collision)
+            duplicates = {u: ctxs for u, ctxs in user_to_contexts.items() if len(ctxs) > 1}
+
+            if duplicates:
+                # Check if our contexts are affected
+                our_contexts = {primary.context_name, secondary.context_name}
+                affected = []
+                for user, ctxs in duplicates.items():
+                    affected_ctxs = [c for c in ctxs if c in our_contexts]
+                    if len(affected_ctxs) > 0:
+                        affected.append(f"user '{user}' in contexts: {', '.join(ctxs)}")
+
+                if affected:
+                    self.reporter.add_result(
+                        "Kubeconfig User Names",
+                        False,
+                        f"Potential credential collision detected: {'; '.join(affected)}. "
+                        "Consider regenerating kubeconfigs with unique --user names.",
+                        critical=False,  # Warning, not fatal
+                    )
+                else:
+                    self.reporter.add_result(
+                        "Kubeconfig User Names",
+                        True,
+                        "No duplicate user names detected for switchover contexts",
+                        critical=False,
+                    )
+            else:
+                self.reporter.add_result(
+                    "Kubeconfig User Names",
+                    True,
+                    "All user names are unique in kubeconfig",
+                    critical=False,
+                )
+        except Exception as e:
+            logger.debug("Could not check for duplicate users: %s", str(e))
+            # Non-critical, skip if we can't check
+
+    def _check_token_expiration(self, client: KubeClient, hub_label: str) -> None:
+        """Check if the token for this context is expired or near expiry.
+
+        Parses JWT token to extract expiration time.
+        """
+        try:
+            import base64
+            import json
+
+            from kubernetes import config as k8s_config
+
+            # Get the token for this context
+            contexts, _ = k8s_config.list_kube_config_contexts()
+            context_config = next((c for c in contexts if c["name"] == client.context_name), None)
+            if not context_config:
+                return
+
+            user_name = context_config.get("context", {}).get("user", "")
+            if not user_name:
+                return
+
+            # Load raw kubeconfig to get token
+            import os
+            kubeconfig_path = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+            kubeconfig_data = k8s_config.kube_config.load_kube_config_from_dict(
+                k8s_config.kube_config._get_kube_config_loader_for_yaml_file(kubeconfig_path)._config
+            ) if False else None  # Placeholder - we'll use a different approach
+
+            # Actually, let's use the simpler approach - try to decode the token from config
+            loader = k8s_config.kube_config._get_kube_config_loader_for_yaml_file(kubeconfig_path)
+            loader.set_active_context(client.context_name)
+
+            token = None
+            for user in loader._config.get("users", []):
+                if user.get("name") == user_name:
+                    token = user.get("user", {}).get("token")
+                    break
+
+            if not token:
+                # No token found - might be using client certs or other auth
+                return
+
+            # Parse JWT (format: header.payload.signature)
+            parts = token.split(".")
+            if len(parts) != 3:
+                return  # Not a JWT
+
+            # Decode payload (middle part)
+            # Add padding if needed
+            payload_b64 = parts[1]
+            padding = 4 - len(payload_b64) % 4
+            if padding != 4:
+                payload_b64 += "=" * padding
+
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+            exp_timestamp = payload.get("exp")
+            if not exp_timestamp:
+                return
+
+            exp_time = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
+            now = datetime.now(tz=timezone.utc)
+
+            if exp_time < now:
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    False,
+                    f"Token for {hub_label} hub has EXPIRED at {exp_time.isoformat()}. "
+                    "Regenerate kubeconfig with fresh token.",
+                    critical=True,
+                )
+            elif (exp_time - now).total_seconds() < self.TOKEN_EXPIRY_WARNING_HOURS * 3600:
+                hours_left = (exp_time - now).total_seconds() / 3600
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    True,  # Pass but warn
+                    f"Token for {hub_label} hub expires in {hours_left:.1f} hours. "
+                    "Consider regenerating for longer operations.",
+                    critical=False,
+                )
+            else:
+                hours_left = (exp_time - now).total_seconds() / 3600
+                self.reporter.add_result(
+                    f"Token Expiration ({hub_label})",
+                    True,
+                    f"Token valid for {hours_left:.1f} more hours",
+                    critical=False,
+                )
+
+        except Exception as e:
+            logger.debug("Could not check token expiration for %s: %s", hub_label, str(e))
+            # Non-critical - skip if we can't parse token
+
+
 class ToolingValidator:
     """Validates required command-line tools exist for operator workflows."""
 
