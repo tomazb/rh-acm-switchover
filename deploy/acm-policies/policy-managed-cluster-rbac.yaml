@@ -1,0 +1,276 @@
+---
+# ACM Policy to deploy RBAC for ACM Switchover tool on managed clusters
+# This policy deploys the Role/RoleBinding needed in the open-cluster-management-agent
+# namespace for klusterlet reconnection operations during hub switchover.
+#
+# The open-cluster-management-agent namespace exists on managed clusters (not hubs)
+# and contains the klusterlet agent that connects the managed cluster to the hub.
+# During switchover, the tool may need to:
+# - Delete and recreate the bootstrap-hub-kubeconfig secret
+# - Restart the klusterlet deployment to pick up new hub connection
+#
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: policy-acm-switchover-managed-cluster-rbac
+  namespace: open-cluster-management-policies
+  annotations:
+    policy.open-cluster-management.io/standards: NIST-CSF
+    policy.open-cluster-management.io/categories: PR.AC Identity Management Authentication and Access Control
+    policy.open-cluster-management.io/controls: PR.AC-4 Access Control
+    policy.open-cluster-management.io/description: >-
+      Deploys RBAC resources for ACM Switchover klusterlet reconnection on managed clusters.
+      This policy creates Role and RoleBinding in the open-cluster-management-agent namespace
+      to allow the switchover tool to manage klusterlet bootstrap secrets and restart deployments.
+spec:
+  remediationAction: inform
+  disabled: false
+  policy-templates:
+    # Ensure ACM Switchover namespace exists on managed clusters
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: policy-acm-switchover-managed-namespace
+        spec:
+          remediationAction: inform
+          severity: high
+          namespaceSelector:
+            exclude:
+              - kube-*
+            include:
+              - '*'
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: v1
+                kind: Namespace
+                metadata:
+                  name: acm-switchover
+                  labels:
+                    app.kubernetes.io/name: acm-switchover
+                    app.kubernetes.io/component: automation
+                    app.kubernetes.io/managed-by: acm-policy
+
+    # Ensure operator service account exists on managed clusters
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: policy-acm-switchover-managed-operator-sa
+        spec:
+          remediationAction: inform
+          severity: high
+          namespaceSelector:
+            include:
+              - acm-switchover
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: v1
+                kind: ServiceAccount
+                metadata:
+                  name: acm-switchover-operator
+                  namespace: acm-switchover
+                  labels:
+                    app.kubernetes.io/name: acm-switchover
+                    app.kubernetes.io/component: operator
+                automountServiceAccountToken: true
+
+    # Ensure validator service account exists on managed clusters
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: policy-acm-switchover-managed-validator-sa
+        spec:
+          remediationAction: inform
+          severity: medium
+          namespaceSelector:
+            include:
+              - acm-switchover
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: v1
+                kind: ServiceAccount
+                metadata:
+                  name: acm-switchover-validator
+                  namespace: acm-switchover
+                  labels:
+                    app.kubernetes.io/name: acm-switchover
+                    app.kubernetes.io/component: validator
+                automountServiceAccountToken: true
+
+    # Role for operator in open-cluster-management-agent namespace
+    # Used for klusterlet reconnection during hub switchover
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: policy-acm-switchover-agent-role-operator
+        spec:
+          remediationAction: inform
+          severity: high
+          namespaceSelector:
+            include:
+              - open-cluster-management-agent
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: rbac.authorization.k8s.io/v1
+                kind: Role
+                metadata:
+                  name: acm-switchover-operator
+                  namespace: open-cluster-management-agent
+                  labels:
+                    app.kubernetes.io/name: acm-switchover
+                    app.kubernetes.io/component: operator
+                    app.kubernetes.io/role: operator
+                rules:
+                  # Secrets - for managing bootstrap-hub-kubeconfig during reconnection
+                  - apiGroups: [""]
+                    resources: ["secrets"]
+                    verbs: ["get", "create", "delete"]
+                  # Deployments - for restarting klusterlet after config change
+                  - apiGroups: ["apps"]
+                    resources: ["deployments"]
+                    verbs: ["get", "patch"]
+
+    # Role for validator in open-cluster-management-agent namespace (read-only)
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: policy-acm-switchover-agent-role-validator
+        spec:
+          remediationAction: inform
+          severity: medium
+          namespaceSelector:
+            include:
+              - open-cluster-management-agent
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: rbac.authorization.k8s.io/v1
+                kind: Role
+                metadata:
+                  name: acm-switchover-validator
+                  namespace: open-cluster-management-agent
+                  labels:
+                    app.kubernetes.io/name: acm-switchover
+                    app.kubernetes.io/component: validator
+                    app.kubernetes.io/role: validator
+                rules:
+                  # Secrets - read-only for validation
+                  - apiGroups: [""]
+                    resources: ["secrets"]
+                    verbs: ["get"]
+                  # Deployments - read-only for validation
+                  - apiGroups: ["apps"]
+                    resources: ["deployments"]
+                    verbs: ["get"]
+
+    # RoleBinding for operator in open-cluster-management-agent namespace
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: policy-acm-switchover-agent-rb-operator
+        spec:
+          remediationAction: inform
+          severity: high
+          namespaceSelector:
+            include:
+              - open-cluster-management-agent
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: rbac.authorization.k8s.io/v1
+                kind: RoleBinding
+                metadata:
+                  name: acm-switchover-operator
+                  namespace: open-cluster-management-agent
+                  labels:
+                    app.kubernetes.io/name: acm-switchover
+                    app.kubernetes.io/component: operator
+                roleRef:
+                  apiGroup: rbac.authorization.k8s.io
+                  kind: Role
+                  name: acm-switchover-operator
+                subjects:
+                  - kind: ServiceAccount
+                    name: acm-switchover-operator
+                    namespace: acm-switchover
+
+    # RoleBinding for validator in open-cluster-management-agent namespace
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: policy-acm-switchover-agent-rb-validator
+        spec:
+          remediationAction: inform
+          severity: medium
+          namespaceSelector:
+            include:
+              - open-cluster-management-agent
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: rbac.authorization.k8s.io/v1
+                kind: RoleBinding
+                metadata:
+                  name: acm-switchover-validator
+                  namespace: open-cluster-management-agent
+                  labels:
+                    app.kubernetes.io/name: acm-switchover
+                    app.kubernetes.io/component: validator
+                roleRef:
+                  apiGroup: rbac.authorization.k8s.io
+                  kind: Role
+                  name: acm-switchover-validator
+                subjects:
+                  - kind: ServiceAccount
+                    name: acm-switchover-validator
+                    namespace: acm-switchover
+
+---
+# PlacementRule to apply policy to managed clusters only (exclude local-cluster/hub)
+apiVersion: apps.open-cluster-management.io/v1
+kind: PlacementRule
+metadata:
+  name: placement-policy-acm-switchover-managed-cluster-rbac
+  namespace: open-cluster-management-policies
+spec:
+  clusterConditions:
+    - status: "True"
+      type: ManagedClusterConditionAvailable
+  clusterSelector:
+    matchExpressions:
+      # Exclude local-cluster (the hub itself)
+      - key: local-cluster
+        operator: NotIn
+        values:
+          - "true"
+      # Only target OpenShift clusters
+      - key: vendor
+        operator: In
+        values:
+          - OpenShift
+
+---
+# PlacementBinding to bind policy to placement rule
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: binding-policy-acm-switchover-managed-cluster-rbac
+  namespace: open-cluster-management-policies
+placementRef:
+  name: placement-policy-acm-switchover-managed-cluster-rbac
+  kind: PlacementRule
+  apiGroup: apps.open-cluster-management.io
+subjects:
+  - name: policy-acm-switchover-managed-cluster-rbac
+    kind: Policy
+    apiGroup: policy.open-cluster-management.io
