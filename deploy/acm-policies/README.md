@@ -85,7 +85,7 @@ kubectl apply -f deploy/acm-policies/policy-managed-cluster-rbac.yaml
 kubectl get policy -n open-cluster-management-policies
 
 # Check managed cluster policy targets (should exclude local-cluster)
-kubectl get placementrule placement-policy-acm-switchover-managed-cluster-rbac \
+kubectl get placementrule placement-policy-switchover-mc-rbac \
   -n open-cluster-management-policies \
   -o jsonpath='{.status.decisions[*].clusterName}'
 ```
@@ -99,7 +99,7 @@ kubectl get policy policy-acm-switchover-rbac \
   -o yaml
 
 # View managed cluster policy status
-kubectl get policy policy-acm-switchover-managed-cluster-rbac \
+kubectl get policy policy-switchover-mc-rbac \
   -n open-cluster-management-policies \
   -o yaml
 
