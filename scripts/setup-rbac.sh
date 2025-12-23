@@ -47,9 +47,7 @@ source "${SCRIPT_DIR}/lib-common.sh"
 # =============================================================================
 # Configuration
 # =============================================================================
-SWITCHOVER_NAMESPACE="acm-switchover"
-OPERATOR_SA="acm-switchover-operator"
-VALIDATOR_SA="acm-switchover-validator"
+# RBAC constants (SWITCHOVER_NAMESPACE, OPERATOR_SA, VALIDATOR_SA) are sourced from constants.sh
 RBAC_MANIFEST_DIR="${REPO_ROOT}/deploy/rbac"
 
 # =============================================================================
@@ -274,6 +272,7 @@ apply_manifest() {
 }
 
 # Function to filter and apply manifest for specific role
+# Uses yq to select only YAML documents matching the role label
 apply_role_filtered() {
     local manifest="$1"
     local description="$2"
@@ -290,10 +289,53 @@ apply_role_filtered() {
         return $?
     fi
     
-    # Filter YAML documents by role label using yq if available, otherwise apply all and let kubectl filter
-    # For simplicity, we'll apply the whole file - Kubernetes is idempotent
-    # In a production scenario, you might use yq to filter
-    apply_manifest "$manifest" "$description (filtered for: $target_role)"
+    # Filter YAML documents by app.kubernetes.io/role label using yq
+    # This ensures only resources for the selected role are applied (least-privilege)
+    if ! command -v yq &>/dev/null; then
+        check_fail "yq is required for role-filtered deployment. Install yq or use --role both"
+        echo "  Install yq: https://github.com/mikefarah/yq#install" >&2
+        return 1
+    fi
+    
+    # Create temporary file for filtered manifest
+    local temp_manifest
+    temp_manifest=$(mktemp)
+    trap 'rm -f "$temp_manifest"' RETURN
+    
+    # Filter YAML documents where metadata.labels."app.kubernetes.io/role" matches target_role
+    # yq 'select(.metadata.labels."app.kubernetes.io/role" == "operator")' handles multi-doc YAML
+    if ! yq "select(.metadata.labels.\"app.kubernetes.io/role\" == \"$target_role\")" "$manifest" > "$temp_manifest" 2>/dev/null; then
+        check_fail "Failed to filter manifest for role: $target_role"
+        return 1
+    fi
+    
+    # Check if any documents matched
+    if [[ ! -s "$temp_manifest" ]]; then
+        check_warn "No resources found for role '$target_role' in $manifest"
+        return 0
+    fi
+    
+    # Apply the filtered manifest
+    if $DRY_RUN; then
+        echo "  Would apply (filtered for $target_role): $manifest"
+        # Validate the filtered manifest is valid YAML
+        # shellcheck disable=SC2086
+        if kubectl $KUBECTL_ARGS apply --dry-run=client -f "$temp_manifest" &>/dev/null; then
+            check_pass "[dry-run] $description (role: $target_role)"
+        else
+            check_fail "[dry-run] $description (role: $target_role) - invalid manifest"
+            return 1
+        fi
+    else
+        # shellcheck disable=SC2086
+        if kubectl $KUBECTL_ARGS apply -f "$temp_manifest" &>/dev/null; then
+            check_pass "$description (role: $target_role)"
+        else
+            check_fail "$description (role: $target_role)"
+            return 1
+        fi
+    fi
+    return 0
 }
 
 # Check which namespaces exist (for graceful handling of optional components)
