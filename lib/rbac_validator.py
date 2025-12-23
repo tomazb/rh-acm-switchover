@@ -72,6 +72,7 @@ class RBACValidator:
             ("", "secrets", ["get"]),  # For Thanos object storage config
             ("apps", "deployments", ["get", "patch"]),
             ("apps", "statefulsets", ["get", "patch"]),
+            ("apps", "statefulsets/scale", ["get", "patch"]),  # For Thanos compactor scaling
             ("route.openshift.io", "routes", ["get"]),  # For Grafana route access
         ],
         "multicluster-engine": [
