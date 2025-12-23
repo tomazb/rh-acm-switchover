@@ -244,19 +244,23 @@ For detailed ACM Policy usage, see [deploy/acm-policies/README.md](../../deploy/
 Use the built-in RBAC checker:
 
 ```bash
-# Check current context
-python check_rbac.py
+# Check operator permissions (default - full operational access)
+python check_rbac.py --role operator
+
+# Check validator permissions (read-only access)
+python check_rbac.py --role validator
 
 # Check specific context
-python check_rbac.py --context primary-hub
+python check_rbac.py --context primary-hub --role operator
 
 # Check both hubs
 python check_rbac.py \
   --primary-context primary-hub \
-  --secondary-context secondary-hub
+  --secondary-context secondary-hub \
+  --role operator
 
 # Include decommission permissions
-python check_rbac.py --include-decommission
+python check_rbac.py --include-decommission --role operator
 ```
 
 ### Manual Verification
@@ -265,6 +269,7 @@ python check_rbac.py --include-decommission
 # Test operator permissions
 kubectl auth can-i list managedclusters \
   --as=system:serviceaccount:acm-switchover:acm-switchover-operator
+
 
 # Test validator permissions (should be read-only)
 kubectl auth can-i patch managedclusters \
@@ -306,67 +311,62 @@ SA_TOKEN=$(kubectl create token acm-switchover-operator \
 
 ### Generate kubeconfig for Service Account
 
-Use the helper script (create it first):
+Use the included helper script:
 
 ```bash
-# Create kubeconfig generator script
-cat > /tmp/generate-sa-kubeconfig.sh <<'EOF'
-#!/bin/bash
-# Generate kubeconfig for service account
+# Generate kubeconfig for operator on current context
+./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator \
+  > /tmp/operator-kubeconfig.yaml
 
-NAMESPACE=${1:-acm-switchover}
-SA_NAME=${2:-acm-switchover-operator}
+# Generate with specific context
+./scripts/generate-sa-kubeconfig.sh --context primary-hub \
+  acm-switchover acm-switchover-operator \
+  > /tmp/primary-operator.kubeconfig
 
-# Get cluster info
-CLUSTER_NAME=$(kubectl config view --minify -o jsonpath='{.clusters[0].name}')
-SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-CA_DATA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
-
-# Generate token
-TOKEN=$(kubectl create token ${SA_NAME} -n ${NAMESPACE} --duration=24h)
-
-# Create kubeconfig
-cat <<KUBECONFIG
-apiVersion: v1
-kind: Config
-clusters:
-- cluster:
-    certificate-authority-data: ${CA_DATA}
-    server: ${SERVER}
-  name: ${CLUSTER_NAME}
-contexts:
-- context:
-    cluster: ${CLUSTER_NAME}
-    user: ${SA_NAME}
-  name: ${SA_NAME}@${CLUSTER_NAME}
-current-context: ${SA_NAME}@${CLUSTER_NAME}
-users:
-- name: ${SA_NAME}
-  user:
-    token: ${TOKEN}
-KUBECONFIG
-EOF
-
-chmod +x /tmp/generate-sa-kubeconfig.sh
-```
-
-Generate kubeconfig:
-
-```bash
-# Generate for operator
-/tmp/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > /tmp/operator-kubeconfig.yaml
+# Generate with custom token duration (8 hours)
+./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator 8h \
+  > /tmp/operator-kubeconfig.yaml
 
 # Test it
 kubectl --kubeconfig=/tmp/operator-kubeconfig.yaml get managedclusters
 ```
 
+### Merging Kubeconfigs for Multi-Hub Operations
+
+When running switchover between two hubs, you need a merged kubeconfig with both contexts.
+
+> **Important**: Each kubeconfig must use unique user names. When generating kubeconfigs
+> from different clusters with the same service account name, the user entries can collide
+> and cause authentication failures.
+
+```bash
+# Generate kubeconfigs for both hubs (use unique names)
+./scripts/generate-sa-kubeconfig.sh --context primary-hub \
+  acm-switchover acm-switchover-operator \
+  > /tmp/primary-operator.kubeconfig
+
+./scripts/generate-sa-kubeconfig.sh --context secondary-hub \
+  acm-switchover acm-switchover-operator \
+  > /tmp/secondary-operator.kubeconfig
+
+# Merge kubeconfigs
+KUBECONFIG="/tmp/primary-operator.kubeconfig:/tmp/secondary-operator.kubeconfig" \
+  kubectl config view --flatten > /tmp/merged-operator.kubeconfig
+
+# Verify contexts are available
+kubectl --kubeconfig=/tmp/merged-operator.kubeconfig config get-contexts
+```
+
+If you encounter authentication issues after merging, verify that user names in the
+merged kubeconfig are unique (check the `users:` section).
+
 ### Run Switchover with Service Account
 
 ```bash
 # Export kubeconfig
-export KUBECONFIG=/tmp/operator-kubeconfig.yaml
+export KUBECONFIG=/tmp/merged-operator.kubeconfig
 
-# Run switchover
+# Run switchover (use context names from merged kubeconfig)
 python acm_switchover.py \
   --primary-context default \
   --secondary-context default \

@@ -215,6 +215,70 @@ kubectl get policy policy-acm-switchover-rbac \
 
 ## Troubleshooting
 
+### Governance Addon Not Installed on Managed Clusters
+
+The managed cluster policy requires the ACM governance addon to be installed on managed
+clusters for ConfigurationPolicy enforcement to work. If policies propagate but resources
+are not created, check if the governance addon is installed:
+
+```bash
+# Check for governance addon on managed cluster
+kubectl get deploy -n open-cluster-management-agent-addon | grep governance
+
+# If no governance addon, you have two options:
+# 1. Enable governance addon via ManagedClusterAddon
+kubectl apply -f - <<EOF
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: ManagedClusterAddOn
+metadata:
+  name: governance-policy-framework
+  namespace: <managed-cluster-name>
+spec:
+  installNamespace: open-cluster-management-agent-addon
+EOF
+
+# 2. Deploy RBAC directly via kubectl (if governance addon not available)
+kubectl --context <managed-cluster-context> apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acm-switchover
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: acm-switchover-operator
+  namespace: acm-switchover
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acm-switchover-operator
+  namespace: open-cluster-management-agent
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acm-switchover-operator
+  namespace: open-cluster-management-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acm-switchover-operator
+subjects:
+  - kind: ServiceAccount
+    name: acm-switchover-operator
+    namespace: acm-switchover
+EOF
+```
+
 ### Policy Not Applying to Clusters
 
 ```bash
