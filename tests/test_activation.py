@@ -197,6 +197,56 @@ class TestSecondaryActivation:
         assert result is False
 
     @patch("modules.activation.wait_for_condition")
+    def test_activate_already_activated_idempotent(
+        self, mock_wait, activation_passive, mock_secondary_client, mock_state_manager
+    ):
+        """Test that activation is idempotent when already activated.
+
+        If veleroManagedClustersBackupName is already 'latest', the tool should
+        skip the patch and proceed without errors. This handles resume scenarios
+        where activation was previously completed.
+        """
+        mock_wait.return_value = True
+
+        # Mock restore already activated (veleroManagedClustersBackupName = latest)
+        def get_custom_resource_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
+                return {
+                    "metadata": {
+                        "name": RESTORE_PASSIVE_SYNC_NAME,
+                        "resourceVersion": "100",
+                    },
+                    "status": {
+                        "phase": "Finished",  # Already completed
+                        "lastMessage": "All Velero restores have run successfully",
+                    },
+                    "spec": {
+                        SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
+                        SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,  # Already set!
+                    },
+                }
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
+                return {"status": {"phase": "Completed"}}
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+
+        # Mock list for restore discovery
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            }
+        ]
+
+        result = activation_passive.activate()
+
+        assert result is True
+
+        # Patch should NOT have been called since value was already correct
+        mock_secondary_client.patch_custom_resource.assert_not_called()
+
+    @patch("modules.activation.wait_for_condition")
     def test_wait_for_restore_timeout(self, mock_wait, activation_passive, mock_secondary_client):
         """Test timeout waiting for restore."""
         mock_wait.return_value = False  # Timeout

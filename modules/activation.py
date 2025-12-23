@@ -230,6 +230,15 @@ class SecondaryActivation:
                 current_mc_backup,
             )
             logger.debug("BEFORE PATCH: Full spec = %s", restore_before.get("spec", {}))
+
+            # Check if already activated (idempotent)
+            if current_mc_backup == VELERO_BACKUP_LATEST:
+                logger.info(
+                    "%s is already set to '%s' - activation already applied (idempotent)",
+                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
+                    VELERO_BACKUP_LATEST,
+                )
+                return
         else:
             logger.error("BEFORE PATCH: %s not found!", restore_name)
             raise FatalError(f"{restore_name} not found before patching")
