@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version 1.5.x is reserved for packaging and distribution work.
 
+## [1.4.4] - 2025-12-23
+
+### Fixed
+
+- **Activation idempotent when already completed**: Fixed an issue where the tool would fail patch verification if `veleroManagedClustersBackupName` was already set to `latest` from a previous run. The tool now recognizes this as a valid idempotent state and skips the patch, allowing resume scenarios to succeed.
+
+- **Klusterlet fix triggered automatically when clusters don't connect**: Improved post-activation verification to automatically fix klusterlet connections when managed clusters don't connect after a brief initial wait (120s). Previously, the tool would wait the full 600s timeout and fail. Now it checks if klusterlets are pointing to the old hub and applies import manifests to update them before waiting again. This is especially important for switchovers where `useManagedServiceAccount` may not have been configured on previous backups.
+
 ## [1.4.3] - 2025-12-22
 
 ### Added
