@@ -159,7 +159,7 @@ class KubeconfigValidator:
 
             if duplicates:
                 # Check if our contexts are affected
-                our_contexts = {primary.context_name, secondary.context_name}
+                our_contexts = {primary.context, secondary.context}
                 affected = []
                 for user, ctxs in duplicates.items():
                     affected_ctxs = [c for c in ctxs if c in our_contexts]
