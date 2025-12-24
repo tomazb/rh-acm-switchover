@@ -233,15 +233,13 @@ for entry in "${CONTEXTS[@]}"; do
     sa_name=""
     
     if $MANAGED_CLUSTER_MODE; then
-        # For managed clusters, use the klusterlet namespace and service account
-        # Managed clusters use 'open-cluster-management-agent' namespace
-        # with klusterlet service accounts for validation operations
-        sa_namespace="open-cluster-management-agent"
-        if [[ "$role" == "operator" ]]; then
-            sa_name="klusterlet"
-        else
-            sa_name="klusterlet"  # Validator uses same SA on managed clusters
-        fi
+        # For managed clusters, all switchover operations (both operator and validator roles)
+        # are executed using the same klusterlet service account in the
+        # 'open-cluster-management-agent' namespace. Managed clusters do not have
+        # separate operator/validator SAs, so the role is only used for naming here,
+        # not for choosing a different service account.
+        sa_namespace="${MANAGED_CLUSTER_NAMESPACE:-open-cluster-management-agent}"
+        sa_name="${MANAGED_CLUSTER_SA:-klusterlet}"
     else
         # Hub clusters use the standard switchover service accounts
         if [[ "$role" == "operator" ]]; then
@@ -254,8 +252,12 @@ for entry in "${CONTEXTS[@]}"; do
     # Generate unique user name: context-role pattern
     user_name="${context}-${role}"
     
+    # Sanitize context name for safe filesystem usage
+    # Replace characters that are problematic in filenames (/, :, etc.) with underscores
+    safe_context=$(echo "$context" | tr '/:\\' '_')
+    
     # Output file for this kubeconfig
-    output_path="${TEMP_DIR}/${context}-${role}.yaml"
+    output_path="${TEMP_DIR}/${safe_context}-${role}.yaml"
     
     echo ""
     echo "Generating kubeconfig for: $context ($role)"
@@ -268,7 +270,7 @@ for entry in "${CONTEXTS[@]}"; do
         --context "$context" \
         --user "$user_name" \
         --token-duration "$TOKEN_DURATION" \
-        "$sa_namespace" "$sa_name" > "$output_path" 2>/dev/null; then
+        "$sa_namespace" "$sa_name" > "$output_path"; then
         
         check_pass "Generated: $context ($role) -> user: $user_name"
         
@@ -332,9 +334,10 @@ for kubeconfig_file in ${KUBECONFIG_PATHS//:/ }; do
                 else
                     # Fallback: Use sed with escaped regex metacharacters
                     # Escape sed-special characters: . * [ ] ^ $ / \ ? + ( ) { } |
+                    # Note: Forward slash must be escaped since it's the sed delimiter
                     # shellcheck disable=SC2016 # Single quotes intentional - we want literal regex, not expansion
-                    escaped_current=$(printf '%s\n' "$current_cluster" | sed 's/[.[\*^$()+?{|]/\\&/g; s/]/\\]/g')
-                    escaped_new=$(printf '%s\n' "$new_cluster" | sed 's/[&/\]/\\&/g')
+                    escaped_current=$(printf '%s\n' "$current_cluster" | sed 's/[.[\/\*^$()+?{|]/\\&/g; s/]/\\]/g')
+                    escaped_new=$(printf '%s\n' "$new_cluster" | sed 's/[&/\\]/\\&/g')
                     sed -i "s/cluster: ${escaped_current}/cluster: ${escaped_new}/g; s/name: ${escaped_current}/name: ${escaped_new}/g" "$kubeconfig_file" 2>/dev/null || true
                 fi
             fi
