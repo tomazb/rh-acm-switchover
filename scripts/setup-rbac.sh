@@ -304,7 +304,7 @@ apply_role_filtered() {
     
     # Filter YAML documents where metadata.labels."app.kubernetes.io/role" matches target_role
     # yq 'select(.metadata.labels."app.kubernetes.io/role" == "operator")' handles multi-doc YAML
-    if ! yq "select(.metadata.labels.\"app.kubernetes.io/role\" == \"$target_role\")" "$manifest" > "$temp_manifest" 2>/dev/null; then
+    if ! yq "select(.metadata.labels.\"app.kubernetes.io/role\" == \"$target_role\")" "$manifest" > "$temp_manifest"; then
         check_fail "Failed to filter manifest for role: $target_role"
         return 1
     fi
