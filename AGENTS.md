@@ -123,6 +123,8 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 
 **IMPORTANT**: Python and Bash versions MUST always be in sync. When making changes to either Python or Bash code, update BOTH version files to the same version.
 
+Container image and Helm chart metadata follow the same version: the Containerfile `version` label and the Helm chart `appVersion` should match the Python/Bash tool version; bump the Helm chart `version` alongside releases.
+
 ### Version Locations
 
 | Component | File | Variables |
@@ -130,6 +132,8 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 | **Bash Scripts** | `scripts/constants.sh` | `SCRIPT_VERSION`, `SCRIPT_VERSION_DATE` |
 | **Python Tool** | `lib/__init__.py` | `__version__`, `__version_date__` |
 | **README** | `README.md` | Version badge at top of file |
+| **Container Image** | `container-bootstrap/Containerfile` | `LABEL version` |
+| **Helm Chart** | `deploy/helm/Chart.yaml` | `version`, `appVersion` (appVersion = tool version) |
 
 ### Bash Scripts Version
 
@@ -180,15 +184,19 @@ Location: `CHANGELOG.md`
 When making script changes:
 1. [ ] Update `SCRIPT_VERSION` in `scripts/constants.sh`
 2. [ ] Update `SCRIPT_VERSION_DATE` to current date
-3. [ ] Update version in `README.md` (top of file)
-4. [ ] Add changelog entry in `CHANGELOG.md`
-5. [ ] Update `scripts/README.md` if new features/checks added
-6. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
+4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/Chart.yaml](deploy/helm/Chart.yaml)
+5. [ ] Update version in `README.md` (top of file)
+6. [ ] Add changelog entry in `CHANGELOG.md`
+7. [ ] Update `scripts/README.md` if new features/checks added
+8. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
 
 When making Python code changes:
 1. [ ] Update `__version__` in `lib/__init__.py`
 2. [ ] Update `__version_date__` to current date
-3. [ ] Update version in `README.md` (top of file)
-4. [ ] Add changelog entry in `CHANGELOG.md`
-5. [ ] Keep Python and Bash versions in sync if changes affect both
-6. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
+4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/Chart.yaml](deploy/helm/Chart.yaml)
+5. [ ] Update version in `README.md` (top of file)
+6. [ ] Add changelog entry in `CHANGELOG.md`
+7. [ ] Keep Python and Bash versions in sync if changes affect both
+8. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
