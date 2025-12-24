@@ -398,7 +398,6 @@ class InputValidator:
                     raise ValidationError("--role must be one of: operator, validator, both")
             # Validate token-duration format (basic check for number + unit)
             if hasattr(args, "token_duration") and args.token_duration:
-                import re
                 if not re.match(r"^\d+[hms]$", args.token_duration):
                     raise ValidationError(
                         "--token-duration must be in format like '48h', '30m', or '3600s'"
