@@ -106,25 +106,37 @@ classDiagram
         +sanitize_context_identifier()
     }
 
-    class ValidationError {
-        <<Exception>>
+    class SwitchoverError {
+        <<Base Exception>>
         +__init__()
     }
 
-    class SecurityValidationError {
-        <<Exception>>
+    class FatalError {
+        <<Non-Recoverable>>
         +__init__()
     }
 
     class ConfigurationError {
-        <<Exception>>
+        <<Invalid Config>>
         +__init__()
     }
 
+    class ValidationError {
+        <<Validation Failure>>
+        +__init__()
+    }
+
+    class SecurityValidationError {
+        <<Security Failure>>
+        +__init__()
+    }
+
+    SwitchoverError <|-- FatalError : Inherits
+    FatalError <|-- ConfigurationError : Inherits
+    ConfigurationError <|-- ValidationError : Inherits
+    ValidationError <|-- SecurityValidationError : Inherits
     InputValidator --> ValidationError : Raises
     InputValidator --> SecurityValidationError : Raises
-    ValidationError --|> ConfigurationError : Inherits
-    SecurityValidationError --|> ValidationError : Inherits
 ```
 
 ### Validation Module Structure
@@ -327,8 +339,23 @@ def _check_namespace(self, kube_client: KubeClient, namespace: str, hub_label: s
 
 ```mermaid
 classDiagram
-    class ConfigurationError {
+    class SwitchoverError {
         <<Base Exception>>
+        +message: str
+    }
+
+    class TransientError {
+        <<Recoverable>>
+        +message: str
+    }
+
+    class FatalError {
+        <<Non-Recoverable>>
+        +message: str
+    }
+
+    class ConfigurationError {
+        <<Invalid Config>>
         +message: str
     }
 
@@ -342,6 +369,9 @@ classDiagram
         +message: str
     }
 
+    SwitchoverError <|-- TransientError
+    SwitchoverError <|-- FatalError
+    FatalError <|-- ConfigurationError
     ConfigurationError <|-- ValidationError
     ValidationError <|-- SecurityValidationError
 ```

@@ -373,12 +373,35 @@ class InputValidator:
         if hasattr(args, "state_file") and args.state_file:
             InputValidator.validate_safe_filesystem_path(args.state_file, "state-file")
 
-        # Validate that secondary context is provided when not in decommission mode
-        if hasattr(args, "decommission") and not args.decommission:
+        # Validate that secondary context is provided when not in decommission or setup mode
+        is_decommission = hasattr(args, "decommission") and args.decommission
+        is_setup = hasattr(args, "setup") and args.setup
+        if not is_decommission and not is_setup:
             if hasattr(args, "secondary_context") and not args.secondary_context:
                 raise ValidationError("secondary-context is required for switchover operations")
 
         # Validate that --non-interactive only makes sense with --decommission
         if hasattr(args, "non_interactive") and args.non_interactive:
-            if not (hasattr(args, "decommission") and args.decommission):
+            if not is_decommission:
                 raise ValidationError("--non-interactive can only be used with --decommission")
+
+        # Validate setup-specific arguments
+        if is_setup:
+            # --admin-kubeconfig is required for setup
+            if not (hasattr(args, "admin_kubeconfig") and args.admin_kubeconfig):
+                raise ValidationError("--admin-kubeconfig is required for --setup mode")
+            # Validate admin-kubeconfig path
+            InputValidator.validate_safe_filesystem_path(args.admin_kubeconfig, "admin-kubeconfig")
+            # Validate role if provided
+            if hasattr(args, "role") and args.role:
+                if args.role not in ("operator", "validator", "both"):
+                    raise ValidationError("--role must be one of: operator, validator, both")
+            # Validate token-duration format (basic check for number + unit)
+            if hasattr(args, "token_duration") and args.token_duration:
+                if not re.match(r"^\d+[hms]$", args.token_duration):
+                    raise ValidationError(
+                        "--token-duration must be in format like '48h', '30m', or '3600s'"
+                    )
+            # Validate output-dir if provided
+            if hasattr(args, "output_dir") and args.output_dir:
+                InputValidator.validate_safe_filesystem_path(args.output_dir, "output-dir")

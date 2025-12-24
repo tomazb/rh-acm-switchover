@@ -15,6 +15,7 @@ from .preflight_validators import (
     BackupValidator,
     ClusterDeploymentValidator,
     HubComponentValidator,
+    KubeconfigValidator,
     ManagedClusterBackupValidator,
     NamespaceValidator,
     ObservabilityDetector,
@@ -44,6 +45,7 @@ class PreflightValidator:
         self.skip_rbac_validation = skip_rbac_validation
 
         self.reporter = ValidationReporter()
+        self.kubeconfig_validator = KubeconfigValidator(self.reporter)
         self.namespace_validator = NamespaceValidator(self.reporter)
         self.version_validator = VersionValidator(self.reporter)
         self.hub_component_validator = HubComponentValidator(self.reporter)
@@ -102,6 +104,9 @@ class PreflightValidator:
                 )
         else:
             logger.info("RBAC validation skipped (--skip-rbac-validation specified)")
+
+        # Kubeconfig structure and token validation
+        self.kubeconfig_validator.run(self.primary, self.secondary)
 
         self.tooling_validator.run()
         self.namespace_validator.run(self.primary, self.secondary)

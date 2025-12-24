@@ -66,6 +66,16 @@ export AUTO_IMPORT_STRATEGY_DEFAULT="ImportOnly"
 export AUTO_IMPORT_STRATEGY_SYNC="ImportAndSync"
 export AUTO_IMPORT_STRATEGY_DOC_URL="https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.14/html-single/clusters/index#custom-auto-import-strat"
 
+# RBAC Constants
+export SWITCHOVER_NAMESPACE="acm-switchover"
+export OPERATOR_SA="acm-switchover-operator"
+export VALIDATOR_SA="acm-switchover-validator"
+
+# Managed Cluster Constants
+# Used when generating kubeconfigs for managed clusters (--managed-cluster flag)
+export MANAGED_CLUSTER_NAMESPACE="open-cluster-management-agent"
+export MANAGED_CLUSTER_SA="klusterlet"
+
 # Timeouts / Thresholds
 export RESTORE_AGE_WARNING_SECONDS=3600 # 1 hour
 
