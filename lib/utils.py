@@ -11,6 +11,12 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
+# File locking is best-effort; fcntl isn't available on Windows.
+try:
+    import fcntl  # type: ignore
+except ImportError:  # pragma: no cover - platform-specific
+    fcntl = None  # type: ignore
+
 # Type variable for generic return type
 T = TypeVar("T")
 
@@ -142,35 +148,49 @@ class StateManager:
         """
         self._ensure_state_dir()
         temp_file = self.state_file + ".tmp"
+        lock_handle = None
 
         try:
-            # Write to temporary file with restrictive permissions
-            fd = os.open(
-                temp_file,
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                stat.S_IRUSR | stat.S_IWUSR,
-            )
+            if fcntl:
+                lock_file = self.state_file + ".lock"
+                lock_handle = open(lock_file, "w", encoding="utf-8")
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(state, f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
-            except (OSError, ValueError, TypeError):
-                # os.fdopen() takes ownership of fd, so it's closed on exception
+                # Write to temporary file with restrictive permissions
+                fd = os.open(
+                    temp_file,
+                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                    stat.S_IRUSR | stat.S_IWUSR,
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(state, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                except (OSError, ValueError, TypeError):
+                    # os.fdopen() takes ownership of fd, so it's closed on exception
+                    raise
+
+                # Atomic rename (POSIX guarantees this is atomic on same filesystem)
+                os.replace(temp_file, self.state_file)
+
+            except (OSError, ValueError, TypeError) as e:
+                # Clean up temp file if it exists
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                except OSError:
+                    pass  # Best-effort cleanup
+                logging.error("Failed to write state file %s: %s", self.state_file, e)
                 raise
-
-            # Atomic rename (POSIX guarantees this is atomic on same filesystem)
-            os.replace(temp_file, self.state_file)
-
-        except (OSError, ValueError, TypeError) as e:
-            # Clean up temp file if it exists
-            try:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-            except OSError:
-                pass  # Best-effort cleanup
-            logging.error("Failed to write state file %s: %s", self.state_file, e)
-            raise
+        finally:
+            if lock_handle:
+                try:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                lock_handle.close()
 
     def save_state(self) -> None:
         """Persist current state to disk."""
@@ -237,15 +257,24 @@ class StateManager:
         stored = self.state.get("contexts") or {}
         desired = {"primary": primary_context, "secondary": secondary_context}
 
-        if stored and (
-            stored.get("primary") not in (None, primary_context)
-            or stored.get("secondary") not in (None, secondary_context)
-        ):
+        stored_primary = stored.get("primary")
+        stored_secondary = stored.get("secondary")
+        has_progress = bool(self.state.get("completed_steps")) or self.state.get("errors") or (
+            self.state.get("current_phase") not in (None, Phase.INIT.value)
+        )
+
+        if stored_primary is None and stored_secondary is None:
+            if has_progress:
+                logging.warning(
+                    "Stored state contexts are missing for an in-progress state. Resetting state.",
+                )
+                self.state = self._new_state()
+        elif stored_primary != primary_context or stored_secondary != secondary_context:
             logging.warning(
                 "Stored state contexts (%s/%s) differ from current invocation (%s/%s). "
                 "Resetting state to avoid mixing runs.",
-                stored.get("primary"),
-                stored.get("secondary"),
+                stored_primary,
+                stored_secondary,
                 primary_context,
                 secondary_context,
             )

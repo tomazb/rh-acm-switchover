@@ -657,6 +657,7 @@ class Finalization:
                     AUTO_IMPORT_STRATEGY_DEFAULT,
                 )
                 self.secondary.delete_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+                self.state.set_config("auto_import_strategy_set", False)
                 if not self.state.is_step_completed("reset_auto_import_strategy"):
                     self.state.mark_step_completed("reset_auto_import_strategy")
             else:

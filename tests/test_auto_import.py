@@ -108,3 +108,19 @@ class TestFinalizationReset:
         fin._ensure_auto_import_default()
 
         fin.secondary.delete_configmap.assert_called_once_with(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+
+    def test_clears_state_flag_after_reset(self, tmp_path):
+        state = StateManager(str(tmp_path / "state.json"))
+        state.set_config("auto_import_strategy_set", True)
+        fin = Finalization(
+            secondary_client=Mock(),
+            state_manager=state,
+            acm_version="2.14.1",
+            manage_auto_import_strategy=False,
+        )
+        fin.secondary.get_configmap.return_value = {"data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}}
+
+        fin._ensure_auto_import_default()
+
+        fin.secondary.delete_configmap.assert_called_once_with(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+        assert state.get_config("auto_import_strategy_set") is False

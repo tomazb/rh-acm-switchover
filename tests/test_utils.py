@@ -214,6 +214,19 @@ class TestStateManager:
         assert reloaded.get_current_phase() == Phase.INIT
         assert reloaded.state["completed_steps"] == []
 
+    def test_ensure_contexts_resets_when_missing_and_in_progress(self, tmp_path):
+        """Missing contexts with in-progress state should reset for safety."""
+        state_path = tmp_path / "ctx-missing.json"
+        sm = StateManager(str(state_path))
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.mark_step_completed("step1")
+
+        reloaded = StateManager(str(state_path))
+        reloaded.ensure_contexts("primary-a", "secondary-b")
+
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.state["completed_steps"] == []
+
 
 @pytest.mark.unit
 class TestPhaseEnum:
