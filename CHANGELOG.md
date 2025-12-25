@@ -29,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version 1.5.x is reserved for packaging and distribution work.
 
+## [1.4.6] - 2025-12-25
+
+### Fixed
+
+- **State file writes serialized with file locking**: Added best-effort locking around state writes to reduce concurrent write clobbering.
+
+- **Context reset for missing contexts in in-progress state**: Prevents resuming with stale state when contexts were never persisted.
+
+- **Auto-import strategy flag cleared after reset**: Avoids repeated cleanup on later runs after restoring the default strategy.
+
 ## [1.4.5] - 2025-12-23
 
 ### Added
