@@ -115,6 +115,7 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 
 - `CHANGELOG.md` - Update `[Unreleased]` section for changes
 - `docs/development/architecture.md` - Design decisions and module descriptions
+- `docs/development/findings-report.md` - Issue backlog with identified bugs and improvements (check Status field before fixing)
 - `lib/constants.py` - All magic strings centralized here (Python)
 - `scripts/constants.sh` - All magic strings centralized here (Bash)
 - `setup.cfg` - pytest, flake8, mypy configuration
