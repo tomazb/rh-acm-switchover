@@ -5,4 +5,4 @@ acm-switchover (1.5.0-1) unstable; urgency=medium
   * Man pages and bash completions
   * State directory defaults to /var/lib/acm-switchover
 
- -- Tomaz Borstnar <tomaz@borstnar.com>  Sun, 22 Dec 2025 12:00:00 +0000
+ -- Tomaz Borstnar <tomaz@borstnar.com>  Mon, 22 Dec 2025 12:00:00 +0000

@@ -41,82 +41,116 @@ fi
 VERSION=$(cat "$REPO_ROOT/packaging/common/VERSION" 2>/dev/null || echo "unknown")
 IMAGE_TAG="acm-switchover:${VERSION}"
 
+readonly SKIP_CODE=77
+
+skip() {
+    warn "$1 (skipped, exit ${SKIP_CODE})"
+    return ${SKIP_CODE}
+}
+
 test_pip_install() {
     info "Testing pip installation in Python container..."
-    
-    $CONTAINER_CMD run --rm -v "$REPO_ROOT:/src:ro" python:3.11-slim sh -c '
+
+    if $CONTAINER_CMD run --rm -v "$REPO_ROOT:/src:ro" python:3.11-slim sh -c '
         set -e
         cd /src
         pip install --quiet .
-        
+
         # Test commands are available
         acm-switchover --version
         acm-switchover-rbac --version
         acm-switchover-state --version
-        
+
         echo "All commands work!"
-    '
-    
-    if [[ $? -eq 0 ]]; then
+    '; then
         success "pip installation test passed"
         return 0
-    else
-        fail "pip installation test failed"
-        return 1
     fi
+
+    local exit_code=$?
+    fail "pip installation test failed (exit ${exit_code})"
+    return 1
 }
 
 test_fedora_install() {
     info "Testing RPM installation on Fedora..."
-    warn "RPM test requires built RPM package - skipping for now"
-    return 0
+    skip "RPM test requires built RPM package"
 }
 
 test_ubuntu_install() {
     info "Testing DEB installation on Ubuntu..."
-    warn "DEB test requires built DEB package - skipping for now"
-    return 0
+    skip "DEB test requires built DEB package"
 }
 
 test_container_image() {
     info "Testing container image..."
-    
-    # Build image first
-    $CONTAINER_CMD build -f "$REPO_ROOT/container-bootstrap/Containerfile" -t "${IMAGE_TAG}" "$REPO_ROOT"
-    
-    # Test commands
-    $CONTAINER_CMD run --rm "${IMAGE_TAG}" --help >/dev/null
-    $CONTAINER_CMD run --rm --entrypoint python3 "${IMAGE_TAG}" /app/check_rbac.py --help >/dev/null
-    $CONTAINER_CMD run --rm --entrypoint python3 "${IMAGE_TAG}" /app/show_state.py --help >/dev/null
-    
-    if [[ $? -eq 0 ]]; then
-        success "Container image test passed"
-        return 0
-    else
-        fail "Container image test failed"
+
+    $CONTAINER_CMD build -f "$REPO_ROOT/container-bootstrap/Containerfile" -t "${IMAGE_TAG}" "$REPO_ROOT" || {
+        fail "Container image build failed"
         return 1
-    fi
+    }
+
+    $CONTAINER_CMD run --rm "${IMAGE_TAG}" --help >/dev/null || {
+        fail "Container help command failed"
+        return 1
+    }
+
+    $CONTAINER_CMD run --rm --entrypoint python3 "${IMAGE_TAG}" /app/check_rbac.py --help >/dev/null || {
+        fail "check_rbac.py help failed"
+        return 1
+    }
+
+    $CONTAINER_CMD run --rm --entrypoint python3 "${IMAGE_TAG}" /app/show_state.py --help >/dev/null || {
+        fail "show_state.py help failed"
+        return 1
+    }
+
+    success "Container image test passed"
+    return 0
 }
 
 # Main
 TEST_FORMAT="${1:-all}"
 
+run_test() {
+    local name="$1"
+    shift
+
+    local rc=0
+    if "$@"; then
+        rc=0
+    else
+        rc=$?
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        return 0
+    fi
+
+    if [[ $rc -eq ${SKIP_CODE} ]]; then
+        return 0
+    fi
+
+    fail "${name} failed (exit ${rc})"
+    return $rc
+}
+
 case "$TEST_FORMAT" in
     pip)
-        test_pip_install
+        run_test "pip" test_pip_install
         ;;
     fedora)
-        test_fedora_install
+        run_test "fedora" test_fedora_install
         ;;
     ubuntu)
-        test_ubuntu_install
+        run_test "ubuntu" test_ubuntu_install
         ;;
     container)
-        test_container_image
+        run_test "container" test_container_image
         ;;
     all)
-        test_pip_install
-        test_container_image
+        run_test "pip" test_pip_install
+        run_test "container" test_container_image
         ;;
     *)
         error "Unknown format: $TEST_FORMAT"

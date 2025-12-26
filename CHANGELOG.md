@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Packaging release workflow now lints the chart on both Helm 3.14 and Helm 4.0.
+- Added optional `autoImportStrategy` ConfigMap template to the packaging chart.
+
 ### Changed
 - Helm packaging now ships RBAC/namespace resources in `packaging/helm/acm-switchover` (Option A); standalone `deploy/helm/acm-switchover-rbac` chart deprecated.
-- Added optional `autoImportStrategy` ConfigMap template to the packaging chart.
-- Debian changelog date aligned with canonical `VERSION_DATE` (2025-12-22).
-- CI packaging workflow now lints the chart on both Helm 3.14 and Helm 4.0.
+- Debian packaging changelog date aligned with canonical `VERSION_DATE` (2025-12-22).
 
 ### Fixed
 - Version sync scripts no longer touch the deprecated RBAC chart.

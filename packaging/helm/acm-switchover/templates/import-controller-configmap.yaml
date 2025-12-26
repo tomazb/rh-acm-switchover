@@ -1,4 +1,4 @@
-{{- if and .Values.autoImportStrategy.enabled .Values.rbac.create }}
+{{- if .Values.autoImportStrategy.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -5,7 +5,7 @@ Packaging groundwork exists but critical gaps block a reliable distribution stor
 
 ## Current State
 - Packaging directories and helper scripts exist, but `packaging/common/man/` only holds Markdown sources—no pre-generated `.1`/`.1.gz` assets—so `rpmbuild`, `dpkg-buildpackage`, and Python sdists fail when they look for compressed man pages.
-- `packaging/deb/debian/changelog` still shows `Sun, 22 Dec 2024`, which conflicts with the canonical `VERSION_DATE` (2025-12-22) and would be rejected by lintian.
+- Debian packaging metadata can drift from the canonical `VERSION_DATE` (2025-12-22); keep `debian/changelog` aligned (including weekday) so lintian won’t reject builds.
 - The shipping Helm chart only templatizes the Job/CronJob/PVC pieces; `values.yaml` fields for `namespace.*` and `rbac.*` are unused, and RBAC resources remain in the separate `deploy/helm/acm-switchover-rbac` chart despite docs (CHANGELOG, AGENTS, packaging README) claiming the app chart already bundles them.
 - There is no template to automate the `import-controller-config` ConfigMap described in the runbook for auto-import strategy changes.
 - `.github/workflows` lacks the documented `pypi-publish.yml` and `packaging-release.yml`, so publishing flows cannot run.
@@ -37,7 +37,7 @@ Packaging groundwork exists but critical gaps block a reliable distribution stor
 - Consider adding a guard (e.g., `git diff --exit-code -- packaging/common/man/*.1.gz`) to the packaging-release workflow so CI fails if the artifacts fall out of sync again.
 
 ### 4. Fix Debian changelog metadata
-- Update `packaging/deb/debian/changelog` to use the canonical release date (`Sun, 22 Dec 2025 12:00:00 +0000`), ensuring the entry matches `VERSION_DATE` and lintian won’t reject the package.
+- Update `packaging/deb/debian/changelog` to use the canonical release date (`Mon, 22 Dec 2025 12:00:00 +0000`), ensuring the entry matches `VERSION_DATE` and lintian won’t reject the package.
 
 ### 5. Restore the documented CI workflows
 - Add `.github/workflows/pypi-publish.yml` that:
