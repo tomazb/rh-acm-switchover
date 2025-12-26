@@ -2,7 +2,7 @@
 
 # Targets
 MAN_SOURCES := $(wildcard *.md)
-MAN_PAGES := $(MAN_SOURCES:.md=.1)
+MAN_PAGES := $(MAN_SOURCES:.1.md=.1)
 MAN_GZIPPED := $(MAN_PAGES:%=%.gz)
 
 .PHONY: all clean help
