@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.7] - 2025-12-26
+
 ### Added
 
 - **RBAC bootstrap script (`setup-rbac.sh`)**: New automated script that deploys RBAC manifests, generates SA kubeconfigs with unique user names, and validates permissions using `check_rbac.py` - all in one command. Requires explicit `--admin-kubeconfig` flag for safety.

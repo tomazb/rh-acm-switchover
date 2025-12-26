@@ -2,8 +2,8 @@ apiVersion: v2
 name: acm-switchover-rbac
 description: RBAC resources for ACM Switchover automation tool
 type: application
-version: 1.4.6
-appVersion: "1.4.6"
+version: 1.4.7
+appVersion: "1.4.7"
 keywords:
   - acm
   - rbac
