@@ -49,13 +49,24 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Create the name of the service account to use
+Create the name of the operator service account to use
 */}}
-{{- define "acm-switchover.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "acm-switchover.fullname" .) .Values.serviceAccount.name }}
+{{- define "acm-switchover.operatorServiceAccountName" -}}
+{{- if .Values.serviceAccounts.operator.create }}
+{{- default (printf "%s-operator" (include "acm-switchover.fullname" .)) .Values.serviceAccounts.operator.name }}
 {{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- default "default" .Values.serviceAccounts.operator.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the name of the validator service account to use
+*/}}
+{{- define "acm-switchover.validatorServiceAccountName" -}}
+{{- if .Values.serviceAccounts.validator.create }}
+{{- default (printf "%s-validator" (include "acm-switchover.fullname" .)) .Values.serviceAccounts.validator.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccounts.validator.name }}
 {{- end }}
 {{- end }}
 

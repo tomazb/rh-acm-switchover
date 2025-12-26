@@ -1,0 +1,124 @@
+{{- if and .Values.rbac.create .Values.serviceAccounts.operator.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "acm-switchover.operatorServiceAccountName" . }}
+  labels:
+    {{- include "acm-switchover.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+rules:
+  # Core API - Namespace validation
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+
+  # Core API - Nodes (for cluster health validation)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+
+  # OpenShift Config API - ClusterOperators
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusteroperators"]
+    verbs: ["get", "list"]
+
+  # OpenShift Config API - ClusterVersions
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusterversions"]
+    verbs: ["get", "list"]
+
+  # ACM Cluster Management - ManagedClusters
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["get", "list", "patch", "delete"]
+
+  # Hive - ClusterDeployment validation
+  - apiGroups: ["hive.openshift.io"]
+    resources: ["clusterdeployments"]
+    verbs: ["get", "list"]
+
+  # ACM Operator - Hub detection and decommission
+  - apiGroups: ["operator.open-cluster-management.io"]
+    resources: ["multiclusterhubs"]
+    verbs:
+      - get
+      - list
+      {{- if .Values.rbac.includeDecommission }}
+      - delete
+      {{- end }}
+
+  # Observability - Auto-detection and decommission
+  {{- if .Values.rbac.includeObservability }}
+  - apiGroups: ["observability.open-cluster-management.io"]
+    resources: ["multiclusterobservabilities"]
+    verbs:
+      - get
+      - list
+      {{- if .Values.rbac.includeDecommission }}
+      - delete
+      {{- end }}
+  {{- end }}
+
+  {{- with .Values.rbac.customOperatorRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end }}
+
+{{- if and .Values.rbac.create .Values.serviceAccounts.validator.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "acm-switchover.validatorServiceAccountName" . }}
+  labels:
+    {{- include "acm-switchover.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+rules:
+  # Core API - Namespace validation
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+
+  # Core API - Nodes (for cluster health validation)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+
+  # OpenShift Config API - ClusterOperators
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusteroperators"]
+    verbs: ["get", "list"]
+
+  # OpenShift Config API - ClusterVersions
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusterversions"]
+    verbs: ["get", "list"]
+
+  # ACM Cluster Management - ManagedClusters (read-only)
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["get", "list"]
+
+  # Hive - ClusterDeployment validation
+  - apiGroups: ["hive.openshift.io"]
+    resources: ["clusterdeployments"]
+    verbs: ["get", "list"]
+
+  # ACM Operator - Hub detection
+  - apiGroups: ["operator.open-cluster-management.io"]
+    resources: ["multiclusterhubs"]
+    verbs: ["get", "list"]
+
+  # Observability - Auto-detection
+  {{- if .Values.rbac.includeObservability }}
+  - apiGroups: ["observability.open-cluster-management.io"]
+    resources: ["multiclusterobservabilities"]
+    verbs: ["get", "list"]
+  {{- end }}
+
+  {{- with .Values.rbac.customValidatorRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end }}

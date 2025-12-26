@@ -1,11 +1,11 @@
 # ACM Switchover Helm Chart
 
-This Helm chart deploys the ACM Switchover tool as a Kubernetes Job or CronJob.
+This Helm chart deploys the ACM Switchover tool as a Kubernetes Job or CronJob and now includes all required RBAC resources (Option A).
 
 ## Prerequisites
 
 - Kubernetes 1.23+
-- Helm 3.8+
+- Helm 3.8+ (tested on Helm 3.14 and Helm 4.0)
 - A kubeconfig secret with contexts for both hub clusters
 
 ## Installation
@@ -49,6 +49,13 @@ See [values.yaml](values.yaml) for all configurable options.
 | `persistence.enabled` | Enable PVC for state | `true` |
 | `job.enabled` | Deploy as Job | `true` |
 | `cronjob.enabled` | Deploy as CronJob | `false` |
+| `serviceAccounts.operator.name` | Operator service account name | `acm-switchover-operator` |
+| `serviceAccounts.validator.name` | Validator service account name | `acm-switchover-validator` |
+| `rbac.create` | Create RBAC (ClusterRoles/Bindings + Roles/Bindings) | `true` |
+| `rbac.customOperatorRules` | Extra ClusterRole rules for operator | `[]` |
+| `rbac.customValidatorRules` | Extra ClusterRole rules for validator | `[]` |
+| `role.namespaces.*` | Target namespaces for Roles | see values.yaml |
+| `autoImportStrategy.enabled` | Manage import-controller ConfigMap | `false` |
 
 ### Kubeconfig Secret
 
@@ -95,15 +102,9 @@ switchover:
   dryRun: true  # Always use dry-run for scheduled runs
 ```
 
-## RBAC Only
+## RBAC Notes
 
-To deploy only RBAC resources without the application, use the standalone RBAC chart:
-
-```bash
-helm install acm-switchover-rbac ./deploy/helm/acm-switchover-rbac \
-  --namespace acm-switchover \
-  --create-namespace
-```
+RBAC manifests are now part of this chart. Set `rbac.create=false` if you bring your own roles/bindings or service accounts. The deprecated `deploy/helm/acm-switchover-rbac` chart remains for reference only; migrate to this chart.
 
 ## Uninstallation
 

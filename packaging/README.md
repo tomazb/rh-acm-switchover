@@ -28,7 +28,11 @@ packaging/
 | Python (pip) | Root `pyproject.toml` | pip-installable with console_scripts |
 | RPM | `packaging/rpm/` | Fedora/RHEL/CentOS packages |
 | DEB | `packaging/deb/` | Debian/Ubuntu packages |
-| Helm | `packaging/helm/acm-switchover/` | Full Kubernetes deployment |
+| Helm | `packaging/helm/acm-switchover/` | Full Kubernetes deployment (includes RBAC) |
+
+> Note: The legacy standalone RBAC chart at `deploy/helm/acm-switchover-rbac` is deprecated. Use the packaging chart with `rbac.create=true` (default) instead.
+
+Helm compatibility: chart v2 tested on Helm 3.14 and Helm 4.0.
 
 ## Version Management
 
@@ -46,7 +50,6 @@ The authoritative version is stored in `packaging/common/VERSION`. All other ver
 | `scripts/constants.sh` | `SCRIPT_VERSION`, `SCRIPT_VERSION_DATE` |
 | `container-bootstrap/Containerfile` | Label `version` |
 | `packaging/helm/acm-switchover/Chart.yaml` | `version`, `appVersion` |
-| `deploy/helm/acm-switchover-rbac/Chart.yaml` | `appVersion` |
 
 ### Bumping Versions
 

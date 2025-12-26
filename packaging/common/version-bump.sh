@@ -106,19 +106,7 @@ if [[ -f "${HELM_CHART}" ]]; then
         "appVersion: \"${NEW_VERSION}\""
 fi
 
-# 7. Update deploy/helm/acm-switchover-rbac/Chart.yaml version and appVersion
-RBAC_CHART="${REPO_ROOT}/deploy/helm/acm-switchover-rbac/Chart.yaml"
-if [[ -f "${RBAC_CHART}" ]]; then
-    update_file "${RBAC_CHART}" \
-        '^version: .*$' \
-        "version: ${NEW_VERSION}"
-    
-    update_file "${RBAC_CHART}" \
-        '^appVersion: .*$' \
-        "appVersion: \"${NEW_VERSION}\""
-fi
-
-# 8. Update README.md version if present
+# 7. Update README.md version if present
 README="${REPO_ROOT}/README.md"
 if [[ -f "${README}" ]]; then
     # Update version badge or header if pattern exists

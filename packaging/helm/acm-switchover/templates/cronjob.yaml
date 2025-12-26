@@ -33,7 +33,7 @@ spec:
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          serviceAccountName: {{ include "acm-switchover.serviceAccountName" . }}
+          serviceAccountName: {{ include "acm-switchover.operatorServiceAccountName" . }}
           securityContext:
             {{- toYaml .Values.podSecurityContext | nindent 12 }}
           restartPolicy: {{ .Values.job.restartPolicy }}

@@ -36,15 +36,15 @@ This document summarizes the comprehensive RBAC (Role-Based Access Control) impl
   - GitOps-ready structure
   - Comprehensive README with examples
 
-### 4. Helm Chart (deploy/helm/acm-switchover-rbac/)
-- **Chart structure**: Full-featured Helm chart for RBAC deployment
-- **Templates**: Templated Kubernetes manifests for all RBAC resources
+### 4. Helm Chart (packaging/helm/acm-switchover/)
+- **Chart structure**: Application + RBAC packaged together (Option A)
+- **Templates**: Job/CronJob, PVC, service accounts, ClusterRoles/Bindings, Roles/Bindings, optional import-controller ConfigMap
 - **Values**: Configurable parameters for customization:
-  - Namespace names
-  - Service account names
-  - RBAC rule customization
-  - Additional namespaces support
-- **Documentation**: Detailed README with usage examples
+  - Namespace names and creation
+  - Operator/validator service account names/annotations
+  - RBAC rule customization and custom namespaces
+  - Observability/decommission toggles
+- **Documentation**: `packaging/helm/acm-switchover/README.md`
 
 ### 5. ACM Policy Governance (deploy/acm-policies/)
 - **Policy**: Validates and enforces RBAC resources across managed clusters
