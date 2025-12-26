@@ -1,0 +1,38 @@
+{{- if and .Values.rbac.create .Values.serviceAccounts.operator.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "acm-switchover.operatorServiceAccountName" . }}
+  labels:
+    {{- include "acm-switchover.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/role: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "acm-switchover.operatorServiceAccountName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "acm-switchover.operatorServiceAccountName" . }}
+    namespace: {{ default .Release.Namespace .Values.namespace.name }}
+{{- end }}
+
+{{- if and .Values.rbac.create .Values.serviceAccounts.validator.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "acm-switchover.validatorServiceAccountName" . }}
+  labels:
+    {{- include "acm-switchover.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/role: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "acm-switchover.validatorServiceAccountName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "acm-switchover.validatorServiceAccountName" . }}
+    namespace: {{ default .Release.Namespace .Values.namespace.name }}
+{{- end }}

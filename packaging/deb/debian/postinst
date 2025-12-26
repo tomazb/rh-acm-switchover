@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Ensure state directory exists with correct permissions
+        if [ ! -d /var/lib/acm-switchover ]; then
+            mkdir -p /var/lib/acm-switchover
+        fi
+        chmod 0750 /var/lib/acm-switchover
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

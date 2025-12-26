@@ -1,6 +1,6 @@
 # ACM Hub Switchover Automation
 
-**Version 1.4.7** (2025-12-26)
+**Version 1.5.0** (2025-12-22)
 
 Automated, idempotent script for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster.
 
@@ -82,11 +82,11 @@ Standalone validation scripts ensure safe and successful switchovers:
 
 ## Documentation
 
-- **[Quick Reference](docs/operations/quickref.md)** - Command cheat sheet and common tasks
-- **[Detailed Usage Guide](docs/operations/usage.md)** - Complete examples and scenarios
 - **[RBAC Requirements](docs/deployment/rbac-requirements.md)** - Complete RBAC permissions guide
 - **[RBAC Deployment](docs/deployment/rbac-deployment.md)** - Step-by-step RBAC deployment instructions
 - **[ACM Switchover Runbook](docs/ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational procedures
+- **[Quick Reference](docs/operations/quickref.md)** - Command cheat sheet and common tasks
+- **[Detailed Usage Guide](docs/operations/usage.md)** - Complete examples and scenarios
 - **[Container Usage Guide](docs/getting-started/container.md)** - Container-based deployment and usage
 - **[Installation Guide](docs/getting-started/install.md)** - Detailed installation instructions
 - **[Architecture](docs/development/architecture.md)** - Design and implementation details
@@ -94,6 +94,25 @@ Standalone validation scripts ensure safe and successful switchovers:
 - **[Contributing](CONTRIBUTING.md)** - Development guidelines
 
 See [docs/README.md](docs/README.md) for complete documentation index.
+
+## Automation Scripts
+
+Automated validation scripts to ensure safe and successful switchovers:
+
+- **[Hub Discovery](scripts/discover-hub.sh)** - Auto-discover ACM hubs and determine primary/secondary roles
+- **[Pre-flight Validation](scripts/preflight-check.sh)** - Verify all prerequisites before switchover
+- **[Post-flight Validation](scripts/postflight-check.sh)** - Confirm switchover completed successfully
+- **[Shared Configuration](scripts/constants.sh)** - Centralized configuration for validation scripts
+
+```bash
+# Auto-discover ACM hubs from kubeconfig contexts
+./scripts/discover-hub.sh --auto
+
+# Discover and immediately run the proposed check
+./scripts/discover-hub.sh --auto --run
+```
+
+See [scripts/README.md](scripts/README.md) for detailed usage and workflow diagrams.
 
 ## Prerequisites
 

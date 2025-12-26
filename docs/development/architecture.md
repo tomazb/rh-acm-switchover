@@ -1,7 +1,7 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.3.0  
-**Last Updated**: December 23, 2025
+**Version**: 1.5.0  
+**Last Updated**: December 22, 2025
 
 ## Project Structure
 
@@ -15,6 +15,8 @@ rh-acm-switchover/
 ├── requirements.txt           # Python dependencies
 ├── requirements-dev.txt       # Development/testing dependencies
 ├── setup.cfg                  # Tool configuration (flake8, pytest, etc.)
+├── pyproject.toml             # Python packaging (PEP 517/518)
+├── MANIFEST.in                # Source distribution includes
 ├── README.md                  # Project overview
 ├── LICENSE                    # MIT License
 ├── SECURITY.md                # Security policy
@@ -23,6 +25,21 @@ rh-acm-switchover/
 ├── container-bootstrap/       # Container build resources
 │   ├── Containerfile          # Multi-stage container build definition
 │   └── get-pip.py             # Python package installer bootstrapper
+│
+├── packaging/                 # Packaging infrastructure
+│   ├── README.md              # Packaging formats overview
+│   ├── common/                # Shared version sync tooling
+│   │   ├── VERSION            # Canonical version source
+│   │   ├── VERSION_DATE       # Version release date
+│   │   ├── version-bump.sh    # Update all version sources
+│   │   ├── validate-versions.sh # CI version validation
+│   │   └── man/               # Man page sources (Markdown + Makefile)
+│   ├── python/                # Python packaging docs
+│   ├── rpm/                   # RPM spec and COPR docs
+│   ├── deb/                   # Debian packaging (debian/)
+│   ├── container/             # Container security docs
+│   └── helm/                  # Full application Helm chart
+│       └── acm-switchover/
 │
 ├── lib/                       # Core utilities
 │   ├── __init__.py
