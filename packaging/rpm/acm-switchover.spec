@@ -137,7 +137,7 @@ chmod 0750 %{_sharedstatedir}/%{pkg_name}
 %dir %attr(0750,root,root) %{_sharedstatedir}/%{pkg_name}
 
 %changelog
-* Sun Dec 22 2025 Tomaz Borstnar <tomaz@borstnar.com> - 1.5.0-1
+* Mon Dec 22 2025 Tomaz Borstnar <tomaz@borstnar.com> - 1.5.0-1
 - Initial packaging release
 - Full packaging support with version sync tooling
 - Man pages and bash completions

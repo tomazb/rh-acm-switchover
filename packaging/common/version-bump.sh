@@ -37,17 +37,28 @@ update_file() {
     local file="$1"
     local pattern="$2"
     local replacement="$3"
-    
-    if [[ -f "${file}" ]]; then
-        if safe_sed "s|${pattern}|${replacement}|g" "${file}"; then
-            echo "✓ Updated: ${file}"
-        else
-            echo "✗ Failed: ${file}"
-            return 1
-        fi
-    else
+
+    if [[ ! -f "${file}" ]]; then
         echo "⚠ Skipped (not found): ${file}"
+        return 0
     fi
+
+    if ! grep -Eq "${pattern}" "${file}"; then
+        echo "⚠ Pattern not found (skipped): ${file}"
+        return 0
+    fi
+
+    if ! safe_sed "s|${pattern}|${replacement}|g" "${file}"; then
+        echo "✗ Failed: ${file}"
+        return 1
+    fi
+
+    if ! grep -Fq "${replacement}" "${file}"; then
+        echo "✗ Update did not apply as expected: didn’t find replacement in ${file}"
+        return 1
+    fi
+
+    echo "✓ Updated: ${file}"
 }
 
 # 1. Update packaging/common/VERSION and VERSION_DATE
