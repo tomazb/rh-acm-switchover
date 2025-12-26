@@ -1,0 +1,55 @@
+{{- if and .Values.rbac.create .Values.serviceAccounts.operator.create }}
+{{- $ns := .Values.role.namespaces }}
+{{- $custom := .Values.rbac.customNamespaces | default list }}
+{{- $allTargetNs := concat (list $ns.backup $ns.observability $ns.acm $ns.mce) $custom | uniq }}
+
+{{- range $i, $target := $allTargetNs }}
+{{- if $target }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "acm-switchover.operatorServiceAccountName" $ }}
+  namespace: {{ $target }}
+  labels:
+    {{- include "acm-switchover.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "acm-switchover.operatorServiceAccountName" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "acm-switchover.operatorServiceAccountName" $ }}
+    namespace: {{ default $.Release.Namespace $.Values.namespace.name }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if and .Values.rbac.create .Values.serviceAccounts.validator.create }}
+{{- $ns := .Values.role.namespaces }}
+{{- $custom := .Values.rbac.customNamespaces | default list }}
+{{- $allTargetNs := concat (list $ns.backup $ns.observability $ns.acm $ns.mce) $custom | uniq }}
+
+{{- range $i, $target := $allTargetNs }}
+{{- if $target }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "acm-switchover.validatorServiceAccountName" $ }}
+  namespace: {{ $target }}
+  labels:
+    {{- include "acm-switchover.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: validator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "acm-switchover.validatorServiceAccountName" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "acm-switchover.validatorServiceAccountName" $ }}
+    namespace: {{ default $.Release.Namespace $.Values.namespace.name }}
+{{- end }}
+{{- end }}
+{{- end }}

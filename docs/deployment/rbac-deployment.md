@@ -221,6 +221,8 @@ kubectl apply -k /tmp/
 
 ### Method 3: Helm
 
+> Note: RBAC is now bundled with the main application chart at `packaging/helm/acm-switchover/` (set `rbac.create=true`, default). The legacy `deploy/helm/acm-switchover-rbac` chart is deprecated.
+
 #### Basic Installation
 
 ```bash

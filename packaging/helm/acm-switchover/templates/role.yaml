@@ -1,0 +1,125 @@
+{{- if and .Values.rbac.create .Values.serviceAccounts.operator.create }}
+{{- $ns := .Values.role.namespaces }}
+{{- $custom := .Values.rbac.customNamespaces | default list }}
+{{- $allTargetNs := concat (list $ns.backup $ns.observability $ns.acm $ns.mce) $custom | uniq }}
+
+{{- /* Operator roles per namespace */}}
+{{- range $i, $target := $allTargetNs }}
+{{- if $target }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "acm-switchover.operatorServiceAccountName" $ }}
+  namespace: {{ $target }}
+  labels:
+    {{- include "acm-switchover.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: operator
+rules:
+  {{- if eq $target $.Values.role.namespaces.backup }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["backupschedules", "restores"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: ["velero.io"]
+    resources: ["backups", "restores", "backupstoragelocations"]
+    verbs: ["get", "list"]
+  - apiGroups: ["oadp.openshift.io"]
+    resources: ["dataprotectionapplications"]
+    verbs: ["get", "list"]
+  {{- end }}
+
+  {{- if and (eq $target $.Values.role.namespaces.observability) $.Values.rbac.includeObservability }}
+  - apiGroups: [""]
+    resources: ["pods", "secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "statefulsets/scale"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["get"]
+  {{- end }}
+
+  {{- if eq $target $.Values.role.namespaces.acm }}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  {{- end }}
+
+  {{- if eq $target $.Values.role.namespaces.mce }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if and .Values.rbac.create .Values.serviceAccounts.validator.create }}
+{{- $ns := .Values.role.namespaces }}
+{{- $custom := .Values.rbac.customNamespaces | default list }}
+{{- $allTargetNs := concat (list $ns.backup $ns.observability $ns.acm $ns.mce) $custom | uniq }}
+
+{{- /* Validator roles per namespace (read-only) */}}
+{{- range $i, $target := $allTargetNs }}
+{{- if $target }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "acm-switchover.validatorServiceAccountName" $ }}
+  namespace: {{ $target }}
+  labels:
+    {{- include "acm-switchover.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: validator
+rules:
+  {{- if eq $target $.Values.role.namespaces.backup }}
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["backupschedules", "restores"]
+    verbs: ["get", "list"]
+  - apiGroups: ["velero.io"]
+    resources: ["backups", "restores", "backupstoragelocations"]
+    verbs: ["get", "list"]
+  - apiGroups: ["oadp.openshift.io"]
+    resources: ["dataprotectionapplications"]
+    verbs: ["get", "list"]
+  {{- end }}
+
+  {{- if and (eq $target $.Values.role.namespaces.observability) $.Values.rbac.includeObservability }}
+  - apiGroups: [""]
+    resources: ["pods", "secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["get"]
+  {{- end }}
+
+  {{- if eq $target $.Values.role.namespaces.acm }}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  {{- end }}
+
+  {{- if eq $target $.Values.role.namespaces.mce }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

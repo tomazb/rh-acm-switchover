@@ -1,0 +1,11 @@
+{{- if and .Values.autoImportStrategy.enabled .Values.rbac.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: import-controller-config
+  namespace: {{ .Values.role.namespaces.mce | default "multicluster-engine" }}
+  labels:
+    {{- include "acm-switchover.labels" . | nindent 4 }}
+data:
+  autoImportStrategy: {{ .Values.autoImportStrategy.mode | default "ImportAndSync" }}
+{{- end }}

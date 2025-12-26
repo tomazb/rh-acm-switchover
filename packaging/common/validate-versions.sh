@@ -97,19 +97,7 @@ if [[ -f "${HELM_CHART}" ]]; then
         "Helm chart appVersion"
 fi
 
-# 6. deploy/helm/acm-switchover-rbac/Chart.yaml
-RBAC_CHART="${REPO_ROOT}/deploy/helm/acm-switchover-rbac/Chart.yaml"
-if [[ -f "${RBAC_CHART}" ]]; then
-    check_version "${RBAC_CHART}" \
-        '(?<=^version: )[^\s]+' \
-        "${EXPECTED_VERSION}" \
-        "RBAC Helm chart version"
-    
-    check_version "${RBAC_CHART}" \
-        '(?<=^appVersion: ")[^"]+' \
-        "${EXPECTED_VERSION}" \
-        "RBAC Helm chart appVersion"
-fi
+# 6. README.md version badge/header (best effort)
 
 echo ""
 if [[ ${ERRORS} -eq 0 ]]; then

@@ -1,16 +1,12 @@
-# ACM Switchover RBAC Helm Chart
+# DEPRECATED – use packaging/helm/acm-switchover (Option A)
 
-This Helm chart deploys RBAC resources for the ACM Switchover automation tool.
+The RBAC-only chart has been folded into the main packaging chart at `packaging/helm/acm-switchover/` (Option A). Please switch to that chart, which now ships RBAC, ConfigMap, Job/CronJob, and PVC templates together.
 
-## TL;DR
+Migration:
+- Replace installs of `deploy/helm/acm-switchover-rbac` with `packaging/helm/acm-switchover`.
+- Set `rbac.create=true` (default) and adjust `serviceAccounts.*`, `role.namespaces.*`, and `rbac.custom*` values as needed.
 
-```bash
-helm install acm-switchover-rbac ./deploy/helm/acm-switchover-rbac
-```
-
-## Introduction
-
-This chart bootstraps RBAC resources required for ACM Switchover operations on a Kubernetes cluster using the Helm package manager.
+This directory is kept temporarily for backwards reference only and will be removed in a future release.
 
 ## Prerequisites
 

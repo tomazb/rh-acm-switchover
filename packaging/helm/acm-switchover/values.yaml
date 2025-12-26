@@ -86,11 +86,25 @@ cronjob:
   # Failed job history limit
   failedJobsHistoryLimit: 3
 
-# Service account configuration
-serviceAccount:
-  create: true
-  annotations: {}
+# Namespace configuration
+namespace:
+  # Create the release namespace
+  create: false
+  # Optional explicit namespace name (defaults to .Release.Namespace when empty)
   name: ""
+
+# Service account configuration (separate operator and validator accounts)
+serviceAccounts:
+  operator:
+    create: true
+    name: acm-switchover-operator
+    annotations: {}
+    labels: {}
+  validator:
+    create: true
+    name: acm-switchover-validator
+    annotations: {}
+    labels: {}
 
 # Pod security context (OpenShift compatible)
 podSecurityContext:
@@ -133,14 +147,28 @@ podLabels: {}
 
 # RBAC configuration
 rbac:
-  # Create RBAC resources
+  # Create RBAC resources (ClusterRoles/Bindings + namespace Roles/Bindings)
   create: true
-  # Include decommission permissions
+  # Include decommission permissions in operator ClusterRole
   includeDecommission: false
-  # Include observability permissions
+  # Include observability permissions in Roles
   includeObservability: true
+  # Additional custom rules
+  customOperatorRules: []
+  customValidatorRules: []
+  # Additional namespaces to create Roles in
+  customNamespaces: []
 
-# Namespace configuration
-namespace:
-  # Create the namespace
-  create: false
+# Namespace-scoped Role targets
+role:
+  namespaces:
+    acm: open-cluster-management
+    backup: open-cluster-management-backup
+    observability: open-cluster-management-observability
+    mce: multicluster-engine
+
+# Optional import-controller ConfigMap management
+autoImportStrategy:
+  enabled: false
+  # ImportOnly | ImportAndSync
+  mode: ImportAndSync
