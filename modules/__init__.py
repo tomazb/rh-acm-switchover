@@ -8,12 +8,12 @@ from .activation import SecondaryActivation
 from .decommission import Decommission
 from .finalization import Finalization
 from .post_activation import PostActivationVerification
-from .preflight import PreflightValidator
+from .preflight_coordinator import PreflightValidator
 from .primary_prep import PrimaryPreparation
 
 __all__ = [
-    "PreflightValidator",
     "ValidationError",
+    "PreflightValidator",
     "PrimaryPreparation",
     "SecondaryActivation",
     "PostActivationVerification",
