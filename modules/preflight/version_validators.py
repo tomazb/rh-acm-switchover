@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
@@ -19,6 +20,8 @@ from lib.utils import is_acm_version_ge
 from lib.validation import InputValidator, ValidationError
 
 from .base_validator import BaseValidator
+
+logger = logging.getLogger("acm_switchover")
 
 
 class KubeconfigValidator(BaseValidator):
