@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.8] - 2025-12-30
+
+### Added
+
+- **Modular pre-flight validation architecture**: Decomposed monolithic `preflight_validators.py` (1,282 lines) into focused modules under `modules/preflight/` with `BaseValidator` class and `ValidationReporter` for extensible validation framework.
+
+- **New validator modules**: Created `backup_validators.py`, `cluster_validators.py`, `namespace_validators.py`, `version_validators.py`, and `reporter.py` with clear separation of concerns.
+
+- **`PreflightValidator` coordinator**: New orchestrator class in `modules/preflight_coordinator.py` for managing modular validators.
+
+- **Modular preflight tests**: Added `tests/test_preflight_modular.py`, `tests/test_preflight_backward_compat.py`, and `tests/test_preflight_validators_unit.py` for comprehensive testing of new structure.
+
+- **Consolidated `@api_call` decorator in `KubeClient`**: Added new `@api_call` decorator that combines retry logic with standard exception handling (404 → return value, 5xx/429 → retry, other → log and re-raise). Refactored 8 methods to use this decorator, reducing ~60 lines of repetitive try/except blocks.
+
 ### Changed
 
-- **Consolidated `@api_call` decorator in `KubeClient`**: Added new `@api_call` decorator that combines retry logic with standard exception handling (404 → return value, 5xx/429 → retry, other → log and re-raise). Refactored 8 methods (`get_namespace`, `get_secret`, `get_configmap`, `delete_configmap`, `get_route_host`, `get_custom_resource`, `delete_custom_resource`, `get_pods`) to use this decorator, reducing ~60 lines of repetitive try/except blocks.
+- **`modules/preflight_validators.py` deprecated**: Now a backward-compatibility shim that imports from `modules.preflight` and emits `DeprecationWarning` on import.
+
+- **Updated architecture documentation**: Refreshed `docs/development/architecture.md` and `docs/project/prd.md` to reflect the new modular preflight structure.
 
 ## [1.4.7] - 2025-12-26
 
