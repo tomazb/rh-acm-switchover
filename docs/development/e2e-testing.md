@@ -404,45 +404,6 @@ kubectl --context prod3 get klusterlet -n open-cluster-management-agent
 # Check backup status
 kubectl --context mgmt1 get backupschedules -n openshift-adp
 kubectl --context mgmt2 get backupschedules -n openshift-adp
-```
-
-## Test Execution Timeline
-
-### Phase 1: Environment Setup (Day 1)
-- [ ] Deploy RBAC to all clusters (mgmt1, mgmt2, prod1, prod2, prod3)
-- [ ] Validate backup storage configuration
-- [ ] Test network connectivity between all clusters
-- [ ] Install test dependencies and tools
-
-### Phase 2: Basic Validation (Day 2)
-- [ ] Run pre-flight checks for all hub combinations
-- [ ] Test dry-run mode execution
-- [ ] Validate RBAC permissions across all contexts
-- [ ] Test state management and file operations
-
-### Phase 3: Full Switchover (Day 3)
-- [ ] Execute complete switchover (mgmt1 → mgmt2)
-- [ ] Validate all success criteria
-- [ ] Test rollback scenarios
-- [ ] Performance benchmarking and analysis
-
-### Phase 4: Stress Testing (Day 4)
-- [ ] Failure injection and recovery testing
-- [ ] Edge case validation
-- [ ] Load testing scenarios
-- [ ] Documentation of all procedures
-
-## Next Steps
-
-### Immediate Actions
-
-1. **Environment Preparation**
-   ```bash
-   # Deploy RBAC to all clusters
-   kubectl --context mgmt1 apply -f deploy/rbac/
-   kubectl --context mgmt2 apply -f deploy/rbac/
-   
-   # Validate environment readiness
    ./scripts/preflight-check.sh --primary-context mgmt1 --secondary-context mgmt2 --method passive
    ```
 
