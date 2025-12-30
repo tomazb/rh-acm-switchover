@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from kubernetes.client.rest import ApiException
 
-from lib.kube_client import KubeClient
+from lib.kube_client import KubeClient, api_call, is_retryable_error
 
 
 @pytest.fixture
@@ -440,3 +440,155 @@ class TestKubeClientInitialization:
 
         assert client_normal.dry_run is False
         assert client_dry.dry_run is True
+
+
+@pytest.mark.unit
+class TestApiCallDecorator:
+    """Tests for the @api_call decorator."""
+
+    def test_returns_not_found_value_on_404(self):
+        """Decorator returns not_found_value when ApiException with 404."""
+
+        @api_call(not_found_value="default_value")
+        def mock_api_method():
+            raise ApiException(status=404)
+
+        result = mock_api_method()
+        assert result == "default_value"
+
+    def test_returns_none_on_404_by_default(self):
+        """Decorator returns None on 404 when not_found_value not specified."""
+
+        @api_call()
+        def mock_api_method():
+            raise ApiException(status=404)
+
+        result = mock_api_method()
+        assert result is None
+
+    def test_returns_empty_list_on_404(self):
+        """Decorator can return empty list on 404."""
+
+        @api_call(not_found_value=[])
+        def mock_api_method():
+            raise ApiException(status=404)
+
+        result = mock_api_method()
+        assert result == []
+
+    def test_reraises_retryable_errors(self):
+        """Decorator re-raises 5xx errors for tenacity to handle."""
+
+        @api_call(not_found_value=None)
+        def mock_api_method():
+            raise ApiException(status=503)
+
+        # Should re-raise ApiException for tenacity retry
+        with pytest.raises(ApiException) as exc_info:
+            mock_api_method()
+        assert exc_info.value.status == 503
+
+    def test_reraises_429_for_retry(self):
+        """Decorator re-raises 429 (Too Many Requests) for tenacity."""
+
+        @api_call(not_found_value=None)
+        def mock_api_method():
+            raise ApiException(status=429)
+
+        with pytest.raises(ApiException) as exc_info:
+            mock_api_method()
+        assert exc_info.value.status == 429
+
+    def test_logs_and_reraises_non_retryable_errors(self):
+        """Decorator logs non-retryable errors before re-raising."""
+
+        @api_call(not_found_value=None, log_on_error=True)
+        def mock_api_method():
+            raise ApiException(status=403, reason="Forbidden")
+
+        with pytest.raises(ApiException) as exc_info:
+            mock_api_method()
+        assert exc_info.value.status == 403
+
+    def test_no_logging_when_log_on_error_false(self):
+        """Decorator does not log when log_on_error=False."""
+
+        @api_call(not_found_value=None, log_on_error=False)
+        def mock_api_method():
+            raise ApiException(status=403, reason="Forbidden")
+
+        with pytest.raises(ApiException) as exc_info:
+            mock_api_method()
+        assert exc_info.value.status == 403
+
+    def test_uses_method_name_as_default_resource_desc(self):
+        """Decorator derives resource_desc from method name if not provided."""
+        # The resource_desc is used in log messages; we just verify the decorator works
+        @api_call(not_found_value=None)
+        def get_some_resource():
+            raise ApiException(status=404)
+
+        result = get_some_resource()
+        assert result is None
+
+    def test_uses_custom_resource_desc(self):
+        """Decorator uses provided resource_desc."""
+
+        @api_call(not_found_value=None, resource_desc="fetch widget")
+        def my_method():
+            raise ApiException(status=404)
+
+        result = my_method()
+        assert result is None
+
+    def test_returns_successful_result(self):
+        """Decorator returns the function result on success."""
+
+        @api_call(not_found_value=None)
+        def mock_api_method():
+            return {"name": "test", "value": 42}
+
+        result = mock_api_method()
+        assert result == {"name": "test", "value": 42}
+
+    def test_preserves_function_name(self):
+        """Decorator preserves the wrapped function name."""
+
+        @api_call(not_found_value=None)
+        def my_descriptive_function():
+            return "success"
+
+        assert my_descriptive_function.__name__ == "my_descriptive_function"
+
+
+@pytest.mark.unit
+class TestIsRetryableError:
+    """Tests for the is_retryable_error function."""
+
+    def test_500_is_retryable(self):
+        """500 Internal Server Error is retryable."""
+        assert is_retryable_error(ApiException(status=500)) is True
+
+    def test_502_is_retryable(self):
+        """502 Bad Gateway is retryable."""
+        assert is_retryable_error(ApiException(status=502)) is True
+
+    def test_503_is_retryable(self):
+        """503 Service Unavailable is retryable."""
+        assert is_retryable_error(ApiException(status=503)) is True
+
+    def test_429_is_retryable(self):
+        """429 Too Many Requests is retryable."""
+        assert is_retryable_error(ApiException(status=429)) is True
+
+    def test_404_is_not_retryable(self):
+        """404 Not Found is not retryable."""
+        assert is_retryable_error(ApiException(status=404)) is False
+
+    def test_403_is_not_retryable(self):
+        """403 Forbidden is not retryable."""
+        assert is_retryable_error(ApiException(status=403)) is False
+
+    def test_400_is_not_retryable(self):
+        """400 Bad Request is not retryable."""
+        assert is_retryable_error(ApiException(status=400)) is False

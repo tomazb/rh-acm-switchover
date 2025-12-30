@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Consolidated `@api_call` decorator in `KubeClient`**: Added new `@api_call` decorator that combines retry logic with standard exception handling (404 → return value, 5xx/429 → retry, other → log and re-raise). Refactored 8 methods (`get_namespace`, `get_secret`, `get_configmap`, `delete_configmap`, `get_route_host`, `get_custom_resource`, `delete_custom_resource`, `get_pods`) to use this decorator, reducing ~60 lines of repetitive try/except blocks.
+
 ## [1.4.7] - 2025-12-26
 
 ### Added
