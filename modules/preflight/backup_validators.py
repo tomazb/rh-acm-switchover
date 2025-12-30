@@ -363,29 +363,14 @@ class ManagedClusterBackupValidator(BaseValidator):
                 )
                 return
 
-            # Get backed up clusters from backup labels (ACM uses different labeling)
-            backup_labels = latest_backup.get("metadata", {}).get("labels", {})
-            backed_up_clusters = []
-
-            # Note: ACM backups don't use velero.io/backup-<cluster> labels
-            # The actual cluster data is stored in the backup content
-            # For now, we'll assume the backup contains all joined clusters if it's completed
-            # This is a reasonable assumption for ACM-managed backups
-            
-            if len(joined_clusters) > 0:
-                self.add_result(
-                    "ManagedClusters in backup",
-                    True,
-                    f"found {len(joined_clusters)} joined cluster(s), latest backup completed successfully",
-                    critical=False,
-                )
-            else:
-                self.add_result(
-                    "ManagedClusters in backup",
-                    True,
-                    "no joined ManagedClusters found (only local-cluster)",
-                    critical=False,
-                )
+            # Backup is completed - report success with joined cluster count
+            # Note: joined_clusters is guaranteed non-empty (validated earlier in this method)
+            self.add_result(
+                "ManagedClusters in backup",
+                True,
+                f"found {len(joined_clusters)} joined cluster(s), latest backup completed successfully",
+                critical=False,
+            )
 
         except (RuntimeError, ValueError, Exception) as exc:
             self.add_result(
