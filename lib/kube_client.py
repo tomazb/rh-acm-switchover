@@ -196,6 +196,19 @@ class KubeClient:
         """
         return self.get_namespace(name) is not None
 
+    @api_call(not_found_value=[], resource_desc="list namespaces")
+    def list_namespaces(self) -> List[Dict]:
+        """List all namespaces.
+
+        Returns:
+            List of namespace dictionaries
+
+        Raises:
+            None (uses api_call decorator for error handling)
+        """
+        result = self.core_v1.list_namespace()
+        return [ns.to_dict() for ns in result.items]
+
     @api_call(not_found_value=None, log_on_error=False)
     def get_secret(self, namespace: str, name: str) -> Optional[Dict]:
         """Get a secret by name.
