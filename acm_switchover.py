@@ -37,10 +37,10 @@ from modules import (
     Decommission,
     Finalization,
     PostActivationVerification,
-    PreflightValidator,
     PrimaryPreparation,
     SecondaryActivation,
 )
+from modules.preflight_coordinator import PreflightValidator
 
 STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
 
