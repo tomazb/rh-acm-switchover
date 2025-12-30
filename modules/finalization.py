@@ -16,6 +16,8 @@ from lib.constants import (
     IMPORT_CONTROLLER_CONFIGMAP,
     MCE_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_TERMINATE_INTERVAL,
+    OBSERVABILITY_TERMINATE_TIMEOUT,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
@@ -646,31 +648,58 @@ class Finalization:
                     logger.info("Scaling down observatorium-api on old hub")
                     self.primary.scale_deployment("observability-observatorium-api", OBSERVABILITY_NAMESPACE, 0)
             
-            # Re-check status after cleanup
-            compactor_pods_after = self.primary.get_pods(
-                namespace=OBSERVABILITY_NAMESPACE,
-                label_selector="app.kubernetes.io/name=thanos-compact",
-            )
-            api_pods_after = self.primary.get_pods(
-                namespace=OBSERVABILITY_NAMESPACE,
-                label_selector="app.kubernetes.io/name=observatorium-api",
-            )
+            # Wait for pods to scale down with polling loop
+            # Kubernetes scales asynchronously, so we need to poll until convergence
+            compactor_pods_after = []
+            api_pods_after = []
             
-            if compactor_pods_after:
-                logger.warning(
-                    "Thanos compactor still running on old hub (%s pod(s))",
-                    len(compactor_pods_after),
+            if not self.dry_run and (compactor_pods or api_pods):
+                logger.debug(
+                    "Waiting for observability pods to scale down (timeout=%ds, interval=%ds)",
+                    OBSERVABILITY_TERMINATE_TIMEOUT,
+                    OBSERVABILITY_TERMINATE_INTERVAL,
                 )
-            else:
-                logger.info("Thanos compactor is scaled down on old hub")
+                start_time = time.time()
                 
-            if api_pods_after:
-                logger.warning(
-                    "Observatorium API still running on old hub (%s pod(s))",
-                    len(api_pods_after),
-                )
-            else:
-                logger.info("Observatorium API is scaled down on old hub")
+                while time.time() - start_time < OBSERVABILITY_TERMINATE_TIMEOUT:
+                    if compactor_pods:
+                        compactor_pods_after = self.primary.get_pods(
+                            namespace=OBSERVABILITY_NAMESPACE,
+                            label_selector="app.kubernetes.io/name=thanos-compact",
+                        )
+                    if api_pods:
+                        api_pods_after = self.primary.get_pods(
+                            namespace=OBSERVABILITY_NAMESPACE,
+                            label_selector="app.kubernetes.io/name=observatorium-api",
+                        )
+                    
+                    # Check if both are scaled down
+                    compactor_done = not compactor_pods or not compactor_pods_after
+                    api_done = not api_pods or not api_pods_after
+                    
+                    if compactor_done and api_done:
+                        break
+                    
+                    time.sleep(OBSERVABILITY_TERMINATE_INTERVAL)
+            
+            # Report status after waiting
+            if compactor_pods:
+                if compactor_pods_after:
+                    logger.warning(
+                        "Thanos compactor still running on old hub (%s pod(s)) after waiting",
+                        len(compactor_pods_after),
+                    )
+                else:
+                    logger.info("Thanos compactor is scaled down on old hub")
+                
+            if api_pods:
+                if api_pods_after:
+                    logger.warning(
+                        "Observatorium API still running on old hub (%s pod(s)) after waiting",
+                        len(api_pods_after),
+                    )
+                else:
+                    logger.info("Observatorium API is scaled down on old hub")
                 
             # Report overall status
             if compactor_pods_after or api_pods_after:
