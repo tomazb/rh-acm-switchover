@@ -2,8 +2,8 @@
 
 ## ACM Hub Switchover Automation
 
-**Version**: 1.3.0  
-**Date**: December 23, 2025  
+**Version**: 1.4.8  
+**Date**: December 30, 2025  
 **Status**: In Testing - Not Yet Production Ready  
 **Owner**: Platform Engineering Team
 
