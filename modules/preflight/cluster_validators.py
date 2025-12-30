@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List
 
+from kubernetes.client.exceptions import ApiException
+
 from lib.kube_client import KubeClient
 
 from .base_validator import BaseValidator
@@ -56,8 +58,8 @@ class ClusterDeploymentValidator(BaseValidator):
                     f"all {len(cluster_deployments)} ClusterDeployments have preserveOnDelete=true",
                     critical=True,
                 )
-        except (RuntimeError, ValueError, Exception) as exc:
-            if "404" in str(exc):
+        except ApiException as exc:
+            if exc.status == 404:
                 self.add_result(
                     "ClusterDeployment preserveOnDelete",
                     True,
@@ -68,6 +70,13 @@ class ClusterDeploymentValidator(BaseValidator):
                 self.add_result(
                     "ClusterDeployment preserveOnDelete",
                     False,
-                    f"error checking ClusterDeployments: {exc}",
+                    f"API error checking ClusterDeployments: {exc.status} {exc.reason}",
                     critical=True,
                 )
+        except Exception as exc:
+            self.add_result(
+                "ClusterDeployment preserveOnDelete",
+                False,
+                f"error checking ClusterDeployments: {exc}",
+                critical=True,
+            )
