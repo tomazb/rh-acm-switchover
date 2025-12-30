@@ -231,7 +231,8 @@ class TestFinalization:
         fin._verify_old_hub_state()
 
         assert primary.list_custom_resources.call_count == 2
-        primary.get_pods.assert_called_once()
+        # get_pods is called for both thanos-compact and observatorium-api checks
+        assert primary.get_pods.call_count == 2
 
     def test_cleanup_restore_resources_archives_before_deletion(
         self, finalization, mock_secondary_client, mock_state_manager
