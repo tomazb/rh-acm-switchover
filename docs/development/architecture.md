@@ -1,7 +1,7 @@
 # ACM Switchover - Architecture & Design
 
 **Version**: 1.5.0  
-**Last Updated**: December 22, 2025
+**Last Updated**: December 30, 2025
 
 ## Project Structure
 
@@ -53,8 +53,16 @@ rh-acm-switchover/
 │
 ├── modules/                   # Switchover modules
 │   ├── __init__.py
-│   ├── preflight.py           # Pre-flight validation
-│   ├── preflight_validators.py # Individual validation logic
+│   ├── preflight/             # Modular pre-flight validation package
+│   │   ├── __init__.py
+│   │   ├── base_validator.py      # BaseValidator class for all validators
+│   │   ├── reporter.py            # ValidationReporter for result collection
+│   │   ├── backup_validators.py   # Backup and restore validations
+│   │   ├── cluster_validators.py  # Cluster-related validations
+│   │   ├── namespace_validators.py # Namespace and resource validations
+│   │   └── version_validators.py  # Version and compatibility validations
+│   ├── preflight_coordinator.py   # PreflightValidator orchestrator
+│   ├── preflight_validators.py    # Backward-compat shim (deprecated)
 │   ├── primary_prep.py        # Primary hub preparation
 │   ├── activation.py          # Secondary hub activation
 │   ├── post_activation.py     # Post-activation verification
