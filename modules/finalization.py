@@ -116,7 +116,7 @@ class Finalization:
             else:
                 logger.info("Step already completed: handle_old_hub")
 
-            if self.primary and self.old_hub_action != "decommission":
+            if self.primary and self.old_hub_action not in ("decommission", "none"):
                 self._verify_old_hub_state()
 
             logger.info("Finalization completed successfully")
@@ -682,33 +682,39 @@ class Finalization:
                     
                     time.sleep(OBSERVABILITY_TERMINATE_INTERVAL)
             
-            # Report status after waiting
-            if compactor_pods:
-                if compactor_pods_after:
-                    logger.warning(
-                        "Thanos compactor still running on old hub (%s pod(s)) after waiting",
-                        len(compactor_pods_after),
-                    )
-                else:
-                    logger.info("Thanos compactor is scaled down on old hub")
-                
-            if api_pods:
-                if api_pods_after:
-                    logger.warning(
-                        "Observatorium API still running on old hub (%s pod(s)) after waiting",
-                        len(api_pods_after),
-                    )
-                else:
-                    logger.info("Observatorium API is scaled down on old hub")
-                
-            # Report overall status
-            if compactor_pods_after or api_pods_after:
-                logger.warning(
-                    "Old hub: MultiClusterObservability is still active (%s). Scale both to 0 or remove MCO.",
-                    f"thanos-compact={len(compactor_pods_after)}, observatorium-api={len(api_pods_after)}"
-                )
+            # Report status after waiting (skip in dry-run to avoid misleading messages)
+            if self.dry_run:
+                if compactor_pods:
+                    logger.info("[DRY-RUN] Would scale down thanos-compact on old hub")
+                if api_pods:
+                    logger.info("[DRY-RUN] Would scale down observatorium-api on old hub")
             else:
-                logger.info("All observability components scaled down on old hub")
+                if compactor_pods:
+                    if compactor_pods_after:
+                        logger.warning(
+                            "Thanos compactor still running on old hub (%s pod(s)) after waiting",
+                            len(compactor_pods_after),
+                        )
+                    else:
+                        logger.info("Thanos compactor is scaled down on old hub")
+                    
+                if api_pods:
+                    if api_pods_after:
+                        logger.warning(
+                            "Observatorium API still running on old hub (%s pod(s)) after waiting",
+                            len(api_pods_after),
+                        )
+                    else:
+                        logger.info("Observatorium API is scaled down on old hub")
+                    
+                # Report overall status
+                if compactor_pods_after or api_pods_after:
+                    logger.warning(
+                        "Old hub: MultiClusterObservability is still active (%s). Scale both to 0 or remove MCO.",
+                        f"thanos-compact={len(compactor_pods_after)}, observatorium-api={len(api_pods_after)}"
+                    )
+                else:
+                    logger.info("All observability components scaled down on old hub")
 
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""
