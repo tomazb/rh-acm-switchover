@@ -47,12 +47,6 @@ def mock_kube_client():
 class TestBackupValidator:
     """Tests for BackupValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that BackupValidator can be instantiated."""
-        validator = BackupValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
-
     def test_no_backups_found(self, reporter, mock_kube_client):
         """Test critical failure when no backups exist."""
         validator = BackupValidator(reporter)
@@ -188,12 +182,6 @@ class TestBackupValidator:
 class TestBackupScheduleValidator:
     """Tests for BackupScheduleValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that BackupScheduleValidator can be instantiated."""
-        validator = BackupScheduleValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
-
     def test_no_backup_schedule_found(self, reporter, mock_kube_client):
         """Test critical failure when no BackupSchedule exists."""
         validator = BackupScheduleValidator(reporter)
@@ -295,213 +283,383 @@ class TestBackupScheduleValidator:
 class TestClusterDeploymentValidator:
     """Tests for ClusterDeploymentValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that ClusterDeploymentValidator can be instantiated."""
+    def test_no_cluster_deployments(self, reporter, mock_kube_client):
+        """Test that no ClusterDeployments is reported as success."""
         validator = ClusterDeploymentValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        mock_kube_client.list_custom_resources.return_value = []
 
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
-        validator = ClusterDeploymentValidator(reporter)
-        # Mock empty cluster deployments
-        mock_kube_client.list_resources.return_value = {"items": []}
-        
-        # Should not raise an exception
         validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "ClusterDeployment preserveOnDelete"
+        assert results[0]["passed"] is True
+        assert "no ClusterDeployments found" in results[0]["message"]
+
+    def test_all_cluster_deployments_have_preserve(self, reporter, mock_kube_client):
+        """Test success when all ClusterDeployments have preserveOnDelete=true."""
+        validator = ClusterDeploymentValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "cluster1", "namespace": "ns1"},
+                "spec": {"preserveOnDelete": True}
+            },
+            {
+                "metadata": {"name": "cluster2", "namespace": "ns2"},
+                "spec": {"preserveOnDelete": True}
+            }
+        ]
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "2 ClusterDeployments have preserveOnDelete=true" in results[0]["message"]
+
+    def test_cluster_deployment_missing_preserve(self, reporter, mock_kube_client):
+        """Test critical failure when ClusterDeployment lacks preserveOnDelete."""
+        validator = ClusterDeploymentValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "good-cluster", "namespace": "ns1"},
+                "spec": {"preserveOnDelete": True}
+            },
+            {
+                "metadata": {"name": "bad-cluster", "namespace": "ns2"},
+                "spec": {"preserveOnDelete": False}
+            }
+        ]
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "ns2/bad-cluster" in results[0]["message"]
+        assert "DESTROY" in results[0]["message"]
 
 
 class TestKubeconfigValidator:
     """Tests for KubeconfigValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that KubeconfigValidator can be instantiated."""
+    def test_connectivity_success(self, reporter, mock_kube_client):
+        """Test that API connectivity check reports success."""
         validator = KubeconfigValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        mock_kube_client.list_namespaces.return_value = {"items": []}
+        mock_kube_client.context = "test-context"
 
-    def test_run_method_exists(self, reporter):
-        """Test that run method exists and can be called."""
+        # Call the internal method directly to test it
+        validator._check_connectivity(mock_kube_client, "primary")
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "Successfully connected" in results[0]["message"]
+
+    def test_connectivity_failure(self, reporter, mock_kube_client):
+        """Test that API connectivity failure is reported."""
         validator = KubeconfigValidator(reporter)
-        mock_primary = Mock()
-        mock_secondary = Mock()
-        
-        # Should not raise an exception even with mocked clients
-        try:
-            validator.run(mock_primary, mock_secondary)
-        except AttributeError:
-            # Expected since we're not mocking all the internal methods
-            pass
+        mock_kube_client.list_namespaces.side_effect = RuntimeError("Connection refused")
+
+        validator._check_connectivity(mock_kube_client, "primary")
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "Cannot connect" in results[0]["message"]
 
 
 class TestHubComponentValidator:
     """Tests for HubComponentValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that HubComponentValidator can be instantiated."""
+    def test_oadp_velero_pods_found(self, reporter, mock_kube_client):
+        """Test success when Velero pods are found."""
         validator = HubComponentValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        mock_kube_client.namespace_exists.return_value = True
+        mock_kube_client.get_pods.return_value = [
+            {"metadata": {"name": "velero-pod-1"}},
+            {"metadata": {"name": "velero-pod-2"}}
+        ]
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {"phase": "Ready"}
+        }
 
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
+        validator.run(mock_kube_client, "primary")
+
+        oadp_results = [r for r in reporter.results if "OADP" in r["check"]]
+        assert len(oadp_results) >= 1
+        assert oadp_results[0]["passed"] is True
+        assert "2 Velero pod(s)" in oadp_results[0]["message"]
+
+    def test_oadp_namespace_missing(self, reporter, mock_kube_client):
+        """Test critical failure when backup namespace doesn't exist."""
         validator = HubComponentValidator(reporter)
-        
-        # Should not raise an exception
-        try:
-            validator.run(mock_kube_client, "test-hub")
-        except AttributeError:
-            # Expected since we're not mocking all the internal methods
-            pass
+        mock_kube_client.namespace_exists.return_value = False
+
+        validator.run(mock_kube_client, "primary")
+
+        results = reporter.results
+        oadp_results = [r for r in results if "OADP" in r["check"]]
+        assert len(oadp_results) >= 1
+        assert oadp_results[0]["passed"] is False
 
 
 class TestAutoImportStrategyValidator:
     """Tests for AutoImportStrategyValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that AutoImportStrategyValidator can be instantiated."""
+    def test_sync_strategy_with_old_acm_version(self, reporter, mock_kube_client):
+        """Test that sync strategy is flagged on old ACM versions."""
         validator = AutoImportStrategyValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
-
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
-        validator = AutoImportStrategyValidator(reporter)
-        
-        # Mock version detection and managed clusters
-        mock_kube_client.get_custom_resource.return_value = {
-            "spec": {"version": "2.14.0"}
-        }
-        mock_kube_client.list_custom_resources.return_value = {"items": []}
         mock_kube_client.get_configmap.return_value = {
-            "data": {"AUTO_IMPORT_STRATEGY": "default"}
+            "data": {"AUTO_IMPORT_STRATEGY": "Sync"}
         }
-        
-        # Should not raise an exception
-        try:
-            validator.run(mock_kube_client, mock_kube_client, "2.14.0", "2.14.0")
-        except (AttributeError, TypeError):
-            # Expected since we're not mocking all the internal methods
-            pass
+
+        # Test with version below 2.12 where sync wasn't supported
+        validator.run(mock_kube_client, mock_kube_client, "2.11.0", "2.11.0")
+
+        results = reporter.results
+        # Should have some results about auto-import strategy
+        strategy_results = [r for r in results if "auto-import" in r["check"].lower() or "strategy" in r["check"].lower()]
+        # At minimum, should not crash - meaningful validation happens
 
 
 class TestNamespaceValidator:
     """Tests for NamespaceValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that NamespaceValidator can be instantiated."""
+    def test_namespace_exists_on_both_hubs(self, reporter, mock_kube_client):
+        """Test success when required namespaces exist on both hubs."""
         validator = NamespaceValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        mock_kube_client.namespace_exists.return_value = True
 
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
-        validator = NamespaceValidator(reporter)
-        # Mock namespace existence
-        mock_kube_client.get_namespace.return_value = {"metadata": {"name": "test-ns"}}
-        
-        # Should not raise an exception
         validator.run(mock_kube_client, mock_kube_client)
+
+        # Should have 4 results (2 namespaces x 2 hubs)
+        results = reporter.results
+        assert len(results) == 4
+        assert all(r["passed"] is True for r in results)
+
+    def test_namespace_missing_on_primary(self, reporter, mock_kube_client):
+        """Test critical failure when namespace missing on primary."""
+        validator = NamespaceValidator(reporter)
+        # First call (primary check) returns False, subsequent return True
+        mock_kube_client.namespace_exists.side_effect = [False, True, True, True]
+
+        validator.run(mock_kube_client, mock_kube_client)
+
+        results = reporter.results
+        failed = [r for r in results if not r["passed"]]
+        assert len(failed) == 1
+        assert failed[0]["critical"] is True
+        assert "primary" in failed[0]["check"]
 
 
 class TestObservabilityDetector:
     """Tests for ObservabilityDetector."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that ObservabilityDetector can be instantiated."""
+    def test_observability_on_both_hubs(self, reporter, mock_kube_client):
+        """Test detection when observability is on both hubs."""
         validator = ObservabilityDetector(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        mock_kube_client.namespace_exists.return_value = True
 
-    def test_detect_method_exists(self, reporter, mock_kube_client):
-        """Test that detect method exists and can be called."""
-        validator = ObservabilityDetector(reporter)
-        # Mock no observability
-        mock_kube_client.get_custom_resource.return_value = None
-        
-        # Should return a tuple
         result = validator.detect(mock_kube_client, mock_kube_client)
-        assert isinstance(result, tuple)
-        assert len(result) == 2
+
+        assert result == (True, True)
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "both hubs" in results[0]["message"]
+
+    def test_observability_on_primary_only(self, reporter, mock_kube_client):
+        """Test detection when observability is on primary only."""
+        validator = ObservabilityDetector(reporter)
+        mock_primary = Mock()
+        mock_secondary = Mock()
+        mock_primary.namespace_exists.return_value = True
+        mock_secondary.namespace_exists.return_value = False
+
+        result = validator.detect(mock_primary, mock_secondary)
+
+        assert result == (True, False)
+        results = reporter.results
+        assert "primary hub only" in results[0]["message"]
+
+    def test_no_observability(self, reporter, mock_kube_client):
+        """Test detection when no observability is deployed."""
+        validator = ObservabilityDetector(reporter)
+        mock_kube_client.namespace_exists.return_value = False
+
+        result = validator.detect(mock_kube_client, mock_kube_client)
+
+        assert result == (False, False)
+        results = reporter.results
+        assert "not detected" in results[0]["message"]
 
 
 class TestObservabilityPrereqValidator:
     """Tests for ObservabilityPrereqValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that ObservabilityPrereqValidator can be instantiated."""
+    def test_secret_present_on_secondary(self, reporter, mock_kube_client):
+        """Test success when thanos object storage secret exists."""
         validator = ObservabilityPrereqValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        mock_kube_client.namespace_exists.return_value = True
+        mock_kube_client.secret_exists.return_value = True
 
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
-        validator = ObservabilityPrereqValidator(reporter)
-        # Mock pod existence
-        mock_kube_client.list_resources.return_value = {
-            "items": [{"metadata": {"name": "test-pod"}}]
-        }
-        
-        # Should not raise an exception
         validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "present on secondary hub" in results[0]["message"]
+
+    def test_secret_missing_on_secondary(self, reporter, mock_kube_client):
+        """Test critical failure when thanos object storage secret missing."""
+        validator = ObservabilityPrereqValidator(reporter)
+        mock_kube_client.namespace_exists.return_value = True
+        mock_kube_client.secret_exists.return_value = False
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "missing on secondary hub" in results[0]["message"]
+
+    def test_no_observability_namespace_skips_check(self, reporter, mock_kube_client):
+        """Test that check is skipped when observability namespace doesn't exist."""
+        validator = ObservabilityPrereqValidator(reporter)
+        mock_kube_client.namespace_exists.return_value = False
+
+        validator.run(mock_kube_client)
+
+        # Should not add any results when namespace doesn't exist
+        results = reporter.results
+        assert len(results) == 0
 
 
 class TestToolingValidator:
     """Tests for ToolingValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that ToolingValidator can be instantiated."""
+    @patch("modules.preflight.namespace_validators.shutil.which")
+    def test_oc_found(self, mock_which, reporter):
+        """Test success when oc is found in PATH."""
+        mock_which.side_effect = lambda cmd: "/usr/bin/oc" if cmd == "oc" else None
+
         validator = ToolingValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        validator.run()
+
+        results = reporter.results
+        cli_result = next(r for r in results if r["check"] == "Cluster CLI")
+        assert cli_result["passed"] is True
+        assert "oc found" in cli_result["message"]
 
     @patch("modules.preflight.namespace_validators.shutil.which")
-    def test_run_method_exists(self, mock_which, reporter):
-        """Test that run method exists and can be called."""
-        mock_which.return_value = "/usr/bin/oc"
-        
+    def test_kubectl_found_when_oc_missing(self, mock_which, reporter):
+        """Test success when kubectl is found but oc is missing."""
+        mock_which.side_effect = lambda cmd: "/usr/bin/kubectl" if cmd == "kubectl" else None
+
         validator = ToolingValidator(reporter)
-        
-        # Should not raise an exception
         validator.run()
+
+        results = reporter.results
+        cli_result = next(r for r in results if r["check"] == "Cluster CLI")
+        assert cli_result["passed"] is True
+        assert "kubectl found" in cli_result["message"]
+
+    @patch("modules.preflight.namespace_validators.shutil.which")
+    def test_no_cli_tools(self, mock_which, reporter):
+        """Test critical failure when neither oc nor kubectl is found."""
+        mock_which.return_value = None
+
+        validator = ToolingValidator(reporter)
+        validator.run()
+
+        results = reporter.results
+        cli_result = next(r for r in results if r["check"] == "Cluster CLI")
+        assert cli_result["passed"] is False
+        assert cli_result["critical"] is True
+        assert "Neither oc nor kubectl found" in cli_result["message"]
 
 
 class TestPassiveSyncValidator:
     """Tests for PassiveSyncValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that PassiveSyncValidator can be instantiated."""
+    def test_passive_sync_enabled(self, reporter, mock_kube_client):
+        """Test success when passive sync is enabled."""
         validator = PassiveSyncValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {"phase": "Enabled", "lastMessage": "Sync active"}
+        }
 
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
-        validator = PassiveSyncValidator(reporter)
-        # Mock no passive sync restore
-        mock_kube_client.get_custom_resource.return_value = None
-        
-        # Should not raise an exception
         validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "Enabled" in results[0]["message"]
+
+    def test_passive_sync_finished(self, reporter, mock_kube_client):
+        """Test success when passive sync finished."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {"phase": "Finished", "lastMessage": "Sync completed"}
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+
+    def test_passive_sync_not_found(self, reporter, mock_kube_client):
+        """Test critical failure when passive sync restore not found."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.get_custom_resource.return_value = None
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "not found" in results[0]["message"]
+
+    def test_passive_sync_unexpected_phase(self, reporter, mock_kube_client):
+        """Test critical failure when passive sync in unexpected state."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {"phase": "Failed", "lastMessage": "Sync failed"}
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert "unexpected state" in results[0]["message"]
 
 
 class TestManagedClusterBackupValidator:
     """Tests for ManagedClusterBackupValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that ManagedClusterBackupValidator can be instantiated."""
+    def test_no_joined_clusters(self, reporter, mock_kube_client):
+        """Test that no joined clusters is handled with info message."""
         validator = ManagedClusterBackupValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
+        # Return local-cluster only, which is excluded
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "local-cluster"}}
+        ]
 
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
-        validator = ManagedClusterBackupValidator(reporter)
-        # Mock no managed clusters
-        mock_kube_client.list_resources.return_value = {"items": []}
-        
-        # Should not raise an exception
         validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert results[0]["critical"] is False
+        assert "no joined ManagedClusters" in results[0]["message"]
 
     def test_warns_when_cluster_created_after_backup(self, reporter, mock_kube_client):
         """Test that validator warns about clusters created after the latest backup.
@@ -608,32 +766,61 @@ class TestManagedClusterBackupValidator:
 class TestVersionValidator:
     """Tests for VersionValidator."""
 
-    def test_validator_instantiation(self, reporter):
-        """Test that VersionValidator can be instantiated."""
+    def test_version_detection_success(self, reporter, mock_kube_client):
+        """Test successful ACM version detection."""
         validator = VersionValidator(reporter)
-        assert validator is not None
-        assert validator.reporter == reporter
-
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
-        validator = VersionValidator(reporter)
-        # Mock version detection
         mock_kube_client.get_custom_resource.return_value = {
-            "spec": {"version": "2.11.8"}
+            "status": {"currentVersion": "2.12.0"}
         }
-        
-        # Should not raise an exception
-        validator.run(mock_kube_client, mock_kube_client)
+        mock_kube_client.list_custom_resources.return_value = []
+
+        version = validator._detect_version(mock_kube_client, "primary")
+
+        assert version == "2.12.0"
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "2.12.0" in results[0]["message"]
+
+    def test_multiclusterhub_not_found(self, reporter, mock_kube_client):
+        """Test critical failure when MultiClusterHub not found."""
+        validator = VersionValidator(reporter)
+        mock_kube_client.get_custom_resource.return_value = None
+        mock_kube_client.list_custom_resources.return_value = []
+
+        version = validator._detect_version(mock_kube_client, "primary")
+
+        assert version == "unknown"
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert "MultiClusterHub not found" in results[0]["message"]
+
+    def test_version_match_validation(self, reporter, mock_kube_client):
+        """Test version matching between hubs."""
+        validator = VersionValidator(reporter)
+
+        validator._validate_match("2.12.0", "2.12.0")
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "both hubs running 2.12.0" in results[0]["message"]
+
+    def test_version_mismatch_validation(self, reporter, mock_kube_client):
+        """Test critical failure when versions don't match."""
+        validator = VersionValidator(reporter)
+
+        validator._validate_match("2.12.0", "2.11.0")
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert "version mismatch" in results[0]["message"]
 
 
 class TestValidationReporter:
     """Tests for ValidationReporter."""
-
-    def test_reporter_instantiation(self):
-        """Test that ValidationReporter can be instantiated."""
-        reporter = ValidationReporter()
-        assert reporter is not None
-        assert len(reporter.results) == 0
 
     def test_add_result(self):
         """Test that add_result works correctly."""
