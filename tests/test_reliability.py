@@ -37,7 +37,7 @@ def test_is_retryable_error():
     assert not is_retryable_error(ValueError())
 
 
-@patch("time.sleep")
+@patch("tenacity.nap.sleep")
 def test_retry_logic_success_after_failure(mock_sleep, kube_client):
     """Test that API call retries and eventually succeeds."""
     # Mock API to fail twice then succeed
@@ -58,7 +58,7 @@ def test_retry_logic_success_after_failure(mock_sleep, kube_client):
     assert mock_api.call_count == 3
 
 
-@patch("time.sleep")
+@patch("tenacity.nap.sleep")
 def test_retry_logic_max_retries_exceeded(mock_sleep, kube_client):
     """Test that API call fails after max retries."""
     # Mock API to fail consistently
