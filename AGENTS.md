@@ -111,6 +111,16 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
     - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
 - If you change these rules, update `docs/reference/validation-rules.md`, `docs/operations/usage.md`, and `docs/operations/quickref.md` to match.
 
+## Code Review Checklist for Future Refactoring
+
+When doing similar refactoring work:
+- Compare line-by-line old vs new implementation
+- Verify all conditional branches are preserved
+- Check that error handling matches original behavior
+- Validate critical vs non-critical failure classifications
+- Ensure all imports are present in new modules
+- Test with real-world scenarios, not just unit tests
+
 ## Files to Know
 
 - `CHANGELOG.md` - Update `[Unreleased]` section for changes
