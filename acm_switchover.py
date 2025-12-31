@@ -266,6 +266,10 @@ def run_switchover(
             if not getattr(args, 'force', False):
                 logger.error("Use --force to proceed with stale state, or remove state file to start fresh.")
                 sys.exit(EXIT_FAILURE)
+            else:
+                # Reset to INIT phase to start fresh switchover
+                logger.warning("--force used: Resetting state to start fresh switchover")
+                state.set_phase(Phase.INIT)
         else:
             logger.info("Resuming recently completed switchover (state age: %s)", 
                        f"{int(state_age.total_seconds() // 60)} minutes")
