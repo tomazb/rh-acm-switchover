@@ -89,6 +89,12 @@ pytest -m integration tests/  # Integration tests
 
 Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock responses should include `resourceVersion` in metadata for patch verification tests.
 
+### Test Quality Guidelines
+- **DO NOT create meaningless or superficial tests** - tests should verify real logic and functionality
+- Focus on testing actual business logic, error handling, and edge cases
+- Avoid tests that only verify implementation details or trivial functionality
+- Each test should provide meaningful value by catching real potential bugs
+
 ### Virtual Environment Usage
 - Prefer activating an existing virtual environment before running tooling.
 - The test runner (`run_tests.sh`) will detect an active `$VIRTUAL_ENV`, otherwise it will try `.venv/` first, then `venv/`, and create `.venv/` if none exist.
