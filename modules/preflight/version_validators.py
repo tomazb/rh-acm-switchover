@@ -198,9 +198,9 @@ class KubeconfigValidator(BaseValidator):
                     elif hours_until_expiry < self.TOKEN_EXPIRY_WARNING_HOURS:
                         self.add_result(
                             f"Token Expiration ({hub_label})",
-                            False,
-                            f"Token expires in {hours_until_expiry:.1f} hours (soon)",
-                            critical=True,
+                            True,
+                            f"Token expires in {hours_until_expiry:.1f} hours (soon) - consider regenerating",
+                            critical=False,
                         )
                     else:
                         self.add_result(
