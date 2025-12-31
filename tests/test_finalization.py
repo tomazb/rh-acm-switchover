@@ -234,6 +234,81 @@ class TestFinalization:
         # get_pods is called for both thanos-compact and observatorium-api checks
         assert primary.get_pods.call_count == 2
 
+    def test_finalize_skips_verify_old_hub_state_when_action_none(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Test that _verify_old_hub_state is not called when old_hub_action is 'none'.
+        
+        This ensures the CLI contract is respected: --old-hub-action none should
+        leave the old hub unchanged for manual handling.
+        """
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+            old_hub_action="none",
+        )
+        
+        # Mock all required responses for finalize() to succeed
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule"}, "spec": {"paused": False}}
+        ]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "multiclusterhub"},
+            "status": {"phase": "Running"},
+        }
+        mock_secondary_client.get_pods.return_value = [
+            {"metadata": {"name": "acm-pod"}, "status": {"phase": "Running"}}
+        ]
+        
+        # Ensure we track if _verify_old_hub_state was called
+        with patch.object(fin, '_verify_old_hub_state') as mock_verify:
+            result = fin.finalize()
+            
+            assert result is True
+            # _verify_old_hub_state should NOT be called when old_hub_action is 'none'
+            mock_verify.assert_not_called()
+            # Primary client should not have scaling methods called
+            primary.scale_statefulset.assert_not_called()
+            primary.scale_deployment.assert_not_called()
+
+    def test_finalize_calls_verify_old_hub_state_when_action_secondary(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Test that _verify_old_hub_state IS called when old_hub_action is 'secondary'."""
+        primary = Mock()
+        primary.list_custom_resources.return_value = []
+        primary.get_pods.return_value = []
+        
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=False,
+            old_hub_action="secondary",
+        )
+        
+        # Mock all required responses
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule"}, "spec": {"paused": False}}
+        ]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "multiclusterhub"},
+            "status": {"phase": "Running"},
+        }
+        mock_secondary_client.get_pods.return_value = []
+        
+        with patch.object(fin, '_verify_old_hub_state') as mock_verify:
+            result = fin.finalize()
+            
+            assert result is True
+            # _verify_old_hub_state SHOULD be called when old_hub_action is 'secondary'
+            mock_verify.assert_called_once()
+
     def test_cleanup_restore_resources_archives_before_deletion(
         self, finalization, mock_secondary_client, mock_state_manager
     ):
