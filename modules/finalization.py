@@ -637,22 +637,22 @@ class Finalization:
                 namespace=OBSERVABILITY_NAMESPACE,
                 label_selector="app.kubernetes.io/name=observatorium-api",
             )
-            
+
             # Automatically scale down observability components on old hub
             if not self.dry_run:
                 if compactor_pods:
                     logger.info("Scaling down thanos-compact on old hub")
                     self.primary.scale_statefulset("observability-thanos-compact", OBSERVABILITY_NAMESPACE, 0)
-                    
+
                 if api_pods:
                     logger.info("Scaling down observatorium-api on old hub")
                     self.primary.scale_deployment("observability-observatorium-api", OBSERVABILITY_NAMESPACE, 0)
-            
+
             # Wait for pods to scale down with polling loop
             # Kubernetes scales asynchronously, so we need to poll until convergence
             compactor_pods_after = []
             api_pods_after = []
-            
+
             if not self.dry_run and (compactor_pods or api_pods):
                 logger.debug(
                     "Waiting for observability pods to scale down (timeout=%ds, interval=%ds)",
@@ -660,7 +660,7 @@ class Finalization:
                     OBSERVABILITY_TERMINATE_INTERVAL,
                 )
                 start_time = time.time()
-                
+
                 while time.time() - start_time < OBSERVABILITY_TERMINATE_TIMEOUT:
                     if compactor_pods:
                         compactor_pods_after = self.primary.get_pods(
@@ -672,16 +672,16 @@ class Finalization:
                             namespace=OBSERVABILITY_NAMESPACE,
                             label_selector="app.kubernetes.io/name=observatorium-api",
                         )
-                    
+
                     # Check if both are scaled down
                     compactor_done = not compactor_pods or not compactor_pods_after
                     api_done = not api_pods or not api_pods_after
-                    
+
                     if compactor_done and api_done:
                         break
-                    
+
                     time.sleep(OBSERVABILITY_TERMINATE_INTERVAL)
-            
+
             # Report status after waiting (skip in dry-run to avoid misleading messages)
             if self.dry_run:
                 if compactor_pods:
@@ -697,7 +697,7 @@ class Finalization:
                         )
                     else:
                         logger.info("Thanos compactor is scaled down on old hub")
-                    
+
                 if api_pods:
                     if api_pods_after:
                         logger.warning(
@@ -706,7 +706,7 @@ class Finalization:
                         )
                     else:
                         logger.info("Observatorium API is scaled down on old hub")
-                    
+
                 # Report overall status
                 if compactor_pods_after or api_pods_after:
                     logger.warning(

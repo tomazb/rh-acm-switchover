@@ -32,7 +32,7 @@ from .preflight import (
 # Re-export everything for backward compatibility
 __all__ = [
     "AutoImportStrategyValidator",
-    "BackupScheduleValidator", 
+    "BackupScheduleValidator",
     "BackupValidator",
     "BaseValidator",
     "ClusterDeploymentValidator",

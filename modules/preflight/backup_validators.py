@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Optional
 
 from lib.constants import (
     BACKUP_NAMESPACE,
@@ -21,7 +21,7 @@ logger = logging.getLogger("acm_switchover")
 class BackupValidator(BaseValidator):
     """Ensures backups exist and no job is stuck."""
 
-    def _get_backup_age_info(self, completion_timestamp: str | None) -> str:
+    def _get_backup_age_info(self, completion_timestamp: Optional[str]) -> str:
         """
         Calculate backup age and return human-readable info with freshness indicator.
 
@@ -370,6 +370,7 @@ class ManagedClusterBackupValidator(BaseValidator):
             if backup_completion_time:
                 try:
                     from datetime import datetime
+
                     # Parse backup completion time (ISO 8601 format)
                     backup_time = datetime.fromisoformat(backup_completion_time.replace("Z", "+00:00"))
 
