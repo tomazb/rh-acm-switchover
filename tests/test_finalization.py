@@ -236,14 +236,19 @@ class TestFinalization:
         # get_pods is called for both thanos-compact and observatorium-api checks
         assert primary.get_pods.call_count == 2
 
+    @patch("modules.finalization.time")
     def test_finalize_skips_verify_old_hub_state_when_action_none(
-        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+        self, mock_time, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
         """Test that _verify_old_hub_state is not called when old_hub_action is 'none'.
         
         This ensures the CLI contract is respected: --old-hub-action none should
         leave the old hub unchanged for manual handling.
         """
+        # Mock time to avoid loops and sleep delays
+        mock_time.time.side_effect = [0, 1, 2, 3]
+        mock_time.sleep.return_value = None
+        
         primary = Mock()
         fin = Finalization(
             secondary_client=mock_secondary_client,
@@ -254,9 +259,13 @@ class TestFinalization:
             old_hub_action="none",
         )
         
-        # Mock all required responses for finalize() to succeed
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule"}, "spec": {"paused": False}}
+        # Mock all required responses with side_effect for sequential calls
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
+            [{"metadata": {"name": "schedule"}, "spec": {}, "status": {"phase": "Enabled"}}],  # fix_backup_collision
+            [],  # Initial backups
+            [],  # Loop iteration 1
+            [{"metadata": {"name": "backup-1"}, "status": {"phase": "InProgress"}}],  # Loop iteration 2 - new backup
         ]
         mock_secondary_client.get_custom_resource.return_value = {
             "metadata": {"name": "multiclusterhub"},
