@@ -4,10 +4,8 @@ Tests cover core validator logic with success and failure cases for each validat
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timedelta
-import base64
-import json
+from unittest.mock import Mock, patch
+from datetime import datetime, timedelta, timezone
 
 from modules.preflight.backup_validators import (
     BackupValidator,
@@ -118,9 +116,8 @@ class TestBackupValidator:
         validator = BackupValidator(reporter)
         # Mock fresh completed backup (very recent, less than 1 hour old)
         # Use current time to ensure it's detected as fresh
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
-        recent_time = now.replace(minute=now.minute-5, second=0, microsecond=0).isoformat().replace('+00:00', 'Z')
+        recent_time = (now - timedelta(minutes=5)).replace(second=0, microsecond=0).isoformat().replace('+00:00', 'Z')
         
         mock_kube_client.list_custom_resources.return_value = [
             {
