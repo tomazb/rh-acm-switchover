@@ -369,8 +369,6 @@ class ManagedClusterBackupValidator(BaseValidator):
 
             if backup_completion_time:
                 try:
-                    from datetime import datetime
-
                     # Parse backup completion time (ISO 8601 format)
                     backup_time = datetime.fromisoformat(backup_completion_time.replace("Z", "+00:00"))
 
@@ -390,10 +388,7 @@ class ManagedClusterBackupValidator(BaseValidator):
                                     clusters_after_backup.append(cluster_name)
                 except (ValueError, TypeError) as e:
                     # If timestamp parsing fails, log warning but continue
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "Could not compare cluster timestamps: %s", e
-                    )
+                    logger.warning("Could not compare cluster timestamps: %s", e)
 
             # Report failure if clusters were imported after the backup
             if clusters_after_backup:
