@@ -286,10 +286,16 @@ class TestFinalization:
             primary.scale_statefulset.assert_not_called()
             primary.scale_deployment.assert_not_called()
 
+    @patch('time.sleep')
+    @patch('time.time')
     def test_finalize_calls_verify_old_hub_state_when_action_secondary(
-        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+        self, mock_time_time, mock_time_sleep, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
         """Test that _verify_old_hub_state IS called when old_hub_action is 'secondary'."""
+        # Mock time to avoid real waits
+        mock_time_time.return_value = 0
+        mock_time_sleep.return_value = None
+        
         primary = Mock()
         primary.list_custom_resources.return_value = []
         primary.get_pods.return_value = []
@@ -303,9 +309,14 @@ class TestFinalization:
             old_hub_action="secondary",
         )
         
-        # Mock all required responses
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule"}, "spec": {"paused": False}}
+        # Mock all required responses with side_effect for sequential calls
+        # Order: _cleanup_restore_resources, verify_backup_schedule_enabled, fix_backup_collision, verify_new_backups (2x)
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [],  # _cleanup_restore_resources - no restores to clean up
+            [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
+            [{"metadata": {"name": "schedule"}, "spec": {}, "status": {"phase": "Enabled"}}],  # fix_backup_collision
+            [],  # Initial backups
+            [{"metadata": {"name": "backup-1"}, "status": {"phase": "InProgress"}}],  # New backup detected
         ]
         mock_secondary_client.get_custom_resource.return_value = {
             "metadata": {"name": "multiclusterhub"},
