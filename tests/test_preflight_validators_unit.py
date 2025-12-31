@@ -293,6 +293,107 @@ class TestManagedClusterBackupValidator:
         # Should not raise an exception
         validator.run(mock_kube_client)
 
+    def test_warns_when_cluster_created_after_backup(self, reporter, mock_kube_client):
+        """Test that validator warns about clusters created after the latest backup.
+        
+        This ensures clusters imported after the last backup are flagged, as they
+        would be lost during switchover.
+        """
+        validator = ManagedClusterBackupValidator(reporter)
+        
+        # Mock joined managed clusters (one created before backup, one after)
+        mock_kube_client.list_custom_resources.side_effect = [
+            # First call: list managed clusters
+            [
+                {
+                    "metadata": {"name": "cluster-before", "creationTimestamp": "2025-12-01T10:00:00Z"},
+                    "status": {"conditions": [{"type": "ManagedClusterJoined", "status": "True"}]},
+                },
+                {
+                    "metadata": {"name": "cluster-after", "creationTimestamp": "2025-12-15T10:00:00Z"},
+                    "status": {"conditions": [{"type": "ManagedClusterJoined", "status": "True"}]},
+                },
+            ],
+            # Second call: list backups (with required ACM label)
+            [
+                {
+                    "metadata": {
+                        "name": "acm-managed-clusters-schedule-20251210100000",
+                        "creationTimestamp": "2025-12-10T10:00:00Z",
+                        "labels": {"cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"},
+                    },
+                    "status": {"phase": "Completed", "completionTimestamp": "2025-12-10T10:05:00Z"},
+                },
+            ],
+        ]
+        
+        # Mock get_custom_resource for individual cluster lookups
+        def get_cluster(group, version, plural, name):
+            if name == "cluster-before":
+                return {"metadata": {"name": "cluster-before", "creationTimestamp": "2025-12-01T10:00:00Z"}}
+            elif name == "cluster-after":
+                return {"metadata": {"name": "cluster-after", "creationTimestamp": "2025-12-15T10:00:00Z"}}
+            return None
+        
+        mock_kube_client.get_custom_resource.side_effect = get_cluster
+        
+        validator.run(mock_kube_client)
+        
+        # Should have a critical failure result about cluster-after
+        results = reporter.results
+        warning_results = [r for r in results if "after backup" in r.get("check", "").lower()]
+        assert len(warning_results) == 1
+        assert warning_results[0]["passed"] is False
+        assert warning_results[0]["critical"] is True  # Critical failure - clusters will be lost
+        assert "cluster-after" in warning_results[0]["message"]
+
+    def test_no_warning_when_all_clusters_before_backup(self, reporter, mock_kube_client):
+        """Test that no warning is issued when all clusters existed before the backup."""
+        validator = ManagedClusterBackupValidator(reporter)
+        
+        # Mock joined managed clusters (all created before backup)
+        mock_kube_client.list_custom_resources.side_effect = [
+            # First call: list managed clusters
+            [
+                {
+                    "metadata": {"name": "cluster-1", "creationTimestamp": "2025-12-01T10:00:00Z"},
+                    "status": {"conditions": [{"type": "ManagedClusterJoined", "status": "True"}]},
+                },
+                {
+                    "metadata": {"name": "cluster-2", "creationTimestamp": "2025-12-05T10:00:00Z"},
+                    "status": {"conditions": [{"type": "ManagedClusterJoined", "status": "True"}]},
+                },
+            ],
+            # Second call: list backups (with required ACM label)
+            [
+                {
+                    "metadata": {
+                        "name": "acm-managed-clusters-schedule-20251210100000",
+                        "creationTimestamp": "2025-12-10T10:00:00Z",
+                        "labels": {"cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"},
+                    },
+                    "status": {"phase": "Completed", "completionTimestamp": "2025-12-10T10:05:00Z"},
+                },
+            ],
+        ]
+        
+        # Mock get_custom_resource for individual cluster lookups
+        def get_cluster(group, version, plural, name):
+            if name == "cluster-1":
+                return {"metadata": {"name": "cluster-1", "creationTimestamp": "2025-12-01T10:00:00Z"}}
+            elif name == "cluster-2":
+                return {"metadata": {"name": "cluster-2", "creationTimestamp": "2025-12-05T10:00:00Z"}}
+            return None
+        
+        mock_kube_client.get_custom_resource.side_effect = get_cluster
+        
+        validator.run(mock_kube_client)
+        
+        # Should NOT have any warning about clusters after backup
+        results = reporter.results
+        warning_results = [r for r in results if "after backup" in r.get("check", "").lower()]
+        assert len(warning_results) == 0
+
 
 class TestVersionValidator:
     """Tests for VersionValidator."""
