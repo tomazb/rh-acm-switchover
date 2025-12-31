@@ -14,7 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Helm packaging now ships RBAC/namespace resources in `packaging/helm/acm-switchover` (Option A); standalone `deploy/helm/acm-switchover-rbac` chart deprecated.
 - Debian packaging changelog date aligned with canonical `VERSION_DATE` (2025-12-22).
+
 ### Fixed
+- **Finalization respects `--old-hub-action none`**: Fixed regression where `_verify_old_hub_state()` was unconditionally scaling down observability components (thanos-compact, observatorium-api) even when `--old-hub-action none` was specified. Now properly skips old hub modifications when action is `none`, honoring the documented "leaves it unchanged for manual handling" contract.
+- **ManagedClusterBackupValidator timestamp comparison**: Restored missing logic that compares each joined ManagedCluster's `creationTimestamp` against the latest backup's `completionTimestamp`. Clusters imported after the last backup now cause a **critical preflight failure** (not just a warning), preventing data loss during switchover.
+- **`--force` properly resets COMPLETED state**: Fixed issue where using `--force` with a stale COMPLETED state would silently no-op instead of re-running the switchover. Now resets phase to INIT when `--force` is used with stale completed state, ensuring all phases execute.
+- **Dry-run reporting for observability pod cleanup**: Fixed misleading log messages when `dry_run=True` that incorrectly reported observability components as "scaled down" even though no scaling occurred. Now properly reports `[DRY-RUN] Would scale down...` messages instead.
+- **Token expiring soon is now a warning, not failure**: Reverted to pre-refactor behavior where tokens expiring within 4 hours produce a non-critical warning (`passed=True, critical=False`) instead of failing preflight. Only already-expired tokens cause critical failures.
 - Version sync scripts no longer touch the deprecated RBAC chart.
 
 ## [1.4.8] - 2025-12-30
