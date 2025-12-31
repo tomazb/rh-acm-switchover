@@ -1,7 +1,5 @@
 """Cluster-related validation checks."""
 
-from typing import Any, Dict, List
-
 from kubernetes.client.exceptions import ApiException
 
 from lib.kube_client import KubeClient
