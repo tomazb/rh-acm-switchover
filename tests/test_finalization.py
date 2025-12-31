@@ -146,7 +146,9 @@ class TestFinalization:
     @patch("modules.finalization.time")
     def test_verify_new_backups_success(self, mock_time, finalization, mock_secondary_client):
         """Test backup verification logic finding a new backup."""
-        mock_time.time.return_value = 0
+        # Mock time.time() to increment, avoiding real sleep calls
+        # Calls: start_time, check 1, check 2, check 3
+        mock_time.time.side_effect = [0, 0, 1, 2]
 
         # Sequence of API calls:
         # 1. Initial list (empty)
@@ -167,8 +169,8 @@ class TestFinalization:
     def test_verify_new_backups_timeout(self, mock_time, finalization, mock_secondary_client):
         """Test backup verification timeout."""
         # Mock time to simulate timeout
-        # Start at 0, then check > timeout
-        mock_time.time.side_effect = [0, 100, 200]
+        # Calls: start_time, check 1, check 2, final check after loop
+        mock_time.time.side_effect = [0, 10, 45, 51]
 
         mock_secondary_client.list_custom_resources.return_value = []
 
