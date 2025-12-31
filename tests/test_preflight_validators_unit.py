@@ -53,14 +53,136 @@ class TestBackupValidator:
         assert validator is not None
         assert validator.reporter == reporter
 
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
+    def test_no_backups_found(self, reporter, mock_kube_client):
+        """Test critical failure when no backups exist."""
         validator = BackupValidator(reporter)
-        # Mock the backup to avoid API calls
-        mock_kube_client.get_latest_backup.return_value = None
+        # Mock empty backup list
+        mock_kube_client.list_custom_resources.return_value = []
         
-        # Should not raise an exception
         validator.run(mock_kube_client)
+        
+        # Should have critical failure result
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "Backup status"
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "no backups found" in results[0]["message"]
+
+    def test_backup_in_progress(self, reporter, mock_kube_client):
+        """Test critical failure when backup is in progress."""
+        validator = BackupValidator(reporter)
+        # Mock backups with one in progress
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-in-progress", "creationTimestamp": "2025-12-31T10:00:00Z"},
+                "status": {"phase": "InProgress"}
+            },
+            {
+                "metadata": {"name": "backup-completed", "creationTimestamp": "2025-12-30T10:00:00Z"},
+                "status": {"phase": "Completed", "completionTimestamp": "2025-12-30T10:05:00Z"}
+            }
+        ]
+        
+        validator.run(mock_kube_client)
+        
+        # Should have critical failure about in-progress backup
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "backup(s) in progress" in results[0]["message"]
+        assert "backup-in-progress" in results[0]["message"]
+
+    def test_latest_backup_failed(self, reporter, mock_kube_client):
+        """Test critical failure when latest backup failed."""
+        validator = BackupValidator(reporter)
+        # Mock backups with failed latest backup
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-failed", "creationTimestamp": "2025-12-31T10:00:00Z"},
+                "status": {"phase": "Failed"}
+            },
+            {
+                "metadata": {"name": "backup-completed", "creationTimestamp": "2025-12-30T10:00:00Z"},
+                "status": {"phase": "Completed", "completionTimestamp": "2025-12-30T10:05:00Z"}
+            }
+        ]
+        
+        validator.run(mock_kube_client)
+        
+        # Should have critical failure about failed backup
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "unexpected state: Failed" in results[0]["message"]
+        assert "backup-failed" in results[0]["message"]
+
+    def test_latest_backup_completed_fresh(self, reporter, mock_kube_client):
+        """Test success with fresh completed backup."""
+        validator = BackupValidator(reporter)
+        # Mock fresh completed backup (very recent, less than 1 hour old)
+        # Use current time to ensure it's detected as fresh
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        recent_time = now.replace(minute=now.minute-5, second=0, microsecond=0).isoformat().replace('+00:00', 'Z')
+        
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-fresh", "creationTimestamp": recent_time},
+                "status": {"phase": "Completed", "completionTimestamp": recent_time}
+            }
+        ]
+        
+        validator.run(mock_kube_client)
+        
+        # Should have success result with fresh indicator
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "Backup status"
+        assert results[0]["passed"] is True
+        assert results[0]["critical"] is True
+        assert "backup-fresh completed successfully" in results[0]["message"]
+        assert "FRESH" in results[0]["message"]
+
+    def test_latest_backup_completed_old(self, reporter, mock_kube_client):
+        """Test success with old completed backup (shows age warning)."""
+        validator = BackupValidator(reporter)
+        # Mock old completed backup (more than 24 hours)
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-old", "creationTimestamp": "2025-12-28T10:00:00Z"},
+                "status": {"phase": "Completed", "completionTimestamp": "2025-12-28T10:05:00Z"}
+            }
+        ]
+        
+        validator.run(mock_kube_client)
+        
+        # Should have success result but with age warning
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "Backup status"
+        assert results[0]["passed"] is True
+        assert results[0]["critical"] is True
+        assert "backup-old completed successfully" in results[0]["message"]
+        assert "consider running a fresh backup" in results[0]["message"]
+
+    def test_api_error_handling(self, reporter, mock_kube_client):
+        """Test error handling when API call fails."""
+        validator = BackupValidator(reporter)
+        # Mock API exception
+        mock_kube_client.list_custom_resources.side_effect = RuntimeError("API error")
+        
+        validator.run(mock_kube_client)
+        
+        # Should have critical failure result
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "Backup status"
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "error checking backups: API error" in results[0]["message"]
 
 
 class TestBackupScheduleValidator:
@@ -72,14 +194,102 @@ class TestBackupScheduleValidator:
         assert validator is not None
         assert validator.reporter == reporter
 
-    def test_run_method_exists(self, reporter, mock_kube_client):
-        """Test that run method exists and can be called."""
+    def test_no_backup_schedule_found(self, reporter, mock_kube_client):
+        """Test critical failure when no BackupSchedule exists."""
         validator = BackupScheduleValidator(reporter)
-        # Mock the backup schedule to avoid API calls
-        mock_kube_client.get_backup_schedule.return_value = None
+        # Mock empty backup schedule list
+        mock_kube_client.list_custom_resources.return_value = []
         
-        # Should not raise an exception
         validator.run(mock_kube_client)
+        
+        # Should have critical failure result
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "BackupSchedule configuration"
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "no BackupSchedule found" in results[0]["message"]
+
+    def test_use_managed_service_account_enabled(self, reporter, mock_kube_client):
+        """Test success when useManagedServiceAccount is enabled."""
+        validator = BackupScheduleValidator(reporter)
+        # Mock BackupSchedule with useManagedServiceAccount=true
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "acm-backup-schedule"},
+                "spec": {"useManagedServiceAccount": True}
+            }
+        ]
+        
+        validator.run(mock_kube_client)
+        
+        # Should have success result
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "BackupSchedule configuration"
+        assert results[0]["passed"] is True
+        assert results[0]["critical"] is True
+        assert "useManagedServiceAccount=true" in results[0]["message"]
+        assert "managed clusters will auto-reconnect" in results[0]["message"]
+
+    def test_use_managed_service_account_disabled(self, reporter, mock_kube_client):
+        """Test critical failure when useManagedServiceAccount is disabled."""
+        validator = BackupScheduleValidator(reporter)
+        # Mock BackupSchedule with useManagedServiceAccount=false
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "acm-backup-schedule"},
+                "spec": {"useManagedServiceAccount": False}
+            }
+        ]
+        
+        validator.run(mock_kube_client)
+        
+        # Should have critical failure result
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "BackupSchedule configuration"
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "useManagedServiceAccount is not enabled" in results[0]["message"]
+        assert "Managed clusters will NOT auto-reconnect" in results[0]["message"]
+
+    def test_use_managed_service_account_missing(self, reporter, mock_kube_client):
+        """Test critical failure when useManagedServiceAccount field is missing."""
+        validator = BackupScheduleValidator(reporter)
+        # Mock BackupSchedule without useManagedServiceAccount field
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "acm-backup-schedule"},
+                "spec": {}
+            }
+        ]
+        
+        validator.run(mock_kube_client)
+        
+        # Should have critical failure result (defaults to False)
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "BackupSchedule configuration"
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "useManagedServiceAccount is not enabled" in results[0]["message"]
+
+    def test_api_error_handling(self, reporter, mock_kube_client):
+        """Test error handling when API call fails."""
+        validator = BackupScheduleValidator(reporter)
+        # Mock API exception
+        mock_kube_client.list_custom_resources.side_effect = RuntimeError("API error")
+        
+        validator.run(mock_kube_client)
+        
+        # Should have critical failure result
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "BackupSchedule configuration"
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "error checking BackupSchedule: API error" in results[0]["message"]
 
 
 class TestClusterDeploymentValidator:
