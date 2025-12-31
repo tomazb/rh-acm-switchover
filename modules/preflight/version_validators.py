@@ -4,7 +4,7 @@ import base64
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Tuple
 
 from lib.constants import (
     ACM_NAMESPACE,
@@ -184,7 +184,7 @@ class KubeconfigValidator(BaseValidator):
                     exp_timestamp = claims["exp"]
                     exp_datetime = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
                     now = datetime.now(tz=timezone.utc)
-                    
+
                     # Calculate hours until expiration
                     hours_until_expiry = (exp_datetime - now).total_seconds() / 3600
 
@@ -556,7 +556,7 @@ class AutoImportStrategyValidator(BaseValidator):
         if is_acm_version_ge(secondary_version, "2.14.0"):
             strategy = self._strategy_for(secondary)
             count = self._non_local_cluster_count(secondary)
-            
+
             if strategy == "error":
                 self.add_result(
                     "Auto-Import Strategy (secondary)",

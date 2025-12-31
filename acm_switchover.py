@@ -197,8 +197,8 @@ Examples:
     # Logging
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument(
-        "--force", 
-        action="store_true", 
+        "--force",
+        action="store_true",
         help="Force execution even with stale state file (use with caution)"
     )
     parser.add_argument(
@@ -255,7 +255,7 @@ def run_switchover(
         if state_age.total_seconds() > 300:  # 5 minutes
             logger.warning("")
             logger.warning("⚠️  DETECTED STALE STATE FILE")
-            logger.warning("Switchover appears to be already completed, but state file is %s old.", 
+            logger.warning("Switchover appears to be already completed, but state file is %s old.",
                         f"{int(state_age.total_seconds() // 60)} minutes")
             logger.warning("A real switchover takes 30-45 minutes, not seconds.")
             logger.warning("")
@@ -271,7 +271,7 @@ def run_switchover(
                 logger.warning("--force used: Resetting state to start fresh switchover")
                 state.set_phase(Phase.INIT)
         else:
-            logger.info("Resuming recently completed switchover (state age: %s)", 
+            logger.info("Resuming recently completed switchover (state age: %s)",
                        f"{int(state_age.total_seconds() // 60)} minutes")
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
