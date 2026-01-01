@@ -3,15 +3,16 @@
 Tests cover core validator logic with success and failure cases for each validator.
 """
 
-import pytest
-from unittest.mock import Mock, patch
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock, patch
+
+import pytest
 
 from modules.preflight.backup_validators import (
-    BackupValidator,
     BackupScheduleValidator,
-    PassiveSyncValidator,
+    BackupValidator,
     ManagedClusterBackupValidator,
+    PassiveSyncValidator,
 )
 from modules.preflight.cluster_validators import ClusterDeploymentValidator
 from modules.preflight.namespace_validators import (
@@ -20,13 +21,13 @@ from modules.preflight.namespace_validators import (
     ObservabilityPrereqValidator,
     ToolingValidator,
 )
+from modules.preflight.reporter import ValidationReporter
 from modules.preflight.version_validators import (
+    AutoImportStrategyValidator,
+    HubComponentValidator,
     KubeconfigValidator,
     VersionValidator,
-    HubComponentValidator,
-    AutoImportStrategyValidator,
 )
-from modules.preflight.reporter import ValidationReporter
 
 
 @pytest.fixture
@@ -50,9 +51,9 @@ class TestBackupValidator:
         validator = BackupValidator(reporter)
         # Mock empty backup list
         mock_kube_client.list_custom_resources.return_value = []
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have critical failure result
         results = reporter.results
         assert len(results) == 1
@@ -68,16 +69,16 @@ class TestBackupValidator:
         mock_kube_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "backup-in-progress", "creationTimestamp": "2025-12-31T10:00:00Z"},
-                "status": {"phase": "InProgress"}
+                "status": {"phase": "InProgress"},
             },
             {
                 "metadata": {"name": "backup-completed", "creationTimestamp": "2025-12-30T10:00:00Z"},
-                "status": {"phase": "Completed", "completionTimestamp": "2025-12-30T10:05:00Z"}
-            }
+                "status": {"phase": "Completed", "completionTimestamp": "2025-12-30T10:05:00Z"},
+            },
         ]
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have critical failure about in-progress backup
         results = reporter.results
         assert len(results) == 1
@@ -93,16 +94,16 @@ class TestBackupValidator:
         mock_kube_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "backup-failed", "creationTimestamp": "2025-12-31T10:00:00Z"},
-                "status": {"phase": "Failed"}
+                "status": {"phase": "Failed"},
             },
             {
                 "metadata": {"name": "backup-completed", "creationTimestamp": "2025-12-30T10:00:00Z"},
-                "status": {"phase": "Completed", "completionTimestamp": "2025-12-30T10:05:00Z"}
-            }
+                "status": {"phase": "Completed", "completionTimestamp": "2025-12-30T10:05:00Z"},
+            },
         ]
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have critical failure about failed backup
         results = reporter.results
         assert len(results) == 1
@@ -117,17 +118,17 @@ class TestBackupValidator:
         # Mock fresh completed backup (very recent, less than 1 hour old)
         # Use current time to ensure it's detected as fresh
         now = datetime.now(timezone.utc)
-        recent_time = (now - timedelta(minutes=5)).replace(second=0, microsecond=0).isoformat().replace('+00:00', 'Z')
-        
+        recent_time = (now - timedelta(minutes=5)).replace(second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+
         mock_kube_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "backup-fresh", "creationTimestamp": recent_time},
-                "status": {"phase": "Completed", "completionTimestamp": recent_time}
+                "status": {"phase": "Completed", "completionTimestamp": recent_time},
             }
         ]
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have success result with fresh indicator
         results = reporter.results
         assert len(results) == 1
@@ -144,12 +145,12 @@ class TestBackupValidator:
         mock_kube_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "backup-old", "creationTimestamp": "2025-12-28T10:00:00Z"},
-                "status": {"phase": "Completed", "completionTimestamp": "2025-12-28T10:05:00Z"}
+                "status": {"phase": "Completed", "completionTimestamp": "2025-12-28T10:05:00Z"},
             }
         ]
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have success result but with age warning
         results = reporter.results
         assert len(results) == 1
@@ -164,9 +165,9 @@ class TestBackupValidator:
         validator = BackupValidator(reporter)
         # Mock API exception
         mock_kube_client.list_custom_resources.side_effect = RuntimeError("API error")
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have critical failure result
         results = reporter.results
         assert len(results) == 1
@@ -184,9 +185,9 @@ class TestBackupScheduleValidator:
         validator = BackupScheduleValidator(reporter)
         # Mock empty backup schedule list
         mock_kube_client.list_custom_resources.return_value = []
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have critical failure result
         results = reporter.results
         assert len(results) == 1
@@ -200,14 +201,11 @@ class TestBackupScheduleValidator:
         validator = BackupScheduleValidator(reporter)
         # Mock BackupSchedule with useManagedServiceAccount=true
         mock_kube_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "acm-backup-schedule"},
-                "spec": {"useManagedServiceAccount": True}
-            }
+            {"metadata": {"name": "acm-backup-schedule"}, "spec": {"useManagedServiceAccount": True}}
         ]
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have success result
         results = reporter.results
         assert len(results) == 1
@@ -222,14 +220,11 @@ class TestBackupScheduleValidator:
         validator = BackupScheduleValidator(reporter)
         # Mock BackupSchedule with useManagedServiceAccount=false
         mock_kube_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "acm-backup-schedule"},
-                "spec": {"useManagedServiceAccount": False}
-            }
+            {"metadata": {"name": "acm-backup-schedule"}, "spec": {"useManagedServiceAccount": False}}
         ]
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have critical failure result
         results = reporter.results
         assert len(results) == 1
@@ -244,14 +239,11 @@ class TestBackupScheduleValidator:
         validator = BackupScheduleValidator(reporter)
         # Mock BackupSchedule without useManagedServiceAccount field
         mock_kube_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "acm-backup-schedule"},
-                "spec": {}
-            }
+            {"metadata": {"name": "acm-backup-schedule"}, "spec": {}}
         ]
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have critical failure result (defaults to False)
         results = reporter.results
         assert len(results) == 1
@@ -265,9 +257,9 @@ class TestBackupScheduleValidator:
         validator = BackupScheduleValidator(reporter)
         # Mock API exception
         mock_kube_client.list_custom_resources.side_effect = RuntimeError("API error")
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have critical failure result
         results = reporter.results
         assert len(results) == 1
@@ -297,14 +289,8 @@ class TestClusterDeploymentValidator:
         """Test success when all ClusterDeployments have preserveOnDelete=true."""
         validator = ClusterDeploymentValidator(reporter)
         mock_kube_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "cluster1", "namespace": "ns1"},
-                "spec": {"preserveOnDelete": True}
-            },
-            {
-                "metadata": {"name": "cluster2", "namespace": "ns2"},
-                "spec": {"preserveOnDelete": True}
-            }
+            {"metadata": {"name": "cluster1", "namespace": "ns1"}, "spec": {"preserveOnDelete": True}},
+            {"metadata": {"name": "cluster2", "namespace": "ns2"}, "spec": {"preserveOnDelete": True}},
         ]
 
         validator.run(mock_kube_client)
@@ -318,14 +304,8 @@ class TestClusterDeploymentValidator:
         """Test critical failure when ClusterDeployment lacks preserveOnDelete."""
         validator = ClusterDeploymentValidator(reporter)
         mock_kube_client.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "good-cluster", "namespace": "ns1"},
-                "spec": {"preserveOnDelete": True}
-            },
-            {
-                "metadata": {"name": "bad-cluster", "namespace": "ns2"},
-                "spec": {"preserveOnDelete": False}
-            }
+            {"metadata": {"name": "good-cluster", "namespace": "ns1"}, "spec": {"preserveOnDelete": True}},
+            {"metadata": {"name": "bad-cluster", "namespace": "ns2"}, "spec": {"preserveOnDelete": False}},
         ]
 
         validator.run(mock_kube_client)
@@ -378,11 +358,9 @@ class TestHubComponentValidator:
         mock_kube_client.namespace_exists.return_value = True
         mock_kube_client.get_pods.return_value = [
             {"metadata": {"name": "velero-pod-1"}},
-            {"metadata": {"name": "velero-pod-2"}}
+            {"metadata": {"name": "velero-pod-2"}},
         ]
-        mock_kube_client.get_custom_resource.return_value = {
-            "status": {"phase": "Ready"}
-        }
+        mock_kube_client.get_custom_resource.return_value = {"status": {"phase": "Ready"}}
 
         validator.run(mock_kube_client, "primary")
 
@@ -410,16 +388,16 @@ class TestAutoImportStrategyValidator:
     def test_sync_strategy_with_old_acm_version(self, reporter, mock_kube_client):
         """Test that sync strategy is flagged on old ACM versions."""
         validator = AutoImportStrategyValidator(reporter)
-        mock_kube_client.get_configmap.return_value = {
-            "data": {"AUTO_IMPORT_STRATEGY": "Sync"}
-        }
+        mock_kube_client.get_configmap.return_value = {"data": {"AUTO_IMPORT_STRATEGY": "Sync"}}
 
         # Test with version below 2.12 where sync wasn't supported
         validator.run(mock_kube_client, mock_kube_client, "2.11.0", "2.11.0")
 
         results = reporter.results
         # Should have some results about auto-import strategy
-        strategy_results = [r for r in results if "auto-import" in r["check"].lower() or "strategy" in r["check"].lower()]
+        strategy_results = [
+            r for r in results if "auto-import" in r["check"].lower() or "strategy" in r["check"].lower()
+        ]
         # At minimum, should not crash - meaningful validation happens
 
 
@@ -646,9 +624,7 @@ class TestManagedClusterBackupValidator:
         """Test that no joined clusters is handled with info message."""
         validator = ManagedClusterBackupValidator(reporter)
         # Return local-cluster only, which is excluded
-        mock_kube_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "local-cluster"}}
-        ]
+        mock_kube_client.list_custom_resources.return_value = [{"metadata": {"name": "local-cluster"}}]
 
         validator.run(mock_kube_client)
 
@@ -660,12 +636,12 @@ class TestManagedClusterBackupValidator:
 
     def test_warns_when_cluster_created_after_backup(self, reporter, mock_kube_client):
         """Test that validator warns about clusters created after the latest backup.
-        
+
         This ensures clusters imported after the last backup are flagged, as they
         would be lost during switchover.
         """
         validator = ManagedClusterBackupValidator(reporter)
-        
+
         # Mock joined managed clusters (one created before backup, one after)
         mock_kube_client.list_custom_resources.side_effect = [
             # First call: list managed clusters
@@ -691,7 +667,7 @@ class TestManagedClusterBackupValidator:
                 },
             ],
         ]
-        
+
         # Mock get_custom_resource for individual cluster lookups
         def get_cluster(group, version, plural, name):
             if name == "cluster-before":
@@ -699,11 +675,11 @@ class TestManagedClusterBackupValidator:
             elif name == "cluster-after":
                 return {"metadata": {"name": "cluster-after", "creationTimestamp": "2025-12-15T10:00:00Z"}}
             return None
-        
+
         mock_kube_client.get_custom_resource.side_effect = get_cluster
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should have a critical failure result about cluster-after
         results = reporter.results
         warning_results = [r for r in results if "after backup" in r.get("check", "").lower()]
@@ -715,7 +691,7 @@ class TestManagedClusterBackupValidator:
     def test_no_warning_when_all_clusters_before_backup(self, reporter, mock_kube_client):
         """Test that no warning is issued when all clusters existed before the backup."""
         validator = ManagedClusterBackupValidator(reporter)
-        
+
         # Mock joined managed clusters (all created before backup)
         mock_kube_client.list_custom_resources.side_effect = [
             # First call: list managed clusters
@@ -741,7 +717,7 @@ class TestManagedClusterBackupValidator:
                 },
             ],
         ]
-        
+
         # Mock get_custom_resource for individual cluster lookups
         def get_cluster(group, version, plural, name):
             if name == "cluster-1":
@@ -749,11 +725,11 @@ class TestManagedClusterBackupValidator:
             elif name == "cluster-2":
                 return {"metadata": {"name": "cluster-2", "creationTimestamp": "2025-12-05T10:00:00Z"}}
             return None
-        
+
         mock_kube_client.get_custom_resource.side_effect = get_cluster
-        
+
         validator.run(mock_kube_client)
-        
+
         # Should NOT have any warning about clusters after backup
         results = reporter.results
         warning_results = [r for r in results if "after backup" in r.get("check", "").lower()]
@@ -766,9 +742,7 @@ class TestVersionValidator:
     def test_version_detection_success(self, reporter, mock_kube_client):
         """Test successful ACM version detection."""
         validator = VersionValidator(reporter)
-        mock_kube_client.get_custom_resource.return_value = {
-            "status": {"currentVersion": "2.12.0"}
-        }
+        mock_kube_client.get_custom_resource.return_value = {"status": {"currentVersion": "2.12.0"}}
         mock_kube_client.list_custom_resources.return_value = []
 
         version = validator._detect_version(mock_kube_client, "primary")
@@ -823,7 +797,7 @@ class TestValidationReporter:
         """Test that add_result works correctly."""
         reporter = ValidationReporter()
         reporter.add_result("test", True, "success message")
-        
+
         assert len(reporter.results) == 1
         assert reporter.results[0]["check"] == "test"
         assert reporter.results[0]["passed"] is True
@@ -833,7 +807,7 @@ class TestValidationReporter:
         """Test that critical flag is preserved."""
         reporter = ValidationReporter()
         reporter.add_result("test", False, "failure message", critical=True)
-        
+
         assert len(reporter.results) == 1
         assert reporter.results[0]["critical"] is True
 
@@ -841,6 +815,6 @@ class TestValidationReporter:
         """Test that non-critical flag is preserved."""
         reporter = ValidationReporter()
         reporter.add_result("test", False, "warning message", critical=False)
-        
+
         assert len(reporter.results) == 1
         assert reporter.results[0]["critical"] is False

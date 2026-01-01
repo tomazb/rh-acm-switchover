@@ -81,14 +81,13 @@ Examples:
         "--managed-cluster",
         action="store_true",
         help="Validate as a managed cluster (check open-cluster-management-agent namespace "
-             "instead of hub namespaces). Use this when checking RBAC on spoke clusters.",
+        "instead of hub namespaces). Use this when checking RBAC on spoke clusters.",
     )
     parser.add_argument(
         "--role",
         choices=["operator", "validator"],
         default="operator",
-        help="Role to validate permissions for (default: operator). "
-             "Use 'validator' for read-only service accounts.",
+        help="Role to validate permissions for (default: operator). " "Use 'validator' for read-only service accounts.",
     )
     parser.add_argument(
         "--verbose",
@@ -198,7 +197,9 @@ def main():
                     report.append("REMEDIATION:")
                     report.append("")
                     report.append("Deploy managed cluster RBAC using one of:")
-                    report.append("  1. ACM Policy: kubectl apply -f deploy/acm-policies/policy-managed-cluster-rbac.yaml")
+                    report.append(
+                        "  1. ACM Policy: kubectl apply -f deploy/acm-policies/policy-managed-cluster-rbac.yaml"
+                    )
                     report.append("  2. Direct apply: See docs/deployment/rbac-deployment.md#managed-cluster-rbac")
 
                 report.append("=" * 80)

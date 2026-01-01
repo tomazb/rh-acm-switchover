@@ -399,9 +399,7 @@ class InputValidator:
             # Validate token-duration format (basic check for number + unit)
             if hasattr(args, "token_duration") and args.token_duration:
                 if not re.match(r"^\d+[hms]$", args.token_duration):
-                    raise ValidationError(
-                        "--token-duration must be in format like '48h', '30m', or '3600s'"
-                    )
+                    raise ValidationError("--token-duration must be in format like '48h', '30m', or '3600s'")
             # Validate output-dir if provided
             if hasattr(args, "output_dir") and args.output_dir:
                 InputValidator.validate_safe_filesystem_path(args.output_dir, "output-dir")

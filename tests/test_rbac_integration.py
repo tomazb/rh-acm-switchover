@@ -86,7 +86,7 @@ class TestRBACPermissionCoverage:
 
     def test_namespace_permissions_include_agent_namespace(self, validator_permissions):
         """Test that open-cluster-management-agent namespace is covered for klusterlet operations.
-        
+
         Note: Agent namespace is in MANAGED_CLUSTER_NAMESPACE_PERMISSIONS since it exists
         on managed clusters, not on hub clusters.
         """
@@ -426,19 +426,14 @@ class TestRBACValidatorRoleAware:
     def test_valid_roles_defined(self):
         """Test that valid roles are defined."""
         from lib.rbac_validator import VALID_ROLES
+
         assert VALID_ROLES == ("operator", "validator")
 
     def test_operator_role_has_more_permissions_than_validator(self):
         """Test that operator role has more permissions than validator."""
         # Cluster permissions - operator should have patch on managedclusters
-        operator_mc = next(
-            (p for p in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"),
-            None
-        )
-        validator_mc = next(
-            (p for p in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"),
-            None
-        )
+        operator_mc = next((p for p in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"), None)
+        validator_mc = next((p for p in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"), None)
 
         assert operator_mc is not None
         assert validator_mc is not None
@@ -453,19 +448,13 @@ class TestRBACValidatorRoleAware:
             for api_group, resource, verbs in perms:
                 has_write = any(v in write_verbs for v in verbs)
                 assert not has_write, (
-                    f"Validator should not have write permissions in {namespace}: "
-                    f"{resource} has {verbs}"
+                    f"Validator should not have write permissions in {namespace}: " f"{resource} has {verbs}"
                 )
 
     def test_operator_hub_permissions_include_write_verbs(self):
         """Test that operator hub permissions include write verbs where needed."""
-        backup_perms = RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS.get(
-            "open-cluster-management-backup", []
-        )
-        configmaps_perm = next(
-            (p for p in backup_perms if p[1] == "configmaps"),
-            None
-        )
+        backup_perms = RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS.get("open-cluster-management-backup", [])
+        configmaps_perm = next((p for p in backup_perms if p[1] == "configmaps"), None)
 
         assert configmaps_perm is not None
         assert "create" in configmaps_perm[2], "Operator should have create on configmaps"
@@ -479,13 +468,8 @@ class TestRBACValidatorRoleAware:
 
     def test_validator_backup_namespace_has_secrets_get(self):
         """Test that validator backup namespace includes secrets get permission."""
-        backup_perms = RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.get(
-            "open-cluster-management-backup", []
-        )
-        secrets_perm = next(
-            (p for p in backup_perms if p[1] == "secrets"),
-            None
-        )
+        backup_perms = RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.get("open-cluster-management-backup", [])
+        secrets_perm = next((p for p in backup_perms if p[1] == "secrets"), None)
 
         assert secrets_perm is not None, "Validator should have secrets permission in backup namespace"
         assert "get" in secrets_perm[2], "Validator should have 'get' verb for secrets"

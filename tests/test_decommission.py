@@ -146,9 +146,7 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_not_called()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_excludes_local(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_managed_clusters_excludes_local(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test that local-cluster is excluded from deletion."""
         mock_wait.return_value = True  # Simulate successful wait for deletion
 
@@ -171,9 +169,7 @@ class TestDecommission:
         mock_wait.assert_called_once()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_timeout(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_managed_clusters_timeout(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test that deletion fails when ManagedClusters are not removed in time."""
         mock_wait.return_value = False  # Simulate timeout
 

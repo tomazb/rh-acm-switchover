@@ -426,9 +426,7 @@ class KubeClient:
                 name=name,
             )
         else:
-            resource = self.custom_api.get_cluster_custom_object(
-                group=group, version=version, plural=plural, name=name
-            )
+            resource = self.custom_api.get_cluster_custom_object(group=group, version=version, plural=plural, name=name)
         return resource
 
     @retry_api_call

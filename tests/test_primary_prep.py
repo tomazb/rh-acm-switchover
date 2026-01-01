@@ -76,7 +76,9 @@ class TestPrimaryPreparation:
         assert prep.has_observability is True
 
     @patch("time.sleep")
-    def test_prepare_success_with_observability(self, mock_sleep, primary_prep_with_obs, mock_primary_client, mock_state_manager):
+    def test_prepare_success_with_observability(
+        self, mock_sleep, primary_prep_with_obs, mock_primary_client, mock_state_manager
+    ):
         """Test successful preparation with observability."""
 
         # Mock all list_custom_resources calls
