@@ -1,0 +1,5 @@
+# ACM Switchover configuration
+# This file is sourced by the wrapper scripts
+
+# State directory (default: /var/lib/acm-switchover)
+# ACM_SWITCHOVER_STATE_DIR=/var/lib/acm-switchover

@@ -1,0 +1,35 @@
+Source: acm-switchover
+Section: admin
+Priority: optional
+Maintainer: Tomaz Borstnar <tomaz@borstnar.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               python3-all,
+               python3-setuptools,
+               pandoc
+Standards-Version: 4.6.0
+Homepage: https://github.com/tomazb/rh-acm-switchover
+Vcs-Git: https://github.com/tomazb/rh-acm-switchover.git
+Vcs-Browser: https://github.com/tomazb/rh-acm-switchover
+Rules-Requires-Root: no
+
+Package: acm-switchover
+Architecture: all
+Depends: ${python3:Depends},
+         ${misc:Depends},
+         python3 (>= 3.9),
+         python3-kubernetes (>= 28.0.0),
+         python3-yaml (>= 6.0),
+         python3-rich (>= 13.0.0),
+         python3-tenacity (>= 8.2.0),
+         python3-urllib3 (>= 2.0.0)
+Description: Automated Red Hat ACM Hub Switchover Tool
+ Automated, idempotent tool for switching over Red Hat Advanced Cluster
+ Management (ACM) from a primary hub to a secondary hub cluster.
+ .
+ Features:
+  - Pre-flight validation of hub clusters
+  - Phased workflow with state tracking
+  - Dry-run mode for safe testing
+  - Post-activation verification
+  - Support for passive-sync and full-restore methods

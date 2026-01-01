@@ -1,0 +1,7 @@
+#!/bin/sh
+# ACM Switchover state viewer wrapper script (Debian/Ubuntu)
+[ -r /etc/default/acm-switchover ] && . /etc/default/acm-switchover
+: "${ACM_SWITCHOVER_STATE_DIR:=/var/lib/acm-switchover}"
+export ACM_SWITCHOVER_STATE_DIR
+export PYTHONPATH="/usr/share/acm-switchover:${PYTHONPATH}"
+exec /usr/bin/python3 -c "from show_state import main; main()" "$@"

@@ -14,7 +14,8 @@ from kubernetes.client.rest import ApiException
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.post_activation as post_activation_module
-from lib.constants import OBSERVABILITY_NAMESPACE
+from lib.constants import CLUSTER_VERIFY_INTERVAL, OBSERVABILITY_NAMESPACE
+from lib.exceptions import SwitchoverError
 
 PostActivationVerification = post_activation_module.PostActivationVerification
 
@@ -253,13 +254,22 @@ class TestPostActivationVerification:
         calls = [call[0][0] for call in mock_state_manager.mark_step_completed.call_args_list]
         assert "verify_klusterlet_connections" in calls
 
-    def test_verify_no_clusters(self, post_verify_with_obs, mock_secondary_client):
-        """Test when no managed clusters exist."""
+    @patch("modules.post_activation.wait_for_condition")
+    def test_verify_no_clusters(self, mock_wait, post_verify_with_obs, mock_secondary_client):
+        """Test when no managed clusters exist - should timeout waiting for clusters."""
         mock_secondary_client.list_custom_resources.return_value = []
+        mock_wait.return_value = False  # Simulate timeout (no clusters found)
 
-        # Should handle gracefully or raise appropriate error
-        with pytest.raises(Exception):
+        # Should raise SwitchoverError with timeout message
+        with pytest.raises(SwitchoverError, match="Timeout waiting for ManagedClusters"):
             post_verify_with_obs._verify_managed_clusters_connected(timeout=1)
+
+        # Verify wait_for_condition was called with expected parameters
+        mock_wait.assert_called_once()
+        call_args = mock_wait.call_args
+        assert call_args[0][0] == "ManagedCluster connections"  # description
+        assert call_args[1]["timeout"] == 1
+        assert call_args[1]["interval"] == CLUSTER_VERIFY_INTERVAL
 
     def test_restart_observatorium_api(self, post_verify_with_obs, mock_secondary_client):
         """Test restarting observatorium API deployment."""

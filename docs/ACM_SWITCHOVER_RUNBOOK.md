@@ -421,6 +421,7 @@ oc get configmap import-controller-config -n multicluster-engine -o yaml
 > **Cross-reference:** This ConfigMap will be removed in [Step 7](#step-7-reset-auto-import-strategy-to-default-acm-214-if-set-on-new-primary-hub) after activation to restore the default `ImportOnly` behavior.
 >
 > Clarification: The ConfigMap affects only the hub where you create it. Use `ImportAndSync` only when you intentionally need continuous re-application on the hub you are promoting (typically for temporary switchback scenarios), and remove it after activation (see Step 7). If the ConfigMap does not exist, the hub uses the default `ImportOnly` behavior.
+> If you deploy via the Helm chart, you can manage this ConfigMap declaratively with `autoImportStrategy.enabled=true` and `autoImportStrategy.mode=ImportAndSync`.
 > **IMPORTANT:** Do not perform this step if your destination hub has no existing managed clusters, as it is unnecessary.
 
 ---

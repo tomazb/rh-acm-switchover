@@ -37,10 +37,10 @@ from modules import (
     Decommission,
     Finalization,
     PostActivationVerification,
-    PreflightValidator,
     PrimaryPreparation,
     SecondaryActivation,
 )
+from modules.preflight_coordinator import PreflightValidator
 
 STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
 
@@ -75,6 +75,13 @@ Examples:
   # Decommission old hub
   %(prog)s --decommission --primary-context old-hub --method passive --old-hub-action none
         """,
+    )
+
+    # Version
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__} ({__version_date__})",
     )
 
     # Context arguments
@@ -197,6 +204,9 @@ Examples:
     # Logging
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument(
+        "--force", action="store_true", help="Force execution even with stale state file (use with caution)"
+    )
+    parser.add_argument(
         "--log-format",
         choices=["text", "json"],
         default="text",
@@ -242,6 +252,39 @@ def run_switchover(
 
     if secondary is None:
         raise ValueError("Secondary client is required for switchover")
+
+    # Check for stale completed state that would cause instant "completion"
+    current_phase = state.get_current_phase()
+    if current_phase == Phase.COMPLETED:
+        state_age = datetime.now(timezone.utc) - datetime.fromisoformat(
+            state.state["last_updated"].replace("Z", "+00:00")
+        )
+        if state_age.total_seconds() > 300:  # 5 minutes
+            logger.warning("")
+            logger.warning("⚠️  DETECTED STALE STATE FILE")
+            logger.warning(
+                "Switchover appears to be already completed, but state file is %s old.",
+                f"{int(state_age.total_seconds() // 60)} minutes",
+            )
+            logger.warning("A real switchover takes 30-45 minutes, not seconds.")
+            logger.warning("")
+            logger.warning("To start a fresh switchover:")
+            logger.warning("  1. Remove state file: rm %s", state.state_file)
+            logger.warning("  2. Or use: --force to override (use with caution)")
+            logger.warning("")
+            if not getattr(args, "force", False):
+                logger.error("Use --force to proceed with stale state, or remove state file to start fresh.")
+                sys.exit(EXIT_FAILURE)
+            else:
+                # Reset state completely to start fresh switchover
+                # This clears completed_steps so all phase handlers re-execute their work
+                logger.warning("--force used: Resetting state to start fresh switchover")
+                state.reset()
+        else:
+            logger.info(
+                "Resuming recently completed switchover (state age: %s)",
+                f"{int(state_age.total_seconds() // 60)} minutes",
+            )
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
@@ -501,11 +544,16 @@ def run_setup(
     # Build command
     cmd = [
         setup_script,
-        "--admin-kubeconfig", args.admin_kubeconfig,
-        "--context", args.primary_context,
-        "--role", args.role,
-        "--token-duration", args.token_duration,
-        "--output-dir", args.output_dir,
+        "--admin-kubeconfig",
+        args.admin_kubeconfig,
+        "--context",
+        args.primary_context,
+        "--role",
+        args.role,
+        "--token-duration",
+        args.token_duration,
+        "--output-dir",
+        args.output_dir,
     ]
 
     if args.skip_kubeconfig_generation:

@@ -73,7 +73,7 @@ class TestValidationReporter:
         assert len(reporter.results) == 3
         assert len(reporter.critical_failures()) == 1
 
-    @patch("modules.preflight_validators.logger")
+    @patch("modules.preflight.reporter.logger")
     def test_print_summary_all_passed(self, mock_logger, reporter):
         """Test summary when all checks pass."""
         reporter.add_result("check1", True, "ok", critical=True)
@@ -84,7 +84,7 @@ class TestValidationReporter:
         # Verify info log calls
         assert any("2/2 checks passed" in str(call) for call in mock_logger.info.call_args_list)
 
-    @patch("modules.preflight_validators.logger")
+    @patch("modules.preflight.reporter.logger")
     def test_print_summary_with_failures(self, mock_logger, reporter):
         """Test summary when there are critical failures."""
         reporter.add_result("check1", True, "ok", critical=True)
@@ -190,7 +190,7 @@ class TestObservabilityDetector:
 class TestToolingValidator:
     """Tests for the ToolingValidator."""
 
-    @patch("modules.preflight_validators.shutil.which")
+    @patch("modules.preflight.namespace_validators.shutil.which")
     def test_tooling_validator_success(self, mock_which, reporter):
         """Succeeds when oc or kubectl and jq are present."""
 
@@ -209,7 +209,7 @@ class TestToolingValidator:
         assert cli_result["passed"] is True
         assert jq_result["passed"] is True
 
-    @patch("modules.preflight_validators.shutil.which", return_value=None)
+    @patch("modules.preflight.namespace_validators.shutil.which", return_value=None)
     def test_tooling_validator_failure(self, mock_which, reporter):
         """Fails when neither oc nor kubectl are found."""
         validator = ToolingValidator(reporter)
