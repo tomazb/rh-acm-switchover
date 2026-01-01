@@ -15,11 +15,12 @@ from lib.kube_client import KubeClient, api_call, is_retryable_error
 @pytest.fixture
 def mock_k8s_apis():
     """Mock Kubernetes API clients."""
-    with patch("lib.kube_client.config.load_kube_config") as mock_config, patch(
-        "lib.kube_client.client.CustomObjectsApi"
-    ) as mock_custom_cls, patch("lib.kube_client.client.CoreV1Api") as mock_core_cls, patch(
-        "lib.kube_client.client.AppsV1Api"
-    ) as mock_apps_cls:
+    with (
+        patch("lib.kube_client.config.load_kube_config") as mock_config,
+        patch("lib.kube_client.client.CustomObjectsApi") as mock_custom_cls,
+        patch("lib.kube_client.client.CoreV1Api") as mock_core_cls,
+        patch("lib.kube_client.client.AppsV1Api") as mock_apps_cls,
+    ):
 
         yield {
             "config": mock_config,
@@ -525,6 +526,7 @@ class TestApiCallDecorator:
 
     def test_uses_method_name_as_default_resource_desc(self):
         """Decorator derives resource_desc from method name if not provided."""
+
         # The resource_desc is used in log messages; we just verify the decorator works
         @api_call(not_found_value=None)
         def get_some_resource():

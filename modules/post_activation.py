@@ -67,17 +67,13 @@ class PostActivationVerification:
                         "ManagedClusters not connected after initial wait: %s",
                         e,
                     )
-                    logger.info(
-                        "Checking if klusterlets need to be fixed (may be pointing to old hub)..."
-                    )
+                    logger.info("Checking if klusterlets need to be fixed (may be pointing to old hub)...")
                     # Try to fix klusterlet connections first
                     self._verify_klusterlet_connections()
                     self.state.mark_step_completed("verify_klusterlet_connections")
 
                     # Now wait longer for clusters to reconnect after fix
-                    logger.info(
-                        "Waiting for ManagedClusters to reconnect after klusterlet fix..."
-                    )
+                    logger.info("Waiting for ManagedClusters to reconnect after klusterlet fix...")
                     self._verify_managed_clusters_connected()
                     self.state.mark_step_completed("verify_clusters_connected")
             else:

@@ -40,9 +40,7 @@ class TestVersionConstants:
         from lib import __version__
 
         # Should match X.Y.Z pattern
-        assert re.match(r"^\d+\.\d+\.\d+$", __version__), (
-            f"Version '{__version__}' doesn't match semver X.Y.Z format"
-        )
+        assert re.match(r"^\d+\.\d+\.\d+$", __version__), f"Version '{__version__}' doesn't match semver X.Y.Z format"
 
     def test_version_date_valid(self):
         """Test that version date is a valid date."""
@@ -81,15 +79,13 @@ class TestVersionSync:
         if version_file.exists():
             canonical_version = version_file.read_text().strip()
             assert canonical_version == __version__, (
-                f"VERSION file ({canonical_version}) doesn't match "
-                f"lib/__version__ ({__version__})"
+                f"VERSION file ({canonical_version}) doesn't match " f"lib/__version__ ({__version__})"
             )
 
         if version_date_file.exists():
             canonical_date = version_date_file.read_text().strip()
             assert canonical_date == __version_date__, (
-                f"VERSION_DATE file ({canonical_date}) doesn't match "
-                f"lib/__version_date__ ({__version_date__})"
+                f"VERSION_DATE file ({canonical_date}) doesn't match " f"lib/__version_date__ ({__version_date__})"
             )
 
     def test_setup_cfg_version_matches(self):
@@ -104,8 +100,7 @@ class TestVersionSync:
             if match:
                 setup_version = match.group(1).strip()
                 assert setup_version == __version__, (
-                    f"setup.cfg version ({setup_version}) doesn't match "
-                    f"lib.__version__ ({__version__})"
+                    f"setup.cfg version ({setup_version}) doesn't match " f"lib.__version__ ({__version__})"
                 )
 
     def test_constants_sh_version_matches(self):
@@ -117,25 +112,19 @@ class TestVersionSync:
             content = constants_sh.read_text()
 
             # Extract SCRIPT_VERSION
-            match = re.search(
-                r'^export\s+SCRIPT_VERSION="(.+)"$', content, re.MULTILINE
-            )
+            match = re.search(r'^export\s+SCRIPT_VERSION="(.+)"$', content, re.MULTILINE)
             if match:
                 script_version = match.group(1)
                 assert script_version == __version__, (
-                    f"SCRIPT_VERSION ({script_version}) doesn't match "
-                    f"lib.__version__ ({__version__})"
+                    f"SCRIPT_VERSION ({script_version}) doesn't match " f"lib.__version__ ({__version__})"
                 )
 
             # Extract SCRIPT_VERSION_DATE
-            match = re.search(
-                r'^export\s+SCRIPT_VERSION_DATE="(.+)"$', content, re.MULTILINE
-            )
+            match = re.search(r'^export\s+SCRIPT_VERSION_DATE="(.+)"$', content, re.MULTILINE)
             if match:
                 script_date = match.group(1)
                 assert script_date == __version_date__, (
-                    f"SCRIPT_VERSION_DATE ({script_date}) doesn't match "
-                    f"lib.__version_date__ ({__version_date__})"
+                    f"SCRIPT_VERSION_DATE ({script_date}) doesn't match " f"lib.__version_date__ ({__version_date__})"
                 )
 
 
@@ -155,12 +144,8 @@ class TestVersionCLI:
         )
 
         assert result.returncode == 0, f"--version failed: {result.stderr}"
-        assert __version__ in result.stdout, (
-            f"Version {__version__} not in output: {result.stdout}"
-        )
-        assert __version_date__ in result.stdout, (
-            f"Date {__version_date__} not in output: {result.stdout}"
-        )
+        assert __version__ in result.stdout, f"Version {__version__} not in output: {result.stdout}"
+        assert __version_date__ in result.stdout, f"Date {__version_date__} not in output: {result.stdout}"
 
     def test_check_rbac_version_flag(self):
         """Test check_rbac.py --version output."""
@@ -174,12 +159,8 @@ class TestVersionCLI:
         )
 
         assert result.returncode == 0, f"--version failed: {result.stderr}"
-        assert __version__ in result.stdout, (
-            f"Version {__version__} not in output: {result.stdout}"
-        )
-        assert __version_date__ in result.stdout, (
-            f"Date {__version_date__} not in output: {result.stdout}"
-        )
+        assert __version__ in result.stdout, f"Version {__version__} not in output: {result.stdout}"
+        assert __version_date__ in result.stdout, f"Date {__version_date__} not in output: {result.stdout}"
 
     def test_show_state_version_flag(self):
         """Test show_state.py --version output."""
@@ -193,12 +174,8 @@ class TestVersionCLI:
         )
 
         assert result.returncode == 0, f"--version failed: {result.stderr}"
-        assert __version__ in result.stdout, (
-            f"Version {__version__} not in output: {result.stdout}"
-        )
-        assert __version_date__ in result.stdout, (
-            f"Date {__version_date__} not in output: {result.stdout}"
-        )
+        assert __version__ in result.stdout, f"Version {__version__} not in output: {result.stdout}"
+        assert __version_date__ in result.stdout, f"Date {__version_date__} not in output: {result.stdout}"
 
     def test_version_output_format(self):
         """Test that version output follows expected format."""
@@ -212,9 +189,7 @@ class TestVersionCLI:
         # Expected format: "scriptname X.Y.Z (YYYY-MM-DD)"
         pattern = r"^[\w_]+\.py \d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\)$"
         output = result.stdout.strip()
-        assert re.match(pattern, output), (
-            f"Version output '{output}' doesn't match expected format"
-        )
+        assert re.match(pattern, output), f"Version output '{output}' doesn't match expected format"
 
 
 @pytest.mark.integration
@@ -241,7 +216,5 @@ class TestValidateVersionsScript:
             cwd=PROJECT_ROOT,
         )
 
-        assert result.returncode == 0, (
-            f"validate-versions.sh failed:\n{result.stdout}\n{result.stderr}"
-        )
+        assert result.returncode == 0, f"validate-versions.sh failed:\n{result.stdout}\n{result.stderr}"
         assert "All versions are consistent" in result.stdout

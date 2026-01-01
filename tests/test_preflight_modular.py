@@ -5,11 +5,11 @@ inherit from BaseValidator and implement the expected interface.
 """
 
 import inspect
+
 import pytest
 
 from modules.preflight.base_validator import BaseValidator
 from modules.preflight.reporter import ValidationReporter
-
 
 # All validator classes that should inherit from BaseValidator
 VALIDATOR_CLASSES = [
@@ -37,12 +37,11 @@ def test_validator_inherits_from_base(module_path, class_name):
     hierarchy, which is critical for consistent result reporting.
     """
     import importlib
+
     module = importlib.import_module(module_path)
     validator_class = getattr(module, class_name)
 
-    assert issubclass(validator_class, BaseValidator), (
-        f"{class_name} must inherit from BaseValidator"
-    )
+    assert issubclass(validator_class, BaseValidator), f"{class_name} must inherit from BaseValidator"
 
 
 @pytest.mark.parametrize("module_path,class_name", VALIDATOR_CLASSES)
@@ -52,15 +51,14 @@ def test_validator_accepts_reporter(module_path, class_name):
     This ensures the dependency injection pattern is consistent across validators.
     """
     import importlib
+
     module = importlib.import_module(module_path)
     validator_class = getattr(module, class_name)
 
     reporter = ValidationReporter()
     validator = validator_class(reporter)
 
-    assert validator.reporter is reporter, (
-        f"{class_name} must store the reporter reference"
-    )
+    assert validator.reporter is reporter, f"{class_name} must store the reporter reference"
 
 
 def test_base_validator_add_result_propagates_to_reporter():

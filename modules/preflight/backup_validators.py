@@ -331,8 +331,12 @@ class ManagedClusterBackupValidator(BaseValidator):
 
             # Filter for managed-clusters backups using ACM backup schedule type label
             mc_backups = [
-                b for b in backups
-                if b.get("metadata", {}).get("labels", {}).get("cluster.open-cluster-management.io/backup-schedule-type") == "managedClusters"
+                b
+                for b in backups
+                if b.get("metadata", {})
+                .get("labels", {})
+                .get("cluster.open-cluster-management.io/backup-schedule-type")
+                == "managedClusters"
             ]
 
             if not mc_backups:

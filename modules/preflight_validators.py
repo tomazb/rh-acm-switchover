@@ -53,8 +53,7 @@ logger = logging.getLogger("acm_switchover")
 
 # Emit deprecation warning when module is imported
 warnings.warn(
-    "modules.preflight_validators is deprecated. "
-    "Import validators directly from modules.preflight instead.",
+    "modules.preflight_validators is deprecated. " "Import validators directly from modules.preflight instead.",
     DeprecationWarning,
-    stacklevel=2
+    stacklevel=2,
 )

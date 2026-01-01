@@ -711,7 +711,7 @@ class Finalization:
                 if compactor_pods_after or api_pods_after:
                     logger.warning(
                         "Old hub: MultiClusterObservability is still active (%s). Scale both to 0 or remove MCO.",
-                        f"thanos-compact={len(compactor_pods_after)}, observatorium-api={len(api_pods_after)}"
+                        f"thanos-compact={len(compactor_pods_after)}, observatorium-api={len(api_pods_after)}",
                     )
                 else:
                     logger.info("All observability components scaled down on old hub")

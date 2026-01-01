@@ -78,7 +78,9 @@ class TestSecondaryActivation:
 
     @patch("time.sleep")
     @patch("modules.activation.wait_for_condition")
-    def test_activate_passive_success(self, mock_wait, mock_sleep, activation_passive, mock_secondary_client, mock_state_manager):
+    def test_activate_passive_success(
+        self, mock_wait, mock_sleep, activation_passive, mock_secondary_client, mock_state_manager
+    ):
         """Test successful passive activation."""
         mock_wait.return_value = True
         mock_sleep.return_value = None  # Skip real sleep in patch verification loop
