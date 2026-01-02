@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`discover-hub.sh` context deduplication and API server display**: The hub discovery script now detects when multiple kubeconfig contexts point to the same cluster (by comparing API server URLs), groups them together in output, and displays the API server URL for each unique hub. Uses the shortest context name as the canonical name for proposed commands. Includes RBAC validation hints suggesting `check_rbac.py` commands.
+
 ### Fixed
 
 - **Finalization respects `--old-hub-action none`**: Fixed regression where `_verify_old_hub_state()` was unconditionally scaling down observability components (thanos-compact, observatorium-api) even when `--old-hub-action none` was specified. Now properly skips old hub modifications when action is `none`, honoring the documented "leaves it unchanged for manual handling" contract.
