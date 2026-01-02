@@ -20,7 +20,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, cast
 
 from lib import (
@@ -252,10 +252,18 @@ def run_switchover(
     current_phase = state.get_current_phase()
     if current_phase == Phase.COMPLETED:
         # Handle both 'Z' suffix and explicit timezone offsets
-        last_updated = state.state["last_updated"]
-        if last_updated.endswith('Z'):
-            last_updated = last_updated[:-1] + '+00:00'
-        state_age = datetime.now(timezone.utc) - datetime.fromisoformat(last_updated)
+        try:
+            last_updated_str = state.state.get("last_updated", "")
+            if not last_updated_str:
+                logger.warning("State file missing last_updated timestamp, treating as fresh")
+                state_age = timedelta(seconds=0)
+            else:
+                if last_updated_str.endswith('Z'):
+                    last_updated_str = last_updated_str[:-1] + '+00:00'
+                state_age = datetime.now(timezone.utc) - datetime.fromisoformat(last_updated_str)
+        except (ValueError, TypeError) as e:
+            logger.warning("Could not parse state timestamp: %s, treating as fresh", e)
+            state_age = timedelta(seconds=0)
         if state_age.total_seconds() > 900:  # 15 minutes (1/2 of minimum switchover time)
             logger.warning("")
             logger.warning("⚠️  DETECTED STALE STATE FILE")
