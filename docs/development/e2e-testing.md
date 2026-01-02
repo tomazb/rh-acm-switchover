@@ -12,8 +12,12 @@ Based on the `discover-hub.sh` output, your test environment includes:
 
 **ACM Hubs:**
 - **mgmt1**: Primary hub (ACM 2.12.7, OCP 4.16.54) - 3/3 clusters connected
+  - API Server: `https://api.mgmt1.htz1.all-it.tech:6443`
+  - Also accessible via context: `open-cluster-management/api-mgmt1-htz1-all-it-tech:6443/system:admin`
 - **mgmt2**: Secondary hub (ACM 2.12.7, OCP 4.16.54) - Ready for switchover
-- **open-cluster-management/api-mgmt1-htz1-all-it-tech:6443/system:admin**: Alternative primary access
+  - API Server: `https://api.mgmt2.htz1.all-it.tech:6443`
+
+**Note:** The `discover-hub.sh` script automatically detects that `mgmt1` and the long-form context point to the same cluster (by API server URL) and groups them together, using the shortest name (`mgmt1`) in proposed commands.
 
 **Managed Clusters:**
 - **prod1**: Connected to mgmt1 (OCP 4.16.54)
