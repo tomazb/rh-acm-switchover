@@ -251,8 +251,12 @@ def run_switchover(
     # Check for stale completed state that would cause instant "completion"
     current_phase = state.get_current_phase()
     if current_phase == Phase.COMPLETED:
-        state_age = datetime.now(timezone.utc) - datetime.fromisoformat(state.state["last_updated"].replace('Z', '+00:00'))
-        if state_age.total_seconds() > 300:  # 5 minutes
+        # Handle both 'Z' suffix and explicit timezone offsets
+        last_updated = state.state["last_updated"]
+        if last_updated.endswith('Z'):
+            last_updated = last_updated[:-1] + '+00:00'
+        state_age = datetime.now(timezone.utc) - datetime.fromisoformat(last_updated)
+        if state_age.total_seconds() > 900:  # 15 minutes (1/2 of minimum switchover time)
             logger.warning("")
             logger.warning("⚠️  DETECTED STALE STATE FILE")
             logger.warning("Switchover appears to be already completed, but state file is %s old.",

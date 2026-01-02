@@ -398,15 +398,15 @@ class ManagedClusterBackupValidator(BaseValidator):
                     f"clusters imported after latest backup will be lost: {', '.join(clusters_after_backup)}",
                     critical=True,  # Critical failure - these clusters will be lost on switchover
                 )
-
-            # Backup is completed - report success with joined cluster count
-            # Note: joined_clusters is guaranteed non-empty (validated earlier in this method)
-            self.add_result(
-                "ManagedClusters in backup",
-                True,
-                f"found {len(joined_clusters)} joined cluster(s), latest backup completed successfully",
-                critical=False,
-            )
+            else:
+                # Backup is completed - report success with joined cluster count
+                # Note: joined_clusters is guaranteed non-empty (validated earlier in this method)
+                self.add_result(
+                    "ManagedClusters in backup",
+                    True,
+                    f"found {len(joined_clusters)} joined cluster(s), latest backup completed successfully",
+                    critical=False,
+                )
 
         except (RuntimeError, ValueError, Exception) as exc:
             self.add_result(
