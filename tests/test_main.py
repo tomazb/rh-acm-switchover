@@ -5,7 +5,7 @@ Tests argument parsing and basic entry point logic.
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, Mock, MagicMock
+from unittest.mock import patch, Mock
 from datetime import datetime, timezone, timedelta
 
 import pytest
@@ -14,7 +14,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from acm_switchover import parse_args
-from lib.utils import Phase
 
 
 @pytest.mark.unit

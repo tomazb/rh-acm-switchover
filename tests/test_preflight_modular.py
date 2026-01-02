@@ -4,7 +4,6 @@ These tests verify the module contract - that all validators properly
 inherit from BaseValidator and implement the expected interface.
 """
 
-import inspect
 import pytest
 
 from modules.preflight.base_validator import BaseValidator
