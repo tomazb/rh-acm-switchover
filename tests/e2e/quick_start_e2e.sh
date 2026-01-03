@@ -2,6 +2,12 @@
 # Quick Start Script for ACM Switchover E2E Testing
 # Provides a simple interface to run comprehensive E2E tests
 # Usage: ./quick_start_e2e.sh [--cycles <n>] [--primary <ctx>] [--secondary <ctx>]
+#
+# DEPRECATION NOTICE:
+#   This bash script is deprecated in favor of the Python E2E orchestrator.
+#   For CI/automated testing, use: pytest -m e2e tests/e2e/
+#   For programmatic usage, import tests.e2e.orchestrator.E2EOrchestrator
+#   This script will be removed in a future release.
 
 set -euo pipefail
 
@@ -312,10 +318,32 @@ analyze_existing_results() {
 }
 
 # =============================================================================
+# Deprecation Warning
+# =============================================================================
+
+print_deprecation_warning() {
+    echo ""
+    echo -e "${YELLOW}╔═══════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║  DEPRECATION WARNING                                                       ║${NC}"
+    echo -e "${YELLOW}║                                                                             ║${NC}"
+    echo -e "${YELLOW}║  This bash script is deprecated in favor of the Python E2E orchestrator.   ║${NC}"
+    echo -e "${YELLOW}║  For CI/automated testing, use: pytest -m e2e tests/e2e/                   ║${NC}"
+    echo -e "${YELLOW}║  For programmatic usage: from tests.e2e.orchestrator import E2EOrchestrator║${NC}"
+    echo -e "${YELLOW}║                                                                             ║${NC}"
+    echo -e "${YELLOW}║  This script will be removed in a future release.                          ║${NC}"
+    echo -e "${YELLOW}╚═══════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    sleep 2
+}
+
+# =============================================================================
 # Main Execution
 # =============================================================================
 
 main() {
+    # Print deprecation warning
+    print_deprecation_warning
+    
     # Parse command line arguments
     local dry_run=false
     local monitoring_only=false

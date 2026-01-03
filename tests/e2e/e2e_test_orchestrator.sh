@@ -2,6 +2,12 @@
 # ACM Switchover E2E Test Orchestrator
 # Runs 5 consecutive switchover cycles with comprehensive monitoring
 # Usage: ./e2e_test_orchestrator.sh [--primary <ctx>] [--secondary <ctx>] [--cycles <n>]
+#
+# DEPRECATION NOTICE:
+#   This bash script is deprecated in favor of the Python E2E orchestrator.
+#   For CI/automated testing, use: pytest -m e2e tests/e2e/
+#   For programmatic usage, import tests.e2e.orchestrator.E2EOrchestrator
+#   This script will be removed in a future release.
 
 set -euo pipefail
 
@@ -45,6 +51,25 @@ declare -a PHASES=(
 declare -A CYCLE_RESULTS=()
 declare -A PHASE_TIMINGS=()
 TOTAL_START_TIME=""
+
+# =============================================================================
+# Deprecation Warning
+# =============================================================================
+
+print_deprecation_warning() {
+    echo ""
+    echo "╔═══════════════════════════════════════════════════════════════════════════╗"
+    echo "║  DEPRECATION WARNING                                                       ║"
+    echo "║                                                                             ║"
+    echo "║  This bash script is deprecated in favor of the Python E2E orchestrator.   ║"
+    echo "║  For CI/automated testing, use: pytest -m e2e tests/e2e/                   ║"
+    echo "║  For programmatic usage: from tests.e2e.orchestrator import E2EOrchestrator║"
+    echo "║                                                                             ║"
+    echo "║  This script will be removed in a future release.                          ║"
+    echo "╚═══════════════════════════════════════════════════════════════════════════╝"
+    echo ""
+    sleep 2
+}
 
 # =============================================================================
 # Utility Functions
@@ -422,6 +447,9 @@ generate_summary_report() {
 # =============================================================================
 
 main() {
+    # Print deprecation warning
+    print_deprecation_warning
+    
     TOTAL_START_TIME=$(date +%s)
     
     log_message "Starting ACM Switchover E2E Test Orchestrator"

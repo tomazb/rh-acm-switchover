@@ -2,6 +2,12 @@
 # Enhanced Monitoring Script for ACM Switchover Phases
 # Provides real-time monitoring and alerting for critical resources
 # Usage: ./phase_monitor.sh [--primary <ctx>] [--secondary <ctx>] [--phase <phase>] [--output-dir <dir>]
+#
+# DEPRECATION NOTICE:
+#   This bash script is deprecated in favor of Python-based monitoring.
+#   The Python E2E orchestrator includes integrated monitoring.
+#   For CI/automated testing, use: pytest -m e2e tests/e2e/
+#   This script will be removed in a future release.
 
 set -euo pipefail
 
@@ -495,10 +501,32 @@ cleanup() {
 }
 
 # =============================================================================
+# Deprecation Warning
+# =============================================================================
+
+print_deprecation_warning() {
+    echo ""
+    echo "╔═══════════════════════════════════════════════════════════════════════════╗"
+    echo "║  DEPRECATION WARNING                                                       ║"
+    echo "║                                                                             ║"
+    echo "║  This bash script is deprecated in favor of Python-based monitoring.       ║"
+    echo "║  The Python E2E orchestrator includes integrated monitoring.               ║"
+    echo "║  For CI/automated testing, use: pytest -m e2e tests/e2e/                   ║"
+    echo "║                                                                             ║"
+    echo "║  This script will be removed in a future release.                          ║"
+    echo "╚═══════════════════════════════════════════════════════════════════════════╝"
+    echo ""
+    sleep 2
+}
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
 main() {
+    # Print deprecation warning
+    print_deprecation_warning
+    
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
