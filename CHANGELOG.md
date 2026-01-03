@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.9] - 2026-01-03
+
 ### Added
 
 - **`discover-hub.sh` context deduplication and API server display**: The hub discovery script now detects when multiple kubeconfig contexts point to the same cluster (by comparing API server URLs), groups them together in output, and displays the API server URL for each unique hub. Uses the shortest context name as the canonical name for proposed commands. Includes RBAC validation hints suggesting `check_rbac.py` commands.
