@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.9] - 2026-01-03
+
+### Added
+
+- **`discover-hub.sh` context deduplication and API server display**: The hub discovery script now detects when multiple kubeconfig contexts point to the same cluster (by comparing API server URLs), groups them together in output, and displays the API server URL for each unique hub. Uses the shortest context name as the canonical name for proposed commands. Includes RBAC validation hints suggesting `check_rbac.py` commands.
+
+### Fixed
+
+- **Finalization respects `--old-hub-action none`**: Fixed regression where `_verify_old_hub_state()` was unconditionally scaling down observability components (thanos-compact, observatorium-api) even when `--old-hub-action none` was specified. Now properly skips old hub modifications when action is `none`, honoring the documented "leaves it unchanged for manual handling" contract.
+
+- **ManagedClusterBackupValidator timestamp comparison**: Restored missing logic that compares each joined ManagedCluster's `creationTimestamp` against the latest backup's `completionTimestamp`. Clusters imported after the last backup now cause a **critical preflight failure** (not just a warning), preventing data loss during switchover.
+
+- **`--force` properly resets COMPLETED state**: Fixed issue where using `--force` with a stale COMPLETED state would silently no-op instead of re-running the switchover. Now resets phase to INIT when `--force` is used with stale completed state, ensuring all phases execute.
+
+- **Dry-run reporting for observability pod cleanup**: Fixed misleading log messages when `dry_run=True` that incorrectly reported observability components as "scaled down" even though no scaling occurred. Now properly reports `[DRY-RUN] Would scale down...` messages instead.
+
+- **Token expiring soon is now a warning, not failure**: Reverted to pre-refactor behavior where tokens expiring within 4 hours produce a non-critical warning (`passed=True, critical=False`) instead of failing preflight. Only already-expired tokens cause critical failures.
+
+## [1.4.8] - 2025-12-30
+
+### Added
+
+- **Modular pre-flight validation architecture**: Decomposed monolithic `preflight_validators.py` (1,282 lines) into focused modules under `modules/preflight/` with `BaseValidator` class and `ValidationReporter` for extensible validation framework.
+
+- **New validator modules**: Created `backup_validators.py`, `cluster_validators.py`, `namespace_validators.py`, `version_validators.py`, and `reporter.py` with clear separation of concerns.
+
+- **`PreflightValidator` coordinator**: New orchestrator class in `modules/preflight_coordinator.py` for managing modular validators.
+
+- **Modular preflight tests**: Added `tests/test_preflight_modular.py`, `tests/test_preflight_backward_compat.py`, and `tests/test_preflight_validators_unit.py` for comprehensive testing of new structure.
+
+- **Consolidated `@api_call` decorator in `KubeClient`**: Added new `@api_call` decorator that combines retry logic with standard exception handling (404 → return value, 5xx/429 → retry, other → log and re-raise). Refactored 8 methods to use this decorator, reducing ~60 lines of repetitive try/except blocks.
+
+### Changed
+
+- **`modules/preflight_validators.py` deprecated**: Now a backward-compatibility shim that imports from `modules.preflight` and emits `DeprecationWarning` on import.
+
+- **Updated architecture documentation**: Refreshed `docs/development/architecture.md` and `docs/project/prd.md` to reflect the new modular preflight structure.
+
 ## [1.4.7] - 2025-12-26
 
 ### Added

@@ -16,6 +16,8 @@ from lib.constants import (
     IMPORT_CONTROLLER_CONFIGMAP,
     MCE_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_TERMINATE_INTERVAL,
+    OBSERVABILITY_TERMINATE_TIMEOUT,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
@@ -114,7 +116,7 @@ class Finalization:
             else:
                 logger.info("Step already completed: handle_old_hub")
 
-            if self.primary and self.old_hub_action != "decommission":
+            if self.primary and self.old_hub_action not in ("decommission", "none"):
                 self._verify_old_hub_state()
 
             logger.info("Finalization completed successfully")
@@ -626,17 +628,93 @@ class Finalization:
                 logger.warning("Old hub BackupSchedule is not paused")
 
         if self.primary_has_observability:
+            # Check both thanos-compact and observatorium-api pods
             compactor_pods = self.primary.get_pods(
                 namespace=OBSERVABILITY_NAMESPACE,
                 label_selector="app.kubernetes.io/name=thanos-compact",
             )
-            if compactor_pods:
-                logger.warning(
-                    "Thanos compactor still running on old hub (%s pod(s))",
-                    len(compactor_pods),
+            api_pods = self.primary.get_pods(
+                namespace=OBSERVABILITY_NAMESPACE,
+                label_selector="app.kubernetes.io/name=observatorium-api",
+            )
+
+            # Automatically scale down observability components on old hub
+            if not self.dry_run:
+                if compactor_pods:
+                    logger.info("Scaling down thanos-compact on old hub")
+                    self.primary.scale_statefulset("observability-thanos-compact", OBSERVABILITY_NAMESPACE, 0)
+
+                if api_pods:
+                    logger.info("Scaling down observatorium-api on old hub")
+                    self.primary.scale_deployment("observability-observatorium-api", OBSERVABILITY_NAMESPACE, 0)
+
+            # Wait for pods to scale down with polling loop
+            # Kubernetes scales asynchronously, so we need to poll until convergence
+            compactor_pods_after = []
+            api_pods_after = []
+
+            if not self.dry_run and (compactor_pods or api_pods):
+                logger.debug(
+                    "Waiting for observability pods to scale down (timeout=%ds, interval=%ds)",
+                    OBSERVABILITY_TERMINATE_TIMEOUT,
+                    OBSERVABILITY_TERMINATE_INTERVAL,
                 )
+                start_time = time.time()
+
+                while time.time() - start_time < OBSERVABILITY_TERMINATE_TIMEOUT:
+                    if compactor_pods:
+                        compactor_pods_after = self.primary.get_pods(
+                            namespace=OBSERVABILITY_NAMESPACE,
+                            label_selector="app.kubernetes.io/name=thanos-compact",
+                        )
+                    if api_pods:
+                        api_pods_after = self.primary.get_pods(
+                            namespace=OBSERVABILITY_NAMESPACE,
+                            label_selector="app.kubernetes.io/name=observatorium-api",
+                        )
+
+                    # Check if both are scaled down
+                    compactor_done = not compactor_pods or not compactor_pods_after
+                    api_done = not api_pods or not api_pods_after
+
+                    if compactor_done and api_done:
+                        break
+
+                    time.sleep(OBSERVABILITY_TERMINATE_INTERVAL)
+
+            # Report status after waiting (skip in dry-run to avoid misleading messages)
+            if self.dry_run:
+                if compactor_pods:
+                    logger.info("[DRY-RUN] Would scale down thanos-compact on old hub")
+                if api_pods:
+                    logger.info("[DRY-RUN] Would scale down observatorium-api on old hub")
             else:
-                logger.info("Thanos compactor is scaled down on old hub")
+                if compactor_pods:
+                    if compactor_pods_after:
+                        logger.warning(
+                            "Thanos compactor still running on old hub (%s pod(s)) after waiting",
+                            len(compactor_pods_after),
+                        )
+                    else:
+                        logger.info("Thanos compactor is scaled down on old hub")
+
+                if api_pods:
+                    if api_pods_after:
+                        logger.warning(
+                            "Observatorium API still running on old hub (%s pod(s)) after waiting",
+                            len(api_pods_after),
+                        )
+                    else:
+                        logger.info("Observatorium API is scaled down on old hub")
+
+                # Report overall status
+                if compactor_pods_after or api_pods_after:
+                    logger.warning(
+                        "Old hub: MultiClusterObservability is still active (%s). Scale both to 0 or remove MCO.",
+                        f"thanos-compact={len(compactor_pods_after)}, observatorium-api={len(api_pods_after)}"
+                    )
+                else:
+                    logger.info("All observability components scaled down on old hub")
 
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""

@@ -5,9 +5,10 @@ This module includes comprehensive input validation for Kubernetes resource
 names, namespaces, and other parameters to improve security and reliability.
 """
 
+import functools
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -51,6 +52,52 @@ retry_api_call = retry(
     before_sleep=before_sleep_log(logger, logging.DEBUG),
     reraise=True,
 )
+
+
+def api_call(
+    not_found_value: Any = None,
+    log_on_error: bool = True,
+    resource_desc: Optional[str] = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """
+    Combined decorator for Kubernetes API calls with retry and exception handling.
+
+    Combines retry logic (5xx/429 → exponential backoff) with standard exception handling:
+    - 404 → return not_found_value
+    - Retryable errors → re-raise for tenacity
+    - Other errors → log and re-raise
+
+    Args:
+        not_found_value: Value to return when resource not found (404)
+        log_on_error: Whether to log non-retryable errors before re-raising
+        resource_desc: Description for error messages (defaults to method name)
+
+    Usage:
+        @api_call(not_found_value=None)
+        def get_namespace(self, name: str) -> Optional[Dict]:
+            ...
+    """
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        desc = resource_desc or func.__name__.replace("_", " ")
+
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return func(*args, **kwargs)
+            except ApiException as e:
+                if e.status == 404:
+                    return not_found_value
+                if is_retryable_error(e):
+                    raise
+                if log_on_error:
+                    logger.error("Failed to %s: %s", desc, e)
+                raise
+
+        # Apply retry decorator
+        return retry_api_call(wrapper)
+
+    return decorator
 
 
 class KubeClient:
@@ -116,7 +163,7 @@ class KubeClient:
             request_timeout,
         )
 
-    @retry_api_call
+    @api_call(not_found_value=None, resource_desc="get namespace")
     def get_namespace(self, name: str) -> Optional[Dict]:
         """Check if namespace exists.
 
@@ -129,20 +176,11 @@ class KubeClient:
         Raises:
             ValidationError: If namespace name is invalid
         """
-        try:
-            # Validate namespace name before making API call
-            InputValidator.validate_kubernetes_namespace(name)
+        # Validate namespace name before making API call
+        InputValidator.validate_kubernetes_namespace(name)
 
-            ns = self.core_v1.read_namespace(name)
-            return ns.to_dict()
-        except ApiException as e:
-            if e.status == 404:
-                return None
-            # Re-raise retryable errors for tenacity to catch
-            if is_retryable_error(e):
-                raise
-            logger.error("Failed to get namespace %s: %s", name, e)
-            raise
+        ns = self.core_v1.read_namespace(name)
+        return ns.to_dict()
 
     def namespace_exists(self, name: str) -> bool:
         """Check if namespace exists.
@@ -158,7 +196,20 @@ class KubeClient:
         """
         return self.get_namespace(name) is not None
 
-    @retry_api_call
+    @api_call(not_found_value=[], resource_desc="list namespaces")
+    def list_namespaces(self) -> List[Dict]:
+        """List all namespaces.
+
+        Returns:
+            List of namespace dictionaries
+
+        Raises:
+            None (uses api_call decorator for error handling)
+        """
+        result = self.core_v1.list_namespace()
+        return [ns.to_dict() for ns in result.items]
+
+    @api_call(not_found_value=None, log_on_error=False)
     def get_secret(self, namespace: str, name: str) -> Optional[Dict]:
         """Get a secret by name.
 
@@ -172,22 +223,12 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or secret name is invalid
         """
-        try:
-            # Validate inputs before making API call
-            InputValidator.validate_kubernetes_namespace(namespace)
-            InputValidator.validate_kubernetes_name(name, "secret")
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_namespace(namespace)
+        InputValidator.validate_kubernetes_name(name, "secret")
 
-            secret = self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
-            return secret.to_dict()
-        except ApiException as e:
-            if e.status == 404:
-                return None
-            if is_retryable_error(e):
-                raise
-            # Avoid logging secret identifiers (namespace/name). Even though these are resource
-            # identifiers (not secret contents), CodeQL can treat them as sensitive data.
-            logger.error("Failed to get secret: status=%s reason=%s", e.status, e.reason)
-            raise
+        secret = self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
+        return secret.to_dict()
 
     def secret_exists(self, namespace: str, name: str) -> bool:
         """Check if a secret exists.
@@ -207,7 +248,7 @@ class KubeClient:
     # =============================
     # ConfigMap helpers (core/v1)
     # =============================
-    @retry_api_call
+    @api_call(not_found_value=None, resource_desc="read configmap")
     def get_configmap(self, namespace: str, name: str) -> Optional[Dict]:
         """Get a namespaced ConfigMap as dict or None if not found.
 
@@ -221,20 +262,12 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or ConfigMap name is invalid
         """
-        try:
-            # Validate inputs before making API call
-            InputValidator.validate_kubernetes_namespace(namespace)
-            InputValidator.validate_kubernetes_name(name, "ConfigMap")
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_namespace(namespace)
+        InputValidator.validate_kubernetes_name(name, "ConfigMap")
 
-            cm = self.core_v1.read_namespaced_config_map(name=name, namespace=namespace)
-            return cm.to_dict()
-        except ApiException as e:
-            if e.status == 404:
-                return None
-            if is_retryable_error(e):
-                raise
-            logger.error("Failed to read configmap %s/%s: %s", namespace, name, e)
-            raise
+        cm = self.core_v1.read_namespaced_config_map(name=name, namespace=namespace)
+        return cm.to_dict()
 
     def exists_configmap(self, namespace: str, name: str) -> bool:
         """Check if ConfigMap exists.
@@ -302,7 +335,7 @@ class KubeClient:
             logger.error("Failed to create/patch configmap %s/%s: %s", namespace, name, e)
             raise
 
-    @retry_api_call
+    @api_call(not_found_value=True, resource_desc="delete configmap")
     def delete_configmap(self, namespace: str, name: str) -> bool:
         """Delete a ConfigMap; return True if deleted or absent.
 
@@ -323,18 +356,11 @@ class KubeClient:
         if self.dry_run:
             logger.info("[DRY-RUN] Would delete ConfigMap %s/%s", namespace, name)
             return True
-        try:
-            self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace)
-            return True
-        except ApiException as e:
-            if e.status == 404:
-                return True
-            if is_retryable_error(e):
-                raise
-            logger.error("Failed to delete configmap %s/%s: %s", namespace, name, e)
-            raise
 
-    @retry_api_call
+        self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace)
+        return True
+
+    @api_call(not_found_value=None, resource_desc="read Route")
     def get_route_host(self, namespace: str, name: str) -> Optional[str]:
         """Fetch the hostname for an OpenShift Route.
 
@@ -348,28 +374,20 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or Route name is invalid
         """
-        try:
-            # Validate inputs before making API call
-            InputValidator.validate_kubernetes_namespace(namespace)
-            InputValidator.validate_kubernetes_name(name, "Route")
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_namespace(namespace)
+        InputValidator.validate_kubernetes_name(name, "Route")
 
-            route = self.custom_api.get_namespaced_custom_object(
-                group="route.openshift.io",
-                version="v1",
-                namespace=namespace,
-                plural="routes",
-                name=name,
-            )
-            return route.get("spec", {}).get("host")
-        except ApiException as e:
-            if e.status == 404:
-                return None
-            if is_retryable_error(e):
-                raise
-            logger.error("Failed to read Route %s/%s: %s", namespace, name, e)
-            raise
+        route = self.custom_api.get_namespaced_custom_object(
+            group="route.openshift.io",
+            version="v1",
+            namespace=namespace,
+            plural="routes",
+            name=name,
+        )
+        return route.get("spec", {}).get("host")
 
-    @retry_api_call
+    @api_call(not_found_value=None, log_on_error=False)
     def get_custom_resource(
         self,
         group: str,
@@ -394,31 +412,24 @@ class KubeClient:
         Raises:
             ValidationError: If resource name or namespace is invalid
         """
-        try:
-            # Validate inputs before making API call
-            InputValidator.validate_kubernetes_name(name, "custom resource")
-            if namespace:
-                InputValidator.validate_kubernetes_namespace(namespace)
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_name(name, "custom resource")
+        if namespace:
+            InputValidator.validate_kubernetes_namespace(namespace)
 
-            if namespace:
-                resource = self.custom_api.get_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    name=name,
-                )
-            else:
-                resource = self.custom_api.get_cluster_custom_object(
-                    group=group, version=version, plural=plural, name=name
-                )
-            return resource
-        except ApiException as e:
-            if e.status == 404:
-                return None
-            if is_retryable_error(e):
-                raise
-            raise
+        if namespace:
+            resource = self.custom_api.get_namespaced_custom_object(
+                group=group,
+                version=version,
+                namespace=namespace,
+                plural=plural,
+                name=name,
+            )
+        else:
+            resource = self.custom_api.get_cluster_custom_object(
+                group=group, version=version, plural=plural, name=name
+            )
+        return resource
 
     @retry_api_call
     def list_custom_resources(
@@ -629,7 +640,7 @@ class KubeClient:
             logger.error("Failed to create %s: %s", plural, e)
             raise
 
-    @retry_api_call
+    @api_call(not_found_value=False, resource_desc="delete custom resource")
     def delete_custom_resource(
         self,
         group: str,
@@ -648,7 +659,7 @@ class KubeClient:
             namespace: Namespace (None for cluster-scoped)
 
         Returns:
-            True if deleted or absent
+            True if deleted, False if not found
 
         Raises:
             ValidationError: If resource name or namespace is invalid
@@ -662,25 +673,17 @@ class KubeClient:
             logger.info("[DRY-RUN] Would delete %s/%s", plural, name)
             return True
 
-        try:
-            if namespace:
-                self.custom_api.delete_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    name=name,
-                )
-            else:
-                self.custom_api.delete_cluster_custom_object(group=group, version=version, plural=plural, name=name)
-            return True
-        except ApiException as e:
-            if e.status == 404:
-                return False
-            if is_retryable_error(e):
-                raise
-            logger.error("Failed to delete %s/%s: %s", plural, name, e)
-            raise
+        if namespace:
+            self.custom_api.delete_namespaced_custom_object(
+                group=group,
+                version=version,
+                namespace=namespace,
+                plural=plural,
+                name=name,
+            )
+        else:
+            self.custom_api.delete_cluster_custom_object(group=group, version=version, plural=plural, name=name)
+        return True
 
     def list_managed_clusters(self) -> List[Dict]:
         """List all ManagedCluster resources."""
@@ -809,7 +812,7 @@ class KubeClient:
             logger.error("Failed to restart deployment %s/%s: %s", namespace, name, e)
             raise
 
-    @retry_api_call
+    @api_call(not_found_value=[], log_on_error=False)
     def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict]:
         """List pods in a namespace.
 
@@ -833,15 +836,8 @@ class KubeClient:
             if not label_selector.strip():
                 raise ValidationError("Label selector cannot be empty or whitespace-only")
 
-        try:
-            result = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
-            return [pod.to_dict() for pod in result.items]
-        except ApiException as e:
-            if e.status == 404:
-                return []
-            if is_retryable_error(e):
-                raise
-            raise
+        result = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
+        return [pod.to_dict() for pod in result.items]
 
     def list_pods(
         self,

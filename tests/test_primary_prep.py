@@ -5,7 +5,7 @@ Tests cover PrimaryPreparation class for preparing the primary hub.
 
 import sys
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -75,7 +75,8 @@ class TestPrimaryPreparation:
         assert prep.acm_version == "2.12.0"
         assert prep.has_observability is True
 
-    def test_prepare_success_with_observability(self, primary_prep_with_obs, mock_primary_client, mock_state_manager):
+    @patch("time.sleep")
+    def test_prepare_success_with_observability(self, mock_sleep, primary_prep_with_obs, mock_primary_client, mock_state_manager):
         """Test successful preparation with observability."""
 
         # Mock all list_custom_resources calls
@@ -215,10 +216,11 @@ class TestPrimaryPreparation:
 
         mock_primary_client.patch_managed_cluster.assert_not_called()
 
-    def test_scale_down_thanos(self, primary_prep_with_obs, mock_primary_client):
+    @patch("time.sleep")
+    def test_scale_down_thanos(self, mock_sleep, primary_prep_with_obs, mock_primary_client):
         """Test scaling down Thanos compactor."""
         mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
-        mock_primary_client.get_pods.return_value = []  # Not checking pods in this method
+        mock_primary_client.get_pods.return_value = []  # No pods after scaling down
 
         primary_prep_with_obs._scale_down_thanos_compactor()
 
@@ -227,6 +229,7 @@ class TestPrimaryPreparation:
             name="observability-thanos-compact",
             replicas=0,
         )
+        mock_sleep.assert_called_once_with(5)  # Verify wait was called
 
     def test_prepare_error_handling(self, primary_prep_with_obs, mock_primary_client, mock_state_manager):
         """Test error handling during preparation."""
@@ -242,7 +245,8 @@ class TestPrimaryPreparation:
 class TestPrimaryPreparationIntegration:
     """Integration tests for PrimaryPreparation."""
 
-    def test_full_workflow_with_state(self, mock_primary_client, tmp_path):
+    @patch("time.sleep")
+    def test_full_workflow_with_state(self, mock_sleep, mock_primary_client, tmp_path):
         """Test complete workflow with real StateManager."""
         from lib.utils import Phase, StateManager
 

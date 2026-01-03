@@ -146,7 +146,9 @@ class TestFinalization:
     @patch("modules.finalization.time")
     def test_verify_new_backups_success(self, mock_time, finalization, mock_secondary_client):
         """Test backup verification logic finding a new backup."""
-        mock_time.time.return_value = 0
+        # Mock time.time() to increment, avoiding real sleep calls
+        # Calls: start_time, check 1, check 2, check 3
+        mock_time.time.side_effect = [0, 0, 1, 2]
 
         # Sequence of API calls:
         # 1. Initial list (empty)
@@ -167,8 +169,8 @@ class TestFinalization:
     def test_verify_new_backups_timeout(self, mock_time, finalization, mock_secondary_client):
         """Test backup verification timeout."""
         # Mock time to simulate timeout
-        # Start at 0, then check > timeout
-        mock_time.time.side_effect = [0, 100, 200]
+        # Calls: start_time, check 1, check 2, final check after loop
+        mock_time.time.side_effect = [0, 10, 45, 51]
 
         mock_secondary_client.list_custom_resources.return_value = []
 
@@ -231,7 +233,103 @@ class TestFinalization:
         fin._verify_old_hub_state()
 
         assert primary.list_custom_resources.call_count == 2
-        primary.get_pods.assert_called_once()
+        # get_pods is called for both thanos-compact and observatorium-api checks
+        assert primary.get_pods.call_count == 2
+
+    @patch("modules.finalization.time")
+    def test_finalize_skips_verify_old_hub_state_when_action_none(
+        self, mock_time, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Test that _verify_old_hub_state is not called when old_hub_action is 'none'.
+        
+        This ensures the CLI contract is respected: --old-hub-action none should
+        leave the old hub unchanged for manual handling.
+        """
+        # Mock time to avoid loops and sleep delays
+        mock_time.time.side_effect = [0, 1, 2, 3]
+        mock_time.sleep.return_value = None
+        
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+            old_hub_action="none",
+        )
+        
+        # Mock all required responses with side_effect for sequential calls
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
+            [{"metadata": {"name": "schedule"}, "spec": {}, "status": {"phase": "Enabled"}}],  # fix_backup_collision
+            [],  # Initial backups
+            [],  # Loop iteration 1
+            [{"metadata": {"name": "backup-1"}, "status": {"phase": "InProgress"}}],  # Loop iteration 2 - new backup
+        ]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "multiclusterhub"},
+            "status": {"phase": "Running"},
+        }
+        mock_secondary_client.get_pods.return_value = [
+            {"metadata": {"name": "acm-pod"}, "status": {"phase": "Running"}}
+        ]
+        
+        # Ensure we track if _verify_old_hub_state was called
+        with patch.object(fin, '_verify_old_hub_state') as mock_verify:
+            result = fin.finalize()
+            
+            assert result is True
+            # _verify_old_hub_state should NOT be called when old_hub_action is 'none'
+            mock_verify.assert_not_called()
+            # Primary client should not have scaling methods called
+            primary.scale_statefulset.assert_not_called()
+            primary.scale_deployment.assert_not_called()
+
+    @patch('time.sleep')
+    @patch('time.time')
+    def test_finalize_calls_verify_old_hub_state_when_action_secondary(
+        self, mock_time_time, mock_time_sleep, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Test that _verify_old_hub_state IS called when old_hub_action is 'secondary'."""
+        # Mock time to avoid real waits
+        mock_time_time.return_value = 0
+        mock_time_sleep.return_value = None
+        
+        primary = Mock()
+        primary.list_custom_resources.return_value = []
+        primary.get_pods.return_value = []
+        
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=False,
+            old_hub_action="secondary",
+        )
+        
+        # Mock all required responses with side_effect for sequential calls
+        # Order: _cleanup_restore_resources, verify_backup_schedule_enabled, fix_backup_collision, verify_new_backups (2x)
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [],  # _cleanup_restore_resources - no restores to clean up
+            [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
+            [{"metadata": {"name": "schedule"}, "spec": {}, "status": {"phase": "Enabled"}}],  # fix_backup_collision
+            [],  # Initial backups
+            [{"metadata": {"name": "backup-1"}, "status": {"phase": "InProgress"}}],  # New backup detected
+        ]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "multiclusterhub"},
+            "status": {"phase": "Running"},
+        }
+        mock_secondary_client.get_pods.return_value = []
+        
+        with patch.object(fin, '_verify_old_hub_state') as mock_verify:
+            result = fin.finalize()
+            
+            assert result is True
+            # _verify_old_hub_state SHOULD be called when old_hub_action is 'secondary'
+            mock_verify.assert_called_once()
 
     def test_cleanup_restore_resources_archives_before_deletion(
         self, finalization, mock_secondary_client, mock_state_manager
