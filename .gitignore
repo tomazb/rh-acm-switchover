@@ -23,3 +23,6 @@ htmlcov/
 .pytest_cache/
 coverage.xml
 *.cover
+
+# Local environment files
+.env
