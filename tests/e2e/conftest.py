@@ -197,12 +197,12 @@ def validate_cluster_access(primary_client, secondary_client):
     """
     try:
         # Simple connectivity check - list namespaces
-        primary_client.core_api.list_namespace(limit=1)
+        primary_client.core_v1.list_namespace(limit=1)
     except Exception as e:
         pytest.fail(f"Cannot connect to primary cluster: {e}")
     
     try:
-        secondary_client.core_api.list_namespace(limit=1)
+        secondary_client.core_v1.list_namespace(limit=1)
     except Exception as e:
         pytest.fail(f"Cannot connect to secondary cluster: {e}")
 
