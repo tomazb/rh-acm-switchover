@@ -1,108 +1,93 @@
 # ACM Switchover E2E Testing Framework
 
-This directory contains comprehensive end-to-end testing tools for the ACM Hub Switchover process.
+This directory contains the end-to-end (E2E) testing tools for the ACM Hub Switchover process.
 
 ## Overview
 
 The E2E testing framework provides:
-- **Automated test orchestration** for multiple consecutive switchover cycles
-- **Real-time monitoring** of all critical resources during testing
-- **Comprehensive analysis and reporting** with performance metrics
+- **Pytest-based orchestration** for single or repeated switchover cycles
+- **Metrics and artifacts** written per cycle (manifest, states, metrics JSON, CSV summary)
+- **Real-time monitoring hooks** via the Python orchestrator (preferred)
 - **Alert detection** for common issues during switchover
-- **Easy-to-use interfaces** for different testing scenarios
+- **Bash helpers** kept for backward compatibility (deprecated)
 
 ## Files
 
 ### Core Components
 
-- **`e2e_test_orchestrator.sh`** - Main test orchestrator that runs multiple switchover cycles
-- **`phase_monitor.sh`** - Real-time monitoring of ACM resources during switchover phases
-- **`e2e_analyzer.py`** - Python tool for analyzing test results and generating HTML reports
-- **`quick_start_e2e.sh`** - Simple interface for running E2E tests with common scenarios
+- **`pytest` suite** — primary entrypoint; see `tests/e2e/test_e2e_switchover.py`
+- **`orchestrator.py`** — Python orchestrator invoked by the tests
+- **`phase_monitor.sh`** — legacy bash monitor (deprecated; use pytest instead)
+- **`e2e_analyzer.py`** — analyze existing result folders and generate HTML
+- **`quick_start_e2e.sh` / `e2e_test_orchestrator.sh`** — legacy bash wrappers (deprecated)
 
-## Quick Start
+## Quick Start (Recommended)
 
-### 1. Environment Validation (No Changes)
+1) Configure environments (optional, for convenience):
+
 ```bash
-./tests/e2e/quick_start_e2e.sh --dry-run --cycles 1
+cp .env.example .env
+# adjust contexts, cycles, output dir if needed
 ```
 
-### 2. Run 5 Complete Switchover Cycles
+2) Run a dry-run smoke (no cluster changes):
+
 ```bash
-./tests/e2e/quick_start_e2e.sh --cycles 5
+pytest tests/e2e -m e2e --e2e-dry-run
 ```
 
-### 3. Monitor Only (No Execution)
+3) Run a single real switchover (passive + secondary):
+
 ```bash
-./tests/e2e/quick_start_e2e.sh --monitoring-only
+pytest tests/e2e -m e2e \
+   --primary-context mgmt1 \
+   --secondary-context mgmt2 \
+   --e2e-method passive \
+   --e2e-old-hub-action secondary \
+   --e2e-cycles 1 \
+   --e2e-output-dir ./e2e-artifacts
 ```
 
-### 4. Analyze Existing Results
+4) Run a multi-cycle soak:
+
 ```bash
-./tests/e2e/quick_start_e2e.sh --analyze-only --results-dir ./e2e-results-20240101-120000
+pytest tests/e2e -m "e2e and slow" \
+   --primary-context mgmt1 \
+   --secondary-context mgmt2 \
+   --e2e-method passive \
+   --e2e-old-hub-action secondary \
+   --e2e-cycles 5 \
+   --e2e-output-dir ./e2e-artifacts-soak
 ```
+
+Artifacts are written under the provided `--e2e-output-dir` (manifest, metrics, states, CSV summary).
 
 ## Detailed Usage
 
-### E2E Test Orchestrator
+### Pytest Orchestrator
 
-The main orchestrator runs complete switchover cycles with comprehensive monitoring:
+The pytest suite drives the Python orchestrator. Key options (CLI or env vars):
 
-```bash
-# Basic usage
-./tests/e2e/e2e_test_orchestrator.sh
+- `--primary-context` / `--secondary-context` (or `E2E_PRIMARY_CONTEXT`, `E2E_SECONDARY_CONTEXT`)
+- `--e2e-cycles` (default 1 via CLI, default 5 inside orchestrator)
+- `--e2e-output-dir` (default: pytest temp dir)
+- `--e2e-method` (passive only) and `--e2e-old-hub-action` (secondary|decommission)
+- `--e2e-stop-on-failure` to halt after the first failed cycle
 
-# Custom configuration
-PRIMARY_CONTEXT=mgmt1 \
-SECONDARY_CONTEXT=mgmt2 \
-CYCLES=5 \
-./tests/e2e/e2e_test_orchestrator.sh
+Output structure for a run:
+
+```
+<output-dir>/<run-id>/
+├── logs/
+├── states/
+├── metrics/
+├── manifests/
+└── cycle_results.csv
 ```
 
-**Features:**
-- Runs N consecutive switchover cycles
-- Automatically swaps contexts between cycles for testing
-- Monitors all critical resources in real-time
-- Generates detailed logs and metrics
-- Provides comprehensive success/failure reporting
-- Supports resume capability if interrupted
+### Phase Monitor (Legacy)
 
-**Output Structure:**
-```
-e2e-results-YYYYMMDD-HHMMSS/
-├── logs/              # Detailed logs for each phase and cycle
-├── states/            # State files for analysis
-├── metrics/           # Resource metrics collected during testing
-├── alerts/            # Alert notifications generated
-├── cycle_results.csv # Summary results in CSV format
-└── summary_report.txt # Text summary of all cycles
-```
-
-### Phase Monitor
-
-Real-time monitoring of ACM resources during switchover:
-
-```bash
-# Monitor during switchover
-./tests/e2e/phase_monitor.sh \
-  --primary mgmt1 \
-  --secondary mgmt2 \
-  --phase switchover \
-  --output-dir ./monitoring-results
-```
-
-**Monitored Resources:**
-- Managed cluster status and availability
-- Backup schedule status (primary hub)
-- Restore progress (secondary hub)
-- Observability deployments
-- Klusterlet agent status
-
-**Alert Detection:**
-- Cluster unavailable for >5 minutes
-- Backup failures
-- Restore operations stalled >15 minutes
-- Unexpected observability scale-up
+`tests/e2e/phase_monitor.sh` remains for manual/legacy monitoring but is deprecated. Use pytest for automated runs. Alert types now include `OBSERVABILITY_NOT_READY` (replacing the previous scale-up wording).
 
 ### E2E Analyzer
 
@@ -123,37 +108,12 @@ python3 tests/e2e/e2e_analyzer.py \
 - Automated recommendations
 - Interactive HTML reports
 
-## Testing Scenarios
+## Testing Scenarios (Pytest)
 
-### Scenario 1: Basic Validation
-```bash
-# Validate environment without making changes
-./tests/e2e/quick_start_e2e.sh --dry-run --cycles 1
-```
-
-### Scenario 2: Single Switchover
-```bash
-# Execute one complete switchover cycle
-./tests/e2e/quick_start_e2e.sh --cycles 1
-```
-
-### Scenario 3: Stress Testing (5 Cycles)
-```bash
-# Run 5 consecutive switchover cycles
-./tests/e2e/quick_start_e2e.sh --cycles 5
-```
-
-### Scenario 4: Custom Configuration
-```bash
-# Test with different contexts and cycle count
-./tests/e2e/quick_start_e2e.sh --primary hub1 --secondary hub2 --cycles 3
-```
-
-### Scenario 5: Monitoring-Only
-```bash
-# Monitor resources without executing switchover
-./tests/e2e/quick_start_e2e.sh --monitoring-only
-```
+- **Smoke (dry-run):** `pytest tests/e2e -m e2e --e2e-dry-run`
+- **Single cycle:** `pytest tests/e2e -m e2e --primary-context mgmt1 --secondary-context mgmt2 --e2e-cycles 1`
+- **Multi-cycle soak:** add `--e2e-cycles N` and `-m "e2e and slow"`
+- **Stop on first failure:** add `--e2e-stop-on-failure`
 
 ## Monitoring and Alerting
 
@@ -181,10 +141,10 @@ python3 tests/e2e/e2e_analyzer.py \
 
 ### Alert Types
 
-- **CLUSTER_UNAVAILABLE** - Cluster unavailable >5 minutes
-- **BACKUP_FAILURE** - Backup operation failed
-- **RESTORE_STALLED** - Restore operation stalled >15 minutes
-- **OBSERVABILITY_SCALE_UP** - Unexpected observability component scale-up
+- **CLUSTER_UNAVAILABLE** — Cluster unavailable >5 minutes
+- **BACKUP_FAILURE** — Backup failing for >10 minutes
+- **RESTORE_STALLED** — Restore operation stalled >15 minutes
+- **OBSERVABILITY_NOT_READY** — Observability pods not ready at desired replicas
 
 ## Performance Benchmarks
 
@@ -238,16 +198,7 @@ python3 tests/e2e/e2e_analyzer.py \
 
 ### Debug Mode
 
-Enable verbose logging for detailed troubleshooting:
-
-```bash
-# Verbose orchestrator
-PRIMARY_CONTEXT=mgmt1 SECONDARY_CONTEXT=mgmt2 CYCLES=1 \
-./tests/e2e/e2e_test_orchestrator.sh 2>&1 | tee debug.log
-
-# Verbose switchover
-python acm_switchover.py --verbose --primary-context mgmt1 --secondary-context mgmt2 --method passive --dry-run
-```
+Enable verbose logging with pytest’s `-v` and review per-cycle logs/metrics under the run directory. Legacy bash orchestrators still accept `set -x` for debugging if needed.
 
 ## Integration with CI/CD
 
