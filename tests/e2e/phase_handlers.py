@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.kube_client import KubeClient
 from lib.utils import StateManager
 from modules import (
@@ -346,8 +347,8 @@ class PhaseHandlers:
 
         # Get configuration from preflight (simplified - in real scenario, we'd get this from preflight)
         # For E2E, we detect observability ourselves
-        primary_has_obs = not skip_observability_checks and primary_client.namespace_exists("open-cluster-management-observability")
-        secondary_has_obs = not skip_observability_checks and secondary_client.namespace_exists("open-cluster-management-observability")
+        primary_has_obs = not skip_observability_checks and primary_client.namespace_exists(OBSERVABILITY_NAMESPACE)
+        secondary_has_obs = not skip_observability_checks and secondary_client.namespace_exists(OBSERVABILITY_NAMESPACE)
 
         # Get ACM version from primary hub
         try:
@@ -356,7 +357,7 @@ class PhaseHandlers:
                 version="v1",
                 plural="multiclusterhubs",
                 name="multiclusterhub",
-                namespace="open-cluster-management",
+                namespace=ACM_NAMESPACE,
             )
             acm_version = mch.get("status", {}).get("currentVersion", "unknown") if mch else "unknown"
         except Exception:

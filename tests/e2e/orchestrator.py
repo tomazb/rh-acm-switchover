@@ -292,7 +292,7 @@ class E2EOrchestrator:
                     # Approximate phase times from cycle times
                     f.write(
                         f"{cycle.cycle_id},{phase.phase_name},{status},"
-                        f"{cycle.start_time.isoformat()},{cycle.end_time.isoformat()},"
+                        f"{phase.start_time.isoformat()},{phase.end_time.isoformat()},"
                         f"{phase.duration_seconds},{status}\n"
                     )
 
