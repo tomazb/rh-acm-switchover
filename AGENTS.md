@@ -89,6 +89,12 @@ pytest -m integration tests/  # Integration tests
 
 Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock responses should include `resourceVersion` in metadata for patch verification tests.
 
+### Test Quality Guidelines
+- **DO NOT create meaningless or superficial tests** - tests should verify real logic and functionality
+- Focus on testing actual business logic, error handling, and edge cases
+- Avoid tests that only verify implementation details or trivial functionality
+- Each test should provide meaningful value by catching real potential bugs
+
 ### Virtual Environment Usage
 - Prefer activating an existing virtual environment before running tooling.
 - The test runner (`run_tests.sh`) will detect an active `$VIRTUAL_ENV`, otherwise it will try `.venv/` first, then `venv/`, and create `.venv/` if none exist.
@@ -110,6 +116,16 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
     - `--secondary-context` is required for switchover operations unless `--decommission` is set.
     - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
 - If you change these rules, update `docs/reference/validation-rules.md`, `docs/operations/usage.md`, and `docs/operations/quickref.md` to match.
+
+## Code Review Checklist for Future Refactoring
+
+When doing similar refactoring work:
+- Compare line-by-line old vs new implementation
+- Verify all conditional branches are preserved
+- Check that error handling matches original behavior
+- Validate critical vs non-critical failure classifications
+- Ensure all imports are present in new modules
+- Test with real-world scenarios, not just unit tests
 
 ## Files to Know
 
