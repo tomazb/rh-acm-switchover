@@ -338,48 +338,62 @@ class Finalization:
         logger.info("BackupSchedule %s is enabled", schedule_name)
 
     @dry_run_skip(message="Skipping MultiClusterHub health verification")
-    def _verify_multiclusterhub_health(self):
-        """Ensure MultiClusterHub reports healthy and pods are running."""
+    def _verify_multiclusterhub_health(self, timeout: int = 300, interval: int = 10):
+        """Ensure MultiClusterHub reports healthy and pods are running, with wait."""
 
         logger.info("Verifying MultiClusterHub health...")
-        mch = self.secondary.get_custom_resource(
-            group="operator.open-cluster-management.io",
-            version="v1",
-            plural="multiclusterhubs",
-            name="multiclusterhub",
-            namespace=ACM_NAMESPACE,
-        )
+        start = time.time()
 
-        if not mch:
-            hubs = self.secondary.list_custom_resources(
+        while True:
+            mch = self.secondary.get_custom_resource(
                 group="operator.open-cluster-management.io",
                 version="v1",
                 plural="multiclusterhubs",
+                name="multiclusterhub",
                 namespace=ACM_NAMESPACE,
             )
-            if hubs:
-                mch = hubs[0]
 
-        if not mch:
-            raise RuntimeError("No MultiClusterHub resource found on secondary hub")
+            if not mch:
+                hubs = self.secondary.list_custom_resources(
+                    group="operator.open-cluster-management.io",
+                    version="v1",
+                    plural="multiclusterhubs",
+                    namespace=ACM_NAMESPACE,
+                )
+                if hubs:
+                    mch = hubs[0]
 
-        mch_name = mch.get("metadata", {}).get("name", "multiclusterhub")
-        phase = mch.get("status", {}).get("phase", "unknown")
+            if not mch:
+                raise RuntimeError("No MultiClusterHub resource found on secondary hub")
 
-        if phase != "Running":
-            raise RuntimeError(f"MultiClusterHub {mch_name} is in phase '{phase}', expected Running")
+            mch_name = mch.get("metadata", {}).get("name", "multiclusterhub")
+            phase = mch.get("status", {}).get("phase", "unknown")
 
-        pods = self.secondary.get_pods(namespace=ACM_NAMESPACE)
-        non_running = [
-            pod.get("metadata", {}).get("name", "unknown")
-            for pod in pods
-            if pod.get("status", {}).get("phase") != "Running"
-        ]
+            pods = self.secondary.get_pods(namespace=ACM_NAMESPACE)
+            non_running = [
+                pod.get("metadata", {}).get("name", "unknown")
+                for pod in pods
+                if pod.get("status", {}).get("phase") != "Running"
+            ]
 
-        if non_running:
-            raise RuntimeError("ACM namespace still has non-running pods: " + ", ".join(non_running))
+            if phase == "Running" and not non_running:
+                logger.info("MultiClusterHub %s is Running and all pods are healthy", mch_name)
+                return
 
-        logger.info("MultiClusterHub %s is Running and all pods are healthy", mch_name)
+            elapsed = time.time() - start
+            if elapsed >= timeout:
+                details = ", non-running pods=" + (", ".join(non_running) if non_running else "none")
+                raise RuntimeError(
+                    f"MultiClusterHub {mch_name} not healthy after {timeout}s (phase={phase}{details})"
+                )
+
+            logger.info(
+                "Waiting for MultiClusterHub %s to become healthy (phase=%s, non-running pods=%s)...",
+                mch_name,
+                phase,
+                ", ".join(non_running) if non_running else "none",
+            )
+            time.sleep(interval)
 
     def _handle_old_hub(self):
         """
