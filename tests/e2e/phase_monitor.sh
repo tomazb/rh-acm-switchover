@@ -208,12 +208,29 @@ check_backup_alerts() {
     phase=$(echo "$backup_schedule" | jq -r '.items[0].status.phase // "Unknown"' 2>/dev/null || echo "Unknown")
     
     if [[ "$phase" == "Failed" || "$phase" == "PartiallyFailed" ]]; then
-        local alert_key="${hub_type}_backup_failure"
-        ((ALERT_COUNTS[$alert_key]++))
-        
-        if [[ ${ALERT_COUNTS[$alert_key]} -eq 1 ]]; then
-            generate_alert "BACKUP_FAILURE" "$hub_type" "BackupSchedule" "Backup phase: $phase"
+        local failure_state_key="${hub_type}_backup_failure_started"
+        local failure_start=${LAST_SEEN_STATES[$failure_state_key]:-}
+
+        if [[ -z "$failure_start" ]]; then
+            LAST_SEEN_STATES[$failure_state_key]=$timestamp
+            failure_start=$timestamp
         fi
+
+        local duration=$((timestamp - failure_start))
+
+        if (( duration >= BACKUP_FAILURE_THRESHOLD )); then
+            local alert_key="${hub_type}_backup_failure_exceeded"
+            ((ALERT_COUNTS[$alert_key]++))
+
+            if [[ ${ALERT_COUNTS[$alert_key]} -eq 1 ]]; then
+                generate_alert "BACKUP_FAILURE" "$hub_type" "BackupSchedule" "Backup failing for ${duration}s (phase: $phase)"
+            fi
+        fi
+    else
+        local failure_state_key="${hub_type}_backup_failure_started"
+        unset LAST_SEEN_STATES[$failure_state_key]
+        local alert_key="${hub_type}_backup_failure_exceeded"
+        unset ALERT_COUNTS[$alert_key]
     fi
 }
 
@@ -283,9 +300,9 @@ monitor_observability() {
         
         echo "$deployment ($resource_type): $desired/$ready replicas" >> "$log_file"
         
-        # Alert on unexpected scale-up
+        # Alert when pods are not all ready (avoid implying scale-up intent)
         if [[ "$desired" != "0" && "$desired" != "$ready" ]]; then
-            generate_alert "OBSERVABILITY_SCALE_UP" "$hub_type" "$deployment" "Unexpected scale-up: $desired replicas desired"
+            generate_alert "OBSERVABILITY_NOT_READY" "$hub_type" "$deployment" "Pods not ready: desired=$desired ready=$ready"
         fi
     done
     
@@ -429,10 +446,10 @@ collect_hub_metrics() {
         local obs_deployments=$(kubectl --context "$context" get deployments -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | wc -l || echo "0")
         local obs_statefulsets=$(kubectl --context "$context" get statefulsets -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | wc -l || echo "0")
         echo "    \"observability_deployments\": $obs_deployments,"
-        echo "    \"observability_statefulsets\": $obs_statefulsets,"
+        echo "    \"observability_statefulsets\": $obs_statefulsets"
     else
         echo "    \"observability_deployments\": 0,"
-        echo "    \"observability_statefulsets\": 0,"
+        echo "    \"observability_statefulsets\": 0"
     fi
 }
 
