@@ -15,11 +15,14 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from lib import KubeClient, Phase, StateManager
 
 from .phase_handlers import CycleResult, PhaseHandlers, PhaseResult
+
+if TYPE_CHECKING:
+    from .monitoring import MetricsLogger
 
 
 @dataclass
@@ -39,6 +42,10 @@ class RunConfig:
     skip_observability_checks: bool = False
     skip_rbac_validation: bool = False
     manage_auto_import_strategy: bool = False
+    # Soak testing controls
+    run_hours: Optional[float] = None
+    max_failures: Optional[int] = None
+    resume: bool = False
 
     def __post_init__(self):
         """Convert string paths to Path objects if needed."""
@@ -97,6 +104,8 @@ class E2EOrchestrator:
         self.run_output_dir = self._setup_output_dir()
         self.phase_handlers = PhaseHandlers(self.logger)
         self._cycle_results: List[CycleResult] = []
+        self._resume_state: Optional[dict] = None
+        self._metrics_logger: Optional["MetricsLogger"] = None
 
     @property
     def manifest_path(self) -> Path:
@@ -158,6 +167,9 @@ class E2EOrchestrator:
                 "dry_run": self.config.dry_run,
                 "cooldown_seconds": self.config.cooldown_seconds,
                 "stop_on_failure": self.config.stop_on_failure,
+                "run_hours": self.config.run_hours,
+                "max_failures": self.config.max_failures,
+                "resume": self.config.resume,
             },
             "environment": {
                 "git_sha": self._get_git_sha(),
@@ -177,6 +189,117 @@ class E2EOrchestrator:
         """Get the Python version."""
         import sys
         return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+    def _get_resume_state_path(self) -> Path:
+        """Get the path to the resume state file."""
+        return self.config.output_dir / ".resume_state.json"
+
+    def _load_resume_state(self) -> Optional[dict]:
+        """
+        Load the resume state from the last run.
+
+        Returns:
+            Resume state dict if available, None otherwise
+        """
+        resume_path = self._get_resume_state_path()
+        if not resume_path.exists():
+            self.logger.info("No resume state found at %s", resume_path)
+            return None
+
+        try:
+            with open(resume_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            self.logger.info(
+                "Loaded resume state: last_completed_cycle=%d, contexts=(%s, %s)",
+                state.get("last_completed_cycle", 0),
+                state.get("current_primary", "?"),
+                state.get("current_secondary", "?"),
+            )
+            return state
+        except (json.JSONDecodeError, IOError) as e:
+            self.logger.warning("Failed to load resume state: %s", e)
+            return None
+
+    def _save_resume_state(
+        self,
+        last_completed_cycle: int,
+        current_primary: str,
+        current_secondary: str,
+        success_count: int,
+        failure_count: int,
+    ) -> None:
+        """
+        Save the resume state for potential continuation.
+
+        Args:
+            last_completed_cycle: Last successfully completed cycle number
+            current_primary: Current primary context
+            current_secondary: Current secondary context
+            success_count: Number of successful cycles
+            failure_count: Number of failed cycles
+        """
+        resume_state = {
+            "run_id": self.run_id,
+            "last_completed_cycle": last_completed_cycle,
+            "current_primary": current_primary,
+            "current_secondary": current_secondary,
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        resume_path = self._get_resume_state_path()
+        resume_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(resume_path, "w", encoding="utf-8") as f:
+            json.dump(resume_state, f, indent=2)
+
+    def _clear_resume_state(self) -> None:
+        """Remove the resume state file after successful completion."""
+        resume_path = self._get_resume_state_path()
+        if resume_path.exists():
+            resume_path.unlink()
+            self.logger.info("Cleared resume state")
+
+    def _should_stop_for_time(self, start_time: datetime) -> bool:
+        """
+        Check if we should stop due to time limit.
+
+        Args:
+            start_time: When the run started
+
+        Returns:
+            True if run_hours limit has been exceeded
+        """
+        if self.config.run_hours is None:
+            return False
+
+        elapsed_hours = (datetime.now(timezone.utc) - start_time).total_seconds() / 3600
+        return elapsed_hours >= self.config.run_hours
+
+    def _should_stop_for_failures(self, failure_count: int) -> bool:
+        """
+        Check if we should stop due to max failures.
+
+        Args:
+            failure_count: Current failure count
+
+        Returns:
+            True if max_failures limit has been reached
+        """
+        if self.config.max_failures is None:
+            return False
+
+        return failure_count >= self.config.max_failures
+
+    def _init_metrics_logger(self) -> "MetricsLogger":
+        """
+        Initialize the JSONL metrics logger.
+
+        Returns:
+            MetricsLogger instance
+        """
+        from .monitoring import MetricsLogger
+        return MetricsLogger(self.run_output_dir / "metrics", self.logger)
 
     def _create_clients(
         self, primary_context: str, secondary_context: str
@@ -325,6 +448,12 @@ class E2EOrchestrator:
         start_time = datetime.now(timezone.utc)
         phase_results: List[PhaseResult] = []
 
+        # Log cycle start to JSONL
+        if self._metrics_logger:
+            self._metrics_logger.log_cycle_start(
+                cycle_id, cycle_num, primary_context, secondary_context
+            )
+
         # Create fresh clients and state for this cycle
         try:
             primary_client, secondary_client = self._create_clients(
@@ -401,6 +530,16 @@ class E2EOrchestrator:
 
         self._write_cycle_metrics(result)
 
+        # Log phase results and cycle end to JSONL
+        if self._metrics_logger:
+            for pr in phase_results:
+                self._metrics_logger.log_phase_result(
+                    cycle_id, pr.phase_name, pr.success, pr.duration_seconds, pr.error
+                )
+            self._metrics_logger.log_cycle_end(
+                cycle_id, cycle_success, result.total_duration_seconds
+            )
+
         if cycle_success:
             self.logger.info("✅ Cycle %d completed successfully in %.1f seconds",
                            cycle_num, result.total_duration_seconds)
@@ -415,8 +554,10 @@ class E2EOrchestrator:
         Run all configured switchover cycles.
 
         This method:
+        - Optionally resumes from last completed cycle
         - Writes the initial manifest
         - Runs each cycle, swapping contexts between cycles
+        - Respects time limits (run_hours) and failure limits (max_failures)
         - Collects metrics and results
         - Writes the final summary
 
@@ -432,22 +573,56 @@ class E2EOrchestrator:
         self.logger.info("Cycles: %d", self.config.cycles)
         self.logger.info("Method: %s", self.config.method)
         self.logger.info("Dry run: %s", self.config.dry_run)
+        if self.config.run_hours:
+            self.logger.info("Time limit: %.1f hours", self.config.run_hours)
+        if self.config.max_failures:
+            self.logger.info("Max failures: %d", self.config.max_failures)
+        if self.config.resume:
+            self.logger.info("Resume mode: enabled")
         self.logger.info("")
 
         # Write manifest
         self._write_manifest()
+
+        # Initialize JSONL metrics logger
+        self._metrics_logger = self._init_metrics_logger()
 
         start_time = datetime.now(timezone.utc)
         cycles: List[CycleResult] = []
         self._cycle_results = []  # Reset for this run
         success_count = 0
         failure_count = 0
+        start_cycle = 1
 
         # Track current contexts (swap after each cycle)
         current_primary = self.config.primary_context
         current_secondary = self.config.secondary_context
 
-        for cycle_num in range(1, self.config.cycles + 1):
+        # Handle resume from previous run
+        if self.config.resume:
+            resume_state = self._load_resume_state()
+            if resume_state:
+                start_cycle = resume_state.get("last_completed_cycle", 0) + 1
+                current_primary = resume_state.get("current_primary", current_primary)
+                current_secondary = resume_state.get("current_secondary", current_secondary)
+                success_count = resume_state.get("success_count", 0)
+                failure_count = resume_state.get("failure_count", 0)
+                self.logger.info(
+                    "Resuming from cycle %d (previous: %d success, %d failures)",
+                    start_cycle, success_count, failure_count
+                )
+
+        stop_reason = None
+        for cycle_num in range(start_cycle, self.config.cycles + 1):
+            # Check time limit before starting cycle
+            if self._should_stop_for_time(start_time):
+                stop_reason = "time_limit"
+                self.logger.info(
+                    "Stopping: time limit of %.1f hours reached",
+                    self.config.run_hours,
+                )
+                break
+
             cycle_result = self._run_cycle(cycle_num, current_primary, current_secondary)
             cycles.append(cycle_result)
             self._cycle_results.append(cycle_result)  # Also store in property
@@ -456,16 +631,41 @@ class E2EOrchestrator:
                 success_count += 1
             else:
                 failure_count += 1
-                if self.config.stop_on_failure:
-                    self.logger.warning(
-                        "Stopping after cycle %d failure (stop_on_failure=True)",
-                        cycle_num
-                    )
-                    break
 
-            # Swap contexts for next cycle (simulating bi-directional switchover)
+            # Calculate next cycle's contexts (swap for bi-directional switchover)
+            next_primary, next_secondary = current_secondary, current_primary
+
+            # Save resume state after each cycle (before any early exit checks)
+            # This ensures resume works correctly even when stopping early
+            self._save_resume_state(
+                last_completed_cycle=cycle_num,
+                current_primary=next_primary,
+                current_secondary=next_secondary,
+                success_count=success_count,
+                failure_count=failure_count,
+            )
+
+            # Check for early stop conditions
+            if not cycle_result.success and self.config.stop_on_failure:
+                stop_reason = "stop_on_failure"
+                self.logger.warning(
+                    "Stopping after cycle %d failure (stop_on_failure=True)",
+                    cycle_num
+                )
+                break
+
+            # Check max failures limit
+            if self._should_stop_for_failures(failure_count):
+                stop_reason = "max_failures"
+                self.logger.warning(
+                    "Stopping: max failures limit of %d reached",
+                    self.config.max_failures,
+                )
+                break
+
+            # Swap contexts for next cycle
             if cycle_num < self.config.cycles:
-                current_primary, current_secondary = current_secondary, current_primary
+                current_primary, current_secondary = next_primary, next_secondary
                 self.logger.info("Swapped contexts for next cycle: Primary=%s, Secondary=%s",
                                current_primary, current_secondary)
 
@@ -476,6 +676,10 @@ class E2EOrchestrator:
                     time.sleep(self.config.cooldown_seconds)
 
         end_time = datetime.now(timezone.utc)
+
+        # Clear resume state only on successful completion of all cycles
+        if stop_reason is None:
+            self._clear_resume_state()
 
         result = RunResult(
             run_id=self.run_id,
