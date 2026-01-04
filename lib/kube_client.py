@@ -360,6 +360,31 @@ class KubeClient:
         self.core_v1.delete_namespaced_config_map(name=name, namespace=namespace)
         return True
 
+    @api_call(not_found_value=True, resource_desc="delete pod")
+    def delete_pod(self, namespace: str, name: str) -> bool:
+        """Delete a Pod; return True if deleted or absent.
+
+        Args:
+            namespace: Namespace name
+            name: Pod name
+
+        Returns:
+            True if deleted or absent
+
+        Raises:
+            ValidationError: If namespace or Pod name is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_namespace(namespace)
+        InputValidator.validate_kubernetes_name(name, "Pod")
+
+        if self.dry_run:
+            logger.info("[DRY-RUN] Would delete Pod %s/%s", namespace, name)
+            return True
+
+        self.core_v1.delete_namespaced_pod(name=name, namespace=namespace)
+        return True
+
     @api_call(not_found_value=None, resource_desc="read Route")
     def get_route_host(self, namespace: str, name: str) -> Optional[str]:
         """Fetch the hostname for an OpenShift Route.
@@ -702,6 +727,27 @@ class KubeClient:
             name=name,
             patch=patch,
         )
+
+    @api_call(not_found_value=None, resource_desc="get deployment")
+    def get_deployment(self, name: str, namespace: str) -> Optional[Dict]:
+        """Get a deployment by name.
+
+        Args:
+            name: Deployment name
+            namespace: Namespace name
+
+        Returns:
+            Deployment dict or None if not found
+
+        Raises:
+            ValidationError: If deployment name or namespace is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_name(name, "deployment")
+        InputValidator.validate_kubernetes_namespace(namespace)
+
+        deployment = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+        return deployment.to_dict()
 
     @retry_api_call
     def scale_deployment(self, name: str, namespace: str, replicas: int) -> Dict:
