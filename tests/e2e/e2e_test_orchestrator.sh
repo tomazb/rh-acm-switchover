@@ -3,11 +3,15 @@
 # Runs 5 consecutive switchover cycles with comprehensive monitoring
 # Usage: ./e2e_test_orchestrator.sh [--primary <ctx>] [--secondary <ctx>] [--cycles <n>]
 #
-# DEPRECATION NOTICE:
-#   This bash script is deprecated in favor of the Python E2E orchestrator.
-#   For CI/automated testing, use: pytest -m e2e tests/e2e/
-#   For programmatic usage, import tests.e2e.orchestrator.E2EOrchestrator
-#   This script will be removed in a future release.
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ ⚠️  DEPRECATION WARNING - THIS SCRIPT WILL BE REMOVED               │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ This bash script is DEPRECATED and will be removed in version 2.0   │
+# │                                                                       │
+# │ MIGRATE TO: pytest -m e2e tests/e2e/                                │
+# │                                                                       │
+# │ See: tests/e2e/MIGRATION.md for detailed migration guide            │
+# └──────────────────────────────────────────────────────────────────────┘
 
 set -euo pipefail
 
