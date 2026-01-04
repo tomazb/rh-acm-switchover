@@ -227,6 +227,7 @@ class E2EOrchestrator:
         current_secondary: str,
         success_count: int,
         failure_count: int,
+        start_time: datetime,
     ) -> None:
         """
         Save the resume state for potential continuation.
@@ -237,6 +238,7 @@ class E2EOrchestrator:
             current_secondary: Current secondary context
             success_count: Number of successful cycles
             failure_count: Number of failed cycles
+            start_time: Original run start time for time limit calculation
         """
         resume_state = {
             "run_id": self.run_id,
@@ -245,6 +247,7 @@ class E2EOrchestrator:
             "current_secondary": current_secondary,
             "success_count": success_count,
             "failure_count": failure_count,
+            "start_time": start_time.isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -300,6 +303,32 @@ class E2EOrchestrator:
         """
         from .monitoring import MetricsLogger
         return MetricsLogger(self.run_output_dir / "metrics", self.logger)
+
+    def _is_transient_error(self, error_msg: str) -> bool:
+        """
+        Check if an error message indicates a transient failure.
+
+        Transient failures are temporary timing issues that typically
+        resolve themselves on the next cycle (e.g., restore still processing).
+
+        Args:
+            error_msg: Error message to check
+
+        Returns:
+            True if error appears to be transient
+        """
+        transient_patterns = [
+            "not found",
+            "not ready",
+            "still processing",
+            "currently executing",
+            "waiting for restore to complete",
+            "Running -",
+            "Started -",
+        ]
+        
+        error_lower = error_msg.lower()
+        return any(pattern.lower() in error_lower for pattern in transient_patterns)
 
     def _create_clients(
         self, primary_context: str, secondary_context: str
@@ -494,6 +523,17 @@ class E2EOrchestrator:
 
             # Check if all phases succeeded
             cycle_success = all(pr.success for pr in phase_results)
+            
+            # Log information about transient failures (for analysis)
+            if not cycle_success:
+                failed_phases = [pr for pr in phase_results if not pr.success]
+                for failed_phase in failed_phases:
+                    error_msg = failed_phase.error or ""
+                    if self._is_transient_error(error_msg):
+                        self.logger.warning(
+                            "Phase %s failed with transient error (may succeed on next cycle): %s",
+                            failed_phase.phase_name, error_msg
+                        )
 
         except Exception as e:
             self.logger.error("Cycle %d failed with exception: %s", cycle_num, e)
@@ -607,10 +647,20 @@ class E2EOrchestrator:
                 current_secondary = resume_state.get("current_secondary", current_secondary)
                 success_count = resume_state.get("success_count", 0)
                 failure_count = resume_state.get("failure_count", 0)
-                self.logger.info(
-                    "Resuming from cycle %d (previous: %d success, %d failures)",
-                    start_cycle, success_count, failure_count
-                )
+                
+                # Restore original start_time for accurate time limit enforcement
+                if "start_time" in resume_state:
+                    start_time = datetime.fromisoformat(resume_state["start_time"])
+                    elapsed = (datetime.now(timezone.utc) - start_time).total_seconds() / 3600
+                    self.logger.info(
+                        "Resuming from cycle %d (previous: %d success, %d failures, elapsed: %.1fh)",
+                        start_cycle, success_count, failure_count, elapsed
+                    )
+                else:
+                    self.logger.info(
+                        "Resuming from cycle %d (previous: %d success, %d failures)",
+                        start_cycle, success_count, failure_count
+                    )
 
         stop_reason = None
         for cycle_num in range(start_cycle, self.config.cycles + 1):
@@ -643,6 +693,7 @@ class E2EOrchestrator:
                 current_secondary=next_secondary,
                 success_count=success_count,
                 failure_count=failure_count,
+                start_time=start_time,
             )
 
             # Check for early stop conditions

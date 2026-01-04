@@ -678,6 +678,66 @@ class TestSoakControls:
 
         assert resume_state["last_completed_cycle"] == 4
         assert resume_state["failure_count"] == 2
+        assert "start_time" in resume_state, "Resume state should include start_time"
+    
+    def test_resume_preserves_start_time(self, tmp_path):
+        """Test that resume preserves the original start_time for time limit enforcement."""
+        # Manually save a resume state with specific start_time
+        from datetime import datetime, timezone
+        original_start = datetime(2026, 1, 4, 10, 0, 0, tzinfo=timezone.utc)
+        resume_state = {
+            "run_id": "test_run",
+            "last_completed_cycle": 2,
+            "current_primary": "hub-b",
+            "current_secondary": "hub-a",
+            "success_count": 2,
+            "failure_count": 0,
+            "start_time": original_start.isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        
+        resume_path = tmp_path / ".resume_state.json"
+        with open(resume_path, "w") as f:
+            json.dump(resume_state, f)
+
+        # Resume and run with max_failures so state is preserved
+        config = RunConfig(
+            primary_context="hub-a",
+            secondary_context="hub-b",
+            dry_run=True,
+            cycles=10,
+            output_dir=tmp_path,
+            cooldown_seconds=0,
+            max_failures=1,  # Stop after 1 failure to preserve state
+            resume=True,
+        )
+
+        orchestrator = E2EOrchestrator(config)
+        
+        call_count = 0
+        def fail_on_second(cycle_num, primary, secondary):
+            nonlocal call_count
+            call_count += 1
+            # First call is cycle 3 (resuming from 2), fail on cycle 4
+            success = call_count != 2
+            return make_cycle_result(
+                cycle_id=f"cycle_{cycle_num:03d}",
+                cycle_num=cycle_num,
+                success=success,
+                primary_context=primary,
+                secondary_context=secondary,
+            )
+        
+        with patch.object(orchestrator, "_run_cycle", side_effect=fail_on_second):
+            orchestrator.run_all_cycles()
+
+        # Verify start_time was preserved in new resume state
+        assert resume_path.exists(), "Resume state should still exist"
+        with open(resume_path) as f:
+            new_state = json.load(f)
+        
+        # The start_time should still be the original
+        assert new_state["start_time"] == original_start.isoformat()
 
     def test_soak_config_in_manifest(self, tmp_path):
         """Test that soak controls appear in manifest."""
