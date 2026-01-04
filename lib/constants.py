@@ -75,3 +75,6 @@ IMPORT_CONTROLLER_CONFIGMAP = "import-controller-config"
 AUTO_IMPORT_STRATEGY_KEY = "autoImportStrategy"
 AUTO_IMPORT_STRATEGY_DEFAULT = "ImportOnly"
 AUTO_IMPORT_STRATEGY_SYNC = "ImportAndSync"
+
+# Local cluster name (hub's self-managed cluster, excluded from counts)
+LOCAL_CLUSTER_NAME = "local-cluster"

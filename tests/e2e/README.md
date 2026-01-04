@@ -73,6 +73,13 @@ The pytest suite drives the Python orchestrator. Key options (CLI or env vars):
 - `--e2e-output-dir` (default: pytest temp dir)
 - `--e2e-method` (passive only) and `--e2e-old-hub-action` (secondary|decommission)
 - `--e2e-stop-on-failure` to halt after the first failed cycle
+- `--e2e-cooldown` (default 30) seconds between cycles
+
+**Soak Testing Options (Phase 2):**
+
+- `--e2e-run-hours` — Time limit in hours; orchestrator stops when exceeded
+- `--e2e-max-failures` — Stop after N cycle failures
+- `--e2e-resume` — Resume from last completed cycle (reads `.resume_state.json`)
 
 Output structure for a run:
 
@@ -81,8 +88,47 @@ Output structure for a run:
 ├── logs/
 ├── states/
 ├── metrics/
+│   └── metrics.jsonl       # JSONL time-series metrics
 ├── manifests/
+│   └── manifest.json       # Run configuration and environment
+├── alerts/                  # Alert files (if any triggered)
+├── summary.json
 └── cycle_results.csv
+```
+
+### JSONL Metrics Format (Phase 2)
+
+The `metrics/metrics.jsonl` file contains one JSON object per line with real-time metrics:
+
+```jsonl
+{"timestamp": "2026-01-03T10:00:00+00:00", "metric_type": "cycle_start", "cycle_id": "cycle_001", "cycle_num": 1, ...}
+{"timestamp": "2026-01-03T10:01:00+00:00", "metric_type": "phase_result", "phase_name": "preflight", "success": true, ...}
+{"timestamp": "2026-01-03T10:05:00+00:00", "metric_type": "cycle_end", "cycle_id": "cycle_001", "success": true, ...}
+```
+
+Metric types include:
+- `cycle_start` / `cycle_end` — Cycle lifecycle events
+- `phase_result` — Individual phase completion with timing
+- `resource_snapshot` — Periodic resource state (managed clusters, backups, restores)
+- `alert` — Alert events (cluster unavailable, backup failure, etc.)
+
+### Resource Monitoring (Phase 2)
+
+The Python monitoring module (`monitoring.py`) provides:
+
+- **ResourceMonitor** — Background thread polling clusters for resource status
+- **MetricsLogger** — Thread-safe JSONL writer for metrics time-series
+- **MonitoringContext** — Context manager for start/stop monitoring during cycles
+
+Use `MonitoringContext` for integrated monitoring:
+
+```python
+from tests.e2e.monitoring import MonitoringContext
+
+with MonitoringContext(primary_client, secondary_client, output_dir) as monitor:
+    if monitor:
+        monitor.set_phase("activation")
+    # ... run cycles ...
 ```
 
 ### Phase Monitor (Legacy)
@@ -114,6 +160,37 @@ python3 tests/e2e/e2e_analyzer.py \
 - **Single cycle:** `pytest tests/e2e -m e2e --primary-context mgmt1 --secondary-context mgmt2 --e2e-cycles 1`
 - **Multi-cycle soak:** add `--e2e-cycles N` and `-m "e2e and slow"`
 - **Stop on first failure:** add `--e2e-stop-on-failure`
+- **Time-limited soak:** add `--e2e-run-hours 4` to stop after 4 hours
+- **Max failures limit:** add `--e2e-max-failures 3` to stop after 3 failures
+- **Resume interrupted run:** add `--e2e-resume` to continue from last completed cycle
+
+### Soak Testing Examples
+
+**Overnight soak test (8 hours, max 5 failures):**
+
+```bash
+pytest tests/e2e -m "e2e and slow" \
+   --primary-context mgmt1 \
+   --secondary-context mgmt2 \
+   --e2e-cycles 100 \
+   --e2e-run-hours 8 \
+   --e2e-max-failures 5 \
+   --e2e-output-dir ./e2e-overnight-soak
+```
+
+**Resume after interruption:**
+
+```bash
+# If the above run is interrupted (Ctrl+C, pod restart, etc.):
+pytest tests/e2e -m "e2e and slow" \
+   --primary-context mgmt1 \
+   --secondary-context mgmt2 \
+   --e2e-cycles 100 \
+   --e2e-run-hours 8 \
+   --e2e-max-failures 5 \
+   --e2e-output-dir ./e2e-overnight-soak \
+   --e2e-resume
+```
 
 ## Monitoring and Alerting
 

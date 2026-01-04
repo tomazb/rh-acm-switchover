@@ -21,7 +21,27 @@
 **Started**: 2026-01-03  
 **Completed**: 2026-01-03
 
-### Files Created/Modified
+### Phase 2 Status: ✅ COMPLETED
+
+| Step | Description | Status |
+|------|-------------|--------|
+| E2E-200 | Add soak controls (--run-hours, --max-failures, --resume) | ✅ Done |
+| E2E-201 | Port phase_monitor.sh to Python monitoring.py | ✅ Done |
+| E2E-202 | Add JSONL metrics emission | ✅ Done |
+
+**Completed**: 2026-01-03
+
+### Phase 2 Files Created/Modified
+
+- `tests/e2e/orchestrator.py` - Added soak controls (run_hours, max_failures, resume), JSONL integration
+- `tests/e2e/conftest.py` - Added CLI options: --e2e-run-hours, --e2e-max-failures, --e2e-resume
+- `tests/e2e/monitoring.py` - NEW: ResourceMonitor, MetricsLogger, Alert, MonitoringContext
+- `tests/e2e/__init__.py` - Exported monitoring classes
+- `tests/e2e/test_e2e_dry_run.py` - Added tests for soak controls and metrics (54 total E2E tests)
+- `tests/e2e/test_e2e_monitoring.py` - NEW: Tests for monitoring module
+- `lib/constants.py` - Added LOCAL_CLUSTER_NAME constant
+
+### Phase 1 Files Created/Modified
 
 - `tests/e2e/__init__.py` - Package init
 - `tests/e2e/orchestrator.py` - E2EOrchestrator class with RunConfig
@@ -234,15 +254,15 @@ Verify rollback completion and data continuity after injected failures.
 | E2E-103 | Create E2E test cases with markers | 3h | ✅ Done |
 | E2E-104 | Extend analyzer with percentiles and compare mode | 6h | ✅ Done |
 
-### Phase 2 Issues (NOT STARTED)
+### Phase 2 Issues (COMPLETED)
 
-| ID | Title | Effort |
-|----|-------|--------|
-| E2E-200 | Add soak controls (--run-hours, --max-failures, --resume) | 6h |
-| E2E-201 | Port phase_monitor.sh to Python | 6h |
-| E2E-202 | Add JSONL metrics emission | 4h |
+| ID | Title | Effort | Status |
+|----|-------|--------|--------|
+| E2E-200 | Add soak controls (--run-hours, --max-failures, --resume) | 6h | ✅ Done |
+| E2E-201 | Port phase_monitor.sh to Python | 6h | ✅ Done |
+| E2E-202 | Add JSONL metrics emission | 4h | ✅ Done |
 
-### Phase 3 Issues
+### Phase 3 Issues (NOT STARTED)
 
 | ID | Title | Effort |
 |----|-------|--------|
@@ -270,6 +290,28 @@ pytest -m e2e \
   --primary-context=mgmt1 \
   --secondary-context=mgmt2 \
   --e2e-cycles=20 \
+  tests/e2e/test_e2e_switchover.py::TestE2ESwitchover::test_multi_cycle_switchover
+```
+
+### Time-Limited Soak (Phase 2)
+```bash
+pytest -m e2e \
+  --primary-context=mgmt1 \
+  --secondary-context=mgmt2 \
+  --e2e-cycles=100 \
+  --e2e-run-hours=8 \
+  --e2e-max-failures=5 \
+  tests/e2e/test_e2e_switchover.py::TestE2ESwitchover::test_multi_cycle_switchover
+```
+
+### Resume Interrupted Run (Phase 2)
+```bash
+pytest -m e2e \
+  --primary-context=mgmt1 \
+  --secondary-context=mgmt2 \
+  --e2e-cycles=100 \
+  --e2e-run-hours=8 \
+  --e2e-resume \
   tests/e2e/test_e2e_switchover.py::TestE2ESwitchover::test_multi_cycle_switchover
 ```
 
