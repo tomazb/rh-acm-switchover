@@ -3,11 +3,22 @@
 # Provides a simple interface to run comprehensive E2E tests
 # Usage: ./quick_start_e2e.sh [--cycles <n>] [--primary <ctx>] [--secondary <ctx>]
 #
-# DEPRECATION NOTICE:
-#   This bash script is deprecated in favor of the Python E2E orchestrator.
-#   For CI/automated testing, use: pytest -m e2e tests/e2e/
-#   For programmatic usage, import tests.e2e.orchestrator.E2EOrchestrator
-#   This script will be removed in a future release.
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ ⚠️  DEPRECATION WARNING - THIS SCRIPT WILL BE REMOVED               │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ This bash script is DEPRECATED and will be removed in version 2.0   │
+# │                                                                       │
+# │ MIGRATE TO: pytest -m e2e tests/e2e/                                │
+# │                                                                       │
+# │ Benefits of pytest approach:                                         │
+# │   • Native Python integration with full ACM API access              │
+# │   • Soak testing with time limits and max failures                  │
+# │   • Resume capability for long-running tests                        │
+# │   • Real-time monitoring and metrics (JSONL)                        │
+# │   • Better error handling and debugging                             │
+# │                                                                       │
+# │ See: tests/e2e/README.md for migration guide                        │
+# └──────────────────────────────────────────────────────────────────────┘
 
 set -euo pipefail
 
