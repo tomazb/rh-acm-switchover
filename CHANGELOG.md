@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.10] - 2026-01-05
+
+### Added
+
+- **Python E2E Orchestrator (Phase 1)**: Replaced bash-based E2E orchestration with pytest-native `E2EOrchestrator` class featuring automated context swapping, per-cycle manifest generation, and structured timing instrumentation. Added 56 CI-friendly dry-run tests that validate workflow without cluster changes.
+
+- **Soak Testing Controls (Phase 2)**: Added enterprise-grade soak testing capabilities with `--run-hours` (time-boxed execution), `--max-failures` (stop after N failures), and `--resume` (continue from last successful cycle). Implemented 570-line `ResourceMonitor` for background polling of ManagedClusters, Backups, Restores, and Observability components with alert detection.
+
+- **JSONL Metrics Export (Phase 2)**: Added `MetricsLogger` with streaming JSONL time-series output capturing `cycle_start`, `cycle_end`, `phase_result`, `resource_snapshot`, and `alert` events. Enables run-to-run analysis with P50/P90/P95 percentile calculations.
+
+- **Failure Injection Framework (Phase 3)**: Implemented `FailureInjector` chaos engineering toolkit with 4 scenarios (`pause-backup`, `scale-down-velero`, `kill-observability-pod`, `random`) for resilience testing. Added 22 resilience tests validating recovery from injected failures.
+
+- **Enhanced E2E Test Coverage**: Total of 99+ E2E tests across 4 test suites including monitoring tests (21 tests) and resilience tests (22 tests). All tests use pytest markers (`@pytest.mark.e2e`, `@pytest.mark.e2e_dry_run`) for selective execution.
+
+### Changed
+
+- **E2E Test Infrastructure**: Migrated from bash (`quick_start_e2e.sh`, `e2e_test_orchestrator.sh`) to pytest-native execution with `pytest -m e2e tests/e2e/`. Enhanced analyzer supports `--compare` mode for run-to-run analysis and graceful degradation without pandas/matplotlib.
+
+### Deprecated
+
+- **Bash E2E Scripts**: `quick_start_e2e.sh`, `e2e_test_orchestrator.sh`, and `phase_monitor.sh` are deprecated and will be removed in v2.0.0. Migration guide available in `tests/e2e/MIGRATION.md`. Scripts now emit deprecation warnings when executed.
+
+### Fixed
+
+- **E2E Resume State**: Fixed bug where `--resume` didn't preserve `swap_contexts_each_cycle` flag, causing incorrect context usage after process restart (commit `82ddb66`).
+
+### Validated
+
+- **4h40m Real-World Soak Test**: Validated on live ACM clusters (mgmt1↔mgmt2, ACM 2.12.7, OCP 4.16.54) with 46 completed cycles achieving 84.8% success rate. Confirmed resume capability (recovered from crash at cycle 4), 100% success for cycles 16-35 after initial timing races, and captured 300+ JSONL events. 
+
 ## [1.4.9] - 2026-01-03
 
 ### Added
