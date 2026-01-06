@@ -1,0 +1,8 @@
+{{- if and .Values.namespace.create (not .Values.namespace.name) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+  labels:
+    {{- include "acm-switchover.labels" . | nindent 4 }}
+{{- end }}

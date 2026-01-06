@@ -196,9 +196,7 @@ class Decommission:
             def _managed_clusters_removed():
                 remaining = self.primary.list_managed_clusters()
                 # Filter out local-cluster
-                non_local = [
-                    mc for mc in remaining if mc.get("metadata", {}).get("name") != "local-cluster"
-                ]
+                non_local = [mc for mc in remaining if mc.get("metadata", {}).get("name") != "local-cluster"]
                 if not non_local:
                     return True, "all ManagedClusters removed (except local-cluster)"
                 names = [mc.get("metadata", {}).get("name") for mc in non_local]
@@ -275,8 +273,7 @@ class Decommission:
                 return True, "all ACM pods removed"
             # Filter out operator pods - they remain after MCH deletion
             non_operator_pods = [
-                p for p in pods
-                if not p.get("metadata", {}).get("name", "").startswith(ACM_OPERATOR_POD_PREFIX)
+                p for p in pods if not p.get("metadata", {}).get("name", "").startswith(ACM_OPERATOR_POD_PREFIX)
             ]
             if not non_operator_pods:
                 operator_count = len(pods)

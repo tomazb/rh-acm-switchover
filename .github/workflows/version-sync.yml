@@ -1,0 +1,38 @@
+name: Version Sync Validation
+
+on:
+  push:
+    branches: [main, packaging]
+  pull_request:
+    branches: [main, packaging]
+
+jobs:
+  validate-versions:
+    name: Validate Version Consistency
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Make validation script executable
+        run: chmod +x packaging/common/validate-versions.sh
+      
+      - name: Validate versions are in sync
+        run: ./packaging/common/validate-versions.sh
+      
+      - name: Check VERSION file exists
+        run: |
+          if [[ ! -f packaging/common/VERSION ]]; then
+            echo "ERROR: packaging/common/VERSION not found"
+            exit 1
+          fi
+          echo "Version: $(cat packaging/common/VERSION)"
+      
+      - name: Check VERSION_DATE file exists
+        run: |
+          if [[ ! -f packaging/common/VERSION_DATE ]]; then
+            echo "ERROR: packaging/common/VERSION_DATE not found"
+            exit 1
+          fi
+          echo "Version date: $(cat packaging/common/VERSION_DATE)"

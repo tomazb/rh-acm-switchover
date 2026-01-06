@@ -1,7 +1,7 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.3.0  
-**Last Updated**: December 23, 2025
+**Version**: 1.5.0  
+**Last Updated**: December 30, 2025
 
 ## Project Structure
 
@@ -15,6 +15,8 @@ rh-acm-switchover/
 ├── requirements.txt           # Python dependencies
 ├── requirements-dev.txt       # Development/testing dependencies
 ├── setup.cfg                  # Tool configuration (flake8, pytest, etc.)
+├── pyproject.toml             # Python packaging (PEP 517/518)
+├── MANIFEST.in                # Source distribution includes
 ├── README.md                  # Project overview
 ├── LICENSE                    # MIT License
 ├── SECURITY.md                # Security policy
@@ -23,6 +25,21 @@ rh-acm-switchover/
 ├── container-bootstrap/       # Container build resources
 │   ├── Containerfile          # Multi-stage container build definition
 │   └── get-pip.py             # Python package installer bootstrapper
+│
+├── packaging/                 # Packaging infrastructure
+│   ├── README.md              # Packaging formats overview
+│   ├── common/                # Shared version sync tooling
+│   │   ├── VERSION            # Canonical version source
+│   │   ├── VERSION_DATE       # Version release date
+│   │   ├── version-bump.sh    # Update all version sources
+│   │   ├── validate-versions.sh # CI version validation
+│   │   └── man/               # Man page sources (Markdown + Makefile)
+│   ├── python/                # Python packaging docs
+│   ├── rpm/                   # RPM spec and COPR docs
+│   ├── deb/                   # Debian packaging (debian/)
+│   ├── container/             # Container security docs
+│   └── helm/                  # Full application Helm chart
+│       └── acm-switchover/
 │
 ├── lib/                       # Core utilities
 │   ├── __init__.py
@@ -36,8 +53,16 @@ rh-acm-switchover/
 │
 ├── modules/                   # Switchover modules
 │   ├── __init__.py
-│   ├── preflight.py           # Pre-flight validation
-│   ├── preflight_validators.py # Individual validation logic
+│   ├── preflight/             # Modular pre-flight validation package
+│   │   ├── __init__.py
+│   │   ├── base_validator.py      # BaseValidator class for all validators
+│   │   ├── reporter.py            # ValidationReporter for result collection
+│   │   ├── backup_validators.py   # Backup and restore validations
+│   │   ├── cluster_validators.py  # Cluster-related validations
+│   │   ├── namespace_validators.py # Namespace and resource validations
+│   │   └── version_validators.py  # Version and compatibility validations
+│   ├── preflight_coordinator.py   # PreflightValidator orchestrator
+│   ├── preflight_validators.py    # Backward-compat shim (deprecated)
 │   ├── primary_prep.py        # Primary hub preparation
 │   ├── activation.py          # Secondary hub activation
 │   ├── post_activation.py     # Post-activation verification
