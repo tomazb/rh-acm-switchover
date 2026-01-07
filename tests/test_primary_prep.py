@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.primary_prep as primary_prep_module
-from lib.constants import OBSERVABILITY_NAMESPACE
+from lib.constants import OBSERVABILITY_NAMESPACE, THANOS_SCALE_DOWN_WAIT
 
 PrimaryPreparation = primary_prep_module.PrimaryPreparation
 
@@ -229,7 +229,7 @@ class TestPrimaryPreparation:
             name="observability-thanos-compact",
             replicas=0,
         )
-        mock_sleep.assert_called_once_with(5)  # Verify wait was called
+        mock_sleep.assert_called_once_with(THANOS_SCALE_DOWN_WAIT)
 
     def test_prepare_error_handling(self, primary_prep_with_obs, mock_primary_client, mock_state_manager):
         """Test error handling during preparation."""
