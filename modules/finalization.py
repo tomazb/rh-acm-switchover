@@ -26,9 +26,11 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
+    OBSERVATORIUM_API_DEPLOYMENT,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
+    THANOS_COMPACTOR_STATEFULSET,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
@@ -670,11 +672,11 @@ class Finalization:
             if not self.dry_run:
                 if compactor_pods:
                     logger.info("Scaling down thanos-compact on old hub")
-                    self.primary.scale_statefulset("observability-thanos-compact", OBSERVABILITY_NAMESPACE, 0)
+                    self.primary.scale_statefulset(THANOS_COMPACTOR_STATEFULSET, OBSERVABILITY_NAMESPACE, 0)
 
                 if api_pods:
                     logger.info("Scaling down observatorium-api on old hub")
-                    self.primary.scale_deployment("observability-observatorium-api", OBSERVABILITY_NAMESPACE, 0)
+                    self.primary.scale_deployment(OBSERVATORIUM_API_DEPLOYMENT, OBSERVABILITY_NAMESPACE, 0)
 
             # Wait for pods to scale down with polling loop
             # Kubernetes scales asynchronously, so we need to poll until convergence

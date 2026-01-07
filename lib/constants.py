@@ -56,6 +56,7 @@ BACKUP_SCHEDULE_DEFAULT_NAME = "acm-hub-backup"
 # Observability Components
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
 THANOS_COMPACTOR_LABEL_SELECTOR = "app=thanos-compact"
+OBSERVATORIUM_API_DEPLOYMENT = "observability-observatorium-api"
 
 # ACM Spec Field Names
 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME = "veleroManagedClustersBackupName"
