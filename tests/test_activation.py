@@ -76,7 +76,7 @@ class TestSecondaryActivation:
         assert act.state == mock_state_manager
         assert act.method == "passive"
 
-    @patch("time.sleep")
+    @patch("modules.activation.time.sleep")
     @patch("modules.activation.wait_for_condition")
     def test_activate_passive_success(self, mock_wait, mock_sleep, activation_passive, mock_secondary_client, mock_state_manager):
         """Test successful passive activation."""
@@ -158,6 +158,7 @@ class TestSecondaryActivation:
             patch={"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}},
             namespace=BACKUP_NAMESPACE,
         )
+        mock_sleep.assert_not_called()
 
     @patch("modules.activation.wait_for_condition")
     def test_activate_full_success(self, mock_wait, activation_full, mock_secondary_client):

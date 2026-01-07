@@ -245,6 +245,7 @@ class E2ETestAnalyzer:
         for phase, stats in phase_stats.items():
             durations = stats['durations']
             percentiles = calculate_percentiles(durations)
+            total_executions = stats['success_count'] + stats['failure_count']
             performance['phase_performance'][phase] = {
                 'avg_duration': sum(durations) / len(durations) if durations else 0,
                 'min_duration': min(durations) if durations else 0,
@@ -252,8 +253,8 @@ class E2ETestAnalyzer:
                 'p50_duration': percentiles['p50'],
                 'p90_duration': percentiles['p90'],
                 'p95_duration': percentiles['p95'],
-                'success_rate': stats['success_count'] / (stats['success_count'] + stats['failure_count']) * 100,
-                'total_executions': stats['success_count'] + stats['failure_count']
+                'success_rate': (stats['success_count'] / total_executions * 100) if total_executions > 0 else 0,
+                'total_executions': total_executions
             }
             
         # Overall metrics

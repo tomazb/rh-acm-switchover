@@ -14,8 +14,23 @@ from modules.preflight_validators import (
 
 def test_backward_compatibility_imports_with_warning():
     """Test that importing from preflight_validators shows deprecation warning."""
-    # Import should trigger deprecation warning - we just verify it doesn't crash
-    import modules.preflight_validators
+    import warnings
+    import importlib
+    import sys
+
+    # Remove from cache to re-trigger the deprecation warning
+    if "modules.preflight_validators" in sys.modules:
+        del sys.modules["modules.preflight_validators"]
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        import modules.preflight_validators
+        importlib.reload(modules.preflight_validators)
+
+        # Verify deprecation warning was raised
+        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(deprecation_warnings) >= 1, "Expected at least one DeprecationWarning"
+        assert "deprecated" in str(deprecation_warnings[0].message).lower()
 
     # Test that we can import the classes we need
     from modules.preflight_validators import ValidationReporter, BackupValidator

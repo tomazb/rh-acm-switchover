@@ -395,7 +395,8 @@ class FailureInjector:
                 message="[DRY-RUN] Would scale Velero back up",
             )
 
-        replicas = self._original_velero_replicas or 1
+        # Use explicit None check to preserve original replicas=0 if that was the state
+        replicas = self._original_velero_replicas if self._original_velero_replicas is not None else 1
 
         self.client.scale_deployment(
             name=self.VELERO_DEPLOYMENT,

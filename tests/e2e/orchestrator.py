@@ -74,7 +74,7 @@ class RunResult:
     @property
     def success_rate(self) -> float:
         """Calculate success rate as a percentage."""
-        total = len(self.cycles)
+        total = self.success_count + self.failure_count
         return (self.success_count / total * 100) if total > 0 else 0.0
 
     @property
@@ -123,7 +123,7 @@ class E2EOrchestrator:
 
     def _generate_run_id(self) -> str:
         """Generate a unique run identifier."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         short_uuid = str(uuid.uuid4())[:8]
         return f"run_{timestamp}_{short_uuid}"
 
