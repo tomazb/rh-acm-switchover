@@ -54,6 +54,7 @@ kubectl --context mgmt2 get dpa -n openshift-adp
 **Objective**: Validate full primary→secondary switchover with all 3 managed clusters
 
 **Test Matrix:**
+
 | Method | Old Hub Action | Primary Context | Secondary Context | Expected Outcome |
 |--------|---------------|----------------|------------------|------------------|
 | passive-sync | secondary | mgmt1 | mgmt2 | Full failback capability |
@@ -166,20 +167,20 @@ kubectl --context mgmt2 get klusterlets -n open-cluster-management-agent
 
 ### Critical Success Metrics
 
-**Phase 1: Pre-flight Validation (100% Required)**
+#### Phase 1: Pre-flight Validation (100% Required)
 - ✅ All 15+ validation checks pass
 - ✅ No critical security warnings
 - ✅ All ClusterDeployments have `preserveOnDelete=true`
 - ✅ Backup completed within last 24 hours
 - ✅ Network connectivity between all clusters
 
-**Phase 2: Execution Validation (Zero Data Loss)**
+#### Phase 2: Execution Validation (Zero Data Loss)
 - ✅ All 3 ManagedClusters successfully transition to mgmt2
 - ✅ Zero ClusterDeployment interruptions
 - ✅ State management integrity maintained
 - ✅ Rollback capability preserved throughout
 
-**Phase 3: Post-activation Validation (Service Continuity)**
+#### Phase 3: Post-activation Validation (Service Continuity)
 - ✅ All ManagedClusters report `Available: true` on mgmt2
 - ✅ Backup schedule active on mgmt2 within 5 minutes
 - ✅ Observability metrics flowing (if enabled)
@@ -320,7 +321,7 @@ echo "Report available at: $REPORT_DIR/final-report.html"
 
 ### Test Components Structure
 
-```
+```text
 tests/e2e/
 ├── run_e2e_tests.sh              # Master orchestrator
 ├── environment-validator.sh       # Environment readiness checks
