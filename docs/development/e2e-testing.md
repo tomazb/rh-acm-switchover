@@ -409,8 +409,7 @@ kubectl --context prod3 get klusterlet -n open-cluster-management-agent
 # Check backup status
 kubectl --context mgmt1 get backupschedules -n openshift-adp
 kubectl --context mgmt2 get backupschedules -n openshift-adp
-   ./scripts/preflight-check.sh --primary-context mgmt1 --secondary-context mgmt2 --method passive
-   ```
+```
 
 2. **Create Test Framework**
    ```bash
