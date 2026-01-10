@@ -173,10 +173,14 @@ class SecondaryActivation:
             logger.error("Secondary hub activation failed: %s", e)
             self.state.add_error(str(e), "activation")
             return False
-        except Exception as e:
+        except (RuntimeError, ValueError) as e:
             logger.error("Unexpected error during activation: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "activation")
             return False
+        except Exception as e:
+            # Log programming errors but re-raise so they're not hidden
+            logger.error("Programming error during activation: %s: %s", type(e).__name__, e)
+            raise
 
     def _verify_passive_sync(self):
         """Verify passive sync restore is up-to-date."""
