@@ -16,8 +16,12 @@ from lib.constants import (
     CLUSTER_VERIFY_INTERVAL,
     CLUSTER_VERIFY_MAX_WORKERS,
     CLUSTER_VERIFY_TIMEOUT,
+    INITIAL_CLUSTER_WAIT_TIMEOUT,
+    LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_AGENT_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_POD_TIMEOUT,
+    POD_READINESS_TOLERANCE,
     SECRET_VISIBILITY_INTERVAL,
     SECRET_VISIBILITY_TIMEOUT,
 )
@@ -58,8 +62,8 @@ class PostActivationVerification:
             # First, try a brief wait to see if clusters connect on their own
             if not self.state.is_step_completed("verify_clusters_connected"):
                 try:
-                    # Initial brief wait (120s) - clusters may connect automatically
-                    self._verify_managed_clusters_connected(timeout=120)
+                    # Initial brief wait - clusters may connect automatically
+                    self._verify_managed_clusters_connected(timeout=INITIAL_CLUSTER_WAIT_TIMEOUT)
                     self.state.mark_step_completed("verify_clusters_connected")
                 except SwitchoverError as e:
                     # Timeout - clusters not connected yet
@@ -162,7 +166,7 @@ class PostActivationVerification:
             for mc in managed_clusters:
                 mc_name = mc.get("metadata", {}).get("name")
 
-                if mc_name == "local-cluster":
+                if mc_name == LOCAL_CLUSTER_NAME:
                     continue
 
                 total_clusters += 1
@@ -223,7 +227,7 @@ class PostActivationVerification:
         try:
             self.secondary.rollout_restart_deployment(
                 name="observability-observatorium-api",
-                namespace="open-cluster-management-observability",
+                namespace=OBSERVABILITY_NAMESPACE,
             )
 
             logger.info("Triggered observatorium-api restart")
@@ -340,7 +344,7 @@ class PostActivationVerification:
         if error_pods:
             logger.warning("Pods in error state: %s", ", ".join(error_pods))
 
-        if ready_pods < len(pods) * 0.8:  # Allow 20% tolerance
+        if ready_pods < len(pods) * POD_READINESS_TOLERANCE:
             logger.warning(
                 "Only %d/%d pods ready. Some pods may still be starting.",
                 ready_pods,
@@ -407,7 +411,7 @@ class PostActivationVerification:
         flagged = []
         for mc in managed_clusters:
             mc_name = mc.get("metadata", {}).get("name")
-            if mc_name == "local-cluster":
+            if mc_name == LOCAL_CLUSTER_NAME:
                 continue
 
             annotations = mc.get("metadata", {}).get("annotations") or {}
@@ -460,7 +464,7 @@ class PostActivationVerification:
         cluster_info = []
         for mc in managed_clusters:
             name = mc.get("metadata", {}).get("name")
-            if name and name != "local-cluster":
+            if name and name != LOCAL_CLUSTER_NAME:
                 # Get API server URL from ManagedCluster spec
                 client_configs = mc.get("spec", {}).get("managedClusterClientConfigs", [])
                 api_url = client_configs[0].get("url", "") if client_configs else ""
@@ -607,7 +611,7 @@ class PostActivationVerification:
             try:
                 v1.delete_namespaced_secret(
                     name="bootstrap-hub-kubeconfig",
-                    namespace="open-cluster-management-agent",
+                    namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                 )
                 logger.debug("Deleted bootstrap-hub-kubeconfig secret on %s", cluster_name)
             except ApiException as e:
@@ -649,7 +653,7 @@ class PostActivationVerification:
                 try:
                     v1.read_namespaced_secret(
                         name="bootstrap-hub-kubeconfig",
-                        namespace="open-cluster-management-agent",
+                        namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                     )
                     return (True, "secret exists")
                 except ApiException as e:
@@ -679,7 +683,7 @@ class PostActivationVerification:
                 }
                 apps_v1.patch_namespaced_deployment(
                     name="klusterlet",
-                    namespace="open-cluster-management-agent",
+                    namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                     body=patch,
                 )
                 logger.debug("Triggered klusterlet restart on %s", cluster_name)
@@ -839,14 +843,14 @@ class PostActivationVerification:
             try:
                 secret = v1.read_namespaced_secret(
                     name="hub-kubeconfig-secret",
-                    namespace="open-cluster-management-agent",
+                    namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                 )
             except ApiException as e:
                 if e.status == 404:
                     # Try bootstrap secret as fallback
                     secret = v1.read_namespaced_secret(
                         name="bootstrap-hub-kubeconfig",
-                        namespace="open-cluster-management-agent",
+                        namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                     )
                 else:
                     raise

@@ -273,7 +273,7 @@ if oc --context="$NEW_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
     # Check metrics-collector on managed clusters (sample check)
     if [[ $TOTAL_CLUSTERS -gt 0 ]]; then
         # This is informational - we can't easily check all managed clusters
-        check_warn "Verify metrics-collector pods on managed clusters manually (oc get pods -n open-cluster-management-addon-observability)"
+        check_warn "Verify metrics-collector pods on managed clusters manually (oc get pods -n $OBSERVABILITY_ADDON_NAMESPACE)"
         echo -e "${YELLOW}       Wait 5-10 minutes after switchover for metrics to appear in Grafana${NC}"
     fi
 fi

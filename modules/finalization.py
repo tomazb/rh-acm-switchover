@@ -6,19 +6,31 @@ import logging
 import time
 from typing import Optional
 
+from kubernetes.client.rest import ApiException
+
 from lib.constants import (
     ACM_NAMESPACE,
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
     BACKUP_NAMESPACE,
+    BACKUP_POLL_INTERVAL,
     BACKUP_SCHEDULE_DEFAULT_NAME,
+    BACKUP_SCHEDULE_DELETE_WAIT,
+    BACKUP_VERIFY_TIMEOUT,
     IMPORT_CONTROLLER_CONFIGMAP,
+    LOCAL_CLUSTER_NAME,
     MCE_NAMESPACE,
+    MCH_VERIFY_INTERVAL,
+    MCH_VERIFY_TIMEOUT,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_TERMINATE_INTERVAL,
+    OBSERVABILITY_TERMINATE_TIMEOUT,
+    OBSERVATORIUM_API_DEPLOYMENT,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
+    THANOS_COMPACTOR_STATEFULSET,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
@@ -114,7 +126,7 @@ class Finalization:
             else:
                 logger.info("Step already completed: handle_old_hub")
 
-            if self.primary and self.old_hub_action != "decommission":
+            if self.primary and self.old_hub_action not in ("decommission", "none"):
                 self._verify_old_hub_state()
 
             logger.info("Finalization completed successfully")
@@ -124,7 +136,7 @@ class Finalization:
             logger.error("Finalization failed: %s", e)
             self.state.add_error(str(e), "finalization")
             return False
-        except (RuntimeError, ValueError, Exception) as e:
+        except Exception as e:
             logger.error("Unexpected error during finalization: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "finalization")
             return False
@@ -247,7 +259,7 @@ class Finalization:
         }
 
     @dry_run_skip(message="Skipping new backup verification")
-    def _verify_new_backups(self, timeout: int = 600):
+    def _verify_new_backups(self, timeout: int = BACKUP_VERIFY_TIMEOUT):
         """
         Verify new backups are being created.
 
@@ -306,7 +318,7 @@ class Finalization:
 
             elapsed = int(time.time() - start_time)
             logger.debug("Waiting for new backup... (elapsed: %ss)", elapsed)
-            time.sleep(30)
+            time.sleep(BACKUP_POLL_INTERVAL)
 
         logger.warning(
             f"No new backups detected after {timeout}s. " "BackupSchedule may take time to create first backup."
@@ -336,48 +348,68 @@ class Finalization:
         logger.info("BackupSchedule %s is enabled", schedule_name)
 
     @dry_run_skip(message="Skipping MultiClusterHub health verification")
-    def _verify_multiclusterhub_health(self):
-        """Ensure MultiClusterHub reports healthy and pods are running."""
+    def _verify_multiclusterhub_health(self, timeout: int = MCH_VERIFY_TIMEOUT, interval: int = MCH_VERIFY_INTERVAL):
+        """Ensure MultiClusterHub reports healthy and pods are running, with wait."""
 
         logger.info("Verifying MultiClusterHub health...")
-        mch = self.secondary.get_custom_resource(
-            group="operator.open-cluster-management.io",
-            version="v1",
-            plural="multiclusterhubs",
-            name="multiclusterhub",
-            namespace=ACM_NAMESPACE,
-        )
+        start = time.time()
 
-        if not mch:
-            hubs = self.secondary.list_custom_resources(
-                group="operator.open-cluster-management.io",
-                version="v1",
-                plural="multiclusterhubs",
-                namespace=ACM_NAMESPACE,
+        while True:
+            try:
+                mch = self.secondary.get_custom_resource(
+                    group="operator.open-cluster-management.io",
+                    version="v1",
+                    plural="multiclusterhubs",
+                    name="multiclusterhub",
+                    namespace=ACM_NAMESPACE,
+                )
+            except ApiException as e:
+                if getattr(e, "status", None) == 404:
+                    mch = None
+                else:
+                    raise
+
+            if not mch:
+                hubs = self.secondary.list_custom_resources(
+                    group="operator.open-cluster-management.io",
+                    version="v1",
+                    plural="multiclusterhubs",
+                    namespace=ACM_NAMESPACE,
+                )
+                if hubs:
+                    mch = hubs[0]
+
+            if not mch:
+                raise RuntimeError("No MultiClusterHub resource found on secondary hub")
+
+            mch_name = mch.get("metadata", {}).get("name", "multiclusterhub")
+            phase = mch.get("status", {}).get("phase", "unknown")
+
+            pods = self.secondary.get_pods(namespace=ACM_NAMESPACE)
+            non_running = [
+                pod.get("metadata", {}).get("name", "unknown")
+                for pod in pods
+                if pod.get("status", {}).get("phase") != "Running"
+            ]
+
+            if phase == "Running" and not non_running:
+                logger.info("MultiClusterHub %s is Running and all pods are healthy", mch_name)
+                return
+
+            elapsed = time.time() - start
+            if elapsed >= timeout:
+                details = ", non-running pods=" + (", ".join(non_running) if non_running else "none")
+                raise RuntimeError(
+                    f"MultiClusterHub {mch_name} not healthy after {timeout}s (phase={phase}{details})"
+                )
+
+            logger.info(
+                "Waiting for MultiClusterHub %s to become healthy (phase=%s, non-running pods=%s)...",
+                mch_name,
+                phase,
+                ", ".join(non_running) if non_running else "none",
             )
-            if hubs:
-                mch = hubs[0]
-
-        if not mch:
-            raise RuntimeError("No MultiClusterHub resource found on secondary hub")
-
-        mch_name = mch.get("metadata", {}).get("name", "multiclusterhub")
-        phase = mch.get("status", {}).get("phase", "unknown")
-
-        if phase != "Running":
-            raise RuntimeError(f"MultiClusterHub {mch_name} is in phase '{phase}', expected Running")
-
-        pods = self.secondary.get_pods(namespace=ACM_NAMESPACE)
-        non_running = [
-            pod.get("metadata", {}).get("name", "unknown")
-            for pod in pods
-            if pod.get("status", {}).get("phase") != "Running"
-        ]
-
-        if non_running:
-            raise RuntimeError("ACM namespace still has non-running pods: " + ", ".join(non_running))
-
-        logger.info("MultiClusterHub %s is Running and all pods are healthy", mch_name)
+            time.sleep(interval)
 
     def _handle_old_hub(self):
         """
@@ -552,7 +584,7 @@ class Finalization:
             logger.info("Deleted old BackupSchedule %s", schedule_name)
 
             # Wait a moment for deletion to complete
-            time.sleep(5)
+            time.sleep(BACKUP_SCHEDULE_DELETE_WAIT)
 
             # Recreate with same spec
             new_schedule = {
@@ -594,7 +626,7 @@ class Finalization:
         still_available = []
         for cluster in clusters:
             name = cluster.get("metadata", {}).get("name")
-            if name == "local-cluster":
+            if name == LOCAL_CLUSTER_NAME:
                 continue
 
             conditions = cluster.get("status", {}).get("conditions", [])
@@ -626,17 +658,93 @@ class Finalization:
                 logger.warning("Old hub BackupSchedule is not paused")
 
         if self.primary_has_observability:
+            # Check both thanos-compact and observatorium-api pods
             compactor_pods = self.primary.get_pods(
                 namespace=OBSERVABILITY_NAMESPACE,
                 label_selector="app.kubernetes.io/name=thanos-compact",
             )
-            if compactor_pods:
-                logger.warning(
-                    "Thanos compactor still running on old hub (%s pod(s))",
-                    len(compactor_pods),
+            api_pods = self.primary.get_pods(
+                namespace=OBSERVABILITY_NAMESPACE,
+                label_selector="app.kubernetes.io/name=observatorium-api",
+            )
+
+            # Automatically scale down observability components on old hub
+            if not self.dry_run:
+                if compactor_pods:
+                    logger.info("Scaling down thanos-compact on old hub")
+                    self.primary.scale_statefulset(THANOS_COMPACTOR_STATEFULSET, OBSERVABILITY_NAMESPACE, 0)
+
+                if api_pods:
+                    logger.info("Scaling down observatorium-api on old hub")
+                    self.primary.scale_deployment(OBSERVATORIUM_API_DEPLOYMENT, OBSERVABILITY_NAMESPACE, 0)
+
+            # Wait for pods to scale down with polling loop
+            # Kubernetes scales asynchronously, so we need to poll until convergence
+            compactor_pods_after = []
+            api_pods_after = []
+
+            if not self.dry_run and (compactor_pods or api_pods):
+                logger.debug(
+                    "Waiting for observability pods to scale down (timeout=%ds, interval=%ds)",
+                    OBSERVABILITY_TERMINATE_TIMEOUT,
+                    OBSERVABILITY_TERMINATE_INTERVAL,
                 )
+                start_time = time.time()
+
+                while time.time() - start_time < OBSERVABILITY_TERMINATE_TIMEOUT:
+                    if compactor_pods:
+                        compactor_pods_after = self.primary.get_pods(
+                            namespace=OBSERVABILITY_NAMESPACE,
+                            label_selector="app.kubernetes.io/name=thanos-compact",
+                        )
+                    if api_pods:
+                        api_pods_after = self.primary.get_pods(
+                            namespace=OBSERVABILITY_NAMESPACE,
+                            label_selector="app.kubernetes.io/name=observatorium-api",
+                        )
+
+                    # Check if both are scaled down
+                    compactor_done = not compactor_pods or not compactor_pods_after
+                    api_done = not api_pods or not api_pods_after
+
+                    if compactor_done and api_done:
+                        break
+
+                    time.sleep(OBSERVABILITY_TERMINATE_INTERVAL)
+
+            # Report status after waiting (skip in dry-run to avoid misleading messages)
+            if self.dry_run:
+                if compactor_pods:
+                    logger.info("[DRY-RUN] Would scale down thanos-compact on old hub")
+                if api_pods:
+                    logger.info("[DRY-RUN] Would scale down observatorium-api on old hub")
             else:
-                logger.info("Thanos compactor is scaled down on old hub")
+                if compactor_pods:
+                    if compactor_pods_after:
+                        logger.warning(
+                            "Thanos compactor still running on old hub (%s pod(s)) after waiting",
+                            len(compactor_pods_after),
+                        )
+                    else:
+                        logger.info("Thanos compactor is scaled down on old hub")
+
+                if api_pods:
+                    if api_pods_after:
+                        logger.warning(
+                            "Observatorium API still running on old hub (%s pod(s)) after waiting",
+                            len(api_pods_after),
+                        )
+                    else:
+                        logger.info("Observatorium API is scaled down on old hub")
+
+                # Report overall status
+                if compactor_pods_after or api_pods_after:
+                    logger.warning(
+                        "Old hub: MultiClusterObservability is still active (%s). Scale both to 0 or remove MCO.",
+                        f"thanos-compact={len(compactor_pods_after)}, observatorium-api={len(api_pods_after)}"
+                    )
+                else:
+                    logger.info("All observability components scaled down on old hub")
 
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""

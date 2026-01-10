@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.activation as activation_module
 from lib.constants import (
     BACKUP_NAMESPACE,
+    PATCH_VERIFY_RETRY_DELAY,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
@@ -76,10 +77,12 @@ class TestSecondaryActivation:
         assert act.state == mock_state_manager
         assert act.method == "passive"
 
+    @patch("modules.activation.time.sleep")
     @patch("modules.activation.wait_for_condition")
-    def test_activate_passive_success(self, mock_wait, activation_passive, mock_secondary_client, mock_state_manager):
+    def test_activate_passive_success(self, mock_wait, mock_sleep, activation_passive, mock_secondary_client, mock_state_manager):
         """Test successful passive activation."""
         mock_wait.return_value = True
+        mock_sleep.return_value = None  # Skip real sleep in patch verification loop
 
         # Track if patch has been applied to simulate the patched state
         patch_applied = {"value": False}
@@ -156,6 +159,8 @@ class TestSecondaryActivation:
             patch={"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}},
             namespace=BACKUP_NAMESPACE,
         )
+        # Patch verification loop sleeps once before detecting the resourceVersion change
+        mock_sleep.assert_called_once_with(PATCH_VERIFY_RETRY_DELAY)
 
     @patch("modules.activation.wait_for_condition")
     def test_activate_full_success(self, mock_wait, activation_full, mock_secondary_client):

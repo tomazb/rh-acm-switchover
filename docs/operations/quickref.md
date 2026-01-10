@@ -330,7 +330,8 @@ podman run -it --rm \
   --dry-run \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
-  --method passive
+  --method passive \
+  --old-hub-action secondary
 ```
 
 #### Execute Switchover (Container)
@@ -342,20 +343,26 @@ podman run -it --rm \
   quay.io/tomazborstnar/acm-switchover:latest \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
-  --method passive
+  --method passive \
+  --old-hub-action secondary
 ```
 
-#### Rollback (Container)
+#### Reverse Switchover (Switch Back to Original Primary)
+
+To switch back to your original primary hub after a successful switchover, perform a reverse switchover by swapping the context values:
 
 ```bash
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   -v $(pwd)/state:/var/lib/acm-switchover \
   quay.io/tomazborstnar/acm-switchover:latest \
-  --rollback \
-  --primary-context primary-hub \
-  --secondary-context secondary-hub
+  --primary-context secondary-hub \
+  --secondary-context primary-hub \
+  --method passive \
+  --old-hub-action secondary
 ```
+
+> **Note**: The `--rollback` flag was removed in v1.3.0. Use a reverse switchover instead.
 
 ### Container Volume Mounts
 
@@ -372,7 +379,7 @@ podman run -it --rm \
 | `--dry-run` | Preview actions without executing |
 | `--method passive` | Use passive sync method (required) |
 | `--method full` | Use full restore method (required) |
-| `--rollback` | Revert to primary hub |
+| `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
 | `--verbose` | Enable debug logging |
 
 ### Container Aliases (Optional)

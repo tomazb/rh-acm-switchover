@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.10] - 2026-01-05
+
+### Added
+
+- **Python E2E Orchestrator (Phase 1)**: Replaced bash-based E2E orchestration with pytest-native `E2EOrchestrator` class featuring automated context swapping, per-cycle manifest generation, and structured timing instrumentation. Added 56 CI-friendly dry-run tests that validate workflow without cluster changes.
+
+- **Soak Testing Controls (Phase 2)**: Added enterprise-grade soak testing capabilities with `--run-hours` (time-boxed execution), `--max-failures` (stop after N failures), and `--resume` (continue from last successful cycle). Implemented 570-line `ResourceMonitor` for background polling of ManagedClusters, Backups, Restores, and Observability components with alert detection.
+
+- **JSONL Metrics Export (Phase 2)**: Added `MetricsLogger` with streaming JSONL time-series output capturing `cycle_start`, `cycle_end`, `phase_result`, `resource_snapshot`, and `alert` events. Enables run-to-run analysis with P50/P90/P95 percentile calculations.
+
+- **Failure Injection Framework (Phase 3)**: Implemented `FailureInjector` chaos engineering toolkit with 4 scenarios (`pause-backup`, `scale-down-velero`, `kill-observability-pod`, `random`) for resilience testing. Added 22 resilience tests validating recovery from injected failures.
+
+- **Enhanced E2E Test Coverage**: Total of 99+ E2E tests across 4 test suites including monitoring tests (21 tests) and resilience tests (22 tests). All tests use pytest markers (`@pytest.mark.e2e`, `@pytest.mark.e2e_dry_run`) for selective execution.
+
+### Changed
+
+- **E2E Test Infrastructure**: Migrated from bash (`quick_start_e2e.sh`, `e2e_test_orchestrator.sh`) to pytest-native execution with `pytest -m e2e tests/e2e/`. Enhanced analyzer supports `--compare` mode for run-to-run analysis and graceful degradation without pandas/matplotlib.
+
+### Deprecated
+
+- **Bash E2E Scripts**: `quick_start_e2e.sh`, `e2e_test_orchestrator.sh`, and `phase_monitor.sh` are deprecated and will be removed in v2.0.0. Migration guide available in `tests/e2e/MIGRATION.md`. Scripts now emit deprecation warnings when executed.
+
+### Fixed
+
+- **E2E Resume State**: Fixed bug where `--resume` didn't preserve `swap_contexts_each_cycle` flag, causing incorrect context usage after process restart (commit `82ddb66`).
+
+### Validated
+
+- **4h40m Real-World Soak Test**: Validated on live ACM clusters (mgmt1↔mgmt2, ACM 2.12.7, OCP 4.16.54) with 46 completed cycles achieving 84.8% success rate. Confirmed resume capability (recovered from crash at cycle 4), 100% success for cycles 16-35 after initial timing races, and captured 300+ JSONL events. 
+
+## [1.4.9] - 2026-01-03
+
+### Added
+
+- **`discover-hub.sh` context deduplication and API server display**: The hub discovery script now detects when multiple kubeconfig contexts point to the same cluster (by comparing API server URLs), groups them together in output, and displays the API server URL for each unique hub. Uses the shortest context name as the canonical name for proposed commands. Includes RBAC validation hints suggesting `check_rbac.py` commands.
+
+### Fixed
+
+- **Finalization respects `--old-hub-action none`**: Fixed regression where `_verify_old_hub_state()` was unconditionally scaling down observability components (thanos-compact, observatorium-api) even when `--old-hub-action none` was specified. Now properly skips old hub modifications when action is `none`, honoring the documented "leaves it unchanged for manual handling" contract.
+
+- **ManagedClusterBackupValidator timestamp comparison**: Restored missing logic that compares each joined ManagedCluster's `creationTimestamp` against the latest backup's `completionTimestamp`. Clusters imported after the last backup now cause a **critical preflight failure** (not just a warning), preventing data loss during switchover.
+
+- **`--force` properly resets COMPLETED state**: Fixed issue where using `--force` with a stale COMPLETED state would silently no-op instead of re-running the switchover. Now resets phase to INIT when `--force` is used with stale completed state, ensuring all phases execute.
+
+- **Dry-run reporting for observability pod cleanup**: Fixed misleading log messages when `dry_run=True` that incorrectly reported observability components as "scaled down" even though no scaling occurred. Now properly reports `[DRY-RUN] Would scale down...` messages instead.
+
+- **Token expiring soon is now a warning, not failure**: Reverted to pre-refactor behavior where tokens expiring within 4 hours produce a non-critical warning (`passed=True, critical=False`) instead of failing preflight. Only already-expired tokens cause critical failures.
+
+## [1.4.8] - 2025-12-30
+
+### Added
+
+- **Modular pre-flight validation architecture**: Decomposed monolithic `preflight_validators.py` (1,282 lines) into focused modules under `modules/preflight/` with `BaseValidator` class and `ValidationReporter` for extensible validation framework.
+
+- **New validator modules**: Created `backup_validators.py`, `cluster_validators.py`, `namespace_validators.py`, `version_validators.py`, and `reporter.py` with clear separation of concerns.
+
+- **`PreflightValidator` coordinator**: New orchestrator class in `modules/preflight_coordinator.py` for managing modular validators.
+
+- **Modular preflight tests**: Added `tests/test_preflight_modular.py`, `tests/test_preflight_backward_compat.py`, and `tests/test_preflight_validators_unit.py` for comprehensive testing of new structure.
+
+- **Consolidated `@api_call` decorator in `KubeClient`**: Added new `@api_call` decorator that combines retry logic with standard exception handling (404 → return value, 5xx/429 → retry, other → log and re-raise). Refactored 8 methods to use this decorator, reducing ~60 lines of repetitive try/except blocks.
+
+### Changed
+
+- **`modules/preflight_validators.py` deprecated**: Now a backward-compatibility shim that imports from `modules.preflight` and emits `DeprecationWarning` on import.
+
+- **Updated architecture documentation**: Refreshed `docs/development/architecture.md` and `docs/project/prd.md` to reflect the new modular preflight structure.
+
 ## [1.4.7] - 2025-12-26
 
 ### Added
@@ -800,7 +868,22 @@ pip install -r requirements.txt
 
 ---
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.10...HEAD
+[1.4.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.9...v1.4.10
+[1.4.9]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.8...v1.4.9
+[1.4.8]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.7...v1.4.8
+[1.4.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.6...v1.4.7
+[1.4.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.5...v1.4.6
+[1.4.5]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.4...v1.4.5
+[1.4.4]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.3...v1.4.4
+[1.4.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.2...v1.4.3
+[1.4.2]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.1...v1.4.2
+[1.4.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.0...v1.4.1
+[1.4.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.3.3...v1.4.0
+[1.3.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.3.2...v1.3.3
+[1.3.2]: https://github.com/tomazb/rh-acm-switchover/compare/v1.3.1...v1.3.2
+[1.3.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/tomazb/rh-acm-switchover/releases/tag/v1.0.0

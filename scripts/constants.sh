@@ -12,18 +12,26 @@
 # - MAJOR: Breaking changes to script behavior or output format
 # - MINOR: New features, new checks, significant improvements
 # - PATCH: Bug fixes, minor improvements
-export SCRIPT_VERSION="1.4.7"
-export SCRIPT_VERSION_DATE="2025-12-26"
+export SCRIPT_VERSION="1.4.10"
+export SCRIPT_VERSION_DATE="2026-01-05"
 
 # Namespaces
 export ACM_NAMESPACE="open-cluster-management"
 export BACKUP_NAMESPACE="open-cluster-management-backup"
 export OBSERVABILITY_NAMESPACE="open-cluster-management-observability"
+# Managed cluster agent namespace (on spoke clusters)
+export MANAGED_CLUSTER_AGENT_NAMESPACE="open-cluster-management-agent"
+# Observability addon namespace (on spoke clusters)
+export OBSERVABILITY_ADDON_NAMESPACE="open-cluster-management-addon-observability"
 
 # Resource Names
 export MCH_NAME="multiclusterhub" # Default MCH name, though scripts often find it dynamically
 export LOCAL_CLUSTER_NAME="local-cluster"
 export THANOS_OBJECT_STORAGE_SECRET="thanos-object-storage"
+
+# Secret names for managed cluster bootstrap
+export HUB_KUBECONFIG_SECRET="hub-kubeconfig-secret"
+export BOOTSTRAP_KUBECONFIG_SECRET="bootstrap-hub-kubeconfig"
 
 # Observability Pods (Prefixes)
 export OBS_GRAFANA_POD="observability-grafana"

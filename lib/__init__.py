@@ -2,12 +2,13 @@
 Library package for ACM switchover automation.
 """
 
-__version__ = "1.4.7"
-__version_date__ = "2025-12-26"
+__version__ = "1.4.10"
+__version_date__ = "2026-01-05"
 
 from .exceptions import (
     ConfigurationError,
     FatalError,
+    SecurityValidationError,
     SwitchoverError,
     TransientError,
     ValidationError,
@@ -32,6 +33,7 @@ __all__ = [
     "TransientError",
     "FatalError",
     "ValidationError",
+    "SecurityValidationError",
     "ConfigurationError",
     "Phase",
     "StateManager",

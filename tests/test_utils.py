@@ -496,3 +496,127 @@ class TestDryRunSkipDecorator:
 
         mock_get_logger.assert_called_with("acm_switchover")
         mock_logger.info.assert_called_with("[DRY-RUN] %s", "Custom skip message")
+
+
+@pytest.mark.unit
+class TestFormatDuration:
+    """Test cases for format_duration utility function."""
+
+    def test_seconds_only(self):
+        """Test formatting durations under 60 seconds."""
+        from lib.utils import format_duration
+
+        assert format_duration(0) == "0.0s"
+        assert format_duration(1) == "1.0s"
+        assert format_duration(30.5) == "30.5s"
+        assert format_duration(59.9) == "59.9s"
+
+    def test_minutes_only(self):
+        """Test formatting durations between 1-60 minutes."""
+        from lib.utils import format_duration
+
+        assert format_duration(60) == "1.0m"
+        assert format_duration(90) == "1.5m"
+        assert format_duration(120) == "2.0m"
+        assert format_duration(3599) == "60.0m"
+
+    def test_hours(self):
+        """Test formatting durations over 1 hour."""
+        from lib.utils import format_duration
+
+        assert format_duration(3600) == "1.0h"
+        assert format_duration(5400) == "1.5h"
+        assert format_duration(7200) == "2.0h"
+        assert format_duration(36000) == "10.0h"
+
+    def test_boundary_values(self):
+        """Test boundary values between units."""
+        from lib.utils import format_duration
+
+        # Just under 1 minute should show seconds
+        assert format_duration(59.99) == "60.0s"
+        # Exactly 1 minute should show minutes
+        assert format_duration(60.0) == "1.0m"
+        # Just under 1 hour should show minutes
+        assert format_duration(3599.99) == "60.0m"
+        # Exactly 1 hour should show hours
+        assert format_duration(3600.0) == "1.0h"
+
+
+@pytest.mark.unit
+class TestConfirmAction:
+    """Test cases for confirm_action utility function."""
+
+    def test_confirm_with_yes(self):
+        """Test confirmation with 'y' or 'yes' responses."""
+        from lib.utils import confirm_action
+
+        with patch("builtins.input", return_value="y"):
+            assert confirm_action("Continue?") is True
+
+        with patch("builtins.input", return_value="Y"):
+            assert confirm_action("Continue?") is True
+
+        with patch("builtins.input", return_value="yes"):
+            assert confirm_action("Continue?") is True
+
+        with patch("builtins.input", return_value="YES"):
+            assert confirm_action("Continue?") is True
+
+    def test_confirm_with_no(self):
+        """Test confirmation with 'n' or 'no' responses."""
+        from lib.utils import confirm_action
+
+        with patch("builtins.input", return_value="n"):
+            assert confirm_action("Continue?") is False
+
+        with patch("builtins.input", return_value="N"):
+            assert confirm_action("Continue?") is False
+
+        with patch("builtins.input", return_value="no"):
+            assert confirm_action("Continue?") is False
+
+        with patch("builtins.input", return_value="NO"):
+            assert confirm_action("Continue?") is False
+
+    def test_confirm_empty_with_default_false(self):
+        """Test empty response uses default=False."""
+        from lib.utils import confirm_action
+
+        with patch("builtins.input", return_value=""):
+            assert confirm_action("Continue?", default=False) is False
+
+    def test_confirm_empty_with_default_true(self):
+        """Test empty response uses default=True."""
+        from lib.utils import confirm_action
+
+        with patch("builtins.input", return_value=""):
+            assert confirm_action("Continue?", default=True) is True
+
+    def test_confirm_invalid_then_valid(self):
+        """Test that invalid responses prompt again."""
+        from lib.utils import confirm_action
+
+        responses = iter(["maybe", "invalid", "y"])
+        with patch("builtins.input", side_effect=responses):
+            with patch("builtins.print") as mock_print:
+                result = confirm_action("Continue?")
+                assert result is True
+                # Should have printed error messages for invalid inputs
+                assert mock_print.call_count == 2
+
+    def test_confirm_prompt_format_default_false(self):
+        """Test prompt format with default=False shows [y/N]."""
+        from lib.utils import confirm_action
+
+        with patch("builtins.input", return_value="y") as mock_input:
+            confirm_action("Continue?", default=False)
+            mock_input.assert_called_once_with("Continue? [y/N]: ")
+
+    def test_confirm_prompt_format_default_true(self):
+        """Test prompt format with default=True shows [Y/n]."""
+        from lib.utils import confirm_action
+
+        with patch("builtins.input", return_value="n") as mock_input:
+            confirm_action("Continue?", default=True)
+            mock_input.assert_called_once_with("Continue? [Y/n]: ")

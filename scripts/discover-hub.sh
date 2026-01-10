@@ -53,8 +53,14 @@ declare -a HUB_BACKUP_STATES=()   # BackupSchedule state
 declare -a HUB_VERSIONS=()        # ACM version
 declare -a HUB_OCP_VERSIONS=()    # OCP / Kubernetes server version (if available)
 declare -a HUB_OCP_CHANNELS=()    # OpenShift update channel (if available)
+declare -a HUB_API_SERVERS=()     # API server URL for each hub context
 declare -a HUB_KLUSTERLET_COUNTS=()  # Number of clusters with klusterlet pointing to this hub
 declare -a ALL_MANAGED_CLUSTERS=()   # All managed cluster contexts discovered
+
+# Grouped hub information (populated by group_contexts_by_cluster)
+declare -A API_SERVER_TO_INDICES=()  # Normalized API server -> comma-separated indices
+declare -a UNIQUE_API_SERVERS=()     # List of unique normalized API servers
+declare -A CANONICAL_CONTEXTS=()     # Normalized API server -> shortest context name
 
 # =============================================================================
 # Helper Functions
@@ -152,37 +158,6 @@ get_ocp_channel() {
     fi
 }
 
-# Get BackupSchedule state for a context
-# Returns: "active", "paused", "collision", or "none"
-get_backup_schedule_state() {
-    local ctx="$1"
-    
-    local schedule_name
-    schedule_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" \
-        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    
-    if [[ -z "$schedule_name" ]]; then
-        echo "none"
-        return
-    fi
-    
-    local paused
-    paused=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE "$schedule_name" -n "$BACKUP_NAMESPACE" \
-        -o jsonpath='{.spec.paused}' 2>/dev/null || echo "")
-    
-    local phase
-    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE "$schedule_name" -n "$BACKUP_NAMESPACE" \
-        -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-    
-    if [[ "$phase" == "BackupCollision" ]]; then
-        echo "collision"
-    elif [[ "$paused" == "true" ]]; then
-        echo "paused"
-    else
-        echo "active"
-    fi
-}
-
 # Get restore state for a context
 # Returns: "passive-sync", "full-restore", "finished", "none"
 get_restore_state() {
@@ -262,27 +237,87 @@ get_hub_api_server() {
     "$CLUSTER_CLI_BIN" --context="$ctx" cluster-info 2>/dev/null | grep -o 'https://[^ ]*' | head -1 || echo ""
 }
 
+# Normalize API server URL for comparison
+# Strips trailing slashes, default port :6443, and extracts just the host
+normalize_api_server() {
+    local url="$1"
+    # Remove trailing slash and standard port, extract hostname
+    echo "$url" | sed 's|/$||' | sed 's|:6443$||' | sed 's|https://||'
+}
+
+# Group contexts by their API server (cluster)
+# Populates API_SERVER_TO_INDICES, UNIQUE_API_SERVERS, and CANONICAL_CONTEXTS
+group_contexts_by_cluster() {
+    # Reset grouping arrays
+    API_SERVER_TO_INDICES=()
+    UNIQUE_API_SERVERS=()
+    CANONICAL_CONTEXTS=()
+    
+    for i in "${!HUB_CONTEXTS[@]}"; do
+        local ctx="${HUB_CONTEXTS[$i]}"
+        local server="${HUB_API_SERVERS[$i]}"
+        local normalized
+        normalized=$(normalize_api_server "$server")
+        
+        if [[ -z "$normalized" ]]; then
+            # If no API server, use context as unique identifier
+            normalized="unknown-$ctx"
+        fi
+        
+        if [[ -n "${API_SERVER_TO_INDICES[$normalized]:-}" ]]; then
+            # Append index to existing entry
+            API_SERVER_TO_INDICES[$normalized]="${API_SERVER_TO_INDICES[$normalized]},$i"
+        else
+            # New unique API server
+            API_SERVER_TO_INDICES[$normalized]="$i"
+            UNIQUE_API_SERVERS+=("$normalized")
+        fi
+        
+        # Track shortest context name as canonical
+        local current_canonical="${CANONICAL_CONTEXTS[$normalized]:-}"
+        if [[ -z "$current_canonical" ]] || [[ ${#ctx} -lt ${#current_canonical} ]]; then
+            CANONICAL_CONTEXTS[$normalized]="$ctx"
+        fi
+    done
+}
+
+# Get the canonical (shortest) context for a given hub index
+get_canonical_context_for_index() {
+    local idx="$1"
+    local server="${HUB_API_SERVERS[$idx]}"
+    local normalized
+    normalized=$(normalize_api_server "$server")
+    if [[ -z "$normalized" ]]; then
+        normalized="unknown-${HUB_CONTEXTS[$idx]}"
+    fi
+    echo "${CANONICAL_CONTEXTS[$normalized]}"
+}
+
 # Verify klusterlet connections for all managed clusters
 # This is called after initial discovery to resolve ambiguous cases
 # Updates HUB_KLUSTERLET_COUNTS array
+# Uses grouped clusters to avoid redundant checks on duplicate contexts
 verify_klusterlet_connections() {
-    local -a hub_servers=()
-    local -a klusterlet_counts=()
+    # First ensure contexts are grouped
+    group_contexts_by_cluster
     
-    # Initialize counts and get hub API servers
-    for i in "${!HUB_CONTEXTS[@]}"; do
-        local ctx="${HUB_CONTEXTS[$i]}"
-        local server
-        server=$(get_hub_api_server "$ctx")
-        hub_servers+=("$server")
-        klusterlet_counts+=(0)
+    # Build arrays for unique clusters only (one per API server)
+    local -a unique_hub_indices=()
+    local -a unique_hub_servers=()
+    local -a unique_klusterlet_counts=()
+    
+    for normalized_server in "${UNIQUE_API_SERVERS[@]}"; do
+        local indices="${API_SERVER_TO_INDICES[$normalized_server]}"
+        local first_idx="${indices%%,*}"
+        unique_hub_indices+=("$first_idx")
+        unique_hub_servers+=("${HUB_API_SERVERS[$first_idx]}")
+        unique_klusterlet_counts+=(0)
     done
     
-    # Check if we need to verify (both hubs have available clusters)
-    local need_verification=false
+    # Check if we need to verify (multiple unique hubs have available clusters)
     local available_count=0
-    for i in "${!HUB_CONTEXTS[@]}"; do
-        local mc_count="${HUB_MC_COUNTS[$i]}"
+    for idx in "${unique_hub_indices[@]}"; do
+        local mc_count="${HUB_MC_COUNTS[$idx]}"
         local available="${mc_count%%/*}"
         if [[ "$available" -gt 0 ]]; then
             available_count=$((available_count + 1))
@@ -290,19 +325,20 @@ verify_klusterlet_connections() {
     done
     
     if [[ "$available_count" -lt 2 ]]; then
-        # Only one hub has clusters, no need to verify
+        # Only one unique hub has clusters, no need to verify
+        # Copy counts to all contexts (including duplicates)
         for i in "${!HUB_CONTEXTS[@]}"; do
             HUB_KLUSTERLET_COUNTS+=("${HUB_MC_COUNTS[$i]%%/*}")
         done
         return
     fi
     
-    echo -e "\n  ${YELLOW}Both hubs report available clusters - verifying klusterlet connections...${NC}"
+    echo -e "\n  ${YELLOW}Multiple hubs report available clusters - verifying klusterlet connections...${NC}"
     
-    # Get unique list of managed clusters from all hubs
+    # Get unique list of managed clusters from unique hubs only
     declare -A seen_clusters
-    for i in "${!HUB_CONTEXTS[@]}"; do
-        local ctx="${HUB_CONTEXTS[$i]}"
+    for idx in "${unique_hub_indices[@]}"; do
+        local ctx="${HUB_CONTEXTS[$idx]}"
         local clusters
         clusters=$(get_managed_cluster_names "$ctx")
         for cluster in $clusters; do
@@ -329,31 +365,56 @@ verify_klusterlet_connections() {
             continue
         fi
         
-        # Match klusterlet server to hub
+        # Match klusterlet server to unique hubs
         local matched=false
-        for i in "${!HUB_CONTEXTS[@]}"; do
-            local hub_server="${hub_servers[$i]}"
-            # Compare by extracting hostname from both
-            local hub_host klusterlet_host
+        local klusterlet_host
+        klusterlet_host=$(echo "$klusterlet_server" | sed 's|https://||' | cut -d: -f1)
+        
+        for j in "${!unique_hub_indices[@]}"; do
+            local hub_server="${unique_hub_servers[$j]}"
+            local hub_host
             hub_host=$(echo "$hub_server" | sed 's|https://||' | cut -d: -f1)
-            klusterlet_host=$(echo "$klusterlet_server" | sed 's|https://||' | cut -d: -f1)
             
             if [[ "$hub_host" == "$klusterlet_host" ]]; then
-                klusterlet_counts[$i]=$((klusterlet_counts[$i] + 1))
-                echo -e "    ${GREEN}✓${NC} $mc → ${HUB_CONTEXTS[$i]}"
+                unique_klusterlet_counts[$j]=$((unique_klusterlet_counts[$j] + 1))
+                local canonical_ctx="${CANONICAL_CONTEXTS[${UNIQUE_API_SERVERS[$j]}]}"
+                echo -e "    ${GREEN}✓${NC} $mc → $canonical_ctx"
                 matched=true
                 break
             fi
         done
         
         if [[ "$matched" == "false" ]]; then
-            echo -e "    ${YELLOW}?${NC} $mc → $klusterlet_server (unknown hub)"
+            # Show which hubs we expected
+            local expected_hubs=""
+            for j in "${!unique_hub_indices[@]}"; do
+                local canonical_ctx="${CANONICAL_CONTEXTS[${UNIQUE_API_SERVERS[$j]}]}"
+                if [[ -n "$expected_hubs" ]]; then
+                    expected_hubs="$expected_hubs, $canonical_ctx"
+                else
+                    expected_hubs="$canonical_ctx"
+                fi
+            done
+            echo -e "    ${YELLOW}?${NC} $mc → $klusterlet_server (not pointing to: $expected_hubs)"
         fi
     done
     
-    # Update the global array
+    # Map unique hub klusterlet counts back to all contexts
     for i in "${!HUB_CONTEXTS[@]}"; do
-        HUB_KLUSTERLET_COUNTS+=("${klusterlet_counts[$i]}")
+        local server="${HUB_API_SERVERS[$i]}"
+        local normalized
+        normalized=$(normalize_api_server "$server")
+        if [[ -z "$normalized" ]]; then
+            normalized="unknown-${HUB_CONTEXTS[$i]}"
+        fi
+        
+        # Find the matching unique hub index
+        for j in "${!UNIQUE_API_SERVERS[@]}"; do
+            if [[ "${UNIQUE_API_SERVERS[$j]}" == "$normalized" ]]; then
+                HUB_KLUSTERLET_COUNTS+=("${unique_klusterlet_counts[$j]}")
+                break
+            fi
+        done
     done
 }
 
@@ -398,7 +459,7 @@ determine_hub_role() {
     if [[ "$backup_state" == "active" ]] && [[ "$restore_state" == "none" || "$restore_state" == "finished" ]]; then
         # Active BackupSchedule + no ongoing restore = Primary
         role="primary"
-        state="Active primary hub (BackupSchedule running, $available_mc/$total_mc clusters available)"
+        state="Active primary hub (BackupSchedule active, $available_mc/$total_mc clusters available)"
     elif [[ "$backup_state" == "active" ]] && [[ "$restore_state" == "passive-sync" ]]; then
         # This is unusual - both backup and passive sync active
         role="unknown"
@@ -460,9 +521,10 @@ analyze_context() {
         return 1
     fi
     
-    # Get ACM version
-    local acm_version
+    # Get ACM version and API server
+    local acm_version api_server
     acm_version=$(get_acm_version "$ctx")
+    api_server=$(get_hub_api_server "$ctx")
     echo -e "${GREEN}ACM hub detected${NC} (ACM ${BLUE}${acm_version}${NC})"
 
     # Get OCP version and update channel
@@ -492,25 +554,38 @@ analyze_context() {
     HUB_VERSIONS+=("$acm_version")
     HUB_OCP_VERSIONS+=("$ocp_version")
     HUB_OCP_CHANNELS+=("$ocp_channel")
+    HUB_API_SERVERS+=("$api_server")
     
     return 0
 }
 
-# Print discovered hubs in a nice format
+# Print discovered hubs in a nice format (grouped by cluster)
 print_discovered_hubs() {
+    # First group contexts by cluster
+    group_contexts_by_cluster
+    
     echo ""
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${BLUE}Discovered ACM Hubs${NC}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
-    for i in "${!HUB_CONTEXTS[@]}"; do
-        local ctx="${HUB_CONTEXTS[$i]}"
-        local role="${HUB_ROLES[$i]}"
-        local state="${HUB_STATES[$i]}"
-        local mc_count="${HUB_MC_COUNTS[$i]}"
-        local klusterlet_count="${HUB_KLUSTERLET_COUNTS[$i]:-}"
-        local version="${HUB_VERSIONS[$i]:-unknown}"
+    # Iterate over unique clusters (by API server)
+    for normalized_server in "${UNIQUE_API_SERVERS[@]}"; do
+        local indices="${API_SERVER_TO_INDICES[$normalized_server]}"
+        local canonical_ctx="${CANONICAL_CONTEXTS[$normalized_server]}"
+        
+        # Get first index for hub data
+        local first_idx="${indices%%,*}"
+        
+        local role="${HUB_ROLES[$first_idx]}"
+        local state="${HUB_STATES[$first_idx]}"
+        local mc_count="${HUB_MC_COUNTS[$first_idx]}"
+        local klusterlet_count="${HUB_KLUSTERLET_COUNTS[$first_idx]:-}"
+        local version="${HUB_VERSIONS[$first_idx]:-unknown}"
+        local api_server="${HUB_API_SERVERS[$first_idx]}"
+        local ocp_version="${HUB_OCP_VERSIONS[$first_idx]:-unknown}"
+        local ocp_channel="${HUB_OCP_CHANNELS[$first_idx]:-n/a}"
         
         # Color based on role
         local role_color="$NC"
@@ -529,32 +604,45 @@ print_discovered_hubs() {
                 ;;
         esac
         
-        echo -e "  ${role_color}●${NC} ${BLUE}$ctx${NC}"
-        echo -e "    Role:     ${role_color}$role${NC}"
-        local ocp_version="${HUB_OCP_VERSIONS[$i]:-unknown}"
-        local ocp_channel="${HUB_OCP_CHANNELS[$i]:-n/a}"
-        echo -e "    ACM:      $version"
-        echo -e "    OCP:      ${ocp_version} (channel: ${ocp_channel})"
+        # Build list of all contexts for this cluster
+        local all_contexts=""
+        IFS=',' read -ra idx_arr <<< "$indices"
+        for idx in "${idx_arr[@]}"; do
+            if [[ -n "$all_contexts" ]]; then
+                all_contexts="$all_contexts, ${HUB_CONTEXTS[$idx]}"
+            else
+                all_contexts="${HUB_CONTEXTS[$idx]}"
+            fi
+        done
+        
+        echo -e "  ${role_color}●${NC} ${BLUE}$canonical_ctx${NC}"
+        echo -e "    API Server: $api_server"
+        # Only show Contexts line if there are multiple contexts
+        if [[ "${#idx_arr[@]}" -gt 1 ]]; then
+            echo -e "    Contexts:   $all_contexts"
+        fi
+        echo -e "    Role:       ${role_color}$role${NC}"
+        echo -e "    ACM:        $version"
+        echo -e "    OCP:        ${ocp_version} (channel: ${ocp_channel})"
         
         # Show cluster counts - include klusterlet count if we verified
         if [[ -n "$klusterlet_count" ]] && [[ "${#HUB_KLUSTERLET_COUNTS[@]}" -gt 0 ]]; then
             local available="${mc_count%%/*}"
-            local total="${mc_count#*/}"
             if [[ "$klusterlet_count" != "$available" ]]; then
                 # Klusterlet count differs from reported available - show both
-                echo -e "    Clusters: ${mc_count} (reported), ${GREEN}${klusterlet_count}${NC} (actual klusterlet connections)"
+                echo -e "    Clusters:   ${mc_count} (reported), ${GREEN}${klusterlet_count}${NC} (actual klusterlet connections)"
             else
-                echo -e "    Clusters: $mc_count"
+                echo -e "    Clusters:   $mc_count"
             fi
         else
-            echo -e "    Clusters: $mc_count"
+            echo -e "    Clusters:   $mc_count"
         fi
-        echo -e "    State:    $state"
+        echo -e "    State:      $state"
         
-        # Show detailed cluster info in verbose mode
+        # Show detailed cluster info in verbose mode (use canonical context)
         if [[ "$VERBOSE" == "true" ]]; then
             local cluster_details
-            cluster_details=$(get_cluster_details "$ctx")
+            cluster_details=$(get_cluster_details "$canonical_ctx")
             if [[ -n "$cluster_details" ]]; then
                 echo -e "    Cluster Details:"
                 while IFS='|' read -r name available joined; do
@@ -581,24 +669,32 @@ propose_check() {
     local proposal_type=""
     declare -a proposal_cmd=()
     
-    # Find hubs by role
-    for i in "${!HUB_CONTEXTS[@]}"; do
-        local ctx="${HUB_CONTEXTS[$i]}"
-        local role="${HUB_ROLES[$i]}"
+    # Ensure contexts are grouped (may already be done by print_discovered_hubs)
+    if [[ ${#UNIQUE_API_SERVERS[@]} -eq 0 ]]; then
+        group_contexts_by_cluster
+    fi
+    
+    # Find hubs by role, using canonical (shortest) context names
+    # We iterate unique clusters to avoid duplicates
+    for normalized_server in "${UNIQUE_API_SERVERS[@]}"; do
+        local indices="${API_SERVER_TO_INDICES[$normalized_server]}"
+        local first_idx="${indices%%,*}"
+        local canonical_ctx="${CANONICAL_CONTEXTS[$normalized_server]}"
+        local role="${HUB_ROLES[$first_idx]}"
         
         case "$role" in
             primary)
-                primary_ctx="$ctx"
+                primary_ctx="$canonical_ctx"
                 ;;
             secondary)
-                secondary_ctx="$ctx"
+                secondary_ctx="$canonical_ctx"
                 ;;
             new-primary)
-                new_hub_ctx="$ctx"
+                new_hub_ctx="$canonical_ctx"
                 ;;
             old-primary|standby)
                 if [[ -z "$old_hub_ctx" ]]; then
-                    old_hub_ctx="$ctx"
+                    old_hub_ctx="$canonical_ctx"
                 fi
                 ;;
         esac
@@ -653,7 +749,7 @@ propose_check() {
         echo ""
         return 1
         
-    elif [[ ${#HUB_CONTEXTS[@]} -eq 0 ]]; then
+    elif [[ ${#UNIQUE_API_SERVERS[@]} -eq 0 ]]; then
         echo -e "  ${RED}No ACM hubs found${NC}"
         echo "  Could not find any reachable Kubernetes contexts with ACM installed."
         echo ""
@@ -661,7 +757,7 @@ propose_check() {
         
     else
         echo -e "  ${YELLOW}Unable to determine switchover state${NC}"
-        echo "  Found ${#HUB_CONTEXTS[@]} hub(s) but could not determine clear primary/secondary roles."
+        echo "  Found ${#UNIQUE_API_SERVERS[@]} unique hub(s) but could not determine clear primary/secondary roles."
         echo "  Review the hub states above and specify contexts manually."
         echo ""
         echo "  For preflight checks:"
@@ -676,6 +772,19 @@ propose_check() {
     # Print the proposed command
     echo -e "  ${GREEN}Proposed command:${NC}"
     echo -e "    ${proposal_cmd[*]}"
+    echo ""
+    
+    # Print RBAC validation hint
+    echo -e "  ${GRAY}Tip: Validate RBAC permissions before switchover:${NC}"
+    if [[ -n "$primary_ctx" ]] && [[ -n "$secondary_ctx" ]]; then
+        echo -e "    python check_rbac.py --context $primary_ctx --role operator"
+        echo -e "    python check_rbac.py --context $secondary_ctx --role operator"
+    elif [[ -n "$new_hub_ctx" ]] && [[ -n "$old_hub_ctx" ]]; then
+        echo -e "    python check_rbac.py --context $new_hub_ctx --role operator"
+        echo -e "    python check_rbac.py --context $old_hub_ctx --role operator"
+    elif [[ -n "$new_hub_ctx" ]]; then
+        echo -e "    python check_rbac.py --context $new_hub_ctx --role operator"
+    fi
     echo ""
     
     # Execute if --run was specified

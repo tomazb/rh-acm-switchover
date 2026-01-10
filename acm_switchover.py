@@ -20,7 +20,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, cast
 
 from lib import (
@@ -31,16 +31,16 @@ from lib import (
     __version_date__,
     setup_logging,
 )
-from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
+from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, STALE_STATE_THRESHOLD
 from lib.validation import InputValidator, ValidationError
 from modules import (
     Decommission,
     Finalization,
     PostActivationVerification,
-    PreflightValidator,
     PrimaryPreparation,
     SecondaryActivation,
 )
+from modules.preflight_coordinator import PreflightValidator
 
 STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
 
@@ -197,6 +197,11 @@ Examples:
     # Logging
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force execution even with stale state file (use with caution)"
+    )
+    parser.add_argument(
         "--log-format",
         choices=["text", "json"],
         default="text",
@@ -242,6 +247,45 @@ def run_switchover(
 
     if secondary is None:
         raise ValueError("Secondary client is required for switchover")
+
+    # Check for stale completed state that would cause instant "completion"
+    current_phase = state.get_current_phase()
+    if current_phase == Phase.COMPLETED:
+        # Handle both 'Z' suffix and explicit timezone offsets
+        try:
+            last_updated_str = state.state.get("last_updated", "")
+            if not last_updated_str:
+                logger.warning("State file missing last_updated timestamp, treating as fresh")
+                state_age = timedelta(seconds=0)
+            else:
+                if last_updated_str.endswith('Z'):
+                    last_updated_str = last_updated_str[:-1] + '+00:00'
+                state_age = datetime.now(timezone.utc) - datetime.fromisoformat(last_updated_str)
+        except (ValueError, TypeError) as e:
+            logger.warning("Could not parse state timestamp: %s, treating as fresh", e)
+            state_age = timedelta(seconds=0)
+        if state_age.total_seconds() > STALE_STATE_THRESHOLD:
+            logger.warning("")
+            logger.warning("⚠️  DETECTED STALE STATE FILE")
+            logger.warning("Switchover appears to be already completed, but state file is %s old.",
+                        f"{int(state_age.total_seconds() // 60)} minutes")
+            logger.warning("A real switchover takes 30-45 minutes, not seconds.")
+            logger.warning("")
+            logger.warning("To start a fresh switchover:")
+            logger.warning("  1. Remove state file: rm %s", state.state_file)
+            logger.warning("  2. Or use: --force to override (use with caution)")
+            logger.warning("")
+            if not getattr(args, 'force', False):
+                logger.error("Use --force to proceed with stale state, or remove state file to start fresh.")
+                sys.exit(EXIT_FAILURE)
+            else:
+                # Reset state completely to start fresh switchover
+                # This clears completed_steps so all phase handlers re-execute their work
+                logger.warning("--force used: Resetting state to start fresh switchover")
+                state.reset()
+        else:
+            logger.info("Resuming recently completed switchover (state age: %s)",
+                       f"{int(state_age.total_seconds() // 60)} minutes")
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
@@ -582,7 +626,7 @@ def main():
 
     try:
         primary, secondary = _initialize_clients(args, logger)
-    except (ValueError, RuntimeError, Exception) as exc:  # pragma: no cover - fatal init error
+    except Exception as exc:  # pragma: no cover - fatal init error
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
         sys.exit(EXIT_FAILURE)
 
@@ -593,7 +637,7 @@ def main():
         logger.info("State saved to: %s", args.state_file)
         logger.info("Re-run the same command to resume from last successful step")
         sys.exit(EXIT_INTERRUPT)
-    except (RuntimeError, ValueError, Exception) as exc:
+    except Exception as exc:
         logger.error("\n✗ Unexpected error: %s", exc, exc_info=args.verbose)
         state.add_error(str(exc))
         sys.exit(EXIT_FAILURE)

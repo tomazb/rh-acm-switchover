@@ -9,7 +9,7 @@ from lib.constants import OBSERVABILITY_NAMESPACE
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
 
-from .preflight_validators import (
+from .preflight import (
     AutoImportStrategyValidator,
     BackupScheduleValidator,
     BackupValidator,

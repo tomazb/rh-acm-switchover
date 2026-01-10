@@ -44,6 +44,8 @@ OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 ACM_NAMESPACE = "open-cluster-management"
 # MCE (used for auto-import strategy ConfigMap)
 MCE_NAMESPACE = "multicluster-engine"
+# Managed cluster agent namespace (on spoke clusters)
+MANAGED_CLUSTER_AGENT_NAMESPACE = "open-cluster-management-agent"
 
 # Secrets (these are Kubernetes secret names, not passwords)
 THANOS_OBJECT_STORAGE_SECRET = "thanos-object-storage"  # nosec B105
@@ -56,6 +58,7 @@ BACKUP_SCHEDULE_DEFAULT_NAME = "acm-hub-backup"
 # Observability Components
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
 THANOS_COMPACTOR_LABEL_SELECTOR = "app=thanos-compact"
+OBSERVATORIUM_API_DEPLOYMENT = "observability-observatorium-api"
 
 # ACM Spec Field Names
 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME = "veleroManagedClustersBackupName"
@@ -75,3 +78,29 @@ IMPORT_CONTROLLER_CONFIGMAP = "import-controller-config"
 AUTO_IMPORT_STRATEGY_KEY = "autoImportStrategy"
 AUTO_IMPORT_STRATEGY_DEFAULT = "ImportOnly"
 AUTO_IMPORT_STRATEGY_SYNC = "ImportAndSync"
+
+# Local cluster name (hub's self-managed cluster, excluded from counts)
+LOCAL_CLUSTER_NAME = "local-cluster"
+
+# Stale state detection threshold (15 minutes = half of minimum switchover time)
+STALE_STATE_THRESHOLD = 900
+
+# Backup verification settings
+BACKUP_VERIFY_TIMEOUT = 600
+BACKUP_POLL_INTERVAL = 30
+
+# MultiClusterHub verification settings
+MCH_VERIFY_TIMEOUT = 300
+MCH_VERIFY_INTERVAL = 10
+
+# BackupSchedule deletion wait (for recreation)
+BACKUP_SCHEDULE_DELETE_WAIT = 5
+
+# Thanos scale-down wait
+THANOS_SCALE_DOWN_WAIT = 5
+
+# Initial cluster connection wait timeout
+INITIAL_CLUSTER_WAIT_TIMEOUT = 120
+
+# Pod readiness tolerance (allow 20% pods not ready)
+POD_READINESS_TOLERANCE = 0.8

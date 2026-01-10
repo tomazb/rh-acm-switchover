@@ -8,9 +8,11 @@ from kubernetes.client.rest import ApiException
 
 from lib.constants import (
     BACKUP_NAMESPACE,
+    LOCAL_CLUSTER_NAME,
     OBSERVABILITY_NAMESPACE,
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
+    THANOS_SCALE_DOWN_WAIT,
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
@@ -77,7 +79,7 @@ class PrimaryPreparation:
             logger.error("Primary hub preparation failed: %s", e)
             self.state.add_error(str(e), "primary_preparation")
             return False
-        except (RuntimeError, ValueError, Exception) as e:
+        except Exception as e:
             logger.error("Unexpected error during primary preparation: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "primary_preparation")
             return False
@@ -163,7 +165,7 @@ class PrimaryPreparation:
             mc_name = mc.get("metadata", {}).get("name")
 
             # Skip local-cluster
-            if mc_name == "local-cluster":
+            if mc_name == LOCAL_CLUSTER_NAME:
                 logger.debug("Skipping local-cluster")
                 continue
 
@@ -205,7 +207,7 @@ class PrimaryPreparation:
             # Wait a moment and verify no pods running
             import time
 
-            time.sleep(5)
+            time.sleep(THANOS_SCALE_DOWN_WAIT)
 
             pods = self.primary.get_pods(
                 namespace=OBSERVABILITY_NAMESPACE,

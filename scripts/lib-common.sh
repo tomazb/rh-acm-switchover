@@ -132,11 +132,11 @@ detect_cluster_cli() {
         check_fail "Neither oc nor kubectl CLI found"
     fi
 
-    # Check for jq (optional but recommended)
+    # Check for jq (required for JSON processing)
     if command -v jq &> /dev/null; then
         check_pass "jq is installed"
     else
-        check_warn "jq not found (optional, but recommended for some commands)"
+        check_fail "jq not found (required for JSON processing)"
     fi
 
     # Print CLI info if available
@@ -250,21 +250,36 @@ get_available_mc_count() {
 }
 
 # Get BackupSchedule state
-# Returns: "running", "paused", "none", or "error"
+# Returns: "active", "paused", "collision", "none", or "error"
 get_backup_schedule_state() {
     local ctx="$1"
     
-    local phase
-    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+    local schedule_name
+    schedule_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
     
-    if [[ -z "$phase" ]]; then
+    if [[ -z "$schedule_name" ]]; then
         echo "none"
-    elif [[ "$phase" == "Enabled" ]]; then
-        echo "running"
-    elif [[ "$phase" == "BackupCollision" ]]; then
+        return
+    fi
+    
+    local paused
+    paused=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE "$schedule_name" -n "$BACKUP_NAMESPACE" \
+        -o jsonpath='{.spec.paused}' 2>/dev/null || echo "")
+    
+    local phase
+    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BACKUP_SCHEDULE "$schedule_name" -n "$BACKUP_NAMESPACE" \
+        -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+    
+    if [[ "$phase" == "BackupCollision" ]]; then
+        echo "collision"
+    elif [[ "$paused" == "true" ]]; then
         echo "paused"
+    elif [[ "$phase" == "Enabled" ]]; then
+        echo "active"
     else
-        echo "$phase"
+        # Return the phase directly for other states
+        echo "${phase:-error}"
     fi
 }
 

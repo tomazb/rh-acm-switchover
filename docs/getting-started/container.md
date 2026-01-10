@@ -4,6 +4,20 @@
 
 The ACM Switchover tool is available as a container image based on Red Hat Universal Base Image (UBI) 9. This provides a consistent, portable runtime environment with all prerequisites pre-installed.
 
+> **Note:** The container image is currently not published to a public registry. You must build the image locally using the instructions below.
+
+## Building the Image
+
+Build the container image from the project root:
+
+```bash
+# Using podman (recommended for RHEL/Fedora)
+podman build -t acm-switchover:latest -f container-bootstrap/Containerfile .
+
+# Using docker
+docker build -t acm-switchover:latest -f container-bootstrap/Containerfile .
+```
+
 ## Prerequisites Included in Container
 
 The container image includes:
@@ -17,10 +31,10 @@ The container image includes:
   - `kubernetes>=28.0.0`
   - `PyYAML>=6.0`
   - `rich>=13.0.0`
+  - `tenacity>=8.2.0`
 
 ## Image Details
 
-- **Registry**: `quay.io/tomazborstnar/acm-switchover`
 - **Base Image**: Red Hat UBI 9 Minimal
 - **Architectures**: linux/amd64, linux/arm64
 - **User**: Non-root (UID 1001)
@@ -28,26 +42,16 @@ The container image includes:
 
 ## Quick Start
 
-### Pull the Image
-
-```bash
-# Using podman (recommended for RHEL/Fedora)
-podman pull quay.io/tomazborstnar/acm-switchover:latest
-
-# Using docker
-docker pull quay.io/tomazborstnar/acm-switchover:latest
-```
-
 ### Basic Usage
 
 ```bash
 # Display help
-podman run --rm quay.io/tomazborstnar/acm-switchover:latest --help
+podman run --rm acm-switchover:latest --help
 
 # Validate switchover prerequisites
 podman run --rm \
   -v ~/.kube:/app/.kube:ro \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --validate-only \
   --primary-context primary-hub \
   --secondary-context secondary-hub
@@ -89,7 +93,7 @@ This ensures state files survive container restarts and enable resume capability
 ```bash
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --validate-only \
   --primary-context primary-hub \
   --secondary-context secondary-hub
@@ -101,7 +105,7 @@ podman run -it --rm \
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   -v $(pwd)/state:/var/lib/acm-switchover \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --dry-run \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
@@ -114,10 +118,11 @@ podman run -it --rm \
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   -v $(pwd)/state:/var/lib/acm-switchover \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
-  --method passive
+  --method passive \
+  --old-hub-action secondary
 ```
 
 ### 4. Execute Switchover (Full Restore)
@@ -126,30 +131,36 @@ podman run -it --rm \
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   -v $(pwd)/state:/var/lib/acm-switchover \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
-  --method full
+  --method full \
+  --old-hub-action secondary
 ```
 
-### 5. Rollback to Primary
+### 5. Reverse Switchover (Switch Back to Original Primary)
+
+To switch back to your original primary hub after a successful switchover, perform a reverse switchover by swapping the context values:
 
 ```bash
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   -v $(pwd)/state:/var/lib/acm-switchover \
-  quay.io/tomazborstnar/acm-switchover:latest \
-  --rollback \
-  --primary-context primary-hub \
-  --secondary-context secondary-hub
+  acm-switchover:latest \
+  --primary-context secondary-hub \
+  --secondary-context primary-hub \
+  --method passive \
+  --old-hub-action secondary
 ```
+
+> **Note**: The `--rollback` flag was removed in v1.3.0. Use a reverse switchover instead.
 
 ### 6. Decommission Old Hub
 
 ```bash
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --decommission \
   --primary-context old-hub
 ```
@@ -163,7 +174,7 @@ podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   -v $(pwd)/state:/var/lib/acm-switchover \
   -e ACM_SWITCHOVER_STATE_DIR=/var/lib/acm-switchover \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
   --method passive
@@ -188,7 +199,7 @@ podman run -it --rm \
   -v $(pwd)/state:/state \
   -e KUBECONFIG=/config/config \
   -e ACM_SWITCHOVER_STATE_DIR=/state \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --validate-only \
   --primary-context primary-hub \
   --secondary-context secondary-hub
@@ -202,7 +213,7 @@ podman run -it --rm \
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   -v $(pwd)/state:/var/lib/acm-switchover \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --verbose \
   --primary-context primary-hub \
   --secondary-context secondary-hub \
@@ -215,13 +226,13 @@ podman run -it --rm \
 # Use specific version tag
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
-  quay.io/tomazborstnar/acm-switchover:v1.0.0 \
+  acm-switchover:v1.0.0 \
   --help
 
 # Use version 1.x latest
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
-  quay.io/tomazborstnar/acm-switchover:1 \
+  acm-switchover:1 \
   --help
 ```
 
@@ -231,7 +242,7 @@ podman run -it --rm \
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   --entrypoint /bin/bash \
-  quay.io/tomazborstnar/acm-switchover:latest
+  acm-switchover:latest
 
 # Inside container:
 $ oc version
@@ -243,7 +254,7 @@ $ python3 acm_switchover.py --help
 
 ```bash
 # Check installed tools
-podman run --rm quay.io/tomazborstnar/acm-switchover:latest \
+podman run --rm acm-switchover:latest \
   sh -c "oc version --client && jq --version && python3 --version"
 ```
 
@@ -262,7 +273,7 @@ spec:
     spec:
       containers:
       - name: acm-switchover
-        image: quay.io/tomazborstnar/acm-switchover:latest
+        image: acm-switchover:latest
         args:
           - "--validate-only"
           - "--primary-context"
@@ -302,7 +313,7 @@ spec:
         spec:
           containers:
           - name: acm-switchover
-            image: quay.io/tomazborstnar/acm-switchover:latest
+            image: acm-switchover:latest
             args:
               - "--validate-only"
               - "--primary-context"
@@ -328,7 +339,7 @@ The container runs as a non-root user (UID 1001) for security:
 
 ```bash
 # Verify non-root execution
-podman run --rm quay.io/tomazborstnar/acm-switchover:latest id
+podman run --rm acm-switchover:latest id
 # Output: uid=1001(acm-switchover) gid=0(root) groups=0(root)
 ```
 
@@ -348,17 +359,17 @@ Use rootless podman for additional security:
 # Run as regular user (no sudo)
 podman run --rm \
   -v ~/.kube:/app/.kube:ro \
-  quay.io/tomazborstnar/acm-switchover:latest --help
+  acm-switchover:latest --help
 ```
 
 ### Image Verification
 
 ```bash
 # Verify image signature (requires cosign)
-cosign verify quay.io/tomazborstnar/acm-switchover:latest
+cosign verify acm-switchover:latest
 
 # Check SBOM
-cosign download sbom quay.io/tomazborstnar/acm-switchover:latest
+cosign download sbom acm-switchover:latest
 ```
 
 ## Troubleshooting
@@ -372,7 +383,7 @@ chmod 777 ./state  # Or set proper ownership
 
 podman run -it --rm \
   -v $(pwd)/state:/var/lib/acm-switchover \
-  quay.io/tomazborstnar/acm-switchover:latest --help
+  acm-switchover:latest --help
 ```
 
 ### Kubeconfig Not Found
@@ -385,7 +396,7 @@ ls -la ~/.kube/config
 podman run -it --rm \
   -v ~/.kube:/config:ro \
   -e KUBECONFIG=/config/config \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --validate-only \
   --primary-context primary-hub \
   --secondary-context secondary-hub
@@ -398,7 +409,7 @@ podman run -it --rm \
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
   --entrypoint oc \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   config get-contexts
 ```
 
@@ -409,7 +420,7 @@ podman run -it --rm \
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro,Z \
   -v $(pwd)/state:/var/lib/acm-switchover:Z \
-  quay.io/tomazborstnar/acm-switchover:latest --help
+  acm-switchover:latest --help
 ```
 
 ## Building Custom Image

@@ -119,8 +119,9 @@ The tool requires these Python packages:
 
 ```
 kubernetes>=28.0.0  # Kubernetes API client
-PyYAML>=6.0        # YAML parsing
-rich>=13.0.0       # Rich text formatting (optional)
+PyYAML>=6.0         # YAML parsing
+rich>=13.0.0        # Rich text formatting (optional)
+tenacity>=8.2.0     # Retry logic
 ```
 
 ### Offline Installation

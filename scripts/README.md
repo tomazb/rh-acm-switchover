@@ -60,6 +60,12 @@ When reporting issues, always include the script version from the output.
 
 Auto-discovers Kubernetes contexts from your kubeconfig, detects which clusters are ACM hubs, determines their roles (primary/secondary/standby), and proposes the appropriate preflight or postflight check command based on the detected state.
 
+**Key Features:**
+- **Context deduplication**: Automatically detects when multiple kubeconfig contexts point to the same cluster (by API server URL) and groups them together
+- **API server display**: Shows the API server URL for each discovered hub
+- **Canonical context selection**: Uses the shortest context name when multiple contexts exist for the same cluster
+- **RBAC validation hints**: Suggests `check_rbac.py` commands to validate permissions before switchover
+
 ### Usage
 
 ```bash
@@ -114,44 +120,54 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Hub Discovery                                        ║
 ╚════════════════════════════════════════════════════════════╝
-discover-hub.sh v1.3.0 (2025-12-11)
+discover-hub.sh v1.4.10 (2025-12-30)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Checking primary-hub... ACM hub detected (ACM 2.11.0)
-  Checking secondary-hub... ACM hub detected (ACM 2.11.0)
-  Checking prod1... not an ACM hub (skipped) (OCP: 4.14.12, channel: stable-4.14)
+  Checking mgmt1... ACM hub detected (ACM 2.12.7)
+  Checking mgmt2... ACM hub detected (ACM 2.12.7)
+  Checking open-cluster-management/api-mgmt1-htz1-all-it-tech:6443/system:admin... ACM hub detected (ACM 2.12.7)
+  Checking prod1... not an ACM hub (skipped) (OCP: 4.16.54, channel: eus-4.16)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Discovered ACM Hubs
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  ● primary-hub
-    Role:     primary
-    ACM:      2.11.0
-    OCP:      4.14.12 (channel: stable-4.14)
-    Clusters: 5/5
-    State:    Active primary hub (BackupSchedule running, 5/5 clusters available)
+  ● mgmt1
+    API Server: https://api.mgmt1.htz1.all-it.tech:6443
+    Contexts:   mgmt1, open-cluster-management/api-mgmt1-htz1-all-it-tech:6443/system:admin
+    Role:       primary
+    ACM:        2.12.7
+    OCP:        4.16.54 (channel: stable-4.16)
+    Clusters:   3/3
+    State:      Active primary hub (BackupSchedule running, 3/3 clusters available)
 
-  ● secondary-hub
-    Role:     secondary
-    ACM:      2.11.0
-    OCP:      4.14.12 (channel: stable-4.14)
-    Clusters: 0/5
-    State:    Secondary hub in passive-sync mode (ready for switchover)
+  ● mgmt2
+    API Server: https://api.mgmt2.htz1.all-it.tech:6443
+    Role:       secondary
+    ACM:        2.12.7
+    OCP:        4.16.54 (channel: stable-4.16)
+    Clusters:   0/3
+    State:      Secondary hub in passive-sync mode (ready for switchover)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Recommended Action
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Scenario: Pre-Switchover
-  Primary hub (primary-hub) and secondary hub (secondary-hub) detected.
+  Primary hub (mgmt1) and secondary hub (mgmt2) detected.
   Run preflight checks before initiating switchover.
 
   Proposed command:
-    ./scripts/preflight-check.sh --primary-context primary-hub --secondary-context secondary-hub --method passive
+    ./scripts/preflight-check.sh --primary-context mgmt1 --secondary-context mgmt2 --method passive
+
+  Tip: Validate RBAC permissions before switchover:
+    python check_rbac.py --context mgmt1 --role operator
+    python check_rbac.py --context mgmt2 --role operator
 ```
+
+**Note:** When multiple contexts point to the same cluster (like `mgmt1` and `open-cluster-management/api-mgmt1...`), they are grouped together and the shortest context name is used in proposed commands.
 
 ### Exit Codes
 
@@ -186,7 +202,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 
 ### What It Checks
 
-1. **CLI Tools** - Verifies `oc`/`kubectl` and `jq` are installed
+1. **CLI Tools** - Verifies `oc`/`kubectl` and `jq` are installed (jq is required)
 2. **Kubernetes Contexts** - Confirms contexts exist and are accessible
 3. **Namespace Access** - Validates required namespaces on both hubs
 4. **ACM Versions** - Ensures versions match between hubs

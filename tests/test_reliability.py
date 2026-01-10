@@ -37,46 +37,40 @@ def test_is_retryable_error():
     assert not is_retryable_error(ValueError())
 
 
-def test_retry_logic_success_after_failure(kube_client):
+@patch("tenacity.nap.sleep")
+def test_retry_logic_success_after_failure(mock_sleep, kube_client):
     """Test that API call retries and eventually succeeds."""
-    with patch("lib.kube_client.wait_exponential") as mock_wait:
-        # Mock wait to speed up test
-        mock_wait.return_value = lambda *args, **kwargs: 0
+    # Mock API to fail twice then succeed
+    mock_api = kube_client.core_v1.read_namespace
+    mock_api.side_effect = [
+        ApiException(status=503),
+        ApiException(status=500),
+        MagicMock(to_dict=lambda: {"metadata": {"name": "test"}}),
+    ]
 
-        # Mock API to fail twice then succeed
-        mock_api = kube_client.core_v1.read_namespace
-        mock_api.side_effect = [
-            ApiException(status=503),
-            ApiException(status=500),
-            MagicMock(to_dict=lambda: {"metadata": {"name": "test"}}),
-        ]
+    # Call method
+    result = kube_client.get_namespace("test")
 
-        # Call method
-        result = kube_client.get_namespace("test")
+    # Verify result
+    assert result["metadata"]["name"] == "test"
 
-        # Verify result
-        assert result["metadata"]["name"] == "test"
-
-        # Verify retries occurred (3 calls total)
-        assert mock_api.call_count == 3
+    # Verify retries occurred (3 calls total)
+    assert mock_api.call_count == 3
 
 
-def test_retry_logic_max_retries_exceeded(kube_client):
+@patch("tenacity.nap.sleep")
+def test_retry_logic_max_retries_exceeded(mock_sleep, kube_client):
     """Test that API call fails after max retries."""
-    with patch("lib.kube_client.wait_exponential") as mock_wait:
-        # Mock wait to speed up test
-        mock_wait.return_value = lambda *args, **kwargs: 0
+    # Mock API to fail consistently
+    mock_api = kube_client.core_v1.read_namespace
+    mock_api.side_effect = ApiException(status=503)
 
-        # Mock API to fail consistently
-        mock_api = kube_client.core_v1.read_namespace
-        mock_api.side_effect = ApiException(status=503)
+    # Call method and expect failure
+    with pytest.raises(ApiException):
+        kube_client.get_namespace("test")
 
-        # Call method and expect failure
-        with pytest.raises(ApiException):
-            kube_client.get_namespace("test")
-
-        # Verify retries occurred (initial + 4 retries = 5 calls)
-        assert mock_api.call_count == 5
+    # Verify retries occurred (initial + 4 retries = 5 calls)
+    assert mock_api.call_count == 5
 
 
 def test_non_retryable_error_fails_immediately(kube_client):

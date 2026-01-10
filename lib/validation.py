@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Pattern
 
-from lib.exceptions import ConfigurationError
+from lib.exceptions import SecurityValidationError, ValidationError
 
 logger = logging.getLogger("acm_switchover")
 
@@ -53,27 +53,6 @@ K8S_LABEL_MAX_LENGTH = 63
 # This accommodates default oc login contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
 CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
 CONTEXT_NAME_MAX_LENGTH = 128
-
-
-class ValidationError(ConfigurationError):
-    """Input validation failure.
-
-    This exception is raised when input validation fails, providing
-    detailed error messages to help users understand what went wrong
-    and how to fix it.
-    """
-
-    pass
-
-
-class SecurityValidationError(ValidationError):
-    """Security-related validation failure.
-
-    This exception is raised when validation fails due to potential
-    security issues (e.g., path traversal attempts, command injection).
-    """
-
-    pass
 
 
 class InputValidator:

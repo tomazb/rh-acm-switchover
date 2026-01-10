@@ -9,6 +9,7 @@ from lib.constants import (
     ACM_OPERATOR_POD_PREFIX,
     DECOMMISSION_POD_INTERVAL,
     DECOMMISSION_POD_TIMEOUT,
+    LOCAL_CLUSTER_NAME,
     MANAGED_CLUSTER_DELETE_INTERVAL,
     MANAGED_CLUSTER_DELETE_TIMEOUT,
     OBSERVABILITY_NAMESPACE,
@@ -162,7 +163,7 @@ class Decommission:
             mc_name = mc.get("metadata", {}).get("name")
 
             # Skip local-cluster
-            if mc_name == "local-cluster":
+            if mc_name == LOCAL_CLUSTER_NAME:
                 logger.info("Skipping local-cluster")
                 continue
 
@@ -197,7 +198,7 @@ class Decommission:
                 remaining = self.primary.list_managed_clusters()
                 # Filter out local-cluster
                 non_local = [
-                    mc for mc in remaining if mc.get("metadata", {}).get("name") != "local-cluster"
+                    mc for mc in remaining if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
                 ]
                 if not non_local:
                     return True, "all ManagedClusters removed (except local-cluster)"

@@ -6,12 +6,12 @@ import logging
 import time
 from typing import Dict, Optional
 
-from lib.constants import AUTO_IMPORT_STRATEGY_DEFAULT  # noqa: F401
 from lib.constants import (
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
     BACKUP_NAMESPACE,
     IMPORT_CONTROLLER_CONFIGMAP,
+    LOCAL_CLUSTER_NAME,
     MCE_NAMESPACE,
     PATCH_VERIFY_MAX_RETRIES,
     PATCH_VERIFY_RETRY_DELAY,
@@ -173,10 +173,14 @@ class SecondaryActivation:
             logger.error("Secondary hub activation failed: %s", e)
             self.state.add_error(str(e), "activation")
             return False
-        except (RuntimeError, ValueError, Exception) as e:
+        except (RuntimeError, ValueError) as e:
             logger.error("Unexpected error during activation: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "activation")
             return False
+        except Exception as e:
+            # Log programming errors but re-raise so they're not hidden
+            logger.error("Programming error during activation: %s: %s", type(e).__name__, e)
+            raise
 
     def _verify_passive_sync(self):
         """Verify passive sync restore is up-to-date."""
@@ -368,7 +372,7 @@ class SecondaryActivation:
                 version="v1",
                 plural="managedclusters",
             )
-            has_non_local = any(mc.get("metadata", {}).get("name") != "local-cluster" for mc in mcs)
+            has_non_local = any(mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME for mc in mcs)
             if not has_non_local:
                 return
             # Determine current strategy
@@ -590,7 +594,7 @@ class SecondaryActivation:
         non_local_clusters = [
             mc.get("metadata", {}).get("name")
             for mc in managed_clusters
-            if mc.get("metadata", {}).get("name") != "local-cluster"
+            if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
         ]
 
         if len(non_local_clusters) >= MIN_MANAGED_CLUSTERS:

@@ -184,15 +184,15 @@ SECONDARY_BACKUP_STATE=$(get_backup_schedule_state "$SECONDARY_CONTEXT")
 
 # Determine hub states for summary
 PRIMARY_STATE_DESC="Active primary hub"
-if [[ "$PRIMARY_BACKUP_STATE" == "running" ]]; then
-    PRIMARY_STATE_DESC="Active primary hub (BackupSchedule running)"
+if [[ "$PRIMARY_BACKUP_STATE" == "active" ]]; then
+    PRIMARY_STATE_DESC="Active primary hub (BackupSchedule active)"
 elif [[ "$PRIMARY_BACKUP_STATE" == "paused" ]]; then
     PRIMARY_STATE_DESC="Primary hub with paused backups"
 fi
 
 SECONDARY_STATE_DESC="Secondary hub"
-if [[ "$SECONDARY_BACKUP_STATE" == "running" ]]; then
-    SECONDARY_STATE_DESC="Secondary hub (BackupSchedule running - unexpected)"
+if [[ "$SECONDARY_BACKUP_STATE" == "active" ]]; then
+    SECONDARY_STATE_DESC="Secondary hub (BackupSchedule active - unexpected)"
 elif [[ "$SECONDARY_MC_TOTAL" -eq 0 ]]; then
     SECONDARY_STATE_DESC="Secondary hub (clean, ready for restore)"
 elif [[ "$SECONDARY_MC_AVAILABLE" -eq 0 ]] && [[ "$SECONDARY_MC_TOTAL" -gt 0 ]]; then

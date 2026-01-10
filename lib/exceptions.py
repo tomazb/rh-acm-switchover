@@ -21,9 +21,22 @@ class FatalError(SwitchoverError):
     """
 
 
-class ValidationError(FatalError):
-    """Pre-flight validation failure."""
-
-
 class ConfigurationError(FatalError):
     """Invalid configuration or arguments."""
+
+
+class ValidationError(ConfigurationError):
+    """Input validation failure.
+
+    This exception is raised when input validation fails, providing
+    detailed error messages to help users understand what went wrong
+    and how to fix it.
+    """
+
+
+class SecurityValidationError(ValidationError):
+    """Security-related validation failure.
+
+    This exception is raised when validation fails due to potential
+    security issues (e.g., path traversal attempts, command injection).
+    """

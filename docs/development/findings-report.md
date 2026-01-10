@@ -17,7 +17,7 @@ This report details 21 hidden logical errors and performance issues identified t
 | False-Positive | 4 | #2, #6, #18, #20 |
 | Open | 14 | #4, #5, #8-17, #19, #21 |
 
-*Last updated: 2025-12-25*
+*Last updated: 2026-01-10*
 
 ---
 
@@ -705,7 +705,7 @@ Then modify phase handlers to call `save_state()` at end of phase or `flush_stat
 
 ### 10. Inefficient Kubeconfig Loading
 
-**File:** `modules/post_activation.py:716-754` (`_load_kubeconfig_data`)
+**File:** `modules/post_activation.py:720-758` (`_load_kubeconfig_data`)
 
 **Severity:** MEDIUM
 

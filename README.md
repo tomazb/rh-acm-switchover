@@ -1,6 +1,6 @@
 # ACM Hub Switchover Automation
 
-**Version 1.4.7** (2025-12-26)
+**Version 1.4.10** (2026-01-05)
 
 Automated, idempotent script for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster.
 
@@ -119,18 +119,18 @@ cd rh-acm-switchover
 pip install -r requirements.txt
 ```
 
-### Option 2: Container Image (Coming Soon)
+### Option 2: Container Image
 
-> **Note:** Container image is not yet published. Use the source installation method above.
+> **Note:** Container image must be built locally. See the [Container Usage Guide](docs/getting-started/container.md) for build instructions.
 
 ```bash
-# Pull the latest image (NOT YET AVAILABLE)
-podman pull quay.io/tomazborstnar/acm-switchover:latest
+# Build the container image locally
+podman build -t acm-switchover:latest -f container-bootstrap/Containerfile .
 
 # Run validation
 podman run -it --rm \
   -v ~/.kube:/app/.kube:ro \
-  quay.io/tomazborstnar/acm-switchover:latest \
+  acm-switchover:latest \
   --validate-only \
   --primary-context primary-hub \
   --secondary-context secondary-hub
@@ -316,9 +316,29 @@ Edit state file manually or use `--reset-state` to start fresh (use with caution
 python -m pytest tests/ -v --cov=. --cov-report=html
 ```
 
+### E2E Testing
+
+End-to-end tests validate complete switchover cycles on real clusters:
+
+```bash
+# Dry-run (no cluster changes)
+pytest -m e2e tests/e2e/ --e2e-dry-run
+
+# Real switchover with soak testing controls
+pytest -m e2e tests/e2e/ \
+  --primary-context mgmt1 \
+  --secondary-context mgmt2 \
+  --e2e-cycles 5 \
+  --e2e-run-hours 2 \
+  --e2e-max-failures 2
+```
+
+**Note**: Legacy bash E2E scripts (`quick_start_e2e.sh`, `e2e_test_orchestrator.sh`, `phase_monitor.sh`) are deprecated and will be removed in v2.0. See [tests/e2e/MIGRATION.md](tests/e2e/MIGRATION.md) for migration guide.
+
 ### Test Coverage
 
 - Unit tests for core utilities and validation modules
+- E2E tests with Python orchestrator and monitoring
 - Code quality checks (flake8, pylint, black, isort)
 - Security scanning (bandit, safety)
 - Type checking (mypy)
