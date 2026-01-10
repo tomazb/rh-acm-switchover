@@ -459,7 +459,7 @@ determine_hub_role() {
     if [[ "$backup_state" == "active" ]] && [[ "$restore_state" == "none" || "$restore_state" == "finished" ]]; then
         # Active BackupSchedule + no ongoing restore = Primary
         role="primary"
-        state="Active primary hub (BackupSchedule running, $available_mc/$total_mc clusters available)"
+        state="Active primary hub (BackupSchedule active, $available_mc/$total_mc clusters available)"
     elif [[ "$backup_state" == "active" ]] && [[ "$restore_state" == "passive-sync" ]]; then
         # This is unusual - both backup and passive sync active
         role="unknown"
