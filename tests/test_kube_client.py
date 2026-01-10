@@ -476,8 +476,7 @@ class TestApiCallDecorator:
         result = mock_api_method()
         assert result == []
 
-    @patch("time.sleep")
-    def test_reraises_retryable_errors(self, mock_sleep):
+    def test_reraises_retryable_errors(self):
         """Decorator re-raises 5xx errors for tenacity to handle."""
 
         @api_call(not_found_value=None)
@@ -489,8 +488,7 @@ class TestApiCallDecorator:
             mock_api_method()
         assert exc_info.value.status == 503
 
-    @patch("time.sleep")
-    def test_reraises_429_for_retry(self, mock_sleep):
+    def test_reraises_429_for_retry(self):
         """Decorator re-raises 429 (Too Many Requests) for tenacity."""
 
         @api_call(not_found_value=None)
