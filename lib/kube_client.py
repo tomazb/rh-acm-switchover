@@ -665,7 +665,7 @@ class KubeClient:
             logger.error("Failed to create %s: %s", plural, e)
             raise
 
-    @api_call(not_found_value=False, resource_desc="delete custom resource")
+    @api_call(not_found_value=True, resource_desc="delete custom resource")
     def delete_custom_resource(
         self,
         group: str,
@@ -684,7 +684,7 @@ class KubeClient:
             namespace: Namespace (None for cluster-scoped)
 
         Returns:
-            True if deleted, False if not found
+            True if deleted or already absent (idempotent)
 
         Raises:
             ValidationError: If resource name or namespace is invalid
