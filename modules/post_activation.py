@@ -18,6 +18,7 @@ from lib.constants import (
     CLUSTER_VERIFY_TIMEOUT,
     INITIAL_CLUSTER_WAIT_TIMEOUT,
     LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_AGENT_NAMESPACE,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_POD_TIMEOUT,
     POD_READINESS_TOLERANCE,
@@ -226,7 +227,7 @@ class PostActivationVerification:
         try:
             self.secondary.rollout_restart_deployment(
                 name="observability-observatorium-api",
-                namespace="open-cluster-management-observability",
+                namespace=OBSERVABILITY_NAMESPACE,
             )
 
             logger.info("Triggered observatorium-api restart")
@@ -610,7 +611,7 @@ class PostActivationVerification:
             try:
                 v1.delete_namespaced_secret(
                     name="bootstrap-hub-kubeconfig",
-                    namespace="open-cluster-management-agent",
+                    namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                 )
                 logger.debug("Deleted bootstrap-hub-kubeconfig secret on %s", cluster_name)
             except ApiException as e:
@@ -652,7 +653,7 @@ class PostActivationVerification:
                 try:
                     v1.read_namespaced_secret(
                         name="bootstrap-hub-kubeconfig",
-                        namespace="open-cluster-management-agent",
+                        namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                     )
                     return (True, "secret exists")
                 except ApiException as e:
@@ -682,7 +683,7 @@ class PostActivationVerification:
                 }
                 apps_v1.patch_namespaced_deployment(
                     name="klusterlet",
-                    namespace="open-cluster-management-agent",
+                    namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                     body=patch,
                 )
                 logger.debug("Triggered klusterlet restart on %s", cluster_name)
@@ -842,14 +843,14 @@ class PostActivationVerification:
             try:
                 secret = v1.read_namespaced_secret(
                     name="hub-kubeconfig-secret",
-                    namespace="open-cluster-management-agent",
+                    namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                 )
             except ApiException as e:
                 if e.status == 404:
                     # Try bootstrap secret as fallback
                     secret = v1.read_namespaced_secret(
                         name="bootstrap-hub-kubeconfig",
-                        namespace="open-cluster-management-agent",
+                        namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                     )
                 else:
                     raise
