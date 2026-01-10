@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.activation as activation_module
 from lib.constants import (
     BACKUP_NAMESPACE,
+    PATCH_VERIFY_RETRY_DELAY,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
@@ -158,7 +159,8 @@ class TestSecondaryActivation:
             patch={"spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST}},
             namespace=BACKUP_NAMESPACE,
         )
-        mock_sleep.assert_not_called()
+        # Patch verification loop sleeps once before detecting the resourceVersion change
+        mock_sleep.assert_called_once_with(PATCH_VERIFY_RETRY_DELAY)
 
     @patch("modules.activation.wait_for_condition")
     def test_activate_full_success(self, mock_wait, activation_full, mock_secondary_client):
