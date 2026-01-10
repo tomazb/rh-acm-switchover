@@ -74,7 +74,7 @@
 
 ### Python Orchestrator (New)
 
-```
+```text
 tests/e2e/
 ├── __init__.py
 ├── conftest.py              # pytest fixtures for E2E

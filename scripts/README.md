@@ -120,7 +120,7 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Hub Discovery                                        ║
 ╚════════════════════════════════════════════════════════════╝
-discover-hub.sh v1.4.8 (2025-12-30)
+discover-hub.sh v1.4.10 (2025-12-30)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts

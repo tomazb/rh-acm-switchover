@@ -151,7 +151,7 @@ kubectl --context mgmt2 get klusterlets -n open-cluster-management-agent
 1. **Version Compatibility**
    - Test with different ACM versions (if available)
    - Validate version checking logic
-   - Test upgrade/downgrade scenarios
+   - Test upgrade or downgrade scenarios
 
 2. **Cluster Scale Testing**
    - Test with varying numbers of managed clusters
