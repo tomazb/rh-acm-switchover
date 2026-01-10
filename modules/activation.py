@@ -6,7 +6,6 @@ import logging
 import time
 from typing import Dict, Optional
 
-from lib.constants import AUTO_IMPORT_STRATEGY_DEFAULT  # noqa: F401
 from lib.constants import (
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
