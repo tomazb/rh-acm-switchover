@@ -3,7 +3,7 @@ Pre-flight validation module for ACM switchover.
 """
 
 import logging
-from typing import Dict, Tuple
+from typing import Tuple, TypedDict
 
 from lib.constants import OBSERVABILITY_NAMESPACE
 from lib.kube_client import KubeClient
@@ -27,6 +27,14 @@ from .preflight import (
 )
 
 logger = logging.getLogger("acm_switchover")
+
+
+class PreflightConfig(TypedDict):
+    primary_version: str
+    secondary_version: str
+    primary_observability_detected: bool
+    secondary_observability_detected: bool
+    has_observability: bool
 
 
 class PreflightValidator:
@@ -58,7 +66,7 @@ class PreflightValidator:
         self.observability_prereq_validator = ObservabilityPrereqValidator(self.reporter)
         self.tooling_validator = ToolingValidator(self.reporter)
 
-    def validate_all(self) -> Tuple[bool, Dict[str, object]]:
+    def validate_all(self) -> Tuple[bool, PreflightConfig]:
         """Run all validation checks and return pass/fail with detected config."""
 
         logger.info("Starting pre-flight validation...")
@@ -144,7 +152,7 @@ class PreflightValidator:
 
         self.reporter.print_summary()
 
-        config = {
+        config: PreflightConfig = {
             "primary_version": primary_version,
             "secondary_version": secondary_version,
             "primary_observability_detected": primary_observability,

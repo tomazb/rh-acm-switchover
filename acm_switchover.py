@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, cast
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from lib import (
     KubeClient,
@@ -197,9 +197,7 @@ Examples:
     # Logging
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Force execution even with stale state file (use with caution)"
+        "--force", action="store_true", help="Force execution even with stale state file (use with caution)"
     )
     parser.add_argument(
         "--log-format",
@@ -258,8 +256,8 @@ def run_switchover(
                 logger.warning("State file missing last_updated timestamp, treating as fresh")
                 state_age = timedelta(seconds=0)
             else:
-                if last_updated_str.endswith('Z'):
-                    last_updated_str = last_updated_str[:-1] + '+00:00'
+                if last_updated_str.endswith("Z"):
+                    last_updated_str = last_updated_str[:-1] + "+00:00"
                 state_age = datetime.now(timezone.utc) - datetime.fromisoformat(last_updated_str)
         except (ValueError, TypeError) as e:
             logger.warning("Could not parse state timestamp: %s, treating as fresh", e)
@@ -267,15 +265,17 @@ def run_switchover(
         if state_age.total_seconds() > STALE_STATE_THRESHOLD:
             logger.warning("")
             logger.warning("⚠️  DETECTED STALE STATE FILE")
-            logger.warning("Switchover appears to be already completed, but state file is %s old.",
-                        f"{int(state_age.total_seconds() // 60)} minutes")
+            logger.warning(
+                "Switchover appears to be already completed, but state file is %s old.",
+                f"{int(state_age.total_seconds() // 60)} minutes",
+            )
             logger.warning("A real switchover takes 30-45 minutes, not seconds.")
             logger.warning("")
             logger.warning("To start a fresh switchover:")
             logger.warning("  1. Remove state file: rm %s", state.state_file)
             logger.warning("  2. Or use: --force to override (use with caution)")
             logger.warning("")
-            if not getattr(args, 'force', False):
+            if not getattr(args, "force", False):
                 logger.error("Use --force to proceed with stale state, or remove state file to start fresh.")
                 sys.exit(EXIT_FAILURE)
             else:
@@ -284,8 +284,10 @@ def run_switchover(
                 logger.warning("--force used: Resetting state to start fresh switchover")
                 state.reset()
         else:
-            logger.info("Resuming recently completed switchover (state age: %s)",
-                       f"{int(state_age.total_seconds() // 60)} minutes")
+            logger.info(
+                "Resuming recently completed switchover (state age: %s)",
+                f"{int(state_age.total_seconds() // 60)} minutes",
+            )
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
@@ -334,10 +336,7 @@ def _run_phase_preflight(
     state.set_phase(Phase.PREFLIGHT)
 
     validator = PreflightValidator(primary, secondary, args.method, skip_rbac_validation=args.skip_rbac_validation)
-    passed, config = cast(
-        Tuple[bool, Dict[str, Any]],
-        validator.validate_all(),
-    )
+    passed, config = validator.validate_all()
 
     if not passed:
         logger.error("Pre-flight validation failed! Cannot proceed.")
@@ -545,11 +544,16 @@ def run_setup(
     # Build command
     cmd = [
         setup_script,
-        "--admin-kubeconfig", args.admin_kubeconfig,
-        "--context", args.primary_context,
-        "--role", args.role,
-        "--token-duration", args.token_duration,
-        "--output-dir", args.output_dir,
+        "--admin-kubeconfig",
+        args.admin_kubeconfig,
+        "--context",
+        args.primary_context,
+        "--role",
+        args.role,
+        "--token-duration",
+        args.token_duration,
+        "--output-dir",
+        args.output_dir,
     ]
 
     if args.skip_kubeconfig_generation:
