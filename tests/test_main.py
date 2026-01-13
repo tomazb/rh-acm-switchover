@@ -4,16 +4,17 @@ Tests argument parsing and basic entry point logic.
 """
 
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch, Mock
-from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
 
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from acm_switchover import parse_args
+from acm_switchover import parse_args, run_switchover
 
 
 @pytest.mark.unit
@@ -212,38 +213,38 @@ class TestForceWithCompletedState:
 
     def test_force_resets_completed_stale_state_to_init(self, tmp_path):
         """Test that --force resets phase to INIT when state is stale COMPLETED.
-        
+
         This verifies the fix for the issue where --force would silently no-op
         when state was already at COMPLETED because the phase loop skipped all
         handlers (COMPLETED is not in any allowed_phases tuple).
         """
-        from lib.utils import StateManager, Phase
-        
+        from lib.utils import Phase, StateManager
+
         # Create a stale state file (older than 5 minutes)
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
-        
+
         # Set to COMPLETED with stale timestamp (use _write_state to preserve timestamp)
         state.state["current_phase"] = Phase.COMPLETED.value
         stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
         state.state["last_updated"] = stale_time.isoformat()
         state._write_state(state.state)
-        
+
         # Reload state to simulate fresh run
         state2 = StateManager(str(state_file))
-        
+
         # Verify initial state is COMPLETED
         assert state2.get_current_phase() == Phase.COMPLETED
-        
+
         # Check state age calculation
         state_age = datetime.now(timezone.utc) - datetime.fromisoformat(
-            state2.state["last_updated"].replace('Z', '+00:00')
+            state2.state["last_updated"].replace("Z", "+00:00")
         )
         assert state_age.total_seconds() > 300  # > 5 minutes
-        
+
         # Simulate what main() does with --force: reset to INIT
         state2.set_phase(Phase.INIT)
-        
+
         # Verify phase is now INIT
         assert state2.get_current_phase() == Phase.INIT
 
@@ -281,3 +282,109 @@ class TestForceWithCompletedState:
         ):
             args = parse_args()
             assert args.force is False
+
+
+@pytest.mark.unit
+class TestCompletedStateTimestampHandling:
+    def test_missing_last_updated_treated_as_stale_requires_force(self, tmp_path):
+        from lib.constants import EXIT_FAILURE
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        state.state.pop("last_updated", None)
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            run_switchover(args, reloaded, Mock(), Mock(), Mock())
+
+        assert exc.value.code == EXIT_FAILURE
+
+    def test_malformed_last_updated_treated_as_stale_requires_force(self, tmp_path):
+        from lib.constants import EXIT_FAILURE
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        state.state["last_updated"] = "not-a-timestamp"
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            run_switchover(args, reloaded, Mock(), Mock(), Mock())
+
+        assert exc.value.code == EXIT_FAILURE
+
+    def test_force_with_missing_last_updated_resets_state(self, tmp_path):
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        state.state.pop("last_updated", None)
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+
+        args = SimpleNamespace(
+            force=True,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True):
+            result = run_switchover(args, reloaded, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert reloaded.get_current_phase() == Phase.INIT
+
+    def test_recent_completed_state_does_not_require_force(self, tmp_path):
+        from lib.constants import STALE_STATE_THRESHOLD
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        state.state["last_updated"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD - 1)
+        ).isoformat()
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is True
