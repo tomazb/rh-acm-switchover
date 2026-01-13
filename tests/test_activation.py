@@ -79,7 +79,9 @@ class TestSecondaryActivation:
 
     @patch("modules.activation.time.sleep")
     @patch("modules.activation.wait_for_condition")
-    def test_activate_passive_success(self, mock_wait, mock_sleep, activation_passive, mock_secondary_client, mock_state_manager):
+    def test_activate_passive_success(
+        self, mock_wait, mock_sleep, activation_passive, mock_secondary_client, mock_state_manager
+    ):
         """Test successful passive activation."""
         mock_wait.return_value = True
         mock_sleep.return_value = None  # Skip real sleep in patch verification loop
@@ -185,8 +187,9 @@ class TestSecondaryActivation:
         assert "restore-acm-full" in mock_wait.call_args[0][0]
 
     def test_verify_passive_sync_failure(self, activation_passive, mock_secondary_client):
-        """Test failure when passive sync is not ready."""
-        # Mock restore not found
+        """Test failure when passive sync restore is not found."""
+        # No restores discovered and fallback name lookup also fails
+        mock_secondary_client.list_custom_resources.return_value = []
         mock_secondary_client.get_custom_resource.return_value = None
 
         result = activation_passive.activate()
@@ -195,7 +198,17 @@ class TestSecondaryActivation:
 
     def test_verify_passive_sync_wrong_phase(self, activation_passive, mock_secondary_client):
         """Test failure when passive sync is in wrong phase."""
-        mock_secondary_client.get_custom_resource.return_value = {"status": {"phase": "Failed"}}
+        # Discover the restore, but report a failing status
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "status": {"phase": "Failed"},
+        }
 
         result = activation_passive.activate()
 
@@ -256,8 +269,23 @@ class TestSecondaryActivation:
         """Test timeout waiting for restore."""
         mock_wait.return_value = False  # Timeout
 
-        # Mock verify success so we get to the wait step
-        mock_secondary_client.get_custom_resource.return_value = {"status": {"phase": "Enabled"}}
+        # Discover a passive sync restore
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            }
+        ]
+
+        # Make activation idempotent by indicating managed clusters backup is already activated
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "status": {"phase": "Enabled"},
+            "spec": {
+                SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
+                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
+            },
+        }
 
         result = activation_passive.activate()
 
