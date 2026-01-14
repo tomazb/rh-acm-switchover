@@ -17,6 +17,10 @@ types-PyYAML>=6.0.0
 bandit>=1.7.5
 pip-audit>=2.6.0
 
+# Patched transitive dependencies (pip-audit output)
+authlib>=1.6.6
+filelock>=3.20.3
+
 # Additional testing utilities
 coverage>=7.3.0
 
