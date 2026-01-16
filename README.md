@@ -271,11 +271,19 @@ The script maintains a JSON state file tracking:
 - Detected configuration (ACM version, Observability presence)
 - Errors encountered
 
+**Optimized State Persistence:**
+
+The state manager uses intelligent write batching to optimize performance:
+- **Non-critical updates** (step completion, configuration) are batched and written only when needed
+- **Critical checkpoints** (phase transitions, errors, resets) are immediately persisted
+- **Automatic protection**: State is automatically flushed on program termination (SIGTERM/SIGINT/atexit) to prevent data loss
+
 This enables:
 
 - Resume from failure point
 - Audit trail of operations
 - Context awareness across sessions
+- Reduced disk I/O for better performance
 
 ## Safety Features
 
