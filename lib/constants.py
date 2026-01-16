@@ -43,16 +43,16 @@ CLUSTER_VERIFY_MAX_WORKERS = 10
 # Maximum kubeconfig file size (10MB default) to prevent memory exhaustion
 # Can be overridden via ACM_KUBECONFIG_MAX_SIZE environment variable (bytes)
 # Set to 0 or negative to disable size checking
-_DEFAULT_KUBECONFIG_SIZE = 10 * 1024 * 1024  # 10MB
+DEFAULT_KUBECONFIG_SIZE = 10 * 1024 * 1024  # 10MB
 try:
     _env_size = os.environ.get("ACM_KUBECONFIG_MAX_SIZE")
     if _env_size is not None:
         MAX_KUBECONFIG_SIZE = int(_env_size)
     else:
-        MAX_KUBECONFIG_SIZE = _DEFAULT_KUBECONFIG_SIZE
+        MAX_KUBECONFIG_SIZE = DEFAULT_KUBECONFIG_SIZE
 except (ValueError, TypeError):
     # Invalid value in environment variable, use default
-    MAX_KUBECONFIG_SIZE = _DEFAULT_KUBECONFIG_SIZE
+    MAX_KUBECONFIG_SIZE = DEFAULT_KUBECONFIG_SIZE
 
 # Namespaces
 BACKUP_NAMESPACE = "open-cluster-management-backup"
