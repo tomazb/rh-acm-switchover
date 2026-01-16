@@ -749,6 +749,27 @@ class KubeClient:
         deployment = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
         return deployment.to_dict()
 
+    @api_call(not_found_value=None, resource_desc="get statefulset")
+    def get_statefulset(self, name: str, namespace: str) -> Optional[Dict]:
+        """Get a statefulset by name.
+
+        Args:
+            name: StatefulSet name
+            namespace: Namespace name
+
+        Returns:
+            StatefulSet dict or None if not found
+
+        Raises:
+            ValidationError: If statefulset name or namespace is invalid
+        """
+        # Validate inputs before making API call
+        InputValidator.validate_kubernetes_name(name, "statefulset")
+        InputValidator.validate_kubernetes_namespace(namespace)
+
+        statefulset = self.apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
+        return statefulset.to_dict()
+
     @retry_api_call
     def scale_deployment(self, name: str, namespace: str, replicas: int) -> Dict:
         """Scale a deployment.
