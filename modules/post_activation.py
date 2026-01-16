@@ -23,9 +23,12 @@ from lib.constants import (
     MAX_KUBECONFIG_SIZE,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_POD_TIMEOUT,
+    OBSERVATORIUM_API_DEPLOYMENT,
     POD_READINESS_TOLERANCE,
     SECRET_VISIBILITY_INTERVAL,
     SECRET_VISIBILITY_TIMEOUT,
+    THANOS_COMPACTOR_LABEL_SELECTOR,
+    THANOS_COMPACTOR_STATEFULSET,
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
@@ -124,6 +127,12 @@ class PostActivationVerification:
 
             # Steps 7-9: Observability verification (if present)
             if self.has_observability:
+                if not self.state.is_step_completed("scale_up_observability_components"):
+                    self._scale_up_observability_components()
+                    self.state.mark_step_completed("scale_up_observability_components")
+                else:
+                    logger.info("Step already completed: scale_up_observability_components")
+
                 if not self.state.is_step_completed("restart_observatorium_api"):
                     self._restart_observatorium_api()
                     self.state.mark_step_completed("restart_observatorium_api")
@@ -240,6 +249,120 @@ class PostActivationVerification:
                 f"{latest_status['available']}/{latest_status['total']} available, "
                 f"{latest_status['joined']}/{latest_status['total']} joined"
             )
+
+    @dry_run_skip(message="Skipping scale-up of observability components")
+    def _scale_up_observability_components(self):
+        """Scale up observability components if they are scaled down to 0 replicas.
+
+        When promoting a passive hub to active, observatorium-api and thanos-compact
+        may be scaled down to 0 replicas. This method checks and scales them up to
+        their default replica counts:
+        - observatorium-api: 2 replicas (default for HA)
+        - thanos-compact: 1 replica (default single replica)
+
+        These defaults are consistent across RHACM versions 2.3 through 2.14.
+        """
+        logger.info("Checking observability components for scale-up...")
+
+        # Default replica counts
+        OBSERVATORIUM_API_REPLICAS = 2  # Default for HA
+        THANOS_COMPACT_REPLICAS = 1  # Default single replica
+
+        scaled_components = []
+
+        # Check and scale observatorium-api deployment
+        try:
+            deployment = self.secondary.get_deployment(
+                name=OBSERVATORIUM_API_DEPLOYMENT,
+                namespace=OBSERVABILITY_NAMESPACE,
+            )
+
+            if deployment is None:
+                logger.warning("observatorium-api deployment not found, skipping scale-up")
+            else:
+                current_replicas = deployment.get("spec", {}).get("replicas", 0)
+                if current_replicas == 0:
+                    logger.info(
+                        "observatorium-api has 0 replicas, scaling up to %d (default for HA)",
+                        OBSERVATORIUM_API_REPLICAS,
+                    )
+                    self.secondary.scale_deployment(
+                        name=OBSERVATORIUM_API_DEPLOYMENT,
+                        namespace=OBSERVABILITY_NAMESPACE,
+                        replicas=OBSERVATORIUM_API_REPLICAS,
+                    )
+                    scaled_components.append(("observatorium-api", OBSERVATORIUM_API_REPLICAS))
+                else:
+                    logger.info(
+                        "observatorium-api already has %d replica(s), no scale-up needed",
+                        current_replicas,
+                    )
+        except (ApiException, Exception) as e:
+            logger.warning("Failed to check/scale observatorium-api: %s", e)
+            # Continue with thanos-compact check
+
+        # Check and scale thanos-compact StatefulSet
+        try:
+            statefulset = self.secondary.get_statefulset(
+                name=THANOS_COMPACTOR_STATEFULSET,
+                namespace=OBSERVABILITY_NAMESPACE,
+            )
+
+            if statefulset is None:
+                logger.warning("thanos-compact StatefulSet not found, skipping scale-up")
+            else:
+                current_replicas = statefulset.get("spec", {}).get("replicas", 0)
+                if current_replicas == 0:
+                    logger.info(
+                        "thanos-compact has 0 replicas, scaling up to %d (default single replica)",
+                        THANOS_COMPACT_REPLICAS,
+                    )
+                    self.secondary.scale_statefulset(
+                        name=THANOS_COMPACTOR_STATEFULSET,
+                        namespace=OBSERVABILITY_NAMESPACE,
+                        replicas=THANOS_COMPACT_REPLICAS,
+                    )
+                    scaled_components.append(("thanos-compact", THANOS_COMPACT_REPLICAS))
+                else:
+                    logger.info(
+                        "thanos-compact already has %d replica(s), no scale-up needed",
+                        current_replicas,
+                    )
+        except (ApiException, Exception) as e:
+            logger.warning("Failed to check/scale thanos-compact: %s", e)
+            # Continue to wait for any components that were scaled
+
+        # Wait for scaled components to be ready
+        if scaled_components:
+            logger.info("Waiting for scaled components to be ready...")
+
+            # Wait for observatorium-api if it was scaled
+            if any(name == "observatorium-api" for name, _ in scaled_components):
+                logger.info("Waiting for observatorium-api pods to be ready...")
+                ready = self.secondary.wait_for_pods_ready(
+                    namespace=OBSERVABILITY_NAMESPACE,
+                    label_selector="app.kubernetes.io/name=observatorium-api",
+                    timeout=OBSERVABILITY_POD_TIMEOUT,
+                )
+                if ready:
+                    logger.info("observatorium-api pods are ready")
+                else:
+                    logger.warning("observatorium-api pods did not become ready in time")
+
+            # Wait for thanos-compact if it was scaled
+            if any(name == "thanos-compact" for name, _ in scaled_components):
+                logger.info("Waiting for thanos-compact pods to be ready...")
+                ready = self.secondary.wait_for_pods_ready(
+                    namespace=OBSERVABILITY_NAMESPACE,
+                    label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+                    timeout=OBSERVABILITY_POD_TIMEOUT,
+                )
+                if ready:
+                    logger.info("thanos-compact pods are ready")
+                else:
+                    logger.warning("thanos-compact pods did not become ready in time")
+        else:
+            logger.info("No components needed scale-up")
 
     def _restart_observatorium_api(self):
         """Restart observatorium-api deployment (ACM 2.12 issue workaround)."""
@@ -814,8 +937,14 @@ class PostActivationVerification:
 
             # Determine size limit: use provided max_size, or default to MAX_KUBECONFIG_SIZE
             if max_size is None:
-                size_limit = MAX_KUBECONFIG_SIZE
-                check_size = True
+                # Check if MAX_KUBECONFIG_SIZE is set to 0 or negative to disable checking
+                if MAX_KUBECONFIG_SIZE <= 0:
+                    # Size checking disabled via environment variable
+                    size_limit = None
+                    check_size = False
+                else:
+                    size_limit = MAX_KUBECONFIG_SIZE
+                    check_size = True
             elif max_size <= 0:
                 # Bypass size check for critical operations
                 size_limit = None
