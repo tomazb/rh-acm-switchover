@@ -48,7 +48,26 @@ Each phase handler checks `state.get_current_phase()` before executing. Failed p
 if not self.state.is_step_completed("step_name"):
     self._do_step()
     self.state.mark_step_completed("step_name")
+    # Note: mark_step_completed() marks state as dirty but doesn't write immediately
+    # State will be written on next flush_state() call or program exit
 ```
+
+### State Persistence Pattern
+The StateManager uses optimized write batching:
+- **`save_state()`**: Writes only if state is dirty (has pending changes). Use for non-critical updates.
+- **`flush_state()`**: Forces immediate write. Use for critical checkpoints (phase transitions, errors, resets).
+
+Critical operations automatically call `flush_state()`:
+- `set_phase()` - Phase transitions
+- `add_error()` - Error recording
+- `reset()` - State resets
+- `ensure_contexts()` - Context changes
+
+Non-critical operations mark state as dirty:
+- `mark_step_completed()` - Step completion tracking
+- `set_config()` - Configuration storage
+
+State is automatically flushed on program termination (SIGTERM/SIGINT/atexit) to prevent data loss.
 
 ### Dry-Run Decorator
 ```python

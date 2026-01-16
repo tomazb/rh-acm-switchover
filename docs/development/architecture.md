@@ -199,15 +199,41 @@ Centralized constants for maintainability and consistency:
 - `CLUSTER_VERIFY_TIMEOUT`: 600s (10 min)
 - `DECOMMISSION_POD_TIMEOUT`: 1200s (20 min)
 
+**Resource Limits:**
+- `MAX_KUBECONFIG_SIZE`: 10MB default (configurable via `ACM_KUBECONFIG_MAX_SIZE` environment variable). Prevents memory exhaustion when loading large kubeconfig files. Set to 0 or negative to disable size checking.
+
 ### State Manager (`lib/utils.py`)
 
 **Responsibilities:**
-- Load/save state to JSON file
+- Load/save state to JSON file with optimized write batching
 - Track current phase and completed steps
 - Store configuration detected during execution
 - Record errors for debugging
 - **Logging**: Configure structured JSON logging or human-readable text logging
 - **Dry-run decorator**: `dry_run_skip` decorator for consistent dry-run handling
+- **State persistence**: Automatic state flushing on critical checkpoints and program termination
+
+**State Persistence Strategy:**
+
+The StateManager uses a two-tier write strategy to optimize performance while ensuring data safety:
+
+- **`save_state()`**: Writes state to disk only if there are pending changes (dirty state). Used for non-critical updates like marking steps completed or setting configuration values.
+
+- **`flush_state()`**: Forces immediate write to disk regardless of dirty state. Used for critical checkpoints:
+  - Phase transitions (`set_phase()`)
+  - Error recording (`add_error()`)
+  - State resets (`reset()`)
+  - Context changes (`ensure_contexts()`)
+
+**Automatic State Protection:**
+
+The StateManager includes multiple safety mechanisms to prevent state loss:
+
+- **Signal handlers**: Registered for `SIGTERM` and `SIGINT` to flush dirty state before process termination
+- **Atexit handlers**: Flush pending state changes and clean up temporary files on normal program exit
+- **Dirty state tracking**: Tracks whether state has pending writes to avoid unnecessary disk I/O
+- **Atomic writes**: Uses temporary files and atomic rename operations to prevent corruption
+- **File locking**: Uses `fcntl` locks (when available) to prevent concurrent write conflicts
 
 **Dry-Run Decorator:**
 
@@ -258,7 +284,10 @@ class MyModule:
 **Key Methods:**
 - `get_custom_resource()`: Retrieve ACM custom resources
 - `patch_custom_resource()`: Update resources (dry-run aware)
-- `scale_deployment()`: Scale deployments/statefulsets
+- `get_deployment()`: Get deployment by name and namespace
+- `get_statefulset()`: Get statefulset by name and namespace
+- `scale_deployment()`: Scale deployments
+- `scale_statefulset()`: Scale statefulsets
 - `wait_for_pods_ready()`: Poll until pods are ready
 
 ### Pre-Flight Validator (`modules/preflight.py`)

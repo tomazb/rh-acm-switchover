@@ -117,6 +117,7 @@ class TestStateManager:
         state_manager.set_phase(Phase.PRIMARY_PREP)
         state_manager.mark_step_completed("backup_paused")
         state_manager.set_config("observability", True)
+        state_manager.save_state()  # Ensure dirty state is persisted
 
         # Load in new instance
         loaded_state = StateManager(str(temp_state_file))
@@ -180,7 +181,7 @@ class TestStateManager:
         """Unknown persisted phase should reset to INIT with warning."""
         sm = StateManager(str(temp_state_file))
         sm.state["current_phase"] = "mystery-phase"
-        sm.save_state()
+        sm.flush_state()  # Force write even if not dirty
 
         # Reload to simulate separate run
         sm_reloaded = StateManager(str(temp_state_file))

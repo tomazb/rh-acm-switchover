@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **StateManager write optimization**: Implemented dirty state tracking with `save_state()` (conditional writes) and `flush_state()` (critical checkpoints) to reduce disk I/O. Non-critical operations (`mark_step_completed()`, `set_config()`) mark state as dirty, while critical operations (`set_phase()`, `add_error()`, `reset()`, `ensure_contexts()`) force immediate writes.
+
+- **Automatic state protection**: Added signal handlers (SIGTERM/SIGINT) and atexit handlers to flush dirty state on program termination, preventing data loss even on unexpected exits. Includes temporary file cleanup to prevent orphaned files.
+
+- **KubeClient `get_statefulset()` method**: Added new method to retrieve StatefulSet resources by name and namespace, complementing existing `get_deployment()` method.
+
+- **Kubeconfig size limit**: Added `MAX_KUBECONFIG_SIZE` constant (10MB default, configurable via `ACM_KUBECONFIG_MAX_SIZE` environment variable) to prevent memory exhaustion when loading large kubeconfig files.
+
+- **Backup schedule caching in finalization**: Implemented caching for backup schedule lookups in `Finalization` module to reduce redundant API calls during verification steps.
+
+- **Enhanced patch verification**: Improved patch verification in activation module with better error messages distinguishing between API caching issues and incorrect patch values. Added tracking of resourceVersion changes for more accurate diagnostics.
+
+### Changed
+
+- **Preflight script node checking**: Optimized node health checking in `preflight-check.sh` to use single JSON API call instead of multiple `oc get` commands, reducing API calls and improving performance. Improved ClusterOperator checking with cached JSON output.
+
+- **Preflight script variable naming**: Improved variable naming in `preflight-check.sh` to avoid conflicts (e.g., `ACM_PRIMARY_VERSION` vs `PRIMARY_VERSION`, `PRIMARY_OCP_VERSION` vs `PRIMARY_VERSION`).
+
+- **Preflight script multiple BackupSchedule handling**: Added warning when multiple BackupSchedules are detected, checking the first one only.
+
+### Fixed
+
+- **State persistence in tests**: Updated test cases to use `flush_state()` for critical checkpoints and `save_state()` for non-critical updates, ensuring proper state persistence testing.
+
 ## [1.4.10] - 2026-01-05
 
 ### Added

@@ -4,7 +4,7 @@ Finalization and rollback module for ACM switchover.
 
 import logging
 import time
-from typing import Optional
+from typing import Dict, List, Optional
 
 from kubernetes.client.rest import ApiException
 
@@ -72,6 +72,7 @@ class Finalization:
             "secondary hub",
             dry_run=dry_run,
         )
+        self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
 
     def finalize(self) -> bool:
         """
@@ -324,16 +325,29 @@ class Finalization:
             f"No new backups detected after {timeout}s. " "BackupSchedule may take time to create first backup."
         )
 
+    def _get_backup_schedules(self, force_refresh: bool = False) -> List[Dict]:
+        """Get backup schedules with caching.
+
+        Args:
+            force_refresh: If True, bypass cache and fetch fresh data
+
+        Returns:
+            List of backup schedule resources
+        """
+        if self._cached_schedules is None or force_refresh:
+            self._cached_schedules = self.secondary.list_custom_resources(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="backupschedules",
+                namespace=BACKUP_NAMESPACE,
+            )
+        return self._cached_schedules
+
     @dry_run_skip(message="Skipping BackupSchedule verification")
     def _verify_backup_schedule_enabled(self):
         """Ensure BackupSchedule is present and not paused."""
 
-        schedules = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
-            namespace=BACKUP_NAMESPACE,
-        )
+        schedules = self._get_backup_schedules()
 
         if not schedules:
             raise RuntimeError("No BackupSchedule found while verifying finalization")
@@ -541,13 +555,8 @@ class Finalization:
         during switchover. This resets the cluster ID association and prevents
         the collision from occurring.
         """
-        # Check current BackupSchedule status
-        schedules = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
-            namespace=BACKUP_NAMESPACE,
-        )
+        # Check current BackupSchedule status (force refresh to get latest state)
+        schedules = self._get_backup_schedules(force_refresh=True)
 
         if not schedules:
             logger.warning("No BackupSchedule found on new primary")
@@ -605,6 +614,8 @@ class Finalization:
                 namespace=BACKUP_NAMESPACE,
             )
             logger.info("Recreated BackupSchedule %s to prevent collision", schedule_name)
+            # Invalidate cache since we recreated the schedule
+            self._cached_schedules = None
 
         except (RuntimeError, ValueError, Exception) as e:
             logger.warning("Failed to recreate BackupSchedule: %s", e)

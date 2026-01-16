@@ -151,25 +151,25 @@ fi
 # Check 4: Verify ACM versions
 section_header "4. Checking ACM Versions"
 
-PRIMARY_VERSION=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
-SECONDARY_VERSION=$(oc --context="$SECONDARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
+ACM_PRIMARY_VERSION=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
+ACM_SECONDARY_VERSION=$(oc --context="$SECONDARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
 
-if [[ "$PRIMARY_VERSION" != "unknown" ]]; then
-    check_pass "Primary hub ACM version: $PRIMARY_VERSION"
+if [[ "$ACM_PRIMARY_VERSION" != "unknown" ]]; then
+    check_pass "Primary hub ACM version: $ACM_PRIMARY_VERSION"
 else
     check_fail "Primary hub: Could not detect ACM version"
 fi
 
-if [[ "$SECONDARY_VERSION" != "unknown" ]]; then
-    check_pass "Secondary hub ACM version: $SECONDARY_VERSION"
+if [[ "$ACM_SECONDARY_VERSION" != "unknown" ]]; then
+    check_pass "Secondary hub ACM version: $ACM_SECONDARY_VERSION"
 else
     check_fail "Secondary hub: Could not detect ACM version"
 fi
 
-if [[ "$PRIMARY_VERSION" == "$SECONDARY_VERSION" ]] && [[ "$PRIMARY_VERSION" != "unknown" ]]; then
+if [[ "$ACM_PRIMARY_VERSION" == "$ACM_SECONDARY_VERSION" ]] && [[ "$ACM_PRIMARY_VERSION" != "unknown" ]]; then
     check_pass "ACM versions match between hubs"
 else
-    check_fail "ACM version mismatch: Primary=$PRIMARY_VERSION, Secondary=$SECONDARY_VERSION"
+    check_fail "ACM version mismatch: Primary=$ACM_PRIMARY_VERSION, Secondary=$ACM_SECONDARY_VERSION"
 fi
 
 # Gather managed cluster counts for both hubs (used in summary and later checks)
@@ -206,8 +206,8 @@ echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BLUE}Hub Summary${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-print_hub_summary "$PRIMARY_CONTEXT" "$PRIMARY_VERSION" "primary" "$PRIMARY_MC_AVAILABLE" "$PRIMARY_MC_TOTAL" "$PRIMARY_STATE_DESC"
-print_hub_summary "$SECONDARY_CONTEXT" "$SECONDARY_VERSION" "secondary" "$SECONDARY_MC_AVAILABLE" "$SECONDARY_MC_TOTAL" "$SECONDARY_STATE_DESC"
+print_hub_summary "$PRIMARY_CONTEXT" "$ACM_PRIMARY_VERSION" "primary" "$PRIMARY_MC_AVAILABLE" "$PRIMARY_MC_TOTAL" "$PRIMARY_STATE_DESC"
+print_hub_summary "$SECONDARY_CONTEXT" "$ACM_SECONDARY_VERSION" "secondary" "$SECONDARY_MC_AVAILABLE" "$SECONDARY_MC_TOTAL" "$SECONDARY_STATE_DESC"
 echo ""
 
 # Check 5: Verify OADP operator
@@ -298,79 +298,99 @@ fi
 # Check 8: Verify Cluster Health (Nodes and ClusterOperators)
 section_header "8. Checking Cluster Health"
 
-# Check primary hub nodes
-PRIMARY_NODES_TOTAL=$(oc --context="$PRIMARY_CONTEXT" get nodes --no-headers 2>/dev/null | wc -l)
-if [[ $PRIMARY_NODES_TOTAL -gt 0 ]]; then
-    PRIMARY_NODES_READY=$(oc --context="$PRIMARY_CONTEXT" get nodes --no-headers 2>/dev/null | grep -c " Ready" || true)
-    if [[ $PRIMARY_NODES_READY -eq $PRIMARY_NODES_TOTAL ]]; then
-        check_pass "Primary hub: All $PRIMARY_NODES_TOTAL node(s) are Ready"
-    else
-        NOT_READY=$((PRIMARY_NODES_TOTAL - PRIMARY_NODES_READY))
-        check_fail "Primary hub: $NOT_READY of $PRIMARY_NODES_TOTAL node(s) are not Ready"
+# Function to check nodes using single JSON API call
+# Note: Always returns 0 to prevent aborting the script (set -e), allowing remaining checks to run
+check_nodes() {
+    local context="$1"
+    local hub_name="$2"
+    local nodes_json
+    nodes_json=$(oc --context="$context" get nodes -o json 2>/dev/null)
+    
+    if [[ -z "$nodes_json" ]]; then
+        check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
+        return 0  # Return 0 to continue with remaining checks
     fi
-else
-    check_fail "Primary hub: Could not retrieve nodes (insufficient permissions or cluster issue)"
-fi
+    
+    local total ready not_ready
+    total=$(echo "$nodes_json" | jq -r '.items | length' 2>/dev/null || echo "0")
+    ready=$(echo "$nodes_json" | jq -r '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length' 2>/dev/null || echo "0")
+    not_ready=$((total - ready))
+    
+    if [[ $total -eq 0 ]]; then
+        check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
+        return 0  # Return 0 to continue with remaining checks
+    elif [[ $ready -eq $total ]]; then
+        check_pass "$hub_name: All $total node(s) are Ready"
+        return 0
+    else
+        check_fail "$hub_name: $not_ready of $total node(s) are not Ready"
+        return 0  # Return 0 to continue with remaining checks
+    fi
+}
+
+# Check primary hub nodes
+check_nodes "$PRIMARY_CONTEXT" "Primary hub"
 
 # Check secondary hub nodes
-SECONDARY_NODES_TOTAL=$(oc --context="$SECONDARY_CONTEXT" get nodes --no-headers 2>/dev/null | wc -l)
-if [[ $SECONDARY_NODES_TOTAL -gt 0 ]]; then
-    SECONDARY_NODES_READY=$(oc --context="$SECONDARY_CONTEXT" get nodes --no-headers 2>/dev/null | grep -c " Ready" || true)
-    if [[ $SECONDARY_NODES_READY -eq $SECONDARY_NODES_TOTAL ]]; then
-        check_pass "Secondary hub: All $SECONDARY_NODES_TOTAL node(s) are Ready"
-    else
-        NOT_READY=$((SECONDARY_NODES_TOTAL - SECONDARY_NODES_READY))
-        check_fail "Secondary hub: $NOT_READY of $SECONDARY_NODES_TOTAL node(s) are not Ready"
-    fi
-else
-    check_fail "Secondary hub: Could not retrieve nodes (insufficient permissions or cluster issue)"
-fi
+check_nodes "$SECONDARY_CONTEXT" "Secondary hub"
 
 # Check primary hub ClusterOperators (OpenShift specific)
-PRIMARY_CO_OUTPUT=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators --no-headers 2>/dev/null || true)
-if [[ -n "$PRIMARY_CO_OUTPUT" ]]; then
-    PRIMARY_CO_TOTAL=$(echo "$PRIMARY_CO_OUTPUT" | wc -l)
-    # ClusterOperators are healthy if Available=True, Progressing=False, Degraded=False
-    PRIMARY_CO_DEGRADED=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
-        jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' | wc -l || true)
-    PRIMARY_CO_UNAVAILABLE=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
-        jq -r '.items[] | select(.status.conditions[]? | select(.type=="Available" and .status=="False")) | .metadata.name' | wc -l || true)
-    
-    if [[ $PRIMARY_CO_DEGRADED -eq 0 ]] && [[ $PRIMARY_CO_UNAVAILABLE -eq 0 ]]; then
-        check_pass "Primary hub: All $PRIMARY_CO_TOTAL ClusterOperator(s) are healthy"
-    else
-        UNHEALTHY=$((PRIMARY_CO_DEGRADED + PRIMARY_CO_UNAVAILABLE))
-        check_fail "Primary hub: $UNHEALTHY ClusterOperator(s) are degraded or unavailable"
-        # Show which operators are unhealthy
-        DEGRADED_LIST=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
-            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' || true)
-        if [[ -n "$DEGRADED_LIST" ]]; then
-            echo -e "${RED}       Degraded operators: $(echo $DEGRADED_LIST | tr '\n' ' ')${NC}"
+# Cache JSON output to avoid multiple API calls
+PRIMARY_CO_JSON=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators -o json 2>/dev/null || true)
+if [[ -n "$PRIMARY_CO_JSON" ]]; then
+    PRIMARY_CO_OUTPUT=$(echo "$PRIMARY_CO_JSON" | jq -r '.items[] | .metadata.name' 2>/dev/null || true)
+    if [[ -n "$PRIMARY_CO_OUTPUT" ]]; then
+        PRIMARY_CO_TOTAL=$(echo "$PRIMARY_CO_OUTPUT" | wc -l)
+        # ClusterOperators are healthy if Available=True, Progressing=False, Degraded=False
+        PRIMARY_CO_DEGRADED=$(echo "$PRIMARY_CO_JSON" | \
+            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' 2>/dev/null | wc -l || true)
+        PRIMARY_CO_UNAVAILABLE=$(echo "$PRIMARY_CO_JSON" | \
+            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Available" and .status=="False")) | .metadata.name' 2>/dev/null | wc -l || true)
+        
+        if [[ $PRIMARY_CO_DEGRADED -eq 0 ]] && [[ $PRIMARY_CO_UNAVAILABLE -eq 0 ]]; then
+            check_pass "Primary hub: All $PRIMARY_CO_TOTAL ClusterOperator(s) are healthy"
+        else
+            UNHEALTHY=$((PRIMARY_CO_DEGRADED + PRIMARY_CO_UNAVAILABLE))
+            check_fail "Primary hub: $UNHEALTHY ClusterOperator(s) are degraded or unavailable"
+            # Show which operators are unhealthy
+            DEGRADED_LIST=$(echo "$PRIMARY_CO_JSON" | \
+                jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' 2>/dev/null || true)
+            if [[ -n "$DEGRADED_LIST" ]]; then
+                echo -e "${RED}       Degraded operators: $(echo "$DEGRADED_LIST" | tr '\n' ' ')${NC}"
+            fi
         fi
+    else
+        check_pass "Primary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
     fi
 else
     check_pass "Primary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
 fi
 
 # Check secondary hub ClusterOperators (OpenShift specific)
-SECONDARY_CO_OUTPUT=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators --no-headers 2>/dev/null || true)
-if [[ -n "$SECONDARY_CO_OUTPUT" ]]; then
-    SECONDARY_CO_TOTAL=$(echo "$SECONDARY_CO_OUTPUT" | wc -l)
-    SECONDARY_CO_DEGRADED=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
-        jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' | wc -l || true)
-    SECONDARY_CO_UNAVAILABLE=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
-        jq -r '.items[] | select(.status.conditions[]? | select(.type=="Available" and .status=="False")) | .metadata.name' | wc -l || true)
-    
-    if [[ $SECONDARY_CO_DEGRADED -eq 0 ]] && [[ $SECONDARY_CO_UNAVAILABLE -eq 0 ]]; then
-        check_pass "Secondary hub: All $SECONDARY_CO_TOTAL ClusterOperator(s) are healthy"
-    else
-        UNHEALTHY=$((SECONDARY_CO_DEGRADED + SECONDARY_CO_UNAVAILABLE))
-        check_fail "Secondary hub: $UNHEALTHY ClusterOperator(s) are degraded or unavailable"
-        DEGRADED_LIST=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators -o json 2>/dev/null | \
-            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' || true)
-        if [[ -n "$DEGRADED_LIST" ]]; then
-            echo -e "${RED}       Degraded operators: $(echo $DEGRADED_LIST | tr '\n' ' ')${NC}"
+# Cache JSON output to avoid multiple API calls
+SECONDARY_CO_JSON=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators -o json 2>/dev/null || true)
+if [[ -n "$SECONDARY_CO_JSON" ]]; then
+    SECONDARY_CO_OUTPUT=$(echo "$SECONDARY_CO_JSON" | jq -r '.items[] | .metadata.name' 2>/dev/null || true)
+    if [[ -n "$SECONDARY_CO_OUTPUT" ]]; then
+        SECONDARY_CO_TOTAL=$(echo "$SECONDARY_CO_OUTPUT" | wc -l)
+        SECONDARY_CO_DEGRADED=$(echo "$SECONDARY_CO_JSON" | \
+            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' 2>/dev/null | wc -l || true)
+        SECONDARY_CO_UNAVAILABLE=$(echo "$SECONDARY_CO_JSON" | \
+            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Available" and .status=="False")) | .metadata.name' 2>/dev/null | wc -l || true)
+        
+        if [[ $SECONDARY_CO_DEGRADED -eq 0 ]] && [[ $SECONDARY_CO_UNAVAILABLE -eq 0 ]]; then
+            check_pass "Secondary hub: All $SECONDARY_CO_TOTAL ClusterOperator(s) are healthy"
+        else
+            UNHEALTHY=$((SECONDARY_CO_DEGRADED + SECONDARY_CO_UNAVAILABLE))
+            check_fail "Secondary hub: $UNHEALTHY ClusterOperator(s) are degraded or unavailable"
+            DEGRADED_LIST=$(echo "$SECONDARY_CO_JSON" | \
+                jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' 2>/dev/null || true)
+            if [[ -n "$DEGRADED_LIST" ]]; then
+                echo -e "${RED}       Degraded operators: $(echo "$DEGRADED_LIST" | tr '\n' ' ')${NC}"
+            fi
         fi
+    else
+        check_pass "Secondary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
     fi
 else
     check_pass "Secondary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
@@ -381,12 +401,12 @@ PRIMARY_CV_OUTPUT=$(oc --context="$PRIMARY_CONTEXT" get clusterversion version -
 if [[ -n "$PRIMARY_CV_OUTPUT" ]]; then
     # Check if cluster is upgrading (Progressing=True means upgrade in progress)
     PRIMARY_UPGRADING=$(echo "$PRIMARY_CV_OUTPUT" | jq -r '.status.conditions[]? | select(.type=="Progressing" and .status=="True") | .message' || true)
-    PRIMARY_VERSION=$(echo "$PRIMARY_CV_OUTPUT" | jq -r '.status.desired.version // "unknown"' || true)
+    PRIMARY_OCP_VERSION=$(echo "$PRIMARY_CV_OUTPUT" | jq -r '.status.desired.version // "unknown"' || true)
     if [[ -n "$PRIMARY_UPGRADING" && "$PRIMARY_UPGRADING" != "null" ]]; then
-        check_fail "Primary hub: Cluster upgrade in progress (version: $PRIMARY_VERSION)"
+        check_fail "Primary hub: Cluster upgrade in progress (version: $PRIMARY_OCP_VERSION)"
         echo -e "${RED}       Message: $PRIMARY_UPGRADING${NC}"
     else
-        check_pass "Primary hub: Cluster is stable (version: $PRIMARY_VERSION, no upgrade in progress)"
+        check_pass "Primary hub: Cluster is stable (version: $PRIMARY_OCP_VERSION, no upgrade in progress)"
     fi
 else
     check_pass "Primary hub: ClusterVersion not available (non-OpenShift cluster or insufficient permissions)"
@@ -396,12 +416,12 @@ fi
 SECONDARY_CV_OUTPUT=$(oc --context="$SECONDARY_CONTEXT" get clusterversion version -o json 2>/dev/null || true)
 if [[ -n "$SECONDARY_CV_OUTPUT" ]]; then
     SECONDARY_UPGRADING=$(echo "$SECONDARY_CV_OUTPUT" | jq -r '.status.conditions[]? | select(.type=="Progressing" and .status=="True") | .message' || true)
-    SECONDARY_VERSION=$(echo "$SECONDARY_CV_OUTPUT" | jq -r '.status.desired.version // "unknown"' || true)
+    SECONDARY_OCP_VERSION=$(echo "$SECONDARY_CV_OUTPUT" | jq -r '.status.desired.version // "unknown"' || true)
     if [[ -n "$SECONDARY_UPGRADING" && "$SECONDARY_UPGRADING" != "null" ]]; then
-        check_fail "Secondary hub: Cluster upgrade in progress (version: $SECONDARY_VERSION)"
+        check_fail "Secondary hub: Cluster upgrade in progress (version: $SECONDARY_OCP_VERSION)"
         echo -e "${RED}       Message: $SECONDARY_UPGRADING${NC}"
     else
-        check_pass "Secondary hub: Cluster is stable (version: $SECONDARY_VERSION, no upgrade in progress)"
+        check_pass "Secondary hub: Cluster is stable (version: $SECONDARY_OCP_VERSION, no upgrade in progress)"
     fi
 else
     check_pass "Secondary hub: ClusterVersion not available (non-OpenShift cluster or insufficient permissions)"
@@ -525,6 +545,13 @@ section_header "10. Checking BackupSchedule useManagedServiceAccount (CRITICAL)"
 
 BACKUP_SCHEDULE=$(oc --context="$PRIMARY_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null)
 if [[ -n "$BACKUP_SCHEDULE" ]] && echo "$BACKUP_SCHEDULE" | jq -e '.items[0]' &>/dev/null; then
+    SCHEDULE_COUNT=$(echo "$BACKUP_SCHEDULE" | jq -r '.items | length' 2>/dev/null || echo "0")
+    
+    # Note: SCHEDULE_COUNT >= 1 is guaranteed by the jq -e '.items[0]' check above
+    if [[ $SCHEDULE_COUNT -gt 1 ]]; then
+        check_warn "Found $SCHEDULE_COUNT BackupSchedules - will check first one only"
+    fi
+    
     SCHEDULE_NAME=$(echo "$BACKUP_SCHEDULE" | jq -r '.items[0].metadata.name')
     USE_MSA=$(echo "$BACKUP_SCHEDULE" | jq -r '.items[0].spec.useManagedServiceAccount // false')
     
@@ -676,7 +703,7 @@ fi
 section_header "15. Checking Auto-Import Strategy (ACM 2.14+ only)"
 
 # Check primary hub
-if is_acm_214_or_higher "$PRIMARY_VERSION"; then
+if is_acm_214_or_higher "$ACM_PRIMARY_VERSION"; then
     PRIMARY_STRATEGY=$(get_auto_import_strategy "$PRIMARY_CONTEXT")
     if [[ "$PRIMARY_STRATEGY" == "error" ]]; then
         check_fail "Primary hub: Could not retrieve autoImportStrategy (connection or API error)"
@@ -690,11 +717,11 @@ if is_acm_214_or_higher "$PRIMARY_VERSION"; then
         echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
     fi
 else
-    check_pass "Primary hub: ACM $PRIMARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
+    check_pass "Primary hub: ACM $ACM_PRIMARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
 fi
 
 # Check secondary hub
-if is_acm_214_or_higher "$SECONDARY_VERSION"; then
+if is_acm_214_or_higher "$ACM_SECONDARY_VERSION"; then
     SECONDARY_STRATEGY=$(get_auto_import_strategy "$SECONDARY_CONTEXT")
     if [[ "$SECONDARY_STRATEGY" == "error" ]]; then
         check_fail "Secondary hub: Could not retrieve autoImportStrategy (connection or API error)"
@@ -720,7 +747,7 @@ if is_acm_214_or_higher "$SECONDARY_VERSION"; then
         echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
     fi
 else
-    check_pass "Secondary hub: ACM $SECONDARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
+    check_pass "Secondary hub: ACM $ACM_SECONDARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
 fi
 
 # Summary and exit

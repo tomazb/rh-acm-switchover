@@ -316,6 +316,8 @@ oc get managedcluster.cluster.open-cluster-management.io \
 
 Stop the Thanos compactor to prevent write conflicts on shared object storage while the secondary hub is being activated.
 
+> **Defaults (RHACM 2.3–2.14):** `observability-thanos-compact` runs as a StatefulSet with **1** replica by default, and `observability-observatorium-api` runs as a Deployment with **2** replicas for high availability.
+
 ```bash
 oc scale statefulset observability-thanos-compact \
   -n open-cluster-management-observability --replicas=0

@@ -211,11 +211,12 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 6. **DataProtectionApplication** - Verifies DPA is configured and reconciled
 7. **BackupStorageLocation** - Validates BSL is in "Available" phase (storage accessible)
 8. **Cluster Health** - Comprehensive cluster health validation per runbook requirements:
-   - Verifies all nodes are in Ready state
-   - Checks ClusterOperators are healthy (Available=True, Degraded=False)
+   - Verifies all nodes are in Ready state (optimized: uses single JSON API call per hub)
+   - Checks ClusterOperators are healthy (Available=True, Degraded=False) with cached JSON output
    - Validates no cluster upgrade is in progress (ClusterVersion Progressing=False)
    - Displays current cluster version
 9. **Backup Status** - Confirms latest backup completed, no in-progress backups
+   - Warns if multiple BackupSchedules are detected (checks first one only)
 10. **ClusterDeployment Safety** - **CRITICAL:** Verifies `preserveOnDelete=true` on ALL ClusterDeployments
 11. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
 12. **Observability** - If observability is installed on the primary:

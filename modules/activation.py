@@ -281,8 +281,22 @@ class SecondaryActivation:
             logger.info("Patched %s to activate managed clusters", restore_name)
             return
 
+        # Verify patch was applied correctly
+        self._verify_patch_applied(restore_name, restore_before)
+
+    def _verify_patch_applied(self, restore_name: str, restore_before: Dict) -> None:
+        """Verify that a patch was applied correctly by checking resourceVersion changes.
+
+        Args:
+            restore_name: Name of the restore resource
+            restore_before: Restore resource state before patching (for resourceVersion comparison)
+        """
         # Get resourceVersion from before patch for comparison
         before_resource_version = restore_before.get("metadata", {}).get("resourceVersion", "")
+
+        # Track whether we've seen version changes and correct values
+        seen_version_change = False
+        correct_value_seen = False
 
         # Verify patch with retry loop and resourceVersion comparison
         # This handles API sync delays more robustly than a single sleep
@@ -316,7 +330,9 @@ class SecondaryActivation:
 
             # Check if resourceVersion changed (patch was processed)
             if after_resource_version != before_resource_version:
+                seen_version_change = True
                 if after_mc_backup == VELERO_BACKUP_LATEST:
+                    correct_value_seen = True
                     logger.info(
                         "AFTER PATCH (re-read): %s = %s",
                         SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
@@ -350,15 +366,27 @@ class SecondaryActivation:
                     PATCH_VERIFY_MAX_RETRIES,
                 )
 
-        # Exhausted retries without seeing resourceVersion change
-        logger.error(
-            "PATCH VERIFICATION FAILED: resourceVersion did not change after %d attempts",
-            PATCH_VERIFY_MAX_RETRIES,
-        )
-        raise FatalError(
-            f"Patch verification failed: resourceVersion remained {before_resource_version} after "
-            f"{PATCH_VERIFY_MAX_RETRIES} retries. The API may not have processed the patch."
-        )
+        # Exhausted retries - check what happened
+        if not seen_version_change:
+            # Version never changed - likely API caching issue
+            logger.error(
+                "PATCH VERIFICATION FAILED: resourceVersion never changed after %d attempts (API may be returning cached responses)",
+                PATCH_VERIFY_MAX_RETRIES,
+            )
+            raise FatalError(
+                f"Patch verification failed: resourceVersion remained {before_resource_version} after "
+                f"{PATCH_VERIFY_MAX_RETRIES} retries. The API may be returning cached responses and not processing the patch."
+            )
+        else:
+            # Version changed but we didn't see correct value (shouldn't happen with current logic)
+            logger.error(
+                "PATCH VERIFICATION FAILED: resourceVersion changed but correct value not verified after %d attempts",
+                PATCH_VERIFY_MAX_RETRIES,
+            )
+            raise FatalError(
+                f"Patch verification failed: resourceVersion changed but {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME} "
+                f"was not verified as '{VELERO_BACKUP_LATEST}' after {PATCH_VERIFY_MAX_RETRIES} retries."
+            )
 
     def _maybe_set_auto_import_strategy(self) -> None:
         """If requested, set ImportAndSync on secondary for ACM 2.14+ with existing clusters."""

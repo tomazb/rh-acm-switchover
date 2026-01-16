@@ -628,7 +628,7 @@ def _fix_backup_schedule_collision(self, schedule_name: str) -> None:
 
 **Severity:** MEDIUM
 
-**Status:** OPEN
+**Status:** RESOLVED
 
 **Description:**
 Each `mark_step_completed`, `set_config`, and `add_error` call immediately writes the entire state file to disk. In phases with many steps (e.g., preflight validation with many checks), this results in excessive I/O operations slowing down execution.
@@ -694,6 +694,16 @@ class StateManager:
 ```
 
 Then modify phase handlers to call `save_state()` at end of phase or `flush_state()` at critical points.
+
+**Implementation Notes:**
+- Implemented dirty state tracking with `_dirty` flag
+- Added `save_state()` for conditional writes (only if dirty)
+- Added `flush_state()` for critical checkpoints (phase transitions, errors, resets)
+- Registered signal handlers (SIGTERM/SIGINT) to flush state on termination
+- Registered atexit handlers for cleanup and final state flush
+- Critical operations (`set_phase()`, `add_error()`, `reset()`, `ensure_contexts()`) automatically call `flush_state()`
+- Non-critical operations (`mark_step_completed()`, `set_config()`) mark state as dirty
+- State is automatically flushed on program exit to prevent data loss
 
 **Testing:**
 - Measure execution time before/after change
