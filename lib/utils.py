@@ -105,6 +105,7 @@ class StateManager:
         self._dirty = False  # Track if state has pending writes
         self._active_temp_files: set[str] = set()  # Track active temp files for cleanup
         self._flushing = False  # Track if we're currently flushing to avoid double-write
+        self._previous_signal_handlers: Dict[int, Any] = {}
         # Register atexit handlers to flush pending state and clean up temp files on program exit
         atexit.register(self._flush_on_exit)
         atexit.register(self._cleanup_temp_files)
@@ -114,8 +115,9 @@ class StateManager:
         def signal_handler(signum: int, frame: Any) -> None:
             self._flush_on_signal(signum, frame)
 
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self._previous_signal_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, signal_handler)
         self.state = self._load_state()
 
     def _load_state(self) -> Dict[str, Any]:
@@ -336,6 +338,18 @@ class StateManager:
                 pass
             finally:
                 self._flushing = False
+        self._forward_signal(signum, frame)
+
+    def _forward_signal(self, signum: int, frame: Any) -> None:
+        """Invoke the previous signal handler or restore default behavior."""
+        previous = self._previous_signal_handlers.get(signum, signal.SIG_DFL)
+        if previous is signal.SIG_IGN:
+            return
+        if callable(previous):
+            previous(signum, frame)
+            return
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
     def _flush_on_exit(self) -> None:
         """Flush pending state changes on program exit (atexit handler)."""
