@@ -164,6 +164,30 @@ case "$*" in
         echo "worker-0   Ready   worker          10d   v1.28.0"
         exit 0
         ;;
+    *"--context=primary-ok get nodes"*"-o json"*)
+        # JSON output for nodes - all Ready
+        cat << 'NODES_JSON'
+{"items":[
+  {"metadata":{"name":"master-0"},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+  {"metadata":{"name":"master-1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+  {"metadata":{"name":"master-2"},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+  {"metadata":{"name":"worker-0"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
+]}
+NODES_JSON
+        exit 0
+        ;;
+    *"--context=secondary-ok get nodes"*"-o json"*)
+        # JSON output for nodes - all Ready
+        cat << 'NODES_JSON'
+{"items":[
+  {"metadata":{"name":"master-0"},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+  {"metadata":{"name":"master-1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+  {"metadata":{"name":"master-2"},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+  {"metadata":{"name":"worker-0"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
+]}
+NODES_JSON
+        exit 0
+        ;;
     "--context=primary-ok get clusteroperators --no-headers")
         echo "authentication                      True   False   False   10d"
         echo "console                             True   False   False   10d"
