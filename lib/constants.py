@@ -1,5 +1,7 @@
 """Centralized constants for ACM switchover."""
 
+import os
+
 # Exit codes
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
@@ -38,8 +40,19 @@ SECRET_VISIBILITY_INTERVAL = 1
 # Parallel cluster verification settings
 CLUSTER_VERIFY_MAX_WORKERS = 10
 
-# Maximum kubeconfig file size (10MB) to prevent memory exhaustion
-MAX_KUBECONFIG_SIZE = 10 * 1024 * 1024
+# Maximum kubeconfig file size (10MB default) to prevent memory exhaustion
+# Can be overridden via ACM_KUBECONFIG_MAX_SIZE environment variable (bytes)
+# Set to 0 or negative to disable size checking
+_DEFAULT_KUBECONFIG_SIZE = 10 * 1024 * 1024  # 10MB
+try:
+    _env_size = os.environ.get("ACM_KUBECONFIG_MAX_SIZE")
+    if _env_size is not None:
+        MAX_KUBECONFIG_SIZE = int(_env_size)
+    else:
+        MAX_KUBECONFIG_SIZE = _DEFAULT_KUBECONFIG_SIZE
+except (ValueError, TypeError):
+    # Invalid value in environment variable, use default
+    MAX_KUBECONFIG_SIZE = _DEFAULT_KUBECONFIG_SIZE
 
 # Namespaces
 BACKUP_NAMESPACE = "open-cluster-management-backup"
