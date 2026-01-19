@@ -71,6 +71,22 @@ class TestPostActivationVerification:
         assert verify.state == mock_state_manager
         assert verify.has_observability is True
 
+    def test_klusterlet_verification_bypasses_kubeconfig_size_limit(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Klusterlet verification should bypass kubeconfig size limits."""
+        verify = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+        )
+
+        with patch.object(verify, "_get_hub_api_server", return_value="https://new-hub"):
+            with patch.object(verify, "_load_kubeconfig_data", return_value={}) as mock_load:
+                verify._verify_klusterlet_connections()
+
+        mock_load.assert_called_with(max_size=0)
+
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_success_with_observability(
         self, mock_wait, post_verify_with_obs, mock_secondary_client, mock_state_manager
