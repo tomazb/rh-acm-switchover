@@ -1116,18 +1116,26 @@ class PostActivationVerification:
                     raise
 
             # Decode and parse kubeconfig from secret
-            secret_kubeconfig = secret.data.get("kubeconfig", "")
+            secret_kubeconfig = (secret.data or {}).get("kubeconfig", "")
             if not secret_kubeconfig:
                 return "unreachable"
 
             kubeconfig_yaml = base64.b64decode(secret_kubeconfig).decode("utf-8")
 
-            # Extract server URL from kubeconfig
-            server_match = re.search(r"server:\s*(https://[^\s]+)", kubeconfig_yaml)
-            if not server_match:
+            # Extract server URL from kubeconfig using proper YAML parsing
+            try:
+                kubeconfig_data = yaml.safe_load(kubeconfig_yaml)
+                if not kubeconfig_data:
+                    return "unreachable"
+                # Server URL is in clusters[0].cluster.server
+                clusters = kubeconfig_data.get("clusters", [])
+                if not clusters:
+                    return "unreachable"
+                klusterlet_hub = clusters[0].get("cluster", {}).get("server", "")
+                if not klusterlet_hub:
+                    return "unreachable"
+            except yaml.YAMLError:
                 return "unreachable"
-
-            klusterlet_hub = server_match.group(1)
 
             # Compare hostnames (ignore port differences)
             expected_host = re.sub(r"https://([^:/]+).*", r"\1", expected_hub)
@@ -1145,6 +1153,6 @@ class PostActivationVerification:
         except config.ConfigException:
             # Context doesn't exist
             return "unreachable"
-        except (ApiException, config.ConfigException, Exception) as e:
+        except Exception as e:
             logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
             return "unreachable"
