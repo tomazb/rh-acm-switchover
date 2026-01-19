@@ -253,7 +253,8 @@ class StateManager:
         """Mark a step as completed."""
         if not self.is_step_completed(step_name):
             self.state["completed_steps"].append({"name": step_name, "timestamp": _utc_timestamp()})
-            self._dirty = True  # Mark as dirty, don't write immediately
+            self._dirty = True
+            self.save_state()
 
     def is_step_completed(self, step_name: str) -> bool:
         """Check if a step was already completed."""
@@ -261,8 +262,11 @@ class StateManager:
 
     def set_config(self, key: str, value: Any) -> None:
         """Store configuration value."""
+        if self.state["config"].get(key) == value:
+            return
         self.state["config"][key] = value
-        self._dirty = True  # Mark as dirty, don't write immediately
+        self._dirty = True
+        self.save_state()
 
     def get_config(self, key: str, default: Any = None) -> Any:
         """Retrieve configuration value."""

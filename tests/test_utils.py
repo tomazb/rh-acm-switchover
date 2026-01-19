@@ -80,6 +80,16 @@ class TestStateManager:
         assert completed[0]["name"] == "step1"
         assert "timestamp" in completed[0]
 
+    def test_mark_step_completed_persists_immediately(self, tmp_path):
+        """Completed steps should be persisted without explicit save_state."""
+        state_path = tmp_path / "state-step.json"
+        sm = StateManager(str(state_path))
+
+        sm.mark_step_completed("step1")
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.is_step_completed("step1") is True
+
     def test_set_get_config(self, state_manager):
         """Test configuration storage."""
         state_manager.set_config("acm_version", "2.12.0")
@@ -88,6 +98,16 @@ class TestStateManager:
 
         # Test with default
         assert state_manager.get_config("missing", "default") == "default"
+
+    def test_set_config_persists_immediately(self, tmp_path):
+        """Config updates should be persisted without explicit save_state."""
+        state_path = tmp_path / "state-config.json"
+        sm = StateManager(str(state_path))
+
+        sm.set_config("key", "value")
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_config("key") == "value"
 
     def test_add_error(self, state_manager):
         """Test error recording."""
