@@ -11,7 +11,7 @@ import signal
 import stat
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Optional, Set, Tuple, TypeVar
 
 # File locking is best-effort; fcntl isn't available on Windows.
 try:
@@ -103,7 +103,7 @@ class StateManager:
     def __init__(self, state_file: str = ".state/switchover-state.json"):
         self.state_file = state_file
         self._dirty = False  # Track if state has pending writes
-        self._active_temp_files: set[str] = set()  # Track active temp files for cleanup
+        self._active_temp_files: Set[str] = set()  # Track active temp files for cleanup
         self._flushing = False  # Track if we're currently flushing to avoid double-write
         self._previous_signal_handlers: Dict[int, Any] = {}
         # Register atexit handlers to flush pending state and clean up temp files on program exit
@@ -116,8 +116,13 @@ class StateManager:
             self._flush_on_signal(signum, frame)
 
         for sig in (signal.SIGTERM, signal.SIGINT):
-            self._previous_signal_handlers[sig] = signal.getsignal(sig)
-            signal.signal(sig, signal_handler)
+            try:
+                self._previous_signal_handlers[sig] = signal.getsignal(sig)
+                signal.signal(sig, signal_handler)
+            except ValueError:
+                # signal.signal() raises ValueError when called from non-main thread
+                # This is expected in test environments or when StateManager is used in workers
+                logging.debug("Cannot register signal handler for %s (not in main thread)", sig)
         self.state = self._load_state()
 
     def _load_state(self) -> Dict[str, Any]:
@@ -219,15 +224,25 @@ class StateManager:
     def save_state(self) -> None:
         """Persist current state to disk if dirty."""
         if self._dirty and not self._flushing:
-            self.state["last_updated"] = _utc_timestamp()
-            self._write_state(self.state)
-            self._dirty = False
+            try:
+                self._flushing = True
+                self.state["last_updated"] = _utc_timestamp()
+                self._write_state(self.state)
+                self._dirty = False
+            finally:
+                self._flushing = False
 
     def flush_state(self) -> None:
         """Force immediate write of state to disk (for critical checkpoints)."""
-        self.state["last_updated"] = _utc_timestamp()
-        self._write_state(self.state)
-        self._dirty = False
+        if self._flushing:
+            return
+        try:
+            self._flushing = True
+            self.state["last_updated"] = _utc_timestamp()
+            self._write_state(self.state)
+            self._dirty = False
+        finally:
+            self._flushing = False
 
     def set_phase(self, phase: Phase) -> None:
         """Update current phase."""
@@ -332,10 +347,11 @@ class StateManager:
                 self.state["last_updated"] = _utc_timestamp()
                 self._write_state(self.state)
                 self._dirty = False
-            except Exception:
-                # Silently ignore errors during signal handling - we don't want to raise
-                # exceptions in signal handlers as they can mask the real exit reason
-                pass
+            except Exception as e:
+                # Log to stderr for visibility but don't raise - signal handlers
+                # shouldn't raise exceptions as they can mask the real exit reason
+                import sys
+                print(f"Error flushing state on signal: {e}", file=sys.stderr)
             finally:
                 self._flushing = False
         self._forward_signal(signum, frame)
@@ -359,10 +375,11 @@ class StateManager:
                 self.state["last_updated"] = _utc_timestamp()
                 self._write_state(self.state)
                 self._dirty = False
-            except Exception:
-                # Silently ignore errors during exit - we don't want to raise exceptions
-                # in atexit handlers as they can mask the real exit reason
-                pass
+            except Exception as e:
+                # Log to stderr for visibility but don't raise - atexit handlers
+                # shouldn't raise exceptions as they can mask the real exit reason
+                import sys
+                print(f"Error flushing state on exit: {e}", file=sys.stderr)
             finally:
                 self._flushing = False
 
