@@ -4,6 +4,16 @@
 
 This is a Python CLI tool for automating Red Hat Advanced Cluster Management (ACM) hub switchover. It orchestrates a phased workflow to migrate from a primary ACM hub to a secondary hub with idempotent execution and comprehensive validation.
 
+## Engineering Principles
+
+- **DRY**: Avoid duplication in code, tests, and documentation; prefer shared helpers or utilities where it makes sense.
+- **KISS**: Prefer simple, straightforward solutions over clever or overly abstract designs.
+- **YAGNI**: Do not add speculative features or abstractions until they are clearly needed.
+- **Fail fast with clear errors**: Detect problems early and surface explicit, actionable error messages.
+- **Prefer explicit over implicit**: Make control flow, side effects, and configuration obvious at call sites.
+- **Keep changes minimal and localized**: Touch as few files and code paths as possible to implement a change.
+- **Respect existing patterns and abstractions**: Align with current architecture and style unless there is a strong reason to refactor.
+
 ## Architecture
 
 **Entry Point**: `acm_switchover.py` - Main orchestrator using `Phase` enum and `StateManager`
