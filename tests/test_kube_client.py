@@ -4,6 +4,7 @@ Modernized pytest tests with fixtures, markers, and parameterization.
 Tests cover KubeClient initialization, CRUD operations, and dry-run mode.
 """
 
+import errno
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -592,3 +593,31 @@ class TestIsRetryableError:
     def test_400_is_not_retryable(self):
         """400 Bad Request is not retryable."""
         assert is_retryable_error(ApiException(status=400)) is False
+
+    def test_network_oserror_is_retryable(self):
+        """Network-related OSError with specific errno values are retryable."""
+        # Core errno values that exist on all platforms
+        assert is_retryable_error(OSError(errno.ECONNREFUSED, "Connection refused")) is True
+        assert is_retryable_error(OSError(errno.ECONNRESET, "Connection reset")) is True
+        assert is_retryable_error(OSError(errno.ETIMEDOUT, "Connection timed out")) is True
+        assert is_retryable_error(OSError(errno.ENETUNREACH, "Network unreachable")) is True
+        assert is_retryable_error(OSError(errno.EAGAIN, "Resource temporarily unavailable")) is True
+
+        # Platform-specific errno values (use getattr to handle cross-platform)
+        econnaborted = getattr(errno, "ECONNABORTED", None)
+        if econnaborted is not None:
+            assert is_retryable_error(OSError(econnaborted, "Connection aborted")) is True
+
+        ehostunreach = getattr(errno, "EHOSTUNREACH", None)
+        if ehostunreach is not None:
+            assert is_retryable_error(OSError(ehostunreach, "No route to host")) is True
+
+        ewouldblock = getattr(errno, "EWOULDBLOCK", None)
+        if ewouldblock is not None:
+            assert is_retryable_error(OSError(ewouldblock, "Operation would block")) is True
+
+    def test_file_oserror_is_not_retryable(self):
+        """File-related OSError (not network) should not be retryable."""
+        assert is_retryable_error(OSError(errno.ENOENT, "No such file")) is False
+        assert is_retryable_error(OSError(errno.EACCES, "Permission denied")) is False
+        assert is_retryable_error(OSError(errno.EEXIST, "File exists")) is False

@@ -8,6 +8,7 @@ names, namespaces, and other parameters to improve security and reliability.
 import errno
 import functools
 import logging
+import socket
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -36,8 +37,6 @@ def is_retryable_error(exception: BaseException) -> bool:
     - Network-related errors (connection failures, timeouts)
     - urllib3 errors (HTTPError, MaxRetryError, NewConnectionError, TimeoutError)
     """
-    import socket
-
     if isinstance(exception, ApiException):
         # Retry on server errors (5xx) and too many requests (429)
         return 500 <= exception.status < 600 or exception.status == 429
@@ -51,16 +50,20 @@ def is_retryable_error(exception: BaseException) -> bool:
     if isinstance(exception, socket.timeout):
         return True
     # OSError with network-related errno values (avoid retrying file/permission errors)
-    if isinstance(exception, OSError) and exception.errno in (
+    # Use getattr for errno constants that may not exist on all platforms (e.g., Windows)
+    retryable_errnos = {
         errno.ECONNREFUSED,  # Connection refused
         errno.ECONNRESET,  # Connection reset by peer
-        errno.ECONNABORTED,  # Connection aborted
-        errno.EHOSTUNREACH,  # No route to host
         errno.ENETUNREACH,  # Network is unreachable
         errno.ETIMEDOUT,  # Connection timed out
         errno.EAGAIN,  # Resource temporarily unavailable (may be network-related)
-        errno.EWOULDBLOCK,  # Operation would block (same as EAGAIN on some systems)
-    ):
+    }
+    # Add platform-specific errno constants if available
+    for errno_name in ("ECONNABORTED", "EHOSTUNREACH", "EWOULDBLOCK"):
+        errno_val = getattr(errno, errno_name, None)
+        if errno_val is not None:
+            retryable_errnos.add(errno_val)
+    if isinstance(exception, OSError) and exception.errno in retryable_errnos:
         return True
     return False
 
