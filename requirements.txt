@@ -3,3 +3,4 @@ PyYAML>=6.0
 rich>=13.0.0
 tenacity>=8.2.0
 urllib3>=2.6.3,<3
+pyasn1>=0.6.2
