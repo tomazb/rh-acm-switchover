@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **KISS refactor: `PostActivationVerifier.verify()`**: Decomposed 75-line method into three focused sub-methods (`_verify_cluster_connections()`, `_verify_auto_import_cleanup_step()`, `_verify_observability_full()`) for improved readability and testability.
+
+- **KISS refactor: `Finalization._verify_old_hub_state()`**: Extracted 88-line observability scale-down logic into three helper methods (`_scale_down_old_hub_observability()`, `_wait_for_observability_scale_down()`, `_report_observability_scale_down_status()`) for clearer separation of concerns.
+
 ## [1.4.11] - 2026-01-19
 
 ### Added
