@@ -1131,10 +1131,13 @@ class PostActivationVerification:
                 clusters = kubeconfig_data.get("clusters", [])
                 if not clusters:
                     return "unreachable"
+                # Verify clusters[0] is a dict before accessing it
+                if not isinstance(clusters[0], dict):
+                    return "unreachable"
                 klusterlet_hub = clusters[0].get("cluster", {}).get("server", "")
                 if not klusterlet_hub:
                     return "unreachable"
-            except yaml.YAMLError:
+            except (yaml.YAMLError, AttributeError, TypeError, IndexError):
                 return "unreachable"
 
             # Compare hostnames (ignore port differences)
