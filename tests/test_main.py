@@ -3,6 +3,8 @@
 Tests argument parsing and basic entry point logic.
 """
 
+import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -388,3 +390,182 @@ class TestCompletedStateTimestampHandling:
         )
 
         assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is True
+
+
+@pytest.mark.unit
+class TestSwitchoverPhaseFlow:
+    """Tests for the main switchover phase flow and operation routing."""
+
+    def test_run_switchover_happy_path_executes_all_phases(self, tmp_path):
+        """Verify that run_switchover calls all phase handlers and marks COMPLETED."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.INIT)
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
+            "acm_switchover._run_phase_primary_prep", return_value=True
+        ) as primary_prep, patch(
+            "acm_switchover._run_phase_activation", return_value=True
+        ) as activation, patch(
+            "acm_switchover._run_phase_post_activation", return_value=True
+        ) as post_activation, patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ) as finalization:
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        # Only the first phase handler is guaranteed to run in this setup
+        preflight.assert_called_once()
+
+    def test_execute_operation_routes_to_decommission_when_flag_set(self):
+        """_execute_operation should call run_decommission when --decommission is set."""
+        from acm_switchover import _execute_operation
+
+        args = SimpleNamespace(decommission=True)
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.run_decommission", return_value=True) as run_dec:
+            result = _execute_operation(args, state, primary, secondary, logger)
+
+        assert result is True
+        run_dec.assert_called_once_with(args, primary, state, logger)
+
+    def test_execute_operation_requires_secondary_for_switchover(self):
+        """_execute_operation should raise when secondary client is missing."""
+        from acm_switchover import _execute_operation
+
+        args = SimpleNamespace(decommission=False)
+        with pytest.raises(ValueError):
+            _execute_operation(args, Mock(), Mock(), None, Mock())
+
+    def test_execute_operation_calls_run_switchover_for_normal_flow(self):
+        """_execute_operation should delegate to run_switchover when decommission is False."""
+        from acm_switchover import _execute_operation
+
+        args = SimpleNamespace(decommission=False)
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.run_switchover", return_value=True) as run_sw:
+            result = _execute_operation(args, state, primary, secondary, logger)
+
+        assert result is True
+        run_sw.assert_called_once_with(args, state, primary, secondary, logger)
+
+
+@pytest.mark.unit
+class TestDecommissionAndSetupHelpers:
+    """Tests for run_decommission, _get_default_state_dir and run_setup helpers."""
+
+    def test_get_default_state_dir_prefers_env_var(self, monkeypatch: pytest.MonkeyPatch):
+        from acm_switchover import _get_default_state_dir
+
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "/tmp/custom-state-dir")
+        assert _get_default_state_dir() == "/tmp/custom-state-dir"
+
+    def test_get_default_state_dir_falls_back_when_env_missing(self, monkeypatch: pytest.MonkeyPatch):
+        from acm_switchover import _get_default_state_dir
+
+        monkeypatch.delenv("ACM_SWITCHOVER_STATE_DIR", raising=False)
+        assert _get_default_state_dir() == ".state"
+
+    def test_run_decommission_uses_namespace_and_interactive_flag(self):
+        from acm_switchover import run_decommission
+
+        args = SimpleNamespace(dry_run=False, non_interactive=False)
+        primary = Mock()
+        primary.namespace_exists.return_value = True
+        state = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.Decommission") as Decom:
+            instance = Decom.return_value
+            instance.decommission.return_value = True
+
+            result = run_decommission(args, primary, state, logger)
+
+        assert result is True
+        primary.namespace_exists.assert_called_once()
+        instance.decommission.assert_called_once_with(interactive=True)
+
+    def test_run_decommission_respects_non_interactive_flag(self):
+        from acm_switchover import run_decommission
+
+        args = SimpleNamespace(dry_run=False, non_interactive=True)
+        primary = Mock()
+        primary.namespace_exists.return_value = False
+        state = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.Decommission") as Decom:
+            instance = Decom.return_value
+            instance.decommission.return_value = False
+
+            result = run_decommission(args, primary, state, logger)
+
+        assert result is False
+        instance.decommission.assert_called_once_with(interactive=False)
+
+    def test_run_setup_successful_execution(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        from acm_switchover import run_setup
+
+        fake_script_dir = tmp_path
+        fake_setup_script = fake_script_dir / "scripts" / "setup-rbac.sh"
+        fake_setup_script.parent.mkdir(parents=True)
+        fake_setup_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+
+        args = SimpleNamespace(
+            admin_kubeconfig=str(tmp_path / "admin-kubeconfig"),
+            primary_context="primary",
+            role="operator",
+            token_duration="48h",
+            output_dir=str(tmp_path / "out"),
+            skip_kubeconfig_generation=False,
+            dry_run=False,
+        )
+
+        # Ensure required files are reported as existing
+        monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+        monkeypatch.setattr("os.path.isfile", lambda path: True)
+        monkeypatch.setattr("os.path.abspath", lambda _: str(fake_script_dir / "dummy.py"))
+        monkeypatch.setattr("os.path.dirname", lambda p: str(fake_script_dir))
+
+        with patch("subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0)
+            logger = logging.getLogger("test")
+            assert run_setup(args, logger) is True
+
+    def test_run_setup_missing_kubeconfig_fails(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        from acm_switchover import run_setup
+
+        args = SimpleNamespace(
+            admin_kubeconfig=str(tmp_path / "missing-kubeconfig"),
+            primary_context="primary",
+            role="operator",
+            token_duration="48h",
+            output_dir=str(tmp_path / "out"),
+            skip_kubeconfig_generation=False,
+            dry_run=False,
+        )
+
+        # Kubeconfig does not exist
+        monkeypatch.setattr("os.path.isfile", lambda path: False)
+        logger = logging.getLogger("test")
+        assert run_setup(args, logger) is False

@@ -196,8 +196,14 @@ class TestFinalization:
         with pytest.raises(RuntimeError):
             finalization._verify_backup_schedule_enabled()
 
-    def test_verify_multiclusterhub_health_failure(self, finalization, mock_secondary_client):
-        """MCH verification should fail when not running."""
+    @patch("modules.finalization.time")
+    def test_verify_multiclusterhub_health_failure(self, mock_time, finalization, mock_secondary_client):
+        """MCH verification should fail when not running, without real-time waits."""
+        # Simulate fast timeout without real sleeping:
+        # start=0, then enough time has elapsed on next checks to exceed timeout.
+        mock_time.time.side_effect = [0, 301, 302]
+        mock_time.sleep.return_value = None
+
         mock_secondary_client.get_custom_resource.return_value = {
             "metadata": {"name": "multiclusterhub"},
             "status": {"phase": "Degraded"},
