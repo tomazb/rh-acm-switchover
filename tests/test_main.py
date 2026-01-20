@@ -396,8 +396,8 @@ class TestCompletedStateTimestampHandling:
 class TestSwitchoverPhaseFlow:
     """Tests for the main switchover phase flow and operation routing."""
 
-    def test_run_switchover_happy_path_executes_all_phases(self, tmp_path):
-        """Verify that run_switchover calls all phase handlers and marks COMPLETED."""
+    def test_run_switchover_happy_path_starts_with_preflight_phase(self, tmp_path):
+        """Verify that run_switchover starts by calling the preflight phase handler."""
         from lib.utils import Phase, StateManager
 
         state_file = tmp_path / "state.json"

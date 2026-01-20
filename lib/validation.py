@@ -259,8 +259,6 @@ class InputValidator:
             SecurityValidationError: If path contains unsafe characters or patterns
             ValidationError: If path is empty
         """
-        import os
-
         if not path:
             raise ValidationError(f"{field_name} path cannot be empty")
 
