@@ -25,6 +25,7 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_POD_TIMEOUT,
     OBSERVATORIUM_API_DEPLOYMENT,
+    DISABLE_AUTO_IMPORT_ANNOTATION,
     POD_READINESS_TOLERANCE,
     SECRET_VISIBILITY_INTERVAL,
     SECRET_VISIBILITY_TIMEOUT,
@@ -370,7 +371,7 @@ class PostActivationVerification:
 
         try:
             self.secondary.rollout_restart_deployment(
-                name="observability-observatorium-api",
+                name=OBSERVATORIUM_API_DEPLOYMENT,
                 namespace=OBSERVABILITY_NAMESPACE,
             )
 
@@ -555,7 +556,7 @@ class PostActivationVerification:
                 continue
 
             annotations = mc.get("metadata", {}).get("annotations") or {}
-            if "import.open-cluster-management.io/disable-auto-import" in annotations:
+            if DISABLE_AUTO_IMPORT_ANNOTATION in annotations:
                 flagged.append(mc_name or "unknown")
 
         if flagged:

@@ -95,6 +95,9 @@ AUTO_IMPORT_STRATEGY_KEY = "autoImportStrategy"
 AUTO_IMPORT_STRATEGY_DEFAULT = "ImportOnly"
 AUTO_IMPORT_STRATEGY_SYNC = "ImportAndSync"
 
+# ManagedCluster annotations
+DISABLE_AUTO_IMPORT_ANNOTATION = "import.open-cluster-management.io/disable-auto-import"
+
 # Local cluster name (hub's self-managed cluster, excluded from counts)
 LOCAL_CLUSTER_NAME = "local-cluster"
 

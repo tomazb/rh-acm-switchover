@@ -300,6 +300,7 @@ class TestSecondaryActivation:
             call_count[0] += 1
             if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
                 return {
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
                     "status": {
                         "phase": "Enabled",
                         "veleroManagedClustersRestoreName": "test-velero-mc-restore",

@@ -13,6 +13,7 @@ from lib.constants import (
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
     THANOS_SCALE_DOWN_WAIT,
+    DISABLE_AUTO_IMPORT_ANNOTATION,
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
@@ -171,7 +172,7 @@ class PrimaryPreparation:
 
             # Check if annotation already exists
             annotations = mc.get("metadata", {}).get("annotations", {})
-            if "import.open-cluster-management.io/disable-auto-import" in annotations:
+            if DISABLE_AUTO_IMPORT_ANNOTATION in annotations:
                 logger.debug(
                     "ManagedCluster %s already has disable-auto-import annotation",
                     mc_name,
@@ -179,7 +180,7 @@ class PrimaryPreparation:
                 continue
 
             # Add annotation
-            patch = {"metadata": {"annotations": {"import.open-cluster-management.io/disable-auto-import": ""}}}
+            patch = {"metadata": {"annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: ""}}}
 
             self.primary.patch_managed_cluster(name=mc_name, patch=patch)
 

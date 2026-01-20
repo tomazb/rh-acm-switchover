@@ -5,6 +5,8 @@ from the new modular structure. Existing code using imports from
 this module will continue to work without changes.
 
 DEPRECATED: New code should import directly from modules.preflight.*
+Removal plan: keep this shim through the next minor release, then remove
+once downstream imports are migrated (target removal by 2026-06-30).
 """
 
 import logging

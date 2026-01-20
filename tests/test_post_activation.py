@@ -14,7 +14,11 @@ from kubernetes.client.rest import ApiException
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.post_activation as post_activation_module
-from lib.constants import CLUSTER_VERIFY_INTERVAL, OBSERVABILITY_NAMESPACE
+from lib.constants import (
+    CLUSTER_VERIFY_INTERVAL,
+    DISABLE_AUTO_IMPORT_ANNOTATION,
+    OBSERVABILITY_NAMESPACE,
+)
 from lib.exceptions import SwitchoverError
 
 PostActivationVerification = post_activation_module.PostActivationVerification
@@ -301,7 +305,7 @@ class TestPostActivationVerification:
         post_verify_with_obs._restart_observatorium_api()
 
         mock_secondary_client.rollout_restart_deployment.assert_called_once_with(
-            namespace=OBSERVABILITY_NAMESPACE, name="observability-observatorium-api"
+            namespace=OBSERVABILITY_NAMESPACE, name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT
         )
         mock_secondary_client.get_pods.assert_called()
 
@@ -464,7 +468,7 @@ class TestPostActivationVerification:
             {
                 "metadata": {
                     "name": "cluster1",
-                    "annotations": {"import.open-cluster-management.io/disable-auto-import": ""},
+                    "annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: ""},
                 }
             }
         ]
