@@ -17,6 +17,7 @@ Features:
 """
 
 import logging
+import os
 import re
 from typing import Pattern
 
@@ -287,12 +288,17 @@ class InputValidator:
             if os.path.exists(path):
                 resolved_path = os.path.realpath(path)
             else:
-                # For non-existent paths, resolve the parent directory if it exists
+                # For non-existent paths, require the parent directory to exist
+                # This prevents symlink-based path bypasses via non-existent parent directories
                 parent = os.path.dirname(path)
                 if parent and os.path.exists(parent):
                     resolved_path = os.path.join(os.path.realpath(parent), os.path.basename(path))
                 else:
-                    resolved_path = path
+                    raise SecurityValidationError(
+                        f"SECURITY: Absolute path '{path}' for {field_name} has a non-existent parent directory. "
+                        f"Creating files in non-existent absolute directories is not allowed to prevent symlink-based path bypasses. "
+                        f"Create the parent directory in an allowed location (/tmp, /var, workspace root, or home directory) before using this path."
+                    )
 
             safe_prefixes = ["/tmp/", "/var/"]  # nosec B108 - path validation, not temp file usage
             # Allow paths under current working directory
