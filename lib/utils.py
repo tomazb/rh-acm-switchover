@@ -314,12 +314,15 @@ class StateManager:
             self.state.get("current_phase") not in (None, Phase.INIT.value)
         )
 
+        state_changed = False
+
         if stored_primary is None and stored_secondary is None:
             if has_progress:
                 logging.warning(
                     "Stored state contexts are missing for an in-progress state. Resetting state.",
                 )
                 self.state = self._new_state()
+                state_changed = True
         elif stored_primary != primary_context or stored_secondary != secondary_context:
             logging.warning(
                 "Stored state contexts (%s/%s) differ from current invocation (%s/%s). "
@@ -330,9 +333,14 @@ class StateManager:
                 secondary_context,
             )
             self.state = self._new_state()
+            state_changed = True
 
-        self.state["contexts"] = desired
-        self.flush_state()  # Context changes are critical checkpoints
+        if self.state.get("contexts") != desired:
+            self.state["contexts"] = desired
+            state_changed = True
+
+        if state_changed:
+            self.flush_state()  # Context changes are critical checkpoints
 
     def _flush_on_signal(self, signum: int, frame: Any) -> None:
         """Flush pending state changes on termination signal (signal handler).

@@ -246,48 +246,48 @@ def run_switchover(
     if secondary is None:
         raise ValueError("Secondary client is required for switchover")
 
-    # Check for stale completed state that would cause instant "completion"
+    # Check for stale state file to avoid resuming outdated runs
     current_phase = state.get_current_phase()
-    if current_phase == Phase.COMPLETED:
-        # Handle both 'Z' suffix and explicit timezone offsets
-        try:
-            last_updated_str = state.state.get("last_updated", "")
-            if not last_updated_str:
-                logger.warning("State file missing last_updated timestamp, treating as stale")
-                state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
-            else:
-                if last_updated_str.endswith("Z"):
-                    last_updated_str = last_updated_str[:-1] + "+00:00"
-                state_age = datetime.now(timezone.utc) - datetime.fromisoformat(last_updated_str)
-        except (ValueError, TypeError) as e:
-            logger.warning("Could not parse state timestamp: %s, treating as stale", e)
+    # Handle both 'Z' suffix and explicit timezone offsets
+    try:
+        last_updated_str = state.state.get("last_updated", "")
+        if not last_updated_str:
+            logger.warning("State file missing last_updated timestamp, treating as stale")
             state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
-        if state_age.total_seconds() > STALE_STATE_THRESHOLD:
-            logger.warning("")
-            logger.warning("⚠️  DETECTED STALE STATE FILE")
-            logger.warning(
-                "Switchover appears to be already completed, but state file is %s old.",
-                f"{int(state_age.total_seconds() // 60)} minutes",
-            )
-            logger.warning("A real switchover takes 30-45 minutes, not seconds.")
-            logger.warning("")
-            logger.warning("To start a fresh switchover:")
-            logger.warning("  1. Remove state file: rm %s", state.state_file)
-            logger.warning("  2. Or use: --force to override (use with caution)")
-            logger.warning("")
-            if not getattr(args, "force", False):
-                logger.error("Use --force to proceed with stale state, or remove state file to start fresh.")
-                sys.exit(EXIT_FAILURE)
-            else:
-                # Reset state completely to start fresh switchover
-                # This clears completed_steps so all phase handlers re-execute their work
-                logger.warning("--force used: Resetting state to start fresh switchover")
-                state.reset()
         else:
-            logger.info(
-                "Resuming recently completed switchover (state age: %s)",
-                f"{int(state_age.total_seconds() // 60)} minutes",
-            )
+            if last_updated_str.endswith("Z"):
+                last_updated_str = last_updated_str[:-1] + "+00:00"
+            state_age = datetime.now(timezone.utc) - datetime.fromisoformat(last_updated_str)
+    except (ValueError, TypeError) as e:
+        logger.warning("Could not parse state timestamp: %s, treating as stale", e)
+        state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+
+    if state_age.total_seconds() > STALE_STATE_THRESHOLD:
+        logger.warning("")
+        logger.warning("⚠️  DETECTED STALE STATE FILE")
+        logger.warning(
+            "State file is %s old (current phase: %s).",
+            f"{int(state_age.total_seconds() // 60)} minutes",
+            current_phase.value,
+        )
+        logger.warning("")
+        logger.warning("To start a fresh switchover:")
+        logger.warning("  1. Remove state file: rm %s", state.state_file)
+        logger.warning("  2. Or use: --reset-state")
+        logger.warning("  3. Or use: --force to override (use with caution)")
+        logger.warning("")
+        if not getattr(args, "force", False):
+            logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
+            sys.exit(EXIT_FAILURE)
+        # Reset state completely to start fresh switchover
+        # This clears completed_steps so all phase handlers re-execute their work
+        logger.warning("--force used: Resetting state to start fresh switchover")
+        state.reset()
+    elif current_phase == Phase.COMPLETED:
+        logger.info(
+            "Resuming recently completed switchover (state age: %s)",
+            f"{int(state_age.total_seconds() // 60)} minutes",
+        )
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
