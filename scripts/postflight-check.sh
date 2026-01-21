@@ -386,8 +386,8 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
     # The previous primary must either have no MCO, or (if MCO exists) have key components scaled down.
     if oc --context="$OLD_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
         if oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
-            OLD_COMPACTOR=$(get_running_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=thanos-compact" "$OBS_THANOS_COMPACT_POD")
-            OLD_OBSERVATORIUM_API_PODS=$(get_running_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=observatorium-api" "$OBS_API_POD")
+            OLD_COMPACTOR=$(get_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=thanos-compact" "$OBS_THANOS_COMPACT_POD")
+            OLD_OBSERVATORIUM_API_PODS=$(get_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=observatorium-api" "$OBS_API_POD")
 
             if [[ $OLD_COMPACTOR -eq 0 ]] && [[ $OLD_OBSERVATORIUM_API_PODS -eq 0 ]]; then
                 check_pass "Old hub: MultiClusterObservability present but Thanos compactor and observatorium-api are scaled to 0 (expected)"
