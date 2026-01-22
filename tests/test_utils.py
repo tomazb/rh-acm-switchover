@@ -12,6 +12,7 @@ import pytest
 from lib.utils import (
     Phase,
     StateManager,
+    StepContext,
     dry_run_skip,
     is_acm_version_ge,
     setup_logging,
@@ -247,6 +248,86 @@ class TestStateManager:
 
         assert reloaded.get_current_phase() == Phase.INIT
         assert reloaded.state["completed_steps"] == []
+
+    def test_get_state_age_valid_timestamp(self, state_manager):
+        """Test get_state_age returns timedelta for valid timestamp."""
+        # State was just created, so age should be very small
+        age = state_manager.get_state_age()
+        assert age is not None
+        assert age.total_seconds() < 5  # Should be less than 5 seconds
+
+    def test_get_state_age_with_z_suffix(self, tmp_path):
+        """Test get_state_age handles 'Z' suffix timestamps."""
+        import json
+
+        state_path = tmp_path / "z-suffix.json"
+        # Write state with 'Z' suffix timestamp (some systems produce this)
+        state_data = {
+            "version": "1.0",
+            "current_phase": "init",
+            "completed_steps": [],
+            "config": {},
+            "errors": [],
+            "last_updated": "2026-01-21T12:00:00Z",
+            "contexts": {"primary": None, "secondary": None},
+        }
+        state_path.write_text(json.dumps(state_data))
+
+        sm = StateManager(str(state_path))
+        age = sm.get_state_age()
+
+        assert age is not None
+        # Should be positive (timestamp is in the past)
+        assert age.total_seconds() > 0
+
+    @patch("lib.utils.logging")
+    def test_get_state_age_missing_timestamp(self, mock_logging, tmp_path):
+        """Test get_state_age returns None and logs warning for missing timestamp."""
+        import json
+
+        state_path = tmp_path / "missing-ts.json"
+        state_data = {
+            "version": "1.0",
+            "current_phase": "init",
+            "completed_steps": [],
+            "config": {},
+            "errors": [],
+            "last_updated": "",
+            "contexts": {"primary": None, "secondary": None},
+        }
+        state_path.write_text(json.dumps(state_data))
+
+        sm = StateManager(str(state_path))
+        age = sm.get_state_age()
+
+        assert age is None
+        mock_logging.warning.assert_called_with("State file missing last_updated timestamp")
+
+    @patch("lib.utils.logging")
+    def test_get_state_age_malformed_timestamp(self, mock_logging, tmp_path):
+        """Test get_state_age returns None and logs warning for malformed timestamp."""
+        import json
+
+        state_path = tmp_path / "bad-ts.json"
+        state_data = {
+            "version": "1.0",
+            "current_phase": "init",
+            "completed_steps": [],
+            "config": {},
+            "errors": [],
+            "last_updated": "not-a-timestamp",
+            "contexts": {"primary": None, "secondary": None},
+        }
+        state_path.write_text(json.dumps(state_data))
+
+        sm = StateManager(str(state_path))
+        age = sm.get_state_age()
+
+        assert age is None
+        # Should have logged a warning about parsing failure
+        assert mock_logging.warning.called
+        call_args = mock_logging.warning.call_args[0]
+        assert "Could not parse state timestamp" in call_args[0]
 
 
 @pytest.mark.unit
@@ -641,3 +722,101 @@ class TestConfirmAction:
         with patch("builtins.input", return_value="n") as mock_input:
             confirm_action("Continue?", default=True)
             mock_input.assert_called_once_with("Continue? [Y/n]: ")
+
+
+@pytest.mark.unit
+class TestStepContext:
+    """Test cases for the StepContext context manager."""
+
+    def test_step_runs_when_not_completed(self, state_manager):
+        """Test that step executes when not previously completed."""
+        executed = False
+
+        with state_manager.step("new_step") as should_run:
+            if should_run:
+                executed = True
+
+        assert executed is True
+        assert state_manager.is_step_completed("new_step") is True
+
+    def test_step_skips_when_already_completed(self, state_manager):
+        """Test that step is skipped when already completed."""
+        state_manager.mark_step_completed("existing_step")
+        executed = False
+
+        with state_manager.step("existing_step") as should_run:
+            if should_run:
+                executed = True
+
+        assert executed is False
+        # Still completed
+        assert state_manager.is_step_completed("existing_step") is True
+
+    def test_step_logs_when_skipped(self, state_manager):
+        """Test that skip message is logged when step already completed."""
+        import logging
+
+        state_manager.mark_step_completed("logged_step")
+        mock_logger = MagicMock(spec=logging.Logger)
+
+        with state_manager.step("logged_step", mock_logger) as should_run:
+            pass
+
+        mock_logger.info.assert_called_once_with("Step already completed: %s", "logged_step")
+        assert should_run is False
+
+    def test_step_not_marked_on_exception(self, state_manager):
+        """Test that step is not marked completed if exception occurs."""
+        with pytest.raises(ValueError):
+            with state_manager.step("failing_step") as should_run:
+                if should_run:
+                    raise ValueError("Intentional failure")
+
+        # Step should NOT be marked completed due to exception
+        assert state_manager.is_step_completed("failing_step") is False
+
+    def test_step_persists_completion(self, tmp_path):
+        """Test that step completion is persisted to disk."""
+        state_path = tmp_path / "step-persist.json"
+        sm = StateManager(str(state_path))
+
+        with sm.step("persisted_step") as should_run:
+            if should_run:
+                pass  # Do work
+
+        # Reload and verify
+        reloaded = StateManager(str(state_path))
+        assert reloaded.is_step_completed("persisted_step") is True
+
+    def test_step_without_logger(self, state_manager):
+        """Test that step works without a logger."""
+        state_manager.mark_step_completed("no_logger_step")
+
+        # Should not raise even without logger
+        with state_manager.step("no_logger_step") as should_run:
+            assert should_run is False
+
+    def test_step_multiple_sequential(self, state_manager):
+        """Test multiple sequential steps."""
+        results = []
+
+        with state_manager.step("step_a") as should_run:
+            if should_run:
+                results.append("a")
+
+        with state_manager.step("step_b") as should_run:
+            if should_run:
+                results.append("b")
+
+        with state_manager.step("step_a") as should_run:  # Already done
+            if should_run:
+                results.append("a_again")
+
+        assert results == ["a", "b"]
+        assert state_manager.is_step_completed("step_a") is True
+        assert state_manager.is_step_completed("step_b") is True
+
+    def test_step_context_returns_step_context_instance(self, state_manager):
+        """Test that step() returns a StepContext instance."""
+        ctx = state_manager.step("test_step")
+        assert isinstance(ctx, StepContext)

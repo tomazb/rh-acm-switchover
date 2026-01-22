@@ -187,49 +187,34 @@ class InputValidator:
             )
 
     @staticmethod
-    def validate_cli_method(method: str) -> None:
-        """
-        Validate CLI method argument.
+    def _validate_choice(value: str, valid_choices: list, field_name: str) -> None:
+        """Validate that a value is one of the allowed choices.
 
         Args:
-            method: The method to validate
+            value: The value to validate
+            valid_choices: List of valid choices
+            field_name: Name of the field for error messages
 
         Raises:
-            ValidationError: If method is invalid
+            ValidationError: If value is not in valid_choices
         """
-        valid_methods = ["passive", "full"]
-        if method not in valid_methods:
-            raise ValidationError(f"Invalid method '{method}'. Must be one of: {', '.join(valid_methods)}")
+        if value not in valid_choices:
+            raise ValidationError(f"Invalid {field_name} '{value}'. Must be one of: {', '.join(valid_choices)}")
+
+    @staticmethod
+    def validate_cli_method(method: str) -> None:
+        """Validate CLI method argument."""
+        InputValidator._validate_choice(method, ["passive", "full"], "method")
 
     @staticmethod
     def validate_cli_old_hub_action(action: str) -> None:
-        """
-        Validate CLI old-hub-action argument.
-
-        Args:
-            action: The action to validate
-
-        Raises:
-            ValidationError: If action is invalid
-        """
-        valid_actions = ["secondary", "decommission", "none"]
-        if action not in valid_actions:
-            raise ValidationError(f"Invalid old-hub-action '{action}'. Must be one of: {', '.join(valid_actions)}")
+        """Validate CLI old-hub-action argument."""
+        InputValidator._validate_choice(action, ["secondary", "decommission", "none"], "old-hub-action")
 
     @staticmethod
     def validate_cli_log_format(log_format: str) -> None:
-        """
-        Validate CLI log format argument.
-
-        Args:
-            log_format: The log format to validate
-
-        Raises:
-            ValidationError: If log format is invalid
-        """
-        valid_formats = ["text", "json"]
-        if log_format not in valid_formats:
-            raise ValidationError(f"Invalid log format '{log_format}'. Must be one of: {', '.join(valid_formats)}")
+        """Validate CLI log format argument."""
+        InputValidator._validate_choice(log_format, ["text", "json"], "log format")
 
     @staticmethod
     def validate_non_empty_string(value: str, field_name: str) -> None:

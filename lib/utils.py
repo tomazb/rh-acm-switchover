@@ -9,7 +9,7 @@ import logging
 import os
 import signal
 import stat
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Set, Tuple, TypeVar
 
@@ -221,28 +221,43 @@ class StateManager:
                     pass
                 lock_handle.close()
 
-    def save_state(self) -> None:
-        """Persist current state to disk if dirty."""
-        if self._dirty and not self._flushing:
-            try:
-                self._flushing = True
-                self.state["last_updated"] = _utc_timestamp()
-                self._write_state(self.state)
-                self._dirty = False
-            finally:
-                self._flushing = False
+    def _do_flush(self, force: bool = False, suppress_errors: bool = False) -> bool:
+        """Core flush logic shared by all flush methods.
 
-    def flush_state(self) -> None:
-        """Force immediate write of state to disk (for critical checkpoints)."""
+        Args:
+            force: If True, write even if not dirty. If False, only write when dirty.
+            suppress_errors: If True, catch exceptions and print to stderr instead of raising.
+
+        Returns:
+            True if flush was performed, False if skipped (not dirty or already flushing).
+        """
         if self._flushing:
-            return
+            return False
+        if not force and not self._dirty:
+            return False
+
         try:
             self._flushing = True
             self.state["last_updated"] = _utc_timestamp()
             self._write_state(self.state)
             self._dirty = False
+            return True
+        except Exception as e:
+            if suppress_errors:
+                import sys
+                print(f"Error flushing state: {e}", file=sys.stderr)
+                return False
+            raise
         finally:
             self._flushing = False
+
+    def save_state(self) -> None:
+        """Persist current state to disk if dirty."""
+        self._do_flush(force=False)
+
+    def flush_state(self) -> None:
+        """Force immediate write of state to disk (for critical checkpoints)."""
+        self._do_flush(force=True)
 
     def set_phase(self, phase: Phase) -> None:
         """Update current phase."""
@@ -259,6 +274,32 @@ class StateManager:
     def is_step_completed(self, step_name: str) -> bool:
         """Check if a step was already completed."""
         return any(s["name"] == step_name for s in self.state["completed_steps"])
+
+    def step(self, step_name: str, logger: Optional[logging.Logger] = None) -> "StepContext":
+        """Context manager for idempotent step execution.
+
+        This helper consolidates the common pattern of checking if a step is
+        completed, executing it if not, and marking it completed afterward.
+
+        Usage:
+            with self.state.step("my_step", logger) as should_run:
+                if should_run:
+                    self._do_actual_work()
+
+        The context manager:
+        - Checks if the step is already completed
+        - If completed, logs "Step already completed: {step_name}" and sets should_run=False
+        - If not completed, sets should_run=True and marks the step completed on exit
+        - Only marks the step completed if no exception was raised
+
+        Args:
+            step_name: Unique identifier for the step
+            logger: Optional logger for "already completed" messages
+
+        Returns:
+            StepContext that yields True if step should run, False if already completed
+        """
+        return StepContext(self, step_name, logger)
 
     def set_config(self, key: str, value: Any) -> None:
         """Store configuration value."""
@@ -303,6 +344,27 @@ class StateManager:
             self.flush_state()  # Phase correction is a critical checkpoint
             return Phase.INIT
 
+    def get_state_age(self) -> Optional[timedelta]:
+        """Get the age of the state file based on last_updated timestamp.
+
+        Returns:
+            timedelta if the timestamp was successfully parsed, None if missing or invalid.
+            Logs a warning for missing or unparseable timestamps.
+        """
+        last_updated_str = self.state.get("last_updated", "")
+        if not last_updated_str:
+            logging.warning("State file missing last_updated timestamp")
+            return None
+
+        try:
+            # Handle both 'Z' suffix and explicit timezone offsets
+            if last_updated_str.endswith("Z"):
+                last_updated_str = last_updated_str[:-1] + "+00:00"
+            return datetime.now(timezone.utc) - datetime.fromisoformat(last_updated_str)
+        except (ValueError, TypeError) as e:
+            logging.warning("Could not parse state timestamp: %s", e)
+            return None
+
     def ensure_contexts(self, primary_context: str, secondary_context: Optional[str]) -> None:
         """Ensure stored contexts match the ones provided on the CLI."""
         stored = self.state.get("contexts") or {}
@@ -314,12 +376,15 @@ class StateManager:
             self.state.get("current_phase") not in (None, Phase.INIT.value)
         )
 
+        state_changed = False
+
         if stored_primary is None and stored_secondary is None:
             if has_progress:
                 logging.warning(
                     "Stored state contexts are missing for an in-progress state. Resetting state.",
                 )
                 self.state = self._new_state()
+                state_changed = True
         elif stored_primary != primary_context or stored_secondary != secondary_context:
             logging.warning(
                 "Stored state contexts (%s/%s) differ from current invocation (%s/%s). "
@@ -330,9 +395,14 @@ class StateManager:
                 secondary_context,
             )
             self.state = self._new_state()
+            state_changed = True
 
-        self.state["contexts"] = desired
-        self.flush_state()  # Context changes are critical checkpoints
+        if self.state.get("contexts") != desired:
+            self.state["contexts"] = desired
+            state_changed = True
+
+        if state_changed:
+            self.flush_state()  # Context changes are critical checkpoints
 
     def _flush_on_signal(self, signum: int, frame: Any) -> None:
         """Flush pending state changes on termination signal (signal handler).
@@ -345,19 +415,7 @@ class StateManager:
             signum: Signal number (SIGTERM or SIGINT)
             frame: Current stack frame (unused)
         """
-        if self._dirty and not self._flushing:
-            try:
-                self._flushing = True
-                self.state["last_updated"] = _utc_timestamp()
-                self._write_state(self.state)
-                self._dirty = False
-            except Exception as e:
-                # Log to stderr for visibility but don't raise - signal handlers
-                # shouldn't raise exceptions as they can mask the real exit reason
-                import sys
-                print(f"Error flushing state on signal: {e}", file=sys.stderr)
-            finally:
-                self._flushing = False
+        self._do_flush(force=False, suppress_errors=True)
         self._forward_signal(signum, frame)
 
     def _forward_signal(self, signum: int, frame: Any) -> None:
@@ -373,19 +431,7 @@ class StateManager:
 
     def _flush_on_exit(self) -> None:
         """Flush pending state changes on program exit (atexit handler)."""
-        if self._dirty and not self._flushing:
-            try:
-                self._flushing = True
-                self.state["last_updated"] = _utc_timestamp()
-                self._write_state(self.state)
-                self._dirty = False
-            except Exception as e:
-                # Log to stderr for visibility but don't raise - atexit handlers
-                # shouldn't raise exceptions as they can mask the real exit reason
-                import sys
-                print(f"Error flushing state on exit: {e}", file=sys.stderr)
-            finally:
-                self._flushing = False
+        self._do_flush(force=False, suppress_errors=True)
 
     def _cleanup_temp_files(self) -> None:
         """Clean up any remaining temp files on program exit (atexit handler).
@@ -398,6 +444,45 @@ class StateManager:
                     os.remove(temp_file)
                 except OSError:
                     pass  # Best-effort cleanup
+
+
+class StepContext:
+    """Context manager for idempotent step execution."""
+
+    def __init__(
+        self,
+        state_manager: "StateManager",
+        step_name: str,
+        logger: Optional[logging.Logger] = None,
+    ):
+        self._state = state_manager
+        self._step_name = step_name
+        self._logger = logger
+        self._should_run = False
+
+    def __enter__(self) -> bool:
+        """Check if step should run.
+
+        Returns:
+            True if step should execute, False if already completed
+        """
+        if self._state.is_step_completed(self._step_name):
+            if self._logger:
+                self._logger.info("Step already completed: %s", self._step_name)
+            self._should_run = False
+        else:
+            self._should_run = True
+        return self._should_run
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Mark step completed if it ran successfully."""
+        # Only mark completed if:
+        # 1. The step was supposed to run (_should_run is True)
+        # 2. No exception occurred (exc_type is None)
+        if self._should_run and exc_type is None:
+            self._state.mark_step_completed(self._step_name)
+        # Don't suppress exceptions
+        return False
 
 
 class JSONFormatter(logging.Formatter):

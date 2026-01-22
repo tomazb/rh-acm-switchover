@@ -4,6 +4,7 @@ Tests cover Finalization class for completing the switchover.
 """
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -17,6 +18,20 @@ import modules.finalization as finalization_module
 Finalization = finalization_module.Finalization
 
 
+def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
+    """Create a mock step context manager that mimics StepContext behavior."""
+    @contextmanager
+    def mock_step(step_name, logger=None):
+        if is_step_completed_func(step_name):
+            if logger:
+                logger.info("Step already completed: %s", step_name)
+            yield False
+        else:
+            yield True
+            mark_step_completed_func(step_name)
+    return mock_step
+
+
 @pytest.fixture
 def mock_secondary_client():
     """Create a mock KubeClient for secondary hub."""
@@ -25,9 +40,14 @@ def mock_secondary_client():
 
 @pytest.fixture
 def mock_state_manager():
-    """Create a mock StateManager."""
+    """Create a mock StateManager with step() context manager support."""
     mock = Mock()
     mock.is_step_completed.return_value = False
+    # Set up step() to return a proper context manager
+    mock.step.side_effect = create_mock_step_context(
+        mock.is_step_completed,
+        mock.mark_step_completed,
+    )
     return mock
 
 

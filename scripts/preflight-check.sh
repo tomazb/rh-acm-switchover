@@ -350,98 +350,13 @@ check_nodes "$PRIMARY_CONTEXT" "Primary hub"
 # Check secondary hub nodes
 check_nodes "$SECONDARY_CONTEXT" "Secondary hub"
 
-# Check primary hub ClusterOperators (OpenShift specific)
-# Cache JSON output to avoid multiple API calls
-PRIMARY_CO_JSON=$(oc --context="$PRIMARY_CONTEXT" get clusteroperators -o json 2>/dev/null || true)
-if [[ -n "$PRIMARY_CO_JSON" ]]; then
-    PRIMARY_CO_OUTPUT=$(echo "$PRIMARY_CO_JSON" | jq -r '.items[] | .metadata.name' 2>/dev/null || true)
-    if [[ -n "$PRIMARY_CO_OUTPUT" ]]; then
-        PRIMARY_CO_TOTAL=$(echo "$PRIMARY_CO_OUTPUT" | wc -l)
-        # ClusterOperators are healthy if Available=True, Progressing=False, Degraded=False
-        PRIMARY_CO_DEGRADED=$(echo "$PRIMARY_CO_JSON" | \
-            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' 2>/dev/null | wc -l || true)
-        PRIMARY_CO_UNAVAILABLE=$(echo "$PRIMARY_CO_JSON" | \
-            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Available" and .status=="False")) | .metadata.name' 2>/dev/null | wc -l || true)
-        
-        if [[ $PRIMARY_CO_DEGRADED -eq 0 ]] && [[ $PRIMARY_CO_UNAVAILABLE -eq 0 ]]; then
-            check_pass "Primary hub: All $PRIMARY_CO_TOTAL ClusterOperator(s) are healthy"
-        else
-            UNHEALTHY=$((PRIMARY_CO_DEGRADED + PRIMARY_CO_UNAVAILABLE))
-            check_fail "Primary hub: $UNHEALTHY ClusterOperator(s) are degraded or unavailable"
-            # Show which operators are unhealthy
-            DEGRADED_LIST=$(echo "$PRIMARY_CO_JSON" | \
-                jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' 2>/dev/null || true)
-            if [[ -n "$DEGRADED_LIST" ]]; then
-                echo -e "${RED}       Degraded operators: $(echo "$DEGRADED_LIST" | tr '\n' ' ')${NC}"
-            fi
-        fi
-    else
-        check_pass "Primary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
-    fi
-else
-    check_pass "Primary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
-fi
+# Check ClusterOperators health (uses helper from lib-common.sh)
+check_cluster_operators "$PRIMARY_CONTEXT" "Primary hub"
+check_cluster_operators "$SECONDARY_CONTEXT" "Secondary hub"
 
-# Check secondary hub ClusterOperators (OpenShift specific)
-# Cache JSON output to avoid multiple API calls
-SECONDARY_CO_JSON=$(oc --context="$SECONDARY_CONTEXT" get clusteroperators -o json 2>/dev/null || true)
-if [[ -n "$SECONDARY_CO_JSON" ]]; then
-    SECONDARY_CO_OUTPUT=$(echo "$SECONDARY_CO_JSON" | jq -r '.items[] | .metadata.name' 2>/dev/null || true)
-    if [[ -n "$SECONDARY_CO_OUTPUT" ]]; then
-        SECONDARY_CO_TOTAL=$(echo "$SECONDARY_CO_OUTPUT" | wc -l)
-        SECONDARY_CO_DEGRADED=$(echo "$SECONDARY_CO_JSON" | \
-            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' 2>/dev/null | wc -l || true)
-        SECONDARY_CO_UNAVAILABLE=$(echo "$SECONDARY_CO_JSON" | \
-            jq -r '.items[] | select(.status.conditions[]? | select(.type=="Available" and .status=="False")) | .metadata.name' 2>/dev/null | wc -l || true)
-        
-        if [[ $SECONDARY_CO_DEGRADED -eq 0 ]] && [[ $SECONDARY_CO_UNAVAILABLE -eq 0 ]]; then
-            check_pass "Secondary hub: All $SECONDARY_CO_TOTAL ClusterOperator(s) are healthy"
-        else
-            UNHEALTHY=$((SECONDARY_CO_DEGRADED + SECONDARY_CO_UNAVAILABLE))
-            check_fail "Secondary hub: $UNHEALTHY ClusterOperator(s) are degraded or unavailable"
-            DEGRADED_LIST=$(echo "$SECONDARY_CO_JSON" | \
-                jq -r '.items[] | select(.status.conditions[]? | select(.type=="Degraded" and .status=="True")) | .metadata.name' 2>/dev/null || true)
-            if [[ -n "$DEGRADED_LIST" ]]; then
-                echo -e "${RED}       Degraded operators: $(echo "$DEGRADED_LIST" | tr '\n' ' ')${NC}"
-            fi
-        fi
-    else
-        check_pass "Secondary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
-    fi
-else
-    check_pass "Secondary hub: ClusterOperators not available (non-OpenShift cluster or insufficient permissions)"
-fi
-
-# Check primary hub upgrade status (ClusterVersion)
-PRIMARY_CV_OUTPUT=$(oc --context="$PRIMARY_CONTEXT" get clusterversion version -o json 2>/dev/null || true)
-if [[ -n "$PRIMARY_CV_OUTPUT" ]]; then
-    # Check if cluster is upgrading (Progressing=True means upgrade in progress)
-    PRIMARY_UPGRADING=$(echo "$PRIMARY_CV_OUTPUT" | jq -r '.status.conditions[]? | select(.type=="Progressing" and .status=="True") | .message' || true)
-    PRIMARY_OCP_VERSION=$(echo "$PRIMARY_CV_OUTPUT" | jq -r '.status.desired.version // "unknown"' || true)
-    if [[ -n "$PRIMARY_UPGRADING" && "$PRIMARY_UPGRADING" != "null" ]]; then
-        check_fail "Primary hub: Cluster upgrade in progress (version: $PRIMARY_OCP_VERSION)"
-        echo -e "${RED}       Message: $PRIMARY_UPGRADING${NC}"
-    else
-        check_pass "Primary hub: Cluster is stable (version: $PRIMARY_OCP_VERSION, no upgrade in progress)"
-    fi
-else
-    check_pass "Primary hub: ClusterVersion not available (non-OpenShift cluster or insufficient permissions)"
-fi
-
-# Check secondary hub upgrade status (ClusterVersion)
-SECONDARY_CV_OUTPUT=$(oc --context="$SECONDARY_CONTEXT" get clusterversion version -o json 2>/dev/null || true)
-if [[ -n "$SECONDARY_CV_OUTPUT" ]]; then
-    SECONDARY_UPGRADING=$(echo "$SECONDARY_CV_OUTPUT" | jq -r '.status.conditions[]? | select(.type=="Progressing" and .status=="True") | .message' || true)
-    SECONDARY_OCP_VERSION=$(echo "$SECONDARY_CV_OUTPUT" | jq -r '.status.desired.version // "unknown"' || true)
-    if [[ -n "$SECONDARY_UPGRADING" && "$SECONDARY_UPGRADING" != "null" ]]; then
-        check_fail "Secondary hub: Cluster upgrade in progress (version: $SECONDARY_OCP_VERSION)"
-        echo -e "${RED}       Message: $SECONDARY_UPGRADING${NC}"
-    else
-        check_pass "Secondary hub: Cluster is stable (version: $SECONDARY_OCP_VERSION, no upgrade in progress)"
-    fi
-else
-    check_pass "Secondary hub: ClusterVersion not available (non-OpenShift cluster or insufficient permissions)"
-fi
+# Check cluster upgrade status (uses helper from lib-common.sh)
+check_cluster_upgrade_status "$PRIMARY_CONTEXT" "Primary hub"
+check_cluster_upgrade_status "$SECONDARY_CONTEXT" "Secondary hub"
 
 # Check 9: Verify backup status
 section_header "9. Checking Backup Status"
@@ -663,15 +578,8 @@ if oc --context="$PRIMARY_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
         #   It's OK for MCO to exist if both Thanos compactor and observatorium-api are scaled to 0.
         # - If MCO is absent but observability pods still exist, warn (likely incomplete decommission).
         if oc --context="$SECONDARY_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
-            SECONDARY_COMPACTOR_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=thanos-compact" --no-headers 2>/dev/null | wc -l || true)
-            if [[ $SECONDARY_COMPACTOR_PODS -eq 0 ]]; then
-                SECONDARY_COMPACTOR_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep -c "^${OBS_THANOS_COMPACT_POD}" || true)
-            fi
-
-            SECONDARY_OBSERVATORIUM_API_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=observatorium-api" --no-headers 2>/dev/null | wc -l || true)
-            if [[ $SECONDARY_OBSERVATORIUM_API_PODS -eq 0 ]]; then
-                SECONDARY_OBSERVATORIUM_API_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep -c "^${OBS_API_POD}" || true)
-            fi
+            SECONDARY_COMPACTOR_PODS=$(get_pod_count "$SECONDARY_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=thanos-compact" "$OBS_THANOS_COMPACT_POD")
+            SECONDARY_OBSERVATORIUM_API_PODS=$(get_pod_count "$SECONDARY_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=observatorium-api" "$OBS_API_POD")
 
             if [[ $SECONDARY_COMPACTOR_PODS -gt 0 ]] || [[ $SECONDARY_OBSERVATORIUM_API_PODS -gt 0 ]]; then
                 check_fail "Secondary hub: MultiClusterObservability is active (thanos-compact=$SECONDARY_COMPACTOR_PODS, observatorium-api=$SECONDARY_OBSERVATORIUM_API_PODS). Scale both to 0 before switchover."

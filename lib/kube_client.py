@@ -194,6 +194,27 @@ class KubeClient:
             request_timeout,
         )
 
+    def _validate_resource_inputs(
+        self,
+        namespace: Optional[str] = None,
+        name: Optional[str] = None,
+        resource_type: str = "resource",
+    ) -> None:
+        """Validate namespace and/or resource name before API calls.
+
+        Args:
+            namespace: Namespace to validate (skipped if None)
+            name: Resource name to validate (skipped if None)
+            resource_type: Resource type for error messages (e.g., "secret", "deployment")
+
+        Raises:
+            ValidationError: If namespace or name is invalid
+        """
+        if namespace is not None:
+            InputValidator.validate_kubernetes_namespace(namespace)
+        if name is not None:
+            InputValidator.validate_kubernetes_name(name, resource_type)
+
     @api_call(not_found_value=None, resource_desc="get namespace")
     def get_namespace(self, name: str) -> Optional[Dict]:
         """Check if namespace exists.
@@ -207,8 +228,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace name is invalid
         """
-        # Validate namespace name before making API call
-        InputValidator.validate_kubernetes_namespace(name)
+        self._validate_resource_inputs(namespace=name)
 
         ns = self.core_v1.read_namespace(name)
         return ns.to_dict()
@@ -254,9 +274,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or secret name is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_namespace(namespace)
-        InputValidator.validate_kubernetes_name(name, "secret")
+        self._validate_resource_inputs(namespace, name, "secret")
 
         secret = self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
         return secret.to_dict()
@@ -293,9 +311,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or ConfigMap name is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_namespace(namespace)
-        InputValidator.validate_kubernetes_name(name, "ConfigMap")
+        self._validate_resource_inputs(namespace, name, "ConfigMap")
 
         cm = self.core_v1.read_namespaced_config_map(name=name, namespace=namespace)
         return cm.to_dict()
@@ -332,9 +348,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or ConfigMap name is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_namespace(namespace)
-        InputValidator.validate_kubernetes_name(name, "ConfigMap")
+        self._validate_resource_inputs(namespace, name, "ConfigMap")
 
         if self.dry_run:
             logger.info(
@@ -380,9 +394,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or ConfigMap name is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_namespace(namespace)
-        InputValidator.validate_kubernetes_name(name, "ConfigMap")
+        self._validate_resource_inputs(namespace, name, "ConfigMap")
 
         if self.dry_run:
             logger.info("[DRY-RUN] Would delete ConfigMap %s/%s", namespace, name)
@@ -405,9 +417,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or Pod name is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_namespace(namespace)
-        InputValidator.validate_kubernetes_name(name, "Pod")
+        self._validate_resource_inputs(namespace, name, "Pod")
 
         if self.dry_run:
             logger.info("[DRY-RUN] Would delete Pod %s/%s", namespace, name)
@@ -430,9 +440,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace or Route name is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_namespace(namespace)
-        InputValidator.validate_kubernetes_name(name, "Route")
+        self._validate_resource_inputs(namespace, name, "Route")
 
         route = self.custom_api.get_namespaced_custom_object(
             group="route.openshift.io",
@@ -468,10 +476,7 @@ class KubeClient:
         Raises:
             ValidationError: If resource name or namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_name(name, "custom resource")
-        if namespace:
-            InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, name, "custom resource")
 
         if namespace:
             resource = self.custom_api.get_namespaced_custom_object(
@@ -512,9 +517,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace is invalid
         """
-        # Validate namespace if provided
-        if namespace:
-            InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace=namespace)
 
         items: List[Dict] = []
         continue_token: Optional[str] = None
@@ -582,10 +585,7 @@ class KubeClient:
         Raises:
             ValidationError: If resource name or namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_name(name, "custom resource")
-        if namespace:
-            InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, name, "custom resource")
 
         if self.dry_run:
             logger.info("[DRY-RUN] Would patch %s/%s with: %s", plural, name, patch)
@@ -668,12 +668,8 @@ class KubeClient:
         Raises:
             ValidationError: If resource name or namespace is invalid
         """
-        # Validate resource name from body
         resource_name = body.get("metadata", {}).get("name")
-        if resource_name:
-            InputValidator.validate_kubernetes_name(resource_name, "custom resource")
-        if namespace:
-            InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, resource_name, "custom resource")
 
         if self.dry_run:
             logger.info(
@@ -727,10 +723,7 @@ class KubeClient:
         Raises:
             ValidationError: If resource name or namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_name(name, "custom resource")
-        if namespace:
-            InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, name, "custom resource")
 
         if self.dry_run:
             logger.info("[DRY-RUN] Would delete %s/%s", plural, name)
@@ -780,9 +773,7 @@ class KubeClient:
         Raises:
             ValidationError: If deployment name or namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_name(name, "deployment")
-        InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, name, "deployment")
 
         deployment = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
         return deployment.to_dict()
@@ -801,9 +792,7 @@ class KubeClient:
         Raises:
             ValidationError: If statefulset name or namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_name(name, "statefulset")
-        InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, name, "statefulset")
 
         statefulset = self.apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
         return statefulset.to_dict()
@@ -823,9 +812,7 @@ class KubeClient:
         Raises:
             ValidationError: If deployment name or namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_name(name, "deployment")
-        InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, name, "deployment")
 
         if self.dry_run:
             logger.info(
@@ -861,9 +848,7 @@ class KubeClient:
         Raises:
             ValidationError: If StatefulSet name or namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_name(name, "statefulset")
-        InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, name, "statefulset")
 
         if self.dry_run:
             logger.info(
@@ -898,9 +883,7 @@ class KubeClient:
         Raises:
             ValidationError: If deployment name or namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_name(name, "deployment")
-        InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace, name, "deployment")
 
         if self.dry_run:
             logger.info("[DRY-RUN] Would restart deployment %s/%s", namespace, name)
@@ -931,8 +914,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace is invalid
         """
-        # Validate inputs before making API call
-        InputValidator.validate_kubernetes_namespace(namespace)
+        self._validate_resource_inputs(namespace=namespace)
         if label_selector is not None:
             # Basic validation - only check for non-empty string
             # Full label selector validation is complex (supports =, ==, !=, in, notin, exists, !exists)

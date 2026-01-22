@@ -192,15 +192,7 @@ get_restore_state() {
     fi
 }
 
-# Get count of available managed clusters
-get_available_mc_count() {
-    local ctx="$1"
-    
-    "$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
-        jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" \
-        '[.items[] | select(.metadata.name != $LOCAL) | select(.status.conditions[]? | select(.type=="ManagedClusterConditionAvailable" and .status=="True"))] | length' \
-        2>/dev/null || echo "0"
-}
+# Note: get_available_mc_count is defined in lib-common.sh and used here
 
 # Get list of managed cluster names (excluding local-cluster)
 get_managed_cluster_names() {
@@ -435,13 +427,7 @@ get_cluster_details() {
         ' 2>/dev/null || echo ""
 }
 
-# Get total managed cluster count (excluding local-cluster)
-get_total_mc_count() {
-    local ctx="$1"
-    
-    "$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER --no-headers 2>/dev/null | \
-        grep -v "$LOCAL_CLUSTER_NAME" | wc -l
-}
+# Note: get_total_mc_count is defined in lib-common.sh and used here
 
 # Determine hub role based on collected information
 # Sets HUB_ROLES and HUB_STATES arrays

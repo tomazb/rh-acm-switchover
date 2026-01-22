@@ -222,13 +222,15 @@ class TestForceWithCompletedState:
         """
         from lib.utils import Phase, StateManager
 
-        # Create a stale state file (older than 5 minutes)
+        # Create a stale state file (older than threshold)
         state_file = tmp_path / "state.json"
         state = StateManager(str(state_file))
 
         # Set to COMPLETED with stale timestamp (use _write_state to preserve timestamp)
         state.state["current_phase"] = Phase.COMPLETED.value
-        stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        from lib.constants import STALE_STATE_THRESHOLD
+
+        stale_time = datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
         state.state["last_updated"] = stale_time.isoformat()
         state._write_state(state.state)
 
@@ -242,7 +244,7 @@ class TestForceWithCompletedState:
         state_age = datetime.now(timezone.utc) - datetime.fromisoformat(
             state2.state["last_updated"].replace("Z", "+00:00")
         )
-        assert state_age.total_seconds() > 300  # > 5 minutes
+        assert state_age.total_seconds() > STALE_STATE_THRESHOLD
 
         # Simulate what main() does with --force: reset to INIT
         state2.set_phase(Phase.INIT)

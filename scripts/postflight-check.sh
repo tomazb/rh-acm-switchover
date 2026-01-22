@@ -205,18 +205,11 @@ if oc --context="$NEW_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
         check_warn "MultiClusterObservability CR is not Ready (Status: $MCO_STATUS)"
     fi
 
-    # Check critical pods
+    # Check critical pods using helper function
     CRITICAL_PODS=("$OBS_GRAFANA_POD" "$OBS_API_POD" "$OBS_THANOS_QUERY_POD")
 
     for pod_prefix in "${CRITICAL_PODS[@]}"; do
-        # Try by label first
-        POD_COUNT=$(oc --context="$NEW_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app=${pod_prefix}" --no-headers 2>/dev/null | grep -c "Running" || true)
-        
-        # Fallback to name prefix if label check returns 0
-        if [[ $POD_COUNT -eq 0 ]]; then
-             POD_COUNT=$(oc --context="$NEW_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep "^${pod_prefix}" | grep -c "Running" || true)
-        fi
-
+        POD_COUNT=$(get_running_pod_count "$NEW_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app=${pod_prefix}" "$pod_prefix")
         if [[ $POD_COUNT -gt 0 ]]; then
             check_pass "${pod_prefix}: $POD_COUNT pod(s) running"
         else
@@ -234,13 +227,7 @@ if oc --context="$NEW_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
     fi
 
     # Check observatorium-api specifically (critical for metrics)
-    # Try label first
-    OBSERVATORIUM_API_PODS=$(oc --context="$NEW_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=observatorium-api" --no-headers 2>/dev/null | grep -c "Running" || true)
-    
-    if [[ $OBSERVATORIUM_API_PODS -eq 0 ]]; then
-         # Fallback to name
-         OBSERVATORIUM_API_PODS=$(oc --context="$NEW_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep "$OBS_API_POD" | grep -c "Running" || true)
-    fi
+    OBSERVATORIUM_API_PODS=$(get_running_pod_count "$NEW_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=observatorium-api" "$OBS_API_POD")
 
     if [[ $OBSERVATORIUM_API_PODS -gt 0 ]]; then
         # Check if pods were recently restarted (should be after switchover)
@@ -399,15 +386,8 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
     # The previous primary must either have no MCO, or (if MCO exists) have key components scaled down.
     if oc --context="$OLD_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
         if oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
-            OLD_COMPACTOR=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=thanos-compact" --no-headers 2>/dev/null | wc -l || true)
-            if [[ $OLD_COMPACTOR -eq 0 ]]; then
-                OLD_COMPACTOR=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep -c "^${OBS_THANOS_COMPACT_POD}" || true)
-            fi
-
-            OLD_OBSERVATORIUM_API_PODS=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" -l "app.kubernetes.io/name=observatorium-api" --no-headers 2>/dev/null | wc -l || true)
-            if [[ $OLD_OBSERVATORIUM_API_PODS -eq 0 ]]; then
-                OLD_OBSERVATORIUM_API_PODS=$(oc --context="$OLD_HUB_CONTEXT" get pods -n "$OBSERVABILITY_NAMESPACE" --no-headers 2>/dev/null | grep -c "^${OBS_API_POD}" || true)
-            fi
+            OLD_COMPACTOR=$(get_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=thanos-compact" "$OBS_THANOS_COMPACT_POD")
+            OLD_OBSERVATORIUM_API_PODS=$(get_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=observatorium-api" "$OBS_API_POD")
 
             if [[ $OLD_COMPACTOR -eq 0 ]] && [[ $OLD_OBSERVATORIUM_API_PODS -eq 0 ]]; then
                 check_pass "Old hub: MultiClusterObservability present but Thanos compactor and observatorium-api are scaled to 0 (expected)"
