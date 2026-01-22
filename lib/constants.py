@@ -1,5 +1,6 @@
 """Centralized constants for ACM switchover."""
 
+import math
 import os
 
 # Exit codes
@@ -104,16 +105,21 @@ LOCAL_CLUSTER_NAME = "local-cluster"
 # Stale state detection threshold (default: 6 hours)
 # Can be overridden via ACM_SWITCHOVER_STALE_HOURS environment variable
 DEFAULT_STALE_STATE_THRESHOLD_HOURS = 6
+_MAX_STALE_HOURS = 8760  # 1 year - reasonable upper bound
 try:
     _env_stale_hours = os.environ.get("ACM_SWITCHOVER_STALE_HOURS")
     if _env_stale_hours is not None:
         _hours_value = float(_env_stale_hours)
+        if not math.isfinite(_hours_value):
+            raise ValueError("ACM_SWITCHOVER_STALE_HOURS must be finite")
         if _hours_value <= 0:
             raise ValueError("ACM_SWITCHOVER_STALE_HOURS must be positive")
+        if _hours_value > _MAX_STALE_HOURS:
+            raise ValueError("ACM_SWITCHOVER_STALE_HOURS exceeds maximum")
         STALE_STATE_THRESHOLD = int(_hours_value * 3600)
     else:
         STALE_STATE_THRESHOLD = DEFAULT_STALE_STATE_THRESHOLD_HOURS * 3600
-except (ValueError, TypeError):
+except (ValueError, TypeError, OverflowError):
     STALE_STATE_THRESHOLD = DEFAULT_STALE_STATE_THRESHOLD_HOURS * 3600
 
 # Backup verification settings
