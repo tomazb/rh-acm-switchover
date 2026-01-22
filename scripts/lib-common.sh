@@ -221,12 +221,13 @@ is_acm_214_or_higher() {
 
 # Get total managed cluster count (excluding local-cluster)
 # Usage: get_total_mc_count "$CONTEXT"
+# Note: Returns 0 if ManagedCluster CRD doesn't exist or permissions are lacking
 get_total_mc_count() {
     local ctx="$1"
     local count
     
     count=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER --no-headers 2>/dev/null | \
-        grep -v "$LOCAL_CLUSTER_NAME" | wc -l)
+        grep -v "$LOCAL_CLUSTER_NAME" | wc -l || echo "0")
     
     # Trim whitespace and ensure numeric
     count=$(echo "$count" | tr -d '[:space:]')
@@ -235,6 +236,7 @@ get_total_mc_count() {
 
 # Get count of available (connected) managed clusters (excluding local-cluster)
 # Usage: get_available_mc_count "$CONTEXT"
+# Note: Returns 0 if ManagedCluster CRD doesn't exist or permissions are lacking
 get_available_mc_count() {
     local ctx="$1"
     local count
@@ -242,7 +244,7 @@ get_available_mc_count() {
     count=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
         jq -r --arg LOCAL "$LOCAL_CLUSTER_NAME" \
         '[.items[] | select(.metadata.name != $LOCAL) | select(.status.conditions[]? | select(.type=="ManagedClusterConditionAvailable" and .status=="True"))] | length' \
-        2>/dev/null)
+        2>/dev/null || echo "0")
     
     # Trim whitespace and ensure numeric
     count=$(echo "$count" | tr -d '[:space:]')
