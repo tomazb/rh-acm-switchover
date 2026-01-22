@@ -2,6 +2,7 @@
 
 import math
 import os
+import sys
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -119,7 +120,8 @@ try:
         STALE_STATE_THRESHOLD = int(_hours_value * 3600)
     else:
         STALE_STATE_THRESHOLD = DEFAULT_STALE_STATE_THRESHOLD_HOURS * 3600
-except (ValueError, TypeError, OverflowError):
+except (ValueError, TypeError, OverflowError) as e:
+    print(f"Warning: Invalid value for ACM_SWITCHOVER_STALE_HOURS: {e}. Using default {DEFAULT_STALE_STATE_THRESHOLD_HOURS} hours.", file=sys.stderr)
     STALE_STATE_THRESHOLD = DEFAULT_STALE_STATE_THRESHOLD_HOURS * 3600
 
 # Backup verification settings

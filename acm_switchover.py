@@ -246,39 +246,41 @@ def run_switchover(
     if secondary is None:
         raise ValueError("Secondary client is required for switchover")
 
-    # Check for stale state file to avoid resuming outdated runs
+    # Check for stale completed state that would cause instant "completion"
+    # Only apply stale detection to COMPLETED phase - in-progress phases should
+    # always be resumable regardless of how long the pause was
     current_phase = state.get_current_phase()
-    state_age = state.get_state_age()
-    if state_age is None:
-        # Treat missing/unparseable timestamp as stale
-        state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+    if current_phase == Phase.COMPLETED:
+        state_age = state.get_state_age()
+        if state_age is None:
+            # Treat missing/unparseable timestamp as stale
+            state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
 
-    if state_age.total_seconds() > STALE_STATE_THRESHOLD:
-        logger.warning("")
-        logger.warning("⚠️  DETECTED STALE STATE FILE")
-        logger.warning(
-            "State file is %s old (current phase: %s).",
-            f"{int(state_age.total_seconds() // 60)} minutes",
-            current_phase.value,
-        )
-        logger.warning("")
-        logger.warning("To start a fresh switchover:")
-        logger.warning("  1. Remove state file: rm %s", state.state_file)
-        logger.warning("  2. Or use: --reset-state")
-        logger.warning("  3. Or use: --force to override (use with caution)")
-        logger.warning("")
-        if not getattr(args, "force", False):
-            logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
-            sys.exit(EXIT_FAILURE)
-        # Reset state completely to start fresh switchover
-        # This clears completed_steps so all phase handlers re-execute their work
-        logger.warning("--force used: Resetting state to start fresh switchover")
-        state.reset()
-    elif current_phase == Phase.COMPLETED:
-        logger.info(
-            "Resuming recently completed switchover (state age: %s)",
-            f"{int(state_age.total_seconds() // 60)} minutes",
-        )
+        if state_age.total_seconds() > STALE_STATE_THRESHOLD:
+            logger.warning("")
+            logger.warning("⚠️  DETECTED STALE COMPLETED STATE")
+            logger.warning(
+                "Switchover appears already completed, but state file is %s old.",
+                f"{int(state_age.total_seconds() // 60)} minutes",
+            )
+            logger.warning("")
+            logger.warning("To start a fresh switchover:")
+            logger.warning("  1. Remove state file: rm %s", state.state_file)
+            logger.warning("  2. Or use: --reset-state")
+            logger.warning("  3. Or use: --force to override (use with caution)")
+            logger.warning("")
+            if not getattr(args, "force", False):
+                logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
+                sys.exit(EXIT_FAILURE)
+            # Reset state completely to start fresh switchover
+            # This clears completed_steps so all phase handlers re-execute their work
+            logger.warning("--force used: Resetting state to start fresh switchover")
+            state.reset()
+        else:
+            logger.info(
+                "Resuming recently completed switchover (state age: %s)",
+                f"{int(state_age.total_seconds() // 60)} minutes",
+            )
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
