@@ -12,6 +12,7 @@ import pytest
 from lib.utils import (
     Phase,
     StateManager,
+    StepContext,
     dry_run_skip,
     is_acm_version_ge,
     setup_logging,
@@ -721,3 +722,101 @@ class TestConfirmAction:
         with patch("builtins.input", return_value="n") as mock_input:
             confirm_action("Continue?", default=True)
             mock_input.assert_called_once_with("Continue? [Y/n]: ")
+
+
+@pytest.mark.unit
+class TestStepContext:
+    """Test cases for the StepContext context manager."""
+
+    def test_step_runs_when_not_completed(self, state_manager):
+        """Test that step executes when not previously completed."""
+        executed = False
+
+        with state_manager.step("new_step") as should_run:
+            if should_run:
+                executed = True
+
+        assert executed is True
+        assert state_manager.is_step_completed("new_step") is True
+
+    def test_step_skips_when_already_completed(self, state_manager):
+        """Test that step is skipped when already completed."""
+        state_manager.mark_step_completed("existing_step")
+        executed = False
+
+        with state_manager.step("existing_step") as should_run:
+            if should_run:
+                executed = True
+
+        assert executed is False
+        # Still completed
+        assert state_manager.is_step_completed("existing_step") is True
+
+    def test_step_logs_when_skipped(self, state_manager):
+        """Test that skip message is logged when step already completed."""
+        import logging
+
+        state_manager.mark_step_completed("logged_step")
+        mock_logger = MagicMock(spec=logging.Logger)
+
+        with state_manager.step("logged_step", mock_logger) as should_run:
+            pass
+
+        mock_logger.info.assert_called_once_with("Step already completed: %s", "logged_step")
+        assert should_run is False
+
+    def test_step_not_marked_on_exception(self, state_manager):
+        """Test that step is not marked completed if exception occurs."""
+        with pytest.raises(ValueError):
+            with state_manager.step("failing_step") as should_run:
+                if should_run:
+                    raise ValueError("Intentional failure")
+
+        # Step should NOT be marked completed due to exception
+        assert state_manager.is_step_completed("failing_step") is False
+
+    def test_step_persists_completion(self, tmp_path):
+        """Test that step completion is persisted to disk."""
+        state_path = tmp_path / "step-persist.json"
+        sm = StateManager(str(state_path))
+
+        with sm.step("persisted_step") as should_run:
+            if should_run:
+                pass  # Do work
+
+        # Reload and verify
+        reloaded = StateManager(str(state_path))
+        assert reloaded.is_step_completed("persisted_step") is True
+
+    def test_step_without_logger(self, state_manager):
+        """Test that step works without a logger."""
+        state_manager.mark_step_completed("no_logger_step")
+
+        # Should not raise even without logger
+        with state_manager.step("no_logger_step") as should_run:
+            assert should_run is False
+
+    def test_step_multiple_sequential(self, state_manager):
+        """Test multiple sequential steps."""
+        results = []
+
+        with state_manager.step("step_a") as should_run:
+            if should_run:
+                results.append("a")
+
+        with state_manager.step("step_b") as should_run:
+            if should_run:
+                results.append("b")
+
+        with state_manager.step("step_a") as should_run:  # Already done
+            if should_run:
+                results.append("a_again")
+
+        assert results == ["a", "b"]
+        assert state_manager.is_step_completed("step_a") is True
+        assert state_manager.is_step_completed("step_b") is True
+
+    def test_step_context_returns_step_context_instance(self, state_manager):
+        """Test that step() returns a StepContext instance."""
+        ctx = state_manager.step("test_step")
+        assert isinstance(ctx, StepContext)
