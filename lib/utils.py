@@ -221,28 +221,43 @@ class StateManager:
                     pass
                 lock_handle.close()
 
-    def save_state(self) -> None:
-        """Persist current state to disk if dirty."""
-        if self._dirty and not self._flushing:
-            try:
-                self._flushing = True
-                self.state["last_updated"] = _utc_timestamp()
-                self._write_state(self.state)
-                self._dirty = False
-            finally:
-                self._flushing = False
+    def _do_flush(self, force: bool = False, suppress_errors: bool = False) -> bool:
+        """Core flush logic shared by all flush methods.
 
-    def flush_state(self) -> None:
-        """Force immediate write of state to disk (for critical checkpoints)."""
+        Args:
+            force: If True, write even if not dirty. If False, only write when dirty.
+            suppress_errors: If True, catch exceptions and print to stderr instead of raising.
+
+        Returns:
+            True if flush was performed, False if skipped (not dirty or already flushing).
+        """
         if self._flushing:
-            return
+            return False
+        if not force and not self._dirty:
+            return False
+
         try:
             self._flushing = True
             self.state["last_updated"] = _utc_timestamp()
             self._write_state(self.state)
             self._dirty = False
+            return True
+        except Exception as e:
+            if suppress_errors:
+                import sys
+                print(f"Error flushing state: {e}", file=sys.stderr)
+                return False
+            raise
         finally:
             self._flushing = False
+
+    def save_state(self) -> None:
+        """Persist current state to disk if dirty."""
+        self._do_flush(force=False)
+
+    def flush_state(self) -> None:
+        """Force immediate write of state to disk (for critical checkpoints)."""
+        self._do_flush(force=True)
 
     def set_phase(self, phase: Phase) -> None:
         """Update current phase."""
@@ -374,19 +389,7 @@ class StateManager:
             signum: Signal number (SIGTERM or SIGINT)
             frame: Current stack frame (unused)
         """
-        if self._dirty and not self._flushing:
-            try:
-                self._flushing = True
-                self.state["last_updated"] = _utc_timestamp()
-                self._write_state(self.state)
-                self._dirty = False
-            except Exception as e:
-                # Log to stderr for visibility but don't raise - signal handlers
-                # shouldn't raise exceptions as they can mask the real exit reason
-                import sys
-                print(f"Error flushing state on signal: {e}", file=sys.stderr)
-            finally:
-                self._flushing = False
+        self._do_flush(force=False, suppress_errors=True)
         self._forward_signal(signum, frame)
 
     def _forward_signal(self, signum: int, frame: Any) -> None:
@@ -402,19 +405,7 @@ class StateManager:
 
     def _flush_on_exit(self) -> None:
         """Flush pending state changes on program exit (atexit handler)."""
-        if self._dirty and not self._flushing:
-            try:
-                self._flushing = True
-                self.state["last_updated"] = _utc_timestamp()
-                self._write_state(self.state)
-                self._dirty = False
-            except Exception as e:
-                # Log to stderr for visibility but don't raise - atexit handlers
-                # shouldn't raise exceptions as they can mask the real exit reason
-                import sys
-                print(f"Error flushing state on exit: {e}", file=sys.stderr)
-            finally:
-                self._flushing = False
+        self._do_flush(force=False, suppress_errors=True)
 
     def _cleanup_temp_files(self) -> None:
         """Clean up any remaining temp files on program exit (atexit handler).
