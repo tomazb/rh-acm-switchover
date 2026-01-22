@@ -138,36 +138,28 @@ class SecondaryActivation:
         try:
             if self.method == "passive":
                 # Method 1: Continuous Passive Restore
-                if not self.state.is_step_completed("verify_passive_sync"):
-                    self._verify_passive_sync()
-                    self.state.mark_step_completed("verify_passive_sync")
-                else:
-                    logger.info("Step already completed: verify_passive_sync")
+                with self.state.step("verify_passive_sync", logger) as should_run:
+                    if should_run:
+                        self._verify_passive_sync()
 
                 # Optional: set ImportAndSync before activation when applicable
                 self._maybe_set_auto_import_strategy()
 
-                if not self.state.is_step_completed("activate_managed_clusters"):
-                    self._activate_via_passive_sync()
-                    self.state.mark_step_completed("activate_managed_clusters")
-                else:
-                    logger.info("Step already completed: activate_managed_clusters")
+                with self.state.step("activate_managed_clusters", logger) as should_run:
+                    if should_run:
+                        self._activate_via_passive_sync()
             else:
                 # Method 2: One-Time Full Restore
                 # Optional: set ImportAndSync pre-restore when applicable
                 self._maybe_set_auto_import_strategy()
-                if not self.state.is_step_completed("create_full_restore"):
-                    self._create_full_restore()
-                    self.state.mark_step_completed("create_full_restore")
-                else:
-                    logger.info("Step already completed: create_full_restore")
+                with self.state.step("create_full_restore", logger) as should_run:
+                    if should_run:
+                        self._create_full_restore()
 
             # Wait for restore to complete
-            if not self.state.is_step_completed("wait_restore_completion"):
-                self._wait_for_restore_completion()
-                self.state.mark_step_completed("wait_restore_completion")
-            else:
-                logger.info("Step already completed: wait_restore_completion")
+            with self.state.step("wait_restore_completion", logger) as should_run:
+                if should_run:
+                    self._wait_for_restore_completion()
 
             logger.info("Secondary hub activation completed successfully")
             return True

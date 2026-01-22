@@ -275,6 +275,32 @@ class StateManager:
         """Check if a step was already completed."""
         return any(s["name"] == step_name for s in self.state["completed_steps"])
 
+    def step(self, step_name: str, logger: Optional[logging.Logger] = None) -> "StepContext":
+        """Context manager for idempotent step execution.
+
+        This helper consolidates the common pattern of checking if a step is
+        completed, executing it if not, and marking it completed afterward.
+
+        Usage:
+            with self.state.step("my_step", logger) as should_run:
+                if should_run:
+                    self._do_actual_work()
+
+        The context manager:
+        - Checks if the step is already completed
+        - If completed, logs "Step already completed: {step_name}" and sets should_run=False
+        - If not completed, sets should_run=True and marks the step completed on exit
+        - Only marks the step completed if no exception was raised
+
+        Args:
+            step_name: Unique identifier for the step
+            logger: Optional logger for "already completed" messages
+
+        Returns:
+            StepContext that yields True if step should run, False if already completed
+        """
+        return StepContext(self, step_name, logger)
+
     def set_config(self, key: str, value: Any) -> None:
         """Store configuration value."""
         if self.state["config"].get(key) == value:
@@ -418,6 +444,45 @@ class StateManager:
                     os.remove(temp_file)
                 except OSError:
                     pass  # Best-effort cleanup
+
+
+class StepContext:
+    """Context manager for idempotent step execution."""
+
+    def __init__(
+        self,
+        state_manager: "StateManager",
+        step_name: str,
+        logger: Optional[logging.Logger] = None,
+    ):
+        self._state = state_manager
+        self._step_name = step_name
+        self._logger = logger
+        self._should_run = False
+
+    def __enter__(self) -> bool:
+        """Check if step should run.
+
+        Returns:
+            True if step should execute, False if already completed
+        """
+        if self._state.is_step_completed(self._step_name):
+            if self._logger:
+                self._logger.info("Step already completed: %s", self._step_name)
+            self._should_run = False
+        else:
+            self._should_run = True
+        return self._should_run
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Mark step completed if it ran successfully."""
+        # Only mark completed if:
+        # 1. The step was supposed to run (_should_run is True)
+        # 2. No exception occurred (exc_type is None)
+        if self._should_run and exc_type is None:
+            self._state.mark_step_completed(self._step_name)
+        # Don't suppress exceptions
+        return False
 
 
 class JSONFormatter(logging.Formatter):

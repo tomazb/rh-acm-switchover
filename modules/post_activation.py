@@ -114,48 +114,41 @@ class PostActivationVerification:
         First tries a brief wait for clusters to connect automatically.
         If that fails, attempts to fix klusterlet connections and waits again.
         """
-        if not self.state.is_step_completed("verify_clusters_connected"):
-            try:
-                # Initial brief wait - clusters may connect automatically
-                self._verify_managed_clusters_connected(timeout=INITIAL_CLUSTER_WAIT_TIMEOUT)
-                self.state.mark_step_completed("verify_clusters_connected")
-            except SwitchoverError as e:
-                # Timeout - clusters not connected yet
-                logger.warning(
-                    "ManagedClusters not connected after initial wait: %s",
-                    e,
-                )
-                logger.info(
-                    "Checking if klusterlets need to be fixed (may be pointing to old hub)..."
-                )
-                # Try to fix klusterlet connections first
-                self._verify_klusterlet_connections()
-                self.state.mark_step_completed("verify_klusterlet_connections")
+        with self.state.step("verify_clusters_connected", logger) as should_run:
+            if should_run:
+                try:
+                    # Initial brief wait - clusters may connect automatically
+                    self._verify_managed_clusters_connected(timeout=INITIAL_CLUSTER_WAIT_TIMEOUT)
+                except SwitchoverError as e:
+                    # Timeout - clusters not connected yet
+                    logger.warning(
+                        "ManagedClusters not connected after initial wait: %s",
+                        e,
+                    )
+                    logger.info(
+                        "Checking if klusterlets need to be fixed (may be pointing to old hub)..."
+                    )
+                    # Try to fix klusterlet connections first
+                    self._verify_klusterlet_connections()
+                    self.state.mark_step_completed("verify_klusterlet_connections")
 
-                # Now wait longer for clusters to reconnect after fix
-                logger.info(
-                    "Waiting for ManagedClusters to reconnect after klusterlet fix..."
-                )
-                self._verify_managed_clusters_connected()
-                self.state.mark_step_completed("verify_clusters_connected")
-        else:
-            logger.info("Step already completed: verify_clusters_connected")
+                    # Now wait longer for clusters to reconnect after fix
+                    logger.info(
+                        "Waiting for ManagedClusters to reconnect after klusterlet fix..."
+                    )
+                    self._verify_managed_clusters_connected()
 
         # Optional: Verify klusterlet connections (non-blocking)
         # This may have already been done above if clusters didn't connect initially
-        if not self.state.is_step_completed("verify_klusterlet_connections"):
-            self._verify_klusterlet_connections()
-            self.state.mark_step_completed("verify_klusterlet_connections")
-        else:
-            logger.info("Step already completed: verify_klusterlet_connections")
+        with self.state.step("verify_klusterlet_connections", logger) as should_run:
+            if should_run:
+                self._verify_klusterlet_connections()
 
     def _verify_auto_import_cleanup_step(self) -> None:
         """Verify disable-auto-import annotations are cleared from ManagedClusters."""
-        if not self.state.is_step_completed("verify_auto_import_cleanup"):
-            self._verify_disable_auto_import_cleared()
-            self.state.mark_step_completed("verify_auto_import_cleanup")
-        else:
-            logger.info("Step already completed: verify_auto_import_cleanup")
+        with self.state.step("verify_auto_import_cleanup", logger) as should_run:
+            if should_run:
+                self._verify_disable_auto_import_cleared()
 
     def _verify_observability_full(self) -> None:
         """
@@ -164,29 +157,21 @@ class PostActivationVerification:
         Includes scaling up components, restarting API, verifying pods,
         and checking metrics collection.
         """
-        if not self.state.is_step_completed("scale_up_observability_components"):
-            self._scale_up_observability_components()
-            self.state.mark_step_completed("scale_up_observability_components")
-        else:
-            logger.info("Step already completed: scale_up_observability_components")
+        with self.state.step("scale_up_observability_components", logger) as should_run:
+            if should_run:
+                self._scale_up_observability_components()
 
-        if not self.state.is_step_completed("restart_observatorium_api"):
-            self._restart_observatorium_api()
-            self.state.mark_step_completed("restart_observatorium_api")
-        else:
-            logger.info("Step already completed: restart_observatorium_api")
+        with self.state.step("restart_observatorium_api", logger) as should_run:
+            if should_run:
+                self._restart_observatorium_api()
 
-        if not self.state.is_step_completed("verify_observability_pods"):
-            self._verify_observability_pods()
-            self.state.mark_step_completed("verify_observability_pods")
-        else:
-            logger.info("Step already completed: verify_observability_pods")
+        with self.state.step("verify_observability_pods", logger) as should_run:
+            if should_run:
+                self._verify_observability_pods()
 
-        if not self.state.is_step_completed("verify_metrics_collection"):
-            self._verify_metrics_collection()
-            self.state.mark_step_completed("verify_metrics_collection")
-        else:
-            logger.info("Step already completed: verify_metrics_collection")
+        with self.state.step("verify_metrics_collection", logger) as should_run:
+            if should_run:
+                self._verify_metrics_collection()
 
     @dry_run_skip(message="Skipping wait for ManagedCluster connections")
     def _verify_managed_clusters_connected(self, timeout: int = CLUSTER_VERIFY_TIMEOUT):
