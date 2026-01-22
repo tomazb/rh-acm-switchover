@@ -554,7 +554,9 @@ class PostActivationVerification:
             return
 
         logger.info("Ensuring disable-auto-import annotations are cleared...")
-        managed_clusters = self._get_managed_clusters()
+        # Force refresh to ensure we have fresh data after klusterlet verification
+        # which may have taken time and annotations could have been cleared
+        managed_clusters = self._get_managed_clusters(force_refresh=True)
 
         flagged = []
         for mc in managed_clusters:

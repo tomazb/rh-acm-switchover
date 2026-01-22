@@ -4,7 +4,7 @@ Finalization and rollback module for ACM switchover.
 
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from kubernetes.client.rest import ApiException
 
@@ -700,7 +700,7 @@ class Finalization:
         self,
         compactor_pods: List[Dict],
         api_pods: List[Dict],
-    ) -> tuple:
+    ) -> Tuple[List[Dict], List[Dict]]:
         """
         Wait for observability pods to scale down with polling.
 
