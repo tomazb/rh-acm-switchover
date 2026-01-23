@@ -90,7 +90,7 @@ The pytest suite drives the Python orchestrator. Key options (CLI or env vars):
 - `--primary-context` / `--secondary-context` (or `E2E_PRIMARY_CONTEXT`, `E2E_SECONDARY_CONTEXT`)
 - `--e2e-cycles` (default 1 via CLI, default 5 inside orchestrator)
 - `--e2e-output-dir` (default: pytest temp dir)
-- `--e2e-method` (passive only) and `--e2e-old-hub-action` (secondary|decommission)
+- `--e2e-method` (passive|full) and `--e2e-old-hub-action` (secondary|decommission|none)
 - `--e2e-stop-on-failure` to halt after the first failed cycle
 - `--e2e-cooldown` (default 30) seconds between cycles
 

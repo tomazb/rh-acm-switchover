@@ -99,6 +99,71 @@ class TestE2ESwitchover:
         assert len(metrics_files) == cycles, \
             f"Expected {cycles} cycle metrics files, found {len(metrics_files)}"
 
+    @pytest.mark.parametrize(
+        "method,old_hub_action",
+        [
+            ("passive", "secondary"),
+            ("passive", "decommission"),
+            ("passive", "none"),
+            ("full", "secondary"),
+            ("full", "decommission"),
+            ("full", "none"),
+        ],
+        ids=[
+            "passive-secondary",
+            "passive-decommission",
+            "passive-none",
+            "full-secondary",
+            "full-decommission",
+            "full-none",
+        ],
+    )
+    def test_switchover_method_and_action_combinations(
+        self,
+        e2e_config: RunConfig,
+        require_cluster_contexts,
+        validate_cluster_access,
+        cycle_output_dir: Path,
+        method: str,
+        old_hub_action: str,
+    ):
+        """
+        Test switchover with all supported method and old-hub-action combinations.
+
+        This parametrized test verifies that all CLI-supported combinations
+        of --method (passive/full) and --old-hub-action (secondary/decommission/none)
+        complete successfully.
+
+        Args:
+            method: Switchover method - 'passive' (continuous sync) or 'full' (one-time restore)
+            old_hub_action: Action for old hub - 'secondary', 'decommission', or 'none'
+        """
+        from dataclasses import replace
+
+        config = replace(
+            e2e_config,
+            cycles=1,
+            method=method,
+            old_hub_action=old_hub_action,
+            output_dir=cycle_output_dir,
+            stop_on_failure=True,
+        )
+
+        orchestrator = E2EOrchestrator(config)
+        result = orchestrator.run_all_cycles()
+
+        assert result.success_rate == 100.0, (
+            f"Switchover with method={method}, old_hub_action={old_hub_action} should succeed"
+        )
+
+        # Verify the cycle result
+        assert len(orchestrator.cycle_results) == 1
+        cycle_result = orchestrator.cycle_results[0]
+        assert cycle_result.success, f"Cycle failed: {cycle_result.error}"
+
+        # Verify manifest was written with correct config
+        assert orchestrator.manifest_path.exists(), "Manifest should be created"
+
     def test_switchover_with_secondary_action(
         self,
         e2e_config: RunConfig,

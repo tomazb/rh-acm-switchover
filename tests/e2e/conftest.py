@@ -50,7 +50,7 @@ def pytest_addoption(parser):
         "--e2e-method",
         action="store",
         default=os.environ.get("E2E_METHOD", "passive"),
-        choices=["passive"],
+        choices=["passive", "full"],
         help="Switchover method (env: E2E_METHOD, default: passive)"
     )
     
@@ -58,7 +58,7 @@ def pytest_addoption(parser):
         "--e2e-old-hub-action",
         action="store",
         default=os.environ.get("E2E_OLD_HUB_ACTION", "secondary"),
-        choices=["secondary", "decommission"],
+        choices=["secondary", "decommission", "none"],
         help="Action for old hub after switchover (env: E2E_OLD_HUB_ACTION, default: secondary)"
     )
     
