@@ -276,6 +276,14 @@ if [[ $PRIMARY_BSL -gt 0 ]]; then
         check_pass "Primary hub: BackupStorageLocation '$BSL_NAME' is Available"
     else
         check_fail "Primary hub: BackupStorageLocation '$BSL_NAME' phase is '$BSL_PHASE' (expected: Available)"
+        echo -e "${RED}       Unavailable BSL means restores cannot proceed${NC}"
+        BSL_CONDITIONS=$(oc --context="$PRIMARY_CONTEXT" get $RES_BSL "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+            jq -r '.status.conditions // [] | map("\(.type)=\(.status) reason=\(.reason // "n/a") msg=\(.message // "n/a")") | join("; ")')
+        if [[ -n "$BSL_CONDITIONS" ]]; then
+            echo -e "${RED}       BSL conditions: $BSL_CONDITIONS${NC}"
+        else
+            echo -e "${YELLOW}       BSL conditions: none reported${NC}"
+        fi
     fi
 else
     check_fail "Primary hub: No BackupStorageLocation found"
@@ -290,6 +298,14 @@ if [[ $SECONDARY_BSL -gt 0 ]]; then
         check_pass "Secondary hub: BackupStorageLocation '$BSL_NAME' is Available"
     else
         check_fail "Secondary hub: BackupStorageLocation '$BSL_NAME' phase is '$BSL_PHASE' (expected: Available)"
+        echo -e "${RED}       Unavailable BSL means restores cannot proceed${NC}"
+        BSL_CONDITIONS=$(oc --context="$SECONDARY_CONTEXT" get $RES_BSL "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+            jq -r '.status.conditions // [] | map("\(.type)=\(.status) reason=\(.reason // "n/a") msg=\(.message // "n/a")") | join("; ")')
+        if [[ -n "$BSL_CONDITIONS" ]]; then
+            echo -e "${RED}       BSL conditions: $BSL_CONDITIONS${NC}"
+        else
+            echo -e "${YELLOW}       BSL conditions: none reported${NC}"
+        fi
     fi
 else
     check_fail "Secondary hub: No BackupStorageLocation found"
@@ -537,10 +553,20 @@ if [[ "$METHOD" == "passive" ]]; then
     
     if [[ -n "$PASSIVE_RESTORE_NAME" ]]; then
         PHASE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
+        LAST_MESSAGE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.lastMessage}' 2>/dev/null)
         if [[ "$PHASE" == "Enabled" ]] || [[ "$PHASE" == "Completed" ]] || [[ "$PHASE" == "Finished" ]]; then
             check_pass "Secondary hub: Found passive sync restore '$PASSIVE_RESTORE_NAME' in state: $PHASE"
         else
             check_fail "Secondary hub: Passive sync restore '$PASSIVE_RESTORE_NAME' exists but phase is: $PHASE (expected: Enabled, Completed, or Finished)"
+            if [[ -n "$LAST_MESSAGE" ]]; then
+                echo -e "${RED}       Restore message: $LAST_MESSAGE${NC}"
+            fi
+            BSL_CONDITIONS=$(oc --context="$SECONDARY_CONTEXT" get $RES_BSL -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+                jq -r '.items[0].status.conditions // [] | map("\(.type)=\(.status) reason=\(.reason // "n/a") msg=\(.message // "n/a")") | join("; ")')
+            if [[ -n "$BSL_CONDITIONS" ]]; then
+                echo -e "${RED}       BSL conditions: $BSL_CONDITIONS${NC}"
+            fi
+            echo -e "${RED}       Unavailable BSL means restores cannot proceed${NC}"
         fi
     else
         check_fail "Secondary hub: No passive sync restore found (required for Method 1). Expected a Restore with spec.syncRestoreWithNewBackups=true or named '$RESTORE_PASSIVE_SYNC_NAME'"

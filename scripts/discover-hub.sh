@@ -162,33 +162,123 @@ get_ocp_channel() {
 # Returns: "passive-sync", "full-restore", "finished", "none"
 get_restore_state() {
     local ctx="$1"
-    
-    # Get latest restore
+
+    local restore_json
+    restore_json=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_RESTORE -n "$BACKUP_NAMESPACE" \
+        --sort-by=.metadata.creationTimestamp -o json 2>/dev/null || echo "")
+
+    if [[ -z "$restore_json" ]] || [[ "$restore_json" == "null" ]]; then
+        echo "none"
+        return
+    fi
+
     local restore_name
-    restore_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_RESTORE -n "$BACKUP_NAMESPACE" \
-        --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || echo "")
-    
+    restore_name=$(echo "$restore_json" | jq -r '.items[-1].metadata.name // empty' 2>/dev/null || echo "")
+
     if [[ -z "$restore_name" ]]; then
         echo "none"
         return
     fi
-    
-    local phase
-    phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_RESTORE "$restore_name" -n "$BACKUP_NAMESPACE" \
-        -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-    
-    local sync_enabled
-    sync_enabled=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_RESTORE "$restore_name" -n "$BACKUP_NAMESPACE" \
-        -o jsonpath='{.spec.syncRestoreWithNewBackups}' 2>/dev/null || echo "false")
-    
+
+    local phase sync_enabled last_message
+    phase=$(echo "$restore_json" | jq -r '.items[-1].status.phase // empty' 2>/dev/null || echo "")
+    sync_enabled=$(echo "$restore_json" | jq -r '.items[-1].spec.syncRestoreWithNewBackups // false' 2>/dev/null || echo "false")
+    last_message=$(echo "$restore_json" | jq -r '.items[-1].status.lastMessage // empty' 2>/dev/null || echo "")
+
     if [[ "$sync_enabled" == "true" ]] && [[ "$phase" == "Enabled" ]]; then
         echo "passive-sync"
+    elif [[ "$sync_enabled" == "true" ]] && [[ -n "$phase" ]]; then
+        if [[ -n "$last_message" ]]; then
+            last_message=$(echo "$last_message" | tr '\n' ' ')
+            echo "passive-sync-error:${phase}:${last_message}"
+        else
+            echo "passive-sync-error:${phase}"
+        fi
     elif [[ "$phase" == "Finished" ]] || [[ "$phase" == "Completed" ]]; then
         echo "finished"
     elif [[ -n "$phase" ]]; then
         echo "in-progress:$phase"
     else
         echo "none"
+    fi
+}
+
+# Get BackupStorageLocation status for a context
+# Returns: "available", "none", or "unavailable:<name>:<phase>:<detail>"
+get_bsl_status() {
+    local ctx="$1"
+
+    local bsl_json
+    bsl_json=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BSL -n "$BACKUP_NAMESPACE" -o json 2>/dev/null || echo "")
+
+    if [[ -z "$bsl_json" ]] || [[ "$bsl_json" == "null" ]]; then
+        echo "none"
+        return
+    fi
+
+    local bsl_name
+    bsl_name=$(echo "$bsl_json" | jq -r '.items[0].metadata.name // empty' 2>/dev/null || echo "")
+    if [[ -z "$bsl_name" ]]; then
+        echo "none"
+        return
+    fi
+
+    local bsl_phase
+    bsl_phase=$(echo "$bsl_json" | jq -r '.items[0].status.phase // "unknown"' 2>/dev/null || echo "unknown")
+    if [[ "$bsl_phase" == "Available" ]]; then
+        echo "available"
+        return
+    fi
+
+    local bsl_reason bsl_message
+    bsl_reason=$(echo "$bsl_json" | jq -r '.items[0].status.conditions // [] | map(select(.status!="True")) | .[0].reason // empty' 2>/dev/null || echo "")
+    bsl_message=$(echo "$bsl_json" | jq -r '.items[0].status.conditions // [] | map(select(.status!="True")) | .[0].message // empty' 2>/dev/null || echo "")
+    bsl_message=$(echo "$bsl_message" | tr '\n' ' ')
+
+    local detail=""
+    if [[ -n "$bsl_reason" ]]; then
+        detail="$bsl_reason"
+    elif [[ -n "$bsl_message" ]]; then
+        detail="$bsl_message"
+    fi
+
+    if [[ -n "$detail" ]]; then
+        echo "unavailable:${bsl_name}:${bsl_phase}:${detail}"
+    else
+        echo "unavailable:${bsl_name}:${bsl_phase}"
+    fi
+}
+
+# Format a human-readable BSL note for state output
+format_bsl_state_note() {
+    local bsl_state="$1"
+
+    if [[ "$bsl_state" == unavailable:* ]]; then
+        IFS=':' read -r _ bsl_name bsl_phase bsl_detail <<< "$bsl_state"
+        if [[ -n "$bsl_detail" ]]; then
+            echo "BSL ${bsl_name} ${bsl_phase}: ${bsl_detail}"
+        else
+            echo "BSL ${bsl_name} ${bsl_phase}"
+        fi
+    elif [[ "$bsl_state" == "none" ]]; then
+        echo "No BackupStorageLocation found"
+    else
+        echo ""
+    fi
+}
+
+format_restore_reason() {
+    local reason="$1"
+
+    if [[ -z "$reason" ]]; then
+        echo ""
+        return
+    fi
+
+    if [[ ${#reason} -gt 80 ]]; then
+        echo $'\n'"    Reason: ${reason}"
+    else
+        echo " (Reason: ${reason})"
     fi
 }
 
@@ -435,8 +525,9 @@ determine_hub_role() {
     local ctx="$1"
     local backup_state="$2"
     local restore_state="$3"
-    local available_mc="$4"
-    local total_mc="$5"
+    local bsl_state="$4"
+    local available_mc="$5"
+    local total_mc="$6"
     
     local role="unknown"
     local state=""
@@ -454,6 +545,41 @@ determine_hub_role() {
         # Passive sync running = Secondary in standby mode
         role="secondary"
         state="Secondary hub in passive-sync mode (ready for switchover)"
+        local bsl_note
+        bsl_note=$(format_bsl_state_note "$bsl_state")
+        if [[ -n "$bsl_note" ]]; then
+            state="$state ($bsl_note)"
+        fi
+    elif [[ "$restore_state" == passive-sync-error:* ]]; then
+        local restore_payload="${restore_state#passive-sync-error:}"
+        local restore_phase restore_reason
+        IFS=':' read -r restore_phase restore_reason <<< "$restore_payload"
+        role="standby"
+        if [[ "$restore_phase" == "Error" ]]; then
+            state="Passive sync configured but restore is in Error state"
+        else
+            state="Passive sync configured but restore is in ${restore_phase} state"
+        fi
+        local reason_note
+        reason_note=$(format_restore_reason "$restore_reason")
+        if [[ -n "$reason_note" ]]; then
+            state="$state$reason_note"
+        fi
+        local bsl_note
+        bsl_note=$(format_bsl_state_note "$bsl_state")
+        if [[ -n "$bsl_note" ]]; then
+            state="$state ($bsl_note)"
+        fi
+    elif [[ "$restore_state" == in-progress:* ]]; then
+        # Restore exists but is not in an expected state
+        local restore_phase="${restore_state#in-progress:}"
+        role="standby"
+        state="Standby hub with restore in ${restore_phase} state"
+        local bsl_note
+        bsl_note=$(format_bsl_state_note "$bsl_state")
+        if [[ -n "$bsl_note" ]]; then
+            state="$state ($bsl_note)"
+        fi
     elif [[ "$backup_state" == "collision" ]]; then
         # BackupCollision = Recently restored, needs configuration
         role="standby"
@@ -519,15 +645,16 @@ analyze_context() {
     ocp_channel=$(get_ocp_channel "$ctx")
     
     # Gather information
-    local backup_state restore_state available_mc total_mc
+    local backup_state restore_state bsl_state available_mc total_mc
     backup_state=$(get_backup_schedule_state "$ctx")
     restore_state=$(get_restore_state "$ctx")
+    bsl_state=$(get_bsl_status "$ctx")
     total_mc=$(get_total_mc_count "$ctx")
     available_mc=$(get_available_mc_count "$ctx")
     
     # Determine role
     local result
-    result=$(determine_hub_role "$ctx" "$backup_state" "$restore_state" "$available_mc" "$total_mc")
+    result=$(determine_hub_role "$ctx" "$backup_state" "$restore_state" "$bsl_state" "$available_mc" "$total_mc")
     local role="${result%%|*}"
     local state="${result#*|}"
     

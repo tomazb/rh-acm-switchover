@@ -148,6 +148,24 @@ case "$*" in
         echo "Available"
         exit 0
         ;;
+    *"--context=primary-ok"*"get "*"backupstoragelocation"*"default"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"status":{"conditions":[{"type":"Available","status":"True"}]}}
+BSL_JSON
+        exit 0
+        ;;
+    *"--context=secondary-ok"*"get "*"backupstoragelocation"*"default"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"status":{"conditions":[{"type":"Available","status":"True"}]}}
+BSL_JSON
+        exit 0
+        ;;
+    *"--context=secondary-ok"*"get "*"backupstoragelocation"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"items":[{"metadata":{"name":"default"},"status":{"phase":"Available","conditions":[{"type":"Available","status":"True"}]}}]}
+BSL_JSON
+        exit 0
+        ;;
     
     # Cluster Health checks (Check 8) - nodes and clusteroperators
     "--context=primary-ok get nodes --no-headers")
@@ -432,6 +450,22 @@ EOF
         ;;
     *"--context=new-hub"*"get "*"backupstoragelocation"*"default"*"-n open-cluster-management-backup"*"status.phase"*)
         echo "Available"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupstoragelocation"*"default"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"status":{"conditions":[{"type":"Available","status":"True"}]}}
+BSL_JSON
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupstoragelocation"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"items":[{"metadata":{"name":"default"},"status":{"phase":"Available","conditions":[{"type":"Available","status":"True"}]}}]}
+BSL_JSON
+        exit 0
+        ;;
+    *"get "*"restore"*"lastMessage"*)
+        echo ""
         exit 0
         ;;
     # MCH checks for new-hub - match both short and full API group names
