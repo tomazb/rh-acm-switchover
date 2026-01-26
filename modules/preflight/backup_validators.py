@@ -227,6 +227,15 @@ class BackupValidator(BaseValidator):
                     namespace=BACKUP_NAMESPACE,
                 )
 
+                if not backups:
+                    self.add_result(
+                        "Backup status",
+                        False,
+                        "no backups found after waiting for in-progress backups to complete (backups may have been deleted)",
+                        critical=True,
+                    )
+                    return
+
                 backups.sort(
                     key=lambda b: b.get("metadata", {}).get("creationTimestamp", ""),
                     reverse=True,
