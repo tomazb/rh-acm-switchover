@@ -61,12 +61,17 @@ for log_file in sorted(results_dir.glob("cycle_*.log")):
     if "SWITCHOVER COMPLETED SUCCESSFULLY" in content:
         # Try to extract duration from state or logs
         # This is approximate - could be improved
-        match = re.search(r'Started at: ([\d-]+T[\d:]+)', content)
-        match2 = re.search(r'completed at: ([\d-]+T[\d:]+)', content)
+        match = re.search(r'Started at: ([\d-]+T[\d:.]+(?:Z|[+-]\d\d:\d\d)?)', content)
+        match2 = re.search(r'completed at: ([\d-]+T[\d:.]+(?:Z|[+-]\d\d:\d\d)?)', content)
         if match and match2:
             from datetime import datetime
-            start = datetime.fromisoformat(match.group(1).replace('+00:00', '').replace('+01:00', ''))
-            end = datetime.fromisoformat(match2.group(1).replace('+00:00', '').replace('+01:00', ''))
+            def parse_iso(value: str) -> datetime:
+                if value.endswith("Z"):
+                    value = value[:-1] + "+00:00"
+                return datetime.fromisoformat(value)
+
+            start = parse_iso(match.group(1))
+            end = parse_iso(match2.group(1))
             duration = (end - start).total_seconds()
             timings.append(duration)
 
