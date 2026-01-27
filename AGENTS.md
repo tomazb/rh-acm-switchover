@@ -107,9 +107,14 @@ Import from `lib/constants.py` - never hard-code namespaces (`BACKUP_NAMESPACE`,
 
 ## Testing
 
+Keep tests current with any behavior changes. The default test run excludes E2E; run E2E on demand.
+
 ```bash
-# Run all tests with coverage
+# Core tests with coverage (default, excludes E2E)
 ./run_tests.sh
+
+# On-demand E2E
+RUN_E2E=1 ./run_tests.sh
 
 # Quick pytest run
 pytest tests/ -v
