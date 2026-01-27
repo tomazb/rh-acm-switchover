@@ -13,6 +13,7 @@ This is a Python CLI tool for automating Red Hat Advanced Cluster Management (AC
 - **Prefer explicit over implicit**: Make control flow, side effects, and configuration obvious at call sites.
 - **Keep changes minimal and localized**: Touch as few files and code paths as possible to implement a change.
 - **Respect existing patterns and abstractions**: Align with current architecture and style unless there is a strong reason to refactor.
+- **Keep AGENTS.md current**: Update this file when making significant architectural, workflow, module, or CLI changes.
 
 ## Architecture
 
@@ -24,9 +25,14 @@ This is a Python CLI tool for automating Red Hat Advanced Cluster Management (AC
 - `constants.py` - Centralized namespaces, timeouts, ACM spec field names
 - `exceptions.py` - Hierarchy: `SwitchoverError` → `TransientError`/`FatalError` → `ValidationError`/`ConfigurationError`
 - `validation.py` - Input validation with `InputValidator` class and `SecurityValidationError`
+- `rbac_validator.py` - RBAC permission checks for operator/validator roles
+- `waiter.py` - Generic polling/wait utilities for async conditions
 
 **Workflow Modules** (`modules/`):
-- `preflight.py` / `preflight_validators.py` - Pre-flight validation checks
+- `preflight/` - Modular pre-flight validators
+- `preflight_coordinator.py` - Coordinates pre-flight validation across modules
+- `preflight_validators.py` - Deprecated compatibility shim (prefer `modules.preflight`)
+- `backup_schedule.py` - Shared helpers for BackupSchedule management
 - `primary_prep.py` - Pause backups, disable auto-import, scale down Thanos
 - `activation.py` - Patch restore resource to activate managed clusters
 - `post_activation.py` - Verify cluster connections, fix klusterlet agents
@@ -40,10 +46,11 @@ The switchover executes phases sequentially, with state tracking for resume capa
 ```
 INIT → PREFLIGHT → PRIMARY_PREP → ACTIVATION → POST_ACTIVATION → FINALIZATION → COMPLETED
 ```
+Defined phases in `Phase` enum: `INIT`, `PREFLIGHT`, `PRIMARY_PREP`, `SECONDARY_VERIFY`, `ACTIVATION`, `POST_ACTIVATION`, `FINALIZATION`, `COMPLETED`, `FAILED`. The main switchover flow uses the diagram above; `FAILED` is set on errors.
 
 | Phase | Module | Key Actions |
 |-------|--------|-------------|
-| `PREFLIGHT` | `preflight.py` | Validate both hubs, check ACM versions, verify backups |
+| `PREFLIGHT` | `preflight_coordinator.py` + `preflight/` | Validate both hubs, check ACM versions, verify backups |
 | `PRIMARY_PREP` | `primary_prep.py` | Pause BackupSchedule, add disable-auto-import annotations, scale Thanos |
 | `ACTIVATION` | `activation.py` | Patch restore with `veleroManagedClustersBackupName: latest` |
 | `POST_ACTIVATION` | `post_activation.py` | Wait for ManagedClusters to connect, verify klusterlet agents |
@@ -141,8 +148,9 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 ### CLI Validation Guidance (Contributor note)
 - CLI validation is implemented in `lib/validation.py` (class `InputValidator`). When changing existing arguments or adding new ones, update the validator accordingly and add tests in `tests/test_validation.py`.
 - Current important cross-argument rules (enforced by `InputValidator.validate_all_cli_args`):
-    - `--secondary-context` is required for switchover operations unless `--decommission` is set.
+    - `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
     - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
+    - `--setup` requires `--admin-kubeconfig` and validates `--token-duration` format (e.g., `48h`, `30m`, `3600s`).
 - If you change these rules, update `docs/reference/validation-rules.md`, `docs/operations/usage.md`, and `docs/operations/quickref.md` to match.
 
 ## Code Review Checklist for Future Refactoring
