@@ -2,7 +2,7 @@
 
 **Passive (Continuous) and One-Time Full Restore**
 
-**Last Updated:** 2025-12-02
+**Last Updated:** 2026-01-28
 
 ---
 
@@ -317,6 +317,8 @@ oc get managedcluster.cluster.open-cluster-management.io \
 Stop the Thanos compactor to prevent write conflicts on shared object storage while the secondary hub is being activated.
 
 > **Defaults (RHACM 2.3–2.14):** `observability-thanos-compact` runs as a StatefulSet with **1** replica by default, and `observability-observatorium-api` runs as a Deployment with **2** replicas for high availability.
+>
+> **IMPORTANT:** Scaling these components down is a **temporary mitigation during the active switchover window only**. In a long‑lived secondary hub scenario, scaling alone is not reliable because operators/controllers (or GitOps) will eventually reconcile replicas back to their defaults. For any hub that will remain as a secondary, Observability must ultimately be disabled by **deleting the `MultiClusterObservability` (MCO) object** on that hub. The MCO object is included in ACM backups and will be restored correctly when that hub is promoted again during a future switchover.
 
 ```bash
 oc scale statefulset observability-thanos-compact \
@@ -381,6 +383,30 @@ done
 ```
 
 > **IMPORTANT:** Do not proceed until passive sync shows latest data has been restored.
+
+#### ACM 2.14+: Immediate Import Annotation for ManagedClusters
+
+Starting with ACM 2.14, the default `autoImportStrategy` is `ImportOnly`. With `ImportOnly`, a `ManagedCluster` that is already known by the hub will **not** be automatically re‑imported after a restore. This behavior is intentional for uncontrolled DR scenarios (for example, when a primary hub comes back unexpectedly after clusters have moved to another hub), but it can be problematic for **planned** failovers or simulations where you expect clusters to be re‑imported.
+
+Before triggering activation or a full restore on the destination hub **when the import strategy is `ImportOnly`** (ConfigMap `import-controller-config` is missing or has `autoImportStrategy: ImportOnly`), add the `immediate-import` annotation to all non‑local `ManagedCluster` objects on that hub:
+
+```bash
+# On the destination hub, when autoImportStrategy is ImportOnly
+oc get configmap import-controller-config -n multicluster-engine -o yaml 2>/dev/null || echo "ConfigMap not found - using default ImportOnly"
+
+for mc in $(oc get managedcluster.cluster.open-cluster-management.io \
+  -o name | grep -v local-cluster); do
+  oc annotate "$mc" import.open-cluster-management.io/immediate-import='' --overwrite
+done
+```
+
+**Behavior details:**
+
+- The annotation **must be present with an empty value** (`''`) in order to trigger the auto‑import process under `ImportOnly`.
+- When auto‑import completes successfully, the controller sets the annotation value to `Completed`.
+- An annotation with a non‑empty value (such as `Completed`) will **not** trigger another auto‑import attempt; there is no need to remove the annotation.
+
+> **Relationship to Step 4b (ImportAndSync):** For ACM 2.14+, using the per‑cluster `immediate-import` annotation under the default `ImportOnly` strategy is often preferable to flipping the global strategy to `ImportAndSync`. Use the `ImportAndSync` override from [Step 4b](#step-4b-set-auto-import-strategy-to-importandsync-acm-214-with-existing-clusters) only when you intentionally require continuous re‑application from the hub you are promoting and plan to remove the ConfigMap again in [Step 7](#step-7-reset-auto-import-strategy-to-default-acm-214-if-set-on-new-primary-hub).
 
 ---
 
@@ -590,6 +616,8 @@ oc get managedcluster.cluster.open-cluster-management.io \
 
 **All clusters should show `AVAILABLE=True` and `JOINED=True` within 5-10 minutes.**
 
+> **Tip (future switchovers):** After you have verified that all clusters are `AVAILABLE=True` on the new hub and that **all Hive ClusterDeployments have `preserveOnDelete=true`**, any stale `ManagedCluster` objects that remain in `Unknown` state on the old hub can later be safely deleted. Cleaning up these `Unknown` entries on the old/secondary hub reduces noise and makes future switchovers or simulated failovers less painful.
+
 ---
 
 ### Step 7: Reset Auto-Import Strategy to Default (ACM 2.14+) if set on New Primary Hub
@@ -694,6 +722,34 @@ oc get route grafana -n open-cluster-management-observability -o jsonpath='{.spe
 - Verify observatorium-api pods were restarted (Step 8)
 - Check metrics-collector pods on managed clusters are running
 - Verify network connectivity from managed clusters to hub
+
+---
+
+### Optional: Disable Observability Permanently on Old Secondary Hub (Non-Decommission Case)
+
+If you keep the old primary hub as a warm secondary/DR hub (that is, you **do not** decommission it immediately), Observability on that hub must be fully disabled to avoid dual writers and split‑brain scenarios:
+
+- **Coordinate with GitOps first:** If GitOps manages the `MultiClusterObservability` (MCO) resource, pause or adjust it so that it does **not** continuously recreate the MCO object on the now‑secondary hub.
+- **Delete the MCO resource on the secondary hub:**
+  ```bash
+  # On the OLD/secondary hub
+  oc get multiclusterobservability.observability.open-cluster-management.io -A
+
+  oc delete multiclusterobservability.observability.open-cluster-management.io observability \
+    -n open-cluster-management-observability
+
+  # Wait for Observability pods to terminate (may take 2-5 minutes):
+  oc get pods -n open-cluster-management-observability
+  ```
+- **Verify no Observability pods remain:**
+  ```bash
+  oc get pods -n open-cluster-management-observability
+  # Should show: No resources found (or only terminating pods)
+  ```
+
+> **Behavior note:** The `MultiClusterObservability` object is part of the ACM backup/restore set. Deleting it on the secondary hub is safe for long‑lived secondary scenarios because it will be restored correctly during a future switchover when that hub is promoted again.
+>
+> **If Observability pods are still running** in `open-cluster-management-observability` after the MCO object has been deleted (and GitOps is not recreating it), this indicates a product bug. Capture details and open a case with Red Hat support.
 
 ---
 
@@ -913,6 +969,8 @@ done
 ```
 
 > **IMPORTANT:** If clusters are still showing "Available" on old hub, STOP. This means they haven't fully moved to new hub. Wait and verify Step 6 succeeded.
+>
+> **Note (long‑lived secondary hubs):** Once this hub is acting purely as a secondary and all clusters are `AVAILABLE=True` on the new hub, it is safe—and recommended—to delete any remaining `ManagedCluster` objects that are stuck in `Unknown` state on the old hub, even if you plan to keep the old hub as a DR secondary. This cleanup reduces confusion and makes any future switchover back to this hub less painful by avoiding large numbers of stale `ManagedCluster` objects.
 
 #### Step 14.4: Delete MultiClusterHub resource
 
@@ -1068,6 +1126,78 @@ oc get restore.cluster.open-cluster-management.io -n open-cluster-management-bac
 oc describe restore.cluster.open-cluster-management.io <restore-name> -n open-cluster-management-backup
 # Check Events section for errors
 ```
+
+---
+
+### Issue: Passive Restore in "Error" State with Velero Restores in "FailedValidation" (BSL Unavailable)
+
+**Symptoms:**
+
+- The passive restore on the secondary hub (for example, `restore-acm-passive-sync`) shows:
+  - `status.phase: Error`
+  - `status.lastMessage` similar to:
+    - `Velero restore <name> has failed validation or encountered errors`
+- The corresponding `restore.velero.io` objects (for example, `restore-acm-passive-sync-acm-resources-schedule-<timestamp>` and `restore-acm-passive-sync-acm-resources-generic-schedule-<timestamp>`) have:
+  - `status.phase: FailedValidation`
+  - `status.validationErrors` containing messages such as:
+    - `the BSL <name> is unavailable, cannot retrieve the backup. please retry the restore after the BSL becomes available`
+
+This typically occurs when the `BackupStorageLocation` (BSL) was temporarily unavailable during a restore attempt.
+
+**Solution:**
+
+1. **Confirm BackupStorageLocation is Available on the Secondary Hub**
+
+   ```bash
+   oc --context=<secondary> -n open-cluster-management-backup \
+     get backupstoragelocations.velero.io -o wide
+   ```
+
+   Ensure the BSL used by ACM backups (for example, `acm-backup-dpa-1`) reports a healthy/Available phase and correct endpoint configuration.
+
+2. **Delete the Failed Velero Restores Related to the Passive Sync Restore**
+
+   Once the BSL is healthy again, delete the specific `restore.velero.io` objects that failed validation. You can delete them explicitly or via a small loop:
+
+   ```bash
+   # Option A: Delete known failed restore names
+   oc --context=<secondary> -n open-cluster-management-backup \
+     delete restore.velero.io restore-acm-passive-sync-acm-resources-schedule-<timestamp>
+
+   oc --context=<secondary> -n open-cluster-management-backup \
+     delete restore.velero.io restore-acm-passive-sync-acm-resources-generic-schedule-<timestamp>
+
+   # Option B: Delete all passive-sync restores in FailedValidation phase
+   for r in $(oc --context=<secondary> -n open-cluster-management-backup \
+     get restore.velero.io -o json | \
+     jq -r '.items[] | select(.metadata.name | startswith("restore-acm-passive-sync-")) | select(.status.phase=="FailedValidation") | .metadata.name'); do
+     echo "Deleting failed Velero restore $r"
+     oc --context=<secondary> -n open-cluster-management-backup delete restore.velero.io "$r"
+   done
+   ```
+
+3. **Allow the Passive-Sync Controller to Retry**
+
+- Wait for at least one `restoreSyncInterval` period (for example, 10 minutes), **or**
+- Force a reconcile by restarting the restore controller pod (per your operational practices).
+
+The passive‑sync controller should recreate new `restore.velero.io` objects that read from the same backups, now that the BSL is available.
+
+4. **Re-check the Cluster Restore and Velero Restores**
+
+   ```bash
+   oc --context=<secondary> -n open-cluster-management-backup \
+     get restore.cluster.open-cluster-management.io restore-acm-passive-sync
+
+   oc --context=<secondary> -n open-cluster-management-backup \
+     get restore.velero.io | grep restore-acm-passive-sync || true
+   ```
+
+   - Expected:
+     - New Velero restore objects have been created and progress to a successful phase.
+     - The passive restore `status.phase` moves back to `Enabled` (continuous passive sync) or `Finished` if you have already activated managed clusters.
+
+> **Why this is safe:** The failed Velero restore objects in `FailedValidation` never successfully applied data because the BSL was unavailable. Deleting only these failed restore CRs allows the passive‑sync controller to retry from the same underlying backups once storage is reachable again; it does not roll back or delete any already‑restored resources.
 
 ---
 
