@@ -514,8 +514,13 @@ esac
     jq_script = mock_bin / "jq"
     jq_script.write_text(
         """#!/bin/bash
-# Mock jq - pass through to real jq
-exec /usr/bin/jq "$@"
+# Mock jq - pass through to real jq (from PATH)
+JQ_BIN="$(command -v jq || true)"
+if [[ -z "$JQ_BIN" ]]; then
+  echo "jq not found in PATH; please install jq to run integration tests" >&2
+  exit 127
+fi
+exec "$JQ_BIN" "$@"
 """,
         encoding="utf-8",
     )
@@ -731,8 +736,9 @@ case "$EXPR" in
         ;;
     *)
         # For unhandled expressions, delegate to real jq if available, else return empty
-        if command -v /usr/bin/jq &>/dev/null; then
-            echo "$INPUT" | /usr/bin/jq "$@" 2>/dev/null || echo ""
+        JQ_BIN="$(command -v jq || true)"
+        if [[ -n "$JQ_BIN" ]]; then
+            echo "$INPUT" | "$JQ_BIN" "$@" 2>/dev/null || echo ""
         else
             echo ""
         fi
