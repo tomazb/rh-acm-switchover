@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
+from typing import Callable, Iterable, Optional, Tuple
 
 from lib import (
     KubeClient,

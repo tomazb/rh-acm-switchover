@@ -84,6 +84,7 @@ def test_all_validators_importable():
     expected_symbols = [
         'AutoImportStrategyValidator',
         'BackupScheduleValidator',
+        'BackupStorageLocationValidator',
         'BackupValidator',
         'ClusterDeploymentValidator',
         'HubComponentValidator',

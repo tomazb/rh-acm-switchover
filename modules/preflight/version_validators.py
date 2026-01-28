@@ -1,4 +1,11 @@
-"""Version and compatibility validation checks."""
+"""Version and compatibility validation checks.
+
+TODO: This module has low test coverage (49%). Expand test cases to cover:
+- Version comparison edge cases (pre-release versions, build metadata)
+- Token expiration validation with various token formats
+- ACM version detection from different MCH states
+See TEST_REPORT.md for coverage details.
+"""
 
 import base64
 import json
@@ -139,6 +146,7 @@ class KubeconfigValidator(BaseValidator):
         """Check service account token expiration."""
         try:
             # Get current configuration to extract token
+            from kubernetes import client as k8s_client
             from kubernetes import config as k8s_config
 
             # Load the current kubeconfig
@@ -146,10 +154,14 @@ class KubeconfigValidator(BaseValidator):
 
             # Get the current configuration
             try:
-                current_config = k8s_config.Configuration.get_default_copy()
+                current_config = k8s_client.Configuration.get_default_copy()
             except Exception:
                 # Fallback for older kubernetes client versions
-                current_config = k8s_config.Configuration()
+                current_config = k8s_client.Configuration()
+                k8s_config.load_kube_config(
+                    context=client.context,
+                    client_configuration=current_config,
+                )
 
             # Extract token from Bearer auth
             auth_header = current_config.api_key.get("authorization", "")
@@ -278,6 +290,7 @@ class VersionValidator(BaseValidator):
                     version="v1",
                     plural="multiclusterhubs",
                     namespace=ACM_NAMESPACE,
+                    max_items=1,
                 )
                 if mchs:
                     mch = mchs[0]
@@ -412,6 +425,7 @@ class HubComponentValidator(BaseValidator):
                 version="v1alpha1",
                 plural="dataprotectionapplications",
                 namespace=BACKUP_NAMESPACE,
+                max_items=1,
             )
 
             if dpas:

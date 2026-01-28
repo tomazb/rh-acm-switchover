@@ -326,6 +326,12 @@ class InputValidator:
 
         Raises:
             ValidationError: If any argument validation fails
+
+        Note:
+            TODO: This function has high cyclomatic complexity (C901: 18).
+            Consider refactoring into smaller validation functions grouped by
+            argument type (contexts, methods, file paths, etc.) in a future PR
+            focused on maintainability improvements.
         """
         # Validate required context arguments
         if hasattr(args, "primary_context") and args.primary_context:

@@ -14,6 +14,7 @@ from modules.preflight.reporter import ValidationReporter
 VALIDATOR_CLASSES = [
     ("modules.preflight.backup_validators", "BackupValidator"),
     ("modules.preflight.backup_validators", "BackupScheduleValidator"),
+    ("modules.preflight.backup_validators", "BackupStorageLocationValidator"),
     ("modules.preflight.backup_validators", "PassiveSyncValidator"),
     ("modules.preflight.backup_validators", "ManagedClusterBackupValidator"),
     ("modules.preflight.cluster_validators", "ClusterDeploymentValidator"),

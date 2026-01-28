@@ -86,6 +86,7 @@ class BackupScheduleManager:
             version="v1beta1",
             plural="backupschedules",
             namespace=BACKUP_NAMESPACE,
+            max_items=1,
         )
 
     def _restore_saved_schedule(self) -> None:

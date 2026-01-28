@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from modules.preflight.backup_validators import (
     BackupValidator,
     BackupScheduleValidator,
+    BackupStorageLocationValidator,
     PassiveSyncValidator,
     ManagedClusterBackupValidator,
 )
@@ -61,10 +62,15 @@ class TestBackupValidator:
         assert results[0]["critical"] is True
         assert "no backups found" in results[0]["message"]
 
-    def test_backup_in_progress(self, reporter, mock_kube_client):
+    def test_backup_in_progress(self, reporter, mock_kube_client, mocker):
         """Test critical failure when backup is in progress."""
+        # Mock time functions to simulate timeout immediately
+        # First call returns 0, second call returns timeout+1 to exit loop immediately
+        mocker.patch("modules.preflight.backup_validators.time.sleep")
+        mocker.patch("modules.preflight.backup_validators.time.time", side_effect=[0, 601])
+        
         validator = BackupValidator(reporter)
-        # Mock backups with one in progress
+        # Mock backups with one in progress - stays in progress through all polls
         mock_kube_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "backup-in-progress", "creationTimestamp": "2025-12-31T10:00:00Z"},
@@ -275,6 +281,67 @@ class TestBackupScheduleValidator:
         assert results[0]["passed"] is False
         assert results[0]["critical"] is True
         assert "error checking BackupSchedule: API error" in results[0]["message"]
+
+
+class TestBackupStorageLocationValidator:
+    """Tests for BackupStorageLocationValidator."""
+
+    def test_no_bsl_found(self, reporter, mock_kube_client):
+        """Test critical failure when no BSL exists."""
+        validator = BackupStorageLocationValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
+
+        validator.run(mock_kube_client, "primary")
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "BackupStorageLocation (primary)"
+        assert results[0]["passed"] is False
+        assert "no BackupStorageLocation found" in results[0]["message"]
+
+    def test_bsl_available(self, reporter, mock_kube_client):
+        """Test success when BSL is Available."""
+        validator = BackupStorageLocationValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "default"}, "status": {"phase": "Available"}}
+        ]
+
+        validator.run(mock_kube_client, "secondary")
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "BackupStorageLocation (secondary)"
+        assert results[0]["passed"] is True
+        assert "Available" in results[0]["message"]
+
+    def test_bsl_unavailable_with_conditions(self, reporter, mock_kube_client):
+        """Test failure with condition details when BSL is not Available."""
+        validator = BackupStorageLocationValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "bsl-1"},
+                "status": {
+                    "phase": "Unavailable",
+                    "conditions": [
+                        {
+                            "type": "Available",
+                            "status": "False",
+                            "reason": "Unavailable",
+                            "message": "credentials invalid",
+                        }
+                    ],
+                },
+            }
+        ]
+
+        validator.run(mock_kube_client, "primary")
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert "bsl-1" in results[0]["message"]
+        assert "Unavailable" in results[0]["message"]
+        assert "credentials invalid" in results[0]["message"]
 
 
 class TestClusterDeploymentValidator:
@@ -587,6 +654,7 @@ class TestPassiveSyncValidator:
     def test_passive_sync_enabled(self, reporter, mock_kube_client):
         """Test success when passive sync is enabled."""
         validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
         mock_kube_client.get_custom_resource.return_value = {
             "status": {"phase": "Enabled", "lastMessage": "Sync active"}
         }
@@ -601,6 +669,7 @@ class TestPassiveSyncValidator:
     def test_passive_sync_finished(self, reporter, mock_kube_client):
         """Test success when passive sync finished."""
         validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
         mock_kube_client.get_custom_resource.return_value = {
             "status": {"phase": "Finished", "lastMessage": "Sync completed"}
         }
@@ -614,6 +683,8 @@ class TestPassiveSyncValidator:
     def test_passive_sync_not_found(self, reporter, mock_kube_client):
         """Test critical failure when passive sync restore not found."""
         validator = PassiveSyncValidator(reporter)
+        mock_kube_client.context = "secondary"
+        mock_kube_client.list_custom_resources.return_value = []
         mock_kube_client.get_custom_resource.return_value = None
 
         validator.run(mock_kube_client)
@@ -622,11 +693,12 @@ class TestPassiveSyncValidator:
         assert len(results) == 1
         assert results[0]["passed"] is False
         assert results[0]["critical"] is True
-        assert "not found" in results[0]["message"]
+        assert "No passive sync restore found" in results[0]["message"]
 
     def test_passive_sync_unexpected_phase(self, reporter, mock_kube_client):
         """Test critical failure when passive sync in unexpected state."""
         validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
         mock_kube_client.get_custom_resource.return_value = {
             "status": {"phase": "Failed", "lastMessage": "Sync failed"}
         }
@@ -637,6 +709,38 @@ class TestPassiveSyncValidator:
         assert len(results) == 1
         assert results[0]["passed"] is False
         assert "unexpected state" in results[0]["message"]
+
+    def test_passive_sync_surfaces_velero_validation_errors(self, reporter, mock_kube_client):
+        """Test that Velero validation errors are surfaced when referenced by ACM restore message."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.context = "secondary"
+        mock_kube_client.list_custom_resources.return_value = []
+
+        # First get_custom_resource call: ACM restore
+        # Second get_custom_resource call: referenced Velero restore
+        mock_kube_client.get_custom_resource.side_effect = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "status": {
+                    "phase": "Error",
+                    "lastMessage": "Velero restore restore-acm-passive-sync-acm-resources-schedule-123 has failed validation",
+                },
+            },
+            {
+                "status": {
+                    "phase": "FailedValidation",
+                    "validationErrors": ["the BSL acm-backup-dpa-1 is unavailable"],
+                }
+            },
+        ]
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert "validationErrors" in results[0]["message"]
+        assert "acm-backup-dpa-1" in results[0]["message"]
 
 
 class TestManagedClusterBackupValidator:

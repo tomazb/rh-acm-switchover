@@ -13,11 +13,11 @@ This report details 21 hidden logical errors and performance issues identified t
 **Status Tracking:**
 | Status | Count | Issues |
 |--------|-------|--------|
-| Resolved | 3 | #1, #3, #7 |
+| Resolved | 15 | #1, #3, #4, #5, #7, #8, #9, #10, #11, #12, #13, #14, #15, #17, #21 |
 | False-Positive | 4 | #2, #6, #18, #20 |
-| Open | 14 | #4, #5, #8-17, #19, #21 |
+| Open | 2 | #16, #19 |
 
-*Last updated: 2026-01-10*
+*Last updated: 2026-01-27*
 
 ---
 
@@ -247,7 +247,10 @@ def ensure_contexts(self, primary_context: str, secondary_context: str) -> None:
 
 **Severity:** HIGH
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-19  
+**Resolved In:** v1.4.11  
+**Resolution Notes:** Track active temp files and clean them up via atexit handler in `StateManager` to prevent orphaned `.tmp` files.
 
 **Description:**
 If `os.replace()` fails (e.g., cross-device link error, permission issue), the temp file is cleaned up. However, if `os.replace()` succeeds but the process crashes before the method returns, no cleanup occurs and `.tmp` files accumulate on disk.
@@ -322,7 +325,10 @@ def _write_state(self) -> None:
 
 **Severity:** HIGH
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-19  
+**Resolved In:** v1.4.11  
+**Resolution Notes:** Implemented `seen_version_change` tracking in `_verify_patch_applied()`. The code now distinguishes between "resourceVersion never changed" (API caching issue) and "resourceVersion changed but value incorrect", providing accurate error messages for each case.
 
 **Description:**
 The patch verification loop checks `after_resource_version != before_resource_version`. If the API server returns the same resourceVersion multiple times (rare but possible due to etcd caching or reconciliation), the loop will exhaust all 5 retries even though no progress is being made.
@@ -541,7 +547,10 @@ class Finalization:
 
 **Severity:** MEDIUM
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-27  
+**Resolved In:** v1.4.13  
+**Resolution Notes:** Re-verify the BackupSchedule by UID before deletion, skip recreation if the schedule changed, and refresh spec from the latest object. Deletion now uses a request timeout and handles 404s cleanly.
 
 **Description:**
 If multiple BackupSchedules exist (edge case), the code deletes `schedule_name` but doesn't verify it still exists before recreating it. A race condition with another process could cause it to delete the wrong schedule or delete a schedule that no longer exists.
@@ -719,7 +728,10 @@ Then modify phase handlers to call `save_state()` at end of phase or `flush_stat
 
 **Severity:** MEDIUM
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-27  
+**Resolved In:** v1.4.13  
+**Resolution Notes:** Added caching with mtime-based invalidation to `_load_kubeconfig_data()`. Cache attributes are stored on the instance and validated against file modification times before reuse.
 
 **Description:**
 The entire kubeconfig file(s) are loaded into memory every time `_load_kubeconfig_data` is called. This can be large and the function is called multiple times during post_activation phase for cluster verification.
@@ -825,7 +837,10 @@ class PostActivation:
 
 **Severity:** MEDIUM
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-19  
+**Resolved In:** v1.4.11  
+**Resolution Notes:** The `check_nodes()` function in `lib-common.sh` already uses a single JSON API call with jq parsing, exactly as recommended. No changes needed.
 
 **Description:**
 The script makes multiple separate `oc` calls in sequence to check node status. Each call spawns a new shell process and establishes a new connection to the API server, which is slow and inefficient.
@@ -893,7 +908,10 @@ check_nodes() {
 
 **Severity:** MEDIUM
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-27  
+**Resolved In:** v1.4.13  
+**Resolution Notes:** `list_custom_resources()` supports `max_items`, and single-item lookups now pass `max_items=1` to avoid unnecessary pagination (e.g., BackupSchedule, MCH, DPA). Pagination stops early when the limit is reached.
 
 **Description:**
 When listing custom resources with pagination, all items are accumulated into a list. For large clusters with thousands of resources (e.g., pods, events), this can consume significant memory and potentially cause OOM errors.
@@ -1015,7 +1033,10 @@ def iter_custom_resources(
 
 **Severity:** MEDIUM
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-19  
+**Resolved In:** v1.4.11  
+**Resolution Notes:** Added cached BackupSchedule retrieval in `Finalization._get_backup_schedules()` to avoid repeated API calls.
 
 **Description:**
 `_verify_new_backups` and `_fix_backup_schedule_collision` both list BackupSchedules. If called in sequence, the same API data is fetched twice, causing unnecessary API calls and slower execution.
@@ -1092,7 +1113,10 @@ class Finalization:
 
 **Severity:** MEDIUM
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-27  
+**Resolved In:** v1.4.13  
+**Resolution Notes:** Added `timeout_seconds` parameter to `delete_custom_resource()` and wired it into decommission and finalization delete calls to prevent hanging API requests.
 
 **Description:**
 Resource deletion (`delete_custom_resource`) returns True immediately after API call, but the resource may take minutes to fully delete due to finalizers. The code waits separately with `wait_for_condition`, but there's no safeguard if the deletion API call itself hangs.
@@ -1178,7 +1202,10 @@ def _delete_observability(self) -> None:
 
 **Severity:** LOW
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-27  
+**Resolved In:** v1.4.13  
+**Resolution Notes:** Code already uses efficient `any()` pattern with generator expression at line 259.
 
 **Description:**
 The function checks each character in `unsafe_chars` with a loop, creating a new error message for each character found. This is a micro-optimization but can be improved.
@@ -1285,7 +1312,10 @@ completed = self.waiter.wait_for_condition(
 
 **Severity:** LOW
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-27  
+**Resolved In:** v1.4.13  
+**Resolution Notes:** `MAX_KUBECONFIG_SIZE` constant with size validation is implemented in `_load_kubeconfig_data()` in post_activation.py. Size checking can be configured via `ACM_KUBECONFIG_MAX_SIZE` environment variable.
 
 **Description:**
 When loading kubeconfig files with `yaml.safe_load()`, there's no limit on file size. A malicious or corrupted kubeconfig could consume all memory.
@@ -1437,7 +1467,10 @@ No fix needed - code is correct.
 
 **Severity:** LOW
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-19  
+**Resolved In:** v1.4.11  
+**Resolution Notes:** Added BackupSchedule count detection and warning in `scripts/preflight-check.sh` (Check 10) to handle multiple schedules.
 
 **Description:**
 The script assumes only one BackupSchedule exists. It uses `.items[0]` without checking if multiple exist. In edge cases with multiple schedules, it checks the wrong one.

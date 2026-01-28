@@ -14,6 +14,7 @@ import warnings
 
 # Import all validators from the new modular structure
 from .preflight import (
+    BackupStorageLocationValidator,
     AutoImportStrategyValidator,
     BackupScheduleValidator,
     BackupValidator,
@@ -35,6 +36,7 @@ from .preflight import (
 __all__ = [
     "AutoImportStrategyValidator",
     "BackupScheduleValidator",
+    "BackupStorageLocationValidator",
     "BackupValidator",
     "BaseValidator",
     "ClusterDeploymentValidator",

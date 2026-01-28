@@ -213,141 +213,25 @@ echo ""
 # Check 5: Verify OADP operator
 section_header "5. Checking OADP Operator"
 
-if oc --context="$PRIMARY_CONTEXT" get namespace "$BACKUP_NAMESPACE" &> /dev/null; then
-    VELERO_PODS=$(oc --context="$PRIMARY_CONTEXT" get pods -n "$BACKUP_NAMESPACE" -l app.kubernetes.io/name=velero --no-headers 2>/dev/null | wc -l)
-    if [[ $VELERO_PODS -gt 0 ]]; then
-        check_pass "Primary hub: OADP operator installed ($VELERO_PODS Velero pod(s))"
-    else
-        check_fail "Primary hub: OADP namespace exists but no Velero pods found"
-    fi
-else
-    check_fail "Primary hub: OADP operator not installed ($BACKUP_NAMESPACE namespace missing)"
-fi
+check_velero_pods "$PRIMARY_CONTEXT" "Primary hub"
+check_velero_pods "$SECONDARY_CONTEXT" "Secondary hub"
 
-if oc --context="$SECONDARY_CONTEXT" get namespace "$BACKUP_NAMESPACE" &> /dev/null; then
-    VELERO_PODS=$(oc --context="$SECONDARY_CONTEXT" get pods -n "$BACKUP_NAMESPACE" -l app.kubernetes.io/name=velero --no-headers 2>/dev/null | wc -l)
-    if [[ $VELERO_PODS -gt 0 ]]; then
-        check_pass "Secondary hub: OADP operator installed ($VELERO_PODS Velero pod(s))"
-    else
-        check_fail "Secondary hub: OADP namespace exists but no Velero pods found"
-    fi
-else
-    check_fail "Secondary hub: OADP operator not installed ($BACKUP_NAMESPACE namespace missing)"
-fi
-
-# Check 6: Verify DataProtectionApplication
+# Check 6: Checking DataProtectionApplication
 section_header "6. Checking DataProtectionApplication"
 
-PRIMARY_DPA=$(oc --context="$PRIMARY_CONTEXT" get $RES_DPA -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l)
-if [[ $PRIMARY_DPA -gt 0 ]]; then
-    DPA_NAME=$(oc --context="$PRIMARY_CONTEXT" get $RES_DPA -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    DPA_RECONCILED=$(oc --context="$PRIMARY_CONTEXT" get $RES_DPA "$DPA_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Reconciled")].status}' 2>/dev/null)
-    if [[ "$DPA_RECONCILED" == "True" ]]; then
-        check_pass "Primary hub: DataProtectionApplication '$DPA_NAME' is reconciled"
-    else
-        check_fail "Primary hub: DataProtectionApplication '$DPA_NAME' exists but not reconciled"
-    fi
-else
-    check_fail "Primary hub: No DataProtectionApplication found"
-fi
-
-SECONDARY_DPA=$(oc --context="$SECONDARY_CONTEXT" get $RES_DPA -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l)
-if [[ $SECONDARY_DPA -gt 0 ]]; then
-    DPA_NAME=$(oc --context="$SECONDARY_CONTEXT" get $RES_DPA -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    DPA_RECONCILED=$(oc --context="$SECONDARY_CONTEXT" get $RES_DPA "$DPA_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Reconciled")].status}' 2>/dev/null)
-    if [[ "$DPA_RECONCILED" == "True" ]]; then
-        check_pass "Secondary hub: DataProtectionApplication '$DPA_NAME' is reconciled"
-    else
-        check_fail "Secondary hub: DataProtectionApplication '$DPA_NAME' exists but not reconciled"
-    fi
-else
-    check_fail "Secondary hub: No DataProtectionApplication found"
-fi
+check_dpa_status "$PRIMARY_CONTEXT" "Primary hub"
+check_dpa_status "$SECONDARY_CONTEXT" "Secondary hub"
 
 # Check 7: Verify BackupStorageLocation status
 section_header "7. Checking BackupStorageLocation Status"
 
-# Check primary hub BSL
-PRIMARY_BSL=$(oc --context="$PRIMARY_CONTEXT" get $RES_BSL -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l)
-if [[ $PRIMARY_BSL -gt 0 ]]; then
-    BSL_NAME=$(oc --context="$PRIMARY_CONTEXT" get $RES_BSL -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    BSL_PHASE=$(oc --context="$PRIMARY_CONTEXT" get $RES_BSL "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
-    if [[ "$BSL_PHASE" == "Available" ]]; then
-        check_pass "Primary hub: BackupStorageLocation '$BSL_NAME' is Available"
-    else
-        check_fail "Primary hub: BackupStorageLocation '$BSL_NAME' phase is '$BSL_PHASE' (expected: Available)"
-    fi
-else
-    check_fail "Primary hub: No BackupStorageLocation found"
-fi
-
-# Check secondary hub BSL
-SECONDARY_BSL=$(oc --context="$SECONDARY_CONTEXT" get $RES_BSL -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l)
-if [[ $SECONDARY_BSL -gt 0 ]]; then
-    BSL_NAME=$(oc --context="$SECONDARY_CONTEXT" get $RES_BSL -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    BSL_PHASE=$(oc --context="$SECONDARY_CONTEXT" get $RES_BSL "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
-    if [[ "$BSL_PHASE" == "Available" ]]; then
-        check_pass "Secondary hub: BackupStorageLocation '$BSL_NAME' is Available"
-    else
-        check_fail "Secondary hub: BackupStorageLocation '$BSL_NAME' phase is '$BSL_PHASE' (expected: Available)"
-    fi
-else
-    check_fail "Secondary hub: No BackupStorageLocation found"
-fi
+check_bsl_status "$PRIMARY_CONTEXT" "Primary hub"
+check_bsl_status "$SECONDARY_CONTEXT" "Secondary hub"
 
 # Check 8: Verify Cluster Health (Nodes and ClusterOperators)
 section_header "8. Checking Cluster Health"
 
-# Function to check nodes using single JSON API call
-# Note: Always returns 0 to prevent aborting the script (set -e), allowing remaining checks to run
-check_nodes() {
-    local context="$1"
-    local hub_name="$2"
-    local nodes_json
-    local oc_stderr_file
-    oc_stderr_file="$(mktemp)"
-
-    if ! nodes_json=$(oc --context="$context" get nodes -o json 2>"$oc_stderr_file"); then
-        local oc_error
-        oc_error="$(<"$oc_stderr_file")"
-        rm -f "$oc_stderr_file"
-
-        if [[ -n "$oc_error" ]]; then
-            check_fail "$hub_name: Could not retrieve nodes: $oc_error"
-        else
-            check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
-        fi
-        return 0  # Return 0 to continue with remaining checks
-    fi
-
-    rm -f "$oc_stderr_file"
-    
-    if [[ -z "$nodes_json" ]]; then
-        check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
-        return 0  # Return 0 to continue with remaining checks
-    fi
-    
-    local total ready not_ready
-    total=$(echo "$nodes_json" | jq -r '.items | length' 2>/dev/null || echo "0")
-    ready=$(echo "$nodes_json" | jq -r '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length' 2>/dev/null || echo "0")
-    not_ready=$((total - ready))
-    
-    if [[ $total -eq 0 ]]; then
-        check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
-        return 0  # Return 0 to continue with remaining checks
-    elif [[ $ready -eq $total ]]; then
-        check_pass "$hub_name: All $total node(s) are Ready"
-        return 0
-    else
-        check_fail "$hub_name: $not_ready of $total node(s) are not Ready"
-        return 0  # Return 0 to continue with remaining checks
-    fi
-}
-
-# Check primary hub nodes
 check_nodes "$PRIMARY_CONTEXT" "Primary hub"
-
-# Check secondary hub nodes
 check_nodes "$SECONDARY_CONTEXT" "Secondary hub"
 
 # Check ClusterOperators health (uses helper from lib-common.sh)
@@ -366,12 +250,48 @@ if [[ $BACKUPS -gt 0 ]]; then
     check_pass "Primary hub: Found $BACKUPS backup(s)"
     
     # Check for in-progress backups
-    IN_PROGRESS=$(oc --context="$PRIMARY_CONTEXT" get $RES_BACKUP -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[?(@.status.phase=="InProgress")].metadata.name}' 2>/dev/null)
-    if [[ -z "$IN_PROGRESS" ]]; then
-        check_pass "Primary hub: No backups in progress"
+    IN_PROGRESS=""
+    IN_PROGRESS_ERROR=""
+    IN_PROGRESS_ERR_FILE=$(mktemp)
+    if IN_PROGRESS=$(oc --context="$PRIMARY_CONTEXT" get $RES_BACKUP -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[?(@.status.phase=="InProgress")].metadata.name}' 2>"$IN_PROGRESS_ERR_FILE"); then
+        if [[ -z "$IN_PROGRESS" ]]; then
+            check_pass "Primary hub: No backups in progress"
+        else
+            WAIT_SECONDS=${BACKUP_IN_PROGRESS_WAIT_SECONDS:-600}
+            POLL_SECONDS=${BACKUP_IN_PROGRESS_POLL_SECONDS:-30}
+            ELAPSED=0
+            echo -e "${YELLOW}⚠${NC} Primary hub: Backup(s) in progress; waiting up to ${WAIT_SECONDS}s for completion..."
+
+            while [[ -n "$IN_PROGRESS" && $ELAPSED -lt $WAIT_SECONDS ]]; do
+                sleep "$POLL_SECONDS"
+                ELAPSED=$((ELAPSED + POLL_SECONDS))
+                if ! IN_PROGRESS=$(oc --context="$PRIMARY_CONTEXT" get $RES_BACKUP -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[?(@.status.phase=="InProgress")].metadata.name}' 2>"$IN_PROGRESS_ERR_FILE"); then
+                    IN_PROGRESS_ERROR=$(<"$IN_PROGRESS_ERR_FILE")
+                    check_fail "Primary hub: Failed to query backup progress during wait"
+                    if [[ -n "$IN_PROGRESS_ERROR" ]]; then
+                        echo -e "${RED}       Error: $IN_PROGRESS_ERROR${NC}"
+                    fi
+                    IN_PROGRESS="error"
+                    break
+                fi
+            done
+
+            if [[ -z "$IN_PROGRESS" ]]; then
+                check_pass "Primary hub: Backups completed within ${ELAPSED}s"
+            elif [[ "$IN_PROGRESS" == "error" ]]; then
+                : # error already reported
+            else
+                check_fail "Primary hub: Backup(s) in progress after waiting ${WAIT_SECONDS}s: $IN_PROGRESS"
+            fi
+        fi
     else
-        check_fail "Primary hub: Backup(s) in progress: $IN_PROGRESS"
+        IN_PROGRESS_ERROR=$(<"$IN_PROGRESS_ERR_FILE")
+        check_fail "Primary hub: Failed to query backups for in-progress status"
+        if [[ -n "$IN_PROGRESS_ERROR" ]]; then
+            echo -e "${RED}       Error: $IN_PROGRESS_ERROR${NC}"
+        fi
     fi
+    rm -f "$IN_PROGRESS_ERR_FILE"
     
     # Check latest backup
     LATEST_BACKUP=$(oc --context="$PRIMARY_CONTEXT" get $RES_BACKUP -n "$BACKUP_NAMESPACE" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null)
@@ -388,22 +308,7 @@ if [[ $BACKUPS -gt 0 ]]; then
             BACKUP_EPOCH=$(date -d "$BACKUP_COMPLETION" +%s 2>/dev/null || echo "0")
             CURRENT_EPOCH=$(date +%s)
             AGE_SECONDS=$((CURRENT_EPOCH - BACKUP_EPOCH))
-            
-            # Calculate human-readable age
-            if [[ $AGE_SECONDS -lt 60 ]]; then
-                AGE_DISPLAY="${AGE_SECONDS}s"
-            elif [[ $AGE_SECONDS -lt 3600 ]]; then
-                AGE_MINUTES=$((AGE_SECONDS / 60))
-                AGE_DISPLAY="${AGE_MINUTES}m"
-            elif [[ $AGE_SECONDS -lt 86400 ]]; then
-                AGE_HOURS=$((AGE_SECONDS / 3600))
-                AGE_MINUTES=$(( (AGE_SECONDS % 3600) / 60 ))
-                AGE_DISPLAY="${AGE_HOURS}h${AGE_MINUTES}m"
-            else
-                AGE_DAYS=$((AGE_SECONDS / 86400))
-                AGE_HOURS=$(( (AGE_SECONDS % 86400) / 3600 ))
-                AGE_DISPLAY="${AGE_DAYS}d${AGE_HOURS}h"
-            fi
+            AGE_DISPLAY=$(format_age_display $AGE_SECONDS)
             
             # Determine freshness status and color
             # Fresh: < 1 hour (3600s), Acceptable: < 24 hours (86400s), Stale: >= 24 hours
@@ -537,10 +442,27 @@ if [[ "$METHOD" == "passive" ]]; then
     
     if [[ -n "$PASSIVE_RESTORE_NAME" ]]; then
         PHASE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
+        LAST_MESSAGE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.lastMessage}' 2>/dev/null)
         if [[ "$PHASE" == "Enabled" ]] || [[ "$PHASE" == "Completed" ]] || [[ "$PHASE" == "Finished" ]]; then
             check_pass "Secondary hub: Found passive sync restore '$PASSIVE_RESTORE_NAME' in state: $PHASE"
         else
             check_fail "Secondary hub: Passive sync restore '$PASSIVE_RESTORE_NAME' exists but phase is: $PHASE (expected: Enabled, Completed, or Finished)"
+            if [[ -n "$LAST_MESSAGE" ]]; then
+                echo -e "${RED}       Restore message: $LAST_MESSAGE${NC}"
+            fi
+            BSL_CONDITIONS=$(oc --context="$SECONDARY_CONTEXT" get $RES_BSL -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+                jq -r '.items[0].status.conditions // [] | map("\(.type)=\(.status) reason=\(.reason // "n/a") msg=\(.message // "n/a")") | join("; ")' || true)
+            if [[ -n "$BSL_CONDITIONS" ]]; then
+                echo -e "${RED}       BSL conditions: $BSL_CONDITIONS${NC}"
+                # Check if BSL is explicitly unavailable
+                if echo "$BSL_CONDITIONS" | grep -qE "Available=False|Ready=False|Unavailable=True"; then
+                    echo -e "${RED}       Unavailable BSL means restores cannot proceed${NC}"
+                else
+                    echo -e "${RED}       Restore '$PASSIVE_RESTORE_NAME' failed - check restore status and BSL conditions above${NC}"
+                fi
+            else
+                echo -e "${RED}       Restore '$PASSIVE_RESTORE_NAME' failed - unable to retrieve BSL conditions${NC}"
+            fi
         fi
     else
         check_fail "Secondary hub: No passive sync restore found (required for Method 1). Expected a Restore with spec.syncRestoreWithNewBackups=true or named '$RESTORE_PASSIVE_SYNC_NAME'"

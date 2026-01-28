@@ -55,6 +55,10 @@ class PostActivationVerification:
         self.has_observability = has_observability
         self.dry_run = dry_run
         self._cached_managed_clusters: Optional[List[Dict]] = None  # Cache for managed clusters
+        # Kubeconfig caching to reduce repeated file I/O (findings #10)
+        self._kubeconfig_cache: Optional[Dict] = None
+        self._kubeconfig_paths: List[str] = []
+        self._kubeconfig_mtime: Dict[str, float] = {}
 
     def _get_managed_clusters(self, force_refresh: bool = False) -> List[Dict]:
         """Get managed clusters with caching.
@@ -425,10 +429,12 @@ class PostActivationVerification:
         """Verify all Observability pods are running and ready."""
         logger.info("Verifying Observability pod health...")
 
-        # Use label selector to filter for app.kubernetes.io/part-of=observability
-        # This reduces the data volume by focusing on observability components
+        # Use label selector scoped to ACM observability components.
+        # The label app.kubernetes.io/part-of=observability is not consistently applied,
+        # while observability.open-cluster-management.io/name=observability is.
         pods = self.secondary.get_pods(
-            namespace=OBSERVABILITY_NAMESPACE, label_selector="app.kubernetes.io/part-of=observability"
+            namespace=OBSERVABILITY_NAMESPACE,
+            label_selector="observability.open-cluster-management.io/name=observability",
         )
 
         if not pods:
@@ -912,7 +918,7 @@ class PostActivationVerification:
 
     def _get_hub_api_server(self) -> str:
         """Get the API server URL for the new hub.
-        
+
         Note: Uses max_size=0 to bypass kubeconfig size limits since this is a
         critical operation for klusterlet verification. Large kubeconfigs in
         multi-context environments must still be readable for hub lookup.
@@ -936,21 +942,42 @@ class PostActivationVerification:
 
         return ""
 
-    def _load_kubeconfig_data(self, max_size: Optional[int] = None) -> dict:
+    def _load_kubeconfig_data(self, max_size: Optional[int] = None, force_reload: bool = False) -> dict:
         """Load and merge kubeconfig data from all KUBECONFIG paths.
 
         Handles the KUBECONFIG environment variable which can contain multiple
         colon-separated paths (e.g., '/path/one:/path/two:~/.kube/config').
         Contexts, clusters, and users are merged from all files.
 
+        Uses caching to avoid repeated file I/O when called multiple times.
+        Cache is invalidated if any kubeconfig file has been modified.
+
         Args:
             max_size: Maximum file size in bytes. If None, uses MAX_KUBECONFIG_SIZE.
                      If 0 or negative, bypasses size check entirely (for critical operations).
+            force_reload: If True, bypass cache and reload from files.
 
         Returns:
             Merged kubeconfig data dict with contexts, clusters, and users.
         """
         try:
+            # Check if we can use cached data
+            if not force_reload and self._kubeconfig_cache is not None:
+                # Verify no files have been modified since caching
+                cache_valid = True
+                for path in self._kubeconfig_paths:
+                    if os.path.exists(path):
+                        current_mtime = os.path.getmtime(path)
+                        if self._kubeconfig_mtime.get(path, 0) != current_mtime:
+                            cache_valid = False
+                            break
+                    else:
+                        # File was deleted
+                        cache_valid = False
+                        break
+
+                if cache_valid:
+                    return self._kubeconfig_cache
             kubeconfig_env = os.environ.get("KUBECONFIG", "")
             if kubeconfig_env:
                 # Split on colon (Unix path separator for KUBECONFIG)
@@ -1020,6 +1047,15 @@ class PostActivationVerification:
                 except (OSError, yaml.YAMLError) as e:
                     logger.debug("Error loading kubeconfig %s: %s", os.path.basename(expanded_path), e)
                     continue
+
+            # Update cache with loaded data and file modification times
+            self._kubeconfig_cache = merged
+            self._kubeconfig_paths = [os.path.expanduser(p) for p in paths]
+            self._kubeconfig_mtime = {
+                path: os.path.getmtime(path)
+                for path in self._kubeconfig_paths
+                if os.path.exists(path)
+            }
 
             return merged
 

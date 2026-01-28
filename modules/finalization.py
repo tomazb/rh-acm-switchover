@@ -18,6 +18,7 @@ from lib.constants import (
     BACKUP_SCHEDULE_DEFAULT_NAME,
     BACKUP_SCHEDULE_DELETE_WAIT,
     BACKUP_VERIFY_TIMEOUT,
+    DELETE_REQUEST_TIMEOUT,
     IMPORT_CONTROLLER_CONFIGMAP,
     LOCAL_CLUSTER_NAME,
     MCE_NAMESPACE,
@@ -193,6 +194,7 @@ class Finalization:
                     plural="restores",
                     name=restore_name,
                     namespace=BACKUP_NAMESPACE,
+                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
                 )
                 logger.info("Deleted restore resource: %s", restore_name)
             except Exception as e:
@@ -328,6 +330,7 @@ class Finalization:
                 version="v1beta1",
                 plural="backupschedules",
                 namespace=BACKUP_NAMESPACE,
+                max_items=1,
             )
         return self._cached_schedules
 
@@ -566,24 +569,62 @@ class Finalization:
                 phase or "Unknown",
             )
 
+        schedule_uid = schedule.get("metadata", {}).get("uid")
         # Save the spec for recreation
         schedule_spec = schedule.get("spec", {})
 
-        # Delete the old schedule
-        try:
-            self.secondary.delete_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
-                name=schedule_name,
-                namespace=BACKUP_NAMESPACE,
+        # Re-verify schedule still exists before deletion (handles race conditions)
+        current_schedule = self.secondary.get_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name=schedule_name,
+            namespace=BACKUP_NAMESPACE,
+        )
+
+        if not current_schedule:
+            logger.warning(
+                "BackupSchedule %s no longer exists (may have been deleted by another process), creating new one",
+                schedule_name,
             )
-            logger.info("Deleted old BackupSchedule %s", schedule_name)
+            # Skip deletion, just create new schedule below
+        else:
+            current_uid = current_schedule.get("metadata", {}).get("uid")
+            if schedule_uid and current_uid and current_uid != schedule_uid:
+                logger.warning(
+                    "BackupSchedule %s changed (uid %s -> %s); skipping recreation to avoid deleting unexpected resource",
+                    schedule_name,
+                    schedule_uid,
+                    current_uid,
+                )
+                return
 
-            # Wait a moment for deletion to complete
-            time.sleep(BACKUP_SCHEDULE_DELETE_WAIT)
+            # Use latest spec to avoid recreating from stale data
+            schedule_spec = current_schedule.get("spec", {})
 
-            # Recreate with same spec
+            # Delete the old schedule
+            try:
+                self.secondary.delete_custom_resource(
+                    group="cluster.open-cluster-management.io",
+                    version="v1beta1",
+                    plural="backupschedules",
+                    name=schedule_name,
+                    namespace=BACKUP_NAMESPACE,
+                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
+                )
+                logger.info("Deleted old BackupSchedule %s", schedule_name)
+            except ApiException as e:
+                # If deletion fails with 404, schedule was already deleted
+                if e.status == 404:
+                    logger.info("BackupSchedule %s already deleted", schedule_name)
+                else:
+                    raise
+
+        # Wait a moment for deletion to complete (even if already deleted, wait for API sync)
+        time.sleep(BACKUP_SCHEDULE_DELETE_WAIT)
+
+        # Recreate the schedule
+        try:
             new_schedule = {
                 "apiVersion": "cluster.open-cluster-management.io/v1beta1",
                 "kind": "BackupSchedule",

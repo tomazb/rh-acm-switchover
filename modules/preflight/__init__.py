@@ -1,6 +1,7 @@
 """Modular pre-flight validation for ACM switchover."""
 
 from .backup_validators import (
+    BackupStorageLocationValidator,
     BackupScheduleValidator,
     BackupValidator,
     ManagedClusterBackupValidator,
@@ -26,6 +27,7 @@ __all__ = [
     "BaseValidator",
     "ValidationReporter",
     "BackupValidator",
+    "BackupStorageLocationValidator",
     "BackupScheduleValidator",
     "ManagedClusterBackupValidator",
     "PassiveSyncValidator",

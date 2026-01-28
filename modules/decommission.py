@@ -9,6 +9,7 @@ from lib.constants import (
     ACM_OPERATOR_POD_PREFIX,
     DECOMMISSION_POD_INTERVAL,
     DECOMMISSION_POD_TIMEOUT,
+    DELETE_REQUEST_TIMEOUT,
     LOCAL_CLUSTER_NAME,
     MANAGED_CLUSTER_DELETE_INTERVAL,
     MANAGED_CLUSTER_DELETE_TIMEOUT,
@@ -122,6 +123,7 @@ class Decommission:
                 version="v1beta2",
                 plural="multiclusterobservabilities",
                 name=mco_name,
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
             )
 
         if self.dry_run:
@@ -179,6 +181,7 @@ class Decommission:
                 version="v1",
                 plural="managedclusters",
                 name=mc_name,
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
             )
 
             deleted_count += 1
@@ -261,6 +264,7 @@ class Decommission:
                 plural="multiclusterhubs",
                 name=mch_name,
                 namespace=ACM_NAMESPACE,
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
             )
 
         if self.dry_run:

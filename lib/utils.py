@@ -112,6 +112,7 @@ class StateManager:
         # Register signal handlers to flush dirty state before termination
         # This ensures state is saved even on SIGTERM/SIGINT (atexit doesn't run on SIGKILL)
         # Use wrapper functions since signal handlers must accept (signum, frame) signature
+
         def signal_handler(signum: int, frame: Any) -> None:
             self._flush_on_signal(signum, frame)
 

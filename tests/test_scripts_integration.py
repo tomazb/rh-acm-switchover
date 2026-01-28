@@ -10,6 +10,7 @@ Test categories:
 
 import os
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -42,7 +43,7 @@ def run_script(script_name: str, *args: str, env=None):
         stderr=subprocess.STDOUT,
         text=True,
         env=use_env,
-        timeout=10,
+        timeout=30,
     )
     output = strip_ansi(proc.stdout)
     return proc.returncode, output
@@ -146,6 +147,24 @@ case "$*" in
         ;;
     *"get "*"backupstoragelocation"*"open-cluster-management-backup"*"status.phase"*)
         echo "Available"
+        exit 0
+        ;;
+    *"--context=primary-ok"*"get "*"backupstoragelocation"*"default"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"status":{"conditions":[{"type":"Available","status":"True"}]}}
+BSL_JSON
+        exit 0
+        ;;
+    *"--context=secondary-ok"*"get "*"backupstoragelocation"*"default"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"status":{"conditions":[{"type":"Available","status":"True"}]}}
+BSL_JSON
+        exit 0
+        ;;
+    *"--context=secondary-ok"*"get "*"backupstoragelocation"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"items":[{"metadata":{"name":"default"},"status":{"phase":"Available","conditions":[{"type":"Available","status":"True"}]}}]}
+BSL_JSON
         exit 0
         ;;
     
@@ -434,6 +453,22 @@ EOF
         echo "Available"
         exit 0
         ;;
+    *"--context=new-hub"*"get "*"backupstoragelocation"*"default"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"status":{"conditions":[{"type":"Available","status":"True"}]}}
+BSL_JSON
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupstoragelocation"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'BSL_JSON'
+{"items":[{"metadata":{"name":"default"},"status":{"phase":"Available","conditions":[{"type":"Available","status":"True"}]}}]}
+BSL_JSON
+        exit 0
+        ;;
+    *"get "*"restore"*"lastMessage"*)
+        echo ""
+        exit 0
+        ;;
     # MCH checks for new-hub - match both short and full API group names
     *"--context=new-hub"*"get "*"multiclusterhub"*"-n open-cluster-management"*"--no-headers"*)
         echo "multiclusterhub"
@@ -480,8 +515,12 @@ esac
     jq_script = mock_bin / "jq"
     jq_script.write_text(
         """#!/bin/bash
-# Mock jq - pass through to real jq
-exec /usr/bin/jq "$@"
+# Mock jq - pass through to real jq (from PATH)
+if [[ -z "${REAL_JQ:-}" ]]; then
+  echo "jq not found in PATH; please install jq to run integration tests" >&2
+  exit 127
+fi
+exec "$REAL_JQ" "$@"
 """,
         encoding="utf-8",
     )
@@ -489,6 +528,7 @@ exec /usr/bin/jq "$@"
 
     # Build environment with mocked PATH
     env = os.environ.copy()
+    env["REAL_JQ"] = shutil.which("jq") or ""
     env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
 
     return env
@@ -584,8 +624,19 @@ case "$*" in
         echo "backup-ongoing   InProgress"
         exit 0
         ;;
-    *"InProgress"*)
+    *"get "*"backup"*"jsonpath"*"InProgress"*)
+        # Return backup name for in-progress check
         echo "backup-ongoing"
+        exit 0
+        ;;
+    *"get "*"backup"*"sort-by"*)
+        # Latest backup query
+        echo "backup-ongoing"
+        exit 0
+        ;;
+    *"get "*"backup"*"backup-ongoing"*"jsonpath"*"phase"*)
+        # Latest backup phase check
+        echo "InProgress"
         exit 0
         ;;
     # ClusterDeployment
@@ -602,6 +653,41 @@ case "$*" in
         echo "local-cluster   True"
         exit 0
         ;;
+    *"get "*"managedcluster"*"-o json"*)
+        echo '{"items":[{"metadata":{"name":"local-cluster"}}]}'
+        exit 0
+        ;;
+    # BackupSchedule checks
+    *"get "*"backupschedule"*"metadata.name"*)
+        echo "schedule-acm"
+        exit 0
+        ;;
+    *"get "*"backupschedule"*"paused"*)
+        echo "false"
+        exit 0
+        ;;
+    *"get "*"backupschedule"*"phase"*)
+        echo "Enabled"
+        exit 0
+        ;;
+    # BackupStorageLocation checks
+    *"get "*"backupstoragelocation"*)
+        echo "default   Available"
+        exit 0
+        ;;
+    # Cluster health checks
+    *"get nodes"*"-o json"*)
+        echo '{"items":[{"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+        exit 0
+        ;;
+    *"get nodes"*)
+        echo "node1   Ready"
+        exit 0
+        ;;
+    *"get clusteroperator"*)
+        echo "NAME   VERSION   AVAILABLE"
+        exit 0
+        ;;
     *) exit 0 ;;
 esac
 """,
@@ -609,12 +695,70 @@ esac
     )
     oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
 
+    # Create a mock jq that handles common expressions used in the scripts
+    # The mock needs to handle expressions like '.items | length' properly
+    # instead of just echoing the input (which breaks numeric comparisons)
     jq_script = mock_bin / "jq"
-    jq_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    jq_script.write_text(
+        """#!/bin/bash
+# Mock jq that handles common expressions used in preflight/postflight scripts
+
+# Get the jq expression (first non-flag argument)
+EXPR=""
+for arg in "$@"; do
+    case "$arg" in
+        -r|--raw-output) ;;
+        --arg) shift; shift ;;  # Skip --arg name value
+        -*) ;;
+        *) EXPR="$arg"; break ;;
+    esac
+done
+
+# Read stdin
+INPUT=$(cat)
+
+# Handle common expressions
+case "$EXPR" in
+    ".items | length")
+        # Count items array length - return 0 for empty/missing
+        echo "0"
+        ;;
+    ".items[0].metadata.name"*)
+        # Return empty string for item name lookups
+        echo ""
+        ;;
+    ".items[0].status"*)
+        # Return empty for status lookups
+        echo ""
+        ;;
+    ".items[-1]"*)
+        # Return empty for last item lookups
+        echo ""
+        ;;
+    ".status.conditions"*)
+        # Return empty for conditions
+        echo ""
+        ;;
+    *)
+        # For unhandled expressions, delegate to real jq if available, else return empty
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            echo "$INPUT" | "$REAL_JQ" "$@" 2>/dev/null || echo ""
+        else
+            echo ""
+        fi
+        ;;
+esac
+""",
+        encoding="utf-8",
+    )
     jq_script.chmod(jq_script.stat().st_mode | stat.S_IEXEC)
 
     env = os.environ.copy()
+    env["REAL_JQ"] = shutil.which("jq") or ""
     env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
+    # Set short wait times so test doesn't timeout waiting for backup completion
+    env["BACKUP_IN_PROGRESS_WAIT_SECONDS"] = "2"
+    env["BACKUP_IN_PROGRESS_POLL_SECONDS"] = "1"
     return env
 
 

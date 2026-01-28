@@ -9,9 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+### Fixed
+
+## [1.4.13] - 2026-01-27
+
+### Changed
+
 - **KISS refactor: `PostActivationVerification.verify()`**: Decomposed 75-line method into three focused sub-methods (`_verify_cluster_connections()`, `_verify_auto_import_cleanup_step()`, `_verify_observability_full()`) for improved readability and testability.
 
 - **KISS refactor: `Finalization._verify_old_hub_state()`**: Extracted 88-line observability scale-down logic into three helper methods (`_scale_down_old_hub_observability()`, `_wait_for_observability_scale_down()`, `_report_observability_scale_down_status()`) for clearer separation of concerns.
+
+- **Backup in-progress timeouts (scripts)**: `BACKUP_IN_PROGRESS_WAIT_SECONDS` and `BACKUP_IN_PROGRESS_POLL_SECONDS` can now be overridden via environment variables to tune preflight wait behavior.
+
+### Fixed
+
+- **Preflight backup in-progress handling**: Preflight now waits for in-progress backups to complete before failing, reducing false negatives during rapid E2E cycles.
+- **Token expiration check**: Fixed kubeconfig token expiration check to use the correct Kubernetes client configuration class.
+- **Observability pod detection**: Updated observability pod selector to a label that exists on ACM observability pods.
+- **BackupSchedule deletion race condition (findings #8)**: Verify schedule UID before deletion, refresh spec from the latest object, and handle 404s cleanly during recreation.
+- **Kubeconfig loading performance (findings #10)**: Added caching with mtime-based invalidation to `_load_kubeconfig_data()` in PostActivationVerification. Reduces repeated file I/O during cluster verification.
+- **Resource list memory bounds (findings #12)**: Single-item list lookups now pass `max_items=1` (e.g., BackupSchedule, MCH, DPA) to avoid unnecessary pagination.
+- **Deletion timeout support (findings #14)**: `delete_custom_resource()` supports request timeouts and decommission/finalization deletes now pass timeouts to avoid hanging API calls.
+
+### Validated
+
+- **Real-cluster preflight (mgmt1/mgmt2)**: `discover-hub.sh --auto --run` verified both hubs on ACM 2.14.1 / OCP 4.19.21 with 38/38 preflight checks passing (2026-01-28).
 
 ## [1.4.11] - 2026-01-19
 

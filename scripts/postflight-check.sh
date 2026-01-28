@@ -132,6 +132,16 @@ if [[ -n "$RESTORE_NAME" ]]; then
         check_warn "Latest restore '$RESTORE_NAME' is Enabled (passive sync may still be running)"
     else
         check_fail "Latest restore '$RESTORE_NAME' in unexpected state: $RESTORE_PHASE"
+        RESTORE_MESSAGE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_RESTORE "$RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.lastMessage}' 2>/dev/null || true)
+        if [[ -n "$RESTORE_MESSAGE" ]]; then
+            echo -e "${RED}       Restore message: $RESTORE_MESSAGE${NC}"
+        fi
+        BSL_CONDITIONS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BSL -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+            jq -r '.items[0].status.conditions // [] | map("\(.type)=\(.status) reason=\(.reason // "n/a") msg=\(.message // "n/a")") | join("; ")' || true)
+        if [[ -n "$BSL_CONDITIONS" ]]; then
+            echo -e "${RED}       BSL conditions: $BSL_CONDITIONS${NC}"
+        fi
+        echo -e "${RED}       Unavailable BSL means restores cannot proceed${NC}"
     fi
 elif [[ "$BACKUP_SCHEDULE_ENABLED" == "false" ]] || [[ -z "$BACKUP_SCHEDULE_ENABLED" ]]; then
     # No restore objects but BackupSchedule is enabled - this is expected behavior
@@ -319,7 +329,15 @@ if [[ -n "$BSL_OUTPUT" ]]; then
         check_pass "BackupStorageLocation '$BSL_NAME' is Available (storage accessible)"
     else
         check_fail "BackupStorageLocation '$BSL_NAME' is in '$BSL_PHASE' state (should be Available)"
+        echo -e "${RED}       Unavailable BSL means restores cannot proceed${NC}"
         echo -e "${RED}       Backup storage may be inaccessible - verify credentials and connectivity${NC}"
+        BSL_CONDITIONS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BSL "$BSL_NAME" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+            jq -r '.status.conditions // [] | map("\(.type)=\(.status) reason=\(.reason // "n/a") msg=\(.message // "n/a")") | join("; ")' || true)
+        if [[ -n "$BSL_CONDITIONS" ]]; then
+            echo -e "${RED}       BSL conditions: $BSL_CONDITIONS${NC}"
+        else
+            echo -e "${YELLOW}       BSL conditions: none reported${NC}"
+        fi
     fi
 else
     check_warn "No BackupStorageLocation found (OADP may not be configured)"

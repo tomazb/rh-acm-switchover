@@ -1,5 +1,12 @@
 """
 Pre-flight validation module for ACM switchover.
+
+TODO: This module has very low test coverage (17%). Given its role as the
+orchestrator for pre-flight validation, add integration tests that verify:
+- Correct coordination of all validators
+- Proper handling of validation failures
+- PreflightConfig generation accuracy
+See TEST_REPORT.md for coverage details.
 """
 
 import logging
@@ -12,6 +19,7 @@ from lib.rbac_validator import validate_rbac_permissions
 from .preflight import (
     AutoImportStrategyValidator,
     BackupScheduleValidator,
+    BackupStorageLocationValidator,
     BackupValidator,
     ClusterDeploymentValidator,
     HubComponentValidator,
@@ -59,6 +67,7 @@ class PreflightValidator:
         self.hub_component_validator = HubComponentValidator(self.reporter)
         self.backup_validator = BackupValidator(self.reporter)
         self.backup_schedule_validator = BackupScheduleValidator(self.reporter)
+        self.backup_storage_location_validator = BackupStorageLocationValidator(self.reporter)
         self.cluster_deployment_validator = ClusterDeploymentValidator(self.reporter)
         self.managed_cluster_backup_validator = ManagedClusterBackupValidator(self.reporter)
         self.passive_sync_validator = PassiveSyncValidator(self.reporter)
@@ -136,6 +145,8 @@ class PreflightValidator:
 
         self.backup_validator.run(self.primary)
         self.backup_schedule_validator.run(self.primary)
+        self.backup_storage_location_validator.run(self.primary, "primary")
+        self.backup_storage_location_validator.run(self.secondary, "secondary")
         self.cluster_deployment_validator.run(self.primary)
         self.managed_cluster_backup_validator.run(self.primary)
 

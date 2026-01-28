@@ -89,6 +89,7 @@ class PrimaryPreparation:
             version="v1beta1",
             plural="backupschedules",
             namespace=BACKUP_NAMESPACE,
+            max_items=1,
         )
 
         if not backup_schedules:

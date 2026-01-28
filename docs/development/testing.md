@@ -34,6 +34,13 @@ tests/
 ./run_tests.sh
 ```
 
+By default, this excludes long-running E2E tests (marked `@pytest.mark.e2e`).
+To include E2E tests on demand:
+
+```bash
+RUN_E2E=1 ./run_tests.sh
+```
+
 #### Virtual Environment Usage
 
 - Prefer activating an existing virtual environment before running tooling.
@@ -46,7 +53,7 @@ tests/
 This script will:
 1. Set up a virtual environment (if needed)
 2. Install dependencies
-3. Run unit tests with coverage
+3. Run unit tests with coverage (excluding E2E by default)
 4. Run code quality checks (flake8, pylint, black, isort, mypy)
 5. Run security scans (bandit, safety)
 6. Validate Python syntax
@@ -62,7 +69,7 @@ pip install -r requirements-dev.txt
 #### Run All Tests
 
 ```bash
-python -m pytest tests/ -v
+python -m pytest tests/ -v -m "not e2e"
 ```
 
 #### Run Specific Test File
@@ -80,7 +87,7 @@ python -m pytest tests/test_utils.py::TestStateManager::test_initial_state -v
 #### Run with Coverage
 
 ```bash
-python -m pytest tests/ -v --cov=. --cov-report=html --cov-report=term
+python -m pytest tests/ -v -m "not e2e" --cov=. --cov-report=html --cov-report=term
 ```
 
 View HTML coverage report:
@@ -88,6 +95,66 @@ View HTML coverage report:
 open htmlcov/index.html  # macOS
 xdg-open htmlcov/index.html  # Linux
 ```
+
+### E2E Tests (On Demand)
+
+E2E tests are marked with `@pytest.mark.e2e` and are intended to run only on demand.
+They may require real cluster contexts and take significantly longer.
+
+```bash
+python -m pytest tests/e2e/ -v -m e2e
+```
+
+See `tests/e2e/README.md` for details.
+
+### Full Real E2E (On Demand)
+
+These commands run real switchover cycles against actual hubs. Ensure the
+output directory exists before running (it is not created automatically):
+
+```bash
+mkdir -p ./e2e-results
+```
+
+Single-cycle real switchover (passive -> secondary):
+
+```bash
+python -m pytest tests/e2e/test_e2e_switchover.py -v -m e2e \
+  --primary-context mgmt1 \
+  --secondary-context mgmt2 \
+  --e2e-method passive \
+  --e2e-old-hub-action secondary \
+  --e2e-cycles 1 \
+  --e2e-output-dir ./e2e-results
+```
+
+Multi-cycle soak with limits:
+
+```bash
+python -m pytest tests/e2e/test_e2e_switchover.py -v -m e2e \
+  --primary-context mgmt1 \
+  --secondary-context mgmt2 \
+  --e2e-method passive \
+  --e2e-old-hub-action secondary \
+  --e2e-cycles 5 \
+  --e2e-run-hours 2 \
+  --e2e-max-failures 2 \
+  --e2e-output-dir ./e2e-results
+```
+
+### Real-Cluster Validation (Example)
+
+Example real-cluster validation using the discovery + preflight scripts:
+
+```bash
+./scripts/discover-hub.sh --auto --run
+```
+
+Observed on 2026-01-28:
+- Hubs detected: `mgmt1` (primary) and `mgmt2` (secondary)
+- ACM: 2.14.1 on both hubs
+- OCP: 4.19.21 on both hubs
+- Preflight: **38 checks passed, 0 warnings**
 
 ## Test Coverage
 

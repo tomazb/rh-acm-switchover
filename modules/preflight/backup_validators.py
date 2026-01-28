@@ -1,11 +1,15 @@
 """Backup and restore validation checks."""
 
 import logging
+import re
+import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from lib.constants import (
     BACKUP_NAMESPACE,
+    BACKUP_POLL_INTERVAL,
+    BACKUP_VERIFY_TIMEOUT,
     BACKUP_SCHEDULE_DEFAULT_NAME,
     LOCAL_CLUSTER_NAME,
     RESTORE_PASSIVE_SYNC_NAME,
@@ -19,8 +23,105 @@ from .base_validator import BaseValidator
 logger = logging.getLogger("acm_switchover")
 
 
+def _format_condition_details(conditions: Optional[List[dict]]) -> str:
+    """Format condition details for human-readable output."""
+    if not conditions:
+        return ""
+
+    details = []
+    for condition in conditions:
+        cond_type = condition.get("type", "unknown")
+        status = condition.get("status", "unknown")
+        reason = condition.get("reason") or "n/a"
+        message = condition.get("message") or "n/a"
+        details.append(f"{cond_type}={status} reason={reason} message={message}")
+
+    return "; ".join(details)
+
+
+def _describe_bsl_issue(bsl: dict) -> str:
+    """Build a descriptive message for a problematic BackupStorageLocation."""
+    name = bsl.get("metadata", {}).get("name", "unknown")
+    phase = bsl.get("status", {}).get("phase", "unknown")
+    conditions = bsl.get("status", {}).get("conditions") or []
+    condition_summary = _format_condition_details(conditions)
+
+    message = f"{name} phase={phase}"
+    if condition_summary:
+        message += f" conditions={condition_summary}"
+    return message
+
+
+def _collect_bsl_unavailable_details(kube_client: KubeClient) -> str:
+    """Return a descriptive string for unavailable BSLs or missing BSLs."""
+    try:
+        bsls = kube_client.list_custom_resources(
+            group="velero.io",
+            version="v1",
+            plural="backupstoragelocations",
+            namespace=BACKUP_NAMESPACE,
+        )
+    except Exception as exc:
+        logger.debug("Failed to list BackupStorageLocations: %s", exc)
+        return ""
+
+    if not bsls:
+        return "no BackupStorageLocation found"
+
+    unavailable = []
+    for bsl in bsls:
+        phase = bsl.get("status", {}).get("phase", "unknown")
+        if phase != "Available":
+            unavailable.append(_describe_bsl_issue(bsl))
+
+    return "; ".join(unavailable)
+
+
 class BackupValidator(BaseValidator):
     """Ensures backups exist and no job is stuck."""
+
+    def _wait_for_backups_complete(self, primary: KubeClient, in_progress: List[str]) -> List[str]:
+        """Wait for in-progress backups to complete within a timeout.
+
+        Args:
+            primary: Primary hub KubeClient instance
+            in_progress: List of backup names currently in progress
+
+        Returns:
+            List of backup names still in progress after waiting
+        """
+        if not in_progress:
+            return []
+
+        logger.info(
+            "Backup(s) in progress: %s. Waiting up to %ds for completion...",
+            ", ".join(in_progress),
+            BACKUP_VERIFY_TIMEOUT,
+        )
+
+        start_time = time.time()
+        remaining = in_progress
+
+        while remaining and (time.time() - start_time) < BACKUP_VERIFY_TIMEOUT:
+            time.sleep(BACKUP_POLL_INTERVAL)
+            try:
+                backups = primary.list_custom_resources(
+                    group="velero.io",
+                    version="v1",
+                    plural="backups",
+                    namespace=BACKUP_NAMESPACE,
+                )
+            except Exception as exc:
+                logger.debug("Failed to list backups while waiting: %s", exc)
+                return remaining
+
+            remaining = [
+                b.get("metadata", {}).get("name")
+                for b in backups
+                if b.get("status", {}).get("phase") == "InProgress"
+            ]
+
+        return remaining
 
     def _get_backup_age_info(self, completion_timestamp: Optional[str]) -> str:
         """
@@ -108,13 +209,43 @@ class BackupValidator(BaseValidator):
             ]
 
             if in_progress:
-                self.add_result(
-                    "Backup status",
-                    False,
-                    f"backup(s) in progress: {', '.join(in_progress)}",
-                    critical=True,
+                remaining = self._wait_for_backups_complete(primary, in_progress)
+                if remaining:
+                    self.add_result(
+                        "Backup status",
+                        False,
+                        f"backup(s) in progress after waiting {BACKUP_VERIFY_TIMEOUT}s: {', '.join(remaining)}",
+                        critical=True,
+                    )
+                    return
+
+                # Refresh backup list after waiting to ensure we inspect the latest completion state
+                backups = primary.list_custom_resources(
+                    group="velero.io",
+                    version="v1",
+                    plural="backups",
+                    namespace=BACKUP_NAMESPACE,
                 )
-            elif phase == "Completed":
+
+                if not backups:
+                    self.add_result(
+                        "Backup status",
+                        False,
+                        "no backups found after waiting for in-progress backups to complete (backups may have been deleted)",
+                        critical=True,
+                    )
+                    return
+
+                backups.sort(
+                    key=lambda b: b.get("metadata", {}).get("creationTimestamp", ""),
+                    reverse=True,
+                )
+
+                latest_backup = backups[0]
+                backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
+                phase = latest_backup.get("status", {}).get("phase", "unknown")
+
+            if phase == "Completed":
                 # Get backup completion timestamp to calculate age
                 completion_ts = latest_backup.get("status", {}).get("completionTimestamp")
                 age_info = self._get_backup_age_info(completion_ts)
@@ -214,6 +345,77 @@ class BackupScheduleValidator(BaseValidator):
             )
 
 
+class BackupStorageLocationValidator(BaseValidator):
+    """Validates BackupStorageLocation availability on each hub.
+
+    A BackupStorageLocation must be Available, otherwise backups cannot be restored.
+    """
+
+    def run(self, kube_client: KubeClient, hub_label: str) -> None:
+        """Check BackupStorageLocation availability for a hub.
+
+        Args:
+            kube_client: KubeClient instance for the hub
+            hub_label: Label for the hub (primary/secondary)
+        """
+        try:
+            InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
+
+            bsls = kube_client.list_custom_resources(
+                group="velero.io",
+                version="v1",
+                plural="backupstoragelocations",
+                namespace=BACKUP_NAMESPACE,
+            )
+
+            if not bsls:
+                self.add_result(
+                    f"BackupStorageLocation ({hub_label})",
+                    False,
+                    "no BackupStorageLocation found - restores cannot proceed",
+                    critical=True,
+                )
+                return
+
+            unavailable = []
+            for bsl in bsls:
+                phase = bsl.get("status", {}).get("phase", "unknown")
+                if phase != "Available":
+                    unavailable.append(_describe_bsl_issue(bsl))
+
+            if unavailable:
+                details = "; ".join(unavailable)
+                self.add_result(
+                    f"BackupStorageLocation ({hub_label})",
+                    False,
+                    f"unavailable BSL(s) block restore: {details}. "
+                    "BackupStorageLocation must be Available to restore backups.",
+                    critical=True,
+                )
+            else:
+                self.add_result(
+                    f"BackupStorageLocation ({hub_label})",
+                    True,
+                    f"all {len(bsls)} BackupStorageLocation(s) are Available",
+                    critical=True,
+                )
+
+        except ValidationError as exc:
+            self.add_result(
+                f"BackupStorageLocation ({hub_label})",
+                False,
+                f"invalid backup namespace: {exc}",
+                critical=True,
+            )
+        except Exception as exc:
+            self.add_result(
+                f"BackupStorageLocation ({hub_label})",
+                False,
+                f"error checking BackupStorageLocation: {exc}",
+                critical=True,
+            )
+
+
 class PassiveSyncValidator(BaseValidator):
     """Checks the passive synchronization restore object."""
 
@@ -228,41 +430,111 @@ class PassiveSyncValidator(BaseValidator):
             InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
             InputValidator.validate_kubernetes_name(RESTORE_PASSIVE_SYNC_NAME, "restore")
 
-            restore = secondary.get_custom_resource(
+            context = secondary.context or "default"
+
+            # Prefer discovery by spec.syncRestoreWithNewBackups=true (matches bash scripts)
+            restores = secondary.list_custom_resources(
                 group="cluster.open-cluster-management.io",
                 version="v1beta1",
                 plural="restores",
-                name=RESTORE_PASSIVE_SYNC_NAME,
                 namespace=BACKUP_NAMESPACE,
             )
+
+            def _creation_ts(item: dict) -> str:
+                return item.get("metadata", {}).get("creationTimestamp", "")
+
+            passive_candidates = [
+                r for r in restores if r.get("spec", {}).get("syncRestoreWithNewBackups") is True
+            ]
+            passive_candidates.sort(key=_creation_ts, reverse=True)
+
+            restore = passive_candidates[0] if passive_candidates else None
+            if not restore:
+                # Fallback to the conventional name
+                restore = secondary.get_custom_resource(
+                    group="cluster.open-cluster-management.io",
+                    version="v1beta1",
+                    plural="restores",
+                    name=RESTORE_PASSIVE_SYNC_NAME,
+                    namespace=BACKUP_NAMESPACE,
+                )
 
             if not restore:
                 self.add_result(
                     "Passive sync restore",
                     False,
-                    f"{RESTORE_PASSIVE_SYNC_NAME} not found on secondary hub",
+                    "No passive sync restore found on secondary hub (required for passive method). "
+                    f"Expected a Restore with spec.syncRestoreWithNewBackups=true or named '{RESTORE_PASSIVE_SYNC_NAME}'. "
+                    f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get restore.cluster.open-cluster-management.io -o wide",
                     critical=True,
                 )
                 return
+
+            restore_name = restore.get("metadata", {}).get("name", "") or RESTORE_PASSIVE_SYNC_NAME
 
             status = restore.get("status", {})
             phase = status.get("phase", "unknown")
             message = status.get("lastMessage", "")
 
             # "Enabled" = continuous sync running
-            # "Finished" = initial sync completed successfully (still valid for switchover)
-            if phase in ("Enabled", "Finished"):
+            # "Finished"/"Completed" = initial sync completed successfully (valid for switchover)
+            if phase in ("Enabled", "Finished", "Completed"):
                 self.add_result(
                     "Passive sync restore",
                     True,
-                    f"passive sync ready ({phase}): {message}",
+                    f"{restore_name} ready ({phase}): {message}",
                     critical=True,
                 )
             else:
+                # If the ACM restore controller referenced a Velero restore, surface its validation errors.
+                velero_details = ""
+                bsl_details = ""
+                bsl_unavailable = _collect_bsl_unavailable_details(secondary)
+                if bsl_unavailable:
+                    bsl_details = (
+                        " BackupStorageLocation issue(s): "
+                        f"{bsl_unavailable}. Restore cannot proceed until BSL is Available."
+                    )
+
+                velero_match = re.search(r"Velero restore\s+(\S+)", message)
+                if velero_match:
+                    velero_restore_name = velero_match.group(1)
+                    try:
+                        velero_restore = secondary.get_custom_resource(
+                            group="velero.io",
+                            version="v1",
+                            plural="restores",
+                            name=velero_restore_name,
+                            namespace=BACKUP_NAMESPACE,
+                        )
+                        if velero_restore:
+                            velero_status = velero_restore.get("status", {})
+                            velero_phase = velero_status.get("phase", "unknown")
+                            validation_errors = velero_status.get("validationErrors") or []
+                            if validation_errors:
+                                joined = "; ".join(str(e) for e in validation_errors)
+                                velero_details = f" Velero restore {velero_restore_name} phase={velero_phase} validationErrors={joined}."
+                            else:
+                                velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
+                    except Exception as exc:
+                        logger.debug("Failed to fetch Velero restore %s details: %s", velero_restore_name, exc)
+
+                error_message = f"{restore_name} in unexpected state: {phase} - {message}"
+                if velero_details:
+                    error_message += f" {velero_details.strip()}"
+                if bsl_details:
+                    error_message += f"{bsl_details}"
+                error_message += (
+                    " (check ACM restore + Velero restore for details). "
+                    f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get "
+                    f"restore.cluster.open-cluster-management.io {restore_name} -o yaml; "
+                    f"oc --context={context} -n {BACKUP_NAMESPACE} get restore.velero.io -o wide"
+                )
+
                 self.add_result(
                     "Passive sync restore",
                     False,
-                    f"passive sync in unexpected state: {phase} - {message}",
+                    error_message,
                     critical=True,
                 )
         except Exception as exc:

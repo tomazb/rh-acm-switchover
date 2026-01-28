@@ -22,6 +22,9 @@ OBSERVABILITY_TERMINATE_INTERVAL = 10
 DECOMMISSION_POD_TIMEOUT = 1200
 DECOMMISSION_POD_INTERVAL = 30
 
+# API request timeout for delete operations (prevents hanging API calls)
+DELETE_REQUEST_TIMEOUT = 30
+
 # ManagedCluster deletion wait (for finalizers to complete before MCH deletion)
 MANAGED_CLUSTER_DELETE_TIMEOUT = 300
 MANAGED_CLUSTER_DELETE_INTERVAL = 10

@@ -454,6 +454,159 @@ check_cluster_upgrade_status() {
     return 0
 }
 
+# Check nodes health on a given context
+# Usage: check_nodes "$CONTEXT" "Hub name"
+# Note: Always returns 0 to prevent aborting the script (set -e), allowing remaining checks to run
+check_nodes() {
+    local context="$1"
+    local hub_name="$2"
+    local nodes_json
+    local oc_stderr_file
+    oc_stderr_file="$(mktemp)"
+
+    if ! nodes_json=$("$CLUSTER_CLI_BIN" --context="$context" get nodes -o json 2>"$oc_stderr_file"); then
+        local oc_error
+        oc_error="$(<"$oc_stderr_file")"
+        rm -f "$oc_stderr_file"
+
+        if [[ -n "$oc_error" ]]; then
+            check_fail "$hub_name: Could not retrieve nodes: $oc_error"
+        else
+            check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
+        fi
+        return 0
+    fi
+
+    rm -f "$oc_stderr_file"
+    
+    if [[ -z "$nodes_json" ]]; then
+        check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
+        return 0
+    fi
+    
+    local total ready not_ready
+    total=$(echo "$nodes_json" | jq -r '.items | length' 2>/dev/null || echo "0")
+    ready=$(echo "$nodes_json" | jq -r '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length' 2>/dev/null || echo "0")
+    not_ready=$((total - ready))
+    
+    if [[ $total -eq 0 ]]; then
+        check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
+        return 0
+    elif [[ $ready -eq $total ]]; then
+        check_pass "$hub_name: All $total node(s) are Ready"
+        return 0
+    else
+        check_fail "$hub_name: $not_ready of $total node(s) are not Ready"
+        return 0
+    fi
+}
+
+# =============================================================================
+# Data Protection Helpers
+# =============================================================================
+
+# Check DataProtectionApplication status on a given context
+# Usage: check_dpa_status "$CONTEXT" "Hub name"
+check_dpa_status() {
+    local ctx="$1"
+    local hub_name="$2"
+
+    local dpa_count
+    dpa_count=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_DPA -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || echo "0")
+    
+    if [[ $dpa_count -gt 0 ]]; then
+        local dpa_name dpa_reconciled
+        dpa_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_DPA -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+        dpa_reconciled=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_DPA "$dpa_name" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Reconciled")].status}' 2>/dev/null || echo "")
+        
+        if [[ "$dpa_reconciled" == "True" ]]; then
+            check_pass "$hub_name: DataProtectionApplication '$dpa_name' is reconciled"
+        else
+            check_fail "$hub_name: DataProtectionApplication '$dpa_name' exists but not reconciled"
+        fi
+    else
+        check_fail "$hub_name: No DataProtectionApplication found"
+    fi
+}
+
+# Check BackupStorageLocation status on a given context
+# Usage: check_bsl_status "$CONTEXT" "Hub name"
+check_bsl_status() {
+    local ctx="$1"
+    local hub_name="$2"
+
+    local bsl_count
+    bsl_count=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BSL -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || echo "0")
+    
+    if [[ $bsl_count -gt 0 ]]; then
+        local bsl_name bsl_phase
+        bsl_name=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BSL -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+        bsl_phase=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BSL "$bsl_name" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+        
+        if [[ "$bsl_phase" == "Available" ]]; then
+            check_pass "$hub_name: BackupStorageLocation '$bsl_name' is Available"
+        else
+            check_fail "$hub_name: BackupStorageLocation '$bsl_name' phase is '$bsl_phase' (expected: Available)"
+            echo -e "${RED}       Unavailable BSL means restores cannot proceed${NC}"
+            
+            local bsl_conditions
+            bsl_conditions=$("$CLUSTER_CLI_BIN" --context="$ctx" get $RES_BSL "$bsl_name" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
+                jq -r '.status.conditions // [] | map("\(.type)=\(.status) reason=\(.reason // "n/a") msg=\(.message // "n/a")") | join("; ")' || echo "")
+            if [[ -n "$bsl_conditions" ]]; then
+                echo -e "${RED}       BSL conditions: $bsl_conditions${NC}"
+            else
+                echo -e "${YELLOW}       BSL conditions: none reported${NC}"
+            fi
+        fi
+    else
+        check_fail "$hub_name: No BackupStorageLocation found"
+    fi
+}
+
+# Check Velero pods on a given context
+# Usage: check_velero_pods "$CONTEXT" "Hub name"
+check_velero_pods() {
+    local ctx="$1"
+    local hub_name="$2"
+
+    if "$CLUSTER_CLI_BIN" --context="$ctx" get namespace "$BACKUP_NAMESPACE" &> /dev/null; then
+        local velero_pods
+        velero_pods=$("$CLUSTER_CLI_BIN" --context="$ctx" get pods -n "$BACKUP_NAMESPACE" -l app.kubernetes.io/name=velero --no-headers 2>/dev/null | wc -l || echo "0")
+        if [[ $velero_pods -gt 0 ]]; then
+            check_pass "$hub_name: OADP operator installed ($velero_pods Velero pod(s))"
+        else
+            check_fail "$hub_name: OADP namespace exists but no Velero pods found"
+        fi
+    else
+        check_fail "$hub_name: OADP operator not installed ($BACKUP_NAMESPACE namespace missing)"
+    fi
+}
+
+# =============================================================================
+# Timestamp Helpers
+# =============================================================================
+
+# Format age in seconds as human-readable string
+# Usage: format_age_display SECONDS
+# Returns: "30s", "5m", "2h30m", "3d12h"
+format_age_display() {
+    local age_seconds="$1"
+    
+    if [[ $age_seconds -lt 60 ]]; then
+        echo "${age_seconds}s"
+    elif [[ $age_seconds -lt 3600 ]]; then
+        echo "$((age_seconds / 60))m"
+    elif [[ $age_seconds -lt 86400 ]]; then
+        local hours=$((age_seconds / 3600))
+        local minutes=$(( (age_seconds % 3600) / 60 ))
+        echo "${hours}h${minutes}m"
+    else
+        local days=$((age_seconds / 86400))
+        local hours=$(( (age_seconds % 86400) / 3600 ))
+        echo "${days}d${hours}h"
+    fi
+}
+
 # =============================================================================
 # Summary Output
 # =============================================================================
