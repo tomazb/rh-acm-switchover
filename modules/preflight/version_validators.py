@@ -1,4 +1,11 @@
-"""Version and compatibility validation checks."""
+"""Version and compatibility validation checks.
+
+TODO: This module has low test coverage (49%). Expand test cases to cover:
+- Version comparison edge cases (pre-release versions, build metadata)
+- Token expiration validation with various token formats
+- ACM version detection from different MCH states
+See TEST_REPORT.md for coverage details.
+"""
 
 import base64
 import json
@@ -151,6 +158,10 @@ class KubeconfigValidator(BaseValidator):
             except Exception:
                 # Fallback for older kubernetes client versions
                 current_config = k8s_client.Configuration()
+                k8s_config.load_kube_config(
+                    context=client.context,
+                    client_configuration=current_config,
+                )
 
             # Extract token from Bearer auth
             auth_header = current_config.api_key.get("authorization", "")
