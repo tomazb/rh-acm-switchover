@@ -149,6 +149,7 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 **Adding a KubeClient method**: Add `@retry_api_call` for API calls, return `Optional[Dict]` for gets, handle 404→None
 **New workflow step**: Follow idempotent pattern with `state.is_step_completed()` / `mark_step_completed()`
 **New validation**: Add to `lib/validation.py` with `InputValidator` static method
+**Hub discovery and preflight**: Use `./scripts/discover-hub.sh --auto --run` to discover hub contexts and run smart preflight checks
 
 ### CLI Validation Guidance (Contributor note)
 - CLI validation is implemented in `lib/validation.py` (class `InputValidator`). When changing existing arguments or adding new ones, update the validator accordingly and add tests in `tests/test_validation.py`.
