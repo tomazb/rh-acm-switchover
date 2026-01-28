@@ -49,6 +49,60 @@ def run_script(script_name: str, *args: str, env=None):
     return proc.returncode, output
 
 
+def write_shared_jq_mock(mock_bin: Path) -> None:
+    """Create a mock jq that handles minimal cases and delegates to real jq."""
+    jq_script = mock_bin / "jq"
+    jq_script.write_text(
+        """#!/bin/bash
+# Mock jq that handles minimal cases and delegates to real jq when available
+
+ALL_ARGS=("$@")
+
+# Get the jq expression (first non-flag argument) without shifting args
+EXPR=""
+skip_next=0
+for ((i=0; i<${#ALL_ARGS[@]}; i++)); do
+    arg="${ALL_ARGS[$i]}"
+    if [[ $skip_next -gt 0 ]]; then
+        skip_next=$((skip_next-1))
+        continue
+    fi
+    case "$arg" in
+        -r|--raw-output) ;;
+        --arg)
+            skip_next=2
+            ;;
+        -*) ;;
+        *)
+            EXPR="$arg"
+            break
+            ;;
+    esac
+done
+
+# Read stdin
+INPUT=$(cat)
+
+# Handle common expressions; otherwise delegate to real jq
+case "$EXPR" in
+    ".items | length")
+        # Return 0 for empty/missing arrays to keep numeric comparisons stable
+        echo "0"
+        ;;
+    *)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" "${ALL_ARGS[@]}" 2>/dev/null || echo ""
+        else
+            echo ""
+        fi
+        ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    jq_script.chmod(jq_script.stat().st_mode | stat.S_IEXEC)
+
+
 @pytest.fixture
 def mock_oc_success(tmp_path):
     """Create mocked oc/jq binaries that simulate successful validation."""
@@ -511,20 +565,8 @@ esac
     )
     oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
 
-    # Create mock jq - just pass through to real jq
-    jq_script = mock_bin / "jq"
-    jq_script.write_text(
-        """#!/bin/bash
-# Mock jq - pass through to real jq (from PATH)
-if [[ -z "${REAL_JQ:-}" ]]; then
-  echo "jq not found in PATH; please install jq to run integration tests" >&2
-  exit 127
-fi
-exec "$REAL_JQ" "$@"
-""",
-        encoding="utf-8",
-    )
-    jq_script.chmod(jq_script.stat().st_mode | stat.S_IEXEC)
+        # Create shared mock jq for consistency with other fixtures
+        write_shared_jq_mock(mock_bin)
 
     # Build environment with mocked PATH
     env = os.environ.copy()
@@ -586,11 +628,10 @@ esac
     )
     oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
 
-    jq_script = mock_bin / "jq"
-    jq_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
-    jq_script.chmod(jq_script.stat().st_mode | stat.S_IEXEC)
+    write_shared_jq_mock(mock_bin)
 
     env = os.environ.copy()
+    env["REAL_JQ"] = shutil.which("jq") or ""
     env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
     return env
 
@@ -695,63 +736,8 @@ esac
     )
     oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
 
-    # Create a mock jq that handles common expressions used in the scripts
-    # The mock needs to handle expressions like '.items | length' properly
-    # instead of just echoing the input (which breaks numeric comparisons)
-    jq_script = mock_bin / "jq"
-    jq_script.write_text(
-        """#!/bin/bash
-# Mock jq that handles common expressions used in preflight/postflight scripts
-
-# Get the jq expression (first non-flag argument)
-EXPR=""
-for arg in "$@"; do
-    case "$arg" in
-        -r|--raw-output) ;;
-        --arg) shift; shift ;;  # Skip --arg name value
-        -*) ;;
-        *) EXPR="$arg"; break ;;
-    esac
-done
-
-# Read stdin
-INPUT=$(cat)
-
-# Handle common expressions
-case "$EXPR" in
-    ".items | length")
-        # Count items array length - return 0 for empty/missing
-        echo "0"
-        ;;
-    ".items[0].metadata.name"*)
-        # Return empty string for item name lookups
-        echo ""
-        ;;
-    ".items[0].status"*)
-        # Return empty for status lookups
-        echo ""
-        ;;
-    ".items[-1]"*)
-        # Return empty for last item lookups
-        echo ""
-        ;;
-    ".status.conditions"*)
-        # Return empty for conditions
-        echo ""
-        ;;
-    *)
-        # For unhandled expressions, delegate to real jq if available, else return empty
-        if [[ -n "${REAL_JQ:-}" ]]; then
-            echo "$INPUT" | "$REAL_JQ" "$@" 2>/dev/null || echo ""
-        else
-            echo ""
-        fi
-        ;;
-esac
-""",
-        encoding="utf-8",
-    )
-    jq_script.chmod(jq_script.stat().st_mode | stat.S_IEXEC)
+    # Create shared mock jq for consistency with other fixtures
+    write_shared_jq_mock(mock_bin)
 
     env = os.environ.copy()
     env["REAL_JQ"] = shutil.which("jq") or ""
