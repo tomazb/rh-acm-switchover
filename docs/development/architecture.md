@@ -172,6 +172,30 @@ Handle optional components gracefully:
 - **Missing Resources**: Log warnings for non-critical missing resources
 - **API Errors**: Distinguish between 404 (expected) and real errors
 
+## Phase-to-Runbook Mapping
+
+The automation phases map to the v2 runbook steps as follows:
+
+| Python Phase | Runbook Steps | Module | Key Actions |
+|--------------|---------------|--------|-------------|
+| `PREFLIGHT` | Step 0 | `preflight_coordinator.py` | Validate both hubs, versions, backups, prerequisites |
+| `PRIMARY_PREP` | Steps 1-3 (Method 1) / F1-F3 (Method 2) | `primary_prep.py` | Pause backups, disable auto-import, scale down Thanos compactor |
+| `ACTIVATION` | Steps 4-5 (Method 1) / F4-F5 (Method 2) | `activation.py` | Verify passive sync or create full restore, activate clusters |
+| `POST_ACTIVATION` | Steps 6-10 / F6 | `post_activation.py` | Verify clusters, restart Observatorium API, metrics checks |
+| `FINALIZATION` | Steps 11-12 | `finalization.py` | Enable backups, verify integrity, handle old hub |
+| (manual) | Step 13 | — | Inform stakeholders (out-of-band) |
+| (separate) | Step 14 | `decommission.py` | Decommission old hub |
+| (separate) | Rollback 1-5 | (manual/partial) | Rollback procedures |
+
+**Method 2 (Full Restore) Support:** Use `--method full` (examples: `--method=full` or `--method full`). The Python tool runs
+`PRIMARY_PREP` → `ACTIVATION` → `POST_ACTIVATION` → `FINALIZATION` for both methods. Method 2 creates `restore-acm-full`
+via `_create_full_restore()` instead of patching the passive sync restore.
+
+**Activation Options (Method 1):** `--activation-method patch` (default) patches the passive sync restore.
+`--activation-method restore` deletes the passive sync restore and creates `restore-acm-activate`.
+
+**Caveat:** The primary hub must be reachable; the tool does not currently support full-restore-only execution when the primary hub is unreachable.
+
 ## Module Architecture
 
 ### Constants (`lib/constants.py`)

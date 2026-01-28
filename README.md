@@ -192,12 +192,15 @@ python acm_switchover.py --decommission \
 | `--primary-context` | Kubernetes context for primary hub (required) |
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method` | Switchover method: `passive` or `full` (required) |
+| `--activation-method` | Activation option for passive method: `patch` (default) or `restore` |
 | `--old-hub-action` | Action for old hub: `secondary` (**recommended** - enables reverse switchover), `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--state-file` | Path to state file (default: `.state/switchover-<primary>__<secondary>.json`) |
 | `--decommission` | Decommission old hub (interactive) |
+| `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Skip Observability-related steps even if detected |
+| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--skip-rbac-validation` | Skip RBAC permission validation during pre-flight checks |
 | `--verbose` | Enable verbose logging |
 
@@ -220,7 +223,8 @@ python acm_switchover.py --decommission \
 
 3. **Secondary Hub Activation**
    - Verify latest passive restore (Method 1) or create full restore (Method 2)
-   - Activate managed clusters on secondary hub
+   - Activate managed clusters on secondary hub (patch or create `restore-acm-activate`)
+   - Apply `immediate-import` annotations when `autoImportStrategy=ImportOnly` (ACM 2.14+)
    - Poll until restore completes
 
 4. **Post-Activation Verification**
@@ -233,10 +237,12 @@ python acm_switchover.py --decommission \
    - Enable BackupSchedule on new hub
    - Fix BackupSchedule collision if detected
    - Verify new backups are created
+   - Verify backup integrity (status, age, and Velero logs)
    - Handle old hub based on `--old-hub-action`:
      - `secondary`: Set up passive sync restore (**recommended** - enables reverse switchover)
      - `decommission`: Remove ACM components automatically
      - `none`: Leave unchanged for manual handling
+   - Optional: delete MultiClusterObservability on old hub when keeping it as secondary
    - Generate completion report
 
 ### State Management
