@@ -219,6 +219,29 @@ class TestFinalization:
 
         finalization._verify_backup_integrity(max_age_seconds=600)
 
+    @patch("modules.finalization.wait_for_condition")
+    def test_verify_backup_integrity_waits_for_completion(
+        self, mock_wait, finalization, mock_secondary_client
+    ):
+        """Backup integrity should wait for the latest backup to complete."""
+        backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        mock_wait.return_value = True
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+                "status": {"phase": "InProgress"},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+            "status": {"phase": "Completed", "completionTimestamp": backup_ts, "errors": 0, "warnings": 0},
+        }
+        mock_secondary_client.get_pods.return_value = []
+
+        finalization._verify_backup_integrity(max_age_seconds=600)
+
+        mock_wait.assert_called_once()
+
     def test_verify_backup_integrity_fails_on_errors(self, finalization, mock_secondary_client):
         """Backup integrity should fail when backup reports errors."""
         backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

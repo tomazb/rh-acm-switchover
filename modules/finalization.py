@@ -426,7 +426,46 @@ class Finalization:
         warnings = _to_int(status.get("warnings"))
 
         if phase != "Completed":
-            raise RuntimeError(f"Latest backup {backup_name} not completed (phase={phase})")
+            if phase in ("New", "InProgress"):
+                def _poll_backup_completion() -> Tuple[bool, str]:
+                    backup = self.secondary.get_custom_resource(
+                        group="velero.io",
+                        version="v1",
+                        plural="backups",
+                        name=backup_name,
+                        namespace=BACKUP_NAMESPACE,
+                    )
+                    if not backup:
+                        raise RuntimeError(f"Backup {backup_name} disappeared during integrity check")
+                    poll_phase = backup.get("status", {}).get("phase", "unknown")
+                    if poll_phase == "Completed":
+                        return True, "completed"
+                    if poll_phase in ("Failed", "PartiallyFailed"):
+                        raise RuntimeError(f"Latest backup {backup_name} failed (phase={poll_phase})")
+                    return False, f"phase={poll_phase}"
+
+                completed = wait_for_condition(
+                    f"backup {backup_name} completion",
+                    _poll_backup_completion,
+                    timeout=BACKUP_VERIFY_TIMEOUT,
+                    interval=BACKUP_POLL_INTERVAL,
+                    logger=logger,
+                )
+                if not completed:
+                    raise RuntimeError(
+                        f"Latest backup {backup_name} did not complete within {BACKUP_VERIFY_TIMEOUT}s"
+                    )
+                latest_backup = self.secondary.get_custom_resource(
+                    group="velero.io",
+                    version="v1",
+                    plural="backups",
+                    name=backup_name,
+                    namespace=BACKUP_NAMESPACE,
+                ) or latest_backup
+                status = latest_backup.get("status", {}) or {}
+                phase = status.get("phase", "unknown")
+            else:
+                raise RuntimeError(f"Latest backup {backup_name} not completed (phase={phase})")
         if errors > 0:
             raise RuntimeError(f"Latest backup {backup_name} completed with {errors} error(s)")
         if warnings > 0:
