@@ -24,7 +24,7 @@ Diagnose and resolve missing metrics in Grafana dashboards after switchover.
 ```bash
 oc get pods -n open-cluster-management-observability --context <secondary> \
   -l app.kubernetes.io/name=observatorium-api \
-  -o custom-columns=NAME:.metadata.name,AGE:.metadata.creationTimestamp
+  -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp
 ```
 
 **Decision Tree:**

@@ -13,7 +13,7 @@ Guide the operator through ACM switchover pre-flight validation with interactive
 Ask the operator:
 
 1. **"Which switchover method are you using?"**
-   - **Method 1 (Passive Restore)**: Secondary hub has continuous passive sync running
+   - **Method 1 (Passive Sync)**: Secondary hub has continuous passive sync running
    - **Method 2 (Full Restore)**: No passive sync, performing one-time full restore
 
 2. **"What are your kubeconfig contexts?"**
@@ -81,15 +81,15 @@ oc get multiclusterhub -A -o jsonpath='{.items[0].status.currentVersion}' --cont
 
 ### OADP/Velero Status
 
-**Both hubs must have:**
+**Both hubs must have (run on each hub):**
 
 ```bash
-# BackupStorageLocation available
-oc get backupstoragelocation.velero.io -n open-cluster-management-backup \
+# BackupStorageLocation available (run on both primary and secondary)
+oc get backupstoragelocation.velero.io -n open-cluster-management-backup --context <primary|secondary> \
   -o custom-columns=NAME:.metadata.name,PHASE:.status.phase
 
-# DataProtectionApplication ready
-oc get dataprotectionapplication.oadp.openshift.io -n open-cluster-management-backup \
+# DataProtectionApplication ready (run on both primary and secondary)
+oc get dataprotectionapplication.oadp.openshift.io -n open-cluster-management-backup --context <primary|secondary> \
   -o custom-columns=NAME:.metadata.name,CONDITION:.status.conditions[-1:].type,STATUS:.status.conditions[-1:].status
 ```
 
@@ -111,7 +111,7 @@ oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync \
 **Decision Tree:**
 - ✅ Phase=Enabled, recent sync → Proceed with Method 1
 - ⚠️ Phase=Enabled but stale → Wait for sync or check storage connectivity
-- ❌ No passive restore exists → Switch to Method 2
+- ❌ No passive sync restore exists → Switch to Method 2
 
 ---
 

@@ -132,6 +132,13 @@ oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAM
 
 ### For ACM 2.11:
 
+Set the BackupSchedule name (if not already set):
+```bash
+BACKUP_SCHEDULE_NAME=$(oc get backupschedule.cluster.open-cluster-management.io \
+  -n open-cluster-management-backup --context <primary> \
+  -o jsonpath='{.items[0].metadata.name}')
+```
+
 Re-apply saved YAML:
 ```bash
 yq 'del(.metadata.uid, .metadata.resourceVersion, .metadata.managedFields, .status)' \

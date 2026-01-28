@@ -72,7 +72,7 @@ oc logs -n hive deployment/hive-controllers --context <secondary> | grep "$CLUST
 
 **Option A: Wait for auto-import (ACM 2.14+ with ImportAndSync)**
 
-If you set `ImportAndSync` in Step 4b, clusters should auto-import. Wait 10-15 minutes.
+If you configured `ImportAndSync` strategy (see [ACM_SWITCHOVER_RUNBOOK.md](../../docs/ACM_SWITCHOVER_RUNBOOK.md) Step 4b: "Configure auto-import strategy"), clusters should auto-import. Wait 10-15 minutes.
 
 **Option B: Trigger reimport**
 
@@ -225,7 +225,7 @@ If cluster still won't import after all steps:
    ```
 
 2. **Check ACM support documentation:**
-   - [Official troubleshooting guide](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.11/html/troubleshooting/index)
+   - [Official troubleshooting guide](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.14/html/troubleshooting/index)
 
 3. **Consider manual cluster reimport:**
    - Delete ManagedCluster from ACM

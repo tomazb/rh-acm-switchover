@@ -240,8 +240,9 @@ If restore fails repeatedly:
    # ACM backup controller logs
    oc logs -n open-cluster-management-backup deployment/cluster-backup-chart-clusterbackup --context <secondary> > backup-controller-logs.txt
    
-   # Full must-gather
-   oc adm must-gather --image=quay.io/stolostron/must-gather:latest --context <secondary>
+   # Full must-gather (use ACM version-specific tag, e.g., 2.12.0, 2.13.0)
+   # Find available tags: skopeo list-tags docker://quay.io/stolostron/must-gather | head
+   oc adm must-gather --image=quay.io/stolostron/must-gather:2.12.0 --context <secondary>
    ```
 
 2. **Check Velero troubleshooting docs:**

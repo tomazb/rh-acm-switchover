@@ -144,7 +144,11 @@ oc get backup.velero.io -n open-cluster-management-backup --context <primary> \
 
 If backup in progress:
 - Wait for completion (typically 5-15 minutes)
-- Or cancel if urgent: `oc delete backup.velero.io <name> -n open-cluster-management-backup`
+- If urgent, delete the backup CR (note: deleted backup will NOT be restorable; the data remains in object storage but ACM cannot use it):
+  ```bash
+  oc delete backup.velero.io <name> -n open-cluster-management-backup --context <primary>
+  ```
+- After switchover stabilizes, take a fresh backup on the new primary hub
 
 ---
 

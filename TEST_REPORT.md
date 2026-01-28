@@ -31,11 +31,13 @@
 ## Code Coverage Analysis
 
 ### Coverage Summary
-```
+
+```text
 Total Coverage: 69% (2,579 covered / 3,760 total statements)
 ```
 
 ### Library Coverage (lib/)
+
 | Module | Statements | Miss | Coverage |
 |--------|-----------|------|----------|
 | __init__.py | 7 | 0 | 100% |
@@ -48,6 +50,7 @@ Total Coverage: 69% (2,579 covered / 3,760 total statements)
 | waiter.py | 31 | 3 | 90% |
 
 ### Modules Coverage (modules/)
+
 | Module | Statements | Miss | Coverage |
 |--------|-----------|------|----------|
 | __init__.py | 8 | 0 | 100% |
@@ -68,6 +71,7 @@ Total Coverage: 69% (2,579 covered / 3,760 total statements)
 | preflight_validators.py | 6 | 0 | 100% |
 
 ### Top-level Script Coverage
+
 | Module | Statements | Miss | Coverage |
 |--------|-----------|------|----------|
 | acm_switchover.py | 277 | 130 | 53% |
@@ -122,7 +126,8 @@ Type-check error:
 ## Test Execution Environment
 
 ### Python Environment
-```
+
+```text
 Python Version: 3.14.2
 Pytest Version: 9.0.2
 Platform: Linux
@@ -131,7 +136,8 @@ pytest-cov: 7.0.0
 ```
 
 ### Virtual Environment
-```
+
+```text
 Location: .venv/
 Type: Python venv
 Status: Active
