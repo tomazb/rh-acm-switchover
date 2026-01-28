@@ -46,7 +46,7 @@
   - Add CLI flag `--activation-method=patch|restore` to select
 - **Clarify auto-import strategy handling (Step 4b / F4 & Step 7)**:
   - Step 4b / F4: Optional `import-controller-config` ConfigMap creation (before activation). **Guards**: Only apply `ImportAndSync` when (a) hub has existing non-local ManagedClusters restored, AND (b) intended for future switchback. Otherwise skip.
-  - Step 7: Delete ConfigMap after clusters attached (in `post_activation.py` or `finalization.py`). **Guard**: Only delete if ConfigMap was explicitly set during this switchover (track in state).
+  - Step 7: Delete ConfigMap after clusters attached (in `post_activation.py` or `finalization.py`). **Guard**: Only delete if ConfigMap was explicitly set during this switchover (record a marker in state, e.g., a state file flag or a ConfigMap annotation, and check it before deletion).
 - **Enhance backup integrity verification (Step 12)**: Expand verification in [modules/finalization.py](modules/finalization.py) to check latest backup status, Velero logs, and recent timestamp.
 
 ### 5. Add Optional MCO Deletion for Non-Decommission Flows (NEW)
