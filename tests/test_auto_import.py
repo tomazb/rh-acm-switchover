@@ -93,7 +93,7 @@ class TestActivationManageFlag:
 
 @pytest.mark.unit
 class TestFinalizationReset:
-    def test_resets_import_strategy_when_flag_on(self, tmp_path):
+    def test_does_not_reset_without_state_flag(self, tmp_path):
         state = StateManager(str(tmp_path / "state.json"))
         fin = Finalization(
             secondary_client=Mock(),
@@ -101,13 +101,12 @@ class TestFinalizationReset:
             acm_version="2.14.1",
             manage_auto_import_strategy=True,
         )
-        # Pretend ImportAndSync is set
+        # Pretend ImportAndSync is set but not managed by this run
         fin.secondary.get_configmap.return_value = {"data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}}
 
-        # Access the private method via name mangling to avoid lint warnings
         fin._ensure_auto_import_default()
 
-        fin.secondary.delete_configmap.assert_called_once_with(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIGMAP)
+        fin.secondary.delete_configmap.assert_not_called()
 
     def test_clears_state_flag_after_reset(self, tmp_path):
         state = StateManager(str(tmp_path / "state.json"))

@@ -84,7 +84,7 @@ class TestWaitForCondition:
 
     @patch("lib.waiter.time")
     def test_wait_success_on_last_check(self, mock_time, mock_logger):
-        """Test condition succeeds exactly on the final check after loop exit."""
+        """Test condition succeeds exactly on the final check after loop exit when enabled."""
         # Simulate loop exit due to timeout
         mock_time.time.side_effect = [0, 100]
 
@@ -95,8 +95,25 @@ class TestWaitForCondition:
             description="test last chance",
             condition_fn=condition,
             timeout=50,
+            allow_success_after_timeout=True,
             logger=mock_logger,
         )
 
         assert result is True
         mock_logger.info.assert_called_with("%s complete: %s", "test last chance", "just in time")
+
+    @patch("lib.waiter.time")
+    def test_wait_timeout_no_last_chance(self, mock_time, mock_logger):
+        """Test timeout does not succeed after loop exit by default."""
+        mock_time.time.side_effect = [0, 100]
+
+        condition = Mock(return_value=(True, "late"))
+
+        result = wait_for_condition(
+            description="test no last chance",
+            condition_fn=condition,
+            timeout=50,
+            logger=mock_logger,
+        )
+
+        assert result is False

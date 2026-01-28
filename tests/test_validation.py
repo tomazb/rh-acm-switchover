@@ -81,6 +81,17 @@ class TestCLIArgumentValidation:
             with pytest.raises(ValidationError):
                 InputValidator.validate_cli_method(method)
 
+    def test_valid_activation_methods(self):
+        """Test valid activation methods."""
+        for method in ["patch", "restore"]:
+            InputValidator.validate_cli_activation_method(method)
+
+    def test_invalid_activation_methods(self):
+        """Test invalid activation methods."""
+        for method in ["invalid", "", "PATCH"]:
+            with pytest.raises(ValidationError):
+                InputValidator.validate_cli_activation_method(method)
+
     def test_valid_old_hub_actions(self):
         """Test valid old hub actions."""
         valid_actions = ["secondary", "decommission", "none"]
@@ -148,6 +159,39 @@ class TestCLIArgumentValidation:
             secondary_context=None,
             method="passive",
             old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+        )
+
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_activation_method_restore_requires_passive(self):
+        """--activation-method=restore should only be valid with passive."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="full",
+            activation_method="restore",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+        )
+
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_disable_observability_requires_secondary_action(self):
+        """--disable-observability-on-secondary requires old_hub_action=secondary."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            activation_method="patch",
+            old_hub_action="none",
+            disable_observability_on_secondary=True,
             log_format="text",
             state_file=".state/switchover-state.json",
             decommission=False,

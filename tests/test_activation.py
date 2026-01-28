@@ -16,11 +16,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.activation as activation_module
 from lib.constants import (
     BACKUP_NAMESPACE,
+    IMMEDIATE_IMPORT_ANNOTATION,
+    MANAGED_CLUSTER_RESTORE_NAME,
     PATCH_VERIFY_RETRY_DELAY,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
     VELERO_BACKUP_LATEST,
+    VELERO_BACKUP_SKIP,
 )
 
 SecondaryActivation = activation_module.SecondaryActivation
@@ -357,6 +360,71 @@ class TestSecondaryActivation:
 
             # Verify get_custom_resource was called by the callback
             assert mock_secondary_client.get_custom_resource.called
+
+    @patch("modules.activation.wait_for_condition")
+    def test_activate_passive_restore_method(
+        self, mock_wait, mock_secondary_client, mock_state_manager
+    ):
+        """Test passive activation using restore-acm-activate (Option B)."""
+        mock_wait.return_value = True
+        mock_state_manager.get_config.return_value = "2.13.0"
+
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+            activation_method="restore",
+        )
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": RESTORE_PASSIVE_SYNC_NAME}, "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}}
+        ]
+
+        def get_custom_resource_side_effect(**kwargs):
+            name = kwargs.get("name")
+            if name == RESTORE_PASSIVE_SYNC_NAME:
+                return {"metadata": {"name": name}, "status": {"phase": "Enabled"}}
+            if name == MANAGED_CLUSTER_RESTORE_NAME:
+                return None
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+
+        with patch.object(activation, "_wait_for_managed_clusters_velero_restore") as mock_wait_mc:
+            result = activation.activate()
+
+        assert result is True
+        mock_secondary_client.delete_custom_resource.assert_called_once()
+        mock_secondary_client.create_custom_resource.assert_called_once()
+        body = mock_secondary_client.create_custom_resource.call_args.kwargs["body"]
+        assert body["metadata"]["name"] == MANAGED_CLUSTER_RESTORE_NAME
+        assert body["spec"][SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME] == VELERO_BACKUP_LATEST
+        assert body["spec"]["veleroCredentialsBackupName"] == VELERO_BACKUP_SKIP
+        assert body["spec"]["veleroResourcesBackupName"] == VELERO_BACKUP_SKIP
+        mock_wait_mc.assert_called_once()
+
+    def test_apply_immediate_import_annotations(self, mock_secondary_client, mock_state_manager):
+        """Test immediate-import annotation application under ImportOnly."""
+        mock_state_manager.get_config.return_value = "2.14.0"
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+        )
+
+        mock_secondary_client.get_configmap.return_value = None
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster-a", "annotations": {}}},
+            {"metadata": {"name": "cluster-b", "annotations": {IMMEDIATE_IMPORT_ANNOTATION: ""}}},
+            {"metadata": {"name": "local-cluster", "annotations": {}}},
+        ]
+
+        activation._apply_immediate_import_annotations()
+
+        mock_secondary_client.patch_managed_cluster.assert_called_once()
+        args, kwargs = mock_secondary_client.patch_managed_cluster.call_args
+        assert kwargs["name"] == "cluster-a"
+        assert kwargs["patch"]["metadata"]["annotations"][IMMEDIATE_IMPORT_ANNOTATION] == ""
 
 
 @pytest.mark.unit

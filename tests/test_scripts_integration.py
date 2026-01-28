@@ -496,7 +496,12 @@ EOF
         exit 0
         ;;
     *"--context=new-hub"*"get "*"backup"*"-n open-cluster-management-backup"*"--sort-by"*)
-        echo "backup-3 Completed 2024-11-24T12:00:00Z"
+        NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "backup-3 Completed $NOW"
+        exit 0
+        ;;
+    *"--context=new-hub"*"logs"*"-n open-cluster-management-backup"*"deployment/velero"*)
+        # Return empty logs to avoid errors
         exit 0
         ;;
     *"--context=new-hub"*"get "*"backupstoragelocation"*"-n open-cluster-management-backup"*"--no-headers"*)
@@ -565,8 +570,8 @@ esac
     )
     oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
 
-        # Create shared mock jq for consistency with other fixtures
-        write_shared_jq_mock(mock_bin)
+    # Create shared mock jq for consistency with other fixtures
+    write_shared_jq_mock(mock_bin)
 
     # Build environment with mocked PATH
     env = os.environ.copy()
