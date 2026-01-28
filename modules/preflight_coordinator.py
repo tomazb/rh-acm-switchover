@@ -125,7 +125,7 @@ class PreflightValidator:
             logger.info("RBAC validation skipped (--skip-rbac-validation specified)")
 
         # Kubeconfig structure and token validation
-        self.kubeconfig_validator.run(self.primary, self.secondary)
+        self.kubeconfig_validator.run(self.primary, self.secondary, method=self.method)
 
         self.tooling_validator.run()
         self.namespace_validator.run(self.primary, self.secondary)

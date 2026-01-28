@@ -44,8 +44,9 @@ class KubeconfigValidator(BaseValidator):
     # Warn if token expires within this many hours
     TOKEN_EXPIRY_WARNING_HOURS = 4
 
-    def run(self, primary: KubeClient, secondary: KubeClient) -> None:
+    def run(self, primary: KubeClient, secondary: KubeClient, method: str = "passive") -> None:
         """Run kubeconfig validation checks."""
+        self.method = method
         # Check connectivity (implicitly validated by KubeClient init, but verify)
         self._check_connectivity(primary, "primary")
         self._check_connectivity(secondary, "secondary")
@@ -70,10 +71,14 @@ class KubeconfigValidator(BaseValidator):
                 critical=True,
             )
         except Exception as e:
+            method = getattr(self, "method", "passive")
+            extra = ""
+            if hub_label == "primary" and method == "full":
+                extra = " Full-restore (--method full) requires primary hub reachability."
             self.add_result(
                 f"API Connectivity ({hub_label})",
                 False,
-                f"Cannot connect to {hub_label} hub: {str(e)}",
+                f"Cannot connect to {hub_label} hub: {str(e)}.{extra}",
                 critical=True,
             )
 
