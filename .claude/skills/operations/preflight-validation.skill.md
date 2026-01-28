@@ -124,6 +124,17 @@ oc get configmap import-controller-config -n multicluster-engine -o yaml 2>/dev/
 
 **Note:** Default `ImportOnly` is correct for most cases. Document if `ImportAndSync` is set.
 
+**If ImportOnly is in effect and you expect clusters to re-import on the destination hub:**
+- Prefer **immediate-import** annotations for non-local clusters (per runbook)
+- Use `ImportAndSync` only when you plan a future switchback, and remove it after activation
+
+```bash
+# Apply immediate-import to all non-local clusters (destination hub)
+oc get managedcluster.cluster.open-cluster-management.io -o name --context <secondary> | \
+  grep -v '/local-cluster$' | \
+  xargs -I{} oc annotate {} import.open-cluster-management.io/immediate-import='' --overwrite --context <secondary>
+```
+
 ---
 
 ## Go/No-Go Decision

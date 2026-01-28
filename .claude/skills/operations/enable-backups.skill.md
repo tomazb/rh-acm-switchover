@@ -132,6 +132,14 @@ oc get backup.velero.io "$BACKUP_NAME" -n open-cluster-management-backup --conte
 # Should return: Completed
 ```
 
+### Verify backup timestamp is recent
+
+```bash
+oc get backup.velero.io "$BACKUP_NAME" -n open-cluster-management-backup --context <secondary> \
+  -o jsonpath='{.metadata.creationTimestamp}'
+# Should be within the last 10 minutes
+```
+
 **Decision Tree:**
 - ✅ Phase=Completed → Backups working
 - ❌ Phase=Failed or PartiallyFailed → Check Velero logs
@@ -139,7 +147,8 @@ oc get backup.velero.io "$BACKUP_NAME" -n open-cluster-management-backup --conte
 ### Check backup logs if issues
 
 ```bash
-oc logs -n open-cluster-management-backup deployment/velero -c velero --context <secondary> --since=10m | grep -i error
+oc logs -n open-cluster-management-backup deployment/velero -c velero --context <secondary> --since=10m | \
+  grep "$BACKUP_NAME" | grep -iE "error|failed"
 ```
 
 ---

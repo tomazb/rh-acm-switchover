@@ -46,9 +46,19 @@ oc scale statefulset observability-thanos-compact \
   -n open-cluster-management-observability --context <primary> --replicas=0
 ```
 
-### F4 (ACM 2.14+): Set ImportAndSync on Secondary
+### F4a (ACM 2.14+ ImportOnly): Apply immediate-import on Secondary
 
-> Only if secondary has existing managed clusters
+> Prefer this when the destination hub uses the default `ImportOnly` strategy
+
+```bash
+oc get managedcluster.cluster.open-cluster-management.io -o name --context <secondary> | \
+  grep -v '/local-cluster$' | \
+  xargs -I{} oc annotate {} import.open-cluster-management.io/immediate-import='' --overwrite --context <secondary>
+```
+
+### F4b (ACM 2.14+): Set ImportAndSync on Secondary (optional)
+
+> Only if secondary has existing managed clusters and you plan to switch back later
 
 ```bash
 oc apply --context <secondary> -f - <<EOF

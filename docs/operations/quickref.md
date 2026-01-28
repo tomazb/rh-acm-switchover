@@ -220,12 +220,15 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method {passive,full}` | Switchover method: `passive` or `full` (required) |
 | `--old-hub-action {secondary,decommission,none}` | Action for old hub after switchover (required) |
+| `--activation-method {patch,restore}` | Activation method for passive restores (default: patch) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--decommission` | Decommission old hub (interactive) |
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
 | `--reset-state` | Reset state file and start fresh |
+| `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Skip Observability steps even if detected |
+| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--verbose, -v` | Enable verbose logging |
 
@@ -258,6 +261,7 @@ oc rollout restart deployment/observability-observatorium-api \
 - [ ] Latest backup completed successfully
 - [ ] ACM versions match between hubs
 - [ ] (ACM 2.14+) Verified `autoImportStrategy` configuration
+- [ ] Do not re-enable Thanos/Observatorium on the old hub unless switching back
 - [ ] Decided on `--old-hub-action` (secondary/decommission/none)
 - [ ] Stakeholders informed of maintenance window
 - [ ] Reverse switchover procedure tested in non-production
@@ -379,7 +383,9 @@ podman run -it --rm \
 | `--dry-run` | Preview actions without executing |
 | `--method passive` | Use passive sync method (required) |
 | `--method full` | Use full restore method (required) |
+| `--activation-method {patch,restore}` | Activation option for passive method |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
+| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--verbose` | Enable debug logging |
 
 ### Container Aliases (Optional)

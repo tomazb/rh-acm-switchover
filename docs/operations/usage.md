@@ -85,6 +85,10 @@ python acm_switchover.py \
 - Finalization: 5-10 minutes (backup verification)
 - **Total: ~30-45 minutes**
 
+> **Safety warning:** Do **NOT** re-enable Thanos Compactor or Observatorium API on the old hub after switchover.
+> Both hubs share the same object storage backend; re-enabling on the old hub can cause data corruption and split-brain.
+> Only re-enable on the old hub if you are switching back and have shut down these components on the current primary first.
+
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
 ```json
@@ -142,6 +146,21 @@ python acm_switchover.py \
   --method passive \
   --old-hub-action secondary
 ```
+
+**Activation options (Method 1):**
+- **Default (Option A):** Patch the passive sync restore in place.
+- **Option B:** Delete passive sync and create `restore-acm-activate`:
+
+```bash
+python acm_switchover.py \
+  --primary-context primary-acm-hub \
+  --secondary-context secondary-acm-hub \
+  --method passive \
+  --activation-method restore \
+  --old-hub-action secondary
+```
+
+> **Note:** `--activation-method` applies only to `--method passive`.
 
 **Advantages:**
 - Faster activation (data already restored)
@@ -204,7 +223,25 @@ python acm_switchover.py \
 
 **Use case:** Observability issues shouldn't block cluster migration.
 
-### Scenario 3: Different ACM Versions (2.11 vs 2.12+)
+### Scenario 3: Disable Observability on Old Hub (Non-Decommission)
+
+If you are keeping the old hub as a secondary and want Observability disabled there,
+you can request deletion of the MultiClusterObservability resource:
+
+```bash
+python acm_switchover.py \
+  --primary-context primary-acm-hub \
+  --secondary-context secondary-acm-hub \
+  --method passive \
+  --old-hub-action secondary \
+  --disable-observability-on-secondary
+```
+
+**Notes:**
+- Only valid when `--old-hub-action secondary` (not for decommission).
+- If the MCO is managed by GitOps (ArgoCD/Flux), coordinate deletion to avoid drift.
+
+### Scenario 4: Different ACM Versions (2.11 vs 2.12+)
 
 The script auto-detects ACM version and adjusts BackupSchedule handling:
 

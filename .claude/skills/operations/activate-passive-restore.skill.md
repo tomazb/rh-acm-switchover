@@ -118,7 +118,19 @@ done
 
 ---
 
-## Step 4b (ACM 2.14+ with existing clusters): Set ImportAndSync
+## Step 4a (ACM 2.14+ with ImportOnly): Apply immediate-import annotations
+
+> If the destination hub is using the default `ImportOnly` strategy, apply immediate-import to ensure clusters re-import.
+
+```bash
+oc get managedcluster.cluster.open-cluster-management.io -o name --context <secondary> | \
+  grep -v '/local-cluster$' | \
+  xargs -I{} oc annotate {} import.open-cluster-management.io/immediate-import='' --overwrite --context <secondary>
+```
+
+---
+
+## Step 4b (ACM 2.14+ with existing clusters): Set ImportAndSync (optional)
 
 > Only needed if secondary hub has non-local-cluster ManagedClusters AND you plan to switch back later
 
@@ -144,7 +156,7 @@ data:
 EOF
 ```
 
-> **Note**: This will be removed in post-activation Step 7
+> **Note**: This will be removed in post-activation Step 7. Use only for planned switchback scenarios.
 
 ---
 

@@ -145,6 +145,10 @@ The ACM switchover automation tool implements comprehensive input validation to:
 
 **Valid Values**: `["passive", "full"]`
 
+#### Activation Method Validation
+
+**Valid Values**: `["patch", "restore"]`
+
 #### Old Hub Action Validation
 
 **Valid Values**: `["secondary", "decommission", "none"]`
@@ -152,6 +156,13 @@ The ACM switchover automation tool implements comprehensive input validation to:
 #### Log Format Validation
 
 **Valid Values**: `["text", "json"]`
+
+#### Cross-Argument Rules
+
+- `--activation-method=restore` is only valid with `--method passive`
+- `--secondary-context` is required for switchover operations (unless `--decommission` or `--setup`)
+- `--non-interactive` is only valid with `--decommission`
+- `--disable-observability-on-secondary` requires `--old-hub-action secondary` and is not valid with `--decommission`
 
 ### 6. Filesystem Path Validation
 

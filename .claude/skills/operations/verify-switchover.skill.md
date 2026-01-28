@@ -128,6 +128,25 @@ oc get route grafana -n open-cluster-management-observability --context <seconda
 
 ---
 
+## Optional: Disable Observability on Old Hub (between Steps 10-11)
+
+> Use this when keeping the old hub as a secondary (not decommissioning).
+> If GitOps manages the MCO, coordinate deletion to avoid drift.
+
+```bash
+oc delete multiclusterobservability.observability.open-cluster-management.io observability \
+  -n open-cluster-management-observability --context <primary>
+```
+
+**Verify pods terminate:**
+```bash
+oc get pods -n open-cluster-management-observability --context <primary>
+```
+
+> **Note:** If Observability pods remain after MCO deletion (and GitOps is not recreating it), capture logs and open a support case (product bug).
+
+---
+
 ## What If...
 
 ### "Clusters stuck in Pending Import"

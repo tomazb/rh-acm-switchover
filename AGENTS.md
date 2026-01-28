@@ -48,13 +48,16 @@ INIT → PREFLIGHT → PRIMARY_PREP → ACTIVATION → POST_ACTIVATION → FINAL
 ```
 Defined phases in `Phase` enum: `INIT`, `PREFLIGHT`, `PRIMARY_PREP`, `SECONDARY_VERIFY`, `ACTIVATION`, `POST_ACTIVATION`, `FINALIZATION`, `COMPLETED`, `FAILED`. The main switchover flow uses the diagram above; `FAILED` is set on errors.
 
-| Phase | Module | Key Actions |
-|-------|--------|-------------|
-| `PREFLIGHT` | `preflight_coordinator.py` + `preflight/` | Validate both hubs, check ACM versions, verify backups |
-| `PRIMARY_PREP` | `primary_prep.py` | Pause BackupSchedule, add disable-auto-import annotations, scale Thanos |
-| `ACTIVATION` | `activation.py` | Patch restore with `veleroManagedClustersBackupName: latest` |
-| `POST_ACTIVATION` | `post_activation.py` | Wait for ManagedClusters to connect, verify klusterlet agents |
-| `FINALIZATION` | `finalization.py` | Configure old hub as secondary or prepare for decommission |
+| Phase | Runbook Steps | Module | Key Actions |
+|-------|---------------|--------|-------------|
+| `PREFLIGHT` | Step 0 | `preflight_coordinator.py` + `preflight/` | Validate both hubs, check ACM versions, verify backups |
+| `PRIMARY_PREP` | Steps 1-3 / F1-F3 | `primary_prep.py` | Pause BackupSchedule, add disable-auto-import annotations, scale Thanos |
+| `ACTIVATION` | Steps 4-5 / F4-F5 | `activation.py` | Verify passive sync or create full restore, activate clusters |
+| `POST_ACTIVATION` | Steps 6-10 / F6 | `post_activation.py` | Wait for ManagedClusters to connect, verify klusterlet agents |
+| `FINALIZATION` | Steps 11-12 | `finalization.py` | Enable backups, verify integrity, handle old hub state |
+| (manual) | Step 13 | — | Inform stakeholders (out-of-band) |
+| (separate) | Step 14 | `decommission.py` | Decommission old hub |
+| (separate) | Rollback 1-5 | (manual/partial) | Rollback procedures |
 
 Each phase handler checks `state.get_current_phase()` before executing. Failed phases set `Phase.FAILED`.
 
