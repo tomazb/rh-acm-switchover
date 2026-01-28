@@ -176,6 +176,7 @@ When doing similar refactoring work:
 - `lib/constants.py` - All magic strings centralized here (Python)
 - `scripts/constants.sh` - All magic strings centralized here (Bash)
 - `setup.cfg` - pytest, flake8, mypy configuration
+- `.claude/skills/` - Claude SKILLS for switchover procedures (keep in sync with runbook)
 
 ## Version Management
 
@@ -258,3 +259,38 @@ When making Python code changes:
 6. [ ] Add changelog entry in `CHANGELOG.md`
 7. [ ] Keep Python and Bash versions in sync if changes affect both
 8. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+
+## Claude SKILLS
+
+The `.claude/skills/` directory contains conversational guides for Claude to help operators through ACM switchover procedures. Each SKILL provides decision trees, commands, and troubleshooting paths.
+
+> **Maintenance Rule**: When updating [docs/ACM_SWITCHOVER_RUNBOOK.md](docs/ACM_SWITCHOVER_RUNBOOK.md), also update the corresponding SKILLS in `.claude/skills/` to keep procedures synchronized.
+
+### Operations SKILLS
+
+| SKILL | Purpose | Runbook Reference |
+|-------|---------|-------------------|
+| [preflight-validation.skill.md](.claude/skills/operations/preflight-validation.skill.md) | Interactive pre-flight checklist with go/no-go decisions | Step 0 |
+| [pause-backups.skill.md](.claude/skills/operations/pause-backups.skill.md) | Pause BackupSchedule (ACM 2.11 vs 2.12+ variants) | Step 1 |
+| [activate-passive-restore.skill.md](.claude/skills/operations/activate-passive-restore.skill.md) | Method 1: Passive restore activation flow | Steps 2-5 |
+| [activate-full-restore.skill.md](.claude/skills/operations/activate-full-restore.skill.md) | Method 2: One-time full restore flow | Steps F1-F5 |
+| [verify-switchover.skill.md](.claude/skills/operations/verify-switchover.skill.md) | Post-activation verification (clusters, observability) | Steps 6-10 |
+| [enable-backups.skill.md](.claude/skills/operations/enable-backups.skill.md) | Enable BackupSchedule on new hub | Steps 11-12 |
+| [rollback.skill.md](.claude/skills/operations/rollback.skill.md) | Rollback procedure with decision tree by failure point | Rollback 1-5 |
+| [decommission.skill.md](.claude/skills/operations/decommission.skill.md) | Safe decommissioning with safety checks | Step 14 |
+
+### Troubleshooting SKILLS
+
+| SKILL | Symptoms | Resolution |
+|-------|----------|------------|
+| [pending-import.skill.md](.claude/skills/troubleshooting/pending-import.skill.md) | Clusters stuck in "Pending Import" | Klusterlet diagnostics, reimport |
+| [grafana-no-data.skill.md](.claude/skills/troubleshooting/grafana-no-data.skill.md) | No metrics in Grafana dashboards | Observatorium restart, collector checks |
+| [restore-stuck.skill.md](.claude/skills/troubleshooting/restore-stuck.skill.md) | Restore stuck in "Running" state | Velero diagnostics, storage checks |
+
+### Using SKILLS
+
+SKILLS are designed for conversational guidance. When helping with switchover:
+1. Start with `preflight-validation` to assess readiness
+2. Follow the appropriate method (passive or full restore)
+3. Use troubleshooting SKILLS when issues arise
+4. Reference the runbook for detailed command explanations
