@@ -42,10 +42,8 @@ echo "Running Unit Tests"
 echo "======================================"
 
 # E2E tests are on-demand. Set RUN_E2E=1 to include them.
-pytest_args=(tests/ -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml)
-if [ "${RUN_E2E:-0}" != "1" ]; then
-    pytest_args+=(-m "not e2e")
-fi
+# Main test run always excludes E2E; E2E runs separately when requested
+pytest_args=(tests/ -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
 python -m pytest "${pytest_args[@]}"
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
@@ -53,7 +51,7 @@ if [ "${RUN_E2E:-0}" = "1" ]; then
     echo "======================================"
     echo "Running E2E Tests (On Demand)"
     echo "======================================"
-    python -m pytest tests/e2e/ -v -m e2e
+    python -m pytest tests/e2e/ -v -m e2e --cov=. --cov-append --cov-report=term-missing
 fi
 
 echo ""
