@@ -7,9 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
 ### Changed
 
 ### Fixed
+
+## [1.5.0] - 2026-01-28
+
+### Added
+
+- **Activation method selection**: Added `--activation-method {patch,restore}` to support both passive activation options, including creation of `restore-acm-activate`.
+- **Immediate-import annotations**: Automatically annotate non-local ManagedClusters when `autoImportStrategy=ImportOnly` (ACM 2.14+).
+- **Optional MCO deletion**: Added `--disable-observability-on-secondary` to delete MultiClusterObservability on the old hub (non-decommission flows).
+- **Backup integrity verification**: Finalization now validates latest backup status, age, and Velero logs.
+- **Fast polling support**: `wait_for_condition` now supports fast polling intervals for quick operations (e.g., Velero restores).
+
+### Changed
+
+- **Auto-import strategy cleanup guard**: ImportAndSync ConfigMap is removed only when set by this switchover (state flag).
+- **Preflight/postflight scripts**: Added immediate-import guidance and backup age/log checks aligned with runbook v2.
+- **Timeout behavior**: Post-timeout success is now configurable and disabled by default.
+
+### Fixed
+
+- **Waiter timeout semantics**: Prevents silent success after timeouts unless explicitly enabled.
 
 ## [1.4.13] - 2026-01-27
 

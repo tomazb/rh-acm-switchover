@@ -13,11 +13,11 @@ This report details 21 hidden logical errors and performance issues identified t
 **Status Tracking:**
 | Status | Count | Issues |
 |--------|-------|--------|
-| Resolved | 15 | #1, #3, #4, #5, #7, #8, #9, #10, #11, #12, #13, #14, #15, #17, #21 |
+| Resolved | 17 | #1, #3, #4, #5, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #19, #21 |
 | False-Positive | 4 | #2, #6, #18, #20 |
-| Open | 2 | #16, #19 |
+| Open | 0 | — |
 
-*Last updated: 2026-01-27*
+*Last updated: 2026-01-28*
 
 ---
 
@@ -1253,7 +1253,10 @@ if found_chars:
 
 **Severity:** LOW
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-28  
+**Resolved In:** v1.5.0  
+**Resolution Notes:** Added fast polling parameters to `wait_for_condition` and applied 10s polling for restore checks during the initial window.
 
 **Description:**
 Many polling operations use 30-second intervals, which is reasonable. However, `_wait_for_managed_clusters_velero_restore` uses `RESTORE_POLL_INTERVAL` (30s) for Velero restore checks that may complete in 5-10 seconds.
@@ -1278,25 +1281,7 @@ completed = self.waiter.wait_for_condition(
 - Minor performance impact
 
 **Resolution:**
-Use adaptive polling or shorter interval for fast operations:
-
-```python
-# For fast operations like Velero restore
-completed = self.waiter.wait_for_condition(
-    lambda: restore.get("status", {}).get("phase") == "Completed",
-    timeout=RESTORE_TIMEOUT,
-    interval=5,  # Velero restores are fast
-    description="Velero restore completion",
-)
-
-# For slow operations (already correct)
-completed = self.waiter.wait_for_condition(
-    lambda: deployment.status.ready_replicas == deployment.spec.replicas,
-    timeout=DEPLOYMENT_TIMEOUT,
-    interval=30,  # Deployment scaling is slow
-    description="Deployment ready",
-)
-```
+Use adaptive polling or shorter interval for fast operations (implemented via `fast_interval`/`fast_timeout`).
 
 **Testing:**
 - Measure actual restore times
@@ -1380,7 +1365,10 @@ No fix needed - code is correct.
 
 **Severity:** LOW
 
-**Status:** OPEN
+**Status:** RESOLVED  
+**Resolution Date:** 2026-01-28  
+**Resolved In:** v1.5.0  
+**Resolution Notes:** Added `allow_success_after_timeout` parameter to `wait_for_condition` (default false) to prevent post-timeout success unless explicitly enabled.
 
 **Description:**
 After timeout, the function calls `condition_fn()` one more time and returns if it succeeds. This means some timeouts succeed (return True) which may confuse calling code.
@@ -1403,17 +1391,7 @@ return False
 - May confuse callers or error handling
 
 **Resolution:**
-Remove the post-timeout check or make it optional:
-
-```python
-logger.warning("%s not complete after %ss timeout", description, timeout)
-
-# Option 1: Remove post-timeout check
-return False
-
-# Option 2: Make it configurable
-# (Add parameter: post_timeout_check: bool = False)
-```
+Make post-timeout success configurable (implemented via `allow_success_after_timeout=False` by default).
 
 **Testing:**
 - Test timeout behavior (should return False)
