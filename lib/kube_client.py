@@ -513,6 +513,9 @@ class KubeClient:
             label_selector: Label selector filter
             max_items: Maximum number of items to return (None for unlimited).
                       Use this to prevent memory exhaustion on large clusters.
+                      NOTE: Currently max_items only limits client-side; the API may still
+                      return full pages. TODO: Pass `limit` parameter to list_*_custom_object
+                      calls for true server-side pagination (see GitHub issue for details).
 
         Returns:
             List of resource dicts, limited to max_items if specified
