@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from kubernetes.client.rest import ApiException
 
+from lib.gitops_detector import detect_gitops_markers, record_gitops_markers
 from lib.constants import (
     ACM_NAMESPACE,
     AUTO_IMPORT_STRATEGY_DEFAULT,
@@ -733,33 +734,6 @@ class Finalization:
             )
             time.sleep(interval)
 
-    def _gitops_markers(self, metadata: Dict) -> List[str]:
-        """Detect common GitOps markers on a resource.
-
-        This helper performs lightweight substring checks to identify
-        GitOps-related labels/annotations. It does not sanitize or
-        transform URLs or other user input and must not be used for
-        security-sensitive filtering.
-        """
-
-        markers: List[str] = []
-        labels = metadata.get("labels") or {}
-        annotations = metadata.get("annotations") or {}
-
-        def _scan(source: Dict[str, str], source_name: str) -> None:
-            for key, value in source.items():
-                combined = f"{key}={value}".lower()
-                if "argocd" in combined or "argoproj.io" in combined:
-                    markers.append(f"{source_name}:{key}")
-                if "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
-                    markers.append(f"{source_name}:{key}")
-                if key == "app.kubernetes.io/managed-by" and value.lower() in ("argocd", "fluxcd"):
-                    markers.append(f"{source_name}:{key}")
-
-        _scan(labels, "label")
-        _scan(annotations, "annotation")
-        return markers
-
     def _disable_observability_on_secondary(self) -> None:
         """Delete MultiClusterObservability on old hub (optional)."""
         if not self.primary:
@@ -787,7 +761,13 @@ class Finalization:
         for mco in mcos:
             metadata = mco.get("metadata", {})
             mco_name = metadata.get("name", "unknown")
-            markers = self._gitops_markers(metadata)
+            markers = record_gitops_markers(
+                context="primary",
+                namespace="",  # MCO is cluster-scoped
+                kind="MultiClusterObservability",
+                name=mco_name,
+                metadata=metadata,
+            )
             if markers:
                 logger.warning(
                     "MultiClusterObservability %s appears GitOps-managed (%s). Coordinate deletion to avoid drift.",

@@ -38,6 +38,7 @@ fi
 PRIMARY_CONTEXT=""
 SECONDARY_CONTEXT=""
 METHOD=""
+SKIP_GITOPS_CHECK=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -53,13 +54,18 @@ while [[ $# -gt 0 ]]; do
             METHOD="$2"
             shift 2
             ;;
+        --skip-gitops-check)
+            SKIP_GITOPS_CHECK=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 --primary-context <primary> --secondary-context <secondary> --method <passive|full>"
+            echo "Usage: $0 --primary-context <primary> --secondary-context <secondary> --method <passive|full> [--skip-gitops-check]"
             echo ""
             echo "Options:"
             echo "  --primary-context     Kubernetes context for primary hub (required)"
             echo "  --secondary-context   Kubernetes context for secondary hub (required)"
             echo "  --method              Switchover method: passive or full (required)"
+            echo "  --skip-gitops-check   Disable GitOps marker detection (ArgoCD, Flux)"
             echo "  --help, -h            Show this help message"
             exit "$EXIT_SUCCESS"
             ;;
@@ -70,6 +76,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Configure GitOps detection
+if [[ $SKIP_GITOPS_CHECK -eq 1 ]]; then
+    disable_gitops_detection
+fi
 
 # Validate required arguments
 if [[ -z "$PRIMARY_CONTEXT" ]] || [[ -z "$SECONDARY_CONTEXT" ]]; then
@@ -418,7 +429,14 @@ if [[ -n "$BACKUP_SCHEDULE" ]] && echo "$BACKUP_SCHEDULE" | jq -e '.items[0]' &>
     
     SCHEDULE_NAME=$(echo "$BACKUP_SCHEDULE" | jq -r '.items[0].metadata.name')
     USE_MSA=$(echo "$BACKUP_SCHEDULE" | jq -r '.items[0].spec.useManagedServiceAccount // false')
-    
+
+    # Detect GitOps markers on BackupSchedule
+    SCHEDULE_JSON=$(echo "$BACKUP_SCHEDULE" | jq '.items[0]')
+    GITOPS_MARKERS=$(detect_gitops_markers "$SCHEDULE_JSON")
+    if [[ -n "$GITOPS_MARKERS" ]]; then
+        collect_gitops_markers "primary" "$BACKUP_NAMESPACE" "BackupSchedule" "$SCHEDULE_NAME" "$GITOPS_MARKERS"
+    fi
+
     if [[ "$USE_MSA" == "true" ]]; then
         check_pass "Primary hub: BackupSchedule '$SCHEDULE_NAME' has useManagedServiceAccount=true"
         echo -e "${GREEN}       Managed clusters will auto-reconnect to new hub after switchover${NC}"
@@ -469,8 +487,16 @@ if [[ "$METHOD" == "passive" ]]; then
     fi
     
     if [[ -n "$PASSIVE_RESTORE_NAME" ]]; then
-        PHASE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
-        LAST_MESSAGE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.lastMessage}' 2>/dev/null)
+        RESTORE_JSON=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null)
+        PHASE=$(echo "$RESTORE_JSON" | jq -r '.status.phase // "unknown"')
+        LAST_MESSAGE=$(echo "$RESTORE_JSON" | jq -r '.status.lastMessage // ""')
+
+        # Detect GitOps markers on Restore
+        GITOPS_MARKERS=$(detect_gitops_markers "$RESTORE_JSON")
+        if [[ -n "$GITOPS_MARKERS" ]]; then
+            collect_gitops_markers "secondary" "$BACKUP_NAMESPACE" "Restore" "$PASSIVE_RESTORE_NAME" "$GITOPS_MARKERS"
+        fi
+
         if [[ "$PHASE" == "Enabled" ]] || [[ "$PHASE" == "Completed" ]] || [[ "$PHASE" == "Finished" ]]; then
             check_pass "Secondary hub: Found passive sync restore '$PASSIVE_RESTORE_NAME' in state: $PHASE"
         else
@@ -628,6 +654,9 @@ if is_acm_214_or_higher "$ACM_SECONDARY_VERSION"; then
 else
     check_pass "Secondary hub: ACM $ACM_SECONDARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
 fi
+
+# Print GitOps detection report if any markers were found
+print_gitops_report
 
 # Summary and exit
 if print_summary "preflight"; then

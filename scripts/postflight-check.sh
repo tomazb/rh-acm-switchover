@@ -37,6 +37,7 @@ fi
 # Parse arguments
 NEW_HUB_CONTEXT=""
 OLD_HUB_CONTEXT=""
+SKIP_GITOPS_CHECK=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -48,12 +49,17 @@ while [[ $# -gt 0 ]]; do
             OLD_HUB_CONTEXT="$2"
             shift 2
             ;;
+        --skip-gitops-check)
+            SKIP_GITOPS_CHECK=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>]"
+            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>] [--skip-gitops-check]"
             echo ""
             echo "Options:"
             echo "  --new-hub-context     Kubernetes context for new active hub (required)"
             echo "  --old-hub-context     Kubernetes context for old primary hub (optional)"
+            echo "  --skip-gitops-check   Disable GitOps marker detection (ArgoCD, Flux)"
             echo "  --help, -h            Show this help message"
             exit "$EXIT_SUCCESS"
             ;;
@@ -64,6 +70,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Configure GitOps detection
+if [[ $SKIP_GITOPS_CHECK -eq 1 ]]; then
+    disable_gitops_detection
+fi
 
 # Validate required arguments
 if [[ -z "$NEW_HUB_CONTEXT" ]]; then
@@ -280,9 +291,18 @@ section_header "5. Checking Backup Configuration"
 
 BACKUP_SCHEDULE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
 if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
-    SCHEDULE_NAME=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    PAUSED=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE "$SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.paused}' 2>/dev/null)
-    
+    SCHEDULE_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "")
+    SCHEDULE_NAME=$(echo "$SCHEDULE_JSON" | jq -r '.metadata.name // ""' 2>/dev/null || echo "")
+    PAUSED=$(echo "$SCHEDULE_JSON" | jq -r '.spec.paused // false' 2>/dev/null || echo "")
+
+    # Detect GitOps markers on BackupSchedule
+    if [[ -n "$SCHEDULE_JSON" ]]; then
+        GITOPS_MARKERS=$(detect_gitops_markers "$SCHEDULE_JSON")
+        if [[ -n "$GITOPS_MARKERS" ]]; then
+            collect_gitops_markers "new-hub" "$BACKUP_NAMESPACE" "BackupSchedule" "$SCHEDULE_NAME" "$GITOPS_MARKERS"
+        fi
+    fi
+
     if [[ "$PAUSED" == "false" ]] || [[ -z "$PAUSED" ]]; then
         check_pass "BackupSchedule '$SCHEDULE_NAME' is enabled (not paused)"
         
@@ -564,6 +584,9 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
         fi
     fi
 fi
+
+# Print GitOps detection report if any markers were found
+print_gitops_report
 
 # Summary and exit
 if print_summary "postflight"; then

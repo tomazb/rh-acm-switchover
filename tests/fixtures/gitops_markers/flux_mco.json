@@ -1,0 +1,26 @@
+{
+  "apiVersion": "observability.open-cluster-management.io/v1beta2",
+  "kind": "MultiClusterObservability",
+  "metadata": {
+    "name": "observability",
+    "labels": {
+      "app.kubernetes.io/managed-by": "flux",
+      "kustomize.toolkit.fluxcd.io/name": "acm-observability",
+      "kustomize.toolkit.fluxcd.io/namespace": "flux-system"
+    },
+    "annotations": {
+      "fluxcd.io/automated": "true"
+    }
+  },
+  "spec": {
+    "observabilityAddonSpec": {
+      "enableMetrics": true
+    },
+    "storageConfig": {
+      "metricObjectStorage": {
+        "name": "thanos-object-storage",
+        "key": "thanos.yaml"
+      }
+    }
+  }
+}

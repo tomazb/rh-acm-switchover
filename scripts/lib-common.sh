@@ -782,7 +782,209 @@ print_summary() {
             echo "If issues persist, consider rollback procedure in the runbook."
         fi
         echo ""
-        
+
         return 1
     fi
+}
+
+# =============================================================================
+# GitOps Detection Helpers
+# =============================================================================
+
+# Indexed arrays for collecting GitOps-managed resources
+# Format: GITOPS_DETECTED_RESOURCES[index]="[context] namespace/Kind/name"
+#         GITOPS_DETECTED_MARKERS[index]="marker1,marker2,..."
+GITOPS_DETECTED_RESOURCES=()
+GITOPS_DETECTED_MARKERS=()
+GITOPS_DETECTION_ENABLED=1  # 1=enabled, 0=disabled
+GITOPS_MAX_DISPLAY_PER_KIND=10
+
+# Disable GitOps detection (used with --skip-gitops-check)
+# Usage: disable_gitops_detection
+disable_gitops_detection() {
+    GITOPS_DETECTION_ENABLED=0
+}
+
+# Enable GitOps detection
+# Usage: enable_gitops_detection
+enable_gitops_detection() {
+    GITOPS_DETECTION_ENABLED=1
+}
+
+# Check if a resource has GitOps markers (ArgoCD, Flux)
+# Usage: detect_gitops_markers "$RESOURCE_JSON"
+# Returns: comma-separated list of markers, or empty string if none
+# Example: detect_gitops_markers "$(oc get backupschedule foo -o json)"
+detect_gitops_markers() {
+    local resource_json="$1"
+    local markers=""
+
+    if [[ -z "$resource_json" ]]; then
+        echo ""
+        return 0
+    fi
+
+    # Extract labels and annotations
+    local labels annotations
+    labels=$(echo "$resource_json" | jq -r '.metadata.labels // {} | to_entries | .[] | "\(.key)=\(.value)"' 2>/dev/null || echo "")
+    annotations=$(echo "$resource_json" | jq -r '.metadata.annotations // {} | to_entries | .[] | "\(.key)=\(.value)"' 2>/dev/null || echo "")
+
+    # Check labels for GitOps markers
+    while IFS= read -r label; do
+        [[ -z "$label" ]] && continue
+        local label_lower
+        label_lower=$(echo "$label" | tr '[:upper:]' '[:lower:]')
+
+        # ArgoCD detection
+        if [[ "$label_lower" == *"argocd"* ]] || [[ "$label_lower" == *"argoproj.io"* ]]; then
+            local key="${label%%=*}"
+            [[ -n "$markers" ]] && markers+=","
+            markers+="label:${key}"
+        fi
+        # Flux detection
+        if [[ "$label_lower" == *"fluxcd.io"* ]] || [[ "$label_lower" == *"toolkit.fluxcd.io"* ]]; then
+            local key="${label%%=*}"
+            [[ -n "$markers" ]] && markers+=","
+            markers+="label:${key}"
+        fi
+        # managed-by detection
+        if [[ "$label" == "app.kubernetes.io/managed-by="* ]]; then
+            local value="${label#*=}"
+            local value_lower
+            value_lower=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+            if [[ "$value_lower" == "argocd" ]] || [[ "$value_lower" == "flux" ]] || [[ "$value_lower" == "fluxcd" ]]; then
+                [[ -n "$markers" ]] && markers+=","
+                markers+="label:app.kubernetes.io/managed-by"
+            fi
+        fi
+    done <<< "$labels"
+
+    # Check annotations for GitOps markers
+    while IFS= read -r annotation; do
+        [[ -z "$annotation" ]] && continue
+        local annotation_lower
+        annotation_lower=$(echo "$annotation" | tr '[:upper:]' '[:lower:]')
+
+        # ArgoCD detection
+        if [[ "$annotation_lower" == *"argocd"* ]] || [[ "$annotation_lower" == *"argoproj.io"* ]]; then
+            local key="${annotation%%=*}"
+            [[ -n "$markers" ]] && markers+=","
+            markers+="annotation:${key}"
+        fi
+        # Flux detection
+        if [[ "$annotation_lower" == *"fluxcd.io"* ]] || [[ "$annotation_lower" == *"toolkit.fluxcd.io"* ]]; then
+            local key="${annotation%%=*}"
+            [[ -n "$markers" ]] && markers+=","
+            markers+="annotation:${key}"
+        fi
+    done <<< "$annotations"
+
+    echo "$markers"
+}
+
+# Collect a GitOps-managed resource for later reporting
+# Usage: collect_gitops_markers "context" "namespace" "Kind" "name" "markers"
+# Example: collect_gitops_markers "primary" "open-cluster-management-backup" "BackupSchedule" "acm-backup" "label:managed-by"
+collect_gitops_markers() {
+    local context="$1"
+    local namespace="$2"
+    local kind="$3"
+    local name="$4"
+    local markers="$5"
+
+    # Skip if detection is disabled or no markers
+    if [[ $GITOPS_DETECTION_ENABLED -eq 0 ]] || [[ -z "$markers" ]]; then
+        return 0
+    fi
+
+    # Build resource identifier
+    local resource_id
+    if [[ -n "$namespace" ]]; then
+        resource_id="[${context}] ${namespace}/${kind}/${name}"
+    else
+        resource_id="[${context}] ${kind}/${name}"
+    fi
+
+    # Add to arrays
+    GITOPS_DETECTED_RESOURCES+=("$resource_id")
+    GITOPS_DETECTED_MARKERS+=("$markers")
+}
+
+# Print consolidated GitOps detection report
+# Usage: print_gitops_report
+print_gitops_report() {
+    # Skip if detection is disabled
+    if [[ $GITOPS_DETECTION_ENABLED -eq 0 ]]; then
+        return 0
+    fi
+
+    local count=${#GITOPS_DETECTED_RESOURCES[@]}
+
+    # Skip if no detections
+    if [[ $count -eq 0 ]]; then
+        return 0
+    fi
+
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    if [[ $count -eq 1 ]]; then
+        echo -e "${YELLOW}GitOps-managed objects detected ($count warning)${NC}"
+    else
+        echo -e "${YELLOW}GitOps-managed objects detected ($count warnings)${NC}"
+    fi
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}Coordinate changes with GitOps to avoid drift after switchover.${NC}"
+    echo ""
+
+    # Group by kind for summarization
+    declare -A kind_counts
+    declare -A kind_displayed
+    local i
+
+    # Count resources by kind
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+        local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
+        # Extract kind from resource identifier
+        # Format: "[context] namespace/Kind/name" or "[context] Kind/name"
+        local kind
+        kind=$(echo "$resource" | sed -E 's/^\[[^]]+\] ([^/]+\/)?([^/]+)\/[^/]+$/\2/')
+        if [[ -z "${kind_counts[$kind]}" ]]; then
+            kind_counts[$kind]=0
+            kind_displayed[$kind]=0
+        fi
+        ((kind_counts[$kind]++)) || true
+    done
+
+    # Display resources with truncation per kind
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+        local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
+        local markers="${GITOPS_DETECTED_MARKERS[$i]}"
+
+        # Extract kind
+        local kind
+        kind=$(echo "$resource" | sed -E 's/^\[[^]]+\] ([^/]+\/)?([^/]+)\/[^/]+$/\2/')
+
+        # Check if we've hit the display limit for this kind
+        if [[ ${kind_displayed[$kind]} -ge $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
+            # Only show "and X more" message once per kind
+            if [[ ${kind_displayed[$kind]} -eq $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
+                local remaining=$((kind_counts[$kind] - GITOPS_MAX_DISPLAY_PER_KIND))
+                echo -e "${YELLOW}  ... and $remaining more ${kind}(s)${NC}"
+                # Increment to prevent showing message again
+                ((kind_displayed[$kind]++)) || true
+            fi
+            continue
+        fi
+
+        echo -e "${YELLOW}${resource}${NC}"
+        # Print each marker
+        IFS=',' read -ra marker_array <<< "$markers"
+        for marker in "${marker_array[@]}"; do
+            echo -e "${YELLOW}  → ${marker}${NC}"
+        done
+
+        ((kind_displayed[$kind]++)) || true
+    done
+
+    echo ""
 }
