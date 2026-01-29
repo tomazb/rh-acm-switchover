@@ -556,12 +556,16 @@ class Finalization:
                         namespace=BACKUP_NAMESPACE,
                     )
                     if not backup:
-                        raise SwitchoverError(f"Backup {backup_name} disappeared during integrity check")
+                        raise SwitchoverError(
+                            f"Backup {backup_name} disappeared during integrity check"
+                        )
                     poll_phase = backup.get("status", {}).get("phase", "unknown")
                     if poll_phase == "Completed":
                         return True, "completed"
                     if poll_phase in ("Failed", "PartiallyFailed"):
-                        raise SwitchoverError(f"Latest backup {backup_name} failed (phase={poll_phase})")
+                        raise SwitchoverError(
+                            f"Latest backup {backup_name} failed (phase={poll_phase})"
+                        )
                     return False, f"phase={poll_phase}"
 
                 completed = wait_for_condition(
@@ -586,7 +590,6 @@ class Finalization:
                     or latest_backup
                 )
                 status = latest_backup.get("status", {}) or {}
-                phase = status.get("phase", "unknown")
             else:
                 raise SwitchoverError(f"Latest backup {backup_name} not completed (phase={phase})")
 
@@ -731,7 +734,14 @@ class Finalization:
             time.sleep(interval)
 
     def _gitops_markers(self, metadata: Dict) -> List[str]:
-        """Detect common GitOps markers on a resource."""
+        """Detect common GitOps markers on a resource.
+
+        This helper performs lightweight substring checks to identify
+        GitOps-related labels/annotations. It does not sanitize or
+        transform URLs or other user input and must not be used for
+        security-sensitive filtering.
+        """
+
         markers: List[str] = []
         labels = metadata.get("labels") or {}
         annotations = metadata.get("annotations") or {}

@@ -9,6 +9,23 @@ from typing import Callable, Optional, Tuple
 ConditionFn = Callable[[], Tuple[bool, str]]
 
 
+def _sanitize_detail(detail: str, max_length: int = 256) -> str:
+    """Sanitize a condition detail string for logging.
+
+    This helper trims whitespace/newlines and truncates overly long
+    messages to avoid logging large payloads or secrets verbatim.
+    Callers should still avoid passing raw secrets as detail strings.
+    """
+
+    if not detail:
+        return ""
+
+    safe = " ".join(str(detail).splitlines()).strip()
+    if len(safe) > max_length:
+        return safe[:max_length] + "... (truncated)"
+    return safe
+
+
 def wait_for_condition(
     description: str,
     condition_fn: ConditionFn,
@@ -27,17 +44,20 @@ def wait_for_condition(
 
     while time.time() - start_time < timeout:
         done, detail = condition_fn()
+        safe_detail = _sanitize_detail(detail)
 
         if done:
-            if detail:
-                logger.info("%s complete: %s", description, detail)
+            if safe_detail:
+                logger.info("%s complete: %s", description, safe_detail)
             else:
                 logger.info("%s complete", description)
             return True
 
         elapsed = int(time.time() - start_time)
-        if detail:
-            logger.debug("%s in progress: %s (elapsed: %ss)", description, detail, elapsed)
+        if safe_detail:
+            logger.debug(
+                "%s in progress: %s (elapsed: %ss)", description, safe_detail, elapsed
+            )
         else:
             logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 
@@ -49,15 +69,21 @@ def wait_for_condition(
 
     if allow_success_after_timeout:
         done, detail = condition_fn()
+        safe_detail = _sanitize_detail(detail)
         if done:
-            if detail:
-                logger.info("%s complete: %s", description, detail)
+            if safe_detail:
+                logger.info("%s complete: %s", description, safe_detail)
             else:
                 logger.info("%s complete", description)
             return True
-        elif detail:
+        elif safe_detail:
             elapsed = int(time.time() - start_time)
-            logger.debug("%s in progress: %s (elapsed: %ss)", description, detail, elapsed)
+            logger.debug(
+                "%s in progress: %s (elapsed: %ss)",
+                description,
+                safe_detail,
+                elapsed,
+            )
 
     logger.warning("%s not complete after %ss timeout", description, timeout)
     return False
