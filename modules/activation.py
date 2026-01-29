@@ -35,6 +35,7 @@ from lib.constants import (
     VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import FatalError, SwitchoverError
+from lib.gitops_detector import record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
 from lib.waiter import wait_for_condition
@@ -216,6 +217,16 @@ class SecondaryActivation:
 
         if not restore:
             raise FatalError(f"{restore_name} not found on secondary hub")
+
+        # Record GitOps markers if present
+        metadata = restore.get("metadata", {})
+        record_gitops_markers(
+            context="secondary",
+            namespace=BACKUP_NAMESPACE,
+            kind="Restore",
+            name=restore_name,
+            metadata=metadata,
+        )
 
         status = restore.get("status", {})
         phase = status.get("phase", "unknown")

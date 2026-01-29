@@ -15,6 +15,7 @@ from lib.constants import (
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_USE_MANAGED_SERVICE_ACCOUNT,
 )
+from lib.gitops_detector import record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.validation import InputValidator, ValidationError
 
@@ -313,9 +314,19 @@ class BackupScheduleValidator(BaseValidator):
 
             # Check the first (typically only) BackupSchedule
             schedule = backup_schedules[0]
-            schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
+            metadata = schedule.get("metadata", {})
+            schedule_name = metadata.get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
             spec = schedule.get("spec", {})
             use_msa = spec.get(SPEC_USE_MANAGED_SERVICE_ACCOUNT, False)
+
+            # Record GitOps markers if present
+            record_gitops_markers(
+                context="primary",
+                namespace=BACKUP_NAMESPACE,
+                kind="BackupSchedule",
+                name=schedule_name,
+                metadata=metadata,
+            )
 
             if use_msa:
                 self.add_result(
@@ -466,7 +477,17 @@ class PassiveSyncValidator(BaseValidator):
                 )
                 return
 
-            restore_name = restore.get("metadata", {}).get("name", "") or RESTORE_PASSIVE_SYNC_NAME
+            metadata = restore.get("metadata", {})
+            restore_name = metadata.get("name", "") or RESTORE_PASSIVE_SYNC_NAME
+
+            # Record GitOps markers if present
+            record_gitops_markers(
+                context="secondary",
+                namespace=BACKUP_NAMESPACE,
+                kind="Restore",
+                name=restore_name,
+                metadata=metadata,
+            )
 
             status = restore.get("status", {})
             phase = status.get("phase", "unknown")
