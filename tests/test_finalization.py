@@ -51,6 +51,7 @@ def mock_state_manager():
         mock.is_step_completed,
         mock.mark_step_completed,
     )
+    mock.state = {"completed_steps": []}
     return mock
 
 
@@ -232,6 +233,17 @@ class TestFinalization:
 
         assert timeout == 4 * 3600
 
+    def test_backup_max_age_derived_from_schedule(self, finalization):
+        schedule = {
+            "metadata": {"name": "schedule-rhacm"},
+            "spec": {"veleroSchedule": "0 */4 * * *"},
+        }
+        finalization._cached_schedules = [schedule]
+
+        max_age = finalization._get_backup_max_age_seconds(600)
+
+        assert max_age == (4 * 3600 + 600)
+
     @pytest.mark.parametrize(
         ("cron_expr", "expected_seconds"),
         [
@@ -253,7 +265,7 @@ class TestFinalization:
             }
         ]
         mock_secondary_client.get_pods.return_value = []
-        finalization.state.get_config.return_value = False
+        finalization.state.get_config.side_effect = lambda key, default=None: False
 
         finalization._verify_backup_integrity(max_age_seconds=600)
 
@@ -267,10 +279,27 @@ class TestFinalization:
             }
         ]
         mock_secondary_client.get_pods.return_value = []
-        finalization.state.get_config.return_value = True
+        finalization.state.get_config.side_effect = lambda key, default=None: True
 
         with pytest.raises(RuntimeError):
             finalization._verify_backup_integrity(max_age_seconds=600)
+
+    def test_verify_backup_integrity_skips_age_if_backup_before_enable(self, finalization, mock_secondary_client):
+        """Backup age enforcement should be skipped if backup predates enable timestamp."""
+        backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
+        enabled_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+                "status": {"phase": "Completed", "completionTimestamp": backup_ts, "errors": 0, "warnings": 0},
+            }
+        ]
+        mock_secondary_client.get_pods.return_value = []
+        finalization.state.get_config.side_effect = (
+            lambda key, default=None: enabled_ts if key == "backup_schedule_enabled_at" else True
+        )
+
+        finalization._verify_backup_integrity(max_age_seconds=600)
 
     @patch("modules.finalization.wait_for_condition")
     def test_verify_backup_integrity_waits_for_completion(self, mock_wait, finalization, mock_secondary_client):

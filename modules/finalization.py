@@ -162,6 +162,8 @@ class Finalization:
 
         # Now create/enable the BackupSchedule
         self.backup_manager.ensure_enabled(self.acm_version)
+        self.state.set_config("backup_schedule_enabled_at", datetime.now(timezone.utc).isoformat())
+        self.state.set_config("new_backup_detected", False)
 
     def _cleanup_restore_resources(self):
         """Delete restore resources before enabling BackupSchedule.
@@ -329,7 +331,6 @@ class Finalization:
             logger.debug("Waiting for new backup... (elapsed: %ss)", elapsed)
             time.sleep(BACKUP_POLL_INTERVAL)
 
-        self.state.set_config("new_backup_detected", False)
         logger.warning(
             f"No new backups detected after {timeout}s. " "BackupSchedule may take time to create first backup."
         )
@@ -346,6 +347,30 @@ class Finalization:
             )
             return derived_timeout
         return BACKUP_VERIFY_TIMEOUT
+
+    def _get_backup_max_age_seconds(self, default_max_age: int) -> int:
+        schedule_interval = self._get_backup_schedule_interval_seconds()
+        if schedule_interval and schedule_interval > default_max_age:
+            derived_max_age = schedule_interval + default_max_age
+            logger.info(
+                "Derived backup age threshold from schedule cadence: %ss (interval=%ss)",
+                derived_max_age,
+                schedule_interval,
+            )
+            return derived_max_age
+        return default_max_age
+
+    def _get_backup_schedule_enabled_at(self) -> Optional[datetime]:
+        enabled_at_raw = self.state.get_config("backup_schedule_enabled_at")
+        enabled_at = self._parse_timestamp(enabled_at_raw)
+        if enabled_at:
+            return enabled_at
+
+        steps = getattr(self.state, "state", {}).get("completed_steps", [])
+        for step in steps:
+            if step.get("name") == "enable_backup_schedule":
+                return self._parse_timestamp(step.get("timestamp"))
+        return None
 
     def _get_backup_schedule_interval_seconds(self) -> Optional[int]:
         schedules = self._get_backup_schedules()
@@ -483,6 +508,7 @@ class Finalization:
         Backup age enforcement is skipped until a new backup is detected after enabling the schedule.
         """
         logger.info("Verifying backup integrity...")
+        effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
 
         backups = self.secondary.list_custom_resources(
             group="velero.io",
@@ -492,7 +518,7 @@ class Finalization:
         )
 
         if not backups:
-            raise RuntimeError("No Velero backups found for integrity verification")
+            raise SwitchoverError("No Velero backups found for integrity verification")
 
         def _backup_sort_key(backup: Dict) -> str:
             return backup.get("metadata", {}).get("creationTimestamp", "") or ""
@@ -525,12 +551,12 @@ class Finalization:
                         namespace=BACKUP_NAMESPACE,
                     )
                     if not backup:
-                        raise RuntimeError(f"Backup {backup_name} disappeared during integrity check")
+                        raise SwitchoverError(f"Backup {backup_name} disappeared during integrity check")
                     poll_phase = backup.get("status", {}).get("phase", "unknown")
                     if poll_phase == "Completed":
                         return True, "completed"
                     if poll_phase in ("Failed", "PartiallyFailed"):
-                        raise RuntimeError(f"Latest backup {backup_name} failed (phase={poll_phase})")
+                        raise SwitchoverError(f"Latest backup {backup_name} failed (phase={poll_phase})")
                     return False, f"phase={poll_phase}"
 
                 completed = wait_for_condition(
@@ -541,7 +567,7 @@ class Finalization:
                     logger=logger,
                 )
                 if not completed:
-                    raise RuntimeError(
+                    raise SwitchoverError(
                         f"Latest backup {backup_name} did not complete within {backup_verify_timeout}s"
                     )
                 latest_backup = (
@@ -557,12 +583,13 @@ class Finalization:
                 status = latest_backup.get("status", {}) or {}
                 phase = status.get("phase", "unknown")
             else:
-                raise RuntimeError(f"Latest backup {backup_name} not completed (phase={phase})")
+                raise SwitchoverError(f"Latest backup {backup_name} not completed (phase={phase})")
         if errors > 0:
-            raise RuntimeError(f"Latest backup {backup_name} completed with {errors} error(s)")
+            raise SwitchoverError(f"Latest backup {backup_name} completed with {errors} error(s)")
         if warnings > 0:
             logger.warning("Latest backup %s completed with %s warning(s)", backup_name, warnings)
 
+        enabled_at = self._get_backup_schedule_enabled_at()
         new_backup_detected = bool(self.state.get_config("new_backup_detected", False))
 
         completion_ts = status.get("completionTimestamp") or status.get("startTimestamp")
@@ -574,7 +601,13 @@ class Finalization:
             logger.warning("Unable to parse timestamp for backup %s (timestamp=%s)", backup_name, ts)
         else:
             age_seconds = int((datetime.now(timezone.utc) - parsed_ts).total_seconds())
-            if not new_backup_detected:
+            backup_after_enable = False
+            if enabled_at:
+                backup_after_enable = parsed_ts >= enabled_at
+            else:
+                backup_after_enable = new_backup_detected
+
+            if not backup_after_enable:
                 logger.warning(
                     "No new backups detected since enabling BackupSchedule; "
                     "skipping backup age enforcement for %s (latest: %ss old)",
@@ -582,9 +615,9 @@ class Finalization:
                     age_seconds,
                 )
             else:
-                if age_seconds > max_age_seconds:
-                    raise RuntimeError(
-                        f"Latest backup {backup_name} is too old ({age_seconds}s > {max_age_seconds}s)"
+                if age_seconds > effective_max_age_seconds:
+                    raise SwitchoverError(
+                        f"Latest backup {backup_name} is too old ({age_seconds}s > {effective_max_age_seconds}s)"
                     )
                 logger.info("Latest backup %s completed %ss ago", backup_name, age_seconds)
 
