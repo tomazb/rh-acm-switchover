@@ -25,7 +25,7 @@ All scripts display their version number in the output header for troubleshootin
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                    ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.5.0 (2026-01-28)
+preflight-check.sh v1.5.3 (2026-01-29)
 ```
 
 The version is defined in `constants.sh` and follows [Semantic Versioning](https://semver.org/):

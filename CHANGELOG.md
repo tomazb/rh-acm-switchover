@@ -803,6 +803,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.1...v1.5.3
+[1.5.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.13...v1.5.0
+
 #### Timeouts
 - Restore completion: 30 minutes
 - Cluster connection: 10 minutes

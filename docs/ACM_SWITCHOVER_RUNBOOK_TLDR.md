@@ -9,7 +9,7 @@
 Quick prerequisites (stop if any are false; use full runbook or preflight script below):
 - ACM versions match; OADP + DPA installed on both hubs; both hubs access same backup storage
 - Secondary already running passive sync if using Method 1
-- Required operators/addons and secrets mirrored on secondary (GitOps/Observability)
+- Required operators/add-ons and secrets mirrored on secondary (GitOps/Observability)
 - Managed clusters can reach secondary hub (network/DNS/firewall)
 
 ```bash
