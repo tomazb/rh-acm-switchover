@@ -66,6 +66,74 @@ print_version_banner() {
 # Helper Functions
 # =============================================================================
 
+# Derive approximate schedule interval (seconds) from a cron expression.
+# Mirrors the Python _parse_cron_interval_seconds implementation in modules/finalization.py
+_derive_backup_interval_seconds() {
+    local cron_expr="$1"
+    local minute hour dom month dow
+
+    # Split into 5 fields; if not exactly 5, bail out
+    read -r minute hour dom month dow <<<"$cron_expr" || return 0
+    if [[ -z "$dow" ]]; then
+        echo ""
+        return 0
+    fi
+
+    _parse_every_field() {
+        local field="$1"
+        if [[ "$field" =~ ^\*/([0-9]+)$ ]]; then
+            local value="${BASH_REMATCH[1]}"
+            if (( value > 0 )); then
+                echo "$value"
+                return 0
+            fi
+        fi
+        echo ""
+        return 0
+    }
+
+    _is_number_field() {
+        [[ "$1" =~ ^[0-9]+$ ]]
+    }
+
+    local every_minute every_hour every_day
+
+    every_minute=$(_parse_every_field "$minute")
+    if [[ -n "$every_minute" && "$hour" == "*" && "$dom" == "*" && "$month" == "*" && "$dow" == "*" ]]; then
+        echo $(( every_minute * 60 ))
+        return 0
+    fi
+
+    every_hour=$(_parse_every_field "$hour")
+    if [[ -n "$every_hour" && "$dom" == "*" && "$month" == "*" && "$dow" == "*" ]] && _is_number_field "$minute"; then
+        echo $(( every_hour * 3600 ))
+        return 0
+    fi
+
+    every_day=$(_parse_every_field "$dom")
+    if [[ -n "$every_day" && "$month" == "*" && "$dow" == "*" ]] && _is_number_field "$minute" && _is_number_field "$hour"; then
+        echo $(( every_day * 86400 ))
+        return 0
+    fi
+
+    if [[ "$dom" == "*" && "$month" == "*" && "$dow" == "*" ]] && _is_number_field "$minute" && _is_number_field "$hour"; then
+        echo 86400
+        return 0
+    fi
+
+    if [[ "$dom" == "*" && "$month" == "*" ]] && _is_number_field "$minute" && _is_number_field "$hour" && [[ "$dow" =~ ^[0-9]+$ ]]; then
+        echo $(( 7 * 86400 ))
+        return 0
+    fi
+
+    if _is_number_field "$minute" && _is_number_field "$hour" && [[ "$dom" =~ ^[0-9]+$ ]] && [[ "$month" == "*" && "$dow" == "*" ]]; then
+        echo $(( 30 * 86400 ))
+        return 0
+    fi
+
+    echo ""
+}
+
 # Record a passing check
 # Usage: check_pass "Check description"
 check_pass() {

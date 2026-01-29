@@ -309,6 +309,14 @@ CV_JSON
 BACKUPSCHEDULE_JSON
         exit 0
         ;;
+    *"--context=primary-ok"*"get "*"backupschedule"*"schedule-acm"*"-n open-cluster-management-backup"*"jsonpath='{.spec.veleroSchedule}'"*)
+        echo "0 */4 * * *"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupschedule"*"schedule-acm"*"-n open-cluster-management-backup"*"jsonpath='{.spec.veleroSchedule}'"*)
+        echo "0 */4 * * *"
+        exit 0
+        ;;
     
     # Backup checks - match both short 'backup' and full API group name
     *"--context=primary-ok"*"get "*"backup"*"-n open-cluster-management-backup"*"--no-headers"*)

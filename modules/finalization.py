@@ -412,6 +412,14 @@ class Finalization:
 
     @staticmethod
     def _parse_cron_interval_seconds(cron_expr: str) -> Optional[int]:
+        """Estimate cron schedule interval in seconds for common Velero patterns.
+
+        This is a simplified parser that supports typical Velero-style expressions
+        such as '*/15 * * * *', '0 */4 * * *', or '0 0 * * *'. It does not handle
+        all valid cron syntax (lists like '1,15,30', ranges like '1-5', or complex
+        day-of-week/month combinations) and may return None or an approximate
+        interval for those cases.
+        """
         fields = cron_expr.split()
         if len(fields) != 5:
             return None

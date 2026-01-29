@@ -308,16 +308,44 @@ if [[ $BACKUPS -gt 0 ]]; then
             BACKUP_EPOCH=$(date -d "$BACKUP_COMPLETION" +%s 2>/dev/null || echo "0")
             CURRENT_EPOCH=$(date +%s)
             AGE_SECONDS=$((CURRENT_EPOCH - BACKUP_EPOCH))
-            AGE_DISPLAY=$(format_age_display $AGE_SECONDS)
-            
-            # Determine freshness status and color
-            # Fresh: < 1 hour (3600s), Acceptable: < 24 hours (86400s), Stale: >= 24 hours
-            if [[ $AGE_SECONDS -lt 3600 ]]; then
-                echo -e "${GREEN}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - FRESH${NC}"
-            elif [[ $AGE_SECONDS -lt 86400 ]]; then
-                echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - acceptable${NC}"
+            AGE_DISPLAY=$(format_age_display "$AGE_SECONDS")
+
+            # If we can derive schedule cadence, show age relative to it
+            EFFECTIVE_BACKUP_AGE_MAX_SECONDS="$BACKUP_AGE_MAX_SECONDS"
+            # Fetch BackupSchedule JSON locally for cadence-aware messaging (keep Check 10 logic unchanged)
+            PRIMARY_BACKUP_SCHEDULE=$(oc --context="$PRIMARY_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null || echo "")
+            SCHEDULE_EXPR=""
+            INTERVAL_SECONDS=""
+            if [[ -n "$PRIMARY_BACKUP_SCHEDULE" ]] && echo "$PRIMARY_BACKUP_SCHEDULE" | jq -e '.items[0]' &>/dev/null; then
+                SCHEDULE_EXPR=$(echo "$PRIMARY_BACKUP_SCHEDULE" | jq -r '.items[0].spec.veleroSchedule // ""' 2>/dev/null || echo "")
+            fi
+            if [[ -n "$SCHEDULE_EXPR" ]]; then
+                INTERVAL_SECONDS=$(_derive_backup_interval_seconds "$SCHEDULE_EXPR")
+                if [[ -n "$INTERVAL_SECONDS" && "$INTERVAL_SECONDS" -gt "$BACKUP_AGE_MAX_SECONDS" ]]; then
+                    EFFECTIVE_BACKUP_AGE_MAX_SECONDS=$((INTERVAL_SECONDS + BACKUP_AGE_MAX_SECONDS))
+                fi
+            fi
+
+            if [[ -n "$INTERVAL_SECONDS" ]]; then
+                INTERVAL_DISPLAY=$(format_age_display "$INTERVAL_SECONDS")
+                THRESHOLD_DISPLAY=$(format_age_display "$EFFECTIVE_BACKUP_AGE_MAX_SECONDS")
+
+                if [[ $AGE_SECONDS -le $INTERVAL_SECONDS ]]; then
+                    echo -e "${GREEN}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION, schedule: $SCHEDULE_EXPR, interval: $INTERVAL_DISPLAY, threshold: $THRESHOLD_DISPLAY) - within one schedule interval${NC}"
+                elif [[ $AGE_SECONDS -le $EFFECTIVE_BACKUP_AGE_MAX_SECONDS ]]; then
+                    echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION, schedule: $SCHEDULE_EXPR, interval: $INTERVAL_DISPLAY, threshold: $THRESHOLD_DISPLAY) - within allowed threshold${NC}"
+                else
+                    echo -e "${RED}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION, schedule: $SCHEDULE_EXPR, interval: $INTERVAL_DISPLAY, threshold: $THRESHOLD_DISPLAY) - OLDER than allowed threshold, run a fresh backup before switchover${NC}"
+                fi
             else
-                echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - consider running a fresh backup${NC}"
+                # Fallback: absolute buckets when schedule cadence is unknown
+                if [[ $AGE_SECONDS -lt 3600 ]]; then
+                    echo -e "${GREEN}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - FRESH${NC}"
+                elif [[ $AGE_SECONDS -lt 86400 ]]; then
+                    echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - acceptable${NC}"
+                else
+                    echo -e "${YELLOW}       Backup age: $AGE_DISPLAY (completed: $BACKUP_COMPLETION) - consider running a fresh backup${NC}"
+                fi
             fi
         else
             check_warn "Primary hub: Could not determine backup age (completion timestamp unavailable)"
