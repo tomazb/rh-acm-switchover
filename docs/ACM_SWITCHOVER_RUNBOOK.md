@@ -501,6 +501,17 @@ oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n op
 oc delete restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup
 ```
 
+> **Important:** Wait until the restore is fully deleted before creating the activation restore.
+> The ACM restore controller can briefly treat the deleted restore as still "active" and reject a new restore.
+
+```bash
+until ! oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync \
+  -n open-cluster-management-backup >/dev/null 2>&1; do
+  echo "Waiting for restore deletion to propagate..."
+  sleep 2
+done
+```
+
 **Step 5c:** Create activation restore manifest (`restore-acm-activate.yaml`):
 ```yaml
 apiVersion: cluster.open-cluster-management.io/v1beta1
@@ -528,6 +539,9 @@ oc get restore.cluster.open-cluster-management.io restore-acm-activate -n open-c
 # Check for completion
 oc get restore.cluster.open-cluster-management.io restore-acm-activate -n open-cluster-management-backup
 # Expected: Phase should transition to "Finished"
+
+# If Phase=FinishedWithErrors, the controller may still see the old restore as active.
+# Ensure the passive restore is fully deleted, then re-create restore-acm-activate.
 
 # Check for any errors
 oc describe restore.cluster.open-cluster-management.io restore-acm-activate -n open-cluster-management-backup

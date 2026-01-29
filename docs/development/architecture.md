@@ -194,6 +194,10 @@ via `_create_full_restore()` instead of patching the passive sync restore.
 **Activation Options (Method 1):** `--activation-method patch` (default) patches the passive sync restore.
 `--activation-method restore` deletes the passive sync restore and creates `restore-acm-activate`.
 
+**Restore Activation Caveat:** The ACM restore controller can briefly treat a deleted restore as still active.
+The implementation waits for deletion to fully propagate before creating `restore-acm-activate`, and treats
+`FinishedWithErrors`/`FailedWithErrors` as fatal restore states to avoid silent hangs.
+
 **Caveat:** The primary hub must be reachable; the tool does not currently support full-restore-only execution when the primary hub is unreachable.
 
 ## Module Architecture

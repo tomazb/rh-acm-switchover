@@ -232,6 +232,11 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--verbose, -v` | Enable verbose logging |
 
+> **Note:** When using `--activation-method restore`, ensure the passive restore is fully deleted
+> before creating `restore-acm-activate`. The tool now waits for deletion to propagate; if done
+> manually and the restore shows `Phase=FinishedWithErrors`, delete/recreate after confirming the
+> old restore is gone.
+
 ## Exit Codes
 
 | Code | Meaning |

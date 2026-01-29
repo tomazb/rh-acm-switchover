@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [1.5.1] - 2026-01-29
+
+### Changed
+
+- **Restore activation guidance**: Documented deletion propagation wait and `FinishedWithErrors` handling for activation restores.
+
+### Fixed
+
+- **Restore activation race**: Wait for passive restore deletion before creating `restore-acm-activate` and treat
+  `FinishedWithErrors`/`FailedWithErrors` as fatal restore phases.
+
 ## [1.5.0] - 2026-01-28
 
 ### Added

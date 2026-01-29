@@ -220,6 +220,9 @@ EOF
 # Monitor
 oc get restore.cluster.open-cluster-management.io restore-acm-activate \
   -n open-cluster-management-backup --context <secondary> -w
+
+# If Phase=FinishedWithErrors, the controller may still see the deleted restore as active.
+# Confirm the passive restore is fully gone, then delete/recreate restore-acm-activate.
 ```
 
 ---

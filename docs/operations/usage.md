@@ -160,6 +160,11 @@ python acm_switchover.py \
   --old-hub-action secondary
 ```
 
+> **Note:** The restore controller may briefly treat a deleted passive restore as still active.
+> The tool now waits for deletion to fully propagate before creating `restore-acm-activate`.
+> If you run this manually, wait for deletion to complete and re-create the activation restore
+> if the phase shows `FinishedWithErrors`.
+
 > **Note:** `--activation-method` applies only to `--method passive`.
 
 **Advantages:**
