@@ -47,9 +47,9 @@ The switchover executes phases sequentially, with state tracking for resume capa
 INIT → PREFLIGHT → PRIMARY_PREP → ACTIVATION → POST_ACTIVATION → FINALIZATION → COMPLETED
 ```
 Defined phases in `Phase` enum: `INIT`, `PREFLIGHT`, `PRIMARY_PREP`, `SECONDARY_VERIFY`, `ACTIVATION`, `POST_ACTIVATION`, `FINALIZATION`, `COMPLETED`, `FAILED`. The main switchover flow uses the diagram above; `FAILED` is set on errors.
-
+|
 | Phase | Runbook Steps | Module | Key Actions |
-|-------|---------------|--------|-------------|
+| --- | --- | --- | --- |
 | `PREFLIGHT` | Step 0 | `preflight_coordinator.py` + `preflight/` | Validate both hubs, check ACM versions, verify backups |
 | `PRIMARY_PREP` | Steps 1-3 / F1-F3 | `primary_prep.py` | Pause BackupSchedule, add disable-auto-import annotations, scale Thanos |
 | `ACTIVATION` | Steps 4-5 / F4-F5 | `activation.py` | Verify passive sync or create full restore, activate clusters |
@@ -58,7 +58,7 @@ Defined phases in `Phase` enum: `INIT`, `PREFLIGHT`, `PRIMARY_PREP`, `SECONDARY_
 | (manual) | Step 13 | — | Inform stakeholders (out-of-band) |
 | (separate) | Step 14 | `decommission.py` | Decommission old hub |
 | (separate) | Rollback 1-5 | (manual/partial) | Rollback procedures |
-
+|
 Each phase handler checks `state.get_current_phase()` before executing. Failed phases set `Phase.FAILED`.
 
 ## Key Patterns
@@ -189,9 +189,9 @@ When doing similar refactoring work:
 Container image and Helm chart metadata follow the same version: the Containerfile `version` label and the Helm chart `appVersion` should match the Python/Bash tool version; bump the Helm chart `version` alongside releases.
 
 ### Version Locations
-
+|
 | Component | File | Variables |
-|-----------|------|-----------|
+| --- | --- | --- |
 | **Bash Scripts** | `scripts/constants.sh` | `SCRIPT_VERSION`, `SCRIPT_VERSION_DATE` |
 | **Python Tool** | `lib/__init__.py` | `__version__`, `__version_date__` |
 | **README** | `README.md` | Version badge at top of file |
@@ -271,9 +271,9 @@ The `.claude/skills/` directory contains conversational guides for Claude to hel
 > **Maintenance Rule**: When updating [docs/ACM_SWITCHOVER_RUNBOOK.md](docs/ACM_SWITCHOVER_RUNBOOK.md), also update the corresponding SKILLS in `.claude/skills/` to keep procedures synchronized.
 
 ### Operations SKILLS
-
+|
 | SKILL | Purpose | Runbook Reference |
-|-------|---------|-------------------|
+| --- | --- | --- |
 | [preflight-validation.skill.md](.claude/skills/operations/preflight-validation.skill.md) | Interactive pre-flight checklist with go/no-go decisions | Step 0 |
 | [pause-backups.skill.md](.claude/skills/operations/pause-backups.skill.md) | Pause BackupSchedule (ACM 2.11 vs 2.12+ variants) | Step 1 |
 | [activate-passive-restore.skill.md](.claude/skills/operations/activate-passive-restore.skill.md) | Method 1: Passive restore activation flow | Steps 2-5 |
@@ -284,9 +284,9 @@ The `.claude/skills/` directory contains conversational guides for Claude to hel
 | [decommission.skill.md](.claude/skills/operations/decommission.skill.md) | Safe decommissioning with safety checks | Step 14 |
 
 ### Troubleshooting SKILLS
-
+|
 | SKILL | Symptoms | Resolution |
-|-------|----------|------------|
+| --- | --- | --- |
 | [pending-import.skill.md](.claude/skills/troubleshooting/pending-import.skill.md) | Clusters stuck in "Pending Import" | Klusterlet diagnostics, reimport |
 | [grafana-no-data.skill.md](.claude/skills/troubleshooting/grafana-no-data.skill.md) | No metrics in Grafana dashboards | Observatorium restart, collector checks |
 | [restore-stuck.skill.md](.claude/skills/troubleshooting/restore-stuck.skill.md) | Restore stuck in "Running" state | Velero diagnostics, storage checks |

@@ -11,8 +11,9 @@ This report details 21 hidden logical errors and performance issues identified t
 - Low Priority Issues: 7
 
 **Status Tracking:**
+
 | Status | Count | Issues |
-|--------|-------|--------|
+| --- | --- | --- |
 | Resolved | 18 | #1, #3, #4, #5, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #19, #21, #22 |
 | False-Positive | 4 | #2, #6, #18, #20 |
 | Open | 0 | — |
