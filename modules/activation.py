@@ -8,6 +8,8 @@ import logging
 import time
 from typing import Dict, Optional
 
+from kubernetes.client.rest import ApiException
+
 from lib.constants import (
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
@@ -604,21 +606,64 @@ class SecondaryActivation:
             return
 
         updated = 0
+        failures = []
         for mc in non_local_clusters:
             name = mc.get("metadata", {}).get("name")
             if not name:
                 continue
-            annotations = mc.get("metadata", {}).get("annotations", {})
-            if annotations.get(IMMEDIATE_IMPORT_ANNOTATION, None) == "":
+            annotations = mc.get("metadata", {}).get("annotations", {}) or {}
+            annotation_value = annotations.get(IMMEDIATE_IMPORT_ANNOTATION)
+            if annotation_value == "":
                 continue
-            patch = {"metadata": {"annotations": {IMMEDIATE_IMPORT_ANNOTATION: ""}}}
-            self.secondary.patch_managed_cluster(name=name, patch=patch)
-            updated += 1
+            if self._reset_immediate_import_annotation(name, annotation_value):
+                updated += 1
+            else:
+                failures.append(name)
 
-        logger.info(
-            "Applied immediate-import annotations to %s ManagedCluster(s)",
-            updated,
-        )
+        if updated:
+            logger.info("Applied immediate-import annotations to %s ManagedCluster(s)", updated)
+        elif not failures:
+            logger.info("All ManagedClusters already had immediate-import annotations")
+
+        if failures:
+            message = (
+                "Failed to update immediate-import annotation on "
+                f"{len(failures)} ManagedCluster(s): {', '.join(sorted(failures))}"
+            )
+            logger.warning(message)
+            raise FatalError(message)
+
+    def _reset_immediate_import_annotation(self, cluster_name: str, current_value: Optional[str]) -> bool:
+        """Ensure the immediate-import annotation is set to empty string for the given cluster."""
+        try:
+            if current_value not in (None, ""):
+                logger.debug(
+                    "Clearing existing immediate-import annotation value '%s' on %s",
+                    current_value,
+                    cluster_name,
+                )
+                # Remove the annotation first so the controller can re-process it
+                self.secondary.patch_managed_cluster(
+                    name=cluster_name,
+                    patch={"metadata": {"annotations": {IMMEDIATE_IMPORT_ANNOTATION: None}}},
+                )
+
+            self.secondary.patch_managed_cluster(
+                name=cluster_name,
+                patch={"metadata": {"annotations": {IMMEDIATE_IMPORT_ANNOTATION: ""}}},
+            )
+            return True
+        except ApiException as exc:
+            logger.warning(
+                "Failed to annotate %s with immediate-import (status=%s): %s",
+                cluster_name,
+                getattr(exc, "status", "unknown"),
+                exc,
+            )
+            return False
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to annotate %s with immediate-import: %s", cluster_name, exc)
+            return False
 
     def _create_full_restore(self):
         """Create full restore resource (Method 2)."""
