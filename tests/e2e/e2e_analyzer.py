@@ -16,7 +16,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 # Optional dependencies with graceful fallback
 try:
@@ -568,7 +568,6 @@ class E2ETestAnalyzer:
         # Generate recommendations
         recommendations = self._generate_recommendations(performance, alerts, trends)
         for i, rec in enumerate(recommendations, 1):
-            priority_class = rec["priority"].lower()
             html += f"""
                 <div class="metric-card">
                     <div class="metric-label"><strong>{i}. {rec['title']}</strong> ({rec['priority']})</div>

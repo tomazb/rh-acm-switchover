@@ -1,8 +1,8 @@
 """Centralized constants for ACM switchover."""
 
+import logging
 import math
 import os
-import sys
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -130,9 +130,10 @@ try:
     else:
         STALE_STATE_THRESHOLD = DEFAULT_STALE_STATE_THRESHOLD_HOURS * 3600
 except (ValueError, TypeError, OverflowError) as e:
-    print(
-        f"Warning: Invalid value for ACM_SWITCHOVER_STALE_HOURS: {e}. Using default {DEFAULT_STALE_STATE_THRESHOLD_HOURS} hours.",
-        file=sys.stderr,
+    logging.getLogger(__name__).warning(
+        "Warning: Invalid value for ACM_SWITCHOVER_STALE_HOURS: %s. Using default %s hours.",
+        e,
+        DEFAULT_STALE_STATE_THRESHOLD_HOURS,
     )
     STALE_STATE_THRESHOLD = DEFAULT_STALE_STATE_THRESHOLD_HOURS * 3600
 

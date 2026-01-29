@@ -997,7 +997,14 @@ class KubeClient:
         if container:
             kwargs["container"] = container
         if tail_lines is not None:
-            kwargs["tail_lines"] = tail_lines
+            # Validate tail_lines to fail fast with clear, actionable errors
+            try:
+                tail_lines_int = int(tail_lines)
+            except (TypeError, ValueError):
+                raise ValidationError("tail_lines must be a non-negative integer")
+            if tail_lines_int < 0:
+                raise ValidationError("tail_lines must be a non-negative integer")
+            kwargs["tail_lines"] = tail_lines_int
 
         return self.core_v1.read_namespaced_pod_log(name=name, namespace=namespace, **kwargs) or ""
 

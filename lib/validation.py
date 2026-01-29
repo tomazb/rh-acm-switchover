@@ -375,9 +375,9 @@ class InputValidator:
                 raise ValidationError("secondary-context is required for switchover operations")
 
         # Validate activation-method is only used with passive switchover
-        if hasattr(args, "method") and hasattr(args, "activation_method"):
-            if args.method == "full" and args.activation_method == "restore":
-                raise ValidationError("--activation-method=restore can only be used with --method passive")
+        if hasattr(args, "method") and hasattr(args, "activation_method") and args.activation_method:
+            if args.method != "passive":
+                raise ValidationError("--activation-method can only be used with --method passive")
 
         # Validate that --non-interactive only makes sense with --decommission
         if hasattr(args, "non_interactive") and args.non_interactive:
