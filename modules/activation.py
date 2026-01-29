@@ -266,23 +266,33 @@ class SecondaryActivation:
         """Activate managed clusters by deleting passive sync and creating activation restore."""
         logger.info("Activating managed clusters via activation restore (Option B)...")
 
-        restore_name = self._get_passive_sync_restore_name()
         self._activation_restore_name = MANAGED_CLUSTER_RESTORE_NAME
 
-        try:
-            logger.info("Deleting passive sync restore %s before activation restore", restore_name)
-            self.secondary.delete_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
-                name=restore_name,
-                namespace=BACKUP_NAMESPACE,
-                timeout_seconds=DELETE_REQUEST_TIMEOUT,
-            )
-        except Exception as e:
-            raise FatalError(f"Failed to delete passive sync restore {restore_name}: {e}") from e
+        # Discover passive sync restore if it still exists; tolerate missing restore on resume
+        restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
+        restore_name = (restore or {}).get("metadata", {}).get("name")
 
-        self._wait_for_restore_deletion(restore_name)
+        if restore_name:
+            try:
+                logger.info("Deleting passive sync restore %s before activation restore", restore_name)
+                self.secondary.delete_custom_resource(
+                    group="cluster.open-cluster-management.io",
+                    version="v1beta1",
+                    plural="restores",
+                    name=restore_name,
+                    namespace=BACKUP_NAMESPACE,
+                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
+                )
+            except ApiException as e:
+                if getattr(e, "status", None) == 404:
+                    logger.info("Passive sync restore %s already deleted; continuing with activation restore", restore_name)
+                else:
+                    raise FatalError(f"Failed to delete passive sync restore {restore_name}: {e}") from e
+
+            # Only wait when we actually had a restore to delete
+            self._wait_for_restore_deletion(restore_name)
+        else:
+            logger.info("No passive sync restore found before activation; proceeding with activation restore creation")
 
         existing_restore = self.secondary.get_custom_resource(
             group="cluster.open-cluster-management.io",
