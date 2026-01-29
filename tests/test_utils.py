@@ -119,6 +119,59 @@ class TestStateManager:
         assert errors[0]["phase"] == Phase.PREFLIGHT.value
         assert "timestamp" in errors[0]
 
+    def test_get_errors_empty(self, state_manager):
+        """Test get_errors returns empty list when no errors."""
+        errors = state_manager.get_errors()
+        assert errors == []
+
+    def test_get_errors_returns_all_errors(self, state_manager):
+        """Test get_errors returns all recorded errors."""
+        state_manager.add_error("Error 1", Phase.PREFLIGHT.value)
+        state_manager.add_error("Error 2", Phase.ACTIVATION.value)
+        state_manager.add_error("Error 3", Phase.POST_ACTIVATION.value)
+
+        errors = state_manager.get_errors()
+        assert len(errors) == 3
+        assert errors[0]["error"] == "Error 1"
+        assert errors[1]["error"] == "Error 2"
+        assert errors[2]["error"] == "Error 3"
+
+    def test_get_last_error_phase_no_errors(self, state_manager):
+        """Test get_last_error_phase returns None when no errors."""
+        result = state_manager.get_last_error_phase()
+        assert result is None
+
+    def test_get_last_error_phase_returns_correct_phase(self, state_manager):
+        """Test get_last_error_phase returns the phase of the last error."""
+        state_manager.add_error("Error 1", Phase.PREFLIGHT.value)
+        state_manager.add_error("Error 2", Phase.POST_ACTIVATION.value)
+
+        result = state_manager.get_last_error_phase()
+        assert result == Phase.POST_ACTIVATION
+
+    def test_get_last_error_phase_invalid_phase(self, state_manager):
+        """Test get_last_error_phase handles invalid phase gracefully."""
+        # Manually add an error with an invalid phase
+        state_manager.state["errors"].append({
+            "error": "Test error",
+            "phase": "invalid_phase",
+            "timestamp": "2026-01-29T12:00:00+00:00"
+        })
+
+        result = state_manager.get_last_error_phase()
+        assert result is None
+
+    def test_get_last_error_phase_missing_phase_field(self, state_manager):
+        """Test get_last_error_phase handles missing phase field."""
+        # Manually add an error without phase field
+        state_manager.state["errors"].append({
+            "error": "Test error",
+            "timestamp": "2026-01-29T12:00:00+00:00"
+        })
+
+        result = state_manager.get_last_error_phase()
+        assert result is None
+
     def test_reset(self, state_manager):
         """Test state reset."""
         state_manager.set_phase(Phase.ACTIVATION)

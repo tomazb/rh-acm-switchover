@@ -326,6 +326,29 @@ class StateManager:
         )
         self.flush_state()  # Errors are critical checkpoints
 
+    def get_errors(self) -> list:
+        """Retrieve list of recorded errors."""
+        return self.state.get("errors", [])
+
+    def get_last_error_phase(self) -> Optional[Phase]:
+        """Get the phase where the last error occurred.
+
+        Returns:
+            Phase enum if there's an error with a valid phase, None otherwise.
+        """
+        errors = self.get_errors()
+        if not errors:
+            return None
+        last_error = errors[-1]
+        phase_str = last_error.get("phase")
+        if not phase_str:
+            return None
+        try:
+            return Phase(phase_str)
+        except ValueError:
+            logging.warning("Unknown phase '%s' in last error, cannot determine resume point", phase_str)
+            return None
+
     def reset(self) -> None:
         """Reset state to initial."""
         self.state = self._new_state()
