@@ -823,7 +823,7 @@ oc get backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME"
 
 **Check that new backups are being created:**
 ```bash
-# Wait 5-10 minutes, then check newest entries:
+# Wait 5-10 minutes (or one full schedule interval), then check newest entries:
 oc get backup.velero.io -n open-cluster-management-backup \
   --sort-by=.metadata.creationTimestamp | tail -n10
 # Should show new backups with recent timestamps

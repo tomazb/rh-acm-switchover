@@ -82,7 +82,7 @@ python acm_switchover.py \
 - Primary preparation: 1-2 minutes
 - Activation: 5-15 minutes (waiting for restore)
 - Post-activation: 10-15 minutes (cluster connections)
-- Finalization: 5-10 minutes (backup verification)
+- Finalization: depends on BackupSchedule cadence (typical 5-10 minutes; longer for hourly/daily schedules)
 - **Total: ~30-45 minutes**
 
 > **Safety warning:** Do **NOT** re-enable Thanos Compactor or Observatorium API on the old hub after switchover.

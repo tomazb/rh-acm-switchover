@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Backup integrity recency guard**: Skip backup age enforcement until a new backup is observed after re-enabling the BackupSchedule (avoids false failures on long cadences).
+- **Schedule-aware backup timeouts**: Derive backup verification timeouts from BackupSchedule cadence to avoid premature failures on longer schedules.
 
 ## [1.5.1] - 2026-01-29
 
