@@ -44,6 +44,7 @@ export OBS_THANOS_COMPACT_POD="observability-thanos-compact"
 # but we can define defaults or common patterns here if needed.
 # Currently scripts detect some of these dynamically.
 export RESTORE_PASSIVE_SYNC_NAME="restore-acm-passive-sync"
+export VELERO_DEPLOYMENT="deployment/velero"
 
 # =============================================================================
 # Fully Qualified API Resource Types

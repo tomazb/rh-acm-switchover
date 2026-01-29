@@ -356,7 +356,7 @@ if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
         fi
 
         # Check Velero logs for backup errors
-        VELERO_LOG_OUTPUT=$(oc --context="$NEW_HUB_CONTEXT" logs -n "$BACKUP_NAMESPACE" deployment/velero -c velero --tail=500 2>/dev/null || true)
+        VELERO_LOG_OUTPUT=$(oc --context="$NEW_HUB_CONTEXT" logs -n "$BACKUP_NAMESPACE" "$VELERO_DEPLOYMENT" -c velero --tail=500 2>/dev/null || true)
         if [[ -n "$VELERO_LOG_OUTPUT" ]]; then
             VELERO_LOG_ERRORS=$(echo "$VELERO_LOG_OUTPUT" | grep "$LATEST_BACKUP" | grep -iE "error|failed" | head -1 || true)
             if [[ -n "$VELERO_LOG_ERRORS" ]]; then
