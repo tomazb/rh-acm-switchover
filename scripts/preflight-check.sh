@@ -487,7 +487,10 @@ if [[ "$METHOD" == "passive" ]]; then
     fi
     
     if [[ -n "$PASSIVE_RESTORE_NAME" ]]; then
-        RESTORE_JSON=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null)
+        if ! RESTORE_JSON=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null); then
+            check_fail "Secondary hub: Failed to fetch restore '$PASSIVE_RESTORE_NAME' details"
+            RESTORE_JSON="{}"
+        fi
         PHASE=$(echo "$RESTORE_JSON" | jq -r '.status.phase // "unknown"')
         LAST_MESSAGE=$(echo "$RESTORE_JSON" | jq -r '.status.lastMessage // ""')
 

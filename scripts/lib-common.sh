@@ -840,15 +840,13 @@ detect_gitops_markers() {
             local key="${label%%=*}"
             [[ -n "$markers" ]] && markers+=","
             markers+="label:${key}"
-        fi
         # Flux detection
-        if [[ "$label_lower" == *"fluxcd.io"* ]] || [[ "$label_lower" == *"toolkit.fluxcd.io"* ]]; then
+        elif [[ "$label_lower" == *"fluxcd.io"* ]] || [[ "$label_lower" == *"toolkit.fluxcd.io"* ]]; then
             local key="${label%%=*}"
             [[ -n "$markers" ]] && markers+=","
             markers+="label:${key}"
-        fi
         # managed-by detection
-        if [[ "$label" == "app.kubernetes.io/managed-by="* ]]; then
+        elif [[ "$label" == "app.kubernetes.io/managed-by="* ]]; then
             local value="${label#*=}"
             local value_lower
             value_lower=$(echo "$value" | tr '[:upper:]' '[:lower:]')
@@ -870,9 +868,8 @@ detect_gitops_markers() {
             local key="${annotation%%=*}"
             [[ -n "$markers" ]] && markers+=","
             markers+="annotation:${key}"
-        fi
         # Flux detection
-        if [[ "$annotation_lower" == *"fluxcd.io"* ]] || [[ "$annotation_lower" == *"toolkit.fluxcd.io"* ]]; then
+        elif [[ "$annotation_lower" == *"fluxcd.io"* ]] || [[ "$annotation_lower" == *"toolkit.fluxcd.io"* ]]; then
             local key="${annotation%%=*}"
             [[ -n "$markers" ]] && markers+=","
             markers+="annotation:${key}"
@@ -936,13 +933,22 @@ print_gitops_report() {
     echo -e "${YELLOW}Coordinate changes with GitOps to avoid drift after switchover.${NC}"
     echo ""
 
+    # Sort resources for consistent output (matches Python implementation)
+    # Create indexed arrays with sorted order
+    local -a sorted_indices
+    mapfile -t sorted_indices < <(
+        for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+            echo "$i"
+        done | sort -n
+    )
+
     # Group by kind for summarization
     declare -A kind_counts
     declare -A kind_displayed
     local i
 
     # Count resources by kind
-    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+    for i in "${sorted_indices[@]}"; do
         local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
         # Extract kind from resource identifier
         # Format: "[context] namespace/Kind/name" or "[context] Kind/name"
@@ -956,7 +962,7 @@ print_gitops_report() {
     done
 
     # Display resources with truncation per kind
-    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+    for i in "${sorted_indices[@]}"; do
         local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
         local markers="${GITOPS_DETECTED_MARKERS[$i]}"
 

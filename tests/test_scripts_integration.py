@@ -350,6 +350,14 @@ BACKUPSCHEDULE_JSON
         echo "Enabled"
         exit 0
         ;;
+    # Single restore GET with -o json (for detailed status check)
+    *"--context=secondary-ok"*"get "*"restore"*"restore-acm-passive-sync"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'SINGLE_RESTORE_JSON'
+{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}
+SINGLE_RESTORE_JSON
+        exit 0
+        ;;
+    # List all restores
     *"--context=secondary-ok"*"get "*"restore"*"-n open-cluster-management-backup"*"-o json"*)
         cat << 'RESTORE_JSON'
 {"items":[{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}]}

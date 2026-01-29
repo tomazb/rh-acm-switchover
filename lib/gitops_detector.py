@@ -35,12 +35,13 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
 
     def _scan(source: Dict[str, str], source_name: str) -> None:
         for key, value in source.items():
-            combined = f"{key}={value}".lower()
+            # Defensive: convert to string in case of unexpected types
+            combined = f"{key}={str(value)}".lower()
             if "argocd" in combined or "argoproj.io" in combined:
                 markers.append(f"{source_name}:{key}")
             elif "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
                 markers.append(f"{source_name}:{key}")
-            elif key == "app.kubernetes.io/managed-by" and value.lower() in ("argocd", "fluxcd", "flux"):
+            elif key == "app.kubernetes.io/managed-by" and str(value).lower() in ("argocd", "fluxcd", "flux"):
                 markers.append(f"{source_name}:{key}")
 
     _scan(labels, "label")
@@ -83,6 +84,7 @@ class GitOpsCollector:
         if cls._instance is not None:
             cls._instance._records = defaultdict(dict)
             cls._instance._enabled = True
+            cls._instance._initialized = False
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable or disable GitOps detection.
