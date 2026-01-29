@@ -280,6 +280,8 @@ class SecondaryActivation:
         except Exception as e:
             raise FatalError(f"Failed to delete passive sync restore {restore_name}: {e}") from e
 
+        self._wait_for_restore_deletion(restore_name)
+
         existing_restore = self.secondary.get_custom_resource(
             group="cluster.open-cluster-management.io",
             version="v1beta1",
@@ -317,6 +319,40 @@ class SecondaryActivation:
             logger.info("Created %s resource", MANAGED_CLUSTER_RESTORE_NAME)
         except Exception as e:
             raise FatalError(f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}") from e
+
+    def _wait_for_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
+        """Wait until a restore resource is fully deleted."""
+        if self.secondary.dry_run:
+            logger.info("[DRY-RUN] Skipping wait for deletion of %s", restore_name)
+            return
+
+        def _poll_restore_deletion():
+            restore = self.secondary.get_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                name=restore_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+
+            if not restore:
+                return True, "deleted"
+
+            phase = restore.get("status", {}).get("phase", "unknown")
+            return False, f"still present (phase={phase})"
+
+        completed = wait_for_condition(
+            f"deletion of restore {restore_name}",
+            _poll_restore_deletion,
+            timeout=timeout,
+            interval=RESTORE_POLL_INTERVAL,
+            fast_interval=RESTORE_FAST_POLL_INTERVAL,
+            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
+            logger=logger,
+        )
+
+        if not completed:
+            raise FatalError(f"Timeout waiting for restore {restore_name} to be deleted after {timeout}s")
 
     def _get_restore_or_raise(self, restore_name: str) -> Dict:
         """Fetch restore resource or raise a fatal error if missing."""
@@ -669,7 +705,7 @@ class SecondaryActivation:
                 return True, message or "passive sync enabled and running"
             if phase == "Finished":
                 return True, message or "restore finished"
-            if phase in ("Failed", "PartiallyFailed"):
+            if phase in ("Failed", "PartiallyFailed", "FinishedWithErrors", "FailedWithErrors"):
                 raise FatalError(f"Restore failed: {phase} - {message}")
 
             return False, f"phase={phase} message={message}"
