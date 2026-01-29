@@ -868,7 +868,7 @@ oc logs -n open-cluster-management-backup deployment/velero -c velero | grep "$B
 **SUCCESS CRITERIA:**
 - Backup status shows "Completed" with no errors
 - No errors in backup logs
-- Backup timestamp is recent (within last 10 minutes) **after** a new backup has been observed since re-enabling the BackupSchedule
+- Backup timestamp is recent (within last 10 minutes, or within the schedule interval + 10 minutes for longer cadences) **after** a new backup has been observed since re-enabling the BackupSchedule
 
 > **Note:** If the BackupSchedule runs less frequently (for example, hourly or daily) or was just re-enabled,
 > the latest backup can legitimately be older than 10 minutes. Wait for the first post-enable backup to complete,
