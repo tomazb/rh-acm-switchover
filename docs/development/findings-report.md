@@ -17,7 +17,7 @@ This report details 21 hidden logical errors and performance issues identified t
 | False-Positive | 4 | #2, #6, #18, #20 |
 | Open | 0 | — |
 
-*Last updated: 2026-01-29*
+### Last updated: 2026-01-29
 
 ---
 
@@ -303,7 +303,7 @@ Resume logic in main orchestrator incorrectly determines completion based on par
 4. Sets `phase: completed` and exits with success message
 
 **Expected Behavior:**
-```
+```text
 INFO - Resuming from failed state
 INFO - Last error: disable-auto-import annotation still present on: prod1, prod2, prod3
 INFO - Failed at phase: post_activation_verification

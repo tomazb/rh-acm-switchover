@@ -41,7 +41,7 @@ The switchover progressed through:
 - ✗ PHASE 4: POST_ACTIVATION VERIFICATION (failed)
 
 **Error logged:**
-```
+```text
 2026-01-29 13:29:10 - ERROR - Post-activation verification failed: disable-auto-import annotation still present on: prod1, prod2, prod3
 2026-01-29 13:29:10 - ERROR - Post-activation verification failed!
 2026-01-29 13:29:10 - ERROR -
@@ -78,7 +78,7 @@ python acm_switchover.py \
 - Complete remaining steps (backup schedule setup, old hub as secondary, etc.)
 
 **Actual Behavior:**
-```
+```text
 2026-01-29 13:29:57 - INFO - ACM Hub Switchover Automation v1.5.3 (2026-01-29)
 2026-01-29 13:29:57 - INFO - Started at: 2026-01-29T12:29:57.042829+00:00
 2026-01-29 13:29:57 - INFO - Using state file: .state/switchover-mgmt1__mgmt2.json
@@ -189,7 +189,7 @@ The tool should:
 
 1. **Detect Failed State**: Recognize `phase: failed` in state file
 2. **Log Resume Context**:
-   ```
+   ```text
    INFO - Resuming from failed state
    INFO - Last error: disable-auto-import annotation still present on: prod1, prod2, prod3
    INFO - Failed at phase: post_activation_verification

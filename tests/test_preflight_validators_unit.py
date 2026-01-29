@@ -465,7 +465,8 @@ class TestAutoImportStrategyValidator:
         strategy_results = [
             r for r in results if "auto-import" in r["check"].lower() or "strategy" in r["check"].lower()
         ]
-        # At minimum, should not crash - meaningful validation happens
+        # At minimum, ensure we emitted at least one strategy-related result
+        assert strategy_results
 
 
 class TestNamespaceValidator:
