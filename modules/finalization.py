@@ -321,6 +321,7 @@ class Finalization:
 
                         # Velero uses "InProgress" and "Completed" phases
                         if phase in ("InProgress", "Completed", "New"):
+                            self.state.set_config("new_backup_detected", True)
                             logger.info("New backup is being created successfully!")
                             return
 
@@ -328,6 +329,7 @@ class Finalization:
             logger.debug("Waiting for new backup... (elapsed: %ss)", elapsed)
             time.sleep(BACKUP_POLL_INTERVAL)
 
+        self.state.set_config("new_backup_detected", False)
         logger.warning(
             f"No new backups detected after {timeout}s. " "BackupSchedule may take time to create first backup."
         )
@@ -392,7 +394,10 @@ class Finalization:
 
     @dry_run_skip(message="Skipping backup integrity verification")
     def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:
-        """Verify latest backup status, logs, and recency."""
+        """Verify latest backup status, logs, and recency.
+
+        Backup age enforcement is skipped until a new backup is detected after enabling the schedule.
+        """
         logger.info("Verifying backup integrity...")
 
         backups = self.secondary.list_custom_resources(
@@ -471,6 +476,8 @@ class Finalization:
         if warnings > 0:
             logger.warning("Latest backup %s completed with %s warning(s)", backup_name, warnings)
 
+        new_backup_detected = bool(self.state.get_config("new_backup_detected", False))
+
         completion_ts = status.get("completionTimestamp") or status.get("startTimestamp")
         creation_ts = latest_backup.get("metadata", {}).get("creationTimestamp")
         ts = completion_ts or creation_ts
@@ -480,9 +487,19 @@ class Finalization:
             logger.warning("Unable to parse timestamp for backup %s (timestamp=%s)", backup_name, ts)
         else:
             age_seconds = int((datetime.now(timezone.utc) - parsed_ts).total_seconds())
-            if age_seconds > max_age_seconds:
-                raise RuntimeError(f"Latest backup {backup_name} is too old ({age_seconds}s > {max_age_seconds}s)")
-            logger.info("Latest backup %s completed %ss ago", backup_name, age_seconds)
+            if not new_backup_detected:
+                logger.warning(
+                    "No new backups detected since enabling BackupSchedule; "
+                    "skipping backup age enforcement for %s (latest: %ss old)",
+                    backup_name,
+                    age_seconds,
+                )
+            else:
+                if age_seconds > max_age_seconds:
+                    raise RuntimeError(
+                        f"Latest backup {backup_name} is too old ({age_seconds}s > {max_age_seconds}s)"
+                    )
+                logger.info("Latest backup %s completed %ss ago", backup_name, age_seconds)
 
         self._check_velero_logs_for_backup(backup_name)
 

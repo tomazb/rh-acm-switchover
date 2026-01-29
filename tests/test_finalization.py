@@ -5,7 +5,7 @@ Tests cover Finalization class for completing the switchover.
 
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -220,6 +220,35 @@ class TestFinalization:
         mock_secondary_client.get_pods.return_value = []
 
         finalization._verify_backup_integrity(max_age_seconds=600)
+
+    def test_verify_backup_integrity_skips_age_without_new_backup(self, finalization, mock_secondary_client):
+        """Backup age enforcement should be skipped if no new backup was detected."""
+        backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+                "status": {"phase": "Completed", "completionTimestamp": backup_ts, "errors": 0, "warnings": 0},
+            }
+        ]
+        mock_secondary_client.get_pods.return_value = []
+        finalization.state.get_config.return_value = False
+
+        finalization._verify_backup_integrity(max_age_seconds=600)
+
+    def test_verify_backup_integrity_enforces_age_with_new_backup(self, finalization, mock_secondary_client):
+        """Backup age enforcement should fail when a new backup was detected but is too old."""
+        backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+                "status": {"phase": "Completed", "completionTimestamp": backup_ts, "errors": 0, "warnings": 0},
+            }
+        ]
+        mock_secondary_client.get_pods.return_value = []
+        finalization.state.get_config.return_value = True
+
+        with pytest.raises(RuntimeError):
+            finalization._verify_backup_integrity(max_age_seconds=600)
 
     @patch("modules.finalization.wait_for_condition")
     def test_verify_backup_integrity_waits_for_completion(self, mock_wait, finalization, mock_secondary_client):
