@@ -295,6 +295,35 @@ def run_switchover(
                 "Resuming recently completed switchover (state age: %s)",
                 f"{int(state_age.total_seconds() // 60)} minutes",
             )
+    elif current_phase == Phase.FAILED:
+        # Handle resume from failed state - determine which phase to retry
+        last_error_phase = state.get_last_error_phase()
+        errors = state.get_errors()
+        last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+
+        logger.info("")
+        logger.info("⚠️  RESUMING FROM FAILED STATE")
+        logger.info("Last error: %s", last_error_msg)
+
+        if last_error_phase:
+            logger.info("Failed at phase: %s", last_error_phase.value)
+            logger.info("Will retry from this phase")
+            # Reset phase to the one that failed so the phase_flow loop can pick it up
+            state.set_phase(last_error_phase)
+        else:
+            # Cannot determine which phase failed - need to start fresh or use --force
+            logger.warning("Cannot determine which phase failed from error history")
+            logger.warning("")
+            logger.warning("Options:")
+            logger.warning("  1. Remove state file: rm %s", state.state_file)
+            logger.warning("  2. Or use: --reset-state to start fresh")
+            logger.warning("  3. Or use: --force to reset and retry from beginning")
+            logger.warning("")
+            if not getattr(args, "force", False):
+                logger.error("Use --force to reset state and retry, or remove state file to start fresh.")
+                sys.exit(EXIT_FAILURE)
+            logger.warning("--force used: Resetting state to start fresh switchover")
+            state.reset()
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),

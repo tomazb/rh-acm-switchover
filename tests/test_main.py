@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from acm_switchover import parse_args, run_switchover
+from lib.constants import EXIT_FAILURE
 
 
 @pytest.mark.unit
@@ -427,6 +428,100 @@ class TestSwitchoverPhaseFlow:
         assert result is True
         assert state.get_current_phase() == Phase.COMPLETED
         # Only the first phase handler is guaranteed to run in this setup
+        preflight.assert_called_once()
+
+    def test_run_switchover_resume_from_failed_state_retries_failed_phase(self, tmp_path):
+        """Verify that run_switchover resumes from the phase that failed when state is FAILED."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        # Simulate a failure during POST_ACTIVATION
+        state.set_phase(Phase.POST_ACTIVATION)
+        state.add_error("disable-auto-import annotation still present", Phase.POST_ACTIVATION.value)
+        state.set_phase(Phase.FAILED)
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
+            "acm_switchover._run_phase_primary_prep", return_value=True
+        ) as primary_prep, patch("acm_switchover._run_phase_activation", return_value=True) as activation, patch(
+            "acm_switchover._run_phase_post_activation", return_value=True
+        ) as post_activation, patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ) as finalization:
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        # Should NOT call preflight, primary_prep - those were already done
+        preflight.assert_not_called()
+        primary_prep.assert_not_called()
+        activation.assert_not_called()
+        # SHOULD call post_activation (the failed phase) and finalization
+        post_activation.assert_called_once()
+        finalization.assert_called_once()
+
+    def test_run_switchover_failed_state_without_error_phase_requires_force(self, tmp_path):
+        """Verify that FAILED state without determinable error phase requires --force."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.FAILED)
+        # No errors recorded - cannot determine which phase failed
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert exc_info.value.code == EXIT_FAILURE
+
+    def test_run_switchover_failed_state_force_resets_and_retries(self, tmp_path):
+        """Verify that --force with FAILED state and unknown error phase resets state."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.FAILED)
+        # No errors recorded - cannot determine which phase failed
+
+        args = SimpleNamespace(
+            force=True,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
+            "acm_switchover._run_phase_primary_prep", return_value=True
+        ), patch("acm_switchover._run_phase_activation", return_value=True), patch(
+            "acm_switchover._run_phase_post_activation", return_value=True
+        ), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        # Should start from the beginning after reset
         preflight.assert_called_once()
 
     def test_execute_operation_routes_to_decommission_when_flag_set(self):
