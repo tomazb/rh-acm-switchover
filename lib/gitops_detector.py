@@ -212,9 +212,14 @@ def record_gitops_markers(
         metadata: Resource metadata dict
 
     Returns:
-        List of detected markers (empty if none)
+        List of detected markers (empty if none or if detection is disabled)
     """
+    # Short-circuit if GitOps detection is disabled to suppress all warnings
+    collector = GitOpsCollector.get_instance()
+    if not collector.is_enabled():
+        return []
+
     markers = detect_gitops_markers(metadata)
     if markers:
-        GitOpsCollector.get_instance().record(context, namespace, kind, name, markers)
+        collector.record(context, namespace, kind, name, markers)
     return markers

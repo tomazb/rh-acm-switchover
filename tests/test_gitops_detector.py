@@ -463,7 +463,7 @@ class TestRecordGitopsMarkers:
         assert not GitOpsCollector.get_instance().has_detections()
 
     def test_respects_collector_disabled(self):
-        """Test that function respects collector disabled state."""
+        """Test that function returns empty when collector is disabled."""
         GitOpsCollector.get_instance().set_enabled(False)
 
         metadata = {
@@ -480,7 +480,7 @@ class TestRecordGitopsMarkers:
             metadata=metadata,
         )
 
-        # Markers are still detected and returned
-        assert markers == ["label:app.kubernetes.io/managed-by"]
-        # But not recorded
+        # When disabled, no markers should be returned (suppresses inline warnings)
+        assert markers == []
+        # And nothing should be recorded
         assert not GitOpsCollector.get_instance().has_detections()
