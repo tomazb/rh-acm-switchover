@@ -32,6 +32,7 @@ from lib import (
     setup_logging,
 )
 from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, STALE_STATE_THRESHOLD
+from lib.gitops_detector import GitOpsCollector
 from lib.validation import InputValidator, ValidationError
 from modules import (
     Decommission,
@@ -196,6 +197,11 @@ Examples:
         "--disable-observability-on-secondary",
         action="store_true",
         help="Delete MultiClusterObservability on the old hub when keeping it as secondary (not for decommission)",
+    )
+    parser.add_argument(
+        "--skip-gitops-check",
+        action="store_true",
+        help="Disable GitOps marker detection (ArgoCD, Flux) to skip drift warnings",
     )
     parser.add_argument(
         "--skip-rbac-validation",
@@ -641,6 +647,11 @@ def main():
     logger.info("Started at: %s", datetime.now(timezone.utc).isoformat())
     logger.info("Using state file: %s", resolved_state_file)
 
+    # Configure GitOps detection based on CLI flag
+    if args.skip_gitops_check:
+        GitOpsCollector.get_instance().set_enabled(False)
+        logger.debug("GitOps marker detection disabled")
+
     # Setup mode doesn't need state tracking or Kubernetes clients
     # It uses the admin-kubeconfig directly via the shell script
     if args.setup:
@@ -684,6 +695,9 @@ def main():
         logger.error("\n✗ Unexpected error: %s", exc, exc_info=args.verbose)
         state.add_error(str(exc))
         sys.exit(EXIT_FAILURE)
+
+    # Print GitOps detection report if any markers were found
+    GitOpsCollector.get_instance().print_report()
 
     if success:
         logger.info("\n✓ Operation completed successfully!")

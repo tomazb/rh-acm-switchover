@@ -51,6 +51,8 @@ python acm_switchover.py \
 
 ```
 
+Optional: add `--skip-gitops-check` to disable GitOps marker detection warnings (ArgoCD, Flux).
+
 ### Switchover Execution
 
 ```bash

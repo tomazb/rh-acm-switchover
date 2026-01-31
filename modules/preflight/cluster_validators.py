@@ -2,6 +2,7 @@
 
 from kubernetes.client.exceptions import ApiException
 
+from lib.gitops_detector import record_gitops_markers
 from lib.kube_client import KubeClient
 
 from .base_validator import BaseValidator
@@ -34,9 +35,20 @@ class ClusterDeploymentValidator(BaseValidator):
 
             missing = []
             for cd in cluster_deployments:
-                name = cd.get("metadata", {}).get("name", "unknown")
-                namespace = cd.get("metadata", {}).get("namespace", "unknown")
+                metadata = cd.get("metadata", {})
+                name = metadata.get("name", "unknown")
+                namespace = metadata.get("namespace", "unknown")
                 preserve = cd.get("spec", {}).get("preserveOnDelete", False)
+
+                # Record GitOps markers if present
+                record_gitops_markers(
+                    context="primary",
+                    namespace=namespace,
+                    kind="ClusterDeployment",
+                    name=name,
+                    metadata=metadata,
+                )
+
                 if not preserve:
                     missing.append(f"{namespace}/{name}")
 
