@@ -25,6 +25,7 @@ Note: `--secondary-context` is required for all switchover operations unless you
 - ✓ **CRITICAL**: All ClusterDeployments have `preserveOnDelete=true`
 - ✓ Passive sync restore is current (Method 1 only)
 - ✓ ACM Observability detected (if present)
+- ✓ GitOps marker detection warnings for ArgoCD/Flux (unless `--skip-gitops-check`)
 
 **Expected output:**
 ```
