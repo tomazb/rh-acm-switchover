@@ -233,8 +233,8 @@ class SecondaryActivation:
         message = status.get("lastMessage", "")
 
         # "Enabled" = continuous sync running
-        # "Finished" = initial sync completed successfully (also valid for activation)
-        if phase not in ("Enabled", "Finished"):
+        # "Finished"/"Completed" = initial sync completed successfully (also valid for activation)
+        if phase not in ("Enabled", "Finished", "Completed"):
             raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
 
         logger.info("Passive sync verified (%s): %s", phase, message)
