@@ -36,12 +36,16 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
     def _scan(source: Dict[str, str], source_name: str) -> None:
         for key, value in source.items():
             # Defensive: convert to string in case of unexpected types
-            combined = f"{key}={str(value)}".lower()
+            value_str = str(value)
+            if key == "app.kubernetes.io/managed-by":
+                if value_str.lower() in ("argocd", "fluxcd", "flux"):
+                    markers.append(f"{source_name}:{key}")
+                continue
+
+            combined = f"{key}={value_str}".lower()
             if "argocd" in combined or "argoproj.io" in combined:
                 markers.append(f"{source_name}:{key}")
             elif "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
-                markers.append(f"{source_name}:{key}")
-            elif key == "app.kubernetes.io/managed-by" and str(value).lower() in ("argocd", "fluxcd", "flux"):
                 markers.append(f"{source_name}:{key}")
 
     _scan(labels, "label")
@@ -139,7 +143,7 @@ class GitOpsCollector:
         Output format:
         === GitOps-managed objects detected (N warnings) ===
         [primary] open-cluster-management-backup/BackupSchedule/acm-backup-schedule
-          → label:app.kubernetes.io/managed-by=argocd
+          → label:app.kubernetes.io/managed-by
         [secondary] open-cluster-management/ManagedCluster/cluster1
           → annotation:argocd.argoproj.io/sync-wave
         ... and 15 more ManagedClusters

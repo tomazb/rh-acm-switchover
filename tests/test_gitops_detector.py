@@ -103,6 +103,28 @@ class TestDetectGitopsMarkers:
         assert "label:app.kubernetes.io/managed-by" in markers
         assert len(markers) == 1
 
+    def test_managed_by_substring_not_matched(self):
+        """Test that managed-by substring values do not match."""
+        metadata = {
+            "labels": {
+                "app.kubernetes.io/managed-by": "not-argocd",
+            }
+        }
+        markers = detect_gitops_markers(metadata)
+        assert markers == []
+
+    def test_managed_by_with_argocd_label_still_detects_label(self):
+        """Test that argocd labels are detected even if managed-by value is non-matching."""
+        metadata = {
+            "labels": {
+                "app.kubernetes.io/managed-by": "not-argocd",
+                "argocd.argoproj.io/instance": "my-app",
+            }
+        }
+        markers = detect_gitops_markers(metadata)
+        assert "label:argocd.argoproj.io/instance" in markers
+        assert "label:app.kubernetes.io/managed-by" not in markers
+
     def test_returns_empty_for_unmarked_resource(self):
         """Test that unmarked resources return empty list."""
         metadata = {
