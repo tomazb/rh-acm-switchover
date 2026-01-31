@@ -958,7 +958,7 @@ print_gitops_report() {
             kind_counts[$kind]=0
             kind_displayed[$kind]=0
         fi
-        ((kind_counts[$kind]++)) || true
+        ((++kind_counts[$kind])) || true
     done
 
     # Display resources with truncation per kind

@@ -68,7 +68,7 @@ class TestBackupValidator:
         # Mock time functions to simulate timeout immediately
         # First call returns 0, second call returns timeout+1 to exit loop immediately
         mocker.patch("modules.preflight.backup_validators.time.sleep")
-        mocker.patch("modules.preflight.backup_validators.time.time", side_effect=[0, 601])
+        mocker.patch("modules.preflight.backup_validators.time.time", side_effect=[0, 601, 602, 603])
 
         validator = BackupValidator(reporter)
         # Mock backups with one in progress - stays in progress through all polls
