@@ -761,20 +761,13 @@ class Finalization:
         for mco in mcos:
             metadata = mco.get("metadata", {})
             mco_name = metadata.get("name", "unknown")
-            markers = record_gitops_markers(
+            record_gitops_markers(
                 context="primary",
                 namespace="",  # MCO is cluster-scoped
                 kind="MultiClusterObservability",
                 name=mco_name,
                 metadata=metadata,
             )
-            if markers:
-                logger.warning(
-                    "MultiClusterObservability %s appears GitOps-managed (%s). Coordinate deletion to avoid drift.",
-                    mco_name,
-                    ", ".join(markers),
-                )
-
             if self.dry_run:
                 logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name)
                 continue
