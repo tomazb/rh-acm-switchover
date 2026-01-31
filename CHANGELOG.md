@@ -13,6 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [1.5.4] - 2026-01-31
+
+### Added
+
+- **GitOps marker detection**: Detect ArgoCD/Flux-managed resources and support `--skip-gitops-check` to suppress drift warnings.
+
+### Changed
+
+- **GitOps MCO handling**: Removed per-resource warning during MCO deletion in favor of consolidated reporting.
+
+### Fixed
+
+- **GitOps managed-by matching**: Avoid substring false positives for `app.kubernetes.io/managed-by`.
+- **GitOps report counters (bash)**: Prevent `set -e` exits on arithmetic increments.
+
 ## [1.5.3] - 2026-01-29
 
 ### Fixed
