@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **GitOps managed-by matching**: Avoid substring false positives for `app.kubernetes.io/managed-by`.
 - **GitOps report counters (bash)**: Prevent `set -e` exits on arithmetic increments.
+- **Passive sync phase validation**: Accept `Completed` as valid passive sync restore state alongside `Enabled` and `Finished`.
 
 ## [1.5.3] - 2026-01-29
 
