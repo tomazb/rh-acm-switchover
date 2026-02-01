@@ -766,11 +766,11 @@ class SecondaryActivation:
             message = status.get("lastMessage", "")
 
             # For passive sync, "Enabled" means the restore is actively syncing - this is the success state
-            # For full restore, "Finished" means the restore completed
+            # For full restore, "Finished"/"Completed" mean the restore completed
             if self.method == "passive" and phase == "Enabled":
                 return True, message or "passive sync enabled and running"
-            if phase == "Finished":
-                return True, message or "restore finished"
+            if phase in ("Finished", "Completed"):
+                return True, message or "restore completed"
             if phase in ("Failed", "PartiallyFailed", "FinishedWithErrors", "FailedWithErrors"):
                 raise FatalError(f"Restore failed: {phase} - {message}")
 
