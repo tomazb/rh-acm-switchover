@@ -832,27 +832,29 @@ detect_gitops_markers() {
     # Check labels for GitOps markers
     while IFS= read -r label; do
         [[ -z "$label" ]] && continue
-        local label_lower
-        label_lower=$(echo "$label" | tr '[:upper:]' '[:lower:]')
+        local key="${label%%=*}"
+        local value="${label#*=}"
 
-        # ArgoCD detection
-        if [[ "$label_lower" == *"argocd"* ]] || [[ "$label_lower" == *"argoproj.io"* ]]; then
-            local key="${label%%=*}"
-            [[ -n "$markers" ]] && markers+=","
-            markers+="label:${key}"
-        # Flux detection
-        elif [[ "$label_lower" == *"fluxcd.io"* ]] || [[ "$label_lower" == *"toolkit.fluxcd.io"* ]]; then
-            local key="${label%%=*}"
-            [[ -n "$markers" ]] && markers+=","
-            markers+="label:${key}"
-        # managed-by detection
-        elif [[ "$label" == "app.kubernetes.io/managed-by="* ]]; then
-            local value="${label#*=}"
+        # managed-by detection (exact value match to avoid substring false positives)
+        if [[ "$key" == "app.kubernetes.io/managed-by" ]]; then
             local value_lower
             value_lower=$(echo "$value" | tr '[:upper:]' '[:lower:]')
             if [[ "$value_lower" == "argocd" ]] || [[ "$value_lower" == "flux" ]] || [[ "$value_lower" == "fluxcd" ]]; then
                 [[ -n "$markers" ]] && markers+=","
                 markers+="label:app.kubernetes.io/managed-by"
+            fi
+        else
+            local label_lower
+            label_lower=$(echo "$label" | tr '[:upper:]' '[:lower:]')
+
+            # ArgoCD detection
+            if [[ "$label_lower" == *"argocd"* ]] || [[ "$label_lower" == *"argoproj.io"* ]]; then
+                [[ -n "$markers" ]] && markers+=","
+                markers+="label:${key}"
+            # Flux detection
+            elif [[ "$label_lower" == *"fluxcd.io"* ]] || [[ "$label_lower" == *"toolkit.fluxcd.io"* ]]; then
+                [[ -n "$markers" ]] && markers+=","
+                markers+="label:${key}"
             fi
         fi
     done <<< "$labels"
