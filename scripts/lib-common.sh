@@ -936,21 +936,34 @@ print_gitops_report() {
     echo ""
 
     # Sort resources for consistent output (matches Python implementation)
-    # Create indexed arrays with sorted order
+    # Format: index:resource:markers, then sort by resource identifier
+    local -a sorted_entries
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+        sorted_entries+=("$i|${GITOPS_DETECTED_RESOURCES[$i]}|${GITOPS_DETECTED_MARKERS[$i]}")
+    done
+
+    # Sort by resource identifier (field 2), then rebuild arrays
+    local -a sorted_resources
+    local -a sorted_markers
     local -a sorted_indices
-    mapfile -t sorted_indices < <(
-        for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
-            echo "$i"
-        done | sort -n
-    )
+
+    while IFS='|' read -r idx resource markers; do
+        sorted_indices+=("$idx")
+        sorted_resources+=("$resource")
+        sorted_markers+=("$markers")
+    done < <(printf '%s\n' "${sorted_entries[@]}" | sort -t'|' -k2)
+
+    # Replace original arrays with sorted versions
+    GITOPS_DETECTED_RESOURCES=("${sorted_resources[@]}")
+    GITOPS_DETECTED_MARKERS=("${sorted_markers[@]}")
 
     # Group by kind for summarization
     declare -A kind_counts
     declare -A kind_displayed
     local i
 
-    # Count resources by kind
-    for i in "${sorted_indices[@]}"; do
+    # Count resources by kind (arrays are now sorted)
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
         local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
         # Extract kind from resource identifier
         # Format: "[context] namespace/Kind/name" or "[context] Kind/name"
@@ -963,8 +976,8 @@ print_gitops_report() {
         ((++kind_counts[$kind])) || true
     done
 
-    # Display resources with truncation per kind
-    for i in "${sorted_indices[@]}"; do
+    # Display resources with truncation per kind (arrays are now sorted)
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
         local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
         local markers="${GITOPS_DETECTED_MARKERS[$i]}"
 
