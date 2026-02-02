@@ -969,7 +969,8 @@ print_gitops_report() {
         # Format: "[context] namespace/Kind/name" or "[context] Kind/name"
         local kind
         kind=$(echo "$resource" | sed -E 's/^\[[^]]+\] ([^/]+\/)?([^/]+)\/[^/]+$/\2/')
-        if [[ -z "${kind_counts[$kind]}" ]]; then
+        # Use default expansion to avoid unbound variable errors under set -u
+        if [[ -z "${kind_counts[$kind]:-}" ]]; then
             kind_counts[$kind]=0
             kind_displayed[$kind]=0
         fi
@@ -986,10 +987,11 @@ print_gitops_report() {
         kind=$(echo "$resource" | sed -E 's/^\[[^]]+\] ([^/]+\/)?([^/]+)\/[^/]+$/\2/')
 
         # Check if we've hit the display limit for this kind
-        if [[ ${kind_displayed[$kind]} -ge $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
+        # Use default expansion to avoid unbound variable errors under set -u
+        if [[ ${kind_displayed[$kind]:-0} -ge $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
             # Only show "and X more" message once per kind
-            if [[ ${kind_displayed[$kind]} -eq $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
-                local remaining=$((kind_counts[$kind] - GITOPS_MAX_DISPLAY_PER_KIND))
+            if [[ ${kind_displayed[$kind]:-0} -eq $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
+                local remaining=$((${kind_counts[$kind]:-0} - GITOPS_MAX_DISPLAY_PER_KIND))
                 echo -e "${YELLOW}  ... and $remaining more ${kind}(s)${NC}"
                 # Increment to prevent showing message again
                 ((kind_displayed[$kind]++)) || true
