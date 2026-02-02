@@ -218,8 +218,18 @@ if oc --context="$NEW_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
     check_pass "Observability namespace exists"
 
     # Check MCO CR status
-    MCO_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
+    MCO_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCO observability -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
     
+    # Detect GitOps markers on MCO (cluster-scoped, no namespace)
+    MCO_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCO observability -o json 2>/dev/null || echo "{}")
+    if [[ -n "$MCO_JSON" && "$MCO_JSON" != "{}" ]]; then
+        MCO_NAME=$(echo "$MCO_JSON" | jq -r '.metadata.name // "observability"')
+        GITOPS_MARKERS=$(detect_gitops_markers "$MCO_JSON")
+        if [[ -n "$GITOPS_MARKERS" ]]; then
+            collect_gitops_markers "new-hub" "" "MultiClusterObservability" "$MCO_NAME" "$GITOPS_MARKERS"
+        fi
+    fi
+
     if [[ "$MCO_STATUS" == "True" ]]; then
         check_pass "MultiClusterObservability CR is Ready"
     else
@@ -480,7 +490,17 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
     # Old hub observability safety:
     # The previous primary must either have no MCO, or (if MCO exists) have key components scaled down.
     if oc --context="$OLD_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
-        if oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
+        if oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability &> /dev/null; then
+            # Detect GitOps markers on old hub MCO (cluster-scoped, no namespace)
+            OLD_MCO_JSON=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability -o json 2>/dev/null || echo "{}")
+            if [[ -n "$OLD_MCO_JSON" && "$OLD_MCO_JSON" != "{}" ]]; then
+                OLD_MCO_NAME=$(echo "$OLD_MCO_JSON" | jq -r '.metadata.name // "observability"')
+                GITOPS_MARKERS=$(detect_gitops_markers "$OLD_MCO_JSON")
+                if [[ -n "$GITOPS_MARKERS" ]]; then
+                    collect_gitops_markers "old-hub" "" "MultiClusterObservability" "$OLD_MCO_NAME" "$GITOPS_MARKERS"
+                fi
+            fi
+
             OLD_COMPACTOR=$(get_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=thanos-compact" "$OBS_THANOS_COMPACT_POD")
             OLD_OBSERVATORIUM_API_PODS=$(get_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=observatorium-api" "$OBS_API_POD")
 
@@ -537,10 +557,21 @@ fi
 # Check 9: Verify Auto-Import Strategy (ACM 2.14+)
 section_header "9. Checking Auto-Import Strategy (ACM 2.14+)"
 
-# Get ACM version on new hub
-if ! NEW_HUB_VERSION=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$NEW_HUB_VERSION" ]]; then
-    check_fail "New hub: Could not determine ACM version. Skipping auto-import strategy check."
+# Get ACM version on new hub and detect GitOps markers on MCH
+NEW_HUB_MCH_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
+if [[ -n "$NEW_HUB_MCH_JSON" && "$NEW_HUB_MCH_JSON" != "{}" ]]; then
+    NEW_HUB_MCH_NAME=$(echo "$NEW_HUB_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
+    GITOPS_MARKERS=$(detect_gitops_markers "$NEW_HUB_MCH_JSON")
+    if [[ -n "$GITOPS_MARKERS" ]]; then
+        collect_gitops_markers "new-hub" "$ACM_NAMESPACE" "MultiClusterHub" "$NEW_HUB_MCH_NAME" "$GITOPS_MARKERS"
+    fi
+    NEW_HUB_VERSION=$(echo "$NEW_HUB_MCH_JSON" | jq -r '.status.currentVersion // "unknown"')
+else
     NEW_HUB_VERSION="unknown"
+fi
+
+if [[ "$NEW_HUB_VERSION" == "unknown" ]]; then
+    check_fail "New hub: Could not determine ACM version. Skipping auto-import strategy check."
 fi
 
 # Check new hub auto-import strategy
