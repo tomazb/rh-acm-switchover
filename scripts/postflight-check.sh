@@ -38,6 +38,7 @@ fi
 NEW_HUB_CONTEXT=""
 OLD_HUB_CONTEXT=""
 SKIP_GITOPS_CHECK=0
+ARGOCD_CHECK=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -53,13 +54,18 @@ while [[ $# -gt 0 ]]; do
             SKIP_GITOPS_CHECK=1
             shift
             ;;
+        --argocd-check)
+            ARGOCD_CHECK=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>] [--skip-gitops-check]"
+            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>] [--skip-gitops-check] [--argocd-check]"
             echo ""
             echo "Options:"
             echo "  --new-hub-context     Kubernetes context for new active hub (required)"
             echo "  --old-hub-context     Kubernetes context for old primary hub (optional)"
             echo "  --skip-gitops-check   Disable GitOps marker detection (ArgoCD, Flux)"
+            echo "  --argocd-check        Detect ArgoCD instances and ACM resources managed by GitOps"
             echo "  --help, -h            Show this help message"
             exit "$EXIT_SUCCESS"
             ;;
@@ -613,6 +619,14 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
             echo -e "${YELLOW}       This should be reset if no longer needed.${NC}"
             echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
         fi
+    fi
+fi
+
+if [[ $ARGOCD_CHECK -eq 1 ]]; then
+    section_header "10. Checking ArgoCD GitOps Management (Optional)"
+    check_argocd_acm_resources "$NEW_HUB_CONTEXT" "New hub"
+    if [[ -n "$OLD_HUB_CONTEXT" ]]; then
+        check_argocd_acm_resources "$OLD_HUB_CONTEXT" "Old hub"
     fi
 fi
 
