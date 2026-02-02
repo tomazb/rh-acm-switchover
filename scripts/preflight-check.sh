@@ -165,6 +165,26 @@ section_header "4. Checking ACM Versions"
 ACM_PRIMARY_VERSION=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
 ACM_SECONDARY_VERSION=$(oc --context="$SECONDARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
 
+# Detect GitOps markers on MultiClusterHub (primary)
+PRIMARY_MCH_JSON=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
+if [[ -n "$PRIMARY_MCH_JSON" && "$PRIMARY_MCH_JSON" != "{}" ]]; then
+    PRIMARY_MCH_NAME=$(echo "$PRIMARY_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
+    GITOPS_MARKERS=$(detect_gitops_markers "$PRIMARY_MCH_JSON")
+    if [[ -n "$GITOPS_MARKERS" ]]; then
+        collect_gitops_markers "primary" "$ACM_NAMESPACE" "MultiClusterHub" "$PRIMARY_MCH_NAME" "$GITOPS_MARKERS"
+    fi
+fi
+
+# Detect GitOps markers on MultiClusterHub (secondary)
+SECONDARY_MCH_JSON=$(oc --context="$SECONDARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
+if [[ -n "$SECONDARY_MCH_JSON" && "$SECONDARY_MCH_JSON" != "{}" ]]; then
+    SECONDARY_MCH_NAME=$(echo "$SECONDARY_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
+    GITOPS_MARKERS=$(detect_gitops_markers "$SECONDARY_MCH_JSON")
+    if [[ -n "$GITOPS_MARKERS" ]]; then
+        collect_gitops_markers "secondary" "$ACM_NAMESPACE" "MultiClusterHub" "$SECONDARY_MCH_NAME" "$GITOPS_MARKERS"
+    fi
+fi
+
 if [[ "$ACM_PRIMARY_VERSION" != "unknown" ]]; then
     check_pass "Primary hub ACM version: $ACM_PRIMARY_VERSION"
 else
@@ -453,17 +473,28 @@ fi
 # Check 11: Verify ClusterDeployment preserveOnDelete (CRITICAL)
 section_header "11. Checking ClusterDeployment preserveOnDelete (CRITICAL)"
 
-CDS=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces --no-headers 2>/dev/null | wc -l)
+CDS_JSON=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
+CDS=$(echo "$CDS_JSON" | jq '.items | length')
 if [[ $CDS -eq 0 ]]; then
     check_pass "No ClusterDeployments found (no Hive-managed clusters)"
 else
-    MISSING_PRESERVE=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces -o json 2>/dev/null | \
+    # Detect GitOps markers on each ClusterDeployment
+    echo "$CDS_JSON" | jq -c '.items[]' 2>/dev/null | while read -r CD_JSON; do
+        CD_NAMESPACE=$(echo "$CD_JSON" | jq -r '.metadata.namespace')
+        CD_NAME=$(echo "$CD_JSON" | jq -r '.metadata.name')
+        GITOPS_MARKERS=$(detect_gitops_markers "$CD_JSON")
+        if [[ -n "$GITOPS_MARKERS" ]]; then
+            collect_gitops_markers "primary" "$CD_NAMESPACE" "ClusterDeployment" "$CD_NAME" "$GITOPS_MARKERS"
+        fi
+    done
+
+    MISSING_PRESERVE=$(echo "$CDS_JSON" | \
         jq -r '.items[] | select(.spec.preserveOnDelete != true) | "\(.metadata.namespace)/\(.metadata.name)"' | wc -l)
     
     if [[ $MISSING_PRESERVE -eq 0 ]]; then
         check_pass "All $CDS ClusterDeployment(s) have preserveOnDelete=true"
     else
-        MISSING_LIST=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces -o json 2>/dev/null | \
+        MISSING_LIST=$(echo "$CDS_JSON" | \
             jq -r '.items[] | select(.spec.preserveOnDelete != true) | "\(.metadata.namespace)/\(.metadata.name)"')
         check_fail "ClusterDeployments missing preserveOnDelete=true: $MISSING_LIST"
         echo -e "${RED}       THIS IS CRITICAL! Without preserveOnDelete=true, deleting ManagedClusters will DESTROY infrastructure!${NC}"
@@ -536,8 +567,17 @@ if oc --context="$PRIMARY_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
     check_pass "Primary hub: Observability namespace exists"
     
     # Check MCO CR on primary
-    if oc --context="$PRIMARY_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
+    if oc --context="$PRIMARY_CONTEXT" get $RES_MCO observability &> /dev/null; then
          check_pass "Primary hub: MultiClusterObservability CR found"
+         # Detect GitOps markers on MCO (cluster-scoped, no namespace)
+         MCO_JSON=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCO observability -o json 2>/dev/null || echo "{}")
+         if [[ -n "$MCO_JSON" && "$MCO_JSON" != "{}" ]]; then
+             MCO_NAME=$(echo "$MCO_JSON" | jq -r '.metadata.name // "observability"')
+             GITOPS_MARKERS=$(detect_gitops_markers "$MCO_JSON")
+             if [[ -n "$GITOPS_MARKERS" ]]; then
+                 collect_gitops_markers "primary" "" "MultiClusterObservability" "$MCO_NAME" "$GITOPS_MARKERS"
+             fi
+         fi
     else
          check_warn "Primary hub: MultiClusterObservability CR not found (but namespace exists)"
     fi

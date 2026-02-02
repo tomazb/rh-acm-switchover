@@ -936,35 +936,49 @@ print_gitops_report() {
     echo ""
 
     # Sort resources for consistent output (matches Python implementation)
-    # Create indexed arrays with sorted order
+    # Format: index:resource:markers, then sort by resource identifier
+    local -a sorted_entries
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+        sorted_entries+=("$i|${GITOPS_DETECTED_RESOURCES[$i]}|${GITOPS_DETECTED_MARKERS[$i]}")
+    done
+
+    # Sort by resource identifier (field 2), then rebuild arrays
+    local -a sorted_resources
+    local -a sorted_markers
     local -a sorted_indices
-    mapfile -t sorted_indices < <(
-        for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
-            echo "$i"
-        done | sort -n
-    )
+
+    while IFS='|' read -r idx resource markers; do
+        sorted_indices+=("$idx")
+        sorted_resources+=("$resource")
+        sorted_markers+=("$markers")
+    done < <(printf '%s\n' "${sorted_entries[@]}" | sort -t'|' -k2)
+
+    # Replace original arrays with sorted versions
+    GITOPS_DETECTED_RESOURCES=("${sorted_resources[@]}")
+    GITOPS_DETECTED_MARKERS=("${sorted_markers[@]}")
 
     # Group by kind for summarization
     declare -A kind_counts
     declare -A kind_displayed
     local i
 
-    # Count resources by kind
-    for i in "${sorted_indices[@]}"; do
+    # Count resources by kind (arrays are now sorted)
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
         local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
         # Extract kind from resource identifier
         # Format: "[context] namespace/Kind/name" or "[context] Kind/name"
         local kind
         kind=$(echo "$resource" | sed -E 's/^\[[^]]+\] ([^/]+\/)?([^/]+)\/[^/]+$/\2/')
-        if [[ -z "${kind_counts[$kind]}" ]]; then
+        # Use default expansion to avoid unbound variable errors under set -u
+        if [[ -z "${kind_counts[$kind]:-}" ]]; then
             kind_counts[$kind]=0
             kind_displayed[$kind]=0
         fi
         ((++kind_counts[$kind])) || true
     done
 
-    # Display resources with truncation per kind
-    for i in "${sorted_indices[@]}"; do
+    # Display resources with truncation per kind (arrays are now sorted)
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
         local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
         local markers="${GITOPS_DETECTED_MARKERS[$i]}"
 
@@ -973,10 +987,11 @@ print_gitops_report() {
         kind=$(echo "$resource" | sed -E 's/^\[[^]]+\] ([^/]+\/)?([^/]+)\/[^/]+$/\2/')
 
         # Check if we've hit the display limit for this kind
-        if [[ ${kind_displayed[$kind]} -ge $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
+        # Use default expansion to avoid unbound variable errors under set -u
+        if [[ ${kind_displayed[$kind]:-0} -ge $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
             # Only show "and X more" message once per kind
-            if [[ ${kind_displayed[$kind]} -eq $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
-                local remaining=$((kind_counts[$kind] - GITOPS_MAX_DISPLAY_PER_KIND))
+            if [[ ${kind_displayed[$kind]:-0} -eq $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
+                local remaining=$((${kind_counts[$kind]:-0} - GITOPS_MAX_DISPLAY_PER_KIND))
                 echo -e "${YELLOW}  ... and $remaining more ${kind}(s)${NC}"
                 # Increment to prevent showing message again
                 ((kind_displayed[$kind]++)) || true
