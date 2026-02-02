@@ -5,7 +5,6 @@ and the convenience function for recording markers.
 """
 
 import json
-import os
 from pathlib import Path
 from unittest.mock import patch
 

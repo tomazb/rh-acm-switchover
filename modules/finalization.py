@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from kubernetes.client.rest import ApiException
 
-from lib.gitops_detector import detect_gitops_markers, record_gitops_markers
+from lib.gitops_detector import record_gitops_markers
 from lib.constants import (
     ACM_NAMESPACE,
     AUTO_IMPORT_STRATEGY_DEFAULT,
