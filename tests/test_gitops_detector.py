@@ -23,7 +23,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures" / "gitops_markers"
 
 def load_fixture(name: str) -> dict:
     """Load a JSON fixture file."""
-    with open(FIXTURES_DIR / name) as f:
+    with open(FIXTURES_DIR / name, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -51,6 +51,17 @@ class TestDetectGitopsMarkers:
         assert "label:app.kubernetes.io/managed-by" in markers
         assert "label:argocd.argoproj.io/instance" in markers
         assert len(markers) == 2
+
+    def test_detects_instance_label_as_unreliable(self):
+        """Test detection of generic instance label as unreliable."""
+        metadata = {
+            "labels": {
+                "app.kubernetes.io/instance": "my-app",
+            }
+        }
+        markers = detect_gitops_markers(metadata)
+        assert "label:app.kubernetes.io/instance (UNRELIABLE)" in markers
+        assert len(markers) == 1
 
     def test_detects_argocd_annotations(self):
         """Test detection of ArgoCD annotations."""
@@ -315,6 +326,16 @@ class TestGitOpsCollector:
         assert collector.is_enabled()
         assert not collector.has_detections()
 
+    def test_reset_clears_class_init_guard(self):
+        """Test that reset() clears class-level _initialized flag."""
+        # Simulate stale class flag and ensure reset restores constructor path.
+        GitOpsCollector._initialized = True
+        GitOpsCollector.reset()
+        collector = GitOpsCollector.get_instance()
+
+        assert collector.is_enabled()
+        assert hasattr(collector, "_records")
+
     @patch("lib.gitops_detector.logger")
     def test_print_report_when_disabled(self, mock_logger):
         """Test that print_report() does nothing when disabled."""
@@ -359,7 +380,7 @@ class TestGitOpsCollector:
                 logged_messages.append(args[0])
 
         full_output = "\n".join(logged_messages)
-        assert "GitOps-managed objects detected (1 warning)" in full_output
+        assert "GitOps-related markers detected (1 warning)" in full_output
         assert "[primary]" in full_output
         assert "BackupSchedule" in full_output
 
@@ -390,7 +411,7 @@ class TestGitOpsCollector:
                 logged_messages.append(args[0])
 
         full_output = "\n".join(logged_messages)
-        assert "GitOps-managed objects detected (3 warnings)" in full_output
+        assert "GitOps-related markers detected (3 warnings)" in full_output
 
     @patch("lib.gitops_detector.logger")
     def test_print_report_truncates_long_lists(self, mock_logger):

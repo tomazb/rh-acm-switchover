@@ -39,6 +39,7 @@ PRIMARY_CONTEXT=""
 SECONDARY_CONTEXT=""
 METHOD=""
 SKIP_GITOPS_CHECK=0
+ARGOCD_CHECK=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -58,14 +59,19 @@ while [[ $# -gt 0 ]]; do
             SKIP_GITOPS_CHECK=1
             shift
             ;;
+        --argocd-check)
+            ARGOCD_CHECK=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 --primary-context <primary> --secondary-context <secondary> --method <passive|full> [--skip-gitops-check]"
+            echo "Usage: $0 --primary-context <primary> --secondary-context <secondary> --method <passive|full> [--skip-gitops-check] [--argocd-check]"
             echo ""
             echo "Options:"
             echo "  --primary-context     Kubernetes context for primary hub (required)"
             echo "  --secondary-context   Kubernetes context for secondary hub (required)"
             echo "  --method              Switchover method: passive or full (required)"
             echo "  --skip-gitops-check   Disable GitOps marker detection (ArgoCD, Flux)"
+            echo "  --argocd-check        Detect ArgoCD instances and ACM resources managed by GitOps"
             echo "  --help, -h            Show this help message"
             exit "$EXIT_SUCCESS"
             ;;
@@ -698,8 +704,19 @@ else
     check_pass "Secondary hub: ACM $ACM_SECONDARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
 fi
 
-# Print GitOps detection report if any markers were found
-print_gitops_report
+if [[ $ARGOCD_CHECK -eq 1 ]]; then
+    section_header "16. Checking ArgoCD GitOps Management (Optional)"
+    check_argocd_acm_resources "$PRIMARY_CONTEXT" "Primary hub"
+    check_argocd_acm_resources "$SECONDARY_CONTEXT" "Secondary hub"
+    # Print GitOps detection report if any markers were found
+    print_gitops_report
+else
+    # If ArgoCD check is disabled, still show GitOps report under section 16 when present
+    if [[ ${#GITOPS_DETECTED_RESOURCES[@]} -gt 0 ]]; then
+        section_header "16. Checking ArgoCD GitOps Management (Optional)"
+        print_gitops_report
+    fi
+fi
 
 # Summary and exit
 if print_summary "preflight"; then

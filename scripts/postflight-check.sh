@@ -38,6 +38,7 @@ fi
 NEW_HUB_CONTEXT=""
 OLD_HUB_CONTEXT=""
 SKIP_GITOPS_CHECK=0
+ARGOCD_CHECK=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -53,13 +54,18 @@ while [[ $# -gt 0 ]]; do
             SKIP_GITOPS_CHECK=1
             shift
             ;;
+        --argocd-check)
+            ARGOCD_CHECK=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>] [--skip-gitops-check]"
+            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>] [--skip-gitops-check] [--argocd-check]"
             echo ""
             echo "Options:"
             echo "  --new-hub-context     Kubernetes context for new active hub (required)"
             echo "  --old-hub-context     Kubernetes context for old primary hub (optional)"
             echo "  --skip-gitops-check   Disable GitOps marker detection (ArgoCD, Flux)"
+            echo "  --argocd-check        Detect ArgoCD instances and ACM resources managed by GitOps"
             echo "  --help, -h            Show this help message"
             exit "$EXIT_SUCCESS"
             ;;
@@ -302,6 +308,10 @@ section_header "5. Checking Backup Configuration"
 BACKUP_SCHEDULE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
 if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
     SCHEDULE_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "")
+    # When no BackupSchedule exists, jq '.items[0]' outputs the literal "null"; treat as empty
+    if [[ "$SCHEDULE_JSON" == "null" ]]; then
+        SCHEDULE_JSON=""
+    fi
     SCHEDULE_NAME=$(echo "$SCHEDULE_JSON" | jq -r '.metadata.name // ""' 2>/dev/null || echo "")
     PAUSED=$(echo "$SCHEDULE_JSON" | jq -r '.spec.paused // false' 2>/dev/null || echo "")
 
@@ -613,6 +623,14 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
             echo -e "${YELLOW}       This should be reset if no longer needed.${NC}"
             echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
         fi
+    fi
+fi
+
+if [[ $ARGOCD_CHECK -eq 1 ]]; then
+    section_header "10. Checking ArgoCD GitOps Management (Optional)"
+    check_argocd_acm_resources "$NEW_HUB_CONTEXT" "New hub"
+    if [[ -n "$OLD_HUB_CONTEXT" ]]; then
+        check_argocd_acm_resources "$OLD_HUB_CONTEXT" "Old hub"
     fi
 fi
 

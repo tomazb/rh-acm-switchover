@@ -7,7 +7,7 @@ and collect warnings to help operators coordinate changes with their GitOps tool
 
 import logging
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("acm_switchover")
 
@@ -29,7 +29,7 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
     Returns:
         List of marker strings in format "label:key" or "annotation:key"
     """
-    markers: List[str] = []
+    markers_set: Set[str] = set()
     labels = metadata.get("labels") or {}
     annotations = metadata.get("annotations") or {}
 
@@ -37,20 +37,28 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
         for key, value in source.items():
             # Defensive: convert to string in case of unexpected types
             value_str = str(value)
+            # app.kubernetes.io/instance is a generic label; flag as unreliable
+            if key == "app.kubernetes.io/instance":
+                markers_set.add(f"{source_name}:{key} (UNRELIABLE)")
+                continue
+            if key == "argocd.argoproj.io/instance":
+                markers_set.add(f"{source_name}:{key}")
+                continue
             if key == "app.kubernetes.io/managed-by":
                 if value_str.lower() in ("argocd", "fluxcd", "flux"):
-                    markers.append(f"{source_name}:{key}")
+                    markers_set.add(f"{source_name}:{key}")
                 continue
 
             combined = f"{key}={value_str}".lower()
+            # Use separate ifs so one value can match multiple tools (e.g. "argocd-and-flux")
             if "argocd" in combined or "argoproj.io" in combined:
-                markers.append(f"{source_name}:{key}")
-            elif "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
-                markers.append(f"{source_name}:{key}")
+                markers_set.add(f"{source_name}:{key}")
+            if "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
+                markers_set.add(f"{source_name}:{key}")
 
     _scan(labels, "label")
     _scan(annotations, "annotation")
-    return markers
+    return sorted(markers_set)
 
 
 class GitOpsCollector:
@@ -84,11 +92,13 @@ class GitOpsCollector:
 
     @classmethod
     def reset(cls) -> None:
-        """Reset the singleton instance (primarily for testing)."""
-        if cls._instance is not None:
-            cls._instance._records = defaultdict(dict)
-            cls._instance._enabled = True
-            cls._instance._initialized = False
+        """Reset the singleton instance (primarily for testing).
+
+        Clear both singleton and class init guard so the next get_instance()
+        call creates a new object and runs __init__ fully.
+        """
+        cls._instance = None
+        cls._initialized = False
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable or disable GitOps detection.
@@ -141,7 +151,7 @@ class GitOpsCollector:
         """Print consolidated report of all detected GitOps-managed resources.
 
         Output format:
-        === GitOps-managed objects detected (N warnings) ===
+        === GitOps-related markers detected (N warnings) ===
         [primary] open-cluster-management-backup/BackupSchedule/acm-backup-schedule
           → label:app.kubernetes.io/managed-by
         [secondary] open-cluster-management/ManagedCluster/cluster1
@@ -157,7 +167,11 @@ class GitOpsCollector:
         count = self.get_detection_count()
         logger.warning("")
         logger.warning("=" * 60)
-        logger.warning("GitOps-managed objects detected (%d warning%s)", count, "s" if count != 1 else "")
+        logger.warning(
+            "GitOps-related markers detected (%d warning%s)",
+            count,
+            "s" if count != 1 else "",
+        )
         logger.warning("=" * 60)
         logger.warning(
             "Coordinate changes with GitOps to avoid drift after switchover."

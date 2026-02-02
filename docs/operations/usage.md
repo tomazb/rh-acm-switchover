@@ -27,6 +27,8 @@ Note: `--secondary-context` is required for all switchover operations unless you
 - ✓ ACM Observability detected (if present)
 - ✓ GitOps marker detection warnings for ArgoCD/Flux (unless `--skip-gitops-check`)
 
+Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
+
 **Expected output:**
 ```
 Pre-flight Validation Summary: 15/15 checks passed
