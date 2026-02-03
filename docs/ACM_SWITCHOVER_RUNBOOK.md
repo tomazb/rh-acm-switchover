@@ -226,6 +226,37 @@ done
 
 ---
 
+### Optional: Pause Argo CD Auto-Sync (when GitOps manages ACM resources)
+
+If Argo CD (or OpenShift GitOps) manages ACM resources (BackupSchedule, Restore, ManagedCluster, MCO, etc.), auto-sync can revert switchover steps. Pause auto-sync for ACM-touching Applications **before** Step 1 and resume only **after** Git/desired state has been updated for the new hub.
+
+**Detection (preflight):**
+```bash
+# Bash: include Argo CD check in preflight
+./scripts/preflight-check.sh --primary-context <primary> --secondary-context <secondary> --method passive --argocd-check
+
+# Python: validation-only with Argo CD report
+python acm_switchover.py --validate-only --primary-context <primary> --secondary-context <secondary> --argocd-check
+```
+
+**Pause (before starting switchover steps):**
+- **Automated (Python):** Run switchover with `--argocd-manage`; the tool pauses ACM-touching Applications on primary (and optionally secondary) during primary prep.
+- **Manual (Bash):** Use the Argo CD management script with a state file:
+  ```bash
+  ./scripts/argocd-manage.sh --context <primary> --mode pause --state-file .state/argocd-pause.json
+  # Optionally on secondary if GitOps there could mutate Restore/BackupSchedule before activation:
+  ./scripts/argocd-manage.sh --context <secondary> --mode pause --state-file .state/argocd-pause.json
+  ```
+
+**Resume (only after Git/desired state reflects the new hub):**
+- **During finalization (Python):** Add `--argocd-resume-after-switchover` to the switchover run.
+- **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>`
+- **Bash:** `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
+
+If you do not pause, GitOps may re-apply Git state and undo pause-backup, disable-auto-import, or activation changes. Do not resume until Git is updated for the new primary; otherwise Argo CD can revert the switchover.
+
+---
+
 ## Method 1: Continuous Passive Restore (Activation Path)
 
 > **Note on Step Numbering:** Method 1 uses sequential numbering (Step 1, 2, 3...) for the main switchover path. Method 2 uses "F" prefixed numbering (F1, F2, F3...) to distinguish its full-restore approach from the continuous passive restore path.
