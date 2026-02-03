@@ -835,6 +835,18 @@ detect_gitops_markers() {
         local key="${label%%=*}"
         local value="${label#*=}"
 
+        # Argo CD instance tracking keys (explicit match)
+        if [[ "$key" == "app.kubernetes.io/instance" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="label:${key} (UNRELIABLE)"
+            continue
+        fi
+        if [[ "$key" == "argocd.argoproj.io/instance" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="label:${key}"
+            continue
+        fi
+
         # managed-by detection (exact value match to avoid substring false positives)
         if [[ "$key" == "app.kubernetes.io/managed-by" ]]; then
             local value_lower
@@ -862,17 +874,28 @@ detect_gitops_markers() {
     # Check annotations for GitOps markers
     while IFS= read -r annotation; do
         [[ -z "$annotation" ]] && continue
+        local key="${annotation%%=*}"
         local annotation_lower
         annotation_lower=$(echo "$annotation" | tr '[:upper:]' '[:lower:]')
 
+        # Argo CD instance tracking key (explicit match)
+        if [[ "$key" == "app.kubernetes.io/instance" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="annotation:${key} (UNRELIABLE)"
+            continue
+        fi
+        if [[ "$key" == "argocd.argoproj.io/instance" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="annotation:${key}"
+            continue
+        fi
+
         # ArgoCD detection
         if [[ "$annotation_lower" == *"argocd"* ]] || [[ "$annotation_lower" == *"argoproj.io"* ]]; then
-            local key="${annotation%%=*}"
             [[ -n "$markers" ]] && markers+=","
             markers+="annotation:${key}"
         # Flux detection
         elif [[ "$annotation_lower" == *"fluxcd.io"* ]] || [[ "$annotation_lower" == *"toolkit.fluxcd.io"* ]]; then
-            local key="${annotation%%=*}"
             [[ -n "$markers" ]] && markers+=","
             markers+="annotation:${key}"
         fi
@@ -927,9 +950,9 @@ print_gitops_report() {
     echo ""
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     if [[ $count -eq 1 ]]; then
-        echo -e "${YELLOW}GitOps-managed objects detected ($count warning)${NC}"
+        echo -e "${YELLOW}GitOps-related markers detected ($count warning)${NC}"
     else
-        echo -e "${YELLOW}GitOps-managed objects detected ($count warnings)${NC}"
+        echo -e "${YELLOW}GitOps-related markers detected ($count warnings)${NC}"
     fi
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}Coordinate changes with GitOps to avoid drift after switchover.${NC}"

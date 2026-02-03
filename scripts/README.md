@@ -887,6 +887,8 @@ Pause or resume auto-sync on Argo CD Applications that touch ACM namespaces/kind
 
 **Options:** `--context`, `--mode pause|resume`, `--state-file` (required for pause/resume), `--target acm` (default), `--dry-run`, `--help`.
 
+Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
+
 ### Recommended sequence with GitOps
 
 1. Run preflight with Argo CD check: `./scripts/preflight-check.sh --primary-context <p> --secondary-context <s> --method passive --argocd-check`

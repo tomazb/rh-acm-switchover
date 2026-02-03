@@ -37,6 +37,13 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
         for key, value in source.items():
             # Defensive: convert to string in case of unexpected types
             value_str = str(value)
+            # app.kubernetes.io/instance is a generic label; flag as unreliable
+            if key == "app.kubernetes.io/instance":
+                markers.append(f"{source_name}:{key} (UNRELIABLE)")
+                continue
+            if key == "argocd.argoproj.io/instance":
+                markers.append(f"{source_name}:{key}")
+                continue
             if key == "app.kubernetes.io/managed-by":
                 if value_str.lower() in ("argocd", "fluxcd", "flux"):
                     markers.append(f"{source_name}:{key}")
@@ -138,7 +145,7 @@ class GitOpsCollector:
         """Print consolidated report of all detected GitOps-managed resources.
 
         Output format:
-        === GitOps-managed objects detected (N warnings) ===
+        === GitOps-related markers detected (N warnings) ===
         [primary] open-cluster-management-backup/BackupSchedule/acm-backup-schedule
           → label:app.kubernetes.io/managed-by
         [secondary] open-cluster-management/ManagedCluster/cluster1
@@ -154,7 +161,11 @@ class GitOpsCollector:
         count = self.get_detection_count()
         logger.warning("")
         logger.warning("=" * 60)
-        logger.warning("GitOps-managed objects detected (%d warning%s)", count, "s" if count != 1 else "")
+        logger.warning(
+            "GitOps-related markers detected (%d warning%s)",
+            count,
+            "s" if count != 1 else "",
+        )
         logger.warning("=" * 60)
         logger.warning("Coordinate changes with GitOps to avoid drift after switchover.")
         logger.warning("")

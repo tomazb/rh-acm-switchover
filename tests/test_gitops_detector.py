@@ -52,6 +52,17 @@ class TestDetectGitopsMarkers:
         assert "label:argocd.argoproj.io/instance" in markers
         assert len(markers) == 2
 
+    def test_detects_instance_label_as_unreliable(self):
+        """Test detection of generic instance label as unreliable."""
+        metadata = {
+            "labels": {
+                "app.kubernetes.io/instance": "my-app",
+            }
+        }
+        markers = detect_gitops_markers(metadata)
+        assert "label:app.kubernetes.io/instance (UNRELIABLE)" in markers
+        assert len(markers) == 1
+
     def test_detects_argocd_annotations(self):
         """Test detection of ArgoCD annotations."""
         metadata = {
@@ -359,7 +370,7 @@ class TestGitOpsCollector:
                 logged_messages.append(args[0])
 
         full_output = "\n".join(logged_messages)
-        assert "GitOps-managed objects detected (1 warning)" in full_output
+        assert "GitOps-related markers detected (1 warning)" in full_output
         assert "[primary]" in full_output
         assert "BackupSchedule" in full_output
 
@@ -390,7 +401,7 @@ class TestGitOpsCollector:
                 logged_messages.append(args[0])
 
         full_output = "\n".join(logged_messages)
-        assert "GitOps-managed objects detected (3 warnings)" in full_output
+        assert "GitOps-related markers detected (3 warnings)" in full_output
 
     @patch("lib.gitops_detector.logger")
     def test_print_report_truncates_long_lists(self, mock_logger):

@@ -239,6 +239,8 @@ If Argo CD (or OpenShift GitOps) manages ACM resources (BackupSchedule, Restore,
 python acm_switchover.py --validate-only --primary-context <primary> --secondary-context <secondary> --argocd-check
 ```
 
+Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
+
 **Pause (before starting switchover steps):**
 - **Automated (Python):** Run switchover with `--argocd-manage`; the tool pauses ACM-touching Applications on primary (and optionally secondary) during primary prep.
 - **Manual (Bash):** Use the Argo CD management script with a state file:
