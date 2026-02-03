@@ -4,6 +4,8 @@ Guide the operator through pausing BackupSchedule on the primary hub, with versi
 
 > **Reference**: [docs/ACM_SWITCHOVER_RUNBOOK.md — Step 1](../../../docs/ACM_SWITCHOVER_RUNBOOK.md#step-1-pause-backupschedule-on-primary-hub)
 
+**If Argo CD / GitOps manages the BackupSchedule:** Pause Argo CD auto-sync for ACM-touching Applications first (runbook: "Optional: Pause Argo CD Auto-Sync"), or run the switchover tool with `--argocd-manage` so it pauses those Applications during primary prep. Otherwise GitOps may immediately revert the pause.
+
 ---
 
 ## Conversation Flow
