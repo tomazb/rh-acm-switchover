@@ -284,6 +284,15 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
     return result
 
 
+@dry_run_skip(
+    message="Skipping Argo CD Application patch in dry-run",
+    return_value=lambda client, app, run_id: PauseResult(
+        namespace=(app.get("metadata", {}) or {}).get("namespace", ""),
+        name=(app.get("metadata", {}) or {}).get("name", ""),
+        original_sync_policy=dict((app.get("spec", {}) or {}).get("syncPolicy") or {}),
+        patched=False,
+    ),
+)
 def pause_autosync(
     client: KubeClient,
     app: Dict[str, Any],
