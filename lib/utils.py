@@ -69,6 +69,8 @@ def dry_run_skip(
             if obj is True:
                 logger = logging.getLogger("acm_switchover")
                 logger.info("[DRY-RUN] %s", message)
+                if callable(return_value):
+                    return return_value(self, *args, **kwargs)
                 return return_value
 
             return func(self, *args, **kwargs)
