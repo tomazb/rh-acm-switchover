@@ -296,7 +296,9 @@ class SecondaryActivation:
                 )
             except ApiException as e:
                 if getattr(e, "status", None) == 404:
-                    logger.info("Passive sync restore %s already deleted; continuing with activation restore", restore_name)
+                    logger.info(
+                        "Passive sync restore %s already deleted; continuing with activation restore", restore_name
+                    )
                 else:
                     raise FatalError(f"Failed to delete passive sync restore {restore_name}: {e}") from e
 

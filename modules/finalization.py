@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from kubernetes.client.rest import ApiException
 
-from lib.gitops_detector import record_gitops_markers
+from lib import argocd as argocd_lib
 from lib.constants import (
     ACM_NAMESPACE,
     AUTO_IMPORT_STRATEGY_DEFAULT,
@@ -41,6 +41,7 @@ from lib.constants import (
     VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import SwitchoverError
+from lib.gitops_detector import record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, dry_run_skip, is_acm_version_ge
 from lib.waiter import wait_for_condition
@@ -65,6 +66,7 @@ class Finalization:
         old_hub_action: str = "secondary",
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,
+        argocd_resume_after_switchover: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -75,6 +77,7 @@ class Finalization:
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.disable_observability_on_secondary = disable_observability_on_secondary
+        self.argocd_resume_after_switchover = argocd_resume_after_switchover
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -83,7 +86,7 @@ class Finalization:
         )
         self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
 
-    def finalize(self) -> bool:
+    def finalize(self) -> bool:  # noqa: C901
         """
         Execute finalization steps.
 
@@ -128,6 +131,12 @@ class Finalization:
 
             # Ensure auto-import strategy reset to default (ACM 2.14+)
             self._ensure_auto_import_default()
+
+            # Optional: Restore Argo CD auto-sync (only when explicitly requested)
+            if self.argocd_resume_after_switchover:
+                with self.state.step("resume_argocd_apps", logger) as should_run:
+                    if should_run:
+                        self._resume_argocd_apps()
 
             # Handle old primary hub based on --old-hub-action
             with self.state.step("handle_old_hub", logger) as should_run:
@@ -511,7 +520,7 @@ class Finalization:
             logger.info("No Velero log errors found for backup %s (recent logs checked)", backup_name)
 
     @dry_run_skip(message="Skipping backup integrity verification")
-    def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:
+    def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:  # noqa: C901
         """Verify latest backup status, logs, and recency.
 
         Backup age enforcement is skipped until a new backup is detected after enabling the schedule.
@@ -557,16 +566,12 @@ class Finalization:
                         namespace=BACKUP_NAMESPACE,
                     )
                     if not backup:
-                        raise SwitchoverError(
-                            f"Backup {backup_name} disappeared during integrity check"
-                        )
+                        raise SwitchoverError(f"Backup {backup_name} disappeared during integrity check")
                     poll_phase = backup.get("status", {}).get("phase", "unknown")
                     if poll_phase == "Completed":
                         return True, "completed"
                     if poll_phase in ("Failed", "PartiallyFailed"):
-                        raise SwitchoverError(
-                            f"Latest backup {backup_name} failed (phase={poll_phase})"
-                        )
+                        raise SwitchoverError(f"Latest backup {backup_name} failed (phase={poll_phase})")
                     return False, f"phase={poll_phase}"
 
                 completed = wait_for_condition(
@@ -1234,6 +1239,33 @@ class Finalization:
             )
         else:
             logger.info("%s is scaled down on old hub", component_name)
+
+    def _resume_argocd_apps(self) -> None:
+        """Restore auto-sync for Argo CD Applications recorded in state (only when --argocd-resume-after-switchover)."""
+        run_id = self.state.get_config("argocd_run_id")
+        paused_apps = self.state.get_config("argocd_paused_apps") or []
+        if not run_id or not paused_apps:
+            logger.info("No Argo CD paused apps in state; skipping resume")
+            return
+        logger.info("Resuming Argo CD auto-sync for %d Application(s) (run_id=%s)", len(paused_apps), run_id)
+        for entry in paused_apps:
+            if not isinstance(entry, dict):
+                continue
+            hub = entry.get("hub")
+            ns = entry.get("namespace")
+            name = entry.get("name")
+            orig = entry.get("original_sync_policy")
+            if not all([hub, ns, name, orig is not None]):
+                continue
+            client = self.primary if hub == "primary" else self.secondary
+            if not client:
+                logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
+                continue
+            result = argocd_lib.resume_autosync(client, ns, name, orig, run_id)
+            if result.restored:
+                logger.info("  Resumed %s/%s on %s", ns, name, hub)
+            else:
+                logger.debug("  Skip %s/%s: %s", ns, name, result.skip_reason or "not restored")
 
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""
