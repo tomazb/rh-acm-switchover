@@ -70,11 +70,11 @@ class GitOpsCollector:
     """
 
     _instance: Optional["GitOpsCollector"] = None
+    _initialized: bool = False
 
     def __new__(cls) -> "GitOpsCollector":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
         return cls._instance
 
     def __init__(self) -> None:
@@ -173,9 +173,7 @@ class GitOpsCollector:
             "s" if count != 1 else "",
         )
         logger.warning("=" * 60)
-        logger.warning(
-            "Coordinate changes with GitOps to avoid drift after switchover."
-        )
+        logger.warning("Coordinate changes with GitOps to avoid drift after switchover.")
         logger.warning("")
 
         for context, records in sorted(self._records.items()):

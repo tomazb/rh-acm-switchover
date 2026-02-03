@@ -664,3 +664,46 @@ class TestDecommissionAndSetupHelpers:
         monkeypatch.setattr("os.path.isfile", lambda path: False)
         logger = logging.getLogger("test")
         assert run_setup(args, logger) is False
+
+
+@pytest.mark.unit
+class TestArgocdResumeOnly:
+    def test_resume_only_fails_when_restore_fails(self):
+        from acm_switchover import _run_argocd_resume_only
+        from lib import argocd as argocd_lib
+
+        paused_apps = [
+            {
+                "hub": "primary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+            },
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {"prune": True}},
+            },
+        ]
+        state = Mock()
+        state.get_config.side_effect = lambda key: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.side_effect = [
+                argocd_lib.ResumeResult(namespace="argocd", name="app-1", restored=True),
+                argocd_lib.ResumeResult(
+                    namespace="argocd",
+                    name="app-2",
+                    restored=False,
+                    skip_reason="patch failed: 403 Forbidden",
+                ),
+            ]
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False

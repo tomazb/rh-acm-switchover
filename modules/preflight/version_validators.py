@@ -44,6 +44,7 @@ class KubeconfigValidator(BaseValidator):
 
     # Warn if token expires within this many hours
     TOKEN_EXPIRY_WARNING_HOURS = 4
+    method: str = "passive"
 
     def run(self, primary: KubeClient, secondary: KubeClient, method: str = "passive") -> None:
         """Run kubeconfig validation checks."""

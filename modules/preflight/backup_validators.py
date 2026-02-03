@@ -171,7 +171,7 @@ class BackupValidator(BaseValidator):
             logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
             return ""
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Run validation with primary client.
 
         Args:
@@ -288,7 +288,7 @@ class BackupScheduleValidator(BaseValidator):
     the old hub.
     """
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Check that BackupSchedule has useManagedServiceAccount enabled.
 
         Args:
@@ -566,7 +566,7 @@ class PassiveSyncValidator(BaseValidator):
 class ManagedClusterBackupValidator(BaseValidator):
     """Validates that all joined ManagedClusters are included in the latest backup."""
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Check that all joined ManagedClusters are in the latest managed-clusters backup."""
         try:
             # Get all joined ManagedClusters (excluding local-cluster)
