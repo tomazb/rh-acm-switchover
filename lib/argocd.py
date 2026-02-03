@@ -12,7 +12,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from kubernetes.client.rest import ApiException
+
 from lib.kube_client import KubeClient
+from lib.utils import dry_run_skip
 
 logger = logging.getLogger("acm_switchover")
 
@@ -322,6 +325,14 @@ def pause_autosync(
     return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=True)
 
 
+@dry_run_skip(
+    message="Would resume auto-sync",
+    return_value=lambda client, namespace, name, original_sync_policy, run_id: ResumeResult(
+        namespace=namespace,
+        name=name,
+        restored=True,
+    ),
+)
 def resume_autosync(
     client: KubeClient,
     namespace: str,
@@ -368,14 +379,31 @@ def resume_autosync(
         "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: None}},
         "spec": {"syncPolicy": original_sync_policy},
     }
-    client.patch_custom_resource(
-        group=ARGOCD_APP_GROUP,
-        version=ARGOCD_APP_VERSION,
-        plural=ARGOCD_APP_PLURAL,
-        name=name,
-        patch=patch,
-        namespace=namespace or None,
-    )
+    try:
+        client.patch_custom_resource(
+            group=ARGOCD_APP_GROUP,
+            version=ARGOCD_APP_VERSION,
+            plural=ARGOCD_APP_PLURAL,
+            name=name,
+            patch=patch,
+            namespace=namespace or None,
+        )
+    except ApiException as e:
+        status = getattr(e, "status", None)
+        reason = getattr(e, "reason", None)
+        detail = f"{status} {reason}".strip() if status or reason else str(e)
+        logger.warning(
+            "Failed to patch Application %s/%s to resume auto-sync: %s",
+            namespace,
+            name,
+            detail,
+        )
+        return ResumeResult(
+            namespace=namespace,
+            name=name,
+            restored=False,
+            skip_reason=f"patch failed: {detail}",
+        )
     return ResumeResult(namespace=namespace, name=name, restored=True)
 
 
