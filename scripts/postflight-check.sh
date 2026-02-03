@@ -578,46 +578,46 @@ fi
 
 if [[ "$NEW_HUB_VERSION" == "unknown" ]]; then
     check_fail "New hub: Could not determine ACM version. Skipping auto-import strategy check."
-fi
+else
+    # Check new hub auto-import strategy
+    NEW_HUB_STRATEGY=$(get_auto_import_strategy "$NEW_HUB_CONTEXT")
 
-# Check new hub auto-import strategy
-NEW_HUB_STRATEGY=$(get_auto_import_strategy "$NEW_HUB_CONTEXT")
-
-if [[ "$NEW_HUB_VERSION" != "unknown" ]] && is_acm_214_or_higher "$NEW_HUB_VERSION"; then
-    if [[ "$NEW_HUB_STRATEGY" == "error" ]]; then
-        check_fail "New hub: Could not retrieve autoImportStrategy (connection or API error)"
-    elif [[ "$NEW_HUB_STRATEGY" == "default" ]]; then
-        check_pass "New hub: Using default autoImportStrategy ($AUTO_IMPORT_STRATEGY_DEFAULT) - correct post-switchover state"
-    elif [[ "$NEW_HUB_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
-        check_pass "New hub: autoImportStrategy explicitly set to $AUTO_IMPORT_STRATEGY_DEFAULT"
-    else
-        check_warn "New hub: autoImportStrategy is set to '$NEW_HUB_STRATEGY' (non-default)"
-        echo -e "${YELLOW}       Post-switchover, this should be removed to restore default behavior.${NC}"
-        echo -e "${YELLOW}       To reset to default, run:${NC}"
-        echo -e "${YELLOW}         oc -n $MCE_NAMESPACE delete configmap $IMPORT_CONTROLLER_CONFIGMAP${NC}"
-        echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
-    fi
-elif [[ "$NEW_HUB_VERSION" != "unknown" ]]; then
-    check_pass "New hub: ACM version $NEW_HUB_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
-fi
-
-# Also check old hub if provided
-if [[ -n "$OLD_HUB_CONTEXT" ]]; then
-    if ! OLD_HUB_VERSION=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$OLD_HUB_VERSION" ]]; then
-        check_warn "Old hub: Could not determine ACM version. Skipping auto-import strategy check."
-        OLD_HUB_VERSION="unknown"
-    fi
-    OLD_HUB_STRATEGY=$(get_auto_import_strategy "$OLD_HUB_CONTEXT")
-    
-    if [[ "$OLD_HUB_VERSION" != "unknown" ]] && is_acm_214_or_higher "$OLD_HUB_VERSION"; then
-        if [[ "$OLD_HUB_STRATEGY" == "error" ]]; then
-            check_warn "Old hub: Could not retrieve autoImportStrategy (connection or API error)"
-        elif [[ "$OLD_HUB_STRATEGY" == "default" ]] || [[ "$OLD_HUB_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
-            check_pass "Old hub: autoImportStrategy is default/ImportOnly"
+    if is_acm_214_or_higher "$NEW_HUB_VERSION"; then
+        if [[ "$NEW_HUB_STRATEGY" == "error" ]]; then
+            check_fail "New hub: Could not retrieve autoImportStrategy (connection or API error)"
+        elif [[ "$NEW_HUB_STRATEGY" == "default" ]]; then
+            check_pass "New hub: Using default autoImportStrategy ($AUTO_IMPORT_STRATEGY_DEFAULT) - correct post-switchover state"
+        elif [[ "$NEW_HUB_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
+            check_pass "New hub: autoImportStrategy explicitly set to $AUTO_IMPORT_STRATEGY_DEFAULT"
         else
-            check_warn "Old hub: autoImportStrategy is set to '$OLD_HUB_STRATEGY'"
-            echo -e "${YELLOW}       This should be reset if no longer needed.${NC}"
+            check_warn "New hub: autoImportStrategy is set to '$NEW_HUB_STRATEGY' (non-default)"
+            echo -e "${YELLOW}       Post-switchover, this should be removed to restore default behavior.${NC}"
+            echo -e "${YELLOW}       To reset to default, run:${NC}"
+            echo -e "${YELLOW}         oc -n $MCE_NAMESPACE delete configmap $IMPORT_CONTROLLER_CONFIGMAP${NC}"
             echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
+        fi
+    else
+        check_pass "New hub: ACM version $NEW_HUB_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
+    fi
+
+    # Also check old hub if provided
+    if [[ -n "$OLD_HUB_CONTEXT" ]]; then
+        if ! OLD_HUB_VERSION=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$OLD_HUB_VERSION" ]]; then
+            check_warn "Old hub: Could not determine ACM version. Skipping auto-import strategy check."
+            OLD_HUB_VERSION="unknown"
+        fi
+        OLD_HUB_STRATEGY=$(get_auto_import_strategy "$OLD_HUB_CONTEXT")
+        
+        if [[ "$OLD_HUB_VERSION" != "unknown" ]] && is_acm_214_or_higher "$OLD_HUB_VERSION"; then
+            if [[ "$OLD_HUB_STRATEGY" == "error" ]]; then
+                check_warn "Old hub: Could not retrieve autoImportStrategy (connection or API error)"
+            elif [[ "$OLD_HUB_STRATEGY" == "default" ]] || [[ "$OLD_HUB_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
+                check_pass "Old hub: autoImportStrategy is default/ImportOnly"
+            else
+                check_warn "Old hub: autoImportStrategy is set to '$OLD_HUB_STRATEGY'"
+                echo -e "${YELLOW}       This should be reset if no longer needed.${NC}"
+                echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
+            fi
         fi
     fi
 fi

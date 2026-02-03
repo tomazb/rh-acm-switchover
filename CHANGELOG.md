@@ -13,11 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [1.5.5] - 2026-02-03
+
+### Changed
+
+- **Docs**: Updated architecture and findings report for GitOps detection/reporting and passive sync phase handling.
+
+### Fixed
+
 - **Argo CD auto-sync pause**: Treat `spec.syncPolicy.automated: {}` as enabled so pause removes auto-sync for those Applications.
 - **Argo CD pause scope**: Check Applications CRD per hub to avoid skipping secondary pause when primary lacks Argo CD.
 - **Validate-only guard**: Reject `--argocd-resume-only` with `--validate-only` to enforce no-change validation runs.
 - **Argo CD install reporting (scripts)**: Avoid labeling operator installs as vanilla and only fall back to cluster-wide scans when no ArgoCD instances are detected.
 - **Postflight ACM version detection (scripts)**: Fall back to jsonpath when MCH JSON is unavailable so auto-import strategy check doesn't fail spuriously.
+- **Argo CD resume-only**: Return non-success when state lacks `argocd_run_id` or paused apps to avoid false positives.
+- **Argo CD resume auto-sync**: Handle unexpected patch errors without propagating exceptions.
+- **Preflight GitOps marker collection (scripts)**: Run ClusterDeployment loop in current shell so detections persist.
+- **Postflight auto-import strategy (scripts)**: Skip strategy checks when the new hub ACM version is unknown.
 
 ## [1.5.4] - 2026-01-31
 

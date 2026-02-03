@@ -839,8 +839,8 @@ def _run_argocd_resume_only(
     run_id = state.get_config("argocd_run_id")
     paused_apps = state.get_config("argocd_paused_apps") or []
     if not run_id or not paused_apps:
-        logger.warning("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
-        return True
+        logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
+        return False
     logger.info("Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))", run_id, len(paused_apps))
     restored = 0
     failed = 0

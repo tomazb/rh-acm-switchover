@@ -18,9 +18,26 @@ This report details 21 hidden logical errors and performance issues identified t
 | False-Positive | 4 | #2, #6, #18, #20 |
 | Open | 0 | — |
 
-### Last updated: 2026-01-29
+### Last updated: 2026-02-03
 
 ---
+
+## Operational Reporting Updates (v1.5.4+)
+
+### GitOps Detection and Reporting
+
+- Preflight and postflight scripts now scan ACM resources for GitOps ownership markers (Argo CD / Flux) and consolidate all findings into a single GitOps report.
+- MCO warnings are consolidated into the GitOps report instead of per-resource warnings during MCO-related checks.
+- `--skip-gitops-check` disables marker detection and suppresses the GitOps report when drift warnings are intentionally skipped.
+- The report header `GitOps-related markers detected (N warnings)` uses `N` as the count of detected resources, not the number of markers.
+- The report groups entries by kind and truncates output per kind after the display limit, emitting `... and X more Kind(s)` to show hidden items.
+- Markers tagged with `(UNRELIABLE)` (for example `app.kubernetes.io/instance`) indicate weaker signals and should be treated as advisory only.
+- `app.kubernetes.io/managed-by` matching is now exact-value only (`argocd`, `flux`, `fluxcd`) to avoid substring false positives.
+- Bash counter increments in the GitOps report are guarded to avoid `set -e` exits while counting and truncating.
+
+### Passive Sync Validation
+
+- Passive sync restore validation accepts `Completed` alongside `Enabled` and `Finished` to avoid false failures when the restore controller reports `Completed`.
 
 ## Critical Issues (Must Fix)
 

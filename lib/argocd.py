@@ -413,6 +413,20 @@ def resume_autosync(
             restored=False,
             skip_reason=f"patch failed: {detail}",
         )
+    except Exception as e:
+        detail = str(e)
+        logger.warning(
+            "Failed to patch Application %s/%s to resume auto-sync: %s",
+            namespace,
+            name,
+            detail,
+        )
+        return ResumeResult(
+            namespace=namespace,
+            name=name,
+            restored=False,
+            skip_reason=f"patch failed: {detail}",
+        )
     return ResumeResult(namespace=namespace, name=name, restored=True)
 
 

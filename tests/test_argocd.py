@@ -195,6 +195,18 @@ class TestResumeAutosync:
         assert result.restored is False
         client.patch_custom_resource.assert_not_called()
 
+    def test_patch_exception_returns_skip_reason(self):
+        client = MagicMock()
+        client.get_custom_resource.return_value = {
+            "metadata": {"annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
+        }
+        client.patch_custom_resource.side_effect = RuntimeError("boom")
+        result = argocd_lib.resume_autosync(
+            client, "argocd", "app", {"automated": {"prune": True}}, "run-1"
+        )
+        assert result.restored is False
+        assert "patch failed" in (result.skip_reason or "").lower()
+
 
 @pytest.mark.unit
 class TestDetectArgocdInstallation:

@@ -668,6 +668,21 @@ class TestDecommissionAndSetupHelpers:
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
+    def test_resume_only_fails_when_state_missing(self):
+        from acm_switchover import _run_argocd_resume_only
+
+        state = Mock()
+        state.get_config.side_effect = lambda key: {
+            "argocd_run_id": None,
+            "argocd_paused_apps": [],
+        }.get(key)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+
     def test_resume_only_fails_when_restore_fails(self):
         from acm_switchover import _run_argocd_resume_only
         from lib import argocd as argocd_lib
