@@ -708,10 +708,15 @@ if [[ $ARGOCD_CHECK -eq 1 ]]; then
     section_header "16. Checking ArgoCD GitOps Management (Optional)"
     check_argocd_acm_resources "$PRIMARY_CONTEXT" "Primary hub"
     check_argocd_acm_resources "$SECONDARY_CONTEXT" "Secondary hub"
+    # Print GitOps detection report if any markers were found
+    print_gitops_report
+else
+    # If ArgoCD check is disabled, still show GitOps report under section 16 when present
+    if [[ ${#GITOPS_DETECTED_RESOURCES[@]} -gt 0 ]]; then
+        section_header "16. Checking ArgoCD GitOps Management (Optional)"
+        print_gitops_report
+    fi
 fi
-
-# Print GitOps detection report if any markers were found
-print_gitops_report
 
 # Summary and exit
 if print_summary "preflight"; then
