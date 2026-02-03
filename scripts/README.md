@@ -6,11 +6,16 @@ This directory contains automated validation scripts for ACM hub switchover oper
 
 These scripts automate the validation process before and after switchover, ensuring safety and operational readiness.
 
+> ⚠️ **Safety note:** Some utilities mutate cluster state. Review usage and required credentials/state files before running in production.
+
+> **Shell requirement:** These scripts require Bash 4 or newer because shared helpers use associative arrays.
+
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
 | [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
 | [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
 | [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
+| [`argocd-manage.sh`](argocd-manage.sh) | Pause or resume Argo CD auto-sync for ACM-touching Applications | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume |
 | [`setup-rbac.sh`](setup-rbac.sh) | Deploy RBAC and generate kubeconfigs | Initial setup of switchover access |
 | [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
 | [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access |
@@ -198,6 +203,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 - `--primary-context` - Kubernetes context for primary hub (required)
 - `--secondary-context` - Kubernetes context for secondary hub (required)
 - `--method` - Switchover method: `passive` or `full` (required)
+- `--argocd-check` - Run Argo CD discovery and report ACM-touching Applications (optional)
 - `--help` - Show help message
 
 ### What It Checks
