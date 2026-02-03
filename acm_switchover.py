@@ -843,6 +843,7 @@ def _run_argocd_resume_only(
         return True
     logger.info("Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))", run_id, len(paused_apps))
     restored = 0
+    failed = 0
     for entry in paused_apps:
         if not isinstance(entry, dict):
             continue
@@ -861,8 +862,12 @@ def _run_argocd_resume_only(
             restored += 1
             logger.info("  Resumed %s/%s on %s", ns, name, hub)
         else:
-            logger.info("  Skip %s/%s: %s", ns, name, result.skip_reason or "not restored")
+            failed += 1
+            logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
     logger.info("Restored %d of %d Application(s).", restored, len(paused_apps))
+    if failed:
+        logger.error("Argo CD auto-sync restore failed for %d Application(s).", failed)
+        return False
     return True
 
 
