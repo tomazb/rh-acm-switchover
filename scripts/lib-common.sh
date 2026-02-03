@@ -1073,7 +1073,7 @@ check_argocd_acm_resources() {
             echo ""
         fi
 
-        while IFS=$'\t' read -r argocd_ns argocd_name; do
+        while IFS=$'\t' read -r argocd_ns _; do
             local apps_json
             apps_json=$("$CLUSTER_CLI_BIN" --context="$context" -n "$argocd_ns" get applications.argoproj.io -o json 2>/dev/null || echo '{"items":[]}')
             local app_output
