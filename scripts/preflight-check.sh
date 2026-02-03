@@ -485,14 +485,14 @@ if [[ $CDS -eq 0 ]]; then
     check_pass "No ClusterDeployments found (no Hive-managed clusters)"
 else
     # Detect GitOps markers on each ClusterDeployment
-    echo "$CDS_JSON" | jq -c '.items[]' 2>/dev/null | while read -r CD_JSON; do
+    while read -r CD_JSON; do
         CD_NAMESPACE=$(echo "$CD_JSON" | jq -r '.metadata.namespace')
         CD_NAME=$(echo "$CD_JSON" | jq -r '.metadata.name')
         GITOPS_MARKERS=$(detect_gitops_markers "$CD_JSON")
         if [[ -n "$GITOPS_MARKERS" ]]; then
             collect_gitops_markers "primary" "$CD_NAMESPACE" "ClusterDeployment" "$CD_NAME" "$GITOPS_MARKERS"
         fi
-    done
+    done < <(echo "$CDS_JSON" | jq -c '.items[]' 2>/dev/null)
 
     MISSING_PRESERVE=$(echo "$CDS_JSON" | \
         jq -r '.items[] | select(.spec.preserveOnDelete != true) | "\(.metadata.namespace)/\(.metadata.name)"' | wc -l)
