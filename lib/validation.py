@@ -322,7 +322,7 @@ class InputValidator:
         return re.sub(r"[^A-Za-z0-9._-]", "_", value)
 
     @staticmethod
-    def validate_all_cli_args(args: object) -> None:
+    def validate_all_cli_args(args: object) -> None:  # noqa: C901
         """
         Validate all CLI arguments comprehensively.
 
@@ -372,6 +372,8 @@ class InputValidator:
         is_setup = hasattr(args, "setup") and args.setup
         if not is_decommission and not is_setup:
             if hasattr(args, "secondary_context") and not args.secondary_context:
+                if hasattr(args, "argocd_resume_only") and args.argocd_resume_only:
+                    raise ValidationError("--argocd-resume-only requires --secondary-context to resolve state file")
                 raise ValidationError("secondary-context is required for switchover operations")
 
         # Validate activation-method combinations
@@ -392,6 +394,13 @@ class InputValidator:
                 raise ValidationError("--disable-observability-on-secondary cannot be used with --decommission")
             if hasattr(args, "old_hub_action") and args.old_hub_action != "secondary":
                 raise ValidationError("--disable-observability-on-secondary requires --old-hub-action secondary")
+
+        # --argocd-resume-only needs state file (primary + secondary context) to restore from
+        if hasattr(args, "argocd_resume_only") and args.argocd_resume_only:
+            if hasattr(args, "validate_only") and args.validate_only:
+                raise ValidationError("--argocd-resume-only cannot be used with --validate-only")
+            if not (hasattr(args, "secondary_context") and args.secondary_context):
+                raise ValidationError("--argocd-resume-only requires --secondary-context to resolve state file")
 
         # Validate setup-specific arguments
         if is_setup:

@@ -35,6 +35,7 @@ from lib.constants import (
     VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import FatalError, SwitchoverError
+from lib.gitops_detector import record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
 from lib.waiter import wait_for_condition
@@ -217,13 +218,23 @@ class SecondaryActivation:
         if not restore:
             raise FatalError(f"{restore_name} not found on secondary hub")
 
+        # Record GitOps markers if present
+        metadata = restore.get("metadata", {})
+        record_gitops_markers(
+            context="secondary",
+            namespace=BACKUP_NAMESPACE,
+            kind="Restore",
+            name=restore_name,
+            metadata=metadata,
+        )
+
         status = restore.get("status", {})
         phase = status.get("phase", "unknown")
         message = status.get("lastMessage", "")
 
         # "Enabled" = continuous sync running
-        # "Finished" = initial sync completed successfully (also valid for activation)
-        if phase not in ("Enabled", "Finished"):
+        # "Finished"/"Completed" = initial sync completed successfully (also valid for activation)
+        if phase not in ("Enabled", "Finished", "Completed"):
             raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
 
         logger.info("Passive sync verified (%s): %s", phase, message)
@@ -285,7 +296,9 @@ class SecondaryActivation:
                 )
             except ApiException as e:
                 if getattr(e, "status", None) == 404:
-                    logger.info("Passive sync restore %s already deleted; continuing with activation restore", restore_name)
+                    logger.info(
+                        "Passive sync restore %s already deleted; continuing with activation restore", restore_name
+                    )
                 else:
                     raise FatalError(f"Failed to delete passive sync restore {restore_name}: {e}") from e
 
@@ -755,11 +768,11 @@ class SecondaryActivation:
             message = status.get("lastMessage", "")
 
             # For passive sync, "Enabled" means the restore is actively syncing - this is the success state
-            # For full restore, "Finished" means the restore completed
+            # For full restore, "Finished"/"Completed" mean the restore completed
             if self.method == "passive" and phase == "Enabled":
                 return True, message or "passive sync enabled and running"
-            if phase == "Finished":
-                return True, message or "restore finished"
+            if phase in ("Finished", "Completed"):
+                return True, message or "restore completed"
             if phase in ("Failed", "PartiallyFailed", "FinishedWithErrors", "FailedWithErrors"):
                 raise FatalError(f"Restore failed: {phase} - {message}")
 

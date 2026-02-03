@@ -226,6 +226,86 @@ class TestSecondaryActivation:
 
         assert result is False
 
+    @patch("modules.activation.time.sleep")
+    @patch("modules.activation.wait_for_condition")
+    def test_verify_passive_sync_completed_phase_is_valid(
+        self, mock_wait, mock_sleep, activation_passive, mock_secondary_client
+    ):
+        """Test that phase=Completed is treated as a ready passive sync state.
+
+        This test fully mocks the activate() flow so patch verification succeeds:
+        - time.sleep is patched to avoid real sleeps
+        - get_custom_resource returns increasing resourceVersion after patch
+        - patch_custom_resource returns a dict including the patched spec
+        - downstream Velero/ManagedCluster checks are mocked
+        """
+        mock_wait.return_value = True
+        mock_sleep.return_value = None
+
+        patch_applied = {"value": False}
+
+        def list_custom_resources_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores":
+                return [
+                    {
+                        "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                        "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                    }
+                ]
+            if kwargs.get("plural") == "managedclusters":
+                return [
+                    {"metadata": {"name": "cluster1"}},
+                    {"metadata": {"name": "local-cluster"}},
+                ]
+            return []
+
+        mock_secondary_client.list_custom_resources.side_effect = list_custom_resources_side_effect
+
+        def get_custom_resource_side_effect(**kwargs):
+            # Passive sync Restore (used by _verify_passive_sync, _get_restore_or_raise, and _verify_patch_applied)
+            if kwargs.get("plural") == "restores" and kwargs.get("name") == RESTORE_PASSIVE_SYNC_NAME:
+                resource_version = "101" if patch_applied["value"] else "100"
+                spec = {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}
+                if patch_applied["value"]:
+                    spec[SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME] = VELERO_BACKUP_LATEST
+
+                return {
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": resource_version},
+                    "status": {
+                        "phase": "Completed",
+                        "lastMessage": "Initial sync complete",
+                        "veleroManagedClustersRestoreName": "test-velero-restore",
+                    },
+                    "spec": spec,
+                }
+
+            # Velero Restore (defensive: only needed if wait_for_condition calls the poller)
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
+                return {
+                    "status": {
+                        "phase": "Completed",
+                        "progress": {"itemsRestored": 100},
+                    }
+                }
+
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+
+        def patch_custom_resource_side_effect(**kwargs):
+            patch_applied["value"] = True
+            return {
+                "spec": {
+                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
+                }
+            }
+
+        mock_secondary_client.patch_custom_resource.side_effect = patch_custom_resource_side_effect
+
+        result = activation_passive.activate()
+
+        assert result is True
+
     def test_verify_passive_sync_wrong_phase(self, activation_passive, mock_secondary_client):
         """Test failure when passive sync is in wrong phase."""
         # Discover the restore, but report a failing status

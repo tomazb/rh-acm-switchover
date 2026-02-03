@@ -115,6 +115,21 @@ oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync \
 
 ---
 
+### Argo CD / GitOps (optional)
+
+If Argo CD or OpenShift GitOps manages ACM resources, include Argo CD discovery in preflight so the operator can plan to pause auto-sync before switchover steps.
+
+**Automated (recommended):**
+```bash
+./scripts/preflight-check.sh --primary-context <primary> --secondary-context <secondary> --method passive --argocd-check
+# Or Python:
+python acm_switchover.py --validate-only --primary-context <primary> --secondary-context <secondary> --argocd-check
+```
+
+**Decision:** If the report shows ACM-touching Applications, advise pausing auto-sync before Step 1 (see runbook "Optional: Pause Argo CD Auto-Sync") or using the switchover tool with `--argocd-manage`. Resume only after Git/desired state is updated for the new hub.
+
+---
+
 ### ACM 2.14+: Auto-Import Strategy Check
 
 ```bash
@@ -165,6 +180,7 @@ Suggest using the automated script:
   --primary-context <primary> \
   --secondary-context <secondary> \
   --method passive  # or "full" for Method 2
+# If GitOps (Argo CD) manages ACM resources, add: --argocd-check
 ```
 
 ---
