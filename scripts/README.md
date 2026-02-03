@@ -11,6 +11,7 @@ These scripts automate the validation process before and after switchover, ensur
 | [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
 | [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
 | [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
+| [`argocd-manage.sh`](argocd-manage.sh) | Pause or resume Argo CD auto-sync for ACM-touching Applications | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume |
 | [`setup-rbac.sh`](setup-rbac.sh) | Deploy RBAC and generate kubeconfigs | Initial setup of switchover access |
 | [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
 | [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access |
@@ -198,6 +199,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 - `--primary-context` - Kubernetes context for primary hub (required)
 - `--secondary-context` - Kubernetes context for secondary hub (required)
 - `--method` - Switchover method: `passive` or `full` (required)
+- `--argocd-check` - Run Argo CD discovery and report ACM-touching Applications (optional)
 - `--help` - Show help message
 
 ### What It Checks
@@ -859,6 +861,40 @@ graph TD
     style U fill:#ffd43b
     style W fill:#51cf66
 ```
+
+---
+
+## Argo CD Management Script
+
+**File:** `argocd-manage.sh`
+
+### Purpose
+
+Pause or resume auto-sync on Argo CD Applications that touch ACM namespaces/kinds, so GitOps does not revert switchover steps. Uses a JSON state file to record original sync policies and restore them safely.
+
+### Usage
+
+```bash
+# Pause ACM-touching Applications on a hub (store state for later resume)
+./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause.json
+
+# Resume auto-sync using saved state (only after Git/desired state updated for target hub)
+./scripts/argocd-manage.sh --context <kubecontext> --mode resume --state-file .state/argocd-pause.json
+
+# Dry-run to see which apps would be paused
+./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause.json --dry-run
+```
+
+**Options:** `--context`, `--mode pause|resume`, `--state-file` (required for pause/resume), `--target acm` (default), `--dry-run`, `--help`.
+
+### Recommended sequence with GitOps
+
+1. Run preflight with Argo CD check: `./scripts/preflight-check.sh --primary-context <p> --secondary-context <s> --method passive --argocd-check`
+2. Pause ACM-touching Applications on primary (and optionally secondary): `./scripts/argocd-manage.sh --context <p> --mode pause --state-file .state/argocd-pause.json` (repeat for secondary if desired)
+3. Run switchover (Python tool or manual runbook steps)
+4. After updating Git/desired state for the new hub, resume: `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
+
+The Python tool can perform pause/resume during switchover when using `--argocd-manage` and optionally `--argocd-resume-after-switchover` or `--argocd-resume-only`; see [usage.md](../docs/operations/usage.md).
 
 ---
 

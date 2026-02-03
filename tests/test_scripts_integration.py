@@ -464,8 +464,14 @@ EOF
     "--context=new-hub get namespace open-cluster-management-observability")
         exit 0
         ;;
-    *"--context=new-hub"*"get "*"multiclusterobservability"*"observability"*"-n open-cluster-management-observability"*)
+    *"--context=new-hub"*"get "*"multiclusterobservability.observability.open-cluster-management.io"*"observability"*"jsonpath"*)
         echo "True"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"multiclusterobservability.observability.open-cluster-management.io"*"observability"*" -o json"*)
+        cat << 'MCO_JSON'
+{"metadata":{"name":"observability"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
+MCO_JSON
         exit 0
         ;;
     "--context=new-hub get pods -n open-cluster-management-observability -l "*"app=observability-grafana"*" --no-headers")

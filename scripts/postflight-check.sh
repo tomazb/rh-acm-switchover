@@ -573,7 +573,7 @@ if [[ -n "$NEW_HUB_MCH_JSON" && "$NEW_HUB_MCH_JSON" != "{}" ]]; then
     fi
     NEW_HUB_VERSION=$(echo "$NEW_HUB_MCH_JSON" | jq -r '.status.currentVersion // "unknown"')
 else
-    NEW_HUB_VERSION="unknown"
+    NEW_HUB_VERSION=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
 fi
 
 if [[ "$NEW_HUB_VERSION" == "unknown" ]]; then
