@@ -7,7 +7,7 @@ and collect warnings to help operators coordinate changes with their GitOps tool
 
 import logging
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("acm_switchover")
 
@@ -29,7 +29,7 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
     Returns:
         List of marker strings in format "label:key" or "annotation:key"
     """
-    markers: List[str] = []
+    markers_set: Set[str] = set()
     labels = metadata.get("labels") or {}
     annotations = metadata.get("annotations") or {}
 
@@ -39,25 +39,26 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
             value_str = str(value)
             # app.kubernetes.io/instance is a generic label; flag as unreliable
             if key == "app.kubernetes.io/instance":
-                markers.append(f"{source_name}:{key} (UNRELIABLE)")
+                markers_set.add(f"{source_name}:{key} (UNRELIABLE)")
                 continue
             if key == "argocd.argoproj.io/instance":
-                markers.append(f"{source_name}:{key}")
+                markers_set.add(f"{source_name}:{key}")
                 continue
             if key == "app.kubernetes.io/managed-by":
                 if value_str.lower() in ("argocd", "fluxcd", "flux"):
-                    markers.append(f"{source_name}:{key}")
+                    markers_set.add(f"{source_name}:{key}")
                 continue
 
             combined = f"{key}={value_str}".lower()
+            # Use separate ifs so one value can match multiple tools (e.g. "argocd-and-flux")
             if "argocd" in combined or "argoproj.io" in combined:
-                markers.append(f"{source_name}:{key}")
-            elif "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
-                markers.append(f"{source_name}:{key}")
+                markers_set.add(f"{source_name}:{key}")
+            if "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
+                markers_set.add(f"{source_name}:{key}")
 
     _scan(labels, "label")
     _scan(annotations, "annotation")
-    return markers
+    return sorted(markers_set)
 
 
 class GitOpsCollector:
@@ -91,7 +92,13 @@ class GitOpsCollector:
 
     @classmethod
     def reset(cls) -> None:
-        """Reset the singleton instance (primarily for testing)."""
+        """Reset the singleton instance (primarily for testing).
+
+        Clearing _instance allows the next get_instance() to create a new
+        instance whose __init__ will run fully (class _initialized stays
+        False). When adding new instance state in __init__, no change to
+        reset() is needed.
+        """
         cls._instance = None
 
     def set_enabled(self, enabled: bool) -> None:
