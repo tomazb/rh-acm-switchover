@@ -20,6 +20,8 @@ pip-audit>=2.6.0
 # Patched transitive dependencies (pip-audit output)
 authlib>=1.6.6
 filelock>=3.20.3
+cryptography>=46.0.5
+pillow>=12.1.1
 
 # Additional testing utilities
 coverage>=7.3.0
