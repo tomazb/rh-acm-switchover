@@ -901,7 +901,10 @@ detect_gitops_markers() {
         fi
     done <<< "$annotations"
 
-    echo "$markers"
+    # Deduplicate and return comma-separated (deterministic order)
+    if [[ -n "$markers" ]]; then
+        echo "$markers" | tr ',' '\n' | sort -u | paste -sd ',' -
+    fi
 }
 
 # Collect a GitOps-managed resource for later reporting
