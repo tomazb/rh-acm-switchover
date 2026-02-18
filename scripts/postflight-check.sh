@@ -308,6 +308,10 @@ section_header "5. Checking Backup Configuration"
 BACKUP_SCHEDULE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
 if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
     SCHEDULE_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "")
+    # When no BackupSchedule exists, jq '.items[0]' outputs the literal "null"; treat as empty
+    if [[ "$SCHEDULE_JSON" == "null" ]]; then
+        SCHEDULE_JSON=""
+    fi
     SCHEDULE_NAME=$(echo "$SCHEDULE_JSON" | jq -r '.metadata.name // ""' 2>/dev/null || echo "")
     PAUSED=$(echo "$SCHEDULE_JSON" | jq -r '.spec.paused // false' 2>/dev/null || echo "")
 
