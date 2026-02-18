@@ -280,8 +280,8 @@ class TestFinalization:
             }
         ]
         mock_secondary_client.get_pods.return_value = []
-        finalization.state.get_config.side_effect = (
-            lambda key, default=None: True if key == "new_backup_detected" else None
+        finalization.state.get_config.side_effect = lambda key, default=None: (
+            True if key == "new_backup_detected" else None
         )
 
         with pytest.raises(SwitchoverError):
@@ -298,8 +298,8 @@ class TestFinalization:
             }
         ]
         mock_secondary_client.get_pods.return_value = []
-        finalization.state.get_config.side_effect = (
-            lambda key, default=None: enabled_ts if key == "backup_schedule_enabled_at" else True
+        finalization.state.get_config.side_effect = lambda key, default=None: (
+            enabled_ts if key == "backup_schedule_enabled_at" else True
         )
 
         finalization._verify_backup_integrity(max_age_seconds=600)

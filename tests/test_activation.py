@@ -511,7 +511,9 @@ class TestSecondaryActivation:
         assert kwargs["name"] == "cluster-a"
         assert kwargs["patch"]["metadata"]["annotations"][IMMEDIATE_IMPORT_ANNOTATION] == ""
 
-    def test_apply_immediate_import_annotations_handles_completed_value(self, mock_secondary_client, mock_state_manager):
+    def test_apply_immediate_import_annotations_handles_completed_value(
+        self, mock_secondary_client, mock_state_manager
+    ):
         """Ensure Completed annotations are reset via delete-and-add."""
         mock_state_manager.get_config.return_value = "2.14.1"
         activation = SecondaryActivation(
@@ -535,7 +537,9 @@ class TestSecondaryActivation:
         assert first_call.kwargs["patch"]["metadata"]["annotations"][IMMEDIATE_IMPORT_ANNOTATION] is None
         assert second_call.kwargs["patch"]["metadata"]["annotations"][IMMEDIATE_IMPORT_ANNOTATION] == ""
 
-    def test_apply_immediate_import_annotations_skips_for_sync_strategy(self, mock_secondary_client, mock_state_manager):
+    def test_apply_immediate_import_annotations_skips_for_sync_strategy(
+        self, mock_secondary_client, mock_state_manager
+    ):
         """Skip annotation when autoImportStrategy already ImportAndSync."""
         mock_state_manager.get_config.return_value = "2.14.2"
         activation = SecondaryActivation(
@@ -553,9 +557,7 @@ class TestSecondaryActivation:
         mock_secondary_client.list_custom_resources.assert_not_called()
         mock_secondary_client.patch_managed_cluster.assert_not_called()
 
-    def test_apply_immediate_import_annotations_raises_on_failures(
-        self, mock_secondary_client, mock_state_manager
-    ):
+    def test_apply_immediate_import_annotations_raises_on_failures(self, mock_secondary_client, mock_state_manager):
         """Ensure failures raise and do not mark the step completed."""
         mock_state_manager.get_config.return_value = "2.14.0"
         activation = SecondaryActivation(

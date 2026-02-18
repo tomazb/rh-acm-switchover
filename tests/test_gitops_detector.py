@@ -144,7 +144,7 @@ class TestDetectGitopsMarkers:
             },
             "annotations": {
                 "description": "My application",
-            }
+            },
         }
         markers = detect_gitops_markers(metadata)
         assert markers == []
@@ -171,7 +171,7 @@ class TestDetectGitopsMarkers:
             },
             "annotations": {
                 "ArgoCD.argoproj.io/sync-wave": "1",  # Capital in key
-            }
+            },
         }
         markers = detect_gitops_markers(metadata)
         assert "label:app.kubernetes.io/managed-by" in markers

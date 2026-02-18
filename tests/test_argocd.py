@@ -81,9 +81,7 @@ class TestFindAcmTouchingApps:
         assert len(result) == 0
 
     def test_excludes_app_with_no_status_resources(self):
-        apps = [
-            {"metadata": {"namespace": "argocd", "name": "no-status"}, "status": {}}
-        ]
+        apps = [{"metadata": {"namespace": "argocd", "name": "no-status"}, "status": {}}]
         result = argocd_lib.find_acm_touching_apps(apps)
         assert len(result) == 0
 
@@ -166,9 +164,7 @@ class TestResumeAutosync:
         client.get_custom_resource.return_value = {
             "metadata": {"annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "other-run"}},
         }
-        result = argocd_lib.resume_autosync(
-            client, "argocd", "app", {"automated": {}}, "run-1"
-        )
+        result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {}}, "run-1")
         assert result.restored is False
         assert "mismatch" in (result.skip_reason or "").lower()
         client.patch_custom_resource.assert_not_called()
@@ -179,9 +175,7 @@ class TestResumeAutosync:
             "metadata": {"annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
         }
         client.patch_custom_resource.return_value = {}
-        result = argocd_lib.resume_autosync(
-            client, "argocd", "app", {"automated": {"prune": True}}, "run-1"
-        )
+        result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {"prune": True}}, "run-1")
         assert result.restored is True
         client.patch_custom_resource.assert_called_once()
         call_kw = client.patch_custom_resource.call_args[1]
@@ -201,9 +195,7 @@ class TestResumeAutosync:
             "metadata": {"annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
         }
         client.patch_custom_resource.side_effect = RuntimeError("boom")
-        result = argocd_lib.resume_autosync(
-            client, "argocd", "app", {"automated": {"prune": True}}, "run-1"
-        )
+        result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {"prune": True}}, "run-1")
         assert result.restored is False
         assert "patch failed" in (result.skip_reason or "").lower()
 
