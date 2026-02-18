@@ -152,11 +152,9 @@ class TestStateManager:
     def test_get_last_error_phase_invalid_phase(self, state_manager):
         """Test get_last_error_phase handles invalid phase gracefully."""
         # Manually add an error with an invalid phase
-        state_manager.state["errors"].append({
-            "error": "Test error",
-            "phase": "invalid_phase",
-            "timestamp": "2026-01-29T12:00:00+00:00"
-        })
+        state_manager.state["errors"].append(
+            {"error": "Test error", "phase": "invalid_phase", "timestamp": "2026-01-29T12:00:00+00:00"}
+        )
 
         result = state_manager.get_last_error_phase()
         assert result is None
@@ -164,10 +162,7 @@ class TestStateManager:
     def test_get_last_error_phase_missing_phase_field(self, state_manager):
         """Test get_last_error_phase handles missing phase field."""
         # Manually add an error without phase field
-        state_manager.state["errors"].append({
-            "error": "Test error",
-            "timestamp": "2026-01-29T12:00:00+00:00"
-        })
+        state_manager.state["errors"].append({"error": "Test error", "timestamp": "2026-01-29T12:00:00+00:00"})
 
         result = state_manager.get_last_error_phase()
         assert result is None
