@@ -1256,20 +1256,38 @@ class Finalization:
 
     def _resume_argocd_apps(self) -> None:
         """Restore auto-sync for Argo CD Applications recorded in state (only when --argocd-resume-after-switchover)."""
+        if self.state.get_config("argocd_pause_dry_run", False):
+            raise SwitchoverError(
+                "Argo CD auto-sync resume requested, but the pause step was run in dry-run mode. "
+                "Re-run pause without --dry-run to generate resumable state."
+            )
         run_id = self.state.get_config("argocd_run_id")
         paused_apps = self.state.get_config("argocd_paused_apps") or []
         if not run_id or not paused_apps:
             logger.info("No Argo CD paused apps in state; skipping resume")
             return
-        logger.info("Resuming Argo CD auto-sync for %d Application(s) (run_id=%s)", len(paused_apps), run_id)
+        logger.info(
+            "Resuming Argo CD auto-sync for %d Application(s) (run_id=%s)",
+            len(paused_apps),
+            run_id,
+        )
+        failures = 0
         for entry in paused_apps:
             if not isinstance(entry, dict):
+                failures += 1
+                logger.warning("  Skip entry with unexpected format in Argo CD pause state")
                 continue
             hub = entry.get("hub")
             ns = entry.get("namespace")
             name = entry.get("name")
             orig = entry.get("original_sync_policy")
+            if entry.get("dry_run"):
+                failures += 1
+                logger.warning("  Skip %s/%s (pause was dry-run only)", ns, name)
+                continue
             if not all([hub, ns, name, orig is not None]):
+                failures += 1
+                logger.warning("  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)", hub, ns, name)
                 continue
             if hub == "primary":
                 client = self.primary
@@ -1280,6 +1298,7 @@ class Finalization:
                 logger.warning("  Skip %s/%s (unrecognized hub=%s)", ns, name, hub)
                 continue
             if not client:
+                failures += 1
                 logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
                 continue
             result = argocd_lib.resume_autosync(client, ns, name, orig, run_id)
@@ -1288,7 +1307,11 @@ class Finalization:
             elif argocd_lib.is_resume_noop(result):
                 logger.info("  Already resumed %s/%s on %s", ns, name, hub)
             else:
-                logger.debug("  Skip %s/%s: %s", ns, name, result.skip_reason or "not restored")
+                failures += 1
+                logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
+
+        if failures:
+            raise SwitchoverError(f"Argo CD auto-sync restore failed for {failures} Application(s)")
 
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""

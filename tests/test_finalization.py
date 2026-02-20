@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.finalization as finalization_module
+from lib import argocd as argocd_lib
 from lib.exceptions import SwitchoverError
 
 Finalization = finalization_module.Finalization
@@ -217,7 +218,6 @@ class TestFinalization:
 
             with pytest.raises(SwitchoverError):
                 fin._resume_argocd_apps()
-
     def test_resume_argocd_apps_allows_marker_missing_retry(
         self,
         mock_secondary_client,
