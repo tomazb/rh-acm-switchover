@@ -1,7 +1,7 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.5.3  
-**Last Updated**: January 29, 2026
+**Version**: 1.5.5
+**Last Updated**: February 20, 2026
 
 ## Project Structure
 

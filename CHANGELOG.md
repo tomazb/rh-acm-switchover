@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Argo CD pause error handling**: Wrap `patch_custom_resource` in `pause_autosync` with the same `try/except` structure used by `resume_autosync`; returns `patched=False` on failure instead of propagating uncaught exceptions.
+- **GitOps marker recording**: Guard both `record_gitops_markers` calls in `backup_validators.py` with `try/except` so detection failures emit a warning but do not fail the preflight check.
+- **Test fixture consistency**: `test_resume_argocd_apps_raises_on_failure` now uses the shared `mock_state_manager` and `mock_backup_manager` fixtures instead of inline `Mock()`.
+- **CodeQL security**: Fix incomplete URL substring sanitization in `gitops_detector.py` (use key-prefix boundary checks instead of `in` substring); suppress false-positive clear-text logging alert in `waiter.py`.
+- **Docs**: Bump Last Updated dates in `architecture.md` and `ACM_SWITCHOVER_RUNBOOK.md`.
+
 ## [1.5.5] - 2026-02-03
 
 ### Changed

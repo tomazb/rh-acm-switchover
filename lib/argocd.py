@@ -172,7 +172,12 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
             )
             for a in argocds:
                 meta = a.get("metadata", {})
-                instances.append({"namespace": meta.get("namespace", ""), "name": meta.get("name", "")})
+                instances.append(
+                    {
+                        "namespace": meta.get("namespace", ""),
+                        "name": meta.get("name", ""),
+                    }
+                )
         except Exception as e:
             logger.debug("Failed to list ArgoCD instances: %s", e)
         install_type = "operator"
@@ -207,7 +212,13 @@ def _application_namespaces(client: KubeClient) -> List[str]:
                 plural=ARGOCD_APP_PLURAL,
                 namespace=None,
             )
-            return list({a.get("metadata", {}).get("namespace", "") for a in apps if a.get("metadata")})
+            return list(
+                {
+                    a.get("metadata", {}).get("namespace", "")
+                    for a in apps
+                    if a.get("metadata")
+                }
+            )
         except Exception as e:
             logger.debug("Failed to list Applications cluster-wide: %s", e)
             return []
@@ -219,7 +230,11 @@ def _application_namespaces(client: KubeClient) -> List[str]:
             plural=ARGOCD_INSTANCE_CRD_PLURAL,
             namespace=None,
         )
-        return [a.get("metadata", {}).get("namespace", "") for a in argocds if a.get("metadata", {}).get("namespace")]
+        return [
+            a.get("metadata", {}).get("namespace", "")
+            for a in argocds
+            if a.get("metadata", {}).get("namespace")
+        ]
     except Exception as e:
         logger.debug("Failed to list ArgoCD instances for namespaces: %s", e)
         return []
@@ -297,9 +312,13 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
         resources = app.get("status", {}).get("resources") or []
         if not isinstance(resources, list):
             continue
-        acm_count = sum(1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r))
+        acm_count = sum(
+            1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r)
+        )
         if acm_count > 0:
-            result.append(AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app))
+            result.append(
+                AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app)
+            )
     return result
 
 
@@ -335,22 +354,50 @@ def pause_autosync(
     sync_policy = spec.get("syncPolicy") or {}
     original = dict(sync_policy)
     if "automated" not in sync_policy:
-        return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=False)
+        return PauseResult(
+            namespace=ns, name=name, original_sync_policy=original, patched=False
+        )
     # Remove automated, keep rest; add annotation
     new_sync = {k: v for k, v in sync_policy.items() if k != "automated"}
     patch: Dict[str, Any] = {
         "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: run_id}},
         "spec": {"syncPolicy": new_sync},
     }
-    client.patch_custom_resource(
-        group=ARGOCD_APP_GROUP,
-        version=ARGOCD_APP_VERSION,
-        plural=ARGOCD_APP_PLURAL,
-        name=name,
-        patch=patch,
-        namespace=ns or None,
+    try:
+        client.patch_custom_resource(
+            group=ARGOCD_APP_GROUP,
+            version=ARGOCD_APP_VERSION,
+            plural=ARGOCD_APP_PLURAL,
+            name=name,
+            patch=patch,
+            namespace=ns or None,
+        )
+    except ApiException as e:
+        status = getattr(e, "status", None)
+        reason = getattr(e, "reason", None)
+        detail = f"{status} {reason}".strip() if status or reason else str(e)
+        logger.warning(
+            "Failed to patch Application %s/%s to pause auto-sync: %s",
+            ns,
+            name,
+            detail,
+        )
+        return PauseResult(
+            namespace=ns, name=name, original_sync_policy=original, patched=False
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to patch Application %s/%s to pause auto-sync: %s",
+            ns,
+            name,
+            str(e),
+        )
+        return PauseResult(
+            namespace=ns, name=name, original_sync_policy=original, patched=False
+        )
+    return PauseResult(
+        namespace=ns, name=name, original_sync_policy=original, patched=True
     )
-    return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=True)
 
 
 @dry_run_skip(
@@ -391,9 +438,13 @@ def resume_autosync(
         )
     except Exception as e:
         logger.debug("Failed to get Application %s/%s: %s", namespace, name, e)
-        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
+        return ResumeResult(
+            namespace=namespace, name=name, restored=False, skip_reason="not found"
+        )
     if not current:
-        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
+        return ResumeResult(
+            namespace=namespace, name=name, restored=False, skip_reason="not found"
+        )
     ann = (current.get("metadata") or {}).get("annotations") or {}
     marker = ann.get(ARGOCD_PAUSED_BY_ANNOTATION)
     if marker != run_id:
