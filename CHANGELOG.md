@@ -1010,7 +1010,6 @@ pip install -r requirements.txt
 
 ---
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.11...HEAD
 [1.4.11]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.10...v1.4.11
 [1.4.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.9...v1.4.10
 [1.4.9]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.8...v1.4.9

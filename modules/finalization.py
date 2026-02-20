@@ -1247,6 +1247,7 @@ class Finalization:
         else:
             logger.info("%s is scaled down on old hub", component_name)
 
+    @dry_run_skip(message="Would resume Argo CD auto-sync for paused apps")
     def _resume_argocd_apps(self) -> None:
         """Restore auto-sync for Argo CD Applications recorded in state (only when --argocd-resume-after-switchover)."""
         run_id = self.state.get_config("argocd_run_id")
