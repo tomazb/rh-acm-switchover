@@ -517,7 +517,10 @@ class Finalization:
                 )
 
         if error_hits == 0:
-            logger.info("No Velero log errors found for backup %s (recent logs checked)", backup_name)
+            logger.info(
+                "No Velero log errors found for backup %s (recent logs checked)",
+                backup_name,
+            )
 
     @dry_run_skip(message="Skipping backup integrity verification")
     def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:  # noqa: C901
@@ -615,7 +618,11 @@ class Finalization:
         parsed_ts = self._parse_timestamp(ts)
 
         if not parsed_ts:
-            logger.warning("Unable to parse timestamp for backup %s (timestamp=%s)", backup_name, ts)
+            logger.warning(
+                "Unable to parse timestamp for backup %s (timestamp=%s)",
+                backup_name,
+                ts,
+            )
         else:
             age_seconds = int((datetime.now(timezone.utc) - parsed_ts).total_seconds())
             backup_after_enable = False
@@ -1247,7 +1254,11 @@ class Finalization:
         if not run_id or not paused_apps:
             logger.info("No Argo CD paused apps in state; skipping resume")
             return
-        logger.info("Resuming Argo CD auto-sync for %d Application(s) (run_id=%s)", len(paused_apps), run_id)
+        logger.info(
+            "Resuming Argo CD auto-sync for %d Application(s) (run_id=%s)",
+            len(paused_apps),
+            run_id,
+        )
         for entry in paused_apps:
             if not isinstance(entry, dict):
                 continue

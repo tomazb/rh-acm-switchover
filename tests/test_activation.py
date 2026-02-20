@@ -13,9 +13,9 @@ import pytest
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import modules.activation as activation_module
 from kubernetes.client.rest import ApiException
 
+import modules.activation as activation_module
 from lib.constants import (
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
