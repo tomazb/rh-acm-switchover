@@ -55,7 +55,11 @@ def wait_for_condition(
 
         elapsed = int(time.time() - start_time)
         if safe_detail:
-            logger.debug("%s in progress: %s (elapsed: %ss)", description, safe_detail, elapsed)
+            # safe_detail is a sanitized status string from the condition function,
+            # not derived from secret content. lgtm [py/clear-text-logging-sensitive-data]
+            logger.debug(
+                "%s in progress: %s (elapsed: %ss)", description, safe_detail, elapsed
+            )
         else:
             logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 
