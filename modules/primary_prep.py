@@ -108,6 +108,7 @@ class PrimaryPreparation:
             return
         run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
         self.state.set_config("argocd_run_id", run_id)
+        self.state.set_config("argocd_pause_dry_run", self.dry_run)
         paused_apps = list(self.state.get_config("argocd_paused_apps") or [])
 
         for client, hub_label, discovery in discoveries:
@@ -119,15 +120,28 @@ class PrimaryPreparation:
             for impact in acm_apps:
                 result = argocd_lib.pause_autosync(client, impact.app, run_id)
                 if result.patched:
-                    paused_apps.append(
-                        {
-                            "hub": hub_label,
-                            "namespace": result.namespace,
-                            "name": result.name,
-                            "original_sync_policy": result.original_sync_policy,
-                        }
-                    )
-                    logger.info("  Paused Argo CD Application %s/%s on %s", result.namespace, result.name, hub_label)
+                    entry = {
+                        "hub": hub_label,
+                        "namespace": result.namespace,
+                        "name": result.name,
+                        "original_sync_policy": result.original_sync_policy,
+                    }
+                    if self.dry_run:
+                        entry["dry_run"] = True
+                        logger.info(
+                            "  [DRY-RUN] Would pause Argo CD Application %s/%s on %s",
+                            result.namespace,
+                            result.name,
+                            hub_label,
+                        )
+                    else:
+                        logger.info(
+                            "  Paused Argo CD Application %s/%s on %s",
+                            result.namespace,
+                            result.name,
+                            hub_label,
+                        )
+                    paused_apps.append(entry)
                 else:
                     logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
 

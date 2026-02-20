@@ -309,7 +309,7 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
         namespace=(app.get("metadata", {}) or {}).get("namespace", ""),
         name=(app.get("metadata", {}) or {}).get("name", ""),
         original_sync_policy=dict((app.get("spec", {}) or {}).get("syncPolicy") or {}),
-        patched=False,
+        patched="automated" in ((app.get("spec", {}) or {}).get("syncPolicy") or {}),
     ),
 )
 def pause_autosync(

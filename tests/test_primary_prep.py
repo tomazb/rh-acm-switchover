@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.primary_prep as primary_prep_module
+from lib import argocd as argocd_lib
 from lib.constants import OBSERVABILITY_NAMESPACE, THANOS_SCALE_DOWN_WAIT
 
 PrimaryPreparation = primary_prep_module.PrimaryPreparation
@@ -150,6 +151,111 @@ class TestPrimaryPreparation:
         result = primary_prep_with_obs.prepare()
 
         assert result is True
+
+    def test_pause_argocd_acm_apps_records_paused(self, mock_primary_client, mock_state_manager):
+        """Pause Argo CD auto-sync should record paused apps in state."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=False,
+            argocd_manage=True,
+        )
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": None,
+            "argocd_paused_apps": [],
+        }.get(key, default)
+
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app-1"},
+            "spec": {"syncPolicy": {"automated": {}}},
+            "status": {"resources": [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}]},
+        }
+        impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
+
+        with (
+            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+        ):
+            pause_autosync.return_value = argocd_lib.PauseResult(
+                namespace="argocd",
+                name="app-1",
+                original_sync_policy={"automated": {}},
+                patched=True,
+            )
+
+            prep._pause_argocd_acm_apps()
+
+        pause_autosync.assert_called_once()
+
+        paused_call = next(
+            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
+        )
+        paused_apps = paused_call.args[1]
+        assert len(paused_apps) == 1
+        assert paused_apps[0]["namespace"] == "argocd"
+        assert paused_apps[0]["name"] == "app-1"
+
+    def test_pause_argocd_acm_apps_dry_run_records_apps(self, mock_primary_client, mock_state_manager):
+        """Dry-run should still report and record ACM-touching apps as would-paused."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": None,
+            "argocd_paused_apps": [],
+        }.get(key, default)
+
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app-2"},
+            "spec": {"syncPolicy": {"automated": {"prune": True}}},
+            "status": {"resources": [{"kind": "Restore", "namespace": "open-cluster-management-backup"}]},
+        }
+        impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-2", resource_count=1, app=app)]
+
+        with (
+            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+        ):
+            pause_autosync.return_value = argocd_lib.PauseResult(
+                namespace="argocd",
+                name="app-2",
+                original_sync_policy={"automated": {"prune": True}},
+                patched=True,
+            )
+
+            prep._pause_argocd_acm_apps()
+
+        paused_call = next(
+            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
+        )
+        paused_apps = paused_call.args[1]
+        assert paused_apps[0]["dry_run"] is True
+
+        dry_run_call = next(
+            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_pause_dry_run"
+        )
+        assert dry_run_call.args[1] is True
 
     def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client):
         """Test pausing backup schedule for ACM 2.12+."""
