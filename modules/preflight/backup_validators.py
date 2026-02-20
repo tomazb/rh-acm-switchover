@@ -81,7 +81,9 @@ def _collect_bsl_unavailable_details(kube_client: KubeClient) -> str:
 class BackupValidator(BaseValidator):
     """Ensures backups exist and no job is stuck."""
 
-    def _wait_for_backups_complete(self, primary: KubeClient, in_progress: List[str]) -> List[str]:
+    def _wait_for_backups_complete(
+        self, primary: KubeClient, in_progress: List[str]
+    ) -> List[str]:
         """Wait for in-progress backups to complete within a timeout.
 
         Args:
@@ -117,7 +119,9 @@ class BackupValidator(BaseValidator):
                 return remaining
 
             remaining = [
-                b.get("metadata", {}).get("name") for b in backups if b.get("status", {}).get("phase") == "InProgress"
+                b.get("metadata", {}).get("name")
+                for b in backups
+                if b.get("status", {}).get("phase") == "InProgress"
             ]
 
         return remaining
@@ -137,7 +141,9 @@ class BackupValidator(BaseValidator):
 
         try:
             # Parse ISO 8601 timestamp (Kubernetes format: 2025-12-03T10:15:30Z)
-            completion_dt = datetime.fromisoformat(completion_timestamp.replace("Z", "+00:00"))
+            completion_dt = datetime.fromisoformat(
+                completion_timestamp.replace("Z", "+00:00")
+            )
             now_dt = datetime.now(timezone.utc)
 
             # Calculate age
@@ -168,7 +174,9 @@ class BackupValidator(BaseValidator):
 
             return f"age: {age_display}, {freshness}"
         except (ValueError, AttributeError) as e:
-            logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
+            logger.debug(
+                "Failed to parse backup timestamp %s: %s", completion_timestamp, e
+            )
             return ""
 
     def run(self, primary: KubeClient) -> None:  # noqa: C901
@@ -204,7 +212,9 @@ class BackupValidator(BaseValidator):
             phase = latest_backup.get("status", {}).get("phase", "unknown")
 
             in_progress = [
-                b.get("metadata", {}).get("name") for b in backups if b.get("status", {}).get("phase") == "InProgress"
+                b.get("metadata", {}).get("name")
+                for b in backups
+                if b.get("status", {}).get("phase") == "InProgress"
             ]
 
             if in_progress:
@@ -246,7 +256,9 @@ class BackupValidator(BaseValidator):
 
             if phase == "Completed":
                 # Get backup completion timestamp to calculate age
-                completion_ts = latest_backup.get("status", {}).get("completionTimestamp")
+                completion_ts = latest_backup.get("status", {}).get(
+                    "completionTimestamp"
+                )
                 age_info = self._get_backup_age_info(completion_ts)
 
                 message = f"latest backup {backup_name} completed successfully"
@@ -319,14 +331,21 @@ class BackupScheduleValidator(BaseValidator):
             spec = schedule.get("spec", {})
             use_msa = spec.get(SPEC_USE_MANAGED_SERVICE_ACCOUNT, False)
 
-            # Record GitOps markers if present
-            record_gitops_markers(
-                context="primary",
-                namespace=BACKUP_NAMESPACE,
-                kind="BackupSchedule",
-                name=schedule_name,
-                metadata=metadata,
-            )
+            # Record GitOps markers if present (non-critical)
+            try:
+                record_gitops_markers(
+                    context="primary",
+                    namespace=BACKUP_NAMESPACE,
+                    kind="BackupSchedule",
+                    name=schedule_name,
+                    metadata=metadata,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "GitOps marker recording failed for BackupSchedule %s: %s",
+                    schedule_name,
+                    exc,
+                )
 
             if use_msa:
                 self.add_result(
@@ -437,7 +456,9 @@ class PassiveSyncValidator(BaseValidator):
         try:
             # Validate namespace and resource name before using them
             InputValidator.validate_kubernetes_namespace(BACKUP_NAMESPACE)
-            InputValidator.validate_kubernetes_name(RESTORE_PASSIVE_SYNC_NAME, "restore")
+            InputValidator.validate_kubernetes_name(
+                RESTORE_PASSIVE_SYNC_NAME, "restore"
+            )
 
             context = secondary.context or "default"
 
@@ -452,7 +473,11 @@ class PassiveSyncValidator(BaseValidator):
             def _creation_ts(item: dict) -> str:
                 return item.get("metadata", {}).get("creationTimestamp", "")
 
-            passive_candidates = [r for r in restores if r.get("spec", {}).get("syncRestoreWithNewBackups") is True]
+            passive_candidates = [
+                r
+                for r in restores
+                if r.get("spec", {}).get("syncRestoreWithNewBackups") is True
+            ]
             passive_candidates.sort(key=_creation_ts, reverse=True)
 
             restore = passive_candidates[0] if passive_candidates else None
@@ -480,14 +505,21 @@ class PassiveSyncValidator(BaseValidator):
             metadata = restore.get("metadata", {})
             restore_name = metadata.get("name", "") or RESTORE_PASSIVE_SYNC_NAME
 
-            # Record GitOps markers if present
-            record_gitops_markers(
-                context="secondary",
-                namespace=BACKUP_NAMESPACE,
-                kind="Restore",
-                name=restore_name,
-                metadata=metadata,
-            )
+            # Record GitOps markers if present (non-critical)
+            try:
+                record_gitops_markers(
+                    context="secondary",
+                    namespace=BACKUP_NAMESPACE,
+                    kind="Restore",
+                    name=restore_name,
+                    metadata=metadata,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "GitOps marker recording failed for Restore %s: %s",
+                    restore_name,
+                    exc,
+                )
 
             status = restore.get("status", {})
             phase = status.get("phase", "unknown")
@@ -527,16 +559,24 @@ class PassiveSyncValidator(BaseValidator):
                         if velero_restore:
                             velero_status = velero_restore.get("status", {})
                             velero_phase = velero_status.get("phase", "unknown")
-                            validation_errors = velero_status.get("validationErrors") or []
+                            validation_errors = (
+                                velero_status.get("validationErrors") or []
+                            )
                             if validation_errors:
                                 joined = "; ".join(str(e) for e in validation_errors)
                                 velero_details = f" Velero restore {velero_restore_name} phase={velero_phase} validationErrors={joined}."
                             else:
                                 velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
                     except Exception as exc:
-                        logger.debug("Failed to fetch Velero restore %s details: %s", velero_restore_name, exc)
+                        logger.debug(
+                            "Failed to fetch Velero restore %s details: %s",
+                            velero_restore_name,
+                            exc,
+                        )
 
-                error_message = f"{restore_name} in unexpected state: {phase} - {message}"
+                error_message = (
+                    f"{restore_name} in unexpected state: {phase} - {message}"
+                )
                 if velero_details:
                     error_message += f" {velero_details.strip()}"
                 if bsl_details:
@@ -585,7 +625,9 @@ class ManagedClusterBackupValidator(BaseValidator):
                 # Check if cluster is joined (has Joined condition = True)
                 conditions = mc.get("status", {}).get("conditions", [])
                 is_joined = any(
-                    c.get("type") == "ManagedClusterJoined" and c.get("status") == "True" for c in conditions
+                    c.get("type") == "ManagedClusterJoined"
+                    and c.get("status") == "True"
+                    for c in conditions
                 )
                 if is_joined:
                     joined_clusters.append(mc_name)
@@ -658,13 +700,17 @@ class ManagedClusterBackupValidator(BaseValidator):
                 return
 
             # Get backup completion timestamp for comparison
-            backup_completion_time = latest_backup.get("status", {}).get("completionTimestamp", "")
+            backup_completion_time = latest_backup.get("status", {}).get(
+                "completionTimestamp", ""
+            )
             clusters_after_backup = []
 
             if backup_completion_time:
                 try:
                     # Parse backup completion time (ISO 8601 format)
-                    backup_time = datetime.fromisoformat(backup_completion_time.replace("Z", "+00:00"))
+                    backup_time = datetime.fromisoformat(
+                        backup_completion_time.replace("Z", "+00:00")
+                    )
 
                     # Check each joined cluster's creation time against backup time
                     for cluster_name in joined_clusters:
@@ -675,9 +721,13 @@ class ManagedClusterBackupValidator(BaseValidator):
                             name=cluster_name,
                         )
                         if cluster_info:
-                            cluster_creation = cluster_info.get("metadata", {}).get("creationTimestamp", "")
+                            cluster_creation = cluster_info.get("metadata", {}).get(
+                                "creationTimestamp", ""
+                            )
                             if cluster_creation:
-                                cluster_time = datetime.fromisoformat(cluster_creation.replace("Z", "+00:00"))
+                                cluster_time = datetime.fromisoformat(
+                                    cluster_creation.replace("Z", "+00:00")
+                                )
                                 if cluster_time > backup_time:
                                     clusters_after_backup.append(cluster_name)
                 except (ValueError, TypeError) as e:
