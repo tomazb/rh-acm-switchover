@@ -457,11 +457,15 @@ def _report_argocd_acm_impact(
         if not discovery.has_applications_crd:
             logger.info("[%s] Argo CD Applications CRD not found (skipping Argo CD check)", label)
             continue
+        if discovery.install_type == "vanilla":
+            instances = "N/A (vanilla)"
+        else:
+            instances = str(len(discovery.argocd_instances or []))
         logger.info(
             "[%s] Argo CD: install_type=%s, argocd_instances=%s",
             label,
             discovery.install_type,
-            len(discovery.argocd_instances) if discovery.argocd_instances else "N/A (vanilla)",
+            instances,
         )
         apps = argocd_lib.list_argocd_applications(client, namespaces=None)
         acm_apps = argocd_lib.find_acm_touching_apps(apps)
@@ -722,6 +726,9 @@ def main():  # noqa: C901
     if args.skip_gitops_check:
         GitOpsCollector.get_instance().set_enabled(False)
         logger.debug("GitOps marker detection disabled")
+        if getattr(args, "argocd_check", False):
+            logger.warning("--argocd-check ignored because --skip-gitops-check is set.")
+            args.argocd_check = False
 
     if getattr(args, "validate_only", False) and getattr(args, "argocd_manage", False):
         logger.warning("--argocd-manage has no effect with --validate-only (no changes are made).")
@@ -836,37 +843,27 @@ def _run_argocd_resume_only(
     logger: logging.Logger,
 ) -> bool:
     """Load state and restore Argo CD auto-sync for previously paused Applications, then exit."""
+    if state.get_config("argocd_pause_dry_run", False):
+        logger.error(
+            "Argo CD resume requested, but the pause step was run in dry-run mode. "
+            "Re-run pause without --dry-run to generate resumable state."
+        )
+        return False
     run_id = state.get_config("argocd_run_id")
     paused_apps = state.get_config("argocd_paused_apps") or []
     if not run_id or not paused_apps:
         logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
         return False
     logger.info("Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))", run_id, len(paused_apps))
-    restored = 0
-    failed = 0
-    for entry in paused_apps:
-        if not isinstance(entry, dict):
-            continue
-        hub = entry.get("hub")
-        ns = entry.get("namespace")
-        name = entry.get("name")
-        orig = entry.get("original_sync_policy")
-        if not all([hub, ns, name, orig is not None]):
-            continue
-        client = primary if hub == "primary" else (secondary if hub == "secondary" else None)
-        if not client:
-            logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
-            continue
-        result = argocd_lib.resume_autosync(client, ns, name, orig, run_id)
-        if result.restored:
-            restored += 1
-            logger.info("  Resumed %s/%s on %s", ns, name, hub)
-        else:
-            failed += 1
-            logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
-    logger.info("Restored %d of %d Application(s).", restored, len(paused_apps))
-    if failed:
-        logger.error("Argo CD auto-sync restore failed for %d Application(s).", failed)
+    summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, primary, secondary, logger)
+    logger.info(
+        "Restored %d and already resumed %d of %d Application(s).",
+        summary.restored,
+        summary.already_resumed,
+        len(paused_apps),
+    )
+    if summary.failed:
+        logger.error("Argo CD auto-sync restore failed for %d Application(s).", summary.failed)
         return False
     return True
 

@@ -1257,7 +1257,14 @@ class Finalization:
             orig = entry.get("original_sync_policy")
             if not all([hub, ns, name, orig is not None]):
                 continue
-            client = self.primary if hub == "primary" else self.secondary
+            if hub == "primary":
+                client = self.primary
+            elif hub == "secondary":
+                client = self.secondary
+            else:
+                failures += 1
+                logger.warning("  Skip %s/%s (unrecognized hub=%s)", ns, name, hub)
+                continue
             if not client:
                 logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
                 continue

@@ -174,6 +174,198 @@ class TestFinalization:
         # verify_new_backups is internal method, hard to assert not called directly without mocking class method,
         # but we can infer from lack of client calls if we didn't mock list_custom_resources
 
+    def test_resume_argocd_apps_raises_on_failure(self, mock_secondary_client, mock_state_manager, mock_backup_manager):
+        """Resume should fail the step if any Application cannot be restored."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": False,
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {}},
+                },
+                {
+                    "hub": "secondary",
+                    "namespace": "argocd",
+                    "name": "app-2",
+                    "original_sync_policy": {"automated": {"prune": True}},
+                },
+            ],
+        }.get(key, default)
+
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+        )
+
+        with patch("modules.finalization.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.side_effect = [
+                argocd_lib.ResumeResult(namespace="argocd", name="app-1", restored=True),
+                argocd_lib.ResumeResult(
+                    namespace="argocd",
+                    name="app-2",
+                    restored=False,
+                    skip_reason="patch failed: 403 Forbidden",
+                ),
+            ]
+
+            with pytest.raises(SwitchoverError):
+                fin._resume_argocd_apps()
+
+    def test_resume_argocd_apps_allows_marker_missing_retry(
+        self,
+        mock_secondary_client,
+        mock_state_manager,
+        mock_backup_manager,
+    ):
+        """Resume should stay idempotent when one app is already resumed on retry."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": False,
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {}},
+                },
+                {
+                    "hub": "secondary",
+                    "namespace": "argocd",
+                    "name": "app-2",
+                    "original_sync_policy": {"automated": {"prune": True}},
+                },
+            ],
+        }.get(key, default)
+
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+        )
+
+        with patch("modules.finalization.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.side_effect = [
+                argocd_lib.ResumeResult(namespace="argocd", name="app-1", restored=True),
+                argocd_lib.ResumeResult(
+                    namespace="argocd",
+                    name="app-2",
+                    restored=False,
+                    skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING,
+                ),
+            ]
+
+            fin._resume_argocd_apps()
+
+    def test_resume_argocd_apps_fails_on_marker_mismatch(
+        self,
+        mock_secondary_client,
+        mock_state_manager,
+        mock_backup_manager,
+    ):
+        """Resume must fail when an app is still paused by a different run."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": False,
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {}},
+                },
+                {
+                    "hub": "secondary",
+                    "namespace": "argocd",
+                    "name": "app-2",
+                    "original_sync_policy": {"automated": {"prune": True}},
+                },
+            ],
+        }.get(key, default)
+
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+        )
+
+        with patch("modules.finalization.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.side_effect = [
+                argocd_lib.ResumeResult(namespace="argocd", name="app-1", restored=True),
+                argocd_lib.ResumeResult(
+                    namespace="argocd",
+                    name="app-2",
+                    restored=False,
+                    skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH,
+                ),
+            ]
+
+            with pytest.raises(SwitchoverError):
+                fin._resume_argocd_apps()
+    def test_resume_argocd_apps_skips_when_no_state(self, finalization, mock_state_manager):
+        """When no paused apps are recorded in state, _resume_argocd_apps returns silently."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": False,
+            "argocd_run_id": None,
+            "argocd_paused_apps": [],
+        }.get(key, default)
+        # Must not raise
+        finalization._resume_argocd_apps()
+
+    def test_resume_argocd_apps_rejects_unrecognized_hub(
+        self,
+        mock_secondary_client,
+        mock_state_manager,
+        mock_backup_manager,
+    ):
+        """Entries with unknown hub identifiers must be skipped instead of defaulting to secondary."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": False,
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "unexpected-hub",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {}},
+                }
+            ],
+        }.get(key, default)
+
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+        )
+
+        with patch("modules.finalization.argocd_lib.resume_autosync") as resume_autosync:
+            with pytest.raises(SwitchoverError, match="failed for 1"):
+                fin._resume_argocd_apps()
+
+        resume_autosync.assert_not_called()
+
+    def test_resume_argocd_apps_raises_when_pause_was_dry_run(self, finalization, mock_state_manager):
+        """When the pause step ran in dry-run mode, resume must raise to prevent incorrect state."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": True,
+        }.get(key, default)
+        with pytest.raises(SwitchoverError, match="dry-run"):
+            finalization._resume_argocd_apps()
     @patch("modules.finalization.time")
     def test_verify_new_backups_success(self, mock_time, finalization, mock_secondary_client):
         """Test backup verification logic finding a new backup."""
