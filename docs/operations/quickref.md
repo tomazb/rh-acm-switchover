@@ -51,7 +51,7 @@ python acm_switchover.py \
 
 ```
 
-Optional: add `--skip-gitops-check` to disable GitOps marker detection warnings (ArgoCD, Flux). Add `--argocd-check` to include Argo CD discovery and ACM-impact summary (read-only).
+Optional: add `--skip-gitops-check` to disable GitOps marker detection warnings (ArgoCD, Flux). Add `--argocd-check` to include Argo CD discovery and ACM-impact summary (read-only). If `--skip-gitops-check` is set, `--argocd-check` is ignored.
 
 ### Switchover Execution
 
@@ -215,6 +215,8 @@ python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-
 ```
 
 Bash: `./scripts/preflight-check.sh --argocd-check`, `./scripts/argocd-manage.sh --mode pause|resume`. See [scripts/README.md](../scripts/README.md).
+
+Note: Resume fails the step if any Application cannot be restored. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
 
 ## Troubleshooting Commands
 
