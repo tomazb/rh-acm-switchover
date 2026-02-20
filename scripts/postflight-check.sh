@@ -569,7 +569,7 @@ section_header "9. Checking Auto-Import Strategy (ACM 2.14+)"
 
 # Get ACM version on new hub and detect GitOps markers on MCH
 NEW_HUB_MCH_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
-if [[ -n "$NEW_HUB_MCH_JSON" && "$NEW_HUB_MCH_JSON" != "{}" ]]; then
+if [[ -n "$NEW_HUB_MCH_JSON" && "$NEW_HUB_MCH_JSON" != "{}" && "$NEW_HUB_MCH_JSON" != "null" ]]; then
     NEW_HUB_MCH_NAME=$(echo "$NEW_HUB_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
     GITOPS_MARKERS=$(detect_gitops_markers "$NEW_HUB_MCH_JSON")
     if [[ -n "$GITOPS_MARKERS" ]]; then

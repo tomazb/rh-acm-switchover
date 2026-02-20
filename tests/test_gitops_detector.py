@@ -16,7 +16,6 @@ from lib.gitops_detector import (
     record_gitops_markers,
 )
 
-
 # Path to test fixtures
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "gitops_markers"
 
@@ -234,7 +233,11 @@ class TestGitOpsCollector:
 
         records = collector.get_records()
         assert "primary" in records
-        key = ("open-cluster-management-backup", "BackupSchedule", "acm-backup-schedule")
+        key = (
+            "open-cluster-management-backup",
+            "BackupSchedule",
+            "acm-backup-schedule",
+        )
         assert key in records["primary"]
         assert records["primary"][key] == ["label:app.kubernetes.io/managed-by"]
 

@@ -13,9 +13,9 @@ import pytest
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import modules.activation as activation_module
 from kubernetes.client.rest import ApiException
 
+import modules.activation as activation_module
 from lib.constants import (
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
@@ -316,7 +316,7 @@ class TestSecondaryActivation:
             }
         ]
         mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
             "status": {"phase": "Failed"},
         }
 
@@ -389,7 +389,7 @@ class TestSecondaryActivation:
 
         # Make activation idempotent by indicating managed clusters backup is already activated
         mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
             "status": {"phase": "Enabled"},
             "spec": {
                 SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
@@ -410,7 +410,7 @@ class TestSecondaryActivation:
             call_count[0] += 1
             if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
                 return {
-                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "100"},
                     "status": {
                         "phase": "Enabled",
                         "veleroManagedClustersRestoreName": "test-velero-mc-restore",

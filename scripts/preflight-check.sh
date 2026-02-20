@@ -173,7 +173,7 @@ ACM_SECONDARY_VERSION=$(oc --context="$SECONDARY_CONTEXT" get $RES_MCH -n "$ACM_
 
 # Detect GitOps markers on MultiClusterHub (primary)
 PRIMARY_MCH_JSON=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
-if [[ -n "$PRIMARY_MCH_JSON" && "$PRIMARY_MCH_JSON" != "{}" ]]; then
+if [[ -n "$PRIMARY_MCH_JSON" && "$PRIMARY_MCH_JSON" != "{}" && "$PRIMARY_MCH_JSON" != "null" ]]; then
     PRIMARY_MCH_NAME=$(echo "$PRIMARY_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
     GITOPS_MARKERS=$(detect_gitops_markers "$PRIMARY_MCH_JSON")
     if [[ -n "$GITOPS_MARKERS" ]]; then
@@ -183,7 +183,7 @@ fi
 
 # Detect GitOps markers on MultiClusterHub (secondary)
 SECONDARY_MCH_JSON=$(oc --context="$SECONDARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
-if [[ -n "$SECONDARY_MCH_JSON" && "$SECONDARY_MCH_JSON" != "{}" ]]; then
+if [[ -n "$SECONDARY_MCH_JSON" && "$SECONDARY_MCH_JSON" != "{}" && "$SECONDARY_MCH_JSON" != "null" ]]; then
     SECONDARY_MCH_NAME=$(echo "$SECONDARY_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
     GITOPS_MARKERS=$(detect_gitops_markers "$SECONDARY_MCH_JSON")
     if [[ -n "$GITOPS_MARKERS" ]]; then

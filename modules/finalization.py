@@ -517,7 +517,10 @@ class Finalization:
                 )
 
         if error_hits == 0:
-            logger.info("No Velero log errors found for backup %s (recent logs checked)", backup_name)
+            logger.info(
+                "No Velero log errors found for backup %s (recent logs checked)",
+                backup_name,
+            )
 
     @dry_run_skip(message="Skipping backup integrity verification")
     def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:  # noqa: C901
@@ -615,7 +618,11 @@ class Finalization:
         parsed_ts = self._parse_timestamp(ts)
 
         if not parsed_ts:
-            logger.warning("Unable to parse timestamp for backup %s (timestamp=%s)", backup_name, ts)
+            logger.warning(
+                "Unable to parse timestamp for backup %s (timestamp=%s)",
+                backup_name,
+                ts,
+            )
         else:
             age_seconds = int((datetime.now(timezone.utc) - parsed_ts).total_seconds())
             backup_after_enable = False
@@ -1254,6 +1261,7 @@ class Finalization:
         else:
             logger.info("%s is scaled down on old hub", component_name)
 
+    @dry_run_skip(message="Would resume Argo CD auto-sync for paused apps")
     def _resume_argocd_apps(self) -> None:
         """Restore auto-sync for Argo CD Applications recorded in state (only when --argocd-resume-after-switchover)."""
         if self.state.get_config("argocd_pause_dry_run", False):
