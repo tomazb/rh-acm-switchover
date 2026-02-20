@@ -460,7 +460,7 @@ def _report_argocd_acm_impact(
         if discovery.install_type == "vanilla":
             instances = "N/A (vanilla)"
         else:
-            instances = len(discovery.argocd_instances or [])
+            instances = str(len(discovery.argocd_instances or []))
         logger.info(
             "[%s] Argo CD: install_type=%s, argocd_instances=%s",
             label,

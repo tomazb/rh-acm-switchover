@@ -5,7 +5,7 @@ Primary hub preparation module for ACM switchover.
 # Runbook: Steps 1-3 (Method 1) / F1-F3 (Method 2)
 
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from kubernetes.client.rest import ApiException
 
@@ -120,7 +120,7 @@ class PrimaryPreparation:
             for impact in acm_apps:
                 result = argocd_lib.pause_autosync(client, impact.app, run_id)
                 if result.patched:
-                    entry = {
+                    entry: Dict[str, Any] = {
                         "hub": hub_label,
                         "namespace": result.namespace,
                         "name": result.name,
