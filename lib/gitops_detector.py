@@ -49,11 +49,22 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
                     markers_set.add(f"{source_name}:{key}")
                 continue
 
-            combined = f"{key}={value_str}".lower()
-            # Use separate ifs so one value can match multiple tools (e.g. "argocd-and-flux")
-            if "argocd" in combined or "argoproj.io" in combined:
+            key_lower = key.lower()
+            val_lower = value_str.lower()
+            # Extract the API group (domain prefix before "/") from the label/annotation key.
+            # Kubernetes label/annotation key format: [domain/]name
+            key_prefix = key_lower.split("/", 1)[0] if "/" in key_lower else ""
+            # Use separate ifs so one value can match multiple tools (e.g. "argocd-and-flux").
+            # Domain checks use endswith/equality to anchor to proper boundaries and avoid
+            # false positives from substrings (e.g. "evil.argoproj.io" vs ".argoproj.io").
+            if (
+                "argocd" in key_lower
+                or "argocd" in val_lower
+                or key_prefix == "argoproj.io"
+                or key_prefix.endswith(".argoproj.io")
+            ):
                 markers_set.add(f"{source_name}:{key}")
-            if "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
+            if key_prefix == "fluxcd.io" or key_prefix.endswith(".fluxcd.io"):
                 markers_set.add(f"{source_name}:{key}")
 
     _scan(labels, "label")
@@ -81,7 +92,9 @@ class GitOpsCollector:
         if self._initialized:
             return
         # Structure: {context: {(namespace, kind, name): [markers]}}
-        self._records: Dict[str, Dict[Tuple[str, str, str], List[str]]] = defaultdict(dict)
+        self._records: Dict[str, Dict[Tuple[str, str, str], List[str]]] = defaultdict(
+            dict
+        )
         self._enabled = True
         self._initialized = True
 
@@ -174,7 +187,9 @@ class GitOpsCollector:
             "s" if count != 1 else "",
         )
         logger.warning("=" * 60)
-        logger.warning("Coordinate changes with GitOps to avoid drift after switchover.")
+        logger.warning(
+            "Coordinate changes with GitOps to avoid drift after switchover."
+        )
         logger.warning("")
 
         for context, records in sorted(self._records.items()):

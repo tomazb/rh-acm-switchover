@@ -97,7 +97,9 @@ class TestPostActivationVerification:
         assert verify.state == mock_state_manager
         assert verify.has_observability is True
 
-    def test_klusterlet_verification_bypasses_kubeconfig_size_limit(self, mock_secondary_client, mock_state_manager):
+    def test_klusterlet_verification_bypasses_kubeconfig_size_limit(
+        self, mock_secondary_client, mock_state_manager
+    ):
         """Klusterlet verification should bypass kubeconfig size limits."""
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
@@ -105,8 +107,12 @@ class TestPostActivationVerification:
             has_observability=False,
         )
 
-        with patch.object(verify, "_get_hub_api_server", return_value="https://new-hub"):
-            with patch.object(verify, "_load_kubeconfig_data", return_value={}) as mock_load:
+        with patch.object(
+            verify, "_get_hub_api_server", return_value="https://new-hub"
+        ):
+            with patch.object(
+                verify, "_load_kubeconfig_data", return_value={}
+            ) as mock_load:
                 verify._verify_klusterlet_connections()
 
         mock_load.assert_called_with(max_size=0)
@@ -187,7 +193,9 @@ class TestPostActivationVerification:
         # Should not verify observability
         mock_secondary_client.rollout_restart_deployment.assert_not_called()
 
-    def test_verify_steps_already_completed(self, post_verify_with_obs, mock_state_manager):
+    def test_verify_steps_already_completed(
+        self, post_verify_with_obs, mock_state_manager
+    ):
         """Test skipping already completed steps."""
         mock_state_manager.is_step_completed.return_value = True
 
@@ -196,7 +204,9 @@ class TestPostActivationVerification:
         assert result is True
 
     @patch("modules.post_activation.wait_for_condition")
-    def test_verify_managed_clusters_all_available(self, mock_wait, post_verify_with_obs, mock_secondary_client):
+    def test_verify_managed_clusters_all_available(
+        self, mock_wait, post_verify_with_obs, mock_secondary_client
+    ):
         """Test when all managed clusters are available."""
         mock_wait.return_value = True
 
@@ -227,14 +237,20 @@ class TestPostActivationVerification:
         assert mock_wait.called
 
     @patch("modules.post_activation.wait_for_condition")
-    def test_verify_managed_clusters_timeout(self, mock_wait, post_verify_with_obs, mock_secondary_client):
+    def test_verify_managed_clusters_timeout(
+        self, mock_wait, post_verify_with_obs, mock_secondary_client
+    ):
         """Test timeout while waiting for clusters."""
         mock_wait.return_value = False  # Timeout
 
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
-                "status": {"conditions": [{"type": "ManagedClusterConditionAvailable", "status": "False"}]},
+                "status": {
+                    "conditions": [
+                        {"type": "ManagedClusterConditionAvailable", "status": "False"}
+                    ]
+                },
             }
         ]
 
@@ -271,7 +287,11 @@ class TestPostActivationVerification:
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "cluster1"},
-                "spec": {"managedClusterClientConfigs": [{"url": "https://api.cluster1:6443"}]},
+                "spec": {
+                    "managedClusterClientConfigs": [
+                        {"url": "https://api.cluster1:6443"}
+                    ]
+                },
                 "status": {
                     "conditions": [
                         {"type": "ManagedClusterConditionAvailable", "status": "True"},
@@ -291,17 +311,23 @@ class TestPostActivationVerification:
         # (initial brief wait + wait after klusterlet fix)
         assert mock_wait.call_count >= 2
         # verify_klusterlet_connections step should be marked completed
-        calls = [call[0][0] for call in mock_state_manager.mark_step_completed.call_args_list]
+        calls = [
+            call[0][0] for call in mock_state_manager.mark_step_completed.call_args_list
+        ]
         assert "verify_klusterlet_connections" in calls
 
     @patch("modules.post_activation.wait_for_condition")
-    def test_verify_no_clusters(self, mock_wait, post_verify_with_obs, mock_secondary_client):
+    def test_verify_no_clusters(
+        self, mock_wait, post_verify_with_obs, mock_secondary_client
+    ):
         """Test when no managed clusters exist - should timeout waiting for clusters."""
         mock_secondary_client.list_custom_resources.return_value = []
         mock_wait.return_value = False  # Simulate timeout (no clusters found)
 
         # Should raise SwitchoverError with timeout message
-        with pytest.raises(SwitchoverError, match="Timeout waiting for ManagedClusters"):
+        with pytest.raises(
+            SwitchoverError, match="Timeout waiting for ManagedClusters"
+        ):
             post_verify_with_obs._verify_managed_clusters_connected(timeout=1)
 
         # Verify wait_for_condition was called with expected parameters
@@ -311,7 +337,9 @@ class TestPostActivationVerification:
         assert call_args[1]["timeout"] == 1
         assert call_args[1]["interval"] == CLUSTER_VERIFY_INTERVAL
 
-    def test_restart_observatorium_api(self, post_verify_with_obs, mock_secondary_client):
+    def test_restart_observatorium_api(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
         """Test restarting observatorium API deployment."""
         mock_secondary_client.wait_for_pods_ready.return_value = True
         mock_secondary_client.get_pods.return_value = [
@@ -325,12 +353,15 @@ class TestPostActivationVerification:
         post_verify_with_obs._restart_observatorium_api()
 
         mock_secondary_client.rollout_restart_deployment.assert_called_once_with(
-            namespace=OBSERVABILITY_NAMESPACE, name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT
+            namespace=OBSERVABILITY_NAMESPACE,
+            name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT,
         )
         mock_secondary_client.get_pods.assert_called()
 
     @patch("modules.post_activation.wait_for_condition")
-    def test_verify_observability_pods_all_ready(self, mock_wait, post_verify_with_obs, mock_secondary_client):
+    def test_verify_observability_pods_all_ready(
+        self, mock_wait, post_verify_with_obs, mock_secondary_client
+    ):
         """Test when all observability pods are ready."""
         mock_secondary_client.get_pods.return_value = [
             {
@@ -349,7 +380,9 @@ class TestPostActivationVerification:
         mock_secondary_client.get_pods.assert_called_once()
 
     @patch("modules.post_activation.wait_for_condition")
-    def test_verify_observability_pods_none_found(self, mock_wait, post_verify_with_obs, mock_secondary_client):
+    def test_verify_observability_pods_none_found(
+        self, mock_wait, post_verify_with_obs, mock_secondary_client
+    ):
         """Test when no observability pods are found."""
         mock_wait.return_value = False
         mock_secondary_client.get_pods.return_value = []
@@ -391,16 +424,21 @@ class TestPostActivationVerification:
         # With lazy logging, format string is args[0] and values are args[1:]
         # Check all args for CrashLoopBackOff
         assert any(
-            any("CrashLoopBackOff" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
+            any("CrashLoopBackOff" in str(arg) for arg in call.args)
+            for call in mock_logger.warning.call_args_list
         )
 
     @patch("modules.post_activation.wait_for_condition")
-    def test_verify_metrics_collection(self, mock_wait, post_verify_with_obs, mock_secondary_client):
+    def test_verify_metrics_collection(
+        self, mock_wait, post_verify_with_obs, mock_secondary_client
+    ):
         """Test verifying metrics collection."""
         mock_wait.return_value = True
 
         # Mock get_pods to return a list
-        mock_secondary_client.get_pods.return_value = [{"metadata": {"name": "metrics-pod"}}]
+        mock_secondary_client.get_pods.return_value = [
+            {"metadata": {"name": "metrics-pod"}}
+        ]
 
         # This method just logs information, no exception expected
         post_verify_with_obs._verify_metrics_collection()
@@ -409,7 +447,9 @@ class TestPostActivationVerification:
         assert mock_secondary_client.get_pods.called
 
     @patch("modules.post_activation.logger")
-    def test_log_grafana_route_found(self, mock_logger, post_verify_with_obs, mock_secondary_client):
+    def test_log_grafana_route_found(
+        self, mock_logger, post_verify_with_obs, mock_secondary_client
+    ):
         """Grafana route should be logged when host detected."""
         mock_secondary_client.get_route_host.return_value = "grafana.example.com"
 
@@ -422,15 +462,21 @@ class TestPostActivationVerification:
         )
 
     @patch("modules.post_activation.logger")
-    def test_log_grafana_route_missing(self, mock_logger, post_verify_with_obs, mock_secondary_client):
+    def test_log_grafana_route_missing(
+        self, mock_logger, post_verify_with_obs, mock_secondary_client
+    ):
         """Missing Grafana route should emit warning."""
         mock_secondary_client.get_route_host.return_value = None
 
         post_verify_with_obs._log_grafana_route()
 
-        mock_logger.warning.assert_any_call("Grafana route not found in Observability namespace")
+        mock_logger.warning.assert_any_call(
+            "Grafana route not found in Observability namespace"
+        )
 
-    def test_verify_error_handling(self, post_verify_with_obs, mock_secondary_client, mock_state_manager):
+    def test_verify_error_handling(
+        self, post_verify_with_obs, mock_secondary_client, mock_state_manager
+    ):
         """Test error handling during verification."""
         mock_secondary_client.list_custom_resources.side_effect = Exception("API error")
 
@@ -473,7 +519,9 @@ class TestPostActivationVerification:
             else:
                 mock_restart.assert_not_called()
 
-    def test_verify_disable_auto_import_cleanup_success(self, post_verify_with_obs, mock_secondary_client):
+    def test_verify_disable_auto_import_cleanup_success(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
         """disable-auto-import verification should pass when annotations removed."""
         mock_secondary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "cluster1", "annotations": {}}},
@@ -482,7 +530,9 @@ class TestPostActivationVerification:
 
         post_verify_with_obs._verify_disable_auto_import_cleared()
 
-    def test_verify_disable_auto_import_cleanup_failure(self, post_verify_with_obs, mock_secondary_client):
+    def test_verify_disable_auto_import_cleanup_failure(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
         """disable-auto-import verification should fail when annotation remains."""
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -501,7 +551,9 @@ class TestPostActivationVerification:
 class TestKlusterletReconnect:
     """Test cases for force klusterlet reconnect functionality."""
 
-    def test_force_klusterlet_reconnect_success(self, mock_secondary_client, mock_state_manager):
+    def test_force_klusterlet_reconnect_success(
+        self, mock_secondary_client, mock_state_manager
+    ):
         """Test successful klusterlet reconnect with import secret."""
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
@@ -533,20 +585,26 @@ data:
                     mock_apps_instance = mock_apps_api.return_value
 
                     # Mock the delete to raise 404 (not found)
-                    mock_core_instance.delete_namespaced_secret.side_effect = ApiException(status=404)
+                    mock_core_instance.delete_namespaced_secret.side_effect = (
+                        ApiException(status=404)
+                    )
                     # Mock the create
                     mock_core_instance.create_namespaced_secret.return_value = None
                     # Mock the deployment patch
                     mock_apps_instance.patch_namespaced_deployment.return_value = None
 
-                    result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+                    result = verify._force_klusterlet_reconnect(
+                        "test-cluster", "test-context"
+                    )
 
                     assert result is True
                     mock_secondary_client.get_secret.assert_called_once_with(
                         namespace="test-cluster", name="test-cluster-import"
                     )
 
-    def test_force_klusterlet_reconnect_no_secret(self, mock_secondary_client, mock_state_manager):
+    def test_force_klusterlet_reconnect_no_secret(
+        self, mock_secondary_client, mock_state_manager
+    ):
         """Test klusterlet reconnect when import secret not found."""
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
@@ -567,7 +625,9 @@ class TestPostActivationVerificationIntegration:
     """Integration tests for PostActivationVerification."""
 
     @patch("modules.post_activation.wait_for_condition")
-    def test_full_verification_workflow(self, mock_wait, mock_secondary_client, tmp_path):
+    def test_full_verification_workflow(
+        self, mock_wait, mock_secondary_client, tmp_path
+    ):
         """Test complete verification workflow with real StateManager."""
         from lib.utils import Phase, StateManager
 
@@ -594,7 +654,9 @@ class TestPostActivationVerificationIntegration:
                 },
             }
         ]
-        mock_secondary_client.get_pods.return_value = [{"metadata": {"name": "pod1"}, "status": {"phase": "Running"}}]
+        mock_secondary_client.get_pods.return_value = [
+            {"metadata": {"name": "pod1"}, "status": {"phase": "Running"}}
+        ]
         mock_secondary_client.rollout_restart_deployment.return_value = {"status": "ok"}
 
         result = verify.verify()
@@ -608,11 +670,12 @@ class TestPostActivationVerificationIntegration:
 class TestLoadKubeconfigData:
     """Tests for _load_kubeconfig_data method."""
 
-    def test_load_single_kubeconfig(self, mock_secondary_client, mock_state_manager, tmp_path):
+    def test_load_single_kubeconfig(
+        self, mock_secondary_client, mock_state_manager, tmp_path
+    ):
         """Test loading a single kubeconfig file."""
         kubeconfig = tmp_path / "config"
-        kubeconfig.write_text(
-            """
+        kubeconfig.write_text("""
 apiVersion: v1
 clusters:
 - cluster:
@@ -627,8 +690,7 @@ users:
 - name: admin
   user:
     token: test-token
-"""
-        )
+""")
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -643,11 +705,12 @@ users:
         assert data["clusters"][0]["name"] == "cluster1"
         assert data["contexts"][0]["name"] == "admin@cluster1"
 
-    def test_load_multiple_kubeconfigs(self, mock_secondary_client, mock_state_manager, tmp_path):
+    def test_load_multiple_kubeconfigs(
+        self, mock_secondary_client, mock_state_manager, tmp_path
+    ):
         """Test loading and merging multiple kubeconfig files."""
         kubeconfig1 = tmp_path / "config1"
-        kubeconfig1.write_text(
-            """
+        kubeconfig1.write_text("""
 apiVersion: v1
 clusters:
 - cluster:
@@ -662,11 +725,9 @@ users:
 - name: admin1
   user:
     token: token1
-"""
-        )
+""")
         kubeconfig2 = tmp_path / "config2"
-        kubeconfig2.write_text(
-            """
+        kubeconfig2.write_text("""
 apiVersion: v1
 clusters:
 - cluster:
@@ -681,8 +742,7 @@ users:
 - name: admin2
   user:
     token: token2
-"""
-        )
+""")
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -699,11 +759,12 @@ users:
         assert "cluster1" in cluster_names
         assert "cluster2" in cluster_names
 
-    def test_load_kubeconfig_missing_file(self, mock_secondary_client, mock_state_manager, tmp_path):
+    def test_load_kubeconfig_missing_file(
+        self, mock_secondary_client, mock_state_manager, tmp_path
+    ):
         """Test graceful handling of missing kubeconfig file."""
         existing = tmp_path / "exists"
-        existing.write_text(
-            """
+        existing.write_text("""
 apiVersion: v1
 clusters:
 - cluster:
@@ -711,8 +772,7 @@ clusters:
   name: exists
 contexts: []
 users: []
-"""
-        )
+""")
         missing = tmp_path / "does_not_exist"
 
         verify = PostActivationVerification(
@@ -728,7 +788,9 @@ users: []
         assert len(data["clusters"]) == 1
         assert data["clusters"][0]["name"] == "exists"
 
-    def test_load_kubeconfig_default_path(self, mock_secondary_client, mock_state_manager, tmp_path):
+    def test_load_kubeconfig_default_path(
+        self, mock_secondary_client, mock_state_manager, tmp_path
+    ):
         """Test falling back to default ~/.kube/config when KUBECONFIG not set."""
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
