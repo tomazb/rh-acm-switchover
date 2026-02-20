@@ -885,7 +885,7 @@ Pause or resume auto-sync on Argo CD Applications that touch ACM namespaces/kind
 ./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause.json --dry-run
 ```
 
-**Options:** `--context`, `--mode pause|resume`, `--state-file` (required for pause/resume), `--target acm` (default), `--dry-run`, `--help`.
+**Options:** `--context`, `--mode pause|resume`, `--state-file` (optional; default: `.state/argocd-pause-state.json`), `--target acm` (default), `--dry-run`, `--help`.
 
 Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
 
