@@ -62,18 +62,22 @@ DRY_RUN=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --context)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --context requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             CONTEXT="$2"
             shift 2
             ;;
         --mode)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --mode requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             MODE="$2"
             shift 2
             ;;
         --target)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --target requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             TARGET="$2"
             shift 2
             ;;
         --state-file)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --state-file requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             STATE_FILE="$2"
             shift 2
             ;;

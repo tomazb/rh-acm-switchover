@@ -153,6 +153,7 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 **New workflow step**: Follow idempotent pattern with `state.is_step_completed()` / `mark_step_completed()`
 **New validation**: Add to `lib/validation.py` with `InputValidator` static method
 **Hub discovery and preflight**: Use `./scripts/discover-hub.sh --auto --run` to discover hub contexts and run smart preflight checks
+**Argo CD pause/resume**: Use `./scripts/argocd-manage.sh --context <ctx> --mode pause|resume --state-file <path>` to pause/resume auto-sync on ACM-touching Applications; add `--argocd-check` or `--argocd-manage` to the Python tool for integrated handling. See `scripts/README.md` for full usage and `docs/operations/usage.md` for Python flags (`--argocd-manage`, `--argocd-resume-after-switchover`, `--argocd-resume-only`). Note: `app.kubernetes.io/instance` is flagged as `UNRELIABLE` by GitOps marker detection and must not be used as a definitive GitOps signal.
 
 ### CLI Validation Guidance (Contributor note)
 - CLI validation is implemented in `lib/validation.py` (class `InputValidator`). When changing existing arguments or adding new ones, update the validator accordingly and add tests in `tests/test_validation.py`.

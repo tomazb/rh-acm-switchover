@@ -124,9 +124,9 @@ class TestPauseAutosync:
 
     def test_patches_and_returns_patched_true_when_has_automated(self):
         client = MagicMock()
-        client.patch_custom_resource.return_value = {}
+        client.patch_custom_resource.return_value = {"metadata": {"resourceVersion": "1001"}}
         app = {
-            "metadata": {"namespace": "argocd", "name": "app"},
+            "metadata": {"namespace": "argocd", "name": "app", "resourceVersion": "1000"},
             "spec": {"syncPolicy": {"automated": {"prune": True}, "syncOptions": []}},
         }
         result = argocd_lib.pause_autosync(client, app, "run-1")
@@ -143,9 +143,9 @@ class TestPauseAutosync:
 
     def test_patches_when_automated_is_empty_map(self):
         client = MagicMock()
-        client.patch_custom_resource.return_value = {}
+        client.patch_custom_resource.return_value = {"metadata": {"resourceVersion": "1001"}}
         app = {
-            "metadata": {"namespace": "argocd", "name": "app"},
+            "metadata": {"namespace": "argocd", "name": "app", "resourceVersion": "1000"},
             "spec": {"syncPolicy": {"automated": {}}},
         }
         result = argocd_lib.pause_autosync(client, app, "run-1")
@@ -162,7 +162,10 @@ class TestResumeAutosync:
     def test_skip_when_marker_mismatch(self):
         client = MagicMock()
         client.get_custom_resource.return_value = {
-            "metadata": {"annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "other-run"}},
+            "metadata": {
+                "resourceVersion": "500",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "other-run"},
+            },
         }
         result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {}}, "run-1")
         assert result.restored is False
@@ -172,9 +175,9 @@ class TestResumeAutosync:
     def test_restores_when_marker_matches(self):
         client = MagicMock()
         client.get_custom_resource.return_value = {
-            "metadata": {"annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
+            "metadata": {"resourceVersion": "500", "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
         }
-        client.patch_custom_resource.return_value = {}
+        client.patch_custom_resource.return_value = {"metadata": {"resourceVersion": "501"}}
         result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {"prune": True}}, "run-1")
         assert result.restored is True
         client.patch_custom_resource.assert_called_once()
@@ -192,7 +195,7 @@ class TestResumeAutosync:
     def test_patch_exception_returns_skip_reason(self):
         client = MagicMock()
         client.get_custom_resource.return_value = {
-            "metadata": {"annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
+            "metadata": {"resourceVersion": "500", "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
         }
         client.patch_custom_resource.side_effect = RuntimeError("boom")
         result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {"prune": True}}, "run-1")

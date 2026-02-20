@@ -14,6 +14,14 @@ from typing import Any, Dict, List, Optional
 
 from kubernetes.client.rest import ApiException
 
+from lib.constants import (
+    ACM_NAMESPACE,
+    BACKUP_NAMESPACE,
+    GLOBAL_SET_NAMESPACE,
+    LOCAL_CLUSTER_NAME,
+    MCE_NAMESPACE,
+    OBSERVABILITY_NAMESPACE,
+)
 from lib.kube_client import KubeClient
 from lib.utils import dry_run_skip
 
@@ -29,10 +37,21 @@ ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 
 # ACM namespace regex (must match scripts/lib-common.sh)
+# Built from lib.constants to stay in sync with canonical namespace definitions.
 ARGOCD_ACM_NS_REGEX = re.compile(
-    r"^(open-cluster-management($|-)|open-cluster-management-backup$|"
-    r"open-cluster-management-observability$|open-cluster-management-global-set$|"
-    r"multicluster-engine$|local-cluster)$"
+    r"^("
+    + re.escape(ACM_NAMESPACE)
+    + r"($|-)|"
+    + re.escape(BACKUP_NAMESPACE)
+    + r"$|"
+    + re.escape(OBSERVABILITY_NAMESPACE)
+    + r"$|"
+    + re.escape(GLOBAL_SET_NAMESPACE)
+    + r"$|"
+    + re.escape(MCE_NAMESPACE)
+    + r"$|"
+    + re.escape(LOCAL_CLUSTER_NAME)
+    + r")$"
 )
 
 # ACM kinds that matter for switchover (must match scripts/lib-common.sh)

@@ -67,6 +67,7 @@ OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 ACM_NAMESPACE = "open-cluster-management"
 # MCE (used for auto-import strategy ConfigMap)
 MCE_NAMESPACE = "multicluster-engine"
+GLOBAL_SET_NAMESPACE = "open-cluster-management-global-set"
 # Managed cluster agent namespace (on spoke clusters)
 MANAGED_CLUSTER_AGENT_NAMESPACE = "open-cluster-management-agent"
 

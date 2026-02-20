@@ -306,14 +306,17 @@ class VersionValidator(BaseValidator):
                 metadata = mch.get("metadata", {})
                 mch_name = metadata.get("name", "multiclusterhub")
 
-                # Record GitOps markers if present
-                record_gitops_markers(
-                    context=hub_name,
-                    namespace=ACM_NAMESPACE,
-                    kind="MultiClusterHub",
-                    name=mch_name,
-                    metadata=metadata,
-                )
+                # Record GitOps markers if present (non-critical; failures must not abort version detection)
+                try:
+                    record_gitops_markers(
+                        context=hub_name,
+                        namespace=ACM_NAMESPACE,
+                        kind="MultiClusterHub",
+                        name=mch_name,
+                        metadata=metadata,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("GitOps marker recording failed for MCH %s (%s): %s", mch_name, hub_name, exc)
 
                 version = mch.get("status", {}).get("currentVersion", "unknown")
                 self.add_result(
