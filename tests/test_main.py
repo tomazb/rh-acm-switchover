@@ -672,10 +672,10 @@ class TestArgocdResumeOnly:
         from acm_switchover import _run_argocd_resume_only
 
         state = Mock()
-        state.get_config.side_effect = lambda key: {
+        state.get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": None,
             "argocd_paused_apps": [],
-        }.get(key)
+        }.get(key, default)
         args = SimpleNamespace()
         primary = Mock()
         secondary = Mock()
@@ -687,7 +687,7 @@ class TestArgocdResumeOnly:
         from acm_switchover import _run_argocd_resume_only
 
         state = Mock()
-        state.get_config.side_effect = lambda key: {
+        state.get_config.side_effect = lambda key, default=None: {
             "argocd_pause_dry_run": True,
             "argocd_run_id": "run-1",
             "argocd_paused_apps": [
@@ -698,7 +698,7 @@ class TestArgocdResumeOnly:
                     "original_sync_policy": {"automated": {}},
                 }
             ],
-        }.get(key)
+        }.get(key, default)
         args = SimpleNamespace()
         primary = Mock()
         secondary = Mock()
@@ -727,10 +727,10 @@ class TestArgocdResumeOnly:
             },
         ]
         state = Mock()
-        state.get_config.side_effect = lambda key: {
+        state.get_config.side_effect = lambda key, default=None: {
             "argocd_run_id": "run-1",
             "argocd_paused_apps": paused_apps,
-        }.get(key)
+        }.get(key, default)
         args = SimpleNamespace()
         primary = Mock()
         secondary = Mock()
