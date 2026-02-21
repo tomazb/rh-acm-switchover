@@ -107,12 +107,11 @@ class GitOpsCollector:
     def reset(cls) -> None:
         """Reset the singleton instance (primarily for testing).
 
-        Clearing _instance allows the next get_instance() to create a new
-        instance whose __init__ will run fully (class _initialized stays
-        False). When adding new instance state in __init__, no change to
-        reset() is needed.
+        Clear both singleton and class init guard so the next get_instance()
+        call creates a new object and runs __init__ fully.
         """
         cls._instance = None
+        cls._initialized = False
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable or disable GitOps detection.

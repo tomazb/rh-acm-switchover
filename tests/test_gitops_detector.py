@@ -329,6 +329,16 @@ class TestGitOpsCollector:
         assert collector.is_enabled()
         assert not collector.has_detections()
 
+    def test_reset_clears_class_init_guard(self):
+        """Test that reset() clears class-level _initialized flag."""
+        # Simulate stale class flag and ensure reset restores constructor path.
+        GitOpsCollector._initialized = True
+        GitOpsCollector.reset()
+        collector = GitOpsCollector.get_instance()
+
+        assert collector.is_enabled()
+        assert hasattr(collector, "_records")
+
     @patch("lib.gitops_detector.logger")
     def test_print_report_when_disabled(self, mock_logger):
         """Test that print_report() does nothing when disabled."""

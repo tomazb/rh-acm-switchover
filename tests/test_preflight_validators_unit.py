@@ -384,6 +384,28 @@ class TestClusterDeploymentValidator:
         assert "ns2/bad-cluster" in results[0]["message"]
         assert "DESTROY" in results[0]["message"]
 
+    @patch("modules.preflight.cluster_validators.logger")
+    def test_gitops_marker_record_failure_is_non_fatal(
+        self, mock_logger, reporter, mock_kube_client
+    ):
+        """Test marker recording exceptions are logged but do not fail validation."""
+        validator = ClusterDeploymentValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster1", "namespace": "ns1"}, "spec": {"preserveOnDelete": True}},
+        ]
+
+        with patch(
+            "modules.preflight.cluster_validators.record_gitops_markers",
+            side_effect=RuntimeError("marker error"),
+        ):
+            validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        mock_logger.warning.assert_called_once()
+        assert "GitOps marker recording failed for ClusterDeployment" in mock_logger.warning.call_args[0][0]
+
 
 class TestKubeconfigValidator:
     """Tests for KubeconfigValidator."""
