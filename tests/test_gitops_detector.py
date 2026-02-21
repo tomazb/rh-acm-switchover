@@ -22,7 +22,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures" / "gitops_markers"
 
 def load_fixture(name: str) -> dict:
     """Load a JSON fixture file."""
-    with open(FIXTURES_DIR / name) as f:
+    with open(FIXTURES_DIR / name, encoding="utf-8") as f:
         return json.load(f)
 
 
