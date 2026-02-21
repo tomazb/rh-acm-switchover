@@ -1,10 +1,15 @@
 """Cluster-related validation checks."""
 
+import logging
+
 from kubernetes.client.exceptions import ApiException
 
+from lib.gitops_detector import record_gitops_markers
 from lib.kube_client import KubeClient
 
 from .base_validator import BaseValidator
+
+logger = logging.getLogger("acm_switchover")
 
 
 class ClusterDeploymentValidator(BaseValidator):
@@ -34,9 +39,28 @@ class ClusterDeploymentValidator(BaseValidator):
 
             missing = []
             for cd in cluster_deployments:
-                name = cd.get("metadata", {}).get("name", "unknown")
-                namespace = cd.get("metadata", {}).get("namespace", "unknown")
+                metadata = cd.get("metadata", {})
+                name = metadata.get("name", "unknown")
+                namespace = metadata.get("namespace", "unknown")
                 preserve = cd.get("spec", {}).get("preserveOnDelete", False)
+
+                # Record GitOps markers if present (non-critical)
+                try:
+                    record_gitops_markers(
+                        context="primary",
+                        namespace=namespace,
+                        kind="ClusterDeployment",
+                        name=name,
+                        metadata=metadata,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "GitOps marker recording failed for ClusterDeployment %s/%s: %s",
+                        namespace,
+                        name,
+                        exc,
+                    )
+
                 if not preserve:
                     missing.append(f"{namespace}/{name}")
 

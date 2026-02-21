@@ -38,6 +38,8 @@ fi
 PRIMARY_CONTEXT=""
 SECONDARY_CONTEXT=""
 METHOD=""
+SKIP_GITOPS_CHECK=0
+ARGOCD_CHECK=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -53,13 +55,23 @@ while [[ $# -gt 0 ]]; do
             METHOD="$2"
             shift 2
             ;;
+        --skip-gitops-check)
+            SKIP_GITOPS_CHECK=1
+            shift
+            ;;
+        --argocd-check)
+            ARGOCD_CHECK=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 --primary-context <primary> --secondary-context <secondary> --method <passive|full>"
+            echo "Usage: $0 --primary-context <primary> --secondary-context <secondary> --method <passive|full> [--skip-gitops-check] [--argocd-check]"
             echo ""
             echo "Options:"
             echo "  --primary-context     Kubernetes context for primary hub (required)"
             echo "  --secondary-context   Kubernetes context for secondary hub (required)"
             echo "  --method              Switchover method: passive or full (required)"
+            echo "  --skip-gitops-check   Disable GitOps marker detection (ArgoCD, Flux)"
+            echo "  --argocd-check        Detect ArgoCD instances and ACM resources managed by GitOps"
             echo "  --help, -h            Show this help message"
             exit "$EXIT_SUCCESS"
             ;;
@@ -70,6 +82,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Configure GitOps detection
+if [[ $SKIP_GITOPS_CHECK -eq 1 ]]; then
+    disable_gitops_detection
+fi
 
 # Validate required arguments
 if [[ -z "$PRIMARY_CONTEXT" ]] || [[ -z "$SECONDARY_CONTEXT" ]]; then
@@ -153,6 +170,26 @@ section_header "4. Checking ACM Versions"
 
 ACM_PRIMARY_VERSION=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
 ACM_SECONDARY_VERSION=$(oc --context="$SECONDARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
+
+# Detect GitOps markers on MultiClusterHub (primary)
+PRIMARY_MCH_JSON=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
+if [[ -n "$PRIMARY_MCH_JSON" && "$PRIMARY_MCH_JSON" != "{}" && "$PRIMARY_MCH_JSON" != "null" ]]; then
+    PRIMARY_MCH_NAME=$(echo "$PRIMARY_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
+    GITOPS_MARKERS=$(detect_gitops_markers "$PRIMARY_MCH_JSON")
+    if [[ -n "$GITOPS_MARKERS" ]]; then
+        collect_gitops_markers "primary" "$ACM_NAMESPACE" "MultiClusterHub" "$PRIMARY_MCH_NAME" "$GITOPS_MARKERS"
+    fi
+fi
+
+# Detect GitOps markers on MultiClusterHub (secondary)
+SECONDARY_MCH_JSON=$(oc --context="$SECONDARY_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
+if [[ -n "$SECONDARY_MCH_JSON" && "$SECONDARY_MCH_JSON" != "{}" && "$SECONDARY_MCH_JSON" != "null" ]]; then
+    SECONDARY_MCH_NAME=$(echo "$SECONDARY_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
+    GITOPS_MARKERS=$(detect_gitops_markers "$SECONDARY_MCH_JSON")
+    if [[ -n "$GITOPS_MARKERS" ]]; then
+        collect_gitops_markers "secondary" "$ACM_NAMESPACE" "MultiClusterHub" "$SECONDARY_MCH_NAME" "$GITOPS_MARKERS"
+    fi
+fi
 
 if [[ "$ACM_PRIMARY_VERSION" != "unknown" ]]; then
     check_pass "Primary hub ACM version: $ACM_PRIMARY_VERSION"
@@ -418,7 +455,14 @@ if [[ -n "$BACKUP_SCHEDULE" ]] && echo "$BACKUP_SCHEDULE" | jq -e '.items[0]' &>
     
     SCHEDULE_NAME=$(echo "$BACKUP_SCHEDULE" | jq -r '.items[0].metadata.name')
     USE_MSA=$(echo "$BACKUP_SCHEDULE" | jq -r '.items[0].spec.useManagedServiceAccount // false')
-    
+
+    # Detect GitOps markers on BackupSchedule
+    SCHEDULE_JSON=$(echo "$BACKUP_SCHEDULE" | jq '.items[0]')
+    GITOPS_MARKERS=$(detect_gitops_markers "$SCHEDULE_JSON")
+    if [[ -n "$GITOPS_MARKERS" ]]; then
+        collect_gitops_markers "primary" "$BACKUP_NAMESPACE" "BackupSchedule" "$SCHEDULE_NAME" "$GITOPS_MARKERS"
+    fi
+
     if [[ "$USE_MSA" == "true" ]]; then
         check_pass "Primary hub: BackupSchedule '$SCHEDULE_NAME' has useManagedServiceAccount=true"
         echo -e "${GREEN}       Managed clusters will auto-reconnect to new hub after switchover${NC}"
@@ -435,17 +479,28 @@ fi
 # Check 11: Verify ClusterDeployment preserveOnDelete (CRITICAL)
 section_header "11. Checking ClusterDeployment preserveOnDelete (CRITICAL)"
 
-CDS=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces --no-headers 2>/dev/null | wc -l)
+CDS_JSON=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
+CDS=$(echo "$CDS_JSON" | jq '.items | length')
 if [[ $CDS -eq 0 ]]; then
     check_pass "No ClusterDeployments found (no Hive-managed clusters)"
 else
-    MISSING_PRESERVE=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces -o json 2>/dev/null | \
+    # Detect GitOps markers on each ClusterDeployment
+    while read -r CD_JSON; do
+        CD_NAMESPACE=$(echo "$CD_JSON" | jq -r '.metadata.namespace')
+        CD_NAME=$(echo "$CD_JSON" | jq -r '.metadata.name')
+        GITOPS_MARKERS=$(detect_gitops_markers "$CD_JSON")
+        if [[ -n "$GITOPS_MARKERS" ]]; then
+            collect_gitops_markers "primary" "$CD_NAMESPACE" "ClusterDeployment" "$CD_NAME" "$GITOPS_MARKERS"
+        fi
+    done < <(echo "$CDS_JSON" | jq -c '.items[]' 2>/dev/null)
+
+    MISSING_PRESERVE=$(echo "$CDS_JSON" | \
         jq -r '.items[] | select(.spec.preserveOnDelete != true) | "\(.metadata.namespace)/\(.metadata.name)"' | wc -l)
     
     if [[ $MISSING_PRESERVE -eq 0 ]]; then
         check_pass "All $CDS ClusterDeployment(s) have preserveOnDelete=true"
     else
-        MISSING_LIST=$(oc --context="$PRIMARY_CONTEXT" get $RES_CLUSTER_DEPLOYMENT --all-namespaces -o json 2>/dev/null | \
+        MISSING_LIST=$(echo "$CDS_JSON" | \
             jq -r '.items[] | select(.spec.preserveOnDelete != true) | "\(.metadata.namespace)/\(.metadata.name)"')
         check_fail "ClusterDeployments missing preserveOnDelete=true: $MISSING_LIST"
         echo -e "${RED}       THIS IS CRITICAL! Without preserveOnDelete=true, deleting ManagedClusters will DESTROY infrastructure!${NC}"
@@ -469,8 +524,19 @@ if [[ "$METHOD" == "passive" ]]; then
     fi
     
     if [[ -n "$PASSIVE_RESTORE_NAME" ]]; then
-        PHASE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
-        LAST_MESSAGE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.lastMessage}' 2>/dev/null)
+        if ! RESTORE_JSON=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o json 2>/dev/null); then
+            check_fail "Secondary hub: Failed to fetch restore '$PASSIVE_RESTORE_NAME' details"
+            RESTORE_JSON="{}"
+        fi
+        PHASE=$(echo "$RESTORE_JSON" | jq -r '.status.phase // "unknown"')
+        LAST_MESSAGE=$(echo "$RESTORE_JSON" | jq -r '.status.lastMessage // ""')
+
+        # Detect GitOps markers on Restore
+        GITOPS_MARKERS=$(detect_gitops_markers "$RESTORE_JSON")
+        if [[ -n "$GITOPS_MARKERS" ]]; then
+            collect_gitops_markers "secondary" "$BACKUP_NAMESPACE" "Restore" "$PASSIVE_RESTORE_NAME" "$GITOPS_MARKERS"
+        fi
+
         if [[ "$PHASE" == "Enabled" ]] || [[ "$PHASE" == "Completed" ]] || [[ "$PHASE" == "Finished" ]]; then
             check_pass "Secondary hub: Found passive sync restore '$PASSIVE_RESTORE_NAME' in state: $PHASE"
         else
@@ -507,8 +573,17 @@ if oc --context="$PRIMARY_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
     check_pass "Primary hub: Observability namespace exists"
     
     # Check MCO CR on primary
-    if oc --context="$PRIMARY_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
+    if oc --context="$PRIMARY_CONTEXT" get $RES_MCO observability &> /dev/null; then
          check_pass "Primary hub: MultiClusterObservability CR found"
+         # Detect GitOps markers on MCO (cluster-scoped, no namespace)
+         MCO_JSON=$(oc --context="$PRIMARY_CONTEXT" get $RES_MCO observability -o json 2>/dev/null || echo "{}")
+         if [[ -n "$MCO_JSON" && "$MCO_JSON" != "{}" ]]; then
+             MCO_NAME=$(echo "$MCO_JSON" | jq -r '.metadata.name // "observability"')
+             GITOPS_MARKERS=$(detect_gitops_markers "$MCO_JSON")
+             if [[ -n "$GITOPS_MARKERS" ]]; then
+                 collect_gitops_markers "primary" "" "MultiClusterObservability" "$MCO_NAME" "$GITOPS_MARKERS"
+             fi
+         fi
     else
          check_warn "Primary hub: MultiClusterObservability CR not found (but namespace exists)"
     fi
@@ -627,6 +702,20 @@ if is_acm_214_or_higher "$ACM_SECONDARY_VERSION"; then
     fi
 else
     check_pass "Secondary hub: ACM $ACM_SECONDARY_VERSION (autoImportStrategy not applicable, requires 2.14+)"
+fi
+
+if [[ $ARGOCD_CHECK -eq 1 ]]; then
+    section_header "16. Checking ArgoCD GitOps Management (Optional)"
+    check_argocd_acm_resources "$PRIMARY_CONTEXT" "Primary hub"
+    check_argocd_acm_resources "$SECONDARY_CONTEXT" "Secondary hub"
+    # Print GitOps detection report if any markers were found
+    print_gitops_report
+else
+    # If ArgoCD check is disabled, still show GitOps report under section 16 when present
+    if [[ ${#GITOPS_DETECTED_RESOURCES[@]} -gt 0 ]]; then
+        section_header "16. Checking ArgoCD GitOps Management (Optional)"
+        print_gitops_report
+    fi
 fi
 
 # Summary and exit

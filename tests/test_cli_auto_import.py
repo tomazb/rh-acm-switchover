@@ -184,6 +184,26 @@ class TestManageAutoImportFlag:
             args = parse_args()
             assert args.disable_observability_on_secondary is True
 
+    def test_skip_gitops_check_flag(self):
+        """Skip GitOps check flag should parse."""
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "p2",
+                "--method",
+                "passive",
+                "--old-hub-action",
+                "secondary",
+                "--skip-gitops-check",
+            ],
+        ):
+            args = parse_args()
+            assert args.skip_gitops_check is True
+
 
 @pytest.mark.unit
 class TestAutoImportFlagInteraction:
