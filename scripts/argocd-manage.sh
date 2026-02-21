@@ -152,6 +152,18 @@ filter_acm_touching_apps() {
 # -----------------------------------------------------------------------------
 # Pause: remove spec.syncPolicy.automated, add marker annotation, save state
 # -----------------------------------------------------------------------------
+write_pause_state() {
+    local run_id="$1"
+    local paused_at="$2"
+    local apps_array="$3"
+    jq -n -c \
+        --arg run_id "$run_id" \
+        --arg context "$CONTEXT" \
+        --arg paused_at "$paused_at" \
+        --argjson apps "$apps_array" \
+        '{ run_id: $run_id, context: $context, paused_at: $paused_at, apps: $apps }' > "$STATE_FILE"
+}
+
 run_pause() {
     if ! "$CLUSTER_CLI_BIN" --context="$CONTEXT" get crd applications.argoproj.io &>/dev/null; then
         echo "Applications CRD not found; nothing to pause." >&2
@@ -160,6 +172,8 @@ run_pause() {
 
     local run_id
     run_id="$(date -u +%Y%m%d%H%M%S)-${RANDOM:-0}"
+    local paused_at
+    paused_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     local state_dir
     state_dir="$(dirname "$STATE_FILE")"
     if [[ -n "$state_dir" ]] && [[ ! -d "$state_dir" ]]; then
@@ -203,6 +217,10 @@ run_pause() {
                 '{ "metadata": { "annotations": { ($ann): $run_id } }, "spec": { "syncPolicy": $sp } }')
             "$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$app_ns" patch application.argoproj.io "$app_name" --type=merge -p "$patch_json" &>/dev/null || {
                 echo "Error: Failed to patch $app_ns/$app_name" >&2
+                if [[ $count -gt 0 ]]; then
+                    write_pause_state "$run_id" "$paused_at" "$apps_array"
+                    echo "Partial state written to $STATE_FILE (run_id=$run_id)." >&2
+                fi
                 return 1
             }
             echo "  Paused $app_ns/$app_name"
@@ -218,12 +236,7 @@ run_pause() {
     fi
 
     if [[ $DRY_RUN -eq 0 ]]; then
-        jq -n -c \
-            --arg run_id "$run_id" \
-            --arg context "$CONTEXT" \
-            --arg paused_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --argjson apps "$apps_array" \
-            '{ run_id: $run_id, context: $context, paused_at: $paused_at, apps: $apps }' > "$STATE_FILE"
+        write_pause_state "$run_id" "$paused_at" "$apps_array"
         echo "State written to $STATE_FILE (run_id=$run_id). Resume only after Git is updated for the target hub."
     else
         echo "[DRY-RUN] Would write state for $count app(s) to $STATE_FILE"
@@ -251,6 +264,7 @@ run_resume() {
     fi
     echo "Resuming from state file (run_id=$run_id). Only use after Git/desired state is updated for the target hub."
     local count=0
+    local patch_failures=0
     while read -r line; do
         local app_ns app_name original_sync_policy
         app_ns=$(jq -r '.namespace' <<<"$line")
@@ -283,10 +297,15 @@ run_resume() {
             ((count++)) || true
         else
             echo "  Error: Failed to patch $app_ns/$app_name" >&2
+            ((patch_failures++)) || true
         fi
     done < <(jq -c '.apps[]?' "$STATE_FILE" 2>/dev/null || true)
     if [[ $count -eq 0 ]] && [[ $DRY_RUN -eq 0 ]]; then
         echo "No applications were resumed (none matched the state file run_id)."
+    fi
+    if [[ $patch_failures -gt 0 ]]; then
+        echo "Resume completed with $patch_failures patch failure(s)." >&2
+        return 1
     fi
     return 0
 }

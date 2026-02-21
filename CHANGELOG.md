@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CodeQL security**: Fix incomplete URL substring sanitization in `gitops_detector.py` (use key-prefix boundary checks instead of `in` substring); suppress false-positive clear-text logging alert in `waiter.py`.
 - **Docs**: Bump Last Updated dates in `architecture.md` and `ACM_SWITCHOVER_RUNBOOK.md`.
 
+## [1.5.6] - 2026-02-21
+
+### Added
+
+- **Argo CD script regression tests**: Added `tests/test_argocd_manage_script.py` to verify partial pause persistence and resume exit-code semantics on patch failures.
+
+### Fixed
+
+- **Argo CD pause state durability (script)**: `scripts/argocd-manage.sh` now writes partial pause state before aborting when a later Application patch fails.
+- **Argo CD resume failure signaling (script)**: `scripts/argocd-manage.sh` now exits non-zero when one or more resume patch operations fail, while still attempting remaining Applications.
+
 ## [1.5.5] - 2026-02-03
 
 ### Changed
@@ -843,7 +854,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...HEAD
+[1.5.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.1...v1.5.3
