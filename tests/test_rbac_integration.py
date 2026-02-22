@@ -188,6 +188,37 @@ class TestRBACManifestConsistency:
         return Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "role.yaml"
 
     @pytest.fixture
+    def kustomize_clusterrole_path(self) -> Path:
+        """Get the Kustomize clusterrole.yaml path."""
+        return Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrole.yaml"
+
+    @pytest.fixture
+    def helm_clusterrole_path(self) -> Path:
+        """Get the Helm clusterrole.yaml path."""
+        return (
+            Path(__file__).parent.parent
+            / "deploy"
+            / "helm"
+            / "acm-switchover-rbac"
+            / "templates"
+            / "clusterrole.yaml"
+        )
+
+    @pytest.fixture
+    def kustomize_clusterrole_content(self, kustomize_clusterrole_path) -> str:
+        """Read Kustomize clusterrole manifest as text."""
+        if not kustomize_clusterrole_path.exists():
+            pytest.skip("Kustomize clusterrole.yaml not found")
+        return kustomize_clusterrole_path.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def helm_clusterrole_content(self, helm_clusterrole_path) -> str:
+        """Read Helm clusterrole template as text."""
+        if not helm_clusterrole_path.exists():
+            pytest.skip("Helm clusterrole.yaml not found")
+        return helm_clusterrole_path.read_text(encoding="utf-8")
+
+    @pytest.fixture
     def kustomize_roles(self, kustomize_role_path) -> List[dict]:
         """Parse Kustomize role.yaml into list of role definitions."""
         if not kustomize_role_path.exists():
@@ -300,6 +331,42 @@ class TestRBACManifestConsistency:
         )
 
         assert secrets_rule is not None, "Expected secrets rule in observability operator role"
+
+    def test_kustomize_clusterrole_has_argocd_rules(self, kustomize_clusterrole_content):
+        """Test that static clusterrole includes Argo CD read/manage permissions."""
+        expected_snippets = [
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
+        ]
+        for snippet in expected_snippets:
+            assert snippet in kustomize_clusterrole_content, f"Missing Argo CD snippet in static clusterrole: {snippet}"
+
+    def test_helm_clusterrole_has_argocd_rules(self, helm_clusterrole_content):
+        """Test that Helm clusterrole includes Argo CD read/manage permissions."""
+        expected_snippets = [
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
+        ]
+        for snippet in expected_snippets:
+            assert snippet in helm_clusterrole_content, f"Missing Argo CD snippet in Helm clusterrole: {snippet}"
+
+    def test_clusterrole_argocd_snippets_match_between_static_and_helm(
+        self, kustomize_clusterrole_content, helm_clusterrole_content
+    ):
+        """Test that static and Helm clusterroles both include the same Argo CD rule snippets."""
+        snippets = [
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
+        ]
+        for snippet in snippets:
+            assert snippet in kustomize_clusterrole_content
+            assert snippet in helm_clusterrole_content
 
 
 class TestCheckRBACArgumentParsing:
