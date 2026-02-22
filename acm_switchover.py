@@ -409,7 +409,15 @@ def _run_phase_preflight(
 
     state.set_phase(Phase.PREFLIGHT)
 
-    validator = PreflightValidator(primary, secondary, args.method, skip_rbac_validation=args.skip_rbac_validation)
+    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(args, "validate_only", False)
+    validator = PreflightValidator(
+        primary,
+        secondary,
+        args.method,
+        skip_rbac_validation=args.skip_rbac_validation,
+        argocd_check=getattr(args, "argocd_check", False),
+        argocd_manage=effective_argocd_manage,
+    )
     passed, config = validator.validate_all()
 
     if not passed:

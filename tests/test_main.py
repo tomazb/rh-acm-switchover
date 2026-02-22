@@ -16,7 +16,7 @@ import pytest
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from acm_switchover import parse_args, run_switchover
+from acm_switchover import _run_phase_preflight, parse_args, run_switchover
 from lib.constants import EXIT_FAILURE
 
 
@@ -664,6 +664,82 @@ class TestDecommissionAndSetupHelpers:
         monkeypatch.setattr("os.path.isfile", lambda path: False)
         logger = logging.getLogger("test")
         assert run_setup(args, logger) is False
+
+
+@pytest.mark.unit
+class TestPreflightPhase:
+    def test_run_phase_preflight_passes_argocd_flags_to_preflight_validator(self):
+        args = SimpleNamespace(
+            method="passive",
+            skip_rbac_validation=False,
+            argocd_check=True,
+            argocd_manage=True,
+            skip_observability_checks=False,
+            validate_only=False,
+        )
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class, patch(
+            "acm_switchover._report_argocd_acm_impact"
+        ) as report_argocd_impact:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = _run_phase_preflight(args, state, primary, secondary, logger)
+
+        assert result is True
+        validator_class.assert_called_once_with(
+            primary,
+            secondary,
+            "passive",
+            skip_rbac_validation=False,
+            argocd_check=True,
+            argocd_manage=True,
+        )
+        report_argocd_impact.assert_called_once_with(primary, secondary, logger)
+
+    def test_run_phase_preflight_disables_argocd_manage_in_validate_only_mode(self):
+        args = SimpleNamespace(
+            method="passive",
+            skip_rbac_validation=False,
+            argocd_check=False,
+            argocd_manage=True,
+            skip_observability_checks=False,
+            validate_only=True,
+        )
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = _run_phase_preflight(args, state, primary, secondary, logger)
+
+        assert result is True
+        validator_class.assert_called_once_with(
+            primary,
+            secondary,
+            "passive",
+            skip_rbac_validation=False,
+            argocd_check=False,
+            argocd_manage=False,
+        )
 
 
 @pytest.mark.unit
