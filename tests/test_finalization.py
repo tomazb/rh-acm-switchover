@@ -219,6 +219,24 @@ class TestFinalization:
             with pytest.raises(SwitchoverError):
                 fin._resume_argocd_apps()
 
+    def test_resume_argocd_apps_skips_when_no_state(self, finalization, mock_state_manager):
+        """When no paused apps are recorded in state, _resume_argocd_apps returns silently."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": False,
+            "argocd_run_id": None,
+            "argocd_paused_apps": [],
+        }.get(key, default)
+        # Must not raise
+        finalization._resume_argocd_apps()
+
+    def test_resume_argocd_apps_raises_when_pause_was_dry_run(self, finalization, mock_state_manager):
+        """When the pause step ran in dry-run mode, resume must raise to prevent incorrect state."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": True,
+        }.get(key, default)
+        with pytest.raises(SwitchoverError, match="dry-run"):
+            finalization._resume_argocd_apps()
+
     @patch("modules.finalization.time")
     def test_verify_new_backups_success(self, mock_time, finalization, mock_secondary_client):
         """Test backup verification logic finding a new backup."""
