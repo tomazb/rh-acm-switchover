@@ -36,12 +36,14 @@ ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
 # Annotation key for our pause marker (must match scripts/argocd-manage.sh)
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 
-# ACM namespace regex (must match scripts/lib-common.sh)
+# ACM namespace regex (must match scripts/argocd-manage.sh).
+# Uses "(-.*)" so any open-cluster-management-* sub-namespace matches, mirroring
+# lib-common.sh prefix semantics (which has no trailing anchor on the group).
 # Built from lib.constants to stay in sync with canonical namespace definitions.
 ARGOCD_ACM_NS_REGEX = re.compile(
     r"^("
     + re.escape(ACM_NAMESPACE)
-    + r"($|-)|"
+    + r"($|-.*)|"
     + re.escape(BACKUP_NAMESPACE)
     + r"$|"
     + re.escape(OBSERVABILITY_NAMESPACE)
@@ -147,8 +149,18 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
             name="argocds.argoproj.io",
         )
         has_argocds = argocds_crd is not None
+    except ApiException as e:
+        if e.status == 404:
+            logger.debug("Argo CD CRDs not found (not installed): %s", e)
+        else:
+            logger.warning("Unexpected API error checking Argo CD CRDs (status=%s): %s", e.status, e)
+        return ArgocdDiscoveryResult(
+            has_applications_crd=False,
+            has_argocds_crd=False,
+            install_type="none",
+        )
     except Exception as e:
-        logger.debug("Failed to check CRDs for Argo CD detection: %s", e)
+        logger.warning("Failed to check Argo CD CRDs: %s", e)
         return ArgocdDiscoveryResult(
             has_applications_crd=False,
             has_argocds_crd=False,
@@ -178,8 +190,15 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
                         "name": meta.get("name", ""),
                     }
                 )
+        except ApiException as e:
+            if e.status != 404:
+                logger.warning(
+                    "Failed to list ArgoCD instances (status=%s); instance list may be incomplete", e.status
+                )
+            else:
+                logger.debug("Failed to list ArgoCD instances: %s", e)
         except Exception as e:
-            logger.debug("Failed to list ArgoCD instances: %s", e)
+            logger.warning("Failed to list ArgoCD instances: %s; instance list may be incomplete", e)
         install_type = "operator"
     else:
         install_type = "vanilla"
@@ -257,8 +276,15 @@ def list_argocd_applications(
                     namespace=ns,
                 )
                 result.extend(items)
+            except ApiException as e:
+                if e.status == 404:
+                    logger.debug("Failed to list Applications in %s: %s", ns, e)
+                else:
+                    logger.warning(
+                        "Failed to list Applications in %s (status=%s); these apps will not be managed", ns, e.status
+                    )
             except Exception as e:
-                logger.debug("Failed to list Applications in %s: %s", ns, e)
+                logger.warning("Failed to list Applications in %s: %s; these apps will not be managed", ns, e)
         return result
     # Cluster-wide (works for namespaced Applications)
     try:
@@ -308,6 +334,10 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
     return result
 
 
+# NOTE: dry_run_skip was designed for instance methods (it reads self.dry_run).
+# Applied here to a module-level function, KubeClient takes the "self" slot, so
+# dry-run is sourced from client.dry_run.  Callers must ensure the KubeClient
+# is constructed with dry_run=True when dry-run mode is intended.
 @dry_run_skip(
     message="Skipping Argo CD Application patch in dry-run",
     return_value=lambda client, app, run_id: PauseResult(
@@ -378,6 +408,7 @@ def pause_autosync(
     return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=True)
 
 
+# NOTE: same dry_run_skip / KubeClient-as-self pattern as pause_autosync above.
 @dry_run_skip(
     message="Would resume auto-sync",
     return_value=lambda client, namespace, name, original_sync_policy, run_id: ResumeResult(
@@ -414,9 +445,19 @@ def resume_autosync(
             name=name,
             namespace=namespace or None,
         )
+    except ApiException as e:
+        if e.status == 404:
+            logger.debug("Application %s/%s not found: %s", namespace, name, e)
+            return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
+        logger.warning(
+            "API error fetching Application %s/%s (status=%s); leaving paused", namespace, name, e.status
+        )
+        return ResumeResult(
+            namespace=namespace, name=name, restored=False, skip_reason=f"fetch error: {e.status}"
+        )
     except Exception as e:
-        logger.debug("Failed to get Application %s/%s: %s", namespace, name, e)
-        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
+        logger.warning("Unexpected error fetching Application %s/%s: %s", namespace, name, e)
+        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason=f"fetch error: {e}")
     if not current:
         return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
     ann = (current.get("metadata") or {}).get("annotations") or {}

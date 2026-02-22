@@ -40,8 +40,10 @@ detect_cli() {
     fi
 }
 
-# ACM namespace regex and kinds (must match lib-common.sh and Python)
-ARGOCD_ACM_NS_REGEX='^(open-cluster-management($|-)|open-cluster-management-backup$|open-cluster-management-observability$|open-cluster-management-global-set$|multicluster-engine$|local-cluster)$'
+# ACM namespace regex and kinds (must match lib/argocd.py).
+# Uses "(-.*)" so any open-cluster-management-* sub-namespace matches, mirroring
+# lib-common.sh prefix semantics (which has no trailing anchor on the group).
+ARGOCD_ACM_NS_REGEX='^(open-cluster-management($|-.*)|open-cluster-management-backup$|open-cluster-management-observability$|open-cluster-management-global-set$|multicluster-engine$|local-cluster)$'
 ARGOCD_ACM_KINDS_JSON='["MultiClusterHub","MultiClusterEngine","MultiClusterObservability","ManagedCluster","ManagedClusterSet","ManagedClusterSetBinding","Placement","PlacementBinding","Policy","PolicySet","BackupSchedule","Restore","DataProtectionApplication","ClusterDeployment"]'
 
 # Annotation key for our pause marker
@@ -156,12 +158,22 @@ write_pause_state() {
     local run_id="$1"
     local paused_at="$2"
     local apps_array="$3"
-    jq -n -c \
+    local tmp_file="${STATE_FILE}.tmp.$$"
+    if ! jq -n -c \
         --arg run_id "$run_id" \
         --arg context "$CONTEXT" \
         --arg paused_at "$paused_at" \
         --argjson apps "$apps_array" \
-        '{ run_id: $run_id, context: $context, paused_at: $paused_at, apps: $apps }' > "$STATE_FILE"
+        '{ run_id: $run_id, context: $context, paused_at: $paused_at, apps: $apps }' > "$tmp_file"; then
+        echo "Error: Failed to generate state JSON" >&2
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if ! mv "$tmp_file" "$STATE_FILE"; then
+        echo "Error: Failed to write state file $STATE_FILE" >&2
+        rm -f "$tmp_file"
+        return 1
+    fi
 }
 
 run_pause() {

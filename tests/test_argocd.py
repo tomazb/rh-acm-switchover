@@ -7,6 +7,7 @@ pause/resume autosync logic, and run_id handling.
 from unittest.mock import MagicMock
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 from lib import argocd as argocd_lib
 
@@ -105,6 +106,22 @@ class TestFindAcmTouchingApps:
         assert len(result) == 1
         assert result[0].resource_count == 1
 
+    def test_includes_app_with_acm_sub_namespace(self):
+        """Regression: open-cluster-management-* sub-namespaces must match (mirrors lib-common.sh)."""
+        for sub_ns in ("open-cluster-management-hub", "open-cluster-management-addon"):
+            apps = [
+                {
+                    "metadata": {"namespace": "argocd", "name": "hub-app"},
+                    "status": {
+                        "resources": [
+                            {"kind": "ConfigMap", "namespace": sub_ns, "name": "z"},
+                        ]
+                    },
+                }
+            ]
+            result = argocd_lib.find_acm_touching_apps(apps)
+            assert len(result) == 1, f"Expected match for sub-namespace {sub_ns!r}"
+
 
 @pytest.mark.unit
 class TestPauseAutosync:
@@ -140,6 +157,18 @@ class TestPauseAutosync:
         assert patch["metadata"]["annotations"][argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION] == "run-1"
         assert "automated" not in patch["spec"]["syncPolicy"]
         assert patch["spec"]["syncPolicy"].get("syncOptions") == []
+
+    def test_api_exception_on_patch_returns_patched_false(self):
+        """ApiException during patch (e.g. 403 Forbidden) must return patched=False and preserve original policy."""
+        client = MagicMock()
+        client.patch_custom_resource.side_effect = ApiException(status=403, reason="Forbidden")
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app"},
+            "spec": {"syncPolicy": {"automated": {"prune": True}}},
+        }
+        result = argocd_lib.pause_autosync(client, app, "run-1")
+        assert result.patched is False
+        assert result.original_sync_policy == {"automated": {"prune": True}}
 
     def test_patches_when_automated_is_empty_map(self):
         client = MagicMock()
