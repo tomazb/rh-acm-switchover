@@ -218,15 +218,18 @@ class SecondaryActivation:
         if not restore:
             raise FatalError(f"{restore_name} not found on secondary hub")
 
-        # Record GitOps markers if present
+        # Record GitOps markers if present (non-critical)
         metadata = restore.get("metadata", {})
-        record_gitops_markers(
-            context="secondary",
-            namespace=BACKUP_NAMESPACE,
-            kind="Restore",
-            name=restore_name,
-            metadata=metadata,
-        )
+        try:
+            record_gitops_markers(
+                context="secondary",
+                namespace=BACKUP_NAMESPACE,
+                kind="Restore",
+                name=restore_name,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            logger.warning("GitOps marker recording failed for Restore %s: %s", restore_name, exc)
 
         status = restore.get("status", {})
         phase = status.get("phase", "unknown")

@@ -142,10 +142,11 @@ class PrimaryPreparation:
                             hub_label,
                         )
                     paused_apps.append(entry)
+                    # Persist after each success so a crash doesn't lose track of paused apps.
+                    self.state.set_config("argocd_paused_apps", paused_apps)
+                    self.state.save_state()
                 else:
                     logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
-
-        self.state.set_config("argocd_paused_apps", paused_apps)
         logger.info(
             "Argo CD: %d Application(s) paused (run_id=%s). Left paused by default; use --argocd-resume-after-switchover or --argocd-resume-only after retargeting Git.",
             len(paused_apps),
