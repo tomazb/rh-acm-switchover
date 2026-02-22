@@ -385,9 +385,7 @@ class TestClusterDeploymentValidator:
         assert "DESTROY" in results[0]["message"]
 
     @patch("modules.preflight.cluster_validators.logger")
-    def test_gitops_marker_record_failure_is_non_fatal(
-        self, mock_logger, reporter, mock_kube_client
-    ):
+    def test_gitops_marker_record_failure_is_non_fatal(self, mock_logger, reporter, mock_kube_client):
         """Test marker recording exceptions are logged but do not fail validation."""
         validator = ClusterDeploymentValidator(reporter)
         mock_kube_client.list_custom_resources.return_value = [

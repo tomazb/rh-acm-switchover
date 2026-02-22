@@ -92,9 +92,7 @@ class GitOpsCollector:
         if self._initialized:
             return
         # Structure: {context: {(namespace, kind, name): [markers]}}
-        self._records: Dict[str, Dict[Tuple[str, str, str], List[str]]] = defaultdict(
-            dict
-        )
+        self._records: Dict[str, Dict[Tuple[str, str, str], List[str]]] = defaultdict(dict)
         self._enabled = True
         self._initialized = True
 
@@ -186,9 +184,7 @@ class GitOpsCollector:
             "s" if count != 1 else "",
         )
         logger.warning("=" * 60)
-        logger.warning(
-            "Coordinate changes with GitOps to avoid drift after switchover."
-        )
+        logger.warning("Coordinate changes with GitOps to avoid drift after switchover.")
         logger.warning("")
 
         for context, records in sorted(self._records.items()):
