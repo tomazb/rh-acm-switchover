@@ -142,9 +142,9 @@ class PrimaryPreparation:
                             hub_label,
                         )
                     paused_apps.append(entry)
-                    # Persist after each success so a crash doesn't lose track of paused apps.
-                    self.state.set_config("argocd_paused_apps", paused_apps)
-                    self.state.save_state()
+                    # Pass a copy so set_config's equality guard sees a new object each
+                    # iteration and marks state dirty even when the list is mutated in-place.
+                    self.state.set_config("argocd_paused_apps", list(paused_apps))
                 else:
                     logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
         logger.info(
