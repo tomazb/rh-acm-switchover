@@ -239,13 +239,7 @@ def _application_namespaces(client: KubeClient) -> List[str]:
                 plural=ARGOCD_APP_PLURAL,
                 namespace=None,
             )
-            return list(
-                {
-                    a.get("metadata", {}).get("namespace", "")
-                    for a in apps
-                    if a.get("metadata")
-                }
-            )
+            return list({a.get("metadata", {}).get("namespace", "") for a in apps if a.get("metadata")})
         except Exception as e:
             logger.debug("Failed to list Applications cluster-wide: %s", e)
             return []
@@ -257,11 +251,7 @@ def _application_namespaces(client: KubeClient) -> List[str]:
             plural=ARGOCD_INSTANCE_CRD_PLURAL,
             namespace=None,
         )
-        return [
-            a.get("metadata", {}).get("namespace", "")
-            for a in argocds
-            if a.get("metadata", {}).get("namespace")
-        ]
+        return [a.get("metadata", {}).get("namespace", "") for a in argocds if a.get("metadata", {}).get("namespace")]
     except Exception as e:
         logger.debug("Failed to list ArgoCD instances for namespaces: %s", e)
         return []
@@ -352,13 +342,9 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
         resources = app.get("status", {}).get("resources") or []
         if not isinstance(resources, list):
             continue
-        acm_count = sum(
-            1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r)
-        )
+        acm_count = sum(1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r))
         if acm_count > 0:
-            result.append(
-                AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app)
-            )
+            result.append(AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app))
     return result
 
 
@@ -398,9 +384,7 @@ def pause_autosync(
     sync_policy = spec.get("syncPolicy") or {}
     original = dict(sync_policy)
     if "automated" not in sync_policy:
-        return PauseResult(
-            namespace=ns, name=name, original_sync_policy=original, patched=False
-        )
+        return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=False)
     # Remove automated, keep rest; add annotation
     new_sync = {k: v for k, v in sync_policy.items() if k != "automated"}
     patch: Dict[str, Any] = {
@@ -426,9 +410,7 @@ def pause_autosync(
             name,
             detail,
         )
-        return PauseResult(
-            namespace=ns, name=name, original_sync_policy=original, patched=False
-        )
+        return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=False)
     except Exception as e:
         logger.warning(
             "Failed to patch Application %s/%s to pause auto-sync: %s",
@@ -436,12 +418,8 @@ def pause_autosync(
             name,
             str(e),
         )
-        return PauseResult(
-            namespace=ns, name=name, original_sync_policy=original, patched=False
-        )
-    return PauseResult(
-        namespace=ns, name=name, original_sync_policy=original, patched=True
-    )
+        return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=False)
+    return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=True)
 
 
 # NOTE: same dry_run_skip / KubeClient-as-self pattern as pause_autosync above.
@@ -484,9 +462,7 @@ def resume_autosync(
     except ApiException as e:
         if e.status == 404:
             logger.debug("Application %s/%s not found: %s", namespace, name, e)
-            return ResumeResult(
-                namespace=namespace, name=name, restored=False, skip_reason="not found"
-            )
+            return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
         logger.warning(
             "API error fetching Application %s/%s (status=%s); leaving paused",
             namespace,
@@ -500,9 +476,7 @@ def resume_autosync(
             skip_reason=f"fetch error: {e.status}",
         )
     except Exception as e:
-        logger.warning(
-            "Unexpected error fetching Application %s/%s: %s", namespace, name, e
-        )
+        logger.warning("Unexpected error fetching Application %s/%s: %s", namespace, name, e)
         return ResumeResult(
             namespace=namespace,
             name=name,
@@ -510,9 +484,7 @@ def resume_autosync(
             skip_reason=f"fetch error: {e}",
         )
     if not current:
-        return ResumeResult(
-            namespace=namespace, name=name, restored=False, skip_reason="not found"
-        )
+        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
     ann = (current.get("metadata") or {}).get("annotations") or {}
     marker = ann.get(ARGOCD_PAUSED_BY_ANNOTATION)
     if marker != run_id:
