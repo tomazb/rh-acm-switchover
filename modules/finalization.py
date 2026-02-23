@@ -1039,6 +1039,34 @@ class Finalization:
         # Wait a moment for deletion to complete (even if already deleted, wait for API sync)
         time.sleep(BACKUP_SCHEDULE_DELETE_WAIT)
 
+        # Re-check before create to avoid racing with external controllers/processes
+        schedule_after_delete = self.secondary.get_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name=schedule_name,
+            namespace=BACKUP_NAMESPACE,
+        )
+        if schedule_after_delete:
+            after_uid = schedule_after_delete.get("metadata", {}).get("uid")
+            if schedule_uid and after_uid and after_uid != schedule_uid:
+                after_phase = schedule_after_delete.get("status", {}).get("phase", "")
+                logger.warning(
+                    "BackupSchedule %s reappeared with uid %s after deletion (previous uid=%s); "
+                    "skipping recreate to avoid mutating a resource created by another process",
+                    schedule_name,
+                    after_uid,
+                    schedule_uid,
+                )
+                if after_phase == "BackupCollision":
+                    logger.warning(
+                        "BackupSchedule %s remains in BackupCollision. Manually delete and recreate the "
+                        "BackupSchedule when no other process is reconciling it.",
+                        schedule_name,
+                    )
+                self._cached_schedules = None
+                return
+
         # Recreate the schedule
         try:
             new_schedule = {
@@ -1062,6 +1090,48 @@ class Finalization:
             # Invalidate cache since we recreated the schedule
             self._cached_schedules = None
 
+        except ApiException as e:
+            if e.status != 409:
+                logger.warning("Failed to recreate BackupSchedule: %s", e)
+                logger.warning("You may need to manually delete and recreate the BackupSchedule")
+                return
+
+            logger.warning(
+                "BackupSchedule %s already exists during recreation (409); checking current state", schedule_name
+            )
+            current_schedule = self.secondary.get_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="backupschedules",
+                name=schedule_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not current_schedule:
+                logger.warning(
+                    "BackupSchedule %s returned 409 on create but was not found immediately after; "
+                    "you may need manual verification",
+                    schedule_name,
+                )
+                return
+
+            current_phase = current_schedule.get("status", {}).get("phase", "")
+            current_uid = current_schedule.get("metadata", {}).get("uid", "unknown")
+            self._cached_schedules = None
+
+            if current_phase == "BackupCollision":
+                logger.warning(
+                    "BackupSchedule %s exists (uid=%s) but phase is BackupCollision; "
+                    "manual delete/recreate may be required.",
+                    schedule_name,
+                    current_uid,
+                )
+            else:
+                logger.info(
+                    "BackupSchedule %s exists after conflict (uid=%s, phase=%s); continuing",
+                    schedule_name,
+                    current_uid,
+                    current_phase or "Unknown",
+                )
         except Exception as e:
             logger.warning("Failed to recreate BackupSchedule: %s", e)
             logger.warning("You may need to manually delete and recreate the BackupSchedule")

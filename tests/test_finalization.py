@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -431,6 +432,81 @@ class TestFinalization:
 
         with pytest.raises(SwitchoverError):
             finalization._verify_backup_integrity(max_age_seconds=600)
+
+    @patch("modules.finalization.time.sleep")
+    def test_fix_backup_schedule_collision_skips_create_on_uid_change_after_delete(
+        self, mock_sleep, finalization, mock_secondary_client
+    ):
+        """If schedule UID changes after delete, skip recreate to avoid mutating a different object."""
+        mock_sleep.return_value = None
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule", "uid": "uid-old"},
+                "spec": {"veleroSchedule": "*/15 * * * *"},
+                "status": {"phase": "Enabled"},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "schedule", "uid": "uid-old"}, "spec": {"veleroSchedule": "*/15 * * * *"}},
+            {"metadata": {"name": "schedule", "uid": "uid-new"}, "status": {"phase": "Enabled"}},
+        ]
+
+        finalization._fix_backup_schedule_collision()
+
+        mock_secondary_client.delete_custom_resource.assert_called_once()
+        mock_secondary_client.create_custom_resource.assert_not_called()
+
+    @patch("modules.finalization.time.sleep")
+    def test_fix_backup_schedule_collision_treats_409_with_healthy_schedule_as_success(
+        self, mock_sleep, finalization, mock_secondary_client
+    ):
+        """A 409 create conflict should be acceptable when schedule exists in a non-collision phase."""
+        mock_sleep.return_value = None
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule", "uid": "uid-old"},
+                "spec": {"veleroSchedule": "*/15 * * * *"},
+                "status": {"phase": "Enabled"},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "schedule", "uid": "uid-old"}, "spec": {"veleroSchedule": "*/15 * * * *"}},
+            None,
+            {"metadata": {"name": "schedule", "uid": "uid-new"}, "status": {"phase": "Enabled"}},
+        ]
+        mock_secondary_client.create_custom_resource.side_effect = ApiException(status=409)
+
+        finalization._cached_schedules = [{"metadata": {"name": "cached"}}]
+        finalization._fix_backup_schedule_collision()
+
+        mock_secondary_client.delete_custom_resource.assert_called_once()
+        mock_secondary_client.create_custom_resource.assert_called_once()
+        assert finalization._cached_schedules is None
+
+    @patch("modules.finalization.time.sleep")
+    def test_fix_backup_schedule_collision_warns_when_409_schedule_is_in_collision(
+        self, mock_sleep, finalization, mock_secondary_client, caplog
+    ):
+        """A 409 create conflict with BackupCollision phase should emit manual-remediation warning."""
+        mock_sleep.return_value = None
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule", "uid": "uid-old"},
+                "spec": {"veleroSchedule": "*/15 * * * *"},
+                "status": {"phase": "Enabled"},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "schedule", "uid": "uid-old"}, "spec": {"veleroSchedule": "*/15 * * * *"}},
+            None,
+            {"metadata": {"name": "schedule", "uid": "uid-new"}, "status": {"phase": "BackupCollision"}},
+        ]
+        mock_secondary_client.create_custom_resource.side_effect = ApiException(status=409)
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            finalization._fix_backup_schedule_collision()
+
+        assert "phase is BackupCollision" in caplog.text
 
     @patch("modules.finalization.wait_for_condition")
     def test_disable_observability_on_secondary_deletes_mco(
