@@ -1011,6 +1011,7 @@ class PostActivationVerification:
                 try:
                     # Check file size before loading to prevent memory exhaustion
                     if check_size:
+                        assert size_limit is not None  # Guaranteed by check_size logic
                         kubeconfig_size = os.path.getsize(expanded_path)
                         if kubeconfig_size > size_limit:
                             logger.warning(
