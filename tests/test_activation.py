@@ -488,6 +488,103 @@ class TestSecondaryActivation:
         assert body["spec"]["veleroResourcesBackupName"] == VELERO_BACKUP_SKIP
         mock_wait_mc.assert_called_once()
 
+    def test_activate_restore_rolls_back_passive_restore_on_create_failure(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Activation restore create failure should recreate passive restore as rollback."""
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+            activation_method="restore",
+        )
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {
+                    "name": RESTORE_PASSIVE_SYNC_NAME,
+                    "namespace": BACKUP_NAMESPACE,
+                    "labels": {"managed-by": "test"},
+                    "annotations": {"example": "annotation"},
+                },
+                "spec": {
+                    SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
+                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
+                },
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = None
+        mock_secondary_client.create_custom_resource.side_effect = [Exception("activation create failed"), None]
+
+        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError, match="Recreated passive sync restore"):
+                activation._activate_via_restore_resource()
+
+        assert mock_secondary_client.create_custom_resource.call_count == 2
+        rollback_body = mock_secondary_client.create_custom_resource.call_args_list[1].kwargs["body"]
+        assert rollback_body["metadata"]["name"] == RESTORE_PASSIVE_SYNC_NAME
+        assert rollback_body["metadata"]["namespace"] == BACKUP_NAMESPACE
+        assert rollback_body["metadata"]["labels"] == {"managed-by": "test"}
+        assert rollback_body["metadata"]["annotations"] == {"example": "annotation"}
+        assert rollback_body["spec"][SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS] is True
+
+    def test_activate_restore_reports_when_rollback_recreate_fails(self, mock_secondary_client, mock_state_manager):
+        """Activation restore create failure should include rollback failure details."""
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+            activation_method="restore",
+        )
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {
+                    "name": RESTORE_PASSIVE_SYNC_NAME,
+                    "namespace": BACKUP_NAMESPACE,
+                },
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = None
+        mock_secondary_client.create_custom_resource.side_effect = [
+            Exception("activation create failed"),
+            Exception("rollback recreate failed"),
+        ]
+
+        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError, match="Rollback failed to recreate passive sync restore"):
+                activation._activate_via_restore_resource()
+
+        assert mock_secondary_client.create_custom_resource.call_count == 2
+
+    def test_activate_restore_does_not_attempt_rollback_when_delete_was_404(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """No rollback recreate should be attempted when passive restore delete returned 404."""
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+            activation_method="restore",
+        )
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = None
+        mock_secondary_client.delete_custom_resource.side_effect = ApiException(status=404)
+        mock_secondary_client.create_custom_resource.side_effect = Exception("activation create failed")
+
+        with patch.object(activation, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError, match="Failed to create activation restore"):
+                activation._activate_via_restore_resource()
+
+        assert mock_secondary_client.create_custom_resource.call_count == 1
+
     def test_apply_immediate_import_annotations(self, mock_secondary_client, mock_state_manager):
         """Test immediate-import annotation application under ImportOnly."""
         mock_state_manager.get_config.return_value = "2.14.0"

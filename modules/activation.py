@@ -285,8 +285,11 @@ class SecondaryActivation:
         # Discover passive sync restore if it still exists; tolerate missing restore on resume
         restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
         restore_name = (restore or {}).get("metadata", {}).get("name")
+        passive_restore_snapshot: Optional[Dict] = None
+        passive_restore_deleted = False
 
         if restore_name:
+            passive_restore_snapshot = self._build_restore_snapshot(restore)
             try:
                 logger.info("Deleting passive sync restore %s before activation restore", restore_name)
                 self.secondary.delete_custom_resource(
@@ -297,6 +300,7 @@ class SecondaryActivation:
                     namespace=BACKUP_NAMESPACE,
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
                 )
+                passive_restore_deleted = True
             except ApiException as e:
                 if getattr(e, "status", None) == 404:
                     logger.info(
@@ -346,7 +350,70 @@ class SecondaryActivation:
             )
             logger.info("Created %s resource", MANAGED_CLUSTER_RESTORE_NAME)
         except Exception as e:
+            if passive_restore_deleted and passive_restore_snapshot:
+                try:
+                    self._recreate_restore_from_snapshot(passive_restore_snapshot)
+                except Exception as rollback_error:
+                    raise FatalError(
+                        f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}. "
+                        f"Rollback failed to recreate passive sync restore {restore_name}: {rollback_error}"
+                    ) from e
+
+                raise FatalError(
+                    f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}. "
+                    f"Recreated passive sync restore {restore_name} as rollback."
+                ) from e
             raise FatalError(f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}") from e
+
+    @staticmethod
+    def _build_restore_snapshot(restore: Dict) -> Dict:
+        """Build a minimal restore body that can be safely recreated."""
+        metadata = restore.get("metadata", {})
+        restore_name = metadata.get("name")
+        if not restore_name:
+            raise FatalError("Passive sync restore missing metadata.name")
+
+        snapshot_metadata = {
+            "name": restore_name,
+            "namespace": metadata.get("namespace", BACKUP_NAMESPACE),
+        }
+        labels = metadata.get("labels")
+        annotations = metadata.get("annotations")
+        if labels:
+            snapshot_metadata["labels"] = labels
+        if annotations:
+            snapshot_metadata["annotations"] = annotations
+
+        return {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": snapshot_metadata,
+            "spec": restore.get("spec", {}),
+        }
+
+    def _recreate_restore_from_snapshot(self, restore_snapshot: Dict) -> None:
+        """Best-effort rollback helper for recreate-on-failure semantics."""
+        restore_name = restore_snapshot.get("metadata", {}).get("name", "unknown")
+        try:
+            self.secondary.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body=restore_snapshot,
+                namespace=BACKUP_NAMESPACE,
+            )
+            logger.warning(
+                "Recreated passive sync restore %s after activation restore creation failure",
+                restore_name,
+            )
+        except ApiException as e:
+            if getattr(e, "status", None) == 409:
+                logger.warning(
+                    "Passive sync restore %s already exists during rollback recreation",
+                    restore_name,
+                )
+                return
+            raise
 
     def _wait_for_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
         """Wait until a restore resource is fully deleted."""
