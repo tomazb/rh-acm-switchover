@@ -177,7 +177,6 @@ if [[ $TOTAL_CLUSTERS -gt 0 ]]; then
     check_pass "Found $TOTAL_CLUSTERS managed cluster(s) (excluding $LOCAL_CLUSTER_NAME)"
     
     # Check Available status
-    # Check Available status
     # Identify clusters that are NOT Available (single API call)
     # This correctly catches clusters with Available=False, Unknown, or missing status
     UNAVAILABLE_LIST=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
