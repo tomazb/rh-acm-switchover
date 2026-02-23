@@ -196,12 +196,7 @@ class TestRBACManifestConsistency:
     def helm_clusterrole_path(self) -> Path:
         """Get the Helm clusterrole.yaml path."""
         return (
-            Path(__file__).parent.parent
-            / "deploy"
-            / "helm"
-            / "acm-switchover-rbac"
-            / "templates"
-            / "clusterrole.yaml"
+            Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "clusterrole.yaml"
         )
 
     @pytest.fixture
@@ -285,7 +280,10 @@ class TestRBACManifestConsistency:
 
         assert backup_operator_role is not None, "Expected backup operator role"
 
-        pods_rule = next((rule for rule in backup_operator_role["rules"] if "pods" in rule.get("resources", [])), None)
+        pods_rule = next(
+            (rule for rule in backup_operator_role["rules"] if "pods" in rule.get("resources", [])),
+            None,
+        )
 
         assert pods_rule is not None, "Expected pods rule in backup operator role"
         assert "get" in pods_rule["verbs"], "Expected 'get' verb for pods"
@@ -305,7 +303,10 @@ class TestRBACManifestConsistency:
 
         assert obs_operator_role is not None, "Expected observability operator role"
 
-        routes_rule = next((rule for rule in obs_operator_role["rules"] if "routes" in rule.get("resources", [])), None)
+        routes_rule = next(
+            (rule for rule in obs_operator_role["rules"] if "routes" in rule.get("resources", [])),
+            None,
+        )
 
         assert routes_rule is not None, "Expected routes rule in observability operator role"
         # Check that route.openshift.io is in the apiGroups list
@@ -327,7 +328,8 @@ class TestRBACManifestConsistency:
         assert obs_operator_role is not None, "Expected observability operator role"
 
         secrets_rule = next(
-            (rule for rule in obs_operator_role["rules"] if "secrets" in rule.get("resources", [])), None
+            (rule for rule in obs_operator_role["rules"] if "secrets" in rule.get("resources", [])),
+            None,
         )
 
         assert secrets_rule is not None, "Expected secrets rule in observability operator role"
@@ -499,8 +501,14 @@ class TestRBACValidatorRoleAware:
     def test_operator_role_has_more_permissions_than_validator(self):
         """Test that operator role has more permissions than validator."""
         # Cluster permissions - operator should have patch on managedclusters
-        operator_mc = next((p for p in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"), None)
-        validator_mc = next((p for p in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"), None)
+        operator_mc = next(
+            (p for p in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"),
+            None,
+        )
+        validator_mc = next(
+            (p for p in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"),
+            None,
+        )
 
         assert operator_mc is not None
         assert validator_mc is not None
@@ -511,7 +519,10 @@ class TestRBACValidatorRoleAware:
         """Test that validator namespace permissions are read-only."""
         write_verbs = {"create", "patch", "delete", "update"}
 
-        for namespace, perms in RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.items():
+        for (
+            namespace,
+            perms,
+        ) in RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.items():
             for api_group, resource, verbs in perms:
                 has_write = any(v in write_verbs for v in verbs)
                 assert not has_write, (
