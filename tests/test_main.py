@@ -16,8 +16,8 @@ import pytest
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from acm_switchover import _run_phase_preflight, parse_args, run_switchover
-from lib.constants import EXIT_FAILURE
+from acm_switchover import _run_phase_preflight, main, parse_args, run_switchover
+from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
 
 
 @pytest.mark.unit
@@ -563,6 +563,130 @@ class TestSwitchoverPhaseFlow:
 
         assert result is True
         run_sw.assert_called_once_with(args, state, primary, secondary, logger)
+
+
+@pytest.mark.unit
+class TestMainGitOpsReporting:
+    @staticmethod
+    def _base_args():
+        return SimpleNamespace(
+            verbose=False,
+            log_format="text",
+            state_file="state.json",
+            primary_context="primary",
+            secondary_context="secondary",
+            skip_gitops_check=False,
+            argocd_check=False,
+            validate_only=False,
+            argocd_manage=False,
+            setup=False,
+            reset_state=False,
+            argocd_resume_only=False,
+        )
+
+    def test_main_prints_gitops_report_on_operation_exception(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", side_effect=RuntimeError("boom")
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        collector.print_report.assert_called_once()
+        state.add_error.assert_called_once_with("boom")
+
+    def test_main_prints_gitops_report_on_keyboard_interrupt(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", side_effect=KeyboardInterrupt
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_INTERRUPT
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
+
+    def test_main_prints_gitops_report_on_success(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
+
+    def test_main_prints_gitops_report_on_operation_failure(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", return_value=False
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
 
 
 @pytest.mark.unit

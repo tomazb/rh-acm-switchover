@@ -781,27 +781,30 @@ def main():  # noqa: C901
         logger.error("\n✗ Argo CD resume failed or had nothing to restore.")
         sys.exit(EXIT_FAILURE)
 
+    operation_exit_code = EXIT_FAILURE
     try:
         success = _execute_operation(args, state, primary, secondary, logger)
     except KeyboardInterrupt:
         logger.warning("\n\nOperation interrupted by user")
         logger.info("State saved to: %s", args.state_file)
         logger.info("Re-run the same command to resume from last successful step")
-        sys.exit(EXIT_INTERRUPT)
+        operation_exit_code = EXIT_INTERRUPT
     except Exception as exc:
         logger.error("\n✗ Unexpected error: %s", exc, exc_info=args.verbose)
         state.add_error(str(exc))
-        sys.exit(EXIT_FAILURE)
+        operation_exit_code = EXIT_FAILURE
+    else:
+        if success:
+            logger.info("\n✓ Operation completed successfully!")
+            operation_exit_code = EXIT_SUCCESS
+        else:
+            logger.error("\n✗ Operation failed!")
+            operation_exit_code = EXIT_FAILURE
+    finally:
+        # Print GitOps detection report if any markers were found
+        GitOpsCollector.get_instance().print_report()
 
-    # Print GitOps detection report if any markers were found
-    GitOpsCollector.get_instance().print_report()
-
-    if success:
-        logger.info("\n✓ Operation completed successfully!")
-        sys.exit(EXIT_SUCCESS)
-
-    logger.error("\n✗ Operation failed!")
-    sys.exit(EXIT_FAILURE)
+    sys.exit(operation_exit_code)
 
 
 def _initialize_clients(

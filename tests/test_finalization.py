@@ -3,6 +3,7 @@
 Tests cover Finalization class for completing the switchover.
 """
 
+import logging
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -451,6 +452,59 @@ class TestFinalization:
 
         fin._disable_observability_on_secondary()
 
+        primary.delete_custom_resource.assert_called_once()
+
+    @patch("modules.finalization.record_gitops_markers")
+    @patch("modules.finalization.wait_for_condition")
+    def test_disable_observability_on_secondary_warns_for_gitops_managed_mco(
+        self, mock_wait, mock_record_markers, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
+    ):
+        """MCO deletion should emit immediate warning when GitOps markers are detected."""
+        mock_wait.return_value = True
+        mock_record_markers.return_value = ["label:app.kubernetes.io/managed-by"]
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+            primary_client=primary,
+            old_hub_action="secondary",
+            disable_observability_on_secondary=True,
+        )
+        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
+        primary.get_pods.return_value = []
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            fin._disable_observability_on_secondary()
+
+        assert "appears GitOps-managed" in caplog.text
+        assert "observability" in caplog.text
+        primary.delete_custom_resource.assert_called_once()
+
+    @patch("modules.finalization.record_gitops_markers")
+    @patch("modules.finalization.wait_for_condition")
+    def test_disable_observability_on_secondary_no_gitops_warning_without_markers(
+        self, mock_wait, mock_record_markers, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
+    ):
+        """MCO deletion should not emit GitOps warning when no markers are detected."""
+        mock_wait.return_value = True
+        mock_record_markers.return_value = []
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+            primary_client=primary,
+            old_hub_action="secondary",
+            disable_observability_on_secondary=True,
+        )
+        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
+        primary.get_pods.return_value = []
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            fin._disable_observability_on_secondary()
+
+        assert "appears GitOps-managed" not in caplog.text
         primary.delete_custom_resource.assert_called_once()
 
     def test_finalize_failure_handling(self, finalization, mock_backup_manager):

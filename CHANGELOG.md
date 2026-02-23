@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CodeQL security**: Fix incomplete URL substring sanitization in `gitops_detector.py` (use key-prefix boundary checks instead of `in` substring); suppress false-positive clear-text logging alert in `waiter.py`.
 - **Docs**: Bump Last Updated dates in `architecture.md` and `ACM_SWITCHOVER_RUNBOOK.md`.
 
+## [1.5.7] - 2026-02-23
+
+### Fixed
+
+- **GitOps warning visibility on failure paths**: Always emit consolidated GitOps marker report after operation execution (success, failure, exception, or interrupt) and restore immediate MultiClusterObservability GitOps warning before deletion.
+
 ## [1.5.6] - 2026-02-21
 
 ### Added
@@ -856,7 +862,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.7...HEAD
+[1.5.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...v1.5.4
