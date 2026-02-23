@@ -654,7 +654,7 @@ def run_setup(
     Returns:
         True if setup completed successfully, False otherwise.
     """
-    import subprocess
+    import subprocess  # nosec B404
 
     # Note: admin_kubeconfig validation is already done by InputValidator.validate_all_cli_args()
     # We just need to check if the file exists
@@ -697,7 +697,7 @@ def run_setup(
     logger.info("  Output directory: %s", args.output_dir)
 
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603
             cmd,
             check=False,
             text=True,
