@@ -12,7 +12,7 @@
 # - MAJOR: Breaking changes to script behavior or output format
 # - MINOR: New features, new checks, significant improvements
 # - PATCH: Bug fixes, minor improvements
-export SCRIPT_VERSION="1.5.7"
+export SCRIPT_VERSION="1.5.8"
 export SCRIPT_VERSION_DATE="2026-02-23"
 
 # Namespaces

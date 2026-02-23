@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Activation restore rollback safety**: `activation_method=restore` now snapshots and recreates the passive sync `Restore` when activation restore creation fails after a successful delete, reducing manual recovery cases.
+- **BackupSchedule collision race handling**: finalization now re-checks for schedule reappearance before recreate and handles create `409` conflicts with phase-based classification and clearer manual-remediation warnings.
+- **Script and prep cleanup**: removed duplicate postflight status comment, dropped unused `enable_gitops_detection` helper, and moved a local `time` import to module scope in primary prep.
 - **Argo CD pause error handling**: Wrap `patch_custom_resource` in `pause_autosync` with the same `try/except` structure used by `resume_autosync`; returns `patched=False` on failure instead of propagating uncaught exceptions.
 - **GitOps marker recording**: Guard both `record_gitops_markers` calls in `backup_validators.py` with `try/except` so detection failures emit a warning but do not fail the preflight check.
 - **GitOps marker recording (ClusterDeployment validator)**: Guard `record_gitops_markers` in `cluster_validators.py` with `try/except` so marker detection errors are logged as warnings and do not abort preflight validation.

@@ -805,12 +805,6 @@ disable_gitops_detection() {
     GITOPS_DETECTION_ENABLED=0
 }
 
-# Enable GitOps detection
-# Usage: enable_gitops_detection
-enable_gitops_detection() {
-    GITOPS_DETECTION_ENABLED=1
-}
-
 # Check if a resource has GitOps markers (ArgoCD, Flux)
 # Usage: detect_gitops_markers "$RESOURCE_JSON"
 # Returns: comma-separated list of markers, or empty string if none

@@ -5,6 +5,7 @@ Primary hub preparation module for ACM switchover.
 # Runbook: Steps 1-3 (Method 1) / F1-F3 (Method 2)
 
 import logging
+import time
 from typing import Any, Dict, Optional
 
 from kubernetes.client.rest import ApiException
@@ -275,8 +276,6 @@ class PrimaryPreparation:
                 return
 
             # Wait a moment and verify no pods running
-            import time
-
             time.sleep(THANOS_SCALE_DOWN_WAIT)
 
             pods = self.primary.get_pods(
