@@ -289,6 +289,7 @@ class SecondaryActivation:
         passive_restore_deleted = False
 
         if restore_name:
+            assert restore is not None  # Guaranteed by restore_name extraction
             passive_restore_snapshot = self._build_restore_snapshot(restore)
             try:
                 logger.info("Deleting passive sync restore %s before activation restore", restore_name)

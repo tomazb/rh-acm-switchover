@@ -810,6 +810,7 @@ class Finalization:
             return
 
         def _observability_terminated():
+            assert self.primary is not None  # Guaranteed by guard at method entry
             pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
             if not pods:
                 return True, "no observability pods remaining"
@@ -1193,6 +1194,7 @@ class Finalization:
         Scales thanos-compact and observatorium-api to 0 replicas, then waits
         for pods to terminate with polling. Reports status of scale-down operation.
         """
+        assert self.primary is not None  # Guaranteed by guard at _verify_old_hub_state entry
         # Check both thanos-compact and observatorium-api pods
         compactor_pods = self.primary.get_pods(
             namespace=OBSERVABILITY_NAMESPACE,
@@ -1234,6 +1236,7 @@ class Finalization:
         Returns:
             Tuple of (compactor_pods_after, api_pods_after) after waiting
         """
+        assert self.primary is not None  # Guaranteed by guard at _verify_old_hub_state entry
         compactor_pods_after = []
         api_pods_after = []
 
