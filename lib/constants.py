@@ -93,6 +93,7 @@ SPEC_USE_MANAGED_SERVICE_ACCOUNT = "useManagedServiceAccount"
 # ACM Spec Field Values
 VELERO_BACKUP_LATEST = "latest"
 VELERO_BACKUP_SKIP = "skip"
+CLEANUP_BEFORE_RESTORE_VALUE = "CleanupRestored"
 
 # Patch verification settings
 PATCH_VERIFY_MAX_RETRIES = 5
