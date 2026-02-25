@@ -31,6 +31,7 @@ from lib.constants import (
     RESTORE_WAIT_TIMEOUT,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
+    CLEANUP_BEFORE_RESTORE_VALUE,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
@@ -334,7 +335,7 @@ class SecondaryActivation:
                 "namespace": BACKUP_NAMESPACE,
             },
             "spec": {
-                "cleanupBeforeRestore": "CleanupRestored",
+                "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
                 "veleroCredentialsBackupName": VELERO_BACKUP_SKIP,
                 "veleroResourcesBackupName": VELERO_BACKUP_SKIP,
@@ -789,7 +790,7 @@ class SecondaryActivation:
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
                 "veleroCredentialsBackupName": VELERO_BACKUP_LATEST,
                 "veleroResourcesBackupName": VELERO_BACKUP_LATEST,
-                "cleanupBeforeRestore": "CleanupRestored",
+                "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
             },
         }
 

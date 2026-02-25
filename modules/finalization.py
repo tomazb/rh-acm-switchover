@@ -37,6 +37,7 @@ from lib.constants import (
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
     THANOS_COMPACTOR_STATEFULSET,
+    CLEANUP_BEFORE_RESTORE_VALUE,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
@@ -929,7 +930,7 @@ class Finalization:
             "spec": {
                 SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
                 "restoreSyncInterval": "10m",
-                "cleanupBeforeRestore": "CleanupRestored",
+                "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
                 "veleroCredentialsBackupName": VELERO_BACKUP_LATEST,
                 "veleroResourcesBackupName": VELERO_BACKUP_LATEST,
