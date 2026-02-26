@@ -738,9 +738,6 @@ def main():  # noqa: C901
             logger.warning("--argocd-check ignored because --skip-gitops-check is set.")
             args.argocd_check = False
 
-    if getattr(args, "validate_only", False) and getattr(args, "argocd_manage", False):
-        logger.warning("--argocd-manage has no effect with --validate-only (no changes are made).")
-
     # Setup mode doesn't need state tracking or Kubernetes clients
     # It uses the admin-kubeconfig directly via the shell script
     if args.setup:

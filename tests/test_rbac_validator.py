@@ -92,6 +92,18 @@ class TestRBACValidator:
         assert len(errors) > 0
         assert any("managedclusters" in error for error in errors)
 
+    def test_validate_cluster_permissions_argocd_none_does_not_check_argocd_permissions(self, validator):
+        """Test that argocd_mode=none does not add Argo CD permissions."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(argocd_mode="none")
+
+        assert all_valid is True
+        assert len(errors) == 0
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
+        assert ("argoproj.io", "applications", "get") not in checked
+        assert ("argoproj.io", "applications", "patch") not in checked
+
     def test_validate_cluster_permissions_argocd_check_adds_read_permissions(self, validator):
         """Test that argocd_mode=check validates Argo CD read permissions."""
         validator.check_permission = MagicMock(return_value=(True, ""))

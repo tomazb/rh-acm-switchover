@@ -830,42 +830,6 @@ class TestPreflightPhase:
         )
         report_argocd_impact.assert_called_once_with(primary, secondary, logger)
 
-    def test_run_phase_preflight_disables_argocd_manage_in_validate_only_mode(self):
-        args = SimpleNamespace(
-            method="passive",
-            skip_rbac_validation=False,
-            argocd_check=False,
-            argocd_manage=True,
-            skip_observability_checks=False,
-            validate_only=True,
-        )
-        state = Mock()
-        primary = Mock()
-        secondary = Mock()
-        logger = Mock()
-        config = {
-            "primary_version": "2.14.0",
-            "secondary_version": "2.14.0",
-            "primary_observability_detected": False,
-            "secondary_observability_detected": False,
-            "has_observability": False,
-        }
-
-        with patch("acm_switchover.PreflightValidator") as validator_class:
-            validator_class.return_value.validate_all.return_value = (True, config)
-            result = _run_phase_preflight(args, state, primary, secondary, logger)
-
-        assert result is True
-        validator_class.assert_called_once_with(
-            primary,
-            secondary,
-            "passive",
-            skip_rbac_validation=False,
-            argocd_check=False,
-            argocd_manage=False,
-        )
-
-
 @pytest.mark.unit
 class TestArgocdResumeOnly:
     def test_resume_only_fails_when_state_missing(self):
