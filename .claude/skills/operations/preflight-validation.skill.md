@@ -128,7 +128,7 @@ If Argo CD or OpenShift GitOps manages ACM resources (BackupSchedule, Restore, M
 python acm_switchover.py --validate-only --primary-context <primary> --secondary-context <secondary> --argocd-check
 ```
 
-> **Note:** GitOps marker detection is heuristic. The label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` and must not be treated as a definitive GitOps signal.
+> **Note:** GitOps marker detection is heuristic. The label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` and must not be treated as a definitive GitOps signal. Marker collection or reporting issues should surface as warnings in the report rather than hard blockers, but the presence of GitOps-managed resources is still important for planning the switchover.
 
 **Pause (before starting switchover steps):**
 - **Automated (Python):** Run switchover with `--argocd-manage`; pauses ACM-touching Applications during primary prep. (Note: cannot be used with `--validate-only`)
@@ -141,7 +141,7 @@ python acm_switchover.py --validate-only --primary-context <primary> --secondary
 
 **Resume (only after Git/desired state reflects the new hub):**
 - **During finalization (Python):** Add `--argocd-resume-after-switchover` to the switchover run (requires `--argocd-manage`; cannot be used with `--validate-only`).
-- **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>` (cannot be used with `--validate-only`, `--argocd-manage`, or `--argocd-resume-after-switchover`)
+- **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>` (cannot be used with `--validate-only`, `--decommission`, `--setup`, `--argocd-manage`, or `--argocd-resume-after-switchover`)
 - **Bash:** `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
 
 **Decision:** If the report shows ACM-touching Applications → advise pausing before Step 1. If pausing is skipped, warn that GitOps may re-apply Git state and undo pause-backup, disable-auto-import, or activation changes. Do not resume until Git reflects the new primary.
