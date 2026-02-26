@@ -450,7 +450,7 @@ Note: `--argocd-manage`, `--argocd-resume-after-switchover`, and `--argocd-resum
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 
-**Bash alternative:** Use `./scripts/preflight-check.sh --argocd-check` and `./scripts/argocd-manage.sh` for detection and pause/resume with a state file. See [scripts/README.md](../scripts/README.md).
+**Bash alternative:** Use `./scripts/preflight-check.sh --argocd-check` and `./scripts/argocd-manage.sh` for detection and pause/resume with a state file. See [scripts/README.md](../../scripts/README.md).
 
 ### Issue: Script Hangs During Restore
 

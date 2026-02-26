@@ -6,13 +6,15 @@ This directory contains automated validation scripts for ACM hub switchover oper
 
 These scripts automate the validation process before and after switchover, ensuring safety and operational readiness.
 
+> ⚠️ **Safety note:** Some utilities mutate cluster state. Review usage and required credentials/state files before running in production.
+
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
 | [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
 | [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
 | [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
-| [`argocd-manage.sh`](argocd-manage.sh) | Pause or resume Argo CD auto-sync for ACM-touching Applications | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume |
-| [`setup-rbac.sh`](setup-rbac.sh) | Deploy RBAC and generate kubeconfigs | Initial setup of switchover access |
+| [`argocd-manage.sh`](argocd-manage.sh) | ⚠️ **Mutating / requires state file**: Pause or resume Argo CD auto-sync for ACM-touching Applications ([usage](#argo-cd-management-script)) | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume |
+| [`setup-rbac.sh`](setup-rbac.sh) | ⚠️ **Mutating (initial setup)**: Deploy RBAC and generate kubeconfigs ([usage](#rbac-bootstrap-script)) | Initial setup of switchover access |
 | [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
 | [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access |
 | [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
@@ -38,18 +40,18 @@ When reporting issues, always include the script version from the output.
 
 ## Idempotency & Safety
 
-**Scripts are fully idempotent and safe to run multiple times:**
+**Scripts are designed for safe re-runs when used as documented:**
 
-- ✅ **Read-only operations** - Only perform `oc get`, `oc describe`, and similar read operations
-- ✅ **No state modifications** - Never modify cluster resources or configuration
-- ✅ **No side effects** - Can be run repeatedly without affecting cluster state
-- ✅ **Safe in production** - No risk of accidental changes or disruptions
+- ✅ **Read-only checks** - `discover-hub.sh`, `preflight-check.sh`, and `postflight-check.sh` only perform `oc get`, `oc describe`, and similar read operations
+- ⚠️ **Mutating with rollback state** - `argocd-manage.sh` patches Argo CD Application sync policy and requires a state file for safe resume
+- ⚠️ **Mutating setup step** - `setup-rbac.sh` creates RBAC resources and service accounts as an initial bootstrap action
+- ✅ **Predictable behavior** - Other utilities are non-disruptive when run with expected inputs
 
 **You can safely:**
-- Run pre-flight checks multiple times before switchover
-- Re-run post-flight verification to monitor stabilization
-- Use scripts for ongoing health monitoring
-- Run in parallel with other operations (read-only)
+- Run pre-flight/post-flight checks multiple times before and after switchover
+- Use read-only scripts for ongoing health monitoring
+- Re-run `argocd-manage.sh` with the same state file to keep pause/resume reversible
+- Run mutating scripts only during planned maintenance windows with the required credentials
 
 ---
 

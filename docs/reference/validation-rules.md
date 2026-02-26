@@ -314,7 +314,7 @@ except ValidationError as e:
 
 ### Cross-Argument Rules
 
-- Secondary context requirement: `secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
+- Secondary context requirement: `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
 - Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`. `--argocd-manage` and `--argocd-resume-after-switchover` also cannot be combined with `--validate-only`. `--argocd-resume-after-switchover` requires `--argocd-manage` and cannot be combined with `--argocd-resume-only`. With `--skip-gitops-check`, `--argocd-check` is ignored and a warning is shown.
 
