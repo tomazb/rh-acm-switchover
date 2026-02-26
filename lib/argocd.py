@@ -250,27 +250,7 @@ def list_argocd_applications(
         for ns in namespaces:
             if not ns:
                 continue
-<<<<<<< HEAD
-            try:
-                items = client.list_custom_resources(
-                    group=ARGOCD_APP_GROUP,
-                    version=ARGOCD_APP_VERSION,
-                    plural=ARGOCD_APP_PLURAL,
-                    namespace=ns,
-                )
-                result.extend(items)
-            except ApiException as e:
-                if e.status == 404:
-                    logger.debug("Failed to list Applications in %s: %s", ns, e)
-                else:
-                    logger.warning(
-                        "Failed to list Applications in %s (status=%s); these apps will not be managed", ns, e.status
-                    )
-            except Exception as e:
-                logger.warning("Failed to list Applications in %s: %s; these apps will not be managed", ns, e)
-=======
             result.extend(_list_argocd_applications_once(client, ns))
->>>>>>> 01b173c (fix(argocd): surface pause and discovery failures)
         return result
     return _list_argocd_applications_once(client, namespace=None)
 
@@ -526,7 +506,7 @@ def resume_autosync(
             namespace=namespace,
             name=name,
             restored=False,
-            skip_reason="marker mismatch or not paused by this run",
+            skip_reason=RESUME_SKIP_REASON_MARKER_MISMATCH,
         )
     patch = {
         "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: None}},
