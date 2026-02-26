@@ -1363,7 +1363,14 @@ class Finalization:
                 failures += 1
                 logger.warning("  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)", hub, ns, name)
                 continue
-            client = self.primary if hub == "primary" else self.secondary
+            if hub == "primary":
+                client = self.primary
+            elif hub == "secondary":
+                client = self.secondary
+            else:
+                failures += 1
+                logger.warning("  Skip %s/%s (unrecognized hub=%s)", ns, name, hub)
+                continue
             if not client:
                 failures += 1
                 logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)

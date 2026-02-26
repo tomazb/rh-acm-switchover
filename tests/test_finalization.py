@@ -231,6 +231,41 @@ class TestFinalization:
         # Must not raise
         finalization._resume_argocd_apps()
 
+    def test_resume_argocd_apps_rejects_unrecognized_hub(
+        self,
+        mock_secondary_client,
+        mock_state_manager,
+        mock_backup_manager,
+    ):
+        """Entries with unknown hub identifiers must be skipped instead of defaulting to secondary."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": False,
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "unexpected-hub",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {}},
+                }
+            ],
+        }.get(key, default)
+
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+        )
+
+        with patch("modules.finalization.argocd_lib.resume_autosync") as resume_autosync:
+            with pytest.raises(SwitchoverError, match="failed for 1"):
+                fin._resume_argocd_apps()
+
+        resume_autosync.assert_not_called()
+
     def test_resume_argocd_apps_raises_when_pause_was_dry_run(self, finalization, mock_state_manager):
         """When the pause step ran in dry-run mode, resume must raise to prevent incorrect state."""
         mock_state_manager.get_config.side_effect = lambda key, default=None: {
