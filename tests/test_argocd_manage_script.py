@@ -227,3 +227,18 @@ def test_resume_returns_success_when_all_patches_succeed(tmp_path):
     assert "Resumed argocd/app-a" in out
     assert "Resumed argocd/app-b" in out
     assert "patch failure" not in out
+
+
+def test_rejects_unsupported_target_value():
+    """Unsupported --target values should fail fast with invalid-args exit code."""
+    code, out = run_argocd_manage(
+        "--context",
+        "test-hub",
+        "--mode",
+        "pause",
+        "--target",
+        "all",
+    )
+
+    assert code == 2
+    assert "unsupported --target value: all" in out

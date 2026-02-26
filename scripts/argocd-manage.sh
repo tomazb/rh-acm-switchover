@@ -76,6 +76,10 @@ while [[ $# -gt 0 ]]; do
         --target)
             [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --target requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             TARGET="$2"
+            if [[ "$TARGET" != "acm" ]]; then
+                echo "Error: unsupported --target value: $TARGET" >&2
+                exit "$EXIT_INVALID_ARGS"
+            fi
             shift 2
             ;;
         --state-file)
