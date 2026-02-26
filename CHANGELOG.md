@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [1.5.9] - 2026-02-26
+
+### Fixed
+
+- **Argo CD resume idempotency (Python)**: Treat marker-mismatch resume results as successful no-ops in both finalization (`--argocd-resume-after-switchover`) and standalone `--argocd-resume-only`, so retries can complete after partial success.
+- **CLI mode conflict validation**: Reject `--argocd-resume-only` when combined with `--decommission` or `--setup` to prevent ambiguous mode selection.
+- **Argo CD script target validation**: `scripts/argocd-manage.sh` now fails fast on unsupported `--target` values instead of accepting them silently.
+- **Finalization GitOps marker hardening**: Wrap `record_gitops_markers` in old-hub observability deletion so marker-recording errors log a warning and do not abort finalization.
+
+## [1.5.8] - 2026-02-23
+
+### Fixed
+
 - **Activation restore rollback safety**: `activation_method=restore` now snapshots and recreates the passive sync `Restore` when activation restore creation fails after a successful delete, reducing manual recovery cases.
 - **BackupSchedule collision race handling**: finalization now re-checks for schedule reappearance before recreate and handles create `409` conflicts with phase-based classification and clearer manual-remediation warnings.
 - **Script and prep cleanup**: removed duplicate postflight status comment, dropped unused `enable_gitops_detection` helper, and moved a local `time` import to module scope in primary prep.
