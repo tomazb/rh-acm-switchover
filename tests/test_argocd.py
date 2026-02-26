@@ -198,7 +198,15 @@ class TestResumeAutosync:
         }
         result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {}}, "run-1")
         assert result.restored is False
-        assert "mismatch" in (result.skip_reason or "").lower()
+        assert result.skip_reason == argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH
+        client.patch_custom_resource.assert_not_called()
+
+    def test_skip_when_marker_missing(self):
+        client = MagicMock()
+        client.get_custom_resource.return_value = {"metadata": {"resourceVersion": "500"}}
+        result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {}}, "run-1")
+        assert result.restored is False
+        assert result.skip_reason == argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING
         client.patch_custom_resource.assert_not_called()
 
     def test_restores_when_marker_matches(self):
@@ -231,14 +239,23 @@ class TestResumeAutosync:
         assert result.restored is False
         assert "patch failed" in (result.skip_reason or "").lower()
 
-    def test_is_resume_noop_true_for_marker_mismatch(self):
+    def test_is_resume_noop_true_for_marker_missing(self):
+        result = argocd_lib.ResumeResult(
+            namespace="argocd",
+            name="app",
+            restored=False,
+            skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING,
+        )
+        assert argocd_lib.is_resume_noop(result) is True
+
+    def test_is_resume_noop_false_for_marker_mismatch(self):
         result = argocd_lib.ResumeResult(
             namespace="argocd",
             name="app",
             restored=False,
             skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH,
         )
-        assert argocd_lib.is_resume_noop(result) is True
+        assert argocd_lib.is_resume_noop(result) is False
 
     def test_is_resume_noop_false_for_patch_failure(self):
         result = argocd_lib.ResumeResult(

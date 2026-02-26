@@ -912,7 +912,38 @@ class TestArgocdResumeOnly:
             ]
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
 
-    def test_resume_only_treats_marker_mismatch_as_already_resumed(self):
+    def test_resume_only_treats_marker_missing_as_already_resumed(self):
+        from acm_switchover import _run_argocd_resume_only
+        from lib import argocd as argocd_lib
+
+        paused_apps = [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {"prune": True}},
+            },
+        ]
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.return_value = argocd_lib.ResumeResult(
+                namespace="argocd",
+                name="app-2",
+                restored=False,
+                skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING,
+            )
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+
+    def test_resume_only_fails_on_marker_mismatch(self):
         from acm_switchover import _run_argocd_resume_only
         from lib import argocd as argocd_lib
 
@@ -941,4 +972,4 @@ class TestArgocdResumeOnly:
                 restored=False,
                 skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH,
             )
-            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
