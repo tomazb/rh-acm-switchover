@@ -95,7 +95,7 @@ python acm_switchover.py \
 > Both hubs share the same object storage backend; re-enabling on the old hub can cause data corruption and split-brain.
 > Only re-enable on the old hub if you are switching back and have shut down these components on the current primary first.
 
-**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused by default; resume only after updating Git/desired state for the new hub, using `--argocd-resume-after-switchover` during finalization or `--argocd-resume-only` as a standalone step. Resume treats already-resumed apps (marker mismatch) as idempotent no-op and fails only when an app cannot be restored for actionable reasons.
+**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused by default; resume only after updating Git/desired state for the new hub, using `--argocd-resume-after-switchover` during finalization or `--argocd-resume-only` as a standalone step. Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
 
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
