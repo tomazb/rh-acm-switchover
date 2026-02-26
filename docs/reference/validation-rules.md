@@ -165,7 +165,11 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--disable-observability-on-secondary` requires `--old-hub-action secondary` and is not valid with `--decommission`
 - `--argocd-resume-only` requires `--secondary-context` (used to resolve the state file for restoring Argo CD auto-sync)
 - `--argocd-resume-only` cannot be used with `--validate-only` (resume performs changes)
-- With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
+- `--argocd-manage` cannot be used with `--validate-only`
+- `--argocd-manage` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-after-switchover` cannot be used with `--validate-only`
+- `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-after-switchover` requires `--argocd-manage`
 - With `--skip-gitops-check`, `--argocd-check` is ignored (GitOps detection is disabled); a warning is emitted if both are set
 
 ### 6. Filesystem Path Validation
@@ -312,7 +316,7 @@ except ValidationError as e:
 
 - Secondary context requirement: `secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
-- Argo CD resume: `--argocd-resume-only` requires `--secondary-context` to resolve the state file and cannot be combined with `--validate-only`. With `--validate-only`, `--argocd-manage` does not perform management; a warning is shown if both are set. With `--skip-gitops-check`, `--argocd-check` is ignored and a warning is shown.
+- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`. `--argocd-manage` and `--argocd-resume-after-switchover` also cannot be combined with `--validate-only`. `--argocd-resume-after-switchover` requires `--argocd-manage` and cannot be combined with `--argocd-resume-only`. With `--skip-gitops-check`, `--argocd-check` is ignored and a warning is shown.
 
 ### Utilities
 

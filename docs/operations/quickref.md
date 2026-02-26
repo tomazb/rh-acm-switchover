@@ -258,9 +258,9 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--argocd-check` | Detect Argo CD and report ACM-touching Applications (preflight; no changes) |
-| `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default) |
-| `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; only after Git updated for new hub) |
-| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; not valid with `--validate-only`) |
+| `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; not valid with `--validate-only` or `--argocd-resume-only`) |
+| `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only` or `--argocd-resume-only`) |
+| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; not valid with `--validate-only`, `--argocd-manage`, or `--argocd-resume-after-switchover`) |
 | `--verbose, -v` | Enable verbose logging |
 
 > **Note:** When using `--activation-method restore`, ensure the passive restore is fully deleted
