@@ -1049,7 +1049,7 @@ check_argocd_acm_resources() {
         return 0
     fi
 
-    local ns_regex='^(open-cluster-management($|-)|open-cluster-management-backup$|open-cluster-management-observability$|open-cluster-management-global-set$|multicluster-engine$|local-cluster$)'
+    local ns_regex='^(open-cluster-management($|-.*)|open-cluster-management-backup$|open-cluster-management-observability$|open-cluster-management-global-set$|multicluster-engine$|local-cluster)$'
     local kinds_json='["MultiClusterHub","MultiClusterEngine","MultiClusterObservability","ManagedCluster","ManagedClusterSet","ManagedClusterSetBinding","Placement","PlacementBinding","Policy","PolicySet","BackupSchedule","Restore","DataProtectionApplication","ClusterDeployment"]'
 
     local found_any=0
