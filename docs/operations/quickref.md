@@ -216,7 +216,7 @@ python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-
 
 Bash: `./scripts/preflight-check.sh --argocd-check`, `./scripts/argocd-manage.sh --mode pause|resume`. See [scripts/README.md](../scripts/README.md).
 
-Note: Resume fails the step if any Application cannot be restored. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
+Note: Resume treats already-resumed apps as idempotent no-ops and fails only when an Application cannot be restored for actionable reasons. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
 
 ## Troubleshooting Commands
 
@@ -260,7 +260,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--argocd-check` | Detect Argo CD and report ACM-touching Applications (preflight; no changes) |
 | `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; not valid with `--validate-only` or `--argocd-resume-only`) |
 | `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only` or `--argocd-resume-only`) |
-| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; not valid with `--validate-only`, `--argocd-manage`, or `--argocd-resume-after-switchover`) |
+| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; not valid with `--validate-only`, `--argocd-manage`, `--argocd-resume-after-switchover`, `--decommission`, or `--setup`) |
 | `--verbose, -v` | Enable verbose logging |
 
 > **Note:** When using `--activation-method restore`, ensure the passive restore is fully deleted

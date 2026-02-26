@@ -251,6 +251,44 @@ class TestCLIArgumentValidation:
         assert "argocd-resume-only" in str(exc_info.value).lower()
         assert "validate-only" in str(exc_info.value).lower()
 
+    def test_argocd_resume_only_rejects_decommission(self):
+        """--argocd-resume-only cannot be combined with --decommission."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=True,
+            argocd_resume_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+        assert "decommission" in str(exc_info.value).lower()
+
+    def test_argocd_resume_only_rejects_setup(self):
+        """--argocd-resume-only cannot be combined with --setup."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            setup=True,
+            admin_kubeconfig=".state/admin.kubeconfig",
+            argocd_resume_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+        assert "setup" in str(exc_info.value).lower()
+
     def test_argocd_manage_rejects_validate_only(self):
         """--argocd-manage cannot be combined with --validate-only."""
         args = MockArgs(

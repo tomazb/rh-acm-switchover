@@ -117,6 +117,14 @@ class ResumeResult:
     skip_reason: Optional[str] = None
 
 
+RESUME_SKIP_REASON_MARKER_MISMATCH = "marker mismatch or not paused by this run"
+
+
+def is_resume_noop(result: ResumeResult) -> bool:
+    """Return True when resume did not patch because app was already resumed by this run."""
+    return (not result.restored) and (result.skip_reason == RESUME_SKIP_REASON_MARKER_MISMATCH)
+
+
 def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     """
     Detect Argo CD installation (operator and/or vanilla).
@@ -492,7 +500,7 @@ def resume_autosync(
             namespace=namespace,
             name=name,
             restored=False,
-            skip_reason="marker mismatch or not paused by this run",
+            skip_reason=RESUME_SKIP_REASON_MARKER_MISMATCH,
         )
     patch = {
         "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: None}},

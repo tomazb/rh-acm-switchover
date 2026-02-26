@@ -221,6 +221,54 @@ class TestFinalization:
             with pytest.raises(SwitchoverError):
                 fin._resume_argocd_apps()
 
+    def test_resume_argocd_apps_allows_marker_mismatch_retry(
+        self,
+        mock_secondary_client,
+        mock_state_manager,
+        mock_backup_manager,
+    ):
+        """Resume should stay idempotent when one app is already resumed on retry."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": False,
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {}},
+                },
+                {
+                    "hub": "secondary",
+                    "namespace": "argocd",
+                    "name": "app-2",
+                    "original_sync_policy": {"automated": {"prune": True}},
+                },
+            ],
+        }.get(key, default)
+
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+        )
+
+        with patch("modules.finalization.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.side_effect = [
+                argocd_lib.ResumeResult(namespace="argocd", name="app-1", restored=True),
+                argocd_lib.ResumeResult(
+                    namespace="argocd",
+                    name="app-2",
+                    restored=False,
+                    skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH,
+                ),
+            ]
+
+            fin._resume_argocd_apps()
+
     def test_resume_argocd_apps_skips_when_no_state(self, finalization, mock_state_manager):
         """When no paused apps are recorded in state, _resume_argocd_apps returns silently."""
         mock_state_manager.get_config.side_effect = lambda key, default=None: {
@@ -616,6 +664,32 @@ class TestFinalization:
             fin._disable_observability_on_secondary()
 
         assert "appears GitOps-managed" not in caplog.text
+        primary.delete_custom_resource.assert_called_once()
+
+    @patch("modules.finalization.record_gitops_markers")
+    @patch("modules.finalization.wait_for_condition")
+    def test_disable_observability_on_secondary_continues_when_marker_recording_fails(
+        self, mock_wait, mock_record_markers, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
+    ):
+        """Marker recording failures must not abort optional MCO deletion flow."""
+        mock_wait.return_value = True
+        mock_record_markers.side_effect = RuntimeError("marker failure")
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+            primary_client=primary,
+            old_hub_action="secondary",
+            disable_observability_on_secondary=True,
+        )
+        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
+        primary.get_pods.return_value = []
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            fin._disable_observability_on_secondary()
+
+        assert "marker recording failed" in caplog.text.lower()
         primary.delete_custom_resource.assert_called_once()
 
     def test_finalize_failure_handling(self, finalization, mock_backup_manager):

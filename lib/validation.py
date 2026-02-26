@@ -421,6 +421,10 @@ class InputValidator:
         if has_argocd_resume_only:
             if has_validate_only:
                 raise ValidationError("--argocd-resume-only cannot be used with --validate-only")
+            if is_decommission:
+                raise ValidationError("--argocd-resume-only cannot be used with --decommission")
+            if is_setup:
+                raise ValidationError("--argocd-resume-only cannot be used with --setup")
             if not (hasattr(args, "secondary_context") and args.secondary_context):
                 raise ValidationError("--argocd-resume-only requires --secondary-context to resolve state file")
 

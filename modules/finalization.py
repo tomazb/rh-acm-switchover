@@ -774,13 +774,21 @@ class Finalization:
         for mco in mcos:
             metadata = mco.get("metadata", {})
             mco_name = metadata.get("name", "unknown")
-            markers = record_gitops_markers(
-                context="primary",
-                namespace="",  # MCO is cluster-scoped
-                kind="MultiClusterObservability",
-                name=mco_name,
-                metadata=metadata,
-            )
+            try:
+                markers = record_gitops_markers(
+                    context="primary",
+                    namespace="",  # MCO is cluster-scoped
+                    kind="MultiClusterObservability",
+                    name=mco_name,
+                    metadata=metadata,
+                )
+            except Exception as e:
+                logger.warning(
+                    "GitOps marker recording failed for MultiClusterObservability %s: %s",
+                    mco_name,
+                    e,
+                )
+                markers = []
             if markers:
                 logger.warning(
                     "MultiClusterObservability %s appears GitOps-managed (%s). Coordinate deletion to avoid drift.",
@@ -1378,6 +1386,8 @@ class Finalization:
             result = argocd_lib.resume_autosync(client, ns, name, orig, run_id)
             if result.restored:
                 logger.info("  Resumed %s/%s on %s", ns, name, hub)
+            elif argocd_lib.is_resume_noop(result):
+                logger.info("  Already resumed %s/%s on %s", ns, name, hub)
             else:
                 failures += 1
                 logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")

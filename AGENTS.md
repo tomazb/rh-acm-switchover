@@ -160,6 +160,7 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 - Current important cross-argument rules (enforced by `InputValidator.validate_all_cli_args`):
     - `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
     - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
+    - `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`.
     - `--setup` requires `--admin-kubeconfig` and validates `--token-duration` format (e.g., `48h`, `30m`, `3600s`).
 - If you change these rules, update `docs/reference/validation-rules.md`, `docs/operations/usage.md`, and `docs/operations/quickref.md` to match.
 
@@ -197,7 +198,7 @@ Container image and Helm chart metadata follow the same version: the Containerfi
 | **Python Tool** | `lib/__init__.py` | `__version__`, `__version_date__` |
 | **README** | `README.md` | Version badge at top of file |
 | **Container Image** | `container-bootstrap/Containerfile` | `LABEL version` |
-| **Helm Chart** | `deploy/helm/Chart.yaml` | `version`, `appVersion` (appVersion = tool version) |
+| **Helm Chart** | `deploy/helm/acm-switchover-rbac/Chart.yaml` | `version`, `appVersion` (appVersion = tool version) |
 
 ### Bash Scripts Version
 
@@ -249,7 +250,7 @@ When making script changes:
 1. [ ] Update `SCRIPT_VERSION` in `scripts/constants.sh`
 2. [ ] Update `SCRIPT_VERSION_DATE` to current date
 3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
-4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/Chart.yaml](deploy/helm/Chart.yaml)
+4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
 5. [ ] Update version in `README.md` (top of file)
 6. [ ] Add changelog entry in `CHANGELOG.md`
 7. [ ] Update `scripts/README.md` if new features/checks added
@@ -259,7 +260,7 @@ When making Python code changes:
 1. [ ] Update `__version__` in `lib/__init__.py`
 2. [ ] Update `__version_date__` to current date
 3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
-4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/Chart.yaml](deploy/helm/Chart.yaml)
+4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
 5. [ ] Update version in `README.md` (top of file)
 6. [ ] Add changelog entry in `CHANGELOG.md`
 7. [ ] Keep Python and Bash versions in sync if changes affect both

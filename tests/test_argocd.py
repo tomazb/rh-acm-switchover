@@ -231,6 +231,24 @@ class TestResumeAutosync:
         assert result.restored is False
         assert "patch failed" in (result.skip_reason or "").lower()
 
+    def test_is_resume_noop_true_for_marker_mismatch(self):
+        result = argocd_lib.ResumeResult(
+            namespace="argocd",
+            name="app",
+            restored=False,
+            skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH,
+        )
+        assert argocd_lib.is_resume_noop(result) is True
+
+    def test_is_resume_noop_false_for_patch_failure(self):
+        result = argocd_lib.ResumeResult(
+            namespace="argocd",
+            name="app",
+            restored=False,
+            skip_reason="patch failed: 403 Forbidden",
+        )
+        assert argocd_lib.is_resume_noop(result) is False
+
 
 @pytest.mark.unit
 class TestDetectArgocdInstallation:
