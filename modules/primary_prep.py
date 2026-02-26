@@ -106,6 +106,8 @@ class PrimaryPreparation:
             discoveries.append((client, hub_label, discovery))
         if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
             logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
+            self.state.set_config("argocd_paused_apps", [])
+            self.state.set_config("argocd_run_id", None)
             return
         run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
         self.state.set_config("argocd_run_id", run_id)

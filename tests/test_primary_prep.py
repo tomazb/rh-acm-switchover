@@ -282,6 +282,36 @@ class TestPrimaryPreparation:
         )
         assert dry_run_call.args[1] is True
 
+    def test_pause_argocd_acm_apps_clears_state_when_no_crd(self, mock_primary_client, mock_state_manager):
+        """No Applications CRD should clear stale Argo CD pause state before returning."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=False,
+            argocd_manage=True,
+        )
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "stale-run",
+            "argocd_paused_apps": [{"hub": "primary", "namespace": "argocd", "name": "stale-app"}],
+        }.get(key, default)
+
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=False,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+
+        with patch(
+            "modules.primary_prep.argocd_lib.detect_argocd_installation",
+            return_value=discovery,
+        ):
+            prep._pause_argocd_acm_apps()
+
+        assert any(call.args == ("argocd_paused_apps", []) for call in mock_state_manager.set_config.call_args_list)
+        assert any(call.args == ("argocd_run_id", None) for call in mock_state_manager.set_config.call_args_list)
+
     def test_pause_argocd_acm_apps_persists_each_app_incrementally(self, mock_primary_client, mock_state_manager):
         """Each paused app must be saved to state independently so a crash preserves prior pauses.
 
