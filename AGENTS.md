@@ -293,6 +293,12 @@ The `.claude/skills/` directory contains conversational guides for Claude to hel
 | [grafana-no-data.skill.md](.claude/skills/troubleshooting/grafana-no-data.skill.md) | No metrics in Grafana dashboards | Observatorium restart, collector checks |
 | [restore-stuck.skill.md](.claude/skills/troubleshooting/restore-stuck.skill.md) | Restore stuck in "Running" state | Velero diagnostics, storage checks |
 
+### Automation SKILLS
+|
+| SKILL | Purpose | Invocation |
+| --- | --- | --- |
+| [release/SKILL.md](.claude/skills/release/SKILL.md) | Bump version across all 6 project version locations | `/release X.Y.Z` |
+
 ### Using SKILLS
 
 SKILLS are designed for conversational guidance. When helping with switchover:
@@ -300,3 +306,10 @@ SKILLS are designed for conversational guidance. When helping with switchover:
 2. Follow the appropriate method (passive or full restore)
 3. Use troubleshooting SKILLS when issues arise
 4. Reference the runbook for detailed command explanations
+
+### Claude Code Hooks
+
+Auto-formatting and file protection hooks are configured in `.claude/settings.json`:
+
+- **Auto-format**: After every `Edit`/`Write` on a `.py` file, `black` and `isort` run automatically
+- **File protection**: Edits to `completions/`, `get-pip.py`, and `*.lock` files are blocked
