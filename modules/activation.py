@@ -15,6 +15,7 @@ from lib.constants import (
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
     BACKUP_NAMESPACE,
+    CLEANUP_BEFORE_RESTORE_VALUE,
     DELETE_REQUEST_TIMEOUT,
     IMMEDIATE_IMPORT_ANNOTATION,
     IMPORT_CONTROLLER_CONFIG_CM,
@@ -35,6 +36,7 @@ from lib.constants import (
     VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import FatalError, SwitchoverError
+from lib.gitops_detector import record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
 from lib.waiter import wait_for_condition
@@ -217,13 +219,26 @@ class SecondaryActivation:
         if not restore:
             raise FatalError(f"{restore_name} not found on secondary hub")
 
+        # Record GitOps markers if present (non-critical)
+        metadata = restore.get("metadata", {})
+        try:
+            record_gitops_markers(
+                context="secondary",
+                namespace=BACKUP_NAMESPACE,
+                kind="Restore",
+                name=restore_name,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            logger.warning("GitOps marker recording failed for Restore %s: %s", restore_name, exc)
+
         status = restore.get("status", {})
         phase = status.get("phase", "unknown")
         message = status.get("lastMessage", "")
 
         # "Enabled" = continuous sync running
-        # "Finished" = initial sync completed successfully (also valid for activation)
-        if phase not in ("Enabled", "Finished"):
+        # "Finished"/"Completed" = initial sync completed successfully (also valid for activation)
+        if phase not in ("Enabled", "Finished", "Completed"):
             raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
 
         logger.info("Passive sync verified (%s): %s", phase, message)
@@ -271,8 +286,12 @@ class SecondaryActivation:
         # Discover passive sync restore if it still exists; tolerate missing restore on resume
         restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
         restore_name = (restore or {}).get("metadata", {}).get("name")
+        passive_restore_snapshot: Optional[Dict] = None
+        passive_restore_deleted = False
 
         if restore_name:
+            assert restore is not None  # Guaranteed by restore_name extraction
+            passive_restore_snapshot = self._build_restore_snapshot(restore)
             try:
                 logger.info("Deleting passive sync restore %s before activation restore", restore_name)
                 self.secondary.delete_custom_resource(
@@ -283,9 +302,12 @@ class SecondaryActivation:
                     namespace=BACKUP_NAMESPACE,
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
                 )
+                passive_restore_deleted = True
             except ApiException as e:
                 if getattr(e, "status", None) == 404:
-                    logger.info("Passive sync restore %s already deleted; continuing with activation restore", restore_name)
+                    logger.info(
+                        "Passive sync restore %s already deleted; continuing with activation restore", restore_name
+                    )
                 else:
                     raise FatalError(f"Failed to delete passive sync restore {restore_name}: {e}") from e
 
@@ -313,7 +335,7 @@ class SecondaryActivation:
                 "namespace": BACKUP_NAMESPACE,
             },
             "spec": {
-                "cleanupBeforeRestore": "CleanupRestored",
+                "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
                 "veleroCredentialsBackupName": VELERO_BACKUP_SKIP,
                 "veleroResourcesBackupName": VELERO_BACKUP_SKIP,
@@ -330,7 +352,70 @@ class SecondaryActivation:
             )
             logger.info("Created %s resource", MANAGED_CLUSTER_RESTORE_NAME)
         except Exception as e:
+            if passive_restore_deleted and passive_restore_snapshot:
+                try:
+                    self._recreate_restore_from_snapshot(passive_restore_snapshot)
+                except Exception as rollback_error:
+                    raise FatalError(
+                        f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}. "
+                        f"Rollback failed to recreate passive sync restore {restore_name}: {rollback_error}"
+                    ) from e
+
+                raise FatalError(
+                    f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}. "
+                    f"Recreated passive sync restore {restore_name} as rollback."
+                ) from e
             raise FatalError(f"Failed to create activation restore {MANAGED_CLUSTER_RESTORE_NAME}: {e}") from e
+
+    @staticmethod
+    def _build_restore_snapshot(restore: Dict) -> Dict:
+        """Build a minimal restore body that can be safely recreated."""
+        metadata = restore.get("metadata", {})
+        restore_name = metadata.get("name")
+        if not restore_name:
+            raise FatalError("Passive sync restore missing metadata.name")
+
+        snapshot_metadata = {
+            "name": restore_name,
+            "namespace": metadata.get("namespace", BACKUP_NAMESPACE),
+        }
+        labels = metadata.get("labels")
+        annotations = metadata.get("annotations")
+        if labels:
+            snapshot_metadata["labels"] = labels
+        if annotations:
+            snapshot_metadata["annotations"] = annotations
+
+        return {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": snapshot_metadata,
+            "spec": restore.get("spec", {}),
+        }
+
+    def _recreate_restore_from_snapshot(self, restore_snapshot: Dict) -> None:
+        """Best-effort rollback helper for recreate-on-failure semantics."""
+        restore_name = restore_snapshot.get("metadata", {}).get("name", "unknown")
+        try:
+            self.secondary.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body=restore_snapshot,
+                namespace=BACKUP_NAMESPACE,
+            )
+            logger.warning(
+                "Recreated passive sync restore %s after activation restore creation failure",
+                restore_name,
+            )
+        except ApiException as e:
+            if getattr(e, "status", None) == 409:
+                logger.warning(
+                    "Passive sync restore %s already exists during rollback recreation",
+                    restore_name,
+                )
+                return
+            raise
 
     def _wait_for_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
         """Wait until a restore resource is fully deleted."""
@@ -705,7 +790,7 @@ class SecondaryActivation:
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST,
                 "veleroCredentialsBackupName": VELERO_BACKUP_LATEST,
                 "veleroResourcesBackupName": VELERO_BACKUP_LATEST,
-                "cleanupBeforeRestore": "CleanupRestored",
+                "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
             },
         }
 
@@ -755,11 +840,11 @@ class SecondaryActivation:
             message = status.get("lastMessage", "")
 
             # For passive sync, "Enabled" means the restore is actively syncing - this is the success state
-            # For full restore, "Finished" means the restore completed
+            # For full restore, "Finished"/"Completed" mean the restore completed
             if self.method == "passive" and phase == "Enabled":
                 return True, message or "passive sync enabled and running"
-            if phase == "Finished":
-                return True, message or "restore finished"
+            if phase in ("Finished", "Completed"):
+                return True, message or "restore completed"
             if phase in ("Failed", "PartiallyFailed", "FinishedWithErrors", "FailedWithErrors"):
                 raise FatalError(f"Restore failed: {phase} - {message}")
 

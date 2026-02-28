@@ -145,6 +145,35 @@ oc logs -n open-cluster-management-backup deployment/velero -c velero --context 
 
 ---
 
+### Issue: Passive Restore in Error with Velero Restores in FailedValidation (BSL Unavailable)
+
+This scenario typically appears when the passive sync restore on the secondary hub has moved to `Error` because one or more underlying Velero restores failed validation due to a temporarily unavailable BackupStorageLocation (BSL).
+
+**Symptoms:**
+- `restore-acm-passive-sync` (or similar) on the secondary hub shows `status.phase: Error`.
+- Its `status.lastMessage` mentions Velero restores failing validation.
+- The related `restore.velero.io` objects for passive sync are in `status.phase: FailedValidation` with messages about the BSL being unavailable.
+
+**High-level remediation:**
+1. Confirm the BSL is healthy again on the secondary hub.
+2. Delete only the failed Velero restores that belong to the passive sync restore.
+3. Allow the passive-sync controller to retry; it will recreate new Velero restores against the same backups once the BSL is Available.
+
+Conceptually, you are just clearing failed “attempt” objects so the controller can try again; no previously restored data is rolled back.
+
+**Conversation guidance:**
+- Ask the operator to:
+  - Check the BSL phase and message on the secondary hub and confirm it is now `Available`.
+  - Identify Velero restores whose names start with the passive sync prefix (for example, `restore-acm-passive-sync-…`) and that are in `FailedValidation`.
+  - Delete those specific Velero restore objects (not the backups themselves).
+- Explain that after deletion:
+  - The passive-sync controller should recreate fresh Velero restores for the same backups.
+  - The cluster-level restore (`restore-acm-passive-sync`) should move back to `Enabled` (continuous passive sync) or to `Finished` if activation has already happened.
+
+Reassure the operator that deleting only the `FailedValidation` Velero restore CRs is safe in this context: they never successfully applied data because the BSL was unavailable; this simply lets the controller retry once storage has recovered.
+
+---
+
 ### Issue: Restore Timeout
 
 **For very large restores (many managed clusters):**

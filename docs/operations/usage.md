@@ -14,6 +14,8 @@ python acm_switchover.py \
   --method passive
 ```
 
+Optional: add `--argocd-check` to include Argo CD discovery and a summary of which Argo CD Applications touch ACM resources (read-only; no changes). If `--skip-gitops-check` is set, `--argocd-check` is ignored.
+
 Note: `--secondary-context` is required for all switchover operations unless you are using `--decommission`.
 
 **What this checks:**
@@ -25,6 +27,10 @@ Note: `--secondary-context` is required for all switchover operations unless you
 - ✓ **CRITICAL**: All ClusterDeployments have `preserveOnDelete=true`
 - ✓ Passive sync restore is current (Method 1 only)
 - ✓ ACM Observability detected (if present)
+- ✓ GitOps marker detection warnings for ArgoCD/Flux (unless `--skip-gitops-check`)
+- ✓ Argo CD discovery and ACM-impact summary on both hubs (when `--argocd-check` is set)
+
+Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
 
 **Expected output:**
 ```
@@ -88,6 +94,8 @@ python acm_switchover.py \
 > **Safety warning:** Do **NOT** re-enable Thanos Compactor or Observatorium API on the old hub after switchover.
 > Both hubs share the same object storage backend; re-enabling on the old hub can cause data corruption and split-brain.
 > Only re-enable on the old hub if you are switching back and have shut down these components on the current primary first.
+
+**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused by default; resume only after updating Git/desired state for the new hub, using `--argocd-resume-after-switchover` during finalization or `--argocd-resume-only` as a standalone step. Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
 
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
@@ -408,6 +416,41 @@ oc rollout restart deployment/observability-observatorium-api \
 ```
 
 Wait 10 minutes for metrics collection to resume.
+
+### Argo CD Detection and Management
+
+When Argo CD manages ACM resources (BackupSchedule, Restore, ManagedCluster, etc.), auto-sync can fight switchover steps. The tool can detect and optionally manage Argo CD:
+
+**Detection only (no changes):**
+```bash
+python acm_switchover.py \
+  --validate-only \
+  --primary-context primary-acm-hub \
+  --secondary-context secondary-acm-hub \
+  --argocd-check
+```
+
+**Pause auto-sync during switchover (recommended if GitOps manages ACM):**
+```bash
+python acm_switchover.py \
+  --primary-context primary-acm-hub \
+  --secondary-context secondary-acm-hub \
+  --method passive \
+  --old-hub-action secondary \
+  --argocd-manage
+```
+
+Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and left paused by default. State is stored in the switchover state file.
+
+**Resume auto-sync after updating Git for the new hub:**
+- During finalization (opt-in): add `--argocd-resume-after-switchover` to the same run.
+- Standalone later: `--argocd-resume-only` with `--primary-context` and `--secondary-context` to restore from state.
+
+Note: `--argocd-manage`, `--argocd-resume-after-switchover`, and `--argocd-resume-only` are not compatible with `--validate-only` (they imply restore/pause behavior). `--argocd-resume-only` is also not compatible with `--decommission` or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
+
+⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
+
+**Bash alternative:** Use `./scripts/preflight-check.sh --argocd-check` and `./scripts/argocd-manage.sh` for detection and pause/resume with a state file. See [scripts/README.md](../../scripts/README.md).
 
 ### Issue: Script Hangs During Restore
 

@@ -13,6 +13,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [1.5.9] - 2026-02-26
+
+### Fixed
+
+- **Argo CD resume idempotency (Python)**: Treat missing-marker resume results as successful no-ops in both finalization (`--argocd-resume-after-switchover`) and standalone `--argocd-resume-only` while failing foreign marker mismatches, so retries stay idempotent without masking ownership conflicts.
+- **CLI mode conflict validation**: Reject `--argocd-resume-only` when combined with `--decommission` or `--setup` to prevent ambiguous mode selection.
+- **Argo CD script target validation**: `scripts/argocd-manage.sh` now fails fast on unsupported `--target` values instead of accepting them silently.
+- **Finalization GitOps marker hardening**: Wrap `record_gitops_markers` in old-hub observability deletion so marker-recording errors log a warning and do not abort finalization.
+
+## [1.5.8] - 2026-02-23
+
+### Fixed
+
+- **Activation restore rollback safety**: `activation_method=restore` now snapshots and recreates the passive sync `Restore` when activation restore creation fails after a successful delete, reducing manual recovery cases.
+- **BackupSchedule collision race handling**: finalization now re-checks for schedule reappearance before recreate and handles create `409` conflicts with phase-based classification and clearer manual-remediation warnings.
+- **Script and prep cleanup**: removed duplicate postflight status comment, dropped unused `enable_gitops_detection` helper, and moved a local `time` import to module scope in primary prep.
+- **Argo CD pause error handling**: Wrap `patch_custom_resource` in `pause_autosync` with the same `try/except` structure used by `resume_autosync`; returns `patched=False` on failure instead of propagating uncaught exceptions.
+- **GitOps marker recording**: Guard both `record_gitops_markers` calls in `backup_validators.py` with `try/except` so detection failures emit a warning but do not fail the preflight check.
+- **GitOps marker recording (ClusterDeployment validator)**: Guard `record_gitops_markers` in `cluster_validators.py` with `try/except` so marker detection errors are logged as warnings and do not abort preflight validation.
+- **GitOps collector reset safety**: `GitOpsCollector.reset()` now clears both `_instance` and class `_initialized` to guarantee full re-initialization on the next `get_instance()` call.
+- **Test fixture consistency**: `test_resume_argocd_apps_raises_on_failure` now uses the shared `mock_state_manager` and `mock_backup_manager` fixtures instead of inline `Mock()`.
+- **CodeQL security**: Fix incomplete URL substring sanitization in `gitops_detector.py` (use key-prefix boundary checks instead of `in` substring); suppress false-positive clear-text logging alert in `waiter.py`.
+- **Docs**: Bump Last Updated dates in `architecture.md` and `ACM_SWITCHOVER_RUNBOOK.md`.
+
+## [1.5.7] - 2026-02-23
+
+### Fixed
+
+- **GitOps warning visibility on failure paths**: Always emit consolidated GitOps marker report after operation execution (success, failure, exception, or interrupt) and restore immediate MultiClusterObservability GitOps warning before deletion.
+
+## [1.5.6] - 2026-02-21
+
+### Added
+
+- **Argo CD script regression tests**: Added `tests/test_argocd_manage_script.py` to verify partial pause persistence and resume exit-code semantics on patch failures.
+
+### Fixed
+
+- **Argo CD pause state durability (script)**: `scripts/argocd-manage.sh` now writes partial pause state before aborting when a later Application patch fails.
+- **Argo CD resume failure signaling (script)**: `scripts/argocd-manage.sh` now exits non-zero when one or more resume patch operations fail, while still attempting remaining Applications.
+
+## [1.5.5] - 2026-02-03
+
+### Changed
+
+- **Docs**: Updated architecture and findings report for GitOps detection/reporting and passive sync phase handling.
+
+### Fixed
+
+- **Argo CD auto-sync pause**: Treat `spec.syncPolicy.automated: {}` as enabled so pause removes auto-sync for those Applications.
+- **Argo CD pause scope**: Check Applications CRD per hub to avoid skipping secondary pause when primary lacks Argo CD.
+- **Validate-only guard**: Reject `--argocd-resume-only` with `--validate-only` to enforce no-change validation runs.
+- **Argo CD install reporting (scripts)**: Avoid labeling operator installs as vanilla and only fall back to cluster-wide scans when no ArgoCD instances are detected.
+- **Postflight ACM version detection (scripts)**: Fall back to jsonpath when MCH JSON is unavailable so auto-import strategy check doesn't fail spuriously.
+- **Argo CD resume-only**: Return non-success when state lacks `argocd_run_id` or paused apps to avoid false positives.
+- **Argo CD resume auto-sync**: Handle unexpected patch errors without propagating exceptions.
+- **Preflight GitOps marker collection (scripts)**: Run ClusterDeployment loop in current shell so detections persist.
+- **Postflight auto-import strategy (scripts)**: Skip strategy checks when the new hub ACM version is unknown.
+
+## [1.5.4] - 2026-01-31
+
+### Added
+
+- **GitOps marker detection**: Detect ArgoCD/Flux-managed resources and support `--skip-gitops-check` to suppress drift warnings.
+
+### Changed
+
+- **GitOps MCO handling**: Removed per-resource warning during MCO deletion in favor of consolidated reporting.
+
+### Fixed
+
+- **GitOps managed-by matching**: Avoid substring false positives for `app.kubernetes.io/managed-by`.
+- **GitOps report counters (bash)**: Prevent `set -e` exits on arithmetic increments.
+- **Passive sync phase validation**: Accept `Completed` as valid passive sync restore state alongside `Enabled` and `Finished`.
+
 ## [1.5.3] - 2026-01-29
 
 ### Fixed
@@ -803,7 +878,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.9...HEAD
+[1.5.9]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.8...v1.5.9
+[1.5.8]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.7...v1.5.8
+[1.5.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...v1.5.7
+[1.5.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...v1.5.6
+[1.5.5]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.1...v1.5.3
 [1.5.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.13...v1.5.0
@@ -974,7 +1055,6 @@ pip install -r requirements.txt
 
 ---
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.11...HEAD
 [1.4.11]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.10...v1.4.11
 [1.4.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.9...v1.4.10
 [1.4.9]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.8...v1.4.9

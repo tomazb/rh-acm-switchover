@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file=\"$CLAUDE_FILE_PATH\"; if [[ \"$file\" == *.py ]]; then black --quiet \"$file\" 2>/dev/null && isort --quiet \"$file\" 2>/dev/null; fi"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file=\"$CLAUDE_FILE_PATH\"; case \"$file\" in */completions/*|*/get-pip.py|*.lock) echo 'BLOCK: This is a protected file (generated/vendored/lock). Do not edit.' >&2; exit 2;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}

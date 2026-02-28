@@ -37,6 +37,8 @@ fi
 # Parse arguments
 NEW_HUB_CONTEXT=""
 OLD_HUB_CONTEXT=""
+SKIP_GITOPS_CHECK=0
+ARGOCD_CHECK=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -48,12 +50,22 @@ while [[ $# -gt 0 ]]; do
             OLD_HUB_CONTEXT="$2"
             shift 2
             ;;
+        --skip-gitops-check)
+            SKIP_GITOPS_CHECK=1
+            shift
+            ;;
+        --argocd-check)
+            ARGOCD_CHECK=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>]"
+            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>] [--skip-gitops-check] [--argocd-check]"
             echo ""
             echo "Options:"
             echo "  --new-hub-context     Kubernetes context for new active hub (required)"
             echo "  --old-hub-context     Kubernetes context for old primary hub (optional)"
+            echo "  --skip-gitops-check   Disable GitOps marker detection (ArgoCD, Flux)"
+            echo "  --argocd-check        Detect ArgoCD instances and ACM resources managed by GitOps"
             echo "  --help, -h            Show this help message"
             exit "$EXIT_SUCCESS"
             ;;
@@ -64,6 +76,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Configure GitOps detection
+if [[ $SKIP_GITOPS_CHECK -eq 1 ]]; then
+    disable_gitops_detection
+fi
 
 # Validate required arguments
 if [[ -z "$NEW_HUB_CONTEXT" ]]; then
@@ -160,7 +177,6 @@ if [[ $TOTAL_CLUSTERS -gt 0 ]]; then
     check_pass "Found $TOTAL_CLUSTERS managed cluster(s) (excluding $LOCAL_CLUSTER_NAME)"
     
     # Check Available status
-    # Check Available status
     # Identify clusters that are NOT Available (single API call)
     # This correctly catches clusters with Available=False, Unknown, or missing status
     UNAVAILABLE_LIST=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MANAGED_CLUSTER -o json 2>/dev/null | \
@@ -207,8 +223,18 @@ if oc --context="$NEW_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /
     check_pass "Observability namespace exists"
 
     # Check MCO CR status
-    MCO_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
+    MCO_STATUS=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCO observability -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
     
+    # Detect GitOps markers on MCO (cluster-scoped, no namespace)
+    MCO_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCO observability -o json 2>/dev/null || echo "{}")
+    if [[ -n "$MCO_JSON" && "$MCO_JSON" != "{}" ]]; then
+        MCO_NAME=$(echo "$MCO_JSON" | jq -r '.metadata.name // "observability"')
+        GITOPS_MARKERS=$(detect_gitops_markers "$MCO_JSON")
+        if [[ -n "$GITOPS_MARKERS" ]]; then
+            collect_gitops_markers "new-hub" "" "MultiClusterObservability" "$MCO_NAME" "$GITOPS_MARKERS"
+        fi
+    fi
+
     if [[ "$MCO_STATUS" == "True" ]]; then
         check_pass "MultiClusterObservability CR is Ready"
     else
@@ -280,9 +306,22 @@ section_header "5. Checking Backup Configuration"
 
 BACKUP_SCHEDULE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" --no-headers 2>/dev/null | wc -l || true)
 if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
-    SCHEDULE_NAME=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    PAUSED=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE "$SCHEDULE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.spec.paused}' 2>/dev/null)
-    
+    SCHEDULE_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "")
+    # When no BackupSchedule exists, jq '.items[0]' outputs the literal "null"; treat as empty
+    if [[ "$SCHEDULE_JSON" == "null" ]]; then
+        SCHEDULE_JSON=""
+    fi
+    SCHEDULE_NAME=$(echo "$SCHEDULE_JSON" | jq -r '.metadata.name // ""' 2>/dev/null || echo "")
+    PAUSED=$(echo "$SCHEDULE_JSON" | jq -r '.spec.paused // false' 2>/dev/null || echo "")
+
+    # Detect GitOps markers on BackupSchedule
+    if [[ -n "$SCHEDULE_JSON" ]]; then
+        GITOPS_MARKERS=$(detect_gitops_markers "$SCHEDULE_JSON")
+        if [[ -n "$GITOPS_MARKERS" ]]; then
+            collect_gitops_markers "new-hub" "$BACKUP_NAMESPACE" "BackupSchedule" "$SCHEDULE_NAME" "$GITOPS_MARKERS"
+        fi
+    fi
+
     if [[ "$PAUSED" == "false" ]] || [[ -z "$PAUSED" ]]; then
         check_pass "BackupSchedule '$SCHEDULE_NAME' is enabled (not paused)"
         
@@ -460,7 +499,17 @@ if [[ -n "$OLD_HUB_CONTEXT" ]]; then
     # Old hub observability safety:
     # The previous primary must either have no MCO, or (if MCO exists) have key components scaled down.
     if oc --context="$OLD_HUB_CONTEXT" get namespace "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
-        if oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability -n "$OBSERVABILITY_NAMESPACE" &> /dev/null; then
+        if oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability &> /dev/null; then
+            # Detect GitOps markers on old hub MCO (cluster-scoped, no namespace)
+            OLD_MCO_JSON=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MCO observability -o json 2>/dev/null || echo "{}")
+            if [[ -n "$OLD_MCO_JSON" && "$OLD_MCO_JSON" != "{}" ]]; then
+                OLD_MCO_NAME=$(echo "$OLD_MCO_JSON" | jq -r '.metadata.name // "observability"')
+                GITOPS_MARKERS=$(detect_gitops_markers "$OLD_MCO_JSON")
+                if [[ -n "$GITOPS_MARKERS" ]]; then
+                    collect_gitops_markers "old-hub" "" "MultiClusterObservability" "$OLD_MCO_NAME" "$GITOPS_MARKERS"
+                fi
+            fi
+
             OLD_COMPACTOR=$(get_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=thanos-compact" "$OBS_THANOS_COMPACT_POD")
             OLD_OBSERVATORIUM_API_PODS=$(get_pod_count "$OLD_HUB_CONTEXT" "$OBSERVABILITY_NAMESPACE" "app.kubernetes.io/name=observatorium-api" "$OBS_API_POD")
 
@@ -517,53 +566,75 @@ fi
 # Check 9: Verify Auto-Import Strategy (ACM 2.14+)
 section_header "9. Checking Auto-Import Strategy (ACM 2.14+)"
 
-# Get ACM version on new hub
-if ! NEW_HUB_VERSION=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$NEW_HUB_VERSION" ]]; then
+# Get ACM version on new hub and detect GitOps markers on MCH
+NEW_HUB_MCH_JSON=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o json 2>/dev/null | jq '.items[0]' 2>/dev/null || echo "{}")
+if [[ -n "$NEW_HUB_MCH_JSON" && "$NEW_HUB_MCH_JSON" != "{}" && "$NEW_HUB_MCH_JSON" != "null" ]]; then
+    NEW_HUB_MCH_NAME=$(echo "$NEW_HUB_MCH_JSON" | jq -r '.metadata.name // "multiclusterhub"')
+    GITOPS_MARKERS=$(detect_gitops_markers "$NEW_HUB_MCH_JSON")
+    if [[ -n "$GITOPS_MARKERS" ]]; then
+        collect_gitops_markers "new-hub" "$ACM_NAMESPACE" "MultiClusterHub" "$NEW_HUB_MCH_NAME" "$GITOPS_MARKERS"
+    fi
+    NEW_HUB_VERSION=$(echo "$NEW_HUB_MCH_JSON" | jq -r '.status.currentVersion // "unknown"')
+else
+    NEW_HUB_VERSION=$(oc --context="$NEW_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null || echo "unknown")
+fi
+
+if [[ "$NEW_HUB_VERSION" == "unknown" ]]; then
     check_fail "New hub: Could not determine ACM version. Skipping auto-import strategy check."
-    NEW_HUB_VERSION="unknown"
-fi
+else
+    # Check new hub auto-import strategy
+    NEW_HUB_STRATEGY=$(get_auto_import_strategy "$NEW_HUB_CONTEXT")
 
-# Check new hub auto-import strategy
-NEW_HUB_STRATEGY=$(get_auto_import_strategy "$NEW_HUB_CONTEXT")
-
-if [[ "$NEW_HUB_VERSION" != "unknown" ]] && is_acm_214_or_higher "$NEW_HUB_VERSION"; then
-    if [[ "$NEW_HUB_STRATEGY" == "error" ]]; then
-        check_fail "New hub: Could not retrieve autoImportStrategy (connection or API error)"
-    elif [[ "$NEW_HUB_STRATEGY" == "default" ]]; then
-        check_pass "New hub: Using default autoImportStrategy ($AUTO_IMPORT_STRATEGY_DEFAULT) - correct post-switchover state"
-    elif [[ "$NEW_HUB_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
-        check_pass "New hub: autoImportStrategy explicitly set to $AUTO_IMPORT_STRATEGY_DEFAULT"
-    else
-        check_warn "New hub: autoImportStrategy is set to '$NEW_HUB_STRATEGY' (non-default)"
-        echo -e "${YELLOW}       Post-switchover, this should be removed to restore default behavior.${NC}"
-        echo -e "${YELLOW}       To reset to default, run:${NC}"
-        echo -e "${YELLOW}         oc -n $MCE_NAMESPACE delete configmap $IMPORT_CONTROLLER_CONFIGMAP${NC}"
-        echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
-    fi
-elif [[ "$NEW_HUB_VERSION" != "unknown" ]]; then
-    check_pass "New hub: ACM version $NEW_HUB_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
-fi
-
-# Also check old hub if provided
-if [[ -n "$OLD_HUB_CONTEXT" ]]; then
-    if ! OLD_HUB_VERSION=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$OLD_HUB_VERSION" ]]; then
-        check_warn "Old hub: Could not determine ACM version. Skipping auto-import strategy check."
-        OLD_HUB_VERSION="unknown"
-    fi
-    OLD_HUB_STRATEGY=$(get_auto_import_strategy "$OLD_HUB_CONTEXT")
-    
-    if [[ "$OLD_HUB_VERSION" != "unknown" ]] && is_acm_214_or_higher "$OLD_HUB_VERSION"; then
-        if [[ "$OLD_HUB_STRATEGY" == "error" ]]; then
-            check_warn "Old hub: Could not retrieve autoImportStrategy (connection or API error)"
-        elif [[ "$OLD_HUB_STRATEGY" == "default" ]] || [[ "$OLD_HUB_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
-            check_pass "Old hub: autoImportStrategy is default/ImportOnly"
+    if is_acm_214_or_higher "$NEW_HUB_VERSION"; then
+        if [[ "$NEW_HUB_STRATEGY" == "error" ]]; then
+            check_fail "New hub: Could not retrieve autoImportStrategy (connection or API error)"
+        elif [[ "$NEW_HUB_STRATEGY" == "default" ]]; then
+            check_pass "New hub: Using default autoImportStrategy ($AUTO_IMPORT_STRATEGY_DEFAULT) - correct post-switchover state"
+        elif [[ "$NEW_HUB_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
+            check_pass "New hub: autoImportStrategy explicitly set to $AUTO_IMPORT_STRATEGY_DEFAULT"
         else
-            check_warn "Old hub: autoImportStrategy is set to '$OLD_HUB_STRATEGY'"
-            echo -e "${YELLOW}       This should be reset if no longer needed.${NC}"
+            check_warn "New hub: autoImportStrategy is set to '$NEW_HUB_STRATEGY' (non-default)"
+            echo -e "${YELLOW}       Post-switchover, this should be removed to restore default behavior.${NC}"
+            echo -e "${YELLOW}       To reset to default, run:${NC}"
+            echo -e "${YELLOW}         oc -n $MCE_NAMESPACE delete configmap $IMPORT_CONTROLLER_CONFIGMAP${NC}"
             echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
+        fi
+    else
+        check_pass "New hub: ACM version $NEW_HUB_VERSION (autoImportStrategy check not applicable for versions < 2.14)"
+    fi
+
+    # Also check old hub if provided
+    if [[ -n "$OLD_HUB_CONTEXT" ]]; then
+        if ! OLD_HUB_VERSION=$(oc --context="$OLD_HUB_CONTEXT" get $RES_MCH -n "$ACM_NAMESPACE" -o jsonpath='{.items[0].status.currentVersion}' 2>/dev/null) || [[ -z "$OLD_HUB_VERSION" ]]; then
+            check_warn "Old hub: Could not determine ACM version. Skipping auto-import strategy check."
+            OLD_HUB_VERSION="unknown"
+        fi
+        OLD_HUB_STRATEGY=$(get_auto_import_strategy "$OLD_HUB_CONTEXT")
+        
+        if [[ "$OLD_HUB_VERSION" != "unknown" ]] && is_acm_214_or_higher "$OLD_HUB_VERSION"; then
+            if [[ "$OLD_HUB_STRATEGY" == "error" ]]; then
+                check_warn "Old hub: Could not retrieve autoImportStrategy (connection or API error)"
+            elif [[ "$OLD_HUB_STRATEGY" == "default" ]] || [[ "$OLD_HUB_STRATEGY" == "$AUTO_IMPORT_STRATEGY_DEFAULT" ]]; then
+                check_pass "Old hub: autoImportStrategy is default/ImportOnly"
+            else
+                check_warn "Old hub: autoImportStrategy is set to '$OLD_HUB_STRATEGY'"
+                echo -e "${YELLOW}       This should be reset if no longer needed.${NC}"
+                echo -e "${YELLOW}       See: $AUTO_IMPORT_STRATEGY_DOC_URL${NC}"
+            fi
         fi
     fi
 fi
+
+if [[ $ARGOCD_CHECK -eq 1 ]]; then
+    section_header "10. Checking ArgoCD GitOps Management (Optional)"
+    check_argocd_acm_resources "$NEW_HUB_CONTEXT" "New hub"
+    if [[ -n "$OLD_HUB_CONTEXT" ]]; then
+        check_argocd_acm_resources "$OLD_HUB_CONTEXT" "Old hub"
+    fi
+fi
+
+# Print GitOps detection report if any markers were found
+print_gitops_report
 
 # Summary and exit
 if print_summary "postflight"; then

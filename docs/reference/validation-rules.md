@@ -163,6 +163,16 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--secondary-context` is required for switchover operations (unless `--decommission` or `--setup`)
 - `--non-interactive` is only valid with `--decommission`
 - `--disable-observability-on-secondary` requires `--old-hub-action secondary` and is not valid with `--decommission`
+- `--argocd-resume-only` requires `--secondary-context` (used to resolve the state file for restoring Argo CD auto-sync)
+- `--argocd-resume-only` cannot be used with `--validate-only` (resume performs changes)
+- `--argocd-resume-only` cannot be used with `--decommission`
+- `--argocd-resume-only` cannot be used with `--setup`
+- `--argocd-manage` cannot be used with `--validate-only`
+- `--argocd-manage` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-after-switchover` cannot be used with `--validate-only`
+- `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-after-switchover` requires `--argocd-manage`
+- With `--skip-gitops-check`, `--argocd-check` is ignored (GitOps detection is disabled); a warning is emitted if both are set
 
 ### 6. Filesystem Path Validation
 
@@ -306,8 +316,9 @@ except ValidationError as e:
 
 ### Cross-Argument Rules
 
-- Secondary context requirement: `secondary-context` is required for switchover operations unless `--decommission` is set.
+- Secondary context requirement: `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
+- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` and `--argocd-resume-after-switchover` also cannot be combined with `--validate-only`. `--argocd-resume-after-switchover` requires `--argocd-manage` and cannot be combined with `--argocd-resume-only`. With `--skip-gitops-check`, `--argocd-check` is ignored and a warning is shown.
 
 ### Utilities
 

@@ -578,7 +578,7 @@ class PostActivationVerification:
         logger.info("All ManagedClusters cleared disable-auto-import annotation")
 
     @dry_run_skip(message="Skipping klusterlet connection verification")
-    def _verify_klusterlet_connections(self):
+    def _verify_klusterlet_connections(self):  # noqa: C901
         """
         Verify and fix klusterlet agents on managed clusters to connect to the new hub.
 
@@ -938,7 +938,7 @@ class PostActivationVerification:
 
         return ""
 
-    def _load_kubeconfig_data(self, max_size: Optional[int] = None, force_reload: bool = False) -> dict:
+    def _load_kubeconfig_data(self, max_size: Optional[int] = None, force_reload: bool = False) -> dict:  # noqa: C901
         """Load and merge kubeconfig data from all KUBECONFIG paths.
 
         Handles the KUBECONFIG environment variable which can contain multiple
@@ -1011,6 +1011,7 @@ class PostActivationVerification:
                 try:
                     # Check file size before loading to prevent memory exhaustion
                     if check_size:
+                        assert size_limit is not None  # Guaranteed by check_size logic
                         kubeconfig_size = os.path.getsize(expanded_path)
                         if kubeconfig_size > size_limit:
                             logger.warning(
@@ -1116,7 +1117,9 @@ class PostActivationVerification:
 
         return ""
 
-    def _check_klusterlet_connection(self, context_name: str, cluster_name: str, expected_hub: str) -> str:
+    def _check_klusterlet_connection(  # noqa: C901
+        self, context_name: str, cluster_name: str, expected_hub: str
+    ) -> str:
         """
         Check if a managed cluster's klusterlet is connected to the expected hub.
 

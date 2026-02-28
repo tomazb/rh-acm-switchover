@@ -5,9 +5,12 @@ Primary hub preparation module for ACM switchover.
 # Runbook: Steps 1-3 (Method 1) / F1-F3 (Method 2)
 
 import logging
+import time
+from typing import Any, Dict, Optional
 
 from kubernetes.client.rest import ApiException
 
+from lib import argocd as argocd_lib
 from lib.constants import (
     BACKUP_NAMESPACE,
     DISABLE_AUTO_IMPORT_ANNOTATION,
@@ -34,12 +37,16 @@ class PrimaryPreparation:
         acm_version: str,
         has_observability: bool,
         dry_run: bool = False,
+        argocd_manage: bool = False,
+        secondary_client: Optional[KubeClient] = None,
     ):
         self.primary = primary_client
         self.state = state_manager
         self.acm_version = acm_version
         self.has_observability = has_observability
         self.dry_run = dry_run
+        self.argocd_manage = argocd_manage
+        self.secondary = secondary_client
 
     def prepare(self) -> bool:
         """
@@ -51,6 +58,12 @@ class PrimaryPreparation:
         logger.info("Starting primary hub preparation...")
 
         try:
+            # Optional: Pause Argo CD auto-sync for ACM-touching Applications (both hubs)
+            if self.argocd_manage:
+                with self.state.step("pause_argocd_apps", logger) as should_run:
+                    if should_run:
+                        self._pause_argocd_acm_apps()
+
             # Step 1: Pause BackupSchedule
             with self.state.step("pause_backup_schedule", logger) as should_run:
                 if should_run:
@@ -83,6 +96,65 @@ class PrimaryPreparation:
             logger.error("Unexpected error during primary preparation: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", "primary_preparation")
             return False
+
+    def _pause_argocd_acm_apps(self) -> None:
+        """Pause auto-sync for ACM-touching Argo CD Applications on primary and optionally secondary hub."""
+        hubs = [(self.primary, "primary")] + ([(self.secondary, "secondary")] if self.secondary else [])
+        discoveries = []
+        for client, hub_label in hubs:
+            discovery = argocd_lib.detect_argocd_installation(client)
+            discoveries.append((client, hub_label, discovery))
+        if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
+            logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
+            self.state.set_config("argocd_paused_apps", [])
+            self.state.set_config("argocd_run_id", None)
+            return
+        run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
+        self.state.set_config("argocd_run_id", run_id)
+        self.state.set_config("argocd_pause_dry_run", self.dry_run)
+        paused_apps = list(self.state.get_config("argocd_paused_apps") or [])
+
+        for client, hub_label, discovery in discoveries:
+            if not discovery.has_applications_crd:
+                logger.info("Argo CD Applications CRD not found on %s; skipping Argo CD pause", hub_label)
+                continue
+            apps = argocd_lib.list_argocd_applications(client, namespaces=None)
+            acm_apps = argocd_lib.find_acm_touching_apps(apps)
+            for impact in acm_apps:
+                result = argocd_lib.pause_autosync(client, impact.app, run_id)
+                if result.patched:
+                    entry: Dict[str, Any] = {
+                        "hub": hub_label,
+                        "namespace": result.namespace,
+                        "name": result.name,
+                        "original_sync_policy": result.original_sync_policy,
+                    }
+                    if self.dry_run:
+                        entry["dry_run"] = True
+                        logger.info(
+                            "  [DRY-RUN] Would pause Argo CD Application %s/%s on %s",
+                            result.namespace,
+                            result.name,
+                            hub_label,
+                        )
+                    else:
+                        logger.info(
+                            "  Paused Argo CD Application %s/%s on %s",
+                            result.namespace,
+                            result.name,
+                            hub_label,
+                        )
+                    paused_apps.append(entry)
+                    # Pass a copy so set_config's equality guard sees a new object each
+                    # iteration and marks state dirty even when the list is mutated in-place.
+                    self.state.set_config("argocd_paused_apps", list(paused_apps))
+                else:
+                    logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
+        logger.info(
+            "Argo CD: %d Application(s) paused (run_id=%s). Left paused by default; use --argocd-resume-after-switchover or --argocd-resume-only after retargeting Git.",
+            len(paused_apps),
+            run_id,
+        )
 
     def _pause_backup_schedule(self):
         """Pause BackupSchedule (version-aware)."""
@@ -206,8 +278,6 @@ class PrimaryPreparation:
                 return
 
             # Wait a moment and verify no pods running
-            import time
-
             time.sleep(THANOS_SCALE_DOWN_WAIT)
 
             pods = self.primary.get_pods(

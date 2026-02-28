@@ -50,6 +50,17 @@ rules:
     resources: ["multiclusterobservabilities"]
     verbs: ["get", "list", "delete"]
 
+  # Argo CD - Detection and pause/resume (--argocd-check, --argocd-manage)
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["argocds"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
+
 ---
 # ClusterRole for ACM Switchover Validator (Read-Only)
 # Provides read-only permissions for validation and dry-run operations
@@ -101,3 +112,14 @@ rules:
   - apiGroups: ["observability.open-cluster-management.io"]
     resources: ["multiclusterobservabilities"]
     verbs: ["get", "list"]
+
+  # Argo CD - Detection only (--argocd-check, read-only)
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["argocds"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]

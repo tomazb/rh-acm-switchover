@@ -57,9 +57,12 @@ def run_script(script_name: str, *args: str, env=None):
     [
         (
             "preflight-check.sh",
-            ["--primary-context", "--secondary-context", "--method"],
+            ["--primary-context", "--secondary-context", "--method", "--skip-gitops-check"],
         ),
-        ("postflight-check.sh", ["--new-hub-context", "--old-hub-context"]),
+        (
+            "postflight-check.sh",
+            ["--new-hub-context", "--old-hub-context", "--skip-gitops-check"],
+        ),
     ],
 )
 def test_help_output(script, expected_args):

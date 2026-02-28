@@ -1,0 +1,18 @@
+{
+  "apiVersion": "operator.open-cluster-management.io/v1",
+  "kind": "MultiClusterHub",
+  "metadata": {
+    "name": "multiclusterhub",
+    "namespace": "open-cluster-management",
+    "labels": {
+      "app.kubernetes.io/name": "multiclusterhub"
+    },
+    "annotations": {
+      "installer.open-cluster-management.io/release-version": "2.12.0"
+    }
+  },
+  "spec": {
+    "availabilityConfig": "High",
+    "enableClusterBackup": true
+  }
+}

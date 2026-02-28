@@ -350,6 +350,14 @@ BACKUPSCHEDULE_JSON
         echo "Enabled"
         exit 0
         ;;
+    # Single restore GET with -o json (for detailed status check)
+    *"--context=secondary-ok"*"get "*"restore"*"restore-acm-passive-sync"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'SINGLE_RESTORE_JSON'
+{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}
+SINGLE_RESTORE_JSON
+        exit 0
+        ;;
+    # List all restores
     *"--context=secondary-ok"*"get "*"restore"*"-n open-cluster-management-backup"*"-o json"*)
         cat << 'RESTORE_JSON'
 {"items":[{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}]}
@@ -456,8 +464,14 @@ EOF
     "--context=new-hub get namespace open-cluster-management-observability")
         exit 0
         ;;
-    *"--context=new-hub"*"get "*"multiclusterobservability"*"observability"*"-n open-cluster-management-observability"*)
+    *"--context=new-hub"*"get "*"multiclusterobservability.observability.open-cluster-management.io"*"observability"*"jsonpath"*)
         echo "True"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"multiclusterobservability.observability.open-cluster-management.io"*"observability"*" -o json"*)
+        cat << 'MCO_JSON'
+{"metadata":{"name":"observability"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
+MCO_JSON
         exit 0
         ;;
     "--context=new-hub get pods -n open-cluster-management-observability -l "*"app=observability-grafana"*" --no-headers")

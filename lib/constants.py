@@ -67,6 +67,7 @@ OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 ACM_NAMESPACE = "open-cluster-management"
 # MCE (used for auto-import strategy ConfigMap)
 MCE_NAMESPACE = "multicluster-engine"
+GLOBAL_SET_NAMESPACE = "open-cluster-management-global-set"
 # Managed cluster agent namespace (on spoke clusters)
 MANAGED_CLUSTER_AGENT_NAMESPACE = "open-cluster-management-agent"
 
@@ -92,6 +93,7 @@ SPEC_USE_MANAGED_SERVICE_ACCOUNT = "useManagedServiceAccount"
 # ACM Spec Field Values
 VELERO_BACKUP_LATEST = "latest"
 VELERO_BACKUP_SKIP = "skip"
+CLEANUP_BEFORE_RESTORE_VALUE = "CleanupRestored"
 
 # Patch verification settings
 PATCH_VERIFY_MAX_RETRIES = 5

@@ -325,7 +325,8 @@ class TestPostActivationVerification:
         post_verify_with_obs._restart_observatorium_api()
 
         mock_secondary_client.rollout_restart_deployment.assert_called_once_with(
-            namespace=OBSERVABILITY_NAMESPACE, name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT
+            namespace=OBSERVABILITY_NAMESPACE,
+            name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT,
         )
         mock_secondary_client.get_pods.assert_called()
 
@@ -611,8 +612,7 @@ class TestLoadKubeconfigData:
     def test_load_single_kubeconfig(self, mock_secondary_client, mock_state_manager, tmp_path):
         """Test loading a single kubeconfig file."""
         kubeconfig = tmp_path / "config"
-        kubeconfig.write_text(
-            """
+        kubeconfig.write_text("""
 apiVersion: v1
 clusters:
 - cluster:
@@ -627,8 +627,7 @@ users:
 - name: admin
   user:
     token: test-token
-"""
-        )
+""")
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -646,8 +645,7 @@ users:
     def test_load_multiple_kubeconfigs(self, mock_secondary_client, mock_state_manager, tmp_path):
         """Test loading and merging multiple kubeconfig files."""
         kubeconfig1 = tmp_path / "config1"
-        kubeconfig1.write_text(
-            """
+        kubeconfig1.write_text("""
 apiVersion: v1
 clusters:
 - cluster:
@@ -662,11 +660,9 @@ users:
 - name: admin1
   user:
     token: token1
-"""
-        )
+""")
         kubeconfig2 = tmp_path / "config2"
-        kubeconfig2.write_text(
-            """
+        kubeconfig2.write_text("""
 apiVersion: v1
 clusters:
 - cluster:
@@ -681,8 +677,7 @@ users:
 - name: admin2
   user:
     token: token2
-"""
-        )
+""")
         verify = PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
@@ -702,8 +697,7 @@ users:
     def test_load_kubeconfig_missing_file(self, mock_secondary_client, mock_state_manager, tmp_path):
         """Test graceful handling of missing kubeconfig file."""
         existing = tmp_path / "exists"
-        existing.write_text(
-            """
+        existing.write_text("""
 apiVersion: v1
 clusters:
 - cluster:
@@ -711,8 +705,7 @@ clusters:
   name: exists
 contexts: []
 users: []
-"""
-        )
+""")
         missing = tmp_path / "does_not_exist"
 
         verify = PostActivationVerification(

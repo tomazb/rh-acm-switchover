@@ -1000,8 +1000,8 @@ class KubeClient:
             # Validate tail_lines to fail fast with clear, actionable errors
             try:
                 tail_lines_int = int(tail_lines)
-            except (TypeError, ValueError):
-                raise ValidationError("tail_lines must be a non-negative integer")
+            except (TypeError, ValueError) as exc:
+                raise ValidationError("tail_lines must be a non-negative integer") from exc
             if tail_lines_int < 0:
                 raise ValidationError("tail_lines must be a non-negative integer")
             kwargs["tail_lines"] = tail_lines_int

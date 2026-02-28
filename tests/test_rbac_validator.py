@@ -92,6 +92,66 @@ class TestRBACValidator:
         assert len(errors) > 0
         assert any("managedclusters" in error for error in errors)
 
+    def test_validate_cluster_permissions_argocd_none_does_not_check_argocd_permissions(self, validator):
+        """Test that argocd_mode=none does not add Argo CD permissions."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(argocd_mode="none")
+
+        assert all_valid is True
+        assert len(errors) == 0
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
+        assert ("argoproj.io", "applications", "get") not in checked
+        assert ("argoproj.io", "applications", "patch") not in checked
+
+    def test_validate_cluster_permissions_argocd_check_adds_read_permissions(self, validator):
+        """Test that argocd_mode=check validates Argo CD read permissions."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(argocd_mode="check")
+
+        assert all_valid is True
+        assert len(errors) == 0
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
+        assert ("argoproj.io", "applications", "get") in checked
+        assert ("argoproj.io", "applications", "list") in checked
+        assert ("argoproj.io", "argocds", "get") in checked
+        assert ("argoproj.io", "argocds", "list") in checked
+        assert ("apiextensions.k8s.io", "customresourcedefinitions", "get") in checked
+        assert ("argoproj.io", "applications", "patch") not in checked
+
+    def test_validate_cluster_permissions_argocd_manage_requires_patch_for_operator(self, validator):
+        """Test that argocd_mode=manage validates Application patch permission for operator role."""
+
+        def mock_check(api_group, resource, verb, namespace=None):
+            if api_group == "argoproj.io" and resource == "applications" and verb == "patch":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=mock_check)
+
+        all_valid, errors = validator.validate_cluster_permissions(argocd_mode="manage")
+
+        assert all_valid is False
+        assert any("Missing Argo CD permission: patch argoproj.io/applications" in error for error in errors)
+
+    def test_validate_cluster_permissions_argocd_manage_validator_role_does_not_require_patch(self, mock_client):
+        """Test that validator role remains read-only even when argocd_mode=manage."""
+        validator = RBACValidator(mock_client, role="validator")
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(argocd_mode="manage")
+
+        assert all_valid is True
+        assert len(errors) == 0
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
+        assert ("argoproj.io", "applications", "patch") not in checked
+
+    def test_validate_cluster_permissions_invalid_argocd_mode_raises(self, validator):
+        """Test validate_cluster_permissions rejects invalid argocd_mode values."""
+        with pytest.raises(ValueError):
+            validator.validate_cluster_permissions(argocd_mode="invalid")
+
     def test_validate_namespace_permissions_success(self, validator):
         """Test validate_namespace_permissions when all permissions exist."""
         # Mock namespace_exists and check_permission
@@ -301,7 +361,7 @@ class TestValidateRBACPermissions:
         """Test validate_rbac_permissions when secondary validation fails."""
 
         # Primary succeeds, secondary fails
-        def mock_validate(include_decommission=False, skip_observability=False):
+        def mock_validate(include_decommission=False, skip_observability=False, argocd_mode="none"):
             if mock_validator_class.call_count == 1:
                 # Primary validation
                 return (True, {})
@@ -329,7 +389,11 @@ class TestValidateRBACPermissions:
         validate_rbac_permissions(mock_primary_client, include_decommission=True)
 
         # Verify decommission was passed
-        mock_validator.validate_all_permissions.assert_called_with(include_decommission=True, skip_observability=False)
+        mock_validator.validate_all_permissions.assert_called_with(
+            include_decommission=True,
+            skip_observability=False,
+            argocd_mode="none",
+        )
 
     @patch("lib.rbac_validator.RBACValidator")
     def test_validate_skip_observability(self, mock_validator_class, mock_primary_client):
@@ -341,4 +405,30 @@ class TestValidateRBACPermissions:
         validate_rbac_permissions(mock_primary_client, skip_observability=True)
 
         # Verify skip_observability was passed
-        mock_validator.validate_all_permissions.assert_called_with(include_decommission=False, skip_observability=True)
+        mock_validator.validate_all_permissions.assert_called_with(
+            include_decommission=False,
+            skip_observability=True,
+            argocd_mode="none",
+        )
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_argocd_mode_manage(self, mock_validator_class, mock_primary_client):
+        """Test validate_rbac_permissions forwards argocd_mode to validators."""
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (True, {})
+        mock_validator_class.return_value = mock_validator
+
+        validate_rbac_permissions(mock_primary_client, argocd_mode="manage")
+
+        mock_validator.validate_all_permissions.assert_called_with(
+            include_decommission=False,
+            skip_observability=False,
+            argocd_mode="manage",
+        )
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_invalid_argocd_mode_raises(self, mock_validator_class, mock_primary_client):
+        """Test validate_rbac_permissions rejects invalid argocd_mode values."""
+        with pytest.raises(ValueError):
+            validate_rbac_permissions(mock_primary_client, argocd_mode="invalid")
+        mock_validator_class.assert_not_called()

@@ -15,6 +15,7 @@ from lib.constants import (
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_USE_MANAGED_SERVICE_ACCOUNT,
 )
+from lib.gitops_detector import record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.validation import InputValidator, ValidationError
 
@@ -170,7 +171,7 @@ class BackupValidator(BaseValidator):
             logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
             return ""
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Run validation with primary client.
 
         Args:
@@ -287,7 +288,7 @@ class BackupScheduleValidator(BaseValidator):
     the old hub.
     """
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Check that BackupSchedule has useManagedServiceAccount enabled.
 
         Args:
@@ -313,9 +314,26 @@ class BackupScheduleValidator(BaseValidator):
 
             # Check the first (typically only) BackupSchedule
             schedule = backup_schedules[0]
-            schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
+            metadata = schedule.get("metadata", {})
+            schedule_name = metadata.get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
             spec = schedule.get("spec", {})
             use_msa = spec.get(SPEC_USE_MANAGED_SERVICE_ACCOUNT, False)
+
+            # Record GitOps markers if present (non-critical)
+            try:
+                record_gitops_markers(
+                    context="primary",
+                    namespace=BACKUP_NAMESPACE,
+                    kind="BackupSchedule",
+                    name=schedule_name,
+                    metadata=metadata,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "GitOps marker recording failed for BackupSchedule %s: %s",
+                    schedule_name,
+                    exc,
+                )
 
             if use_msa:
                 self.add_result(
@@ -466,7 +484,24 @@ class PassiveSyncValidator(BaseValidator):
                 )
                 return
 
-            restore_name = restore.get("metadata", {}).get("name", "") or RESTORE_PASSIVE_SYNC_NAME
+            metadata = restore.get("metadata", {})
+            restore_name = metadata.get("name", "") or RESTORE_PASSIVE_SYNC_NAME
+
+            # Record GitOps markers if present (non-critical)
+            try:
+                record_gitops_markers(
+                    context="secondary",
+                    namespace=BACKUP_NAMESPACE,
+                    kind="Restore",
+                    name=restore_name,
+                    metadata=metadata,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "GitOps marker recording failed for Restore %s: %s",
+                    restore_name,
+                    exc,
+                )
 
             status = restore.get("status", {})
             phase = status.get("phase", "unknown")
@@ -513,7 +548,11 @@ class PassiveSyncValidator(BaseValidator):
                             else:
                                 velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
                     except Exception as exc:
-                        logger.debug("Failed to fetch Velero restore %s details: %s", velero_restore_name, exc)
+                        logger.debug(
+                            "Failed to fetch Velero restore %s details: %s",
+                            velero_restore_name,
+                            exc,
+                        )
 
                 error_message = f"{restore_name} in unexpected state: {phase} - {message}"
                 if velero_details:
@@ -545,7 +584,7 @@ class PassiveSyncValidator(BaseValidator):
 class ManagedClusterBackupValidator(BaseValidator):
     """Validates that all joined ManagedClusters are included in the latest backup."""
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Check that all joined ManagedClusters are in the latest managed-clusters backup."""
         try:
             # Get all joined ManagedClusters (excluding local-cluster)

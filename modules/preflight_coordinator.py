@@ -56,11 +56,15 @@ class PreflightValidator:
         secondary_client: KubeClient,
         method: str = "passive",
         skip_rbac_validation: bool = False,
+        argocd_check: bool = False,
+        argocd_manage: bool = False,
     ) -> None:
         self.primary = primary_client
         self.secondary = secondary_client
         self.method = method
         self.skip_rbac_validation = skip_rbac_validation
+        self.argocd_check = argocd_check
+        self.argocd_manage = argocd_manage
 
         self.reporter = ValidationReporter()
         self.kubeconfig_validator = KubeconfigValidator(self.reporter)
@@ -76,6 +80,14 @@ class PreflightValidator:
         self.observability_detector = ObservabilityDetector(self.reporter)
         self.observability_prereq_validator = ObservabilityPrereqValidator(self.reporter)
         self.tooling_validator = ToolingValidator(self.reporter)
+
+    def _get_argocd_rbac_mode(self) -> str:
+        """Get Argo CD RBAC validation mode based on requested CLI behavior."""
+        if self.argocd_manage:
+            return "manage"
+        if self.argocd_check:
+            return "check"
+        return "none"
 
     def validate_all(self) -> Tuple[bool, PreflightConfig]:
         """Run all validation checks and return pass/fail with detected config."""
@@ -103,6 +115,7 @@ class PreflightValidator:
                     secondary_client=self.secondary,
                     include_decommission=False,  # Checked separately if needed
                     skip_observability=skip_obs,
+                    argocd_mode=self._get_argocd_rbac_mode(),
                 )
                 self.reporter.add_result(
                     "RBAC Permissions",

@@ -1,0 +1,21 @@
+{
+  "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+  "kind": "BackupSchedule",
+  "metadata": {
+    "name": "acm-backup-schedule",
+    "namespace": "open-cluster-management-backup",
+    "labels": {
+      "app.kubernetes.io/managed-by": "argocd",
+      "argocd.argoproj.io/instance": "acm-config"
+    },
+    "annotations": {
+      "argocd.argoproj.io/sync-wave": "5",
+      "argocd.argoproj.io/compare-options": "IgnoreExtraneous"
+    }
+  },
+  "spec": {
+    "veleroSchedule": "0 */4 * * *",
+    "veleroTtl": "720h",
+    "useManagedServiceAccount": true
+  }
+}

@@ -69,6 +69,8 @@ def dry_run_skip(
             if obj is True:
                 logger = logging.getLogger("acm_switchover")
                 logger.info("[DRY-RUN] %s", message)
+                if callable(return_value):
+                    return return_value(self, *args, **kwargs)
                 return return_value
 
             return func(self, *args, **kwargs)
@@ -172,17 +174,12 @@ class StateManager:
         """
         self._ensure_state_dir()
         temp_file = self.state_file + ".tmp"
-        lock_handle = None
 
         # Track temp file for cleanup (atexit handler will clean up if process crashes)
         self._active_temp_files.add(temp_file)
 
-        try:
-            if fcntl:
-                lock_file = self.state_file + ".lock"
-                lock_handle = open(lock_file, "w", encoding="utf-8")
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-
+        def _write_temp_file() -> None:
+            error: Optional[Exception] = None
             try:
                 # Write to temporary file with restrictive permissions
                 fd = os.open(
@@ -190,14 +187,10 @@ class StateManager:
                     os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
                     stat.S_IRUSR | stat.S_IWUSR,
                 )
-                try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        json.dump(state, f, indent=2)
-                        f.flush()
-                        os.fsync(f.fileno())
-                except (OSError, ValueError, TypeError):
-                    # os.fdopen() takes ownership of fd, so it's closed on exception
-                    raise
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(state, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
 
                 # Atomic rename (POSIX guarantees this is atomic on same filesystem)
                 os.replace(temp_file, self.state_file)
@@ -213,14 +206,24 @@ class StateManager:
                 except OSError:
                     pass  # Best-effort cleanup - atexit handler will try again
                 logging.error("Failed to write state file %s: %s", self.state_file, e)
-                raise
-        finally:
-            if lock_handle:
+                error = e
+
+            if error is not None:
+                raise error
+
+        if fcntl:
+            lock_file = self.state_file + ".lock"
+            with open(lock_file, "w", encoding="utf-8") as lock_handle:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
                 try:
-                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    pass
-                lock_handle.close()
+                    _write_temp_file()
+                finally:
+                    try:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+        else:
+            _write_temp_file()
 
     def _do_flush(self, force: bool = False, suppress_errors: bool = False) -> bool:
         """Core flush logic shared by all flush methods.
@@ -237,19 +240,21 @@ class StateManager:
         if not force and not self._dirty:
             return False
 
+        self._flushing = True
+        self.state["last_updated"] = _utc_timestamp()
         try:
-            self._flushing = True
-            self.state["last_updated"] = _utc_timestamp()
-            self._write_state(self.state)
+            if suppress_errors:
+                try:
+                    self._write_state(self.state)
+                except Exception as e:
+                    import sys
+
+                    print(f"Error flushing state: {e}", file=sys.stderr)
+                    return False
+            else:
+                self._write_state(self.state)
             self._dirty = False
             return True
-        except Exception as e:
-            if suppress_errors:
-                import sys
-
-                print(f"Error flushing state: {e}", file=sys.stderr)
-                return False
-            raise
         finally:
             self._flushing = False
 
