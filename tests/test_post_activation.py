@@ -97,6 +97,29 @@ class TestPostActivationVerification:
         assert verify.state == mock_state_manager
         assert verify.has_observability is True
 
+    def test_build_managed_cluster_clients_disables_kubeconfig_persistence(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Per-context clients should not persist refreshed credentials back to kubeconfig."""
+        verify = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+        )
+        api_client = Mock(name="api_client")
+        core_v1 = Mock(name="core_v1")
+        apps_v1 = Mock(name="apps_v1")
+
+        with patch("modules.post_activation.config.new_client_from_config", return_value=api_client) as new_client:
+            with patch("modules.post_activation.client.CoreV1Api", return_value=core_v1) as core_ctor:
+                with patch("modules.post_activation.client.AppsV1Api", return_value=apps_v1) as apps_ctor:
+                    result = verify._build_managed_cluster_clients("managed-context")
+
+        new_client.assert_called_once_with(context="managed-context", persist_config=False)
+        core_ctor.assert_called_once_with(api_client=api_client)
+        apps_ctor.assert_called_once_with(api_client=api_client)
+        assert result == (core_v1, apps_v1)
+
     def test_klusterlet_verification_bypasses_kubeconfig_size_limit(
         self, mock_secondary_client, mock_state_manager
     ):

@@ -1089,18 +1089,14 @@ class Finalization:
             },
         }
 
-        try:
-            self.primary.create_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
-                body=restore_body,
-                namespace=BACKUP_NAMESPACE,
-            )
-            logger.info("Created passive sync restore on old primary hub")
-        except Exception as e:
-            logger.warning("Failed to create passive sync restore on old primary: %s", e)
-            logger.warning("You may need to manually create it for failback capability")
+        self.primary.create_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="restores",
+            body=restore_body,
+            namespace=BACKUP_NAMESPACE,
+        )
+        logger.info("Created passive sync restore on old primary hub")
 
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")
     def _fix_backup_schedule_collision(self):
@@ -1269,21 +1265,26 @@ class Finalization:
                 return
 
             current_phase = current_schedule.get("status", {}).get("phase", "")
-            current_uid = current_schedule.get("metadata", {}).get("uid", "unknown")
+            current_uid = current_schedule.get("metadata", {}).get("uid")
             self._cached_schedules = None
 
+            if schedule_uid and current_uid == schedule_uid:
+                raise SwitchoverError(
+                    "BackupSchedule %s returned 409 on recreate but still has the original uid (%s). "
+                    "Manual verification is required before retrying collision repair."
+                    % (schedule_name, current_uid)
+                )
+
             if current_phase == "BackupCollision":
-                logger.warning(
-                    "BackupSchedule %s exists (uid=%s) but phase is BackupCollision; "
-                    "manual delete/recreate may be required.",
-                    schedule_name,
-                    current_uid,
+                raise SwitchoverError(
+                    "BackupSchedule %s exists after recreate conflict (uid=%s) but remains in BackupCollision"
+                    % (schedule_name, current_uid or "unknown")
                 )
             else:
                 logger.info(
                     "BackupSchedule %s exists after conflict (uid=%s, phase=%s); continuing",
                     schedule_name,
-                    current_uid,
+                    current_uid or "unknown",
                     current_phase or "Unknown",
                 )
         except Exception as e:

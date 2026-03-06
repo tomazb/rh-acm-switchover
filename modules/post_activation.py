@@ -778,7 +778,7 @@ class PostActivationVerification:
         Raises:
             config.ConfigException: If context does not exist in kubeconfig
         """
-        api_client = config.new_client_from_config(context=context_name)
+        api_client = config.new_client_from_config(context=context_name, persist_config=False)
         return client.CoreV1Api(api_client=api_client), client.AppsV1Api(api_client=api_client)
 
     def _get_import_secret(self, cluster_name: str) -> Optional[str]:

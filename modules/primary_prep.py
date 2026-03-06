@@ -111,6 +111,7 @@ class PrimaryPreparation:
             logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
             self.state.set_config("argocd_paused_apps", [])
             self.state.set_config("argocd_run_id", None)
+            self.state.set_config("argocd_pause_dry_run", False)
             return
         run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
         self.state.set_config("argocd_run_id", run_id)
@@ -189,8 +190,10 @@ class PrimaryPreparation:
         bs_name = bs.get("metadata", {}).get("name")
 
         if not bs_name:
-            logger.error("BackupSchedule found but has no name in metadata")
-            return
+            raise SwitchoverError(
+                "BackupSchedule object found but has no name in metadata — cannot pause it. "
+                "Inspect the BackupSchedule resource and retry."
+            )
 
         # Check if already paused
         if bs.get("spec", {}).get("paused") is True:

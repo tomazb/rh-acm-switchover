@@ -786,10 +786,35 @@ class TestFinalization:
         assert finalization._cached_schedules is None
 
     @patch("modules.finalization.time.sleep")
-    def test_fix_backup_schedule_collision_warns_when_409_schedule_is_in_collision(
-        self, mock_sleep, finalization, mock_secondary_client, caplog
+    def test_fix_backup_schedule_collision_raises_when_409_reuses_original_uid(
+        self, mock_sleep, finalization, mock_secondary_client
     ):
-        """A 409 create conflict with BackupCollision phase should emit manual-remediation warning."""
+        """A 409 create conflict must fail when the original schedule object still exists."""
+        mock_sleep.return_value = None
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule", "uid": "uid-old"},
+                "spec": {"veleroSchedule": "*/15 * * * *"},
+                "status": {"phase": "Enabled"},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "schedule", "uid": "uid-old"}, "spec": {"veleroSchedule": "*/15 * * * *"}},
+            None,
+            {"metadata": {"name": "schedule", "uid": "uid-old"}, "status": {"phase": "Enabled"}},
+        ]
+        mock_secondary_client.create_custom_resource.side_effect = ApiException(status=409)
+
+        with pytest.raises(SwitchoverError, match="still has the original uid"):
+            finalization._fix_backup_schedule_collision()
+
+        assert finalization._cached_schedules is None
+
+    @patch("modules.finalization.time.sleep")
+    def test_fix_backup_schedule_collision_raises_when_409_schedule_is_in_collision(
+        self, mock_sleep, finalization, mock_secondary_client
+    ):
+        """A 409 create conflict with BackupCollision phase must fail closed."""
         mock_sleep.return_value = None
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -805,10 +830,8 @@ class TestFinalization:
         ]
         mock_secondary_client.create_custom_resource.side_effect = ApiException(status=409)
 
-        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+        with pytest.raises(SwitchoverError, match="remains in BackupCollision"):
             finalization._fix_backup_schedule_collision()
-
-        assert "phase is BackupCollision" in caplog.text
 
     @patch("modules.finalization.wait_for_condition")
     def test_disable_observability_on_secondary_deletes_mco(
@@ -1093,6 +1116,27 @@ class TestFinalization:
             assert result is True
             # _verify_old_hub_state SHOULD be called when old_hub_action is 'secondary'
             mock_verify.assert_called_once()
+
+    def test_setup_old_hub_as_secondary_failure_propagates(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Failed passive restore creation on old hub must propagate as an exception, not log-and-continue."""
+        from kubernetes.client.rest import ApiException
+
+        primary = Mock()
+        primary.get_custom_resource.return_value = None
+        primary.create_custom_resource.side_effect = ApiException(status=500, reason="Internal Server Error")
+
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            old_hub_action="secondary",
+        )
+
+        with pytest.raises(ApiException):
+            fin._setup_old_hub_as_secondary()
 
     def test_cleanup_restore_resources_archives_before_deletion(
         self, finalization, mock_secondary_client, mock_state_manager

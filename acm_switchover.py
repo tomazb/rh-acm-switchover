@@ -134,6 +134,16 @@ Examples:
             "(delete passive sync and create restore-acm-activate)."
         ),
     )
+    parser.add_argument(
+        "--min-managed-clusters",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Minimum number of non-local ManagedClusters expected on the secondary hub after restore. "
+            "Activation fails if fewer than N clusters are found. Default is 0 (informational check only)."
+        ),
+    )
 
     # State management
     parser.add_argument(
@@ -547,6 +557,7 @@ def _run_phase_activation(
         activation_method=args.activation_method,
         manage_auto_import_strategy=args.manage_auto_import_strategy,
         old_hub_action=args.old_hub_action,
+        min_managed_clusters=getattr(args, "min_managed_clusters", 0),
     )
 
     if not activation.activate():
