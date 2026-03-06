@@ -1025,12 +1025,18 @@ class KubeClient:
             raise
 
     @api_call(not_found_value=[], log_on_error=False)
-    def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict]:
+    def get_pods(
+        self,
+        namespace: str,
+        label_selector: Optional[str] = None,
+        request_timeout: Optional[int] = None,
+    ) -> List[Dict]:
         """List pods in a namespace.
 
         Args:
             namespace: Namespace name
             label_selector: Optional label selector
+            request_timeout: Optional per-call request timeout in seconds
 
         Returns:
             List of pod dicts
@@ -1047,7 +1053,11 @@ class KubeClient:
             if not label_selector.strip():
                 raise ValidationError("Label selector cannot be empty or whitespace-only")
 
-        result = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
+        kwargs: Dict[str, Any] = {"namespace": namespace, "label_selector": label_selector}
+        if request_timeout is not None:
+            kwargs["_request_timeout"] = request_timeout
+
+        result = self.core_v1.list_namespaced_pod(**kwargs)
         return [pod.to_dict() for pod in result.items]
 
     def list_pods(
@@ -1118,13 +1128,25 @@ class KubeClient:
             True if pods are ready within timeout
         """
         start_time = time.time()
+        poll_interval = 5
 
         while time.time() - start_time < timeout:
-            pods = self.get_pods(namespace, label_selector)
+            elapsed = time.time() - start_time
+            remaining_budget = timeout - elapsed
+            if remaining_budget <= 0:
+                break
+
+            pods = self.get_pods(
+                namespace,
+                label_selector,
+                request_timeout=max(1, int(remaining_budget)),
+            )
 
             if expected_count is not None and len(pods) < expected_count:
                 logger.debug("Waiting for %s pods, found %s", expected_count, len(pods))
-                time.sleep(5)
+                sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
                 continue
 
             ready_count = 0
@@ -1151,7 +1173,9 @@ class KubeClient:
                     return True
 
             logger.debug("%s/%s pods ready in %s", ready_count, len(pods), namespace)
-            time.sleep(5)
+            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         logger.error("Timeout waiting for pods in %s", namespace)
         return False
