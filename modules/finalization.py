@@ -282,7 +282,10 @@ class Finalization:
     @dry_run_skip(message="Skipping new backup verification")
     def _verify_new_backups(self, timeout: int = BACKUP_VERIFY_TIMEOUT):
         """
-        Verify new backups are being created.
+        Verify new backups are being created after enabling BackupSchedule.
+
+        Fails with SwitchoverError if no new backup appears within the timeout.
+        Records the detected backup name in state for downstream integrity verification.
 
         Args:
             timeout: Maximum wait time in seconds
@@ -335,6 +338,7 @@ class Finalization:
                         # Velero uses "InProgress" and "Completed" phases
                         if phase in ("InProgress", "Completed", "New"):
                             self.state.set_config("new_backup_detected", True)
+                            self.state.set_config("post_switchover_backup_name", backup_name)
                             logger.info("New backup is being created successfully!")
                             return
 
@@ -342,8 +346,9 @@ class Finalization:
             logger.debug("Waiting for new backup... (elapsed: %ss)", elapsed)
             time.sleep(BACKUP_POLL_INTERVAL)
 
-        logger.warning(
-            f"No new backups detected after {timeout}s. " "BackupSchedule may take time to create first backup."
+        raise SwitchoverError(
+            f"No new backup created within {timeout}s after enabling BackupSchedule on new hub. "
+            "Finalization cannot succeed without proof of backup continuity."
         )
 
     def _get_backup_verify_timeout(self) -> int:
@@ -525,28 +530,54 @@ class Finalization:
 
     @dry_run_skip(message="Skipping backup integrity verification")
     def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:  # noqa: C901
-        """Verify latest backup status, logs, and recency.
+        """Verify backup status, logs, and recency for the post-switchover backup.
 
-        Backup age enforcement is skipped until a new backup is detected after enabling the schedule.
+        When a post-switchover backup name was recorded by _verify_new_backups(), that
+        specific backup is fetched and verified. This prevents unrelated backups in the
+        namespace from masking a missing or failed ACM backup.
+
+        Falls back to the latest-by-timestamp backup (with a warning) only when no
+        recorded name is available (e.g. during a dry-run).
         """
         logger.info("Verifying backup integrity...")
         effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
 
-        backups = self.secondary.list_custom_resources(
-            group="velero.io",
-            version="v1",
-            plural="backups",
-            namespace=BACKUP_NAMESPACE,
-        )
+        post_switchover_backup_name = self.state.get_config("post_switchover_backup_name")
 
-        if not backups:
-            raise SwitchoverError("No Velero backups found for integrity verification")
+        if post_switchover_backup_name:
+            logger.info("Verifying post-switchover backup: %s", post_switchover_backup_name)
+            latest_backup = self.secondary.get_custom_resource(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                name=post_switchover_backup_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not latest_backup:
+                raise SwitchoverError(
+                    f"Post-switchover backup '{post_switchover_backup_name}' no longer exists; "
+                    "cannot verify integrity"
+                )
+            backup_name = post_switchover_backup_name
+        else:
+            logger.warning(
+                "No post-switchover backup name recorded; falling back to latest backup in namespace"
+            )
+            backups = self.secondary.list_custom_resources(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not backups:
+                raise SwitchoverError("No Velero backups found for integrity verification")
 
-        def _backup_sort_key(backup: Dict) -> str:
-            return backup.get("metadata", {}).get("creationTimestamp", "") or ""
+            def _backup_sort_key(backup: Dict) -> str:
+                return backup.get("metadata", {}).get("creationTimestamp", "") or ""
 
-        latest_backup = max(backups, key=_backup_sort_key)
-        backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
+            latest_backup = max(backups, key=_backup_sort_key)
+            backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
+
         status = latest_backup.get("status", {}) or {}
 
         phase = status.get("phase", "unknown")
@@ -611,7 +642,10 @@ class Finalization:
             logger.warning("Latest backup %s completed with %s warning(s)", backup_name, warnings)
 
         enabled_at = self._get_backup_schedule_enabled_at()
-        new_backup_detected = bool(self.state.get_config("new_backup_detected", False))
+        # A backup is considered "after enable" if its name was recorded by
+        # _verify_new_backups (meaning it was detected after enabling the schedule),
+        # or if its timestamp is >= the recorded enable time.
+        is_post_switchover_backup = bool(post_switchover_backup_name)
 
         completion_ts = status.get("completionTimestamp") or status.get("startTimestamp")
         creation_ts = latest_backup.get("metadata", {}).get("creationTimestamp")
@@ -630,7 +664,7 @@ class Finalization:
             if enabled_at:
                 backup_after_enable = parsed_ts >= enabled_at
             else:
-                backup_after_enable = new_backup_detected
+                backup_after_enable = is_post_switchover_backup
 
             if not backup_after_enable:
                 logger.warning(
