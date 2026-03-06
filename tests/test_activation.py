@@ -757,3 +757,52 @@ class TestFindPassiveSyncRestore:
         assert result["metadata"]["name"] == "custom-passive-sync"
         # Should not have tried fallback
         mock_secondary_client.get_custom_resource.assert_not_called()
+
+
+@pytest.mark.unit
+class TestMinManagedClusters:
+    """Tests for the min_managed_clusters sanity check."""
+
+    def _make_activation(self, mock_secondary_client, mock_state_manager, min_clusters=0):
+        return SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=min_clusters,
+        )
+
+    def test_zero_clusters_with_min_zero_logs_warning_not_error(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """min_managed_clusters=0 should log a warning when zero clusters found, not raise."""
+        mock_secondary_client.list_custom_resources.return_value = []
+        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=0)
+        act._verify_managed_clusters_restored()  # Must not raise
+
+    def test_nonzero_min_raises_when_below_threshold(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """min_managed_clusters > 0 must raise FatalError when fewer clusters are found."""
+        mock_secondary_client.list_custom_resources.return_value = []
+        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=2)
+
+        with pytest.raises(FatalError, match="Expected at least 2"):
+            act._verify_managed_clusters_restored()
+
+    def test_meets_min_cluster_count_passes(self, mock_secondary_client, mock_state_manager):
+        """Activation succeeds when cluster count meets or exceeds min_managed_clusters."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster-a"}},
+            {"metadata": {"name": "cluster-b"}},
+        ]
+        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=2)
+        act._verify_managed_clusters_restored()  # Must not raise
+
+    def test_local_cluster_excluded_from_count(self, mock_secondary_client, mock_state_manager):
+        """local-cluster must not count toward the minimum managed cluster total."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "local-cluster"}},
+        ]
+        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=1)
+
+        with pytest.raises(FatalError, match="Expected at least 1"):
+            act._verify_managed_clusters_restored()

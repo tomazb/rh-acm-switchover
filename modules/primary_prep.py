@@ -178,8 +178,10 @@ class PrimaryPreparation:
         bs_name = bs.get("metadata", {}).get("name")
 
         if not bs_name:
-            logger.error("BackupSchedule found but has no name in metadata")
-            return
+            raise SwitchoverError(
+                "BackupSchedule object found but has no name in metadata — cannot pause it. "
+                "Inspect the BackupSchedule resource and retry."
+            )
 
         # Check if already paused
         if bs.get("spec", {}).get("paused") is True:

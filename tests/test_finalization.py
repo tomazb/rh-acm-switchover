@@ -996,6 +996,27 @@ class TestFinalization:
             # _verify_old_hub_state SHOULD be called when old_hub_action is 'secondary'
             mock_verify.assert_called_once()
 
+    def test_setup_old_hub_as_secondary_failure_propagates(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Failed passive restore creation on old hub must propagate as an exception, not log-and-continue."""
+        from kubernetes.client.rest import ApiException
+
+        primary = Mock()
+        primary.get_custom_resource.return_value = None
+        primary.create_custom_resource.side_effect = ApiException(status=500, reason="Internal Server Error")
+
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            old_hub_action="secondary",
+        )
+
+        with pytest.raises(ApiException):
+            fin._setup_old_hub_as_secondary()
+
     def test_cleanup_restore_resources_archives_before_deletion(
         self, finalization, mock_secondary_client, mock_state_manager
     ):

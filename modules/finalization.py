@@ -979,18 +979,14 @@ class Finalization:
             },
         }
 
-        try:
-            self.primary.create_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
-                body=restore_body,
-                namespace=BACKUP_NAMESPACE,
-            )
-            logger.info("Created passive sync restore on old primary hub")
-        except Exception as e:
-            logger.warning("Failed to create passive sync restore on old primary: %s", e)
-            logger.warning("You may need to manually create it for failback capability")
+        self.primary.create_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="restores",
+            body=restore_body,
+            namespace=BACKUP_NAMESPACE,
+        )
+        logger.info("Created passive sync restore on old primary hub")
 
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")
     def _fix_backup_schedule_collision(self):

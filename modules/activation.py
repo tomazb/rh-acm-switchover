@@ -102,6 +102,7 @@ class SecondaryActivation:
         activation_method: str = "patch",
         manage_auto_import_strategy: bool = False,
         old_hub_action: str = "secondary",
+        min_managed_clusters: int = MIN_MANAGED_CLUSTERS,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -109,6 +110,7 @@ class SecondaryActivation:
         self.activation_method = activation_method
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.old_hub_action = old_hub_action
+        self.min_managed_clusters = min_managed_clusters
         # Cache for discovered passive sync restore name
         self._passive_sync_restore_name: Optional[str] = None
         self._activation_restore_name: Optional[str] = None
@@ -969,20 +971,31 @@ class SecondaryActivation:
             if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
         ]
 
-        if len(non_local_clusters) >= MIN_MANAGED_CLUSTERS:
-            logger.info(
-                "Found %s ManagedCluster(s) on secondary hub: %s",
-                len(non_local_clusters),
-                ", ".join(non_local_clusters) if non_local_clusters else "(none)",
-            )
-        else:
-            if MIN_MANAGED_CLUSTERS > 0:
-                raise FatalError(
-                    f"Expected at least {MIN_MANAGED_CLUSTERS} ManagedCluster(s) after restore, "
-                    f"but found only {len(non_local_clusters)}: {non_local_clusters}"
+        count = len(non_local_clusters)
+
+        if self.min_managed_clusters == 0:
+            if count == 0:
+                logger.warning(
+                    "No non-local ManagedClusters found after restore "
+                    "(managed cluster count check is informational only; use --min-managed-clusters N "
+                    "to enforce a minimum). This may be expected if no clusters were imported on the "
+                    "primary hub."
                 )
             else:
-                logger.warning(
-                    "No non-local ManagedClusters found after restore. "
-                    "This may be expected if no clusters were imported on the primary hub."
+                logger.info(
+                    "Found %s ManagedCluster(s) on secondary hub: %s",
+                    count,
+                    ", ".join(non_local_clusters),
                 )
+        elif count >= self.min_managed_clusters:
+            logger.info(
+                "Found %s ManagedCluster(s) on secondary hub (minimum required: %s): %s",
+                count,
+                self.min_managed_clusters,
+                ", ".join(non_local_clusters),
+            )
+        else:
+            raise FatalError(
+                f"Expected at least {self.min_managed_clusters} ManagedCluster(s) after restore, "
+                f"but found only {count}: {non_local_clusters}"
+            )
