@@ -52,6 +52,8 @@ from .decommission import Decommission
 
 logger = logging.getLogger("acm_switchover")
 
+ACM_BACKUP_SCHEDULE_TYPE_LABEL = "cluster.open-cluster-management.io/backup-schedule-type"
+
 
 class Finalization:
     """Handles finalization steps on secondary hub."""
@@ -86,6 +88,16 @@ class Finalization:
             dry_run=dry_run,
         )
         self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
+
+    @staticmethod
+    def _is_acm_owned_backup(backup: Dict) -> bool:
+        """Return True when the Velero backup carries ACM ownership metadata."""
+        labels = backup.get("metadata", {}).get("labels", {}) or {}
+        return bool(labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL))
+
+    def _filter_acm_owned_backups(self, backups: List[Dict]) -> List[Dict]:
+        """Filter Velero backups down to ACM-owned backups only."""
+        return [backup for backup in backups if self._is_acm_owned_backup(backup)]
 
     def finalize(self) -> bool:  # noqa: C901
         """
@@ -300,6 +312,7 @@ class Finalization:
             plural="backups",
             namespace=BACKUP_NAMESPACE,
         )
+        initial_backups = self._filter_acm_owned_backups(initial_backups)
 
         initial_backup_names = {b.get("metadata", {}).get("name") for b in initial_backups}
 
@@ -315,6 +328,7 @@ class Finalization:
                 plural="backups",
                 namespace=BACKUP_NAMESPACE,
             )
+            current_backups = self._filter_acm_owned_backups(current_backups)
 
             current_backup_names = {b.get("metadata", {}).get("name") for b in current_backups}
 
@@ -569,8 +583,9 @@ class Finalization:
                 plural="backups",
                 namespace=BACKUP_NAMESPACE,
             )
+            backups = self._filter_acm_owned_backups(backups)
             if not backups:
-                raise SwitchoverError("No Velero backups found for integrity verification")
+                raise SwitchoverError("No ACM-owned Velero backups found for integrity verification")
 
             def _backup_sort_key(backup: Dict) -> str:
                 return backup.get("metadata", {}).get("creationTimestamp", "") or ""

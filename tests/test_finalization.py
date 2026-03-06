@@ -21,6 +21,7 @@ from lib import argocd as argocd_lib
 from lib.exceptions import SwitchoverError
 
 Finalization = finalization_module.Finalization
+ACM_BACKUP_LABEL = {"cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"}
 
 
 def create_mock_step_context(is_step_completed_func, mark_step_completed_func):
@@ -134,10 +135,15 @@ class TestFinalization:
             ],  # fix_backup_collision
             [],  # Initial backups
             [],  # Loop iteration 1
-            [{"metadata": {"name": "backup-1"}, "status": {"phase": "InProgress"}}],  # Loop iteration 2 - new backup
             [
                 {
-                    "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+                    "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
+                    "status": {"phase": "InProgress"},
+                }
+            ],  # Loop iteration 2 - new ACM backup
+            [
+                {
+                    "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
                     "status": {"phase": "Completed", "completionTimestamp": backup_ts},
                 }
             ],  # verify_backup_integrity
@@ -388,7 +394,7 @@ class TestFinalization:
         mock_secondary_client.list_custom_resources.side_effect = [
             [],
             [],
-            [{"metadata": {"name": "new-backup"}, "status": {"phase": "Completed"}}],
+            [{"metadata": {"name": "new-backup", "labels": ACM_BACKUP_LABEL}, "status": {"phase": "Completed"}}],
         ]
 
         finalization._verify_new_backups(timeout=10)
@@ -410,7 +416,23 @@ class TestFinalization:
         mock_time.time.side_effect = [0, 1]
         mock_secondary_client.list_custom_resources.side_effect = [
             [],
-            [{"metadata": {"name": "acm-backup-001"}, "status": {"phase": "Completed"}}],
+            [{"metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL}, "status": {"phase": "Completed"}}],
+        ]
+
+        finalization._verify_new_backups(timeout=10)
+
+        finalization.state.set_config.assert_any_call("post_switchover_backup_name", "acm-backup-001")
+
+    @patch("modules.finalization.time")
+    def test_verify_new_backups_ignores_unrelated_velero_backups(
+        self, mock_time, finalization, mock_secondary_client
+    ):
+        """Only ACM-owned backups should count as post-switchover evidence."""
+        mock_time.time.side_effect = [0, 0, 1, 2]
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [],
+            [{"metadata": {"name": "manual-backup"}, "status": {"phase": "Completed"}}],
+            [{"metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL}, "status": {"phase": "Completed"}}],
         ]
 
         finalization._verify_new_backups(timeout=10)
@@ -421,7 +443,7 @@ class TestFinalization:
         """Backup integrity should pass for a recent completed backup with no errors (recorded name path)."""
         backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         backup = {
-            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
             "status": {
                 "phase": "Completed",
                 "completionTimestamp": backup_ts,
@@ -475,7 +497,7 @@ class TestFinalization:
         """Backup age enforcement should be skipped if no post-switchover backup name is recorded."""
         backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
         backup = {
-            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
             "status": {
                 "phase": "Completed",
                 "completionTimestamp": backup_ts,
@@ -490,13 +512,41 @@ class TestFinalization:
 
         finalization._verify_backup_integrity(max_age_seconds=600)
 
+    def test_verify_backup_integrity_fallback_ignores_unrelated_backups(self, finalization, mock_secondary_client):
+        """Fallback integrity path should consider only ACM-owned backups."""
+        acm_backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        manual_backup_ts = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "manual-backup", "creationTimestamp": manual_backup_ts},
+                "status": {
+                    "phase": "Completed",
+                    "completionTimestamp": manual_backup_ts,
+                    "errors": 99,
+                },
+            },
+            {
+                "metadata": {"name": "backup-1", "creationTimestamp": acm_backup_ts, "labels": ACM_BACKUP_LABEL},
+                "status": {
+                    "phase": "Completed",
+                    "completionTimestamp": acm_backup_ts,
+                    "errors": 0,
+                    "warnings": 0,
+                },
+            },
+        ]
+        mock_secondary_client.get_pods.return_value = []
+        finalization.state.get_config.return_value = None
+
+        finalization._verify_backup_integrity(max_age_seconds=600)
+
     def test_verify_backup_integrity_enforces_age_with_recorded_backup_name(
         self, finalization, mock_secondary_client
     ):
         """Age enforcement fires when backup name is recorded and backup is too old."""
         backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
         backup = {
-            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
             "status": {
                 "phase": "Completed",
                 "completionTimestamp": backup_ts,
@@ -519,7 +569,7 @@ class TestFinalization:
         backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
         enabled_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         backup = {
-            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
             "status": {
                 "phase": "Completed",
                 "completionTimestamp": backup_ts,
@@ -539,7 +589,11 @@ class TestFinalization:
         """When backup name is recorded, that specific backup is verified — not the latest in the namespace."""
         switchover_ts = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
         switchover_backup = {
-            "metadata": {"name": "acm-backup-switchover", "creationTimestamp": switchover_ts},
+            "metadata": {
+                "name": "acm-backup-switchover",
+                "creationTimestamp": switchover_ts,
+                "labels": ACM_BACKUP_LABEL,
+            },
             "status": {
                 "phase": "Completed",
                 "completionTimestamp": switchover_ts,
@@ -582,11 +636,11 @@ class TestFinalization:
         backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         mock_wait.return_value = True
         in_progress_backup = {
-            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
             "status": {"phase": "InProgress"},
         }
         completed_backup = {
-            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
             "status": {
                 "phase": "Completed",
                 "completionTimestamp": backup_ts,
@@ -610,7 +664,7 @@ class TestFinalization:
         """Backup integrity should fail when the recorded backup reports errors."""
         backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+            "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
             "status": {
                 "phase": "Completed",
                 "completionTimestamp": backup_ts,
@@ -901,10 +955,15 @@ class TestFinalization:
             ],  # fix_backup_collision
             [],  # Initial backups
             [],  # Loop iteration 1
-            [{"metadata": {"name": "backup-1"}, "status": {"phase": "InProgress"}}],  # Loop iteration 2 - new backup
             [
                 {
-                    "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+                    "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
+                    "status": {"phase": "InProgress"},
+                }
+            ],  # Loop iteration 2 - new ACM backup
+            [
+                {
+                    "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
                     "status": {"phase": "Completed", "completionTimestamp": backup_ts},
                 }
             ],  # verify_backup_integrity
@@ -975,10 +1034,15 @@ class TestFinalization:
                 }
             ],  # _get_backup_verify_timeout
             [],  # Initial backups
-            [{"metadata": {"name": "backup-1"}, "status": {"phase": "InProgress"}}],  # New backup detected
             [
                 {
-                    "metadata": {"name": "backup-1", "creationTimestamp": backup_ts},
+                    "metadata": {"name": "backup-1", "labels": ACM_BACKUP_LABEL},
+                    "status": {"phase": "InProgress"},
+                }
+            ],  # New ACM backup detected
+            [
+                {
+                    "metadata": {"name": "backup-1", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
                     "status": {"phase": "Completed", "completionTimestamp": backup_ts},
                 }
             ],  # verify_backup_integrity
