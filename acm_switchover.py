@@ -35,6 +35,7 @@ from lib import (
     setup_logging,
 )
 from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, STALE_STATE_THRESHOLD
+from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
 from lib.validation import InputValidator, ValidationError
 from modules import (
@@ -398,6 +399,19 @@ def run_switchover(
     return True
 
 
+def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
+    """Record a phase failure with consistent error metadata and return False.
+
+    Guarantees that every path to Phase.FAILED also records an error entry
+    with the current phase name, so resume logic can always determine which
+    phase to retry without requiring --force.
+    """
+    logger.error(message)
+    state.add_error(message, phase=state.get_current_phase().value)
+    state.set_phase(Phase.FAILED)
+    return False
+
+
 def _run_phase_preflight(
     args: argparse.Namespace,
     state: StateManager,
@@ -421,9 +435,7 @@ def _run_phase_preflight(
     passed, config = validator.validate_all()
 
     if not passed:
-        logger.error("Pre-flight validation failed! Cannot proceed.")
-        state.set_phase(Phase.FAILED)
-        return False
+        return _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
 
     state.set_config("primary_version", config["primary_version"])
     state.set_config("secondary_version", config["secondary_version"])
@@ -512,9 +524,7 @@ def _run_phase_primary_prep(
     )
 
     if not prep.prepare():
-        logger.error("Primary hub preparation failed!")
-        state.set_phase(Phase.FAILED)
-        return False
+        return _fail_phase(state, "Primary hub preparation failed!", logger)
 
     logger.info("\n✓ Primary hub preparation complete!")
     return True
@@ -540,9 +550,7 @@ def _run_phase_activation(
     )
 
     if not activation.activate():
-        logger.error("Secondary hub activation failed!")
-        state.set_phase(Phase.FAILED)
-        return False
+        return _fail_phase(state, "Secondary hub activation failed!", logger)
 
     logger.info("\n✓ Secondary hub activation complete!")
     return True
@@ -566,9 +574,7 @@ def _run_phase_post_activation(
     )
 
     if not verification.verify():
-        logger.error("Post-activation verification failed!")
-        state.set_phase(Phase.FAILED)
-        return False
+        return _fail_phase(state, "Post-activation verification failed!", logger)
 
     logger.info("\n✓ Post-activation verification complete!")
     return True
@@ -598,9 +604,7 @@ def _run_phase_finalization(
     )
 
     if not finalization.finalize():
-        logger.error("Finalization failed!")
-        state.set_phase(Phase.FAILED)
-        return False
+        return _fail_phase(state, "Finalization failed!", logger)
 
     logger.info("\n✓ Finalization complete!")
     return True
@@ -757,11 +761,31 @@ def main():  # noqa: C901
             logger.error("\n✗ Setup failed!")
             sys.exit(EXIT_FAILURE)
 
-    state = StateManager(resolved_state_file)
+    if getattr(args, "reset_state", False):
+        # --reset-state: delete existing state file before loading so StateManager
+        # starts fresh.  We handle this before constructing StateManager to allow
+        # recovery from a corrupt state file via the flag.
+        if os.path.exists(resolved_state_file):
+            logger.warning("Resetting state file: %s", resolved_state_file)
+            try:
+                os.remove(resolved_state_file)
+            except OSError as exc:
+                logger.error("Failed to remove state file: %s", exc)
+                sys.exit(EXIT_FAILURE)
 
-    if args.reset_state:
-        logger.warning("Resetting state file...")
-        state.reset()
+    try:
+        state = StateManager(resolved_state_file)
+    except (StateLoadError, StateLockError) as exc:
+        logger.error("")
+        logger.error("FATAL: Cannot initialize switchover state file.")
+        logger.error("%s", exc)
+        logger.error("")
+        if isinstance(exc, StateLoadError):
+            logger.error("To start a fresh switchover run:")
+            logger.error("  --reset-state  (removes and recreates the state file)")
+            logger.error("  or manually remove: %s", resolved_state_file)
+        sys.exit(EXIT_FAILURE)
+
     state.ensure_contexts(args.primary_context, args.secondary_context)
 
     try:
