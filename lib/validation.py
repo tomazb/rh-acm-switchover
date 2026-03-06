@@ -367,6 +367,13 @@ class InputValidator:
         if hasattr(args, "state_file") and args.state_file:
             InputValidator.validate_safe_filesystem_path(args.state_file, "state-file")
 
+        # Validate minimum managed cluster threshold
+        if hasattr(args, "min_managed_clusters") and args.min_managed_clusters is not None:
+            if not isinstance(args.min_managed_clusters, int):
+                raise ValidationError("--min-managed-clusters must be an integer")
+            if args.min_managed_clusters < 0:
+                raise ValidationError("--min-managed-clusters must be a non-negative integer")
+
         # Validate that secondary context is provided when not in decommission or setup mode
         is_decommission = hasattr(args, "decommission") and args.decommission
         is_setup = hasattr(args, "setup") and args.setup

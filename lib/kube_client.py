@@ -125,7 +125,10 @@ def _create_result_matches_requested_body(existing: Dict[str, Any], requested: D
         if isinstance(requested_value, list):
             if not isinstance(existing_value, list) or len(requested_value) != len(existing_value):
                 return False
-            return all(_is_requested_subset(req_item, exist_item) for req_item, exist_item in zip(requested_value, existing_value))
+            return all(
+                _is_requested_subset(req_item, exist_item)
+                for req_item, exist_item in zip(requested_value, existing_value)
+            )
         return requested_value == existing_value
 
     return _is_requested_subset(requested, existing)
@@ -431,9 +434,7 @@ class KubeClient:
                 # ConfigMap already exists (concurrent create or timeout-after-create);
                 # patch to converge to the desired state.
                 logger.debug("ConfigMap %s/%s already exists (409), patching instead", namespace, name)
-                result = self.core_v1.patch_namespaced_config_map(
-                    name=name, namespace=namespace, body={"data": data}
-                )
+                result = self.core_v1.patch_namespaced_config_map(name=name, namespace=namespace, body={"data": data})
                 return result.to_dict()
             if is_retryable_error(e):
                 raise
@@ -1024,6 +1025,33 @@ class KubeClient:
             logger.error("Failed to restart deployment %s/%s: %s", namespace, name, e)
             raise
 
+    def _list_pods_once(
+        self,
+        namespace: str,
+        label_selector: Optional[str] = None,
+        request_timeout: Optional[int] = None,
+    ) -> List[Dict]:
+        """List pods in a namespace with a single Kubernetes API call.
+
+        This helper intentionally performs no retry handling so callers with
+        their own deadline budgeting logic can control retry pacing explicitly.
+        """
+        self._validate_resource_inputs(namespace=namespace)
+        if label_selector is not None:
+            # Basic validation - only check for non-empty string
+            # Full label selector validation is complex (supports =, ==, !=, in, notin, exists, !exists)
+            # and includes keys with prefixes like 'app.kubernetes.io/name'
+            # Let the Kubernetes API validate the selector and return appropriate errors
+            if not label_selector.strip():
+                raise ValidationError("Label selector cannot be empty or whitespace-only")
+
+        kwargs: Dict[str, Any] = {"namespace": namespace, "label_selector": label_selector}
+        if request_timeout is not None:
+            kwargs["_request_timeout"] = request_timeout
+
+        result = self.core_v1.list_namespaced_pod(**kwargs)
+        return [pod.to_dict() for pod in result.items]
+
     @api_call(not_found_value=[], log_on_error=False)
     def get_pods(
         self,
@@ -1044,21 +1072,7 @@ class KubeClient:
         Raises:
             ValidationError: If namespace is invalid
         """
-        self._validate_resource_inputs(namespace=namespace)
-        if label_selector is not None:
-            # Basic validation - only check for non-empty string
-            # Full label selector validation is complex (supports =, ==, !=, in, notin, exists, !exists)
-            # and includes keys with prefixes like 'app.kubernetes.io/name'
-            # Let the Kubernetes API validate the selector and return appropriate errors
-            if not label_selector.strip():
-                raise ValidationError("Label selector cannot be empty or whitespace-only")
-
-        kwargs: Dict[str, Any] = {"namespace": namespace, "label_selector": label_selector}
-        if request_timeout is not None:
-            kwargs["_request_timeout"] = request_timeout
-
-        result = self.core_v1.list_namespaced_pod(**kwargs)
-        return [pod.to_dict() for pod in result.items]
+        return self._list_pods_once(namespace, label_selector, request_timeout)
 
     def list_pods(
         self,
@@ -1136,11 +1150,31 @@ class KubeClient:
             if remaining_budget <= 0:
                 break
 
-            pods = self.get_pods(
-                namespace,
-                label_selector,
-                request_timeout=max(1, int(remaining_budget)),
-            )
+            try:
+                pods = self._list_pods_once(
+                    namespace,
+                    label_selector,
+                    request_timeout=max(1, int(remaining_budget)),
+                )
+            except ApiException as exc:
+                if exc.status == 404:
+                    pods = []
+                elif is_retryable_error(exc):
+                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                    continue
+                else:
+                    raise
+            except Exception as exc:
+                if is_retryable_error(exc):
+                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                    continue
+                raise
 
             if expected_count is not None and len(pods) < expected_count:
                 logger.debug("Waiting for %s pods, found %s", expected_count, len(pods))

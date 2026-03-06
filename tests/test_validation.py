@@ -200,6 +200,54 @@ class TestCLIArgumentValidation:
         with pytest.raises(ValidationError):
             InputValidator.validate_all_cli_args(args)
 
+    def test_min_managed_clusters_rejects_negative(self):
+        """--min-managed-clusters must be zero or greater."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            min_managed_clusters=-1,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "min-managed-clusters" in str(exc_info.value)
+        assert "non-negative" in str(exc_info.value)
+
+    def test_min_managed_clusters_zero_passes_validation(self):
+        """--min-managed-clusters=0 remains the informational default."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            min_managed_clusters=0,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_min_managed_clusters_positive_passes_validation(self):
+        """Positive managed cluster thresholds remain valid."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            min_managed_clusters=2,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
     def test_argocd_resume_only_requires_secondary_context(self):
         """--argocd-resume-only requires --secondary-context to resolve state file."""
         args = MockArgs(

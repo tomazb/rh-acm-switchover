@@ -374,6 +374,25 @@ class TestKubeClient:
         assert 1 <= first_call_kwargs["_request_timeout"] <= 10
 
     @patch("lib.kube_client.time.sleep")
+    def test_wait_for_pods_ready_retries_transient_poll_error(self, mock_sleep, kube_client, mock_k8s_apis):
+        """A transient poll error should consume one poll cycle, not nested retries."""
+        pod_ready = MagicMock()
+        pod_ready.to_dict.return_value = {
+            "metadata": {"name": "pod1"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }
+        mock_k8s_apis["core_api"].list_namespaced_pod.side_effect = [
+            ApiException(status=500),
+            MagicMock(items=[pod_ready]),
+        ]
+
+        result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=10)
+
+        assert result is True
+        assert mock_k8s_apis["core_api"].list_namespaced_pod.call_count == 2
+        mock_sleep.assert_called_once_with(5)
+
+    @patch("lib.kube_client.time.sleep")
     def test_wait_for_pods_ready_allows_extra_pods(self, mock_sleep, kube_client, mock_k8s_apis):
         """When more pods than expected exist, success should still be reported."""
         pod_ready = MagicMock()
@@ -416,6 +435,21 @@ class TestKubeClient:
         call_kwargs = mock_k8s_apis["core_api"].list_namespaced_pod.call_args.kwargs
         assert call_kwargs["_request_timeout"] == 2
         mock_sleep.assert_called_once_with(0.5)
+
+    @patch("lib.kube_client.time.sleep")
+    @patch("lib.kube_client.time.time")
+    def test_wait_for_pods_ready_times_out_on_repeated_transient_errors(
+        self, mock_time, mock_sleep, kube_client, mock_k8s_apis
+    ):
+        """Repeated transient poll failures must respect the wall-clock timeout."""
+        mock_k8s_apis["core_api"].list_namespaced_pod.side_effect = ApiException(status=500)
+        mock_time.side_effect = [100.0, 100.0, 100.0, 108.0, 110.1]
+
+        result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=10)
+
+        assert result is False
+        mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once()
+        mock_sleep.assert_called_once_with(2.0)
 
     def test_rollout_restart_deployment_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test rollout restart deployment in dry-run mode."""

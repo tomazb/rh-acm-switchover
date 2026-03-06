@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pod readiness deadline enforcement**: `wait_for_pods_ready()` now performs one pod-list API call per poll cycle and handles transient poll failures inside the polling loop, so the configured timeout is a true wall-clock deadline rather than being extended by nested client retries.
+- **Managed cluster threshold validation**: `--min-managed-clusters` now rejects negative values instead of silently disabling the post-restore safety check.
 - **Backup ownership hardening**: Finalization now prefers the ACM backup ownership label and warns while accepting a narrow ACM name-pattern fallback for supported backup names, reducing false negatives when real ACM backups are missing the label.
 
 ## [1.5.10] - 2026-03-06
