@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Literal, Optional, Set, Tuple, TypeVar
 
+from lib.exceptions import StateLoadError
+
 # File locking is best-effort; fcntl isn't available on Windows.
 try:
     import fcntl  # type: ignore
@@ -129,20 +131,48 @@ class StateManager:
         self.state = self._load_state()
 
     def _load_state(self) -> Dict[str, Any]:
-        """Load state from file or create new state."""
-        if os.path.exists(self.state_file):
-            try:
-                with open(self.state_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except json.JSONDecodeError as e:
-                logging.warning("Corrupted state file %s: %s, starting fresh", self.state_file, e)
-            except OSError as e:
-                logging.error("Failed to read state file %s: %s", self.state_file, e)
+        """Load state from file, or create a new state file when none exists.
 
-        # If state file is missing or unreadable, create a new state file.
-        state = self._new_state()
-        self._write_state(state)
-        return state
+        Raises StateLoadError if the file exists but cannot be read or parsed.
+        The corrupt file is preserved (renamed to *.corrupt.<timestamp>) so that
+        operators can inspect it.  Never silently replaces a corrupt state file —
+        that would risk replaying mutations that were already applied to a real hub.
+        """
+        if not os.path.exists(self.state_file):
+            state = self._new_state()
+            self._write_state(state)
+            return state
+
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            corrupt_path = self._preserve_corrupt_state_file()
+            raise StateLoadError(
+                f"State file is corrupt and cannot be loaded: {self.state_file}\n"
+                f"Parse error: {e}\n"
+                f"The corrupt file has been preserved at: {corrupt_path}\n"
+                "To start a fresh switchover, use --reset-state or remove the state file."
+            ) from e
+        except OSError as e:
+            raise StateLoadError(
+                f"State file cannot be read: {self.state_file}\n"
+                f"I/O error: {e}\n"
+                "Check file permissions. To start a fresh switchover, use --reset-state."
+            ) from e
+
+    def _preserve_corrupt_state_file(self) -> str:
+        """Rename the corrupt state file to *.corrupt.<timestamp> for forensics.
+
+        Returns the path of the renamed file, or the original path if renaming fails.
+        """
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        corrupt_path = f"{self.state_file}.corrupt.{ts}"
+        try:
+            os.rename(self.state_file, corrupt_path)
+        except OSError:
+            corrupt_path = self.state_file
+        return corrupt_path
 
     def _new_state(self) -> Dict[str, Any]:
         """Return a fresh state structure."""

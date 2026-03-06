@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lib.exceptions import StateLoadError
 from lib.utils import (
     Phase,
     StateManager,
@@ -376,6 +377,108 @@ class TestStateManager:
         assert mock_logging.warning.called
         call_args = mock_logging.warning.call_args[0]
         assert "Could not parse state timestamp" in call_args[0]
+
+
+@pytest.mark.unit
+class TestStateLoadSafety:
+    """Tests for fail-fast behavior on corrupt or unreadable state files."""
+
+    def test_corrupt_json_raises_state_load_error(self, tmp_path):
+        """A corrupt state file must raise StateLoadError, not silently reset."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{invalid json %%}")
+
+        with pytest.raises(StateLoadError, match="corrupt"):
+            StateManager(str(state_file))
+
+    def test_corrupt_file_is_preserved_not_deleted(self, tmp_path):
+        """The corrupt state file must be renamed for forensics, not silently deleted."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{invalid}")
+
+        with pytest.raises(StateLoadError):
+            StateManager(str(state_file))
+
+        # Original file should be gone (renamed), but a .corrupt.* file should exist
+        assert not state_file.exists(), "Original file should have been renamed"
+        corrupt_files = list(tmp_path.glob("state.json.corrupt.*"))
+        assert len(corrupt_files) == 1, f"Expected one .corrupt.* file, found: {corrupt_files}"
+
+    def test_unreadable_file_raises_state_load_error(self, tmp_path):
+        """An unreadable state file must raise StateLoadError."""
+        import stat as stat_mod
+
+        state_file = tmp_path / "state.json"
+        state_file.write_text('{"version": "1.0"}')
+        state_file.chmod(0o000)
+
+        try:
+            with pytest.raises(StateLoadError, match="cannot be read"):
+                StateManager(str(state_file))
+        finally:
+            state_file.chmod(stat_mod.S_IRUSR | stat_mod.S_IWUSR)
+
+    def test_missing_file_creates_fresh_state(self, tmp_path):
+        """When no state file exists, a fresh one must be created without error."""
+        state_file = tmp_path / "new-state.json"
+        assert not state_file.exists()
+
+        sm = StateManager(str(state_file))
+
+        assert state_file.exists()
+        assert sm.get_current_phase() == Phase.INIT
+
+    def test_reset_state_flag_allows_recovery_from_corrupt_file(self, tmp_path):
+        """Simulates the --reset-state path: delete file before constructing StateManager."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{invalid}")
+
+        # --reset-state removes the file before constructing StateManager
+        state_file.unlink()
+        sm = StateManager(str(state_file))
+
+        assert sm.get_current_phase() == Phase.INIT
+
+
+@pytest.mark.unit
+class TestPhaseResumeMetadata:
+    """Tests for reliable failure metadata required by resume logic."""
+
+    def test_add_error_captures_current_phase(self, tmp_path):
+        """add_error records the current phase so get_last_error_phase can locate it."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+        sm.add_error("activation step failed")
+
+        last_phase = sm.get_last_error_phase()
+        assert last_phase == Phase.ACTIVATION
+
+    def test_fail_phase_helper_records_both_error_and_failed_state(self, tmp_path):
+        """_fail_phase must record an error entry AND set phase to FAILED."""
+        import logging
+
+        import acm_switchover
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+
+        logger = logging.getLogger("test")
+        result = acm_switchover._fail_phase(sm, "something broke", logger)
+
+        assert result is False
+        assert sm.get_current_phase() == Phase.FAILED
+        errors = sm.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["phase"] == Phase.ACTIVATION.value
+
+    def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
+        """After a phase failure, get_last_error_phase returns the phase to retry."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.add_error("prep failed", phase=Phase.PRIMARY_PREP.value)
+        sm.set_phase(Phase.FAILED)
+
+        assert sm.get_last_error_phase() == Phase.PRIMARY_PREP
 
 
 @pytest.mark.unit

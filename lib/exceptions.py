@@ -40,3 +40,16 @@ class SecurityValidationError(ValidationError):
     This exception is raised when validation fails due to potential
     security issues (e.g., path traversal attempts, command injection).
     """
+
+
+class StateLoadError(FatalError):
+    """State file could not be loaded due to corruption or I/O failure.
+
+    The tool must not continue with an automatically-generated fresh state
+    when a state file already existed, because doing so risks replaying
+    mutations that were already applied to a real hub.
+
+    Raise this exception instead of silently resetting state. The caller
+    (acm_switchover.py) should surface a clear operator-facing message and
+    abort unless an explicit --reset-state or --force flag is provided.
+    """
