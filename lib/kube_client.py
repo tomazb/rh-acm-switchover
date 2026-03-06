@@ -76,6 +76,61 @@ def _should_retry(exception: BaseException) -> bool:
     return is_retryable_error(exception)
 
 
+def _sanitize_created_resource_for_compare(resource: Any) -> Any:
+    """Remove server-managed fields before comparing create intent vs reread object."""
+    if isinstance(resource, dict):
+        sanitized = {}
+        for key, value in resource.items():
+            if key == "status":
+                continue
+            if key == "metadata" and isinstance(value, dict):
+                metadata = dict(value)
+                for field in (
+                    "resourceVersion",
+                    "uid",
+                    "creationTimestamp",
+                    "managedFields",
+                    "generation",
+                    "selfLink",
+                ):
+                    metadata.pop(field, None)
+                sanitized[key] = _sanitize_created_resource_for_compare(metadata)
+                continue
+            sanitized[key] = _sanitize_created_resource_for_compare(value)
+        return sanitized
+    if isinstance(resource, list):
+        return [_sanitize_created_resource_for_compare(item) for item in resource]
+    return resource
+
+
+def _create_result_matches_requested_body(existing: Dict[str, Any], requested: Dict[str, Any]) -> bool:
+    """Check whether a reread object is equivalent to the requested create body.
+
+    Comparison is intentionally asymmetric: the existing object may contain extra
+    server-managed or controller-populated fields, but every field requested in
+    the create body must match after stripping server-managed metadata and status.
+    """
+
+    def _is_requested_subset(requested_value: Any, existing_value: Any) -> bool:
+        requested_value = _sanitize_created_resource_for_compare(requested_value)
+        existing_value = _sanitize_created_resource_for_compare(existing_value)
+
+        if isinstance(requested_value, dict):
+            if not isinstance(existing_value, dict):
+                return False
+            return all(
+                key in existing_value and _is_requested_subset(value, existing_value[key])
+                for key, value in requested_value.items()
+            )
+        if isinstance(requested_value, list):
+            if not isinstance(existing_value, list) or len(requested_value) != len(existing_value):
+                return False
+            return all(_is_requested_subset(req_item, exist_item) for req_item, exist_item in zip(requested_value, existing_value))
+        return requested_value == existing_value
+
+    return _is_requested_subset(requested, existing)
+
+
 # Standard retry decorator for API calls
 retry_api_call = retry(
     retry=retry_if_exception(_should_retry),
@@ -732,15 +787,22 @@ class KubeClient:
                     namespace=namespace,
                 )
                 if existing:
-                    logger.debug(
-                        "409 on create %s/%s: resource already exists, treating as success",
+                    if _create_result_matches_requested_body(existing, body):
+                        logger.debug(
+                            "409 on create %s/%s: reread object matches requested body, treating as success",
+                            plural,
+                            resource_name,
+                        )
+                        return existing
+                    logger.error(
+                        "409 on create %s/%s: existing resource conflicts with requested body",
                         plural,
                         resource_name,
                     )
-                    return existing
-                # 409 but resource not found on re-read: genuine conflict with a different object.
+                    raise
+                # 409 but resource not found on re-read: conflict could not be reconciled.
                 logger.error(
-                    "409 on create %s/%s but resource not found on re-read; genuine conflict",
+                    "409 on create %s/%s but resource not found on re-read; conflict could not be reconciled",
                     plural,
                     resource_name,
                 )

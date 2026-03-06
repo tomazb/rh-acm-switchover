@@ -447,8 +447,26 @@ class TestMutatorIdempotency:
     """Tests for 409-reconciliation and retry safety in mutating helpers."""
 
     def test_create_custom_resource_409_reconciles_when_resource_exists(self, kube_client, mock_k8s_apis):
-        """When create returns 409 and resource exists on re-read, treat as success (timeout-after-create)."""
-        existing = {"metadata": {"name": "test-restore", "resourceVersion": "1"}}
+        """When create returns 409 and reread object matches requested body, treat as success."""
+        body = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns"},
+            "spec": {"syncRestoreWithNewBackups": True},
+        }
+        existing = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {
+                "name": "test-restore",
+                "namespace": "test-ns",
+                "resourceVersion": "1",
+                "uid": "abc123",
+                "creationTimestamp": "2026-03-06T12:00:00Z",
+            },
+            "spec": {"syncRestoreWithNewBackups": True},
+            "status": {"phase": "Running"},
+        }
         mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=409)
         mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = existing
 
@@ -456,7 +474,7 @@ class TestMutatorIdempotency:
             group="cluster.open-cluster-management.io",
             version="v1beta1",
             plural="restores",
-            body={"metadata": {"name": "test-restore"}},
+            body=body,
             namespace="test-ns",
         )
 
@@ -465,7 +483,7 @@ class TestMutatorIdempotency:
         mock_k8s_apis["custom_api"].get_namespaced_custom_object.assert_called_once()
 
     def test_create_custom_resource_409_reraises_when_resource_absent(self, kube_client, mock_k8s_apis):
-        """When create returns 409 but resource is not found on re-read, re-raise the 409 (genuine conflict)."""
+        """When create returns 409 but resource is not found on re-read, re-raise the 409."""
         mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=409)
         mock_k8s_apis["custom_api"].get_namespaced_custom_object.side_effect = ApiException(status=404)
 
@@ -475,6 +493,34 @@ class TestMutatorIdempotency:
                 version="v1beta1",
                 plural="restores",
                 body={"metadata": {"name": "test-restore"}},
+                namespace="test-ns",
+            )
+
+        assert exc_info.value.status == 409
+
+    def test_create_custom_resource_409_reraises_when_existing_resource_differs(self, kube_client, mock_k8s_apis):
+        """When create returns 409 and the reread object differs from the requested body, re-raise."""
+        body = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns"},
+            "spec": {"syncRestoreWithNewBackups": True},
+        }
+        existing = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns", "resourceVersion": "1"},
+            "spec": {"syncRestoreWithNewBackups": False},
+        }
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=409)
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = existing
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body=body,
                 namespace="test-ns",
             )
 
