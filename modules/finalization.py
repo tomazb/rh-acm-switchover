@@ -5,6 +5,7 @@ Finalization and rollback module for ACM switchover.
 # Runbook: Steps 11-12 (finalization) and Step 14 (old hub handling)
 
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -52,6 +53,10 @@ from .decommission import Decommission
 
 logger = logging.getLogger("acm_switchover")
 
+ACM_BACKUP_SCHEDULE_TYPE_LABEL = "cluster.open-cluster-management.io/backup-schedule-type"
+ACM_BACKUP_SCHEDULE_TYPES = {"managedClusters", "credentials", "resources"}
+ACM_BACKUP_NAME_RE = re.compile(r"^acm-(managed-clusters|credentials|resources)-")
+
 
 class Finalization:
     """Handles finalization steps on secondary hub."""
@@ -86,6 +91,82 @@ class Finalization:
             dry_run=dry_run,
         )
         self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
+
+    @staticmethod
+    def _get_acm_backup_ownership_signal(backup: Dict) -> Optional[str]:
+        """Return the ownership signal proving a Velero backup is ACM-owned.
+
+        Preferred signal is the ACM backup-schedule-type label. As a hardened
+        fallback, accept the well-known ACM backup naming convention if the
+        label is missing.
+        """
+        labels = backup.get("metadata", {}).get("labels", {}) or {}
+        label_value = labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL)
+        if label_value in ACM_BACKUP_SCHEDULE_TYPES:
+            return "label"
+
+        backup_name = backup.get("metadata", {}).get("name", "")
+        if ACM_BACKUP_NAME_RE.match(backup_name):
+            return "name-pattern"
+
+        return None
+
+    def _is_acm_owned_backup(self, backup: Dict) -> bool:
+        """Return True when the backup has a recognized ACM ownership signal."""
+        return self._get_acm_backup_ownership_signal(backup) is not None
+
+    def _filter_acm_owned_backups(self, backups: List[Dict]) -> List[Dict]:
+        """Filter Velero backups down to ACM-owned backups only.
+
+        Warn when the label is missing but a known ACM backup name pattern is
+        used as the fallback ownership signal.
+        """
+        acm_backups = []
+        for backup in backups:
+            signal = self._get_acm_backup_ownership_signal(backup)
+            if signal == "name-pattern":
+                backup_name = backup.get("metadata", {}).get("name", "unknown")
+                logger.warning(
+                    "Backup %s is missing ACM ownership label %s; accepting ACM name-pattern fallback",
+                    backup_name,
+                    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+                )
+            if signal:
+                acm_backups.append(backup)
+        return acm_backups
+
+    @staticmethod
+    def _backup_is_detectable(backup: Dict) -> bool:
+        """Return True when a backup phase proves backup creation has started."""
+        phase = backup.get("status", {}).get("phase", "unknown")
+        return phase in ("InProgress", "Completed", "New")
+
+    def _backup_effective_timestamp(self, backup: Dict) -> Optional[datetime]:
+        """Return the most useful timestamp for backup chronology checks."""
+        status = backup.get("status", {}) or {}
+        metadata = backup.get("metadata", {}) or {}
+        return self._parse_timestamp(
+            status.get("completionTimestamp") or status.get("startTimestamp") or metadata.get("creationTimestamp")
+        )
+
+    def _find_post_enable_backup(self, backups: List[Dict], enabled_at: Optional[datetime]) -> Optional[Dict]:
+        """Find an ACM-owned backup that proves continuity after enable/resume."""
+        if enabled_at is None:
+            return None
+
+        candidates = []
+        for backup in backups:
+            backup_ts = self._backup_effective_timestamp(backup)
+            if backup_ts and backup_ts >= enabled_at and self._backup_is_detectable(backup):
+                candidates.append((backup_ts, backup))
+
+        if not candidates:
+            return None
+
+        # Pick the earliest post-enable backup so resume reuses the first proof point
+        # instead of requiring a later backup to appear.
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
 
     def finalize(self) -> bool:  # noqa: C901
         """
@@ -282,7 +363,10 @@ class Finalization:
     @dry_run_skip(message="Skipping new backup verification")
     def _verify_new_backups(self, timeout: int = BACKUP_VERIFY_TIMEOUT):
         """
-        Verify new backups are being created.
+        Verify new backups are being created after enabling BackupSchedule.
+
+        Fails with SwitchoverError if no new backup appears within the timeout.
+        Records the detected backup name in state for downstream integrity verification.
 
         Args:
             timeout: Maximum wait time in seconds
@@ -290,13 +374,40 @@ class Finalization:
 
         logger.info("Verifying new backups are being created...")
 
-        # Get current backup list (Velero Backups use velero.io/v1)
-        initial_backups = self.secondary.list_custom_resources(
+        # Get current ACM-owned backup list (Velero Backups use velero.io/v1)
+        current_backups = self.secondary.list_custom_resources(
             group="velero.io",
             version="v1",
             plural="backups",
             namespace=BACKUP_NAMESPACE,
         )
+        current_backups = self._filter_acm_owned_backups(current_backups)
+
+        recorded_backup_name = self.state.get_config("post_switchover_backup_name")
+        if recorded_backup_name:
+            recorded_backup = self.secondary.get_custom_resource(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                name=recorded_backup_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if recorded_backup and self._is_acm_owned_backup(recorded_backup) and self._backup_is_detectable(recorded_backup):
+                logger.info("Reusing previously recorded post-switchover backup: %s", recorded_backup_name)
+                self.state.set_config("new_backup_detected", True)
+                self.state.set_config("post_switchover_backup_name", recorded_backup_name)
+                return
+
+        enabled_at = self._get_backup_schedule_enabled_at()
+        existing_post_enable_backup = self._find_post_enable_backup(current_backups, enabled_at)
+        if existing_post_enable_backup:
+            existing_backup_name = existing_post_enable_backup.get("metadata", {}).get("name")
+            logger.info("Found existing post-enable ACM backup on resume: %s", existing_backup_name)
+            self.state.set_config("new_backup_detected", True)
+            self.state.set_config("post_switchover_backup_name", existing_backup_name)
+            return
+
+        initial_backups = current_backups
 
         initial_backup_names = {b.get("metadata", {}).get("name") for b in initial_backups}
 
@@ -312,6 +423,7 @@ class Finalization:
                 plural="backups",
                 namespace=BACKUP_NAMESPACE,
             )
+            current_backups = self._filter_acm_owned_backups(current_backups)
 
             current_backup_names = {b.get("metadata", {}).get("name") for b in current_backups}
 
@@ -335,6 +447,7 @@ class Finalization:
                         # Velero uses "InProgress" and "Completed" phases
                         if phase in ("InProgress", "Completed", "New"):
                             self.state.set_config("new_backup_detected", True)
+                            self.state.set_config("post_switchover_backup_name", backup_name)
                             logger.info("New backup is being created successfully!")
                             return
 
@@ -342,8 +455,9 @@ class Finalization:
             logger.debug("Waiting for new backup... (elapsed: %ss)", elapsed)
             time.sleep(BACKUP_POLL_INTERVAL)
 
-        logger.warning(
-            f"No new backups detected after {timeout}s. " "BackupSchedule may take time to create first backup."
+        raise SwitchoverError(
+            f"No new backup created within {timeout}s after enabling BackupSchedule on new hub. "
+            "Finalization cannot succeed without proof of backup continuity."
         )
 
     def _get_backup_verify_timeout(self) -> int:
@@ -525,28 +639,55 @@ class Finalization:
 
     @dry_run_skip(message="Skipping backup integrity verification")
     def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:  # noqa: C901
-        """Verify latest backup status, logs, and recency.
+        """Verify backup status, logs, and recency for the post-switchover backup.
 
-        Backup age enforcement is skipped until a new backup is detected after enabling the schedule.
+        When a post-switchover backup name was recorded by _verify_new_backups(), that
+        specific backup is fetched and verified. This prevents unrelated backups in the
+        namespace from masking a missing or failed ACM backup.
+
+        Falls back to the latest-by-timestamp backup (with a warning) only when no
+        recorded name is available (e.g. during a dry-run).
         """
         logger.info("Verifying backup integrity...")
         effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
 
-        backups = self.secondary.list_custom_resources(
-            group="velero.io",
-            version="v1",
-            plural="backups",
-            namespace=BACKUP_NAMESPACE,
-        )
+        post_switchover_backup_name = self.state.get_config("post_switchover_backup_name")
 
-        if not backups:
-            raise SwitchoverError("No Velero backups found for integrity verification")
+        if post_switchover_backup_name:
+            logger.info("Verifying post-switchover backup: %s", post_switchover_backup_name)
+            latest_backup = self.secondary.get_custom_resource(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                name=post_switchover_backup_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not latest_backup:
+                raise SwitchoverError(
+                    f"Post-switchover backup '{post_switchover_backup_name}' no longer exists; "
+                    "cannot verify integrity"
+                )
+            backup_name = post_switchover_backup_name
+        else:
+            logger.warning(
+                "No post-switchover backup name recorded; falling back to latest backup in namespace"
+            )
+            backups = self.secondary.list_custom_resources(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                namespace=BACKUP_NAMESPACE,
+            )
+            backups = self._filter_acm_owned_backups(backups)
+            if not backups:
+                raise SwitchoverError("No ACM-owned Velero backups found for integrity verification")
 
-        def _backup_sort_key(backup: Dict) -> str:
-            return backup.get("metadata", {}).get("creationTimestamp", "") or ""
+            def _backup_sort_key(backup: Dict) -> str:
+                return backup.get("metadata", {}).get("creationTimestamp", "") or ""
 
-        latest_backup = max(backups, key=_backup_sort_key)
-        backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
+            latest_backup = max(backups, key=_backup_sort_key)
+            backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
+
         status = latest_backup.get("status", {}) or {}
 
         phase = status.get("phase", "unknown")
@@ -611,7 +752,10 @@ class Finalization:
             logger.warning("Latest backup %s completed with %s warning(s)", backup_name, warnings)
 
         enabled_at = self._get_backup_schedule_enabled_at()
-        new_backup_detected = bool(self.state.get_config("new_backup_detected", False))
+        # A backup is considered "after enable" if its name was recorded by
+        # _verify_new_backups (meaning it was detected after enabling the schedule),
+        # or if its timestamp is >= the recorded enable time.
+        is_post_switchover_backup = bool(post_switchover_backup_name)
 
         completion_ts = status.get("completionTimestamp") or status.get("startTimestamp")
         creation_ts = latest_backup.get("metadata", {}).get("creationTimestamp")
@@ -630,7 +774,7 @@ class Finalization:
             if enabled_at:
                 backup_after_enable = parsed_ts >= enabled_at
             else:
-                backup_after_enable = new_backup_detected
+                backup_after_enable = is_post_switchover_backup
 
             if not backup_after_enable:
                 logger.warning(
