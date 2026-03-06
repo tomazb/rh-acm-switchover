@@ -370,6 +370,8 @@ class TestKubeClient:
 
         assert result is True
         assert mock_k8s_apis["core_api"].list_namespaced_pod.call_count >= 2
+        first_call_kwargs = mock_k8s_apis["core_api"].list_namespaced_pod.call_args_list[0].kwargs
+        assert 1 <= first_call_kwargs["_request_timeout"] <= 10
 
     @patch("lib.kube_client.time.sleep")
     def test_wait_for_pods_ready_allows_extra_pods(self, mock_sleep, kube_client, mock_k8s_apis):
@@ -391,6 +393,29 @@ class TestKubeClient:
 
         assert result is True
         mock_sleep.assert_not_called()
+
+    @patch("lib.kube_client.time.sleep")
+    @patch("lib.kube_client.time.time")
+    def test_wait_for_pods_ready_uses_remaining_budget(self, mock_time, mock_sleep, kube_client, mock_k8s_apis):
+        """Each polling API call should use the remaining wall-clock timeout budget."""
+        pod_not_ready = MagicMock()
+        pod_not_ready.to_dict.return_value = {
+            "metadata": {"name": "pod1"},
+            "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+        }
+        mock_k8s_apis["core_api"].list_namespaced_pod.return_value = MagicMock(items=[pod_not_ready])
+
+        # start_time=100, loop check=100, remaining-budget check=108 -> 2s left,
+        # sleep budget check=109.5 -> 0.5s sleep, next loop check=110.1 -> timeout
+        mock_time.side_effect = [100.0, 100.0, 108.0, 109.5, 110.1]
+
+        result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=10)
+
+        assert result is False
+        mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once()
+        call_kwargs = mock_k8s_apis["core_api"].list_namespaced_pod.call_args.kwargs
+        assert call_kwargs["_request_timeout"] == 2
+        mock_sleep.assert_called_once_with(0.5)
 
     def test_rollout_restart_deployment_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test rollout restart deployment in dry-run mode."""
