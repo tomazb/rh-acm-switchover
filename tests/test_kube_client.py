@@ -418,6 +418,127 @@ class TestKubeClient:
 
 
 @pytest.mark.unit
+class TestMutatorIdempotency:
+    """Tests for 409-reconciliation and retry safety in mutating helpers."""
+
+    def test_create_custom_resource_409_reconciles_when_resource_exists(self, kube_client, mock_k8s_apis):
+        """When create returns 409 and reread object matches requested body, treat as success."""
+        body = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns"},
+            "spec": {"syncRestoreWithNewBackups": True},
+        }
+        existing = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {
+                "name": "test-restore",
+                "namespace": "test-ns",
+                "resourceVersion": "1",
+                "uid": "abc123",
+                "creationTimestamp": "2026-03-06T12:00:00Z",
+            },
+            "spec": {"syncRestoreWithNewBackups": True},
+            "status": {"phase": "Running"},
+        }
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=409)
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = existing
+
+        result = kube_client.create_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="restores",
+            body=body,
+            namespace="test-ns",
+        )
+
+        assert result == existing
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.assert_called_once()
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.assert_called_once()
+
+    def test_create_custom_resource_409_reraises_when_resource_absent(self, kube_client, mock_k8s_apis):
+        """When create returns 409 but resource is not found on re-read, re-raise the 409."""
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=409)
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.side_effect = ApiException(status=404)
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body={"metadata": {"name": "test-restore"}},
+                namespace="test-ns",
+            )
+
+        assert exc_info.value.status == 409
+
+    def test_create_custom_resource_409_reraises_when_existing_resource_differs(self, kube_client, mock_k8s_apis):
+        """When create returns 409 and the reread object differs from the requested body, re-raise."""
+        body = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns"},
+            "spec": {"syncRestoreWithNewBackups": True},
+        }
+        existing = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns", "resourceVersion": "1"},
+            "spec": {"syncRestoreWithNewBackups": False},
+        }
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=409)
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = existing
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body=body,
+                namespace="test-ns",
+            )
+
+        assert exc_info.value.status == 409
+
+    def test_create_or_patch_configmap_creates_when_absent(self, kube_client, mock_k8s_apis):
+        """ConfigMap upsert creates when the resource does not yet exist."""
+        created = MagicMock()
+        created.to_dict.return_value = {"metadata": {"name": "cm1"}, "data": {"k": "v"}}
+        mock_k8s_apis["core_api"].create_namespaced_config_map.return_value = created
+
+        result = kube_client.create_or_patch_configmap("ns", "cm1", {"k": "v"})
+
+        assert result == {"metadata": {"name": "cm1"}, "data": {"k": "v"}}
+        mock_k8s_apis["core_api"].create_namespaced_config_map.assert_called_once()
+        mock_k8s_apis["core_api"].patch_namespaced_config_map.assert_not_called()
+
+    def test_create_or_patch_configmap_patches_on_409(self, kube_client, mock_k8s_apis):
+        """ConfigMap upsert patches when create returns 409 (concurrent create or timeout-after-create)."""
+        mock_k8s_apis["core_api"].create_namespaced_config_map.side_effect = ApiException(status=409)
+        patched = MagicMock()
+        patched.to_dict.return_value = {"metadata": {"name": "cm1"}, "data": {"k": "v"}}
+        mock_k8s_apis["core_api"].patch_namespaced_config_map.return_value = patched
+
+        result = kube_client.create_or_patch_configmap("ns", "cm1", {"k": "v"})
+
+        assert result == {"metadata": {"name": "cm1"}, "data": {"k": "v"}}
+        mock_k8s_apis["core_api"].create_namespaced_config_map.assert_called_once()
+        mock_k8s_apis["core_api"].patch_namespaced_config_map.assert_called_once()
+
+    def test_create_or_patch_configmap_no_nested_retry_on_read(self, kube_client, mock_k8s_apis):
+        """ConfigMap upsert no longer calls get_configmap; no nested retry amplification."""
+        created = MagicMock()
+        created.to_dict.return_value = {"metadata": {"name": "cm1"}}
+        mock_k8s_apis["core_api"].create_namespaced_config_map.return_value = created
+
+        kube_client.create_or_patch_configmap("ns", "cm1", {"k": "v"})
+
+        # read_namespaced_config_map must NOT be called (old read-then-create path is gone)
+        mock_k8s_apis["core_api"].read_namespaced_config_map.assert_not_called()
+
+
+@pytest.mark.unit
 class TestKubeClientInitialization:
     """Test cases for KubeClient initialization."""
 
