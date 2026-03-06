@@ -248,6 +248,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--method {passive,full}` | Switchover method: `passive` or `full` (required) |
 | `--old-hub-action {secondary,decommission,none}` | Action for old hub after switchover (required) |
 | `--activation-method {patch,restore}` | Activation method for passive restores (default: patch) |
+| `--min-managed-clusters N` | Require at least `N` non-local `ManagedCluster` resources after restore; `N` must be non-negative and `0` keeps the check informational |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--decommission` | Decommission old hub (interactive) |
@@ -420,6 +421,7 @@ podman run -it --rm \
 | `--method passive` | Use passive sync method (required) |
 | `--method full` | Use full restore method (required) |
 | `--activation-method {patch,restore}` | Activation option for passive method |
+| `--min-managed-clusters N` | Enforce a non-negative minimum restored non-local `ManagedCluster` count (`0` = informational only) |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--verbose` | Enable debug logging |

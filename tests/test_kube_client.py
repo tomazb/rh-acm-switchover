@@ -375,6 +375,25 @@ class TestKubeClient:
         assert 1 <= first_call_kwargs["_request_timeout"] <= 10
 
     @patch("lib.kube_client.time.sleep")
+    def test_wait_for_pods_ready_retries_transient_poll_error(self, mock_sleep, kube_client, mock_k8s_apis):
+        """A transient poll error should consume one poll cycle, not nested retries."""
+        pod_ready = MagicMock()
+        pod_ready.to_dict.return_value = {
+            "metadata": {"name": "pod1"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }
+        mock_k8s_apis["core_api"].list_namespaced_pod.side_effect = [
+            ApiException(status=500),
+            MagicMock(items=[pod_ready]),
+        ]
+
+        result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=10)
+
+        assert result is True
+        assert mock_k8s_apis["core_api"].list_namespaced_pod.call_count == 2
+        mock_sleep.assert_called_once_with(5)
+
+    @patch("lib.kube_client.time.sleep")
     def test_wait_for_pods_ready_allows_extra_pods(self, mock_sleep, kube_client, mock_k8s_apis):
         """When more pods than expected exist, success should still be reported."""
         pod_ready = MagicMock()
