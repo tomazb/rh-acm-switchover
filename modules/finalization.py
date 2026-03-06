@@ -99,6 +99,39 @@ class Finalization:
         """Filter Velero backups down to ACM-owned backups only."""
         return [backup for backup in backups if self._is_acm_owned_backup(backup)]
 
+    @staticmethod
+    def _backup_is_detectable(backup: Dict) -> bool:
+        """Return True when a backup phase proves backup creation has started."""
+        phase = backup.get("status", {}).get("phase", "unknown")
+        return phase in ("InProgress", "Completed", "New")
+
+    def _backup_effective_timestamp(self, backup: Dict) -> Optional[datetime]:
+        """Return the most useful timestamp for backup chronology checks."""
+        status = backup.get("status", {}) or {}
+        metadata = backup.get("metadata", {}) or {}
+        return self._parse_timestamp(
+            status.get("completionTimestamp") or status.get("startTimestamp") or metadata.get("creationTimestamp")
+        )
+
+    def _find_post_enable_backup(self, backups: List[Dict], enabled_at: Optional[datetime]) -> Optional[Dict]:
+        """Find an ACM-owned backup that proves continuity after enable/resume."""
+        if enabled_at is None:
+            return None
+
+        candidates = []
+        for backup in backups:
+            backup_ts = self._backup_effective_timestamp(backup)
+            if backup_ts and backup_ts >= enabled_at and self._backup_is_detectable(backup):
+                candidates.append((backup_ts, backup))
+
+        if not candidates:
+            return None
+
+        # Pick the earliest post-enable backup so resume reuses the first proof point
+        # instead of requiring a later backup to appear.
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+
     def finalize(self) -> bool:  # noqa: C901
         """
         Execute finalization steps.
@@ -305,14 +338,40 @@ class Finalization:
 
         logger.info("Verifying new backups are being created...")
 
-        # Get current backup list (Velero Backups use velero.io/v1)
-        initial_backups = self.secondary.list_custom_resources(
+        # Get current ACM-owned backup list (Velero Backups use velero.io/v1)
+        current_backups = self.secondary.list_custom_resources(
             group="velero.io",
             version="v1",
             plural="backups",
             namespace=BACKUP_NAMESPACE,
         )
-        initial_backups = self._filter_acm_owned_backups(initial_backups)
+        current_backups = self._filter_acm_owned_backups(current_backups)
+
+        recorded_backup_name = self.state.get_config("post_switchover_backup_name")
+        if recorded_backup_name:
+            recorded_backup = self.secondary.get_custom_resource(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                name=recorded_backup_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if recorded_backup and self._is_acm_owned_backup(recorded_backup) and self._backup_is_detectable(recorded_backup):
+                logger.info("Reusing previously recorded post-switchover backup: %s", recorded_backup_name)
+                self.state.set_config("new_backup_detected", True)
+                self.state.set_config("post_switchover_backup_name", recorded_backup_name)
+                return
+
+        enabled_at = self._get_backup_schedule_enabled_at()
+        existing_post_enable_backup = self._find_post_enable_backup(current_backups, enabled_at)
+        if existing_post_enable_backup:
+            existing_backup_name = existing_post_enable_backup.get("metadata", {}).get("name")
+            logger.info("Found existing post-enable ACM backup on resume: %s", existing_backup_name)
+            self.state.set_config("new_backup_detected", True)
+            self.state.set_config("post_switchover_backup_name", existing_backup_name)
+            return
+
+        initial_backups = current_backups
 
         initial_backup_names = {b.get("metadata", {}).get("name") for b in initial_backups}
 

@@ -423,6 +423,44 @@ class TestFinalization:
 
         finalization.state.set_config.assert_any_call("post_switchover_backup_name", "acm-backup-001")
 
+    def test_verify_new_backups_reuses_recorded_backup_name(self, finalization, mock_secondary_client):
+        """If a recorded post-switchover backup still exists, resume should succeed immediately."""
+        recorded_backup = {
+            "metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL},
+            "status": {"phase": "Completed"},
+        }
+        mock_secondary_client.list_custom_resources.return_value = [recorded_backup]
+        mock_secondary_client.get_custom_resource.return_value = recorded_backup
+        finalization.state.get_config.side_effect = lambda key, default=None: (
+            "acm-backup-001" if key == "post_switchover_backup_name" else None
+        )
+
+        finalization._verify_new_backups(timeout=10)
+
+        mock_secondary_client.get_custom_resource.assert_called_once()
+        finalization.state.set_config.assert_any_call("post_switchover_backup_name", "acm-backup-001")
+
+    def test_verify_new_backups_accepts_existing_post_enable_backup_on_resume(
+        self, finalization, mock_secondary_client
+    ):
+        """If the first post-enable ACM backup already exists on resume, do not require a second backup."""
+        backup_ts = "2026-03-06T10:05:00Z"
+        enabled_ts = "2026-03-06T10:00:00Z"
+        existing_backup = {
+            "metadata": {"name": "acm-backup-001", "creationTimestamp": backup_ts, "labels": ACM_BACKUP_LABEL},
+            "status": {"phase": "Completed", "completionTimestamp": backup_ts},
+        }
+        mock_secondary_client.list_custom_resources.return_value = [existing_backup]
+        mock_secondary_client.get_custom_resource.return_value = None
+        finalization.state.get_config.side_effect = lambda key, default=None: {
+            "post_switchover_backup_name": None,
+            "backup_schedule_enabled_at": enabled_ts,
+        }.get(key, default)
+
+        finalization._verify_new_backups(timeout=10)
+
+        finalization.state.set_config.assert_any_call("post_switchover_backup_name", "acm-backup-001")
+
     @patch("modules.finalization.time")
     def test_verify_new_backups_ignores_unrelated_velero_backups(
         self, mock_time, finalization, mock_secondary_client
