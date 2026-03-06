@@ -5,6 +5,7 @@ Finalization and rollback module for ACM switchover.
 # Runbook: Steps 11-12 (finalization) and Step 14 (old hub handling)
 
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -53,6 +54,8 @@ from .decommission import Decommission
 logger = logging.getLogger("acm_switchover")
 
 ACM_BACKUP_SCHEDULE_TYPE_LABEL = "cluster.open-cluster-management.io/backup-schedule-type"
+ACM_BACKUP_SCHEDULE_TYPES = {"managedClusters", "credentials", "resources"}
+ACM_BACKUP_NAME_RE = re.compile(r"^acm-(managed-clusters|credentials|resources)-")
 
 
 class Finalization:
@@ -90,14 +93,47 @@ class Finalization:
         self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
 
     @staticmethod
-    def _is_acm_owned_backup(backup: Dict) -> bool:
-        """Return True when the Velero backup carries ACM ownership metadata."""
+    def _get_acm_backup_ownership_signal(backup: Dict) -> Optional[str]:
+        """Return the ownership signal proving a Velero backup is ACM-owned.
+
+        Preferred signal is the ACM backup-schedule-type label. As a hardened
+        fallback, accept the well-known ACM backup naming convention if the
+        label is missing.
+        """
         labels = backup.get("metadata", {}).get("labels", {}) or {}
-        return bool(labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL))
+        label_value = labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL)
+        if label_value in ACM_BACKUP_SCHEDULE_TYPES:
+            return "label"
+
+        backup_name = backup.get("metadata", {}).get("name", "")
+        if ACM_BACKUP_NAME_RE.match(backup_name):
+            return "name-pattern"
+
+        return None
+
+    def _is_acm_owned_backup(self, backup: Dict) -> bool:
+        """Return True when the backup has a recognized ACM ownership signal."""
+        return self._get_acm_backup_ownership_signal(backup) is not None
 
     def _filter_acm_owned_backups(self, backups: List[Dict]) -> List[Dict]:
-        """Filter Velero backups down to ACM-owned backups only."""
-        return [backup for backup in backups if self._is_acm_owned_backup(backup)]
+        """Filter Velero backups down to ACM-owned backups only.
+
+        Warn when the label is missing but a known ACM backup name pattern is
+        used as the fallback ownership signal.
+        """
+        acm_backups = []
+        for backup in backups:
+            signal = self._get_acm_backup_ownership_signal(backup)
+            if signal == "name-pattern":
+                backup_name = backup.get("metadata", {}).get("name", "unknown")
+                logger.warning(
+                    "Backup %s is missing ACM ownership label %s; accepting ACM name-pattern fallback",
+                    backup_name,
+                    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+                )
+            if signal:
+                acm_backups.append(backup)
+        return acm_backups
 
     @staticmethod
     def _backup_is_detectable(backup: Dict) -> bool:

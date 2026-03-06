@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Backup ownership hardening**: Finalization now prefers the ACM backup ownership label and warns while accepting a narrow ACM name-pattern fallback for supported backup names, reducing false negatives when real ACM backups are missing the label.
+
 ## [1.5.10] - 2026-03-06
 
 ### Added

@@ -462,6 +462,27 @@ class TestFinalization:
         finalization.state.set_config.assert_any_call("post_switchover_backup_name", "acm-backup-001")
 
     @patch("modules.finalization.time")
+    def test_verify_new_backups_accepts_known_acm_name_without_label_and_logs_warning(
+        self, mock_time, finalization, mock_secondary_client, caplog
+    ):
+        """Known ACM backup names are accepted with a warning when the ACM label is missing."""
+        mock_time.time.side_effect = [0, 0, 1, 2]
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [],
+            [],
+            [{"metadata": {"name": "acm-managed-clusters-schedule-20260306100000"}, "status": {"phase": "Completed"}}],
+        ]
+
+        with caplog.at_level(logging.WARNING):
+            finalization._verify_new_backups(timeout=10)
+
+        finalization.state.set_config.assert_any_call(
+            "post_switchover_backup_name", "acm-managed-clusters-schedule-20260306100000"
+        )
+        assert finalization_module.ACM_BACKUP_SCHEDULE_TYPE_LABEL in caplog.text
+        assert "name-pattern fallback" in caplog.text
+
+    @patch("modules.finalization.time")
     def test_verify_new_backups_ignores_unrelated_velero_backups(
         self, mock_time, finalization, mock_secondary_client
     ):
@@ -1217,3 +1238,31 @@ class TestFinalization:
         assert result["phase"] == "Enabled"
         assert result["last_message"] == "Sync in progress"
         assert result["velero_managed_clusters_restore_name"] == "restore-mc-123"
+
+
+@pytest.mark.integration
+class TestFinalizationBackupOwnershipFallbackIntegration:
+    """Integration-style checks for ACM backup ownership fallback with real state persistence."""
+
+    @patch("modules.finalization.time")
+    def test_verify_new_backups_persists_fallback_detected_backup(self, mock_time, mock_secondary_client, tmp_path):
+        """A label-missing ACM-style backup should still be persisted via the fallback signal."""
+        from lib.utils import StateManager
+
+        mock_time.time.side_effect = [0, 0, 1, 2]
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [],
+            [],
+            [{"metadata": {"name": "acm-managed-clusters-schedule-20260306100000"}, "status": {"phase": "Completed"}}],
+        ]
+
+        state = StateManager(str(tmp_path / "state.json"))
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=state,
+            acm_version="2.12.0",
+        )
+
+        fin._verify_new_backups(timeout=10)
+
+        assert state.get_config("post_switchover_backup_name") == "acm-managed-clusters-schedule-20260306100000"
