@@ -336,7 +336,9 @@ class KubeClient:
     def create_or_patch_configmap(self, namespace: str, name: str, data: Dict[str, str]) -> Dict:
         """Create or patch a ConfigMap's data field.
 
-        If CM exists, patch data; otherwise create it.
+        Uses a create-first, patch-on-409 strategy to avoid the TOCTOU race
+        inherent in read-then-create and to eliminate nested retry amplification
+        that would result from calling get_configmap() (which has its own retry).
 
         Args:
             namespace: Namespace name
@@ -360,22 +362,24 @@ class KubeClient:
             )
             return {"metadata": {"name": name, "namespace": namespace}, "data": data}
 
+        create_body = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": name, "namespace": namespace},
+            "data": data,
+        }
         try:
-            existing = self.get_configmap(namespace, name)
-            if existing is None:
-                body = {
-                    "apiVersion": "v1",
-                    "kind": "ConfigMap",
-                    "metadata": {"name": name, "namespace": namespace},
-                    "data": data,
-                }
-                result = self.core_v1.create_namespaced_config_map(namespace=namespace, body=body)
-                return result.to_dict()
-            # Patch existing
-            body = {"data": data}
-            result = self.core_v1.patch_namespaced_config_map(name=name, namespace=namespace, body=body)
+            result = self.core_v1.create_namespaced_config_map(namespace=namespace, body=create_body)
             return result.to_dict()
         except ApiException as e:
+            if e.status == 409:
+                # ConfigMap already exists (concurrent create or timeout-after-create);
+                # patch to converge to the desired state.
+                logger.debug("ConfigMap %s/%s already exists (409), patching instead", namespace, name)
+                result = self.core_v1.patch_namespaced_config_map(
+                    name=name, namespace=namespace, body={"data": data}
+                )
+                return result.to_dict()
             if is_retryable_error(e):
                 raise
             logger.error("Failed to create/patch configmap %s/%s: %s", namespace, name, e)
@@ -717,6 +721,30 @@ class KubeClient:
                 )
             return result
         except ApiException as e:
+            if e.status == 409:
+                # The create may have succeeded server-side but timed out client-side,
+                # or another actor created the resource concurrently. Re-read to decide.
+                existing = self.get_custom_resource(
+                    group=group,
+                    version=version,
+                    plural=plural,
+                    name=resource_name,
+                    namespace=namespace,
+                )
+                if existing:
+                    logger.debug(
+                        "409 on create %s/%s: resource already exists, treating as success",
+                        plural,
+                        resource_name,
+                    )
+                    return existing
+                # 409 but resource not found on re-read: genuine conflict with a different object.
+                logger.error(
+                    "409 on create %s/%s but resource not found on re-read; genuine conflict",
+                    plural,
+                    resource_name,
+                )
+                raise
             if is_retryable_error(e):
                 raise
             logger.error("Failed to create %s: %s", plural, e)
