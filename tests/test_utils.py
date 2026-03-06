@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.exceptions import StateLoadError
+from lib.exceptions import StateLoadError, StateLockError
 from lib.utils import (
     Phase,
     StateManager,
@@ -438,6 +438,31 @@ class TestStateLoadSafety:
         sm = StateManager(str(state_file))
 
         assert sm.get_current_phase() == Phase.INIT
+
+    def test_same_process_reuses_run_lock(self, tmp_path):
+        """Multiple StateManager instances in the same process should share the run lock."""
+        state_file = tmp_path / "state.json"
+
+        sm1 = StateManager(str(state_file))
+        sm2 = StateManager(str(state_file))
+
+        assert sm1.get_current_phase() == Phase.INIT
+        assert sm2.get_current_phase() == Phase.INIT
+
+    @patch("lib.utils.fcntl.flock")
+    def test_conflicting_run_lock_raises_state_lock_error(self, mock_flock, tmp_path):
+        """A conflicting OS-level lock should raise StateLockError during initialization."""
+        state_file = tmp_path / "state.json"
+
+        def side_effect(_fd, operation):
+            if operation & 4:  # LOCK_NB
+                raise BlockingIOError("already locked")
+            return None
+
+        mock_flock.side_effect = side_effect
+
+        with pytest.raises(StateLockError, match="already using state file"):
+            StateManager(str(state_file))
 
 
 @pytest.mark.unit

@@ -35,7 +35,7 @@ from lib import (
     setup_logging,
 )
 from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, STALE_STATE_THRESHOLD
-from lib.exceptions import StateLoadError
+from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
 from lib.validation import InputValidator, ValidationError
 from modules import (
@@ -786,14 +786,15 @@ def main():  # noqa: C901
 
     try:
         state = StateManager(resolved_state_file)
-    except StateLoadError as exc:
+    except (StateLoadError, StateLockError) as exc:
         logger.error("")
-        logger.error("FATAL: Cannot load switchover state file.")
+        logger.error("FATAL: Cannot initialize switchover state file.")
         logger.error("%s", exc)
         logger.error("")
-        logger.error("To start a fresh switchover run:")
-        logger.error("  --reset-state  (removes and recreates the state file)")
-        logger.error("  or manually remove: %s", resolved_state_file)
+        if isinstance(exc, StateLoadError):
+            logger.error("To start a fresh switchover run:")
+            logger.error("  --reset-state  (removes and recreates the state file)")
+            logger.error("  or manually remove: %s", resolved_state_file)
         sys.exit(EXIT_FAILURE)
 
     state.ensure_contexts(args.primary_context, args.secondary_context)

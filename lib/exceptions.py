@@ -53,3 +53,12 @@ class StateLoadError(FatalError):
     (acm_switchover.py) should surface a clear operator-facing message and
     abort unless an explicit --reset-state or --force flag is provided.
     """
+
+
+class StateLockError(FatalError):
+    """Another process is already using the same switchover state file.
+
+    This protects hub mutations from concurrent invocations that would
+    otherwise race on both the state file and the cluster resources being
+    modified. The caller should abort with a clear operator-facing message.
+    """
