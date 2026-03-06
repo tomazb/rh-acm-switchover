@@ -13,7 +13,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Security dependency override**: Bump `authlib` floor in `requirements-dev.txt` to `>=1.6.7` to address `CVE-2026-28802` reported by `pip-audit`.
+## [1.5.10] - 2026-03-06
+
+### Added
+
+- **Managed cluster restore threshold control**: Added `--min-managed-clusters N` so operators can enforce a minimum non-local `ManagedCluster` count after restore instead of relying on a warning-only default.
+
+### Changed
+
+- **State-file concurrency protection**: `StateManager` now acquires a process-lifetime `.run.lock` per state file to block concurrent switchover runs that would otherwise race on shared state and cluster mutations.
+- **Backup verification targeting**: Finalization now records the detected post-switchover backup name and verifies that specific backup instead of heuristically selecting the latest backup in the namespace by timestamp.
+- **Managed-cluster client isolation**: Post-activation klusterlet verification and reconnect flows now build isolated per-context Kubernetes API clients instead of mutating global kubeconfig state in parallel worker threads.
+
+### Fixed
+
+- **Parallel klusterlet worker safety**: Removed thread-unsafe `config.load_kube_config()` usage from parallel post-activation paths to prevent workers from racing on global Kubernetes client state.
+- **Backup continuity enforcement**: `_verify_new_backups()` now fails closed when no new backup appears within the timeout, preventing finalization from succeeding without proof that backup scheduling resumed.
+- **Custom resource create idempotency**: `create_custom_resource()` now reconciles `409 AlreadyExists` responses by re-reading the resource, treating timeout-after-success cases as successful creates.
+- **ConfigMap upsert race handling**: `create_or_patch_configmap()` now uses create-first/patch-on-409 to eliminate the read-then-create race and nested retry amplification.
+- **State corruption handling**: Corrupt or unreadable state files now raise `StateLoadError` and preserve the original file as `*.corrupt.<timestamp>` instead of silently starting fresh.
+- **Resume metadata reliability**: Phase handlers now record error metadata consistently before transitioning to `FAILED`, ensuring resume logic can always identify the correct phase to retry.
+- **Old-hub failback setup truthfulness**: Finalization now treats failure to create the passive restore on the old hub as fatal instead of logging a warning and continuing without failback capability.
+- **BackupSchedule step truthfulness**: Primary preparation now raises an error when a discovered `BackupSchedule` is missing metadata needed to pause it, rather than silently marking the step complete.
+- **Pod readiness timeout budgeting**: `wait_for_pods_ready()` now passes the remaining timeout budget into each API call and caps sleep intervals to the remaining wall-clock time.
+- **Security dependency override**: Bumped `authlib` floor in `requirements-dev.txt` to `>=1.6.7` to address `CVE-2026-28802` reported by `pip-audit`.
 
 ## [1.5.9] - 2026-02-26
 
