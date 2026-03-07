@@ -792,6 +792,31 @@ class TestFinalization:
         assert finalization._cached_schedules is None
 
     @patch("modules.finalization.time.sleep")
+    def test_fix_backup_schedule_collision_raises_when_409_reuses_original_uid(
+        self, mock_sleep, finalization, mock_secondary_client
+    ):
+        """A 409 create conflict must fail when the original schedule object still exists."""
+        mock_sleep.return_value = None
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule", "uid": "uid-old"},
+                "spec": {"veleroSchedule": "*/15 * * * *"},
+                "status": {"phase": "Enabled"},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "schedule", "uid": "uid-old"}, "spec": {"veleroSchedule": "*/15 * * * *"}},
+            None,
+            {"metadata": {"name": "schedule", "uid": "uid-old"}, "status": {"phase": "Enabled"}},
+        ]
+        mock_secondary_client.create_custom_resource.side_effect = ApiException(status=409)
+
+        with pytest.raises(SwitchoverError, match="still has the original uid"):
+            finalization._fix_backup_schedule_collision()
+
+        assert finalization._cached_schedules is None
+
+    @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_warns_when_409_schedule_is_in_collision(
         self, mock_sleep, finalization, mock_secondary_client, caplog
     ):

@@ -411,10 +411,9 @@ class SecondaryActivation:
         except ApiException as e:
             if getattr(e, "status", None) == 409:
                 logger.warning(
-                    "Passive sync restore %s already exists during rollback recreation",
+                    "Passive sync restore %s already exists during rollback recreation; surfacing conflict",
                     restore_name,
                 )
-                return
             raise
 
     def _wait_for_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:

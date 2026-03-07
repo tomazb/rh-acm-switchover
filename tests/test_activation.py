@@ -585,6 +585,24 @@ class TestSecondaryActivation:
 
         assert mock_secondary_client.create_custom_resource.call_count == 1
 
+    def test_recreate_restore_from_snapshot_raises_on_conflict(self, mock_secondary_client, mock_state_manager):
+        """Rollback recreation must surface 409 conflicts to the caller."""
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="passive",
+        )
+        restore_snapshot = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+        }
+        mock_secondary_client.create_custom_resource.side_effect = ApiException(status=409)
+
+        with pytest.raises(ApiException) as exc_info:
+            activation._recreate_restore_from_snapshot(restore_snapshot)
+
+        assert exc_info.value.status == 409
+
     def test_apply_immediate_import_annotations(self, mock_secondary_client, mock_state_manager):
         """Test immediate-import annotation application under ImportOnly."""
         mock_state_manager.get_config.return_value = "2.14.0"

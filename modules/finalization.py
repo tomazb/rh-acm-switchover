@@ -1249,19 +1249,26 @@ class Finalization:
                 )
 
             current_phase = current_schedule.get("status", {}).get("phase", "")
-            current_uid = current_schedule.get("metadata", {}).get("uid", "unknown")
+            current_uid = current_schedule.get("metadata", {}).get("uid")
             self._cached_schedules = None
+
+            if schedule_uid and current_uid == schedule_uid:
+                raise SwitchoverError(
+                    "BackupSchedule %s returned 409 on recreate but still has the original uid (%s). "
+                    "Manual verification is required before retrying collision repair."
+                    % (schedule_name, current_uid)
+                )
 
             if current_phase == "BackupCollision":
                 raise SwitchoverError(
                     "BackupSchedule %s exists after recreate conflict (uid=%s) but remains in BackupCollision"
-                    % (schedule_name, current_uid)
+                    % (schedule_name, current_uid or "unknown")
                 )
             else:
                 logger.info(
                     "BackupSchedule %s exists after conflict (uid=%s, phase=%s); continuing",
                     schedule_name,
-                    current_uid,
+                    current_uid or "unknown",
                     current_phase or "Unknown",
                 )
         except Exception as e:
