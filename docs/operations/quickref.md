@@ -51,6 +51,8 @@ python acm_switchover.py \
 
 ```
 
+Optional: add `--skip-gitops-check` to disable GitOps marker detection warnings (ArgoCD, Flux). Add `--argocd-check` to include Argo CD discovery and ACM-impact summary (read-only). If `--skip-gitops-check` is set, `--argocd-check` is ignored.
+
 ### Switchover Execution
 
 ```bash
@@ -197,6 +199,25 @@ oc --context <secondary> get backup -n open-cluster-management-backup \
 oc --context <secondary> get pods -n open-cluster-management-observability
 ```
 
+## Argo CD / GitOps
+
+```bash
+# Detection only (preflight)
+python acm_switchover.py --validate-only --primary-context <p> --secondary-context <s> --argocd-check
+
+# Pause ACM-touching Applications during switchover
+python acm_switchover.py ... --argocd-manage
+
+# Resume after updating Git for new hub (during run or standalone)
+python acm_switchover.py ... --argocd-resume-after-switchover
+# Or later:
+python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>
+```
+
+Bash: `./scripts/preflight-check.sh --argocd-check`, `./scripts/argocd-manage.sh --mode pause|resume`. See [scripts/README.md](../scripts/README.md).
+
+Note: Resume treats already-resumed apps as idempotent no-ops and fails only when an Application cannot be restored for actionable reasons. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
+
 ## Troubleshooting Commands
 
 ```bash
@@ -227,6 +248,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--method {passive,full}` | Switchover method: `passive` or `full` (required) |
 | `--old-hub-action {secondary,decommission,none}` | Action for old hub after switchover (required) |
 | `--activation-method {patch,restore}` | Activation method for passive restores (default: patch) |
+| `--min-managed-clusters N` | Require at least `N` non-local `ManagedCluster` resources after restore; `N` must be non-negative and `0` keeps the check informational |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--decommission` | Decommission old hub (interactive) |
@@ -236,6 +258,11 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--skip-observability-checks` | Skip Observability steps even if detected |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
+| `--skip-gitops-check` | Disable GitOps marker detection warnings (ArgoCD, Flux); when set, `--argocd-check` is ignored |
+| `--argocd-check` | Detect Argo CD and report ACM-touching Applications (preflight; no changes) |
+| `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; not valid with `--validate-only` or `--argocd-resume-only`) |
+| `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only` or `--argocd-resume-only`) |
+| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; not valid with `--validate-only`, `--argocd-manage`, `--argocd-resume-after-switchover`, `--decommission`, or `--setup`) |
 | `--verbose, -v` | Enable verbose logging |
 
 > **Note:** When using `--activation-method restore`, ensure the passive restore is fully deleted
@@ -395,6 +422,7 @@ podman run -it --rm \
 | `--method passive` | Use passive sync method (required) |
 | `--method full` | Use full restore method (required) |
 | `--activation-method {patch,restore}` | Activation option for passive method |
+| `--min-managed-clusters N` | Enforce a non-negative minimum restored non-local `ManagedCluster` count (`0` = informational only) |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--verbose` | Enable debug logging |

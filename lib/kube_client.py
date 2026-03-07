@@ -76,6 +76,64 @@ def _should_retry(exception: BaseException) -> bool:
     return is_retryable_error(exception)
 
 
+def _sanitize_created_resource_for_compare(resource: Any) -> Any:
+    """Remove server-managed fields before comparing create intent vs reread object."""
+    if isinstance(resource, dict):
+        sanitized = {}
+        for key, value in resource.items():
+            if key == "status":
+                continue
+            if key == "metadata" and isinstance(value, dict):
+                metadata = dict(value)
+                for field in (
+                    "resourceVersion",
+                    "uid",
+                    "creationTimestamp",
+                    "managedFields",
+                    "generation",
+                    "selfLink",
+                ):
+                    metadata.pop(field, None)
+                sanitized[key] = _sanitize_created_resource_for_compare(metadata)
+                continue
+            sanitized[key] = _sanitize_created_resource_for_compare(value)
+        return sanitized
+    if isinstance(resource, list):
+        return [_sanitize_created_resource_for_compare(item) for item in resource]
+    return resource
+
+
+def _create_result_matches_requested_body(existing: Dict[str, Any], requested: Dict[str, Any]) -> bool:
+    """Check whether a reread object is equivalent to the requested create body.
+
+    Comparison is intentionally asymmetric: the existing object may contain extra
+    server-managed or controller-populated fields, but every field requested in
+    the create body must match after stripping server-managed metadata and status.
+    """
+
+    def _is_requested_subset(requested_value: Any, existing_value: Any) -> bool:
+        requested_value = _sanitize_created_resource_for_compare(requested_value)
+        existing_value = _sanitize_created_resource_for_compare(existing_value)
+
+        if isinstance(requested_value, dict):
+            if not isinstance(existing_value, dict):
+                return False
+            return all(
+                key in existing_value and _is_requested_subset(value, existing_value[key])
+                for key, value in requested_value.items()
+            )
+        if isinstance(requested_value, list):
+            if not isinstance(existing_value, list) or len(requested_value) != len(existing_value):
+                return False
+            return all(
+                _is_requested_subset(req_item, exist_item)
+                for req_item, exist_item in zip(requested_value, existing_value)
+            )
+        return requested_value == existing_value
+
+    return _is_requested_subset(requested, existing)
+
+
 # Standard retry decorator for API calls
 retry_api_call = retry(
     retry=retry_if_exception(_should_retry),
@@ -336,7 +394,9 @@ class KubeClient:
     def create_or_patch_configmap(self, namespace: str, name: str, data: Dict[str, str]) -> Dict:
         """Create or patch a ConfigMap's data field.
 
-        If CM exists, patch data; otherwise create it.
+        Uses a create-first, patch-on-409 strategy to avoid the TOCTOU race
+        inherent in read-then-create and to eliminate nested retry amplification
+        that would result from calling get_configmap() (which has its own retry).
 
         Args:
             namespace: Namespace name
@@ -360,22 +420,22 @@ class KubeClient:
             )
             return {"metadata": {"name": name, "namespace": namespace}, "data": data}
 
+        create_body = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": name, "namespace": namespace},
+            "data": data,
+        }
         try:
-            existing = self.get_configmap(namespace, name)
-            if existing is None:
-                body = {
-                    "apiVersion": "v1",
-                    "kind": "ConfigMap",
-                    "metadata": {"name": name, "namespace": namespace},
-                    "data": data,
-                }
-                result = self.core_v1.create_namespaced_config_map(namespace=namespace, body=body)
-                return result.to_dict()
-            # Patch existing
-            body = {"data": data}
-            result = self.core_v1.patch_namespaced_config_map(name=name, namespace=namespace, body=body)
+            result = self.core_v1.create_namespaced_config_map(namespace=namespace, body=create_body)
             return result.to_dict()
         except ApiException as e:
+            if e.status == 409:
+                # ConfigMap already exists (concurrent create or timeout-after-create);
+                # patch to converge to the desired state.
+                logger.debug("ConfigMap %s/%s already exists (409), patching instead", namespace, name)
+                result = self.core_v1.patch_namespaced_config_map(name=name, namespace=namespace, body={"data": data})
+                return result.to_dict()
             if is_retryable_error(e):
                 raise
             logger.error("Failed to create/patch configmap %s/%s: %s", namespace, name, e)
@@ -490,6 +550,37 @@ class KubeClient:
         else:
             resource = self.custom_api.get_cluster_custom_object(group=group, version=version, plural=plural, name=name)
         return resource
+
+    def _get_custom_resource_raw(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        name: str,
+        namespace: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Read a custom resource once without the retry-wrapped public helper."""
+        self._validate_resource_inputs(namespace, name, "custom resource")
+
+        try:
+            if namespace:
+                return self.custom_api.get_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    name=name,
+                )
+            return self.custom_api.get_cluster_custom_object(
+                group=group,
+                version=version,
+                plural=plural,
+                name=name,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            raise
 
     @retry_api_call
     def list_custom_resources(
@@ -717,6 +808,37 @@ class KubeClient:
                 )
             return result
         except ApiException as e:
+            if e.status == 409:
+                # The create may have succeeded server-side but timed out client-side,
+                # or another actor created the resource concurrently. Re-read to decide.
+                existing = self._get_custom_resource_raw(
+                    group=group,
+                    version=version,
+                    plural=plural,
+                    name=resource_name,
+                    namespace=namespace,
+                )
+                if existing:
+                    if _create_result_matches_requested_body(existing, body):
+                        logger.debug(
+                            "409 on create %s/%s: reread object matches requested body, treating as success",
+                            plural,
+                            resource_name,
+                        )
+                        return existing
+                    logger.error(
+                        "409 on create %s/%s: existing resource conflicts with requested body",
+                        plural,
+                        resource_name,
+                    )
+                    raise
+                # 409 but resource not found on re-read: conflict could not be reconciled.
+                logger.error(
+                    "409 on create %s/%s but resource not found on re-read; conflict could not be reconciled",
+                    plural,
+                    resource_name,
+                )
+                raise
             if is_retryable_error(e):
                 raise
             logger.error("Failed to create %s: %s", plural, e)
@@ -934,19 +1056,16 @@ class KubeClient:
             logger.error("Failed to restart deployment %s/%s: %s", namespace, name, e)
             raise
 
-    @api_call(not_found_value=[], log_on_error=False)
-    def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict]:
-        """List pods in a namespace.
+    def _list_pods_once(
+        self,
+        namespace: str,
+        label_selector: Optional[str] = None,
+        request_timeout: Optional[int] = None,
+    ) -> List[Dict]:
+        """List pods in a namespace with a single Kubernetes API call.
 
-        Args:
-            namespace: Namespace name
-            label_selector: Optional label selector
-
-        Returns:
-            List of pod dicts
-
-        Raises:
-            ValidationError: If namespace is invalid
+        This helper intentionally performs no retry handling so callers with
+        their own deadline budgeting logic can control retry pacing explicitly.
         """
         self._validate_resource_inputs(namespace=namespace)
         if label_selector is not None:
@@ -957,8 +1076,34 @@ class KubeClient:
             if not label_selector.strip():
                 raise ValidationError("Label selector cannot be empty or whitespace-only")
 
-        result = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
+        kwargs: Dict[str, Any] = {"namespace": namespace, "label_selector": label_selector}
+        if request_timeout is not None:
+            kwargs["_request_timeout"] = request_timeout
+
+        result = self.core_v1.list_namespaced_pod(**kwargs)
         return [pod.to_dict() for pod in result.items]
+
+    @api_call(not_found_value=[], log_on_error=False)
+    def get_pods(
+        self,
+        namespace: str,
+        label_selector: Optional[str] = None,
+        request_timeout: Optional[int] = None,
+    ) -> List[Dict]:
+        """List pods in a namespace.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Optional label selector
+            request_timeout: Optional per-call request timeout in seconds
+
+        Returns:
+            List of pod dicts
+
+        Raises:
+            ValidationError: If namespace is invalid
+        """
+        return self._list_pods_once(namespace, label_selector, request_timeout)
 
     def list_pods(
         self,
@@ -1000,8 +1145,8 @@ class KubeClient:
             # Validate tail_lines to fail fast with clear, actionable errors
             try:
                 tail_lines_int = int(tail_lines)
-            except (TypeError, ValueError):
-                raise ValidationError("tail_lines must be a non-negative integer")
+            except (TypeError, ValueError) as exc:
+                raise ValidationError("tail_lines must be a non-negative integer") from exc
             if tail_lines_int < 0:
                 raise ValidationError("tail_lines must be a non-negative integer")
             kwargs["tail_lines"] = tail_lines_int
@@ -1028,13 +1173,45 @@ class KubeClient:
             True if pods are ready within timeout
         """
         start_time = time.time()
+        poll_interval = 5
 
         while time.time() - start_time < timeout:
-            pods = self.get_pods(namespace, label_selector)
+            elapsed = time.time() - start_time
+            remaining_budget = timeout - elapsed
+            if remaining_budget <= 0:
+                break
+
+            try:
+                pods = self._list_pods_once(
+                    namespace,
+                    label_selector,
+                    request_timeout=max(1, int(remaining_budget)),
+                )
+            except ApiException as exc:
+                if exc.status == 404:
+                    pods = []
+                elif is_retryable_error(exc):
+                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                    continue
+                else:
+                    raise
+            except Exception as exc:
+                if is_retryable_error(exc):
+                    logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
+                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                    continue
+                raise
 
             if expected_count is not None and len(pods) < expected_count:
                 logger.debug("Waiting for %s pods, found %s", expected_count, len(pods))
-                time.sleep(5)
+                sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
                 continue
 
             ready_count = 0
@@ -1061,7 +1238,9 @@ class KubeClient:
                     return True
 
             logger.debug("%s/%s pods ready in %s", ready_count, len(pods), namespace)
-            time.sleep(5)
+            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         logger.error("Timeout waiting for pods in %s", namespace)
         return False

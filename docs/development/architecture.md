@@ -1,7 +1,7 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.5.3  
-**Last Updated**: January 29, 2026
+**Version**: 1.5.5
+**Last Updated**: February 20, 2026
 
 ## Project Structure
 
@@ -327,7 +327,7 @@ class MyModule:
 4. DataProtectionApplication configuration
 5. Backup status and completion
 6. **ClusterDeployment preserveOnDelete** (CRITICAL)
-7. Passive sync status (Method 1 only)
+7. Passive sync status (Method 1 only; `Enabled`, `Finished`, or `Completed` are acceptable)
 8. Observability detection (optional)
 
 **Output:**
@@ -341,6 +341,20 @@ class MyModule:
 ✓ ClusterDeployment preserveOnDelete: all 5 ClusterDeployments have preserveOnDelete=true
 ✓ Passive sync restore: passive sync enabled and running
 ```
+
+### GitOps Marker Detection (Scripts)
+
+The preflight and postflight shell scripts scan ACM resources for GitOps ownership markers (Argo CD, Flux) to warn about
+potential drift after switchover. Detection is centralized in `scripts/lib-common.sh`:
+
+- `detect_gitops_markers` inspects labels and annotations for Argo CD/Flux keys. The `app.kubernetes.io/managed-by` label
+  is only considered a GitOps marker when its value exactly matches `argocd`, `flux`, or `fluxcd` (avoids substring false positives).
+- `collect_gitops_markers` aggregates hits across resources (MultiClusterHub, BackupSchedule, ClusterDeployment, Restore,
+  MultiClusterObservability, etc.) and emits a single consolidated report; MCO warnings are reported here instead of per-resource.
+- `print_gitops_report` groups entries by kind, shows up to `GITOPS_MAX_DISPLAY_PER_KIND` per kind, and prints an
+  `... and X more` line when truncated. Counters are guarded to avoid `set -e` exits.
+
+**Control:** `--skip-gitops-check` disables marker detection and reporting when you want to suppress GitOps drift warnings.
 
 ### Primary Preparation (`modules/primary_prep.py`)
 
@@ -358,7 +372,7 @@ class MyModule:
 **Method 1 (Passive Sync):**
 1. Verify passive sync restore status
 2. Patch restore with `veleroManagedClustersBackupName: latest`
-3. Poll until restore Phase="Finished"
+3. Poll until restore Phase is `Finished` or `Completed`
 
 **Method 2 (Full Restore):**
 1. Create new Restore resource with all backup names

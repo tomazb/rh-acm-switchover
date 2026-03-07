@@ -12,12 +12,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from acm_switchover import parse_args, run_switchover
-from lib.constants import EXIT_FAILURE
+from acm_switchover import _report_argocd_acm_impact, _run_phase_preflight, main, parse_args, run_switchover
+from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
+from lib import argocd as argocd_lib
 
 
 @pytest.mark.unit
@@ -208,6 +210,24 @@ class TestArgParsing:
         ):
             with pytest.raises(SystemExit):
                 parse_args()
+
+    def test_argocd_resume_only_parses_without_method_or_old_hub_action(self):
+        """Standalone resume-only mode must not require switchover-only flags."""
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "p2",
+                "--argocd-resume-only",
+            ],
+        ):
+            args = parse_args()
+            assert args.argocd_resume_only is True
+            assert args.method is None
+            assert args.old_hub_action is None
 
 
 @pytest.mark.unit
@@ -566,6 +586,184 @@ class TestSwitchoverPhaseFlow:
 
 
 @pytest.mark.unit
+class TestMainGitOpsReporting:
+    @staticmethod
+    def _base_args():
+        return SimpleNamespace(
+            verbose=False,
+            log_format="text",
+            state_file="state.json",
+            primary_context="primary",
+            secondary_context="secondary",
+            skip_gitops_check=False,
+            argocd_check=False,
+            validate_only=False,
+            argocd_manage=False,
+            setup=False,
+            reset_state=False,
+            argocd_resume_only=False,
+        )
+
+    def test_main_prints_gitops_report_on_operation_exception(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", side_effect=RuntimeError("boom")
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        collector.print_report.assert_called_once()
+        state.add_error.assert_called_once_with("boom")
+
+    def test_main_prints_gitops_report_on_keyboard_interrupt(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", side_effect=KeyboardInterrupt
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_INTERRUPT
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
+
+    def test_main_prints_gitops_report_on_success(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
+
+    def test_main_prints_gitops_report_on_operation_failure(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", return_value=False
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
+
+    def test_main_prints_gitops_report_on_argocd_resume_only_exception(self):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._run_argocd_resume_only", side_effect=RuntimeError("boom")
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        collector.print_report.assert_called_once()
+        state.add_error.assert_called_once_with("boom")
+
+    def test_main_prints_gitops_report_on_argocd_resume_only_success(self):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._run_argocd_resume_only", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
+
+
+@pytest.mark.unit
 class TestDecommissionAndSetupHelpers:
     """Tests for run_decommission, _get_default_state_dir and run_setup helpers."""
 
@@ -664,3 +862,236 @@ class TestDecommissionAndSetupHelpers:
         monkeypatch.setattr("os.path.isfile", lambda path: False)
         logger = logging.getLogger("test")
         assert run_setup(args, logger) is False
+
+
+@pytest.mark.unit
+class TestPreflightPhase:
+    def test_run_phase_preflight_passes_argocd_flags_to_preflight_validator(self):
+        args = SimpleNamespace(
+            method="passive",
+            skip_rbac_validation=False,
+            argocd_check=True,
+            argocd_manage=True,
+            skip_observability_checks=False,
+            validate_only=False,
+        )
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class, patch(
+            "acm_switchover._report_argocd_acm_impact"
+        ) as report_argocd_impact:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = _run_phase_preflight(args, state, primary, secondary, logger)
+
+        assert result is True
+        validator_class.assert_called_once_with(
+            primary,
+            secondary,
+            "passive",
+            skip_rbac_validation=False,
+            argocd_check=True,
+            argocd_manage=True,
+        )
+        report_argocd_impact.assert_called_once_with(primary, secondary, logger)
+
+    def test_report_argocd_impact_warns_instead_of_raising_on_list_failure(self):
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation", return_value=discovery), patch(
+            "acm_switchover.argocd_lib.list_argocd_applications",
+            side_effect=ApiException(status=403, reason="Forbidden"),
+        ):
+            _report_argocd_acm_impact(primary, secondary, logger)
+
+        assert logger.warning.call_count == 2
+        assert any(
+            "Unable to complete Argo CD check" in call.args[0] for call in logger.warning.call_args_list
+        )
+
+@pytest.mark.unit
+class TestArgocdResumeOnly:
+    def test_resume_only_fails_when_state_missing(self):
+        from acm_switchover import _run_argocd_resume_only
+
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": None,
+            "argocd_paused_apps": [],
+        }.get(key, default)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+
+    def test_resume_only_rejects_dry_run_state(self):
+        from acm_switchover import _run_argocd_resume_only
+
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_pause_dry_run": True,
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {}},
+                }
+            ],
+        }.get(key, default)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+            resume_autosync.assert_not_called()
+
+    def test_resume_only_fails_when_restore_fails(self):
+        from acm_switchover import _run_argocd_resume_only
+        from lib import argocd as argocd_lib
+
+        paused_apps = [
+            {
+                "hub": "primary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+            },
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {"prune": True}},
+            },
+        ]
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.side_effect = [
+                argocd_lib.ResumeResult(namespace="argocd", name="app-1", restored=True),
+                argocd_lib.ResumeResult(
+                    namespace="argocd",
+                    name="app-2",
+                    restored=False,
+                    skip_reason="patch failed: 403 Forbidden",
+                ),
+            ]
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+    def test_resume_only_treats_marker_missing_as_already_resumed(self):
+        from acm_switchover import _run_argocd_resume_only
+        from lib import argocd as argocd_lib
+
+        paused_apps = [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {"prune": True}},
+            },
+        ]
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.return_value = argocd_lib.ResumeResult(
+                namespace="argocd",
+                name="app-2",
+                restored=False,
+                skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING,
+            )
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+
+    def test_resume_only_fails_on_marker_mismatch(self):
+        from acm_switchover import _run_argocd_resume_only
+        from lib import argocd as argocd_lib
+
+        paused_apps = [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {"prune": True}},
+            },
+        ]
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.return_value = argocd_lib.ResumeResult(
+                namespace="argocd",
+                name="app-2",
+                restored=False,
+                skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH,
+            )
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+
+    def test_resume_only_logs_malformed_state_entries(self, caplog):
+        from acm_switchover import _run_argocd_resume_only
+
+        paused_apps = [
+            "bad-entry",
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": None,
+                "original_sync_policy": {"automated": {}},
+            },
+        ]
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        with caplog.at_level(logging.WARNING):
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+
+        assert "unexpected format" in caplog.text
+        assert "missing required fields" in caplog.text

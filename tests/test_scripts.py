@@ -57,9 +57,12 @@ def run_script(script_name: str, *args: str, env=None):
     [
         (
             "preflight-check.sh",
-            ["--primary-context", "--secondary-context", "--method"],
+            ["--primary-context", "--secondary-context", "--method", "--skip-gitops-check"],
         ),
-        ("postflight-check.sh", ["--new-hub-context", "--old-hub-context"]),
+        (
+            "postflight-check.sh",
+            ["--new-hub-context", "--old-hub-context", "--skip-gitops-check"],
+        ),
     ],
 )
 def test_help_output(script, expected_args):
@@ -127,6 +130,23 @@ def test_preflight_invalid_method():
         assert "Primary Hub:" in out or "Secondary Hub:" in out
 
 
+def test_preflight_warns_when_argocd_check_is_ignored():
+    """Explicit Argo CD discovery should warn when GitOps detection is disabled."""
+    code, out = run_script(
+        "preflight-check.sh",
+        "--primary-context",
+        "fake-primary",
+        "--secondary-context",
+        "fake-secondary",
+        "--method",
+        "passive",
+        "--skip-gitops-check",
+        "--argocd-check",
+    )
+    assert code != 2, "Argument parsing should succeed"
+    assert "--argocd-check ignored because --skip-gitops-check is set." in out
+
+
 def test_postflight_with_optional_old_hub():
     """Test postflight with optional old-hub-context (will fail on cluster access but args parse)."""
     code, out = run_script(
@@ -141,6 +161,19 @@ def test_postflight_with_optional_old_hub():
     # If script started, should show header
     if code in (0, 1):
         assert "New Hub:" in out
+
+
+def test_postflight_warns_when_argocd_check_is_ignored():
+    """Postflight should mirror the same warning for ignored explicit Argo CD discovery."""
+    code, out = run_script(
+        "postflight-check.sh",
+        "--new-hub-context",
+        "fake-new",
+        "--skip-gitops-check",
+        "--argocd-check",
+    )
+    assert code != 2, "Argument parsing should succeed"
+    assert "--argocd-check ignored because --skip-gitops-check is set." in out
 
 
 def test_preflight_output_format():

@@ -137,7 +137,9 @@ oc get backup.velero.io "$BACKUP_NAME" -n open-cluster-management-backup --conte
 ```bash
 oc get backup.velero.io "$BACKUP_NAME" -n open-cluster-management-backup --context <secondary> \
   -o jsonpath='{.metadata.creationTimestamp}'
-# Should be within the last 10 minutes
+# Should be recent relative to your schedule (for example, within the last 10 minutes on frequent schedules,
+# or within one full schedule interval plus a small buffer after you have seen at least one new backup
+# created since re-enabling the BackupSchedule)
 ```
 
 **Decision Tree:**

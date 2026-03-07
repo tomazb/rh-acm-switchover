@@ -4,14 +4,18 @@ Common utilities for ACM switchover automation.
 
 import atexit
 import functools
+import inspect
 import json
 import logging
 import os
 import signal
+import shutil
 import stat
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Literal, Optional, Set, Tuple, TypeVar
+
+from lib.exceptions import StateLoadError, StateLockError
 
 # File locking is best-effort; fcntl isn't available on Windows.
 try:
@@ -21,6 +25,12 @@ except ImportError:  # pragma: no cover - platform-specific
 
 # Type variable for generic return type
 T = TypeVar("T")
+
+# Process-local registry for lifetime state-file run locks.
+# Each entry is keyed by absolute lock-file path and stores a shared file handle
+# plus a reference count so multiple StateManager instances in the same process
+# can reuse the same OS lock without blocking each other.
+_RUN_LOCK_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
 
 def dry_run_skip(
@@ -56,10 +66,16 @@ def dry_run_skip(
     """
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        first_param_name = next(iter(inspect.signature(func).parameters), None)
+
         @functools.wraps(func)
-        def wrapper(self, *args, **kwargs) -> T:
+        def wrapper(*args, **kwargs) -> T:
             # Navigate through dot-separated attribute path
-            obj = self
+            root = args[0] if args else None
+            if root is None and first_param_name:
+                root = kwargs.get(first_param_name)
+
+            obj = root
             for attr_name in dry_run_attr.split("."):
                 obj = getattr(obj, attr_name, None)
                 if obj is None:
@@ -69,9 +85,11 @@ def dry_run_skip(
             if obj is True:
                 logger = logging.getLogger("acm_switchover")
                 logger.info("[DRY-RUN] %s", message)
+                if callable(return_value):
+                    return return_value(*args, **kwargs)
                 return return_value
 
-            return func(self, *args, **kwargs)
+            return func(*args, **kwargs)
 
         return wrapper
 
@@ -106,41 +124,149 @@ class StateManager:
         self._active_temp_files: Set[str] = set()  # Track active temp files for cleanup
         self._flushing = False  # Track if we're currently flushing to avoid double-write
         self._previous_signal_handlers: Dict[int, Any] = {}
-        # Register atexit handlers to flush pending state and clean up temp files on program exit
+        self._run_lock_path = os.path.abspath(self.state_file) + ".run.lock"
+        self._run_lock_handle: Optional[Any] = None
+        # Register atexit handlers to flush pending state, clean up temp files,
+        # and release the lifetime run lock on process exit.
         atexit.register(self._flush_on_exit)
         atexit.register(self._cleanup_temp_files)
-        # Register signal handlers to flush dirty state before termination
-        # This ensures state is saved even on SIGTERM/SIGINT (atexit doesn't run on SIGKILL)
-        # Use wrapper functions since signal handlers must accept (signum, frame) signature
+        atexit.register(self._release_run_lock)
 
-        def signal_handler(signum: int, frame: Any) -> None:
-            self._flush_on_signal(signum, frame)
+        try:
+            self._acquire_run_lock()
 
-        for sig in (signal.SIGTERM, signal.SIGINT):
+            # Register signal handlers to flush dirty state before termination
+            # This ensures state is saved even on SIGTERM/SIGINT (atexit doesn't run on SIGKILL)
+            # Use wrapper functions since signal handlers must accept (signum, frame) signature
+            def signal_handler(signum: int, frame: Any) -> None:
+                self._flush_on_signal(signum, frame)
+
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                try:
+                    self._previous_signal_handlers[sig] = signal.getsignal(sig)
+                    signal.signal(sig, signal_handler)
+                except ValueError:
+                    # signal.signal() raises ValueError when called from non-main thread
+                    # This is expected in test environments or when StateManager is used in workers
+                    logging.debug("Cannot register signal handler for %s (not in main thread)", sig)
+            self.state = self._load_state()
+        except Exception:
+            self._release_run_lock()
+            raise
+
+    def _acquire_run_lock(self) -> None:
+        """Acquire a non-blocking process-lifetime lock for this state file.
+
+        The lock is advisory and POSIX-only. If fcntl is unavailable, the code
+        falls back to best-effort behavior (write-time locking still applies).
+        Multiple StateManager instances in the same process reuse the same lock.
+        """
+        if not fcntl:  # pragma: no cover - platform-specific
+            logging.debug("fcntl unavailable; process-level state lock disabled for %s", self.state_file)
+            return
+
+        registry_entry = _RUN_LOCK_REGISTRY.get(self._run_lock_path)
+        if registry_entry is not None:
+            registry_entry["refcount"] += 1
+            self._run_lock_handle = registry_entry["handle"]
+            return
+
+        self._ensure_state_dir()
+        lock_handle = open(self._run_lock_path, "a+", encoding="utf-8")
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            lock_handle.close()
+            raise StateLockError(
+                f"Another switchover process is already using state file: {self.state_file}\n"
+                f"Lock file: {self._run_lock_path}\n"
+                "Wait for the other process to finish, or verify no stale process is still running."
+            ) from exc
+
+        lock_handle.seek(0)
+        lock_handle.truncate()
+        lock_handle.write(f"pid={os.getpid()}\nstate_file={os.path.abspath(self.state_file)}\n")
+        lock_handle.flush()
+
+        _RUN_LOCK_REGISTRY[self._run_lock_path] = {"handle": lock_handle, "refcount": 1}
+        self._run_lock_handle = lock_handle
+
+    def _release_run_lock(self) -> None:
+        """Release the process-lifetime run lock if this is the last holder."""
+        if not self._run_lock_handle:
+            return
+
+        registry_entry = _RUN_LOCK_REGISTRY.get(self._run_lock_path)
+        if registry_entry is None:
+            self._run_lock_handle = None
+            return
+
+        registry_entry["refcount"] -= 1
+        if registry_entry["refcount"] <= 0:
+            handle = registry_entry["handle"]
             try:
-                self._previous_signal_handlers[sig] = signal.getsignal(sig)
-                signal.signal(sig, signal_handler)
-            except ValueError:
-                # signal.signal() raises ValueError when called from non-main thread
-                # This is expected in test environments or when StateManager is used in workers
-                logging.debug("Cannot register signal handler for %s (not in main thread)", sig)
-        self.state = self._load_state()
+                if fcntl:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError as exc:
+                logging.debug("Failed to unlock state run lock %s: %s", self._run_lock_path, exc)
+            try:
+                handle.close()
+            except OSError as exc:
+                logging.debug("Failed to close state run lock %s: %s", self._run_lock_path, exc)
+            _RUN_LOCK_REGISTRY.pop(self._run_lock_path, None)
+
+        self._run_lock_handle = None
 
     def _load_state(self) -> Dict[str, Any]:
-        """Load state from file or create new state."""
-        if os.path.exists(self.state_file):
-            try:
-                with open(self.state_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except json.JSONDecodeError as e:
-                logging.warning("Corrupted state file %s: %s, starting fresh", self.state_file, e)
-            except OSError as e:
-                logging.error("Failed to read state file %s: %s", self.state_file, e)
+        """Load state from file, or create a new state file when none exists.
 
-        # If state file is missing or unreadable, create a new state file.
-        state = self._new_state()
-        self._write_state(state)
-        return state
+        Raises StateLoadError if the file exists but cannot be read or parsed.
+        The corrupt file is preserved (copied to *.corrupt.<timestamp>) so that
+        operators can inspect it while the original path continues blocking reuse.
+        Never silently replaces a corrupt state file —
+        that would risk replaying mutations that were already applied to a real hub.
+        """
+        if not os.path.exists(self.state_file):
+            state = self._new_state()
+            self._write_state(state)
+            return state
+
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            corrupt_path = self._preserve_corrupt_state_file()
+            raise StateLoadError(
+                f"State file is corrupt and cannot be loaded: {self.state_file}\n"
+                f"Parse error: {e}\n"
+                f"The corrupt file has been preserved at: {corrupt_path}\n"
+                "To start a fresh switchover, use --reset-state or remove the state file."
+            ) from e
+        except OSError as e:
+            raise StateLoadError(
+                f"State file cannot be read: {self.state_file}\n"
+                f"I/O error: {e}\n"
+                "Check file permissions. To start a fresh switchover, use --reset-state."
+            ) from e
+
+    def _preserve_corrupt_state_file(self) -> str:
+        """Copy the corrupt state file to *.corrupt.<timestamp> for forensics.
+
+        Returns the path of the forensic copy, or the original path if copying fails.
+        """
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        corrupt_path = f"{self.state_file}.corrupt.{ts}"
+        try:
+            shutil.copy2(self.state_file, corrupt_path)
+        except OSError as exc:
+            logging.getLogger("acm_switchover").warning(
+                "Failed to preserve corrupt state file %s at %s: %s",
+                self.state_file,
+                corrupt_path,
+                exc,
+            )
+            corrupt_path = self.state_file
+        return corrupt_path
 
     def _new_state(self) -> Dict[str, Any]:
         """Return a fresh state structure."""
@@ -172,17 +298,12 @@ class StateManager:
         """
         self._ensure_state_dir()
         temp_file = self.state_file + ".tmp"
-        lock_handle = None
 
         # Track temp file for cleanup (atexit handler will clean up if process crashes)
         self._active_temp_files.add(temp_file)
 
-        try:
-            if fcntl:
-                lock_file = self.state_file + ".lock"
-                lock_handle = open(lock_file, "w", encoding="utf-8")
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-
+        def _write_temp_file() -> None:
+            error: Optional[Exception] = None
             try:
                 # Write to temporary file with restrictive permissions
                 fd = os.open(
@@ -190,14 +311,10 @@ class StateManager:
                     os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
                     stat.S_IRUSR | stat.S_IWUSR,
                 )
-                try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        json.dump(state, f, indent=2)
-                        f.flush()
-                        os.fsync(f.fileno())
-                except (OSError, ValueError, TypeError):
-                    # os.fdopen() takes ownership of fd, so it's closed on exception
-                    raise
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(state, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
 
                 # Atomic rename (POSIX guarantees this is atomic on same filesystem)
                 os.replace(temp_file, self.state_file)
@@ -213,14 +330,24 @@ class StateManager:
                 except OSError:
                     pass  # Best-effort cleanup - atexit handler will try again
                 logging.error("Failed to write state file %s: %s", self.state_file, e)
-                raise
-        finally:
-            if lock_handle:
+                error = e
+
+            if error is not None:
+                raise error
+
+        if fcntl:
+            lock_file = self.state_file + ".lock"
+            with open(lock_file, "w", encoding="utf-8") as lock_handle:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
                 try:
-                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    pass
-                lock_handle.close()
+                    _write_temp_file()
+                finally:
+                    try:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+        else:
+            _write_temp_file()
 
     def _do_flush(self, force: bool = False, suppress_errors: bool = False) -> bool:
         """Core flush logic shared by all flush methods.
@@ -237,19 +364,21 @@ class StateManager:
         if not force and not self._dirty:
             return False
 
+        self._flushing = True
+        self.state["last_updated"] = _utc_timestamp()
         try:
-            self._flushing = True
-            self.state["last_updated"] = _utc_timestamp()
-            self._write_state(self.state)
+            if suppress_errors:
+                try:
+                    self._write_state(self.state)
+                except Exception as e:
+                    import sys
+
+                    print(f"Error flushing state: {e}", file=sys.stderr)
+                    return False
+            else:
+                self._write_state(self.state)
             self._dirty = False
             return True
-        except Exception as e:
-            if suppress_errors:
-                import sys
-
-                print(f"Error flushing state: {e}", file=sys.stderr)
-                return False
-            raise
         finally:
             self._flushing = False
 

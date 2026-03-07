@@ -322,7 +322,7 @@ class InputValidator:
         return re.sub(r"[^A-Za-z0-9._-]", "_", value)
 
     @staticmethod
-    def validate_all_cli_args(args: object) -> None:
+    def validate_all_cli_args(args: object) -> None:  # noqa: C901
         """
         Validate all CLI arguments comprehensively.
 
@@ -333,7 +333,7 @@ class InputValidator:
             ValidationError: If any argument validation fails
 
         Note:
-            TODO: This function has high cyclomatic complexity (C901: 18).
+            TODO: This function still has high cyclomatic complexity.
             Consider refactoring into smaller validation functions grouped by
             argument type (contexts, methods, file paths, etc.) in a future PR
             focused on maintainability improvements.
@@ -367,10 +367,24 @@ class InputValidator:
         if hasattr(args, "state_file") and args.state_file:
             InputValidator.validate_safe_filesystem_path(args.state_file, "state-file")
 
-        # Validate that secondary context is provided when not in decommission or setup mode
+        # Validate minimum managed cluster threshold
+        if hasattr(args, "min_managed_clusters") and args.min_managed_clusters is not None:
+            if not isinstance(args.min_managed_clusters, int):
+                raise ValidationError("--min-managed-clusters must be an integer")
+            if args.min_managed_clusters < 0:
+                raise ValidationError("--min-managed-clusters must be a non-negative integer")
+
         is_decommission = hasattr(args, "decommission") and args.decommission
         is_setup = hasattr(args, "setup") and args.setup
-        if not is_decommission and not is_setup:
+        has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
+        has_argocd_resume_after = (
+            hasattr(args, "argocd_resume_after_switchover") and args.argocd_resume_after_switchover
+        )
+        has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
+        has_validate_only = hasattr(args, "validate_only") and args.validate_only
+
+        # Validate that secondary context is provided when not in decommission or setup mode
+        if not is_decommission and not is_setup and not has_argocd_resume_only:
             if hasattr(args, "secondary_context") and not args.secondary_context:
                 raise ValidationError("secondary-context is required for switchover operations")
 
@@ -392,6 +406,33 @@ class InputValidator:
                 raise ValidationError("--disable-observability-on-secondary cannot be used with --decommission")
             if hasattr(args, "old_hub_action") and args.old_hub_action != "secondary":
                 raise ValidationError("--disable-observability-on-secondary requires --old-hub-action secondary")
+
+        # Validate Argo CD argument combinations
+
+        if has_argocd_resume_after:
+            if has_argocd_resume_only:
+                raise ValidationError("--argocd-resume-after-switchover cannot be used with --argocd-resume-only")
+            if has_validate_only:
+                raise ValidationError("--argocd-resume-after-switchover cannot be used with --validate-only")
+            if not has_argocd_manage:
+                raise ValidationError("--argocd-resume-after-switchover requires --argocd-manage")
+
+        if has_argocd_manage:
+            if has_argocd_resume_only:
+                raise ValidationError("--argocd-manage cannot be used with --argocd-resume-only")
+            if has_validate_only:
+                raise ValidationError("--argocd-manage cannot be used with --validate-only")
+
+        # --argocd-resume-only needs state file (primary + secondary context) to restore from
+        if has_argocd_resume_only:
+            if has_validate_only:
+                raise ValidationError("--argocd-resume-only cannot be used with --validate-only")
+            if is_decommission:
+                raise ValidationError("--argocd-resume-only cannot be used with --decommission")
+            if is_setup:
+                raise ValidationError("--argocd-resume-only cannot be used with --setup")
+            if not (hasattr(args, "secondary_context") and args.secondary_context):
+                raise ValidationError("--argocd-resume-only requires --secondary-context to resolve state file")
 
         # Validate setup-specific arguments
         if is_setup:

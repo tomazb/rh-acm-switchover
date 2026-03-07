@@ -205,11 +205,11 @@ def main():
                     include_decommission=args.include_decommission,
                     skip_observability=args.skip_observability,
                 )
-                report = validator.generate_permission_report(
+                report_text = validator.generate_permission_report(
                     include_decommission=args.include_decommission,
                     skip_observability=args.skip_observability,
                 )
-                print(report)
+                print(report_text)
 
             # Exit with appropriate code
             if all_valid:
