@@ -199,12 +199,12 @@ class StateManager:
             try:
                 if fcntl:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
+            except OSError as exc:
+                logging.debug("Failed to unlock state run lock %s: %s", self._run_lock_path, exc)
             try:
                 handle.close()
-            except OSError:
-                pass
+            except OSError as exc:
+                logging.debug("Failed to close state run lock %s: %s", self._run_lock_path, exc)
             _RUN_LOCK_REGISTRY.pop(self._run_lock_path, None)
 
         self._run_lock_handle = None

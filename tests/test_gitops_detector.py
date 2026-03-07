@@ -5,6 +5,7 @@ and the convenience function for recording markers.
 """
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ from lib.gitops_detector import (
     GitOpsCollector,
     detect_gitops_markers,
     record_gitops_markers,
+    safe_record_gitops_markers,
 )
 
 # Path to test fixtures
@@ -529,3 +531,19 @@ class TestRecordGitopsMarkers:
         assert markers == []
         # And nothing should be recorded
         assert not GitOpsCollector.get_instance().has_detections()
+
+    def test_safe_wrapper_logs_and_returns_empty_on_failure(self, caplog):
+        logger = logging.getLogger("test")
+        with patch("lib.gitops_detector.record_gitops_markers", side_effect=RuntimeError("boom")):
+            with caplog.at_level(logging.WARNING):
+                markers = safe_record_gitops_markers(
+                    logger=logger,
+                    context="primary",
+                    namespace="ns",
+                    kind="Kind",
+                    name="resource",
+                    metadata={},
+                )
+
+        assert markers == []
+        assert "GitOps marker recording failed" in caplog.text

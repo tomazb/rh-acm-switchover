@@ -125,6 +125,7 @@ class TestFinalization:
 
         # Mock list responses: schedule verification, collision check, initial backups, loop 1, loop 2
         mock_secondary_client.list_custom_resources.side_effect = [
+            [],  # _cleanup_restore_resources
             [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
             [
                 {
@@ -743,7 +744,7 @@ class TestFinalization:
     def test_fix_backup_schedule_collision_skips_create_on_uid_change_after_delete(
         self, mock_sleep, finalization, mock_secondary_client
     ):
-        """If schedule UID changes after delete, skip recreate to avoid mutating a different object."""
+        """If schedule UID changes after delete, fail the step so resume does not mark it complete."""
         mock_sleep.return_value = None
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -757,7 +758,8 @@ class TestFinalization:
             {"metadata": {"name": "schedule", "uid": "uid-new"}, "status": {"phase": "Enabled"}},
         ]
 
-        finalization._fix_backup_schedule_collision()
+        with pytest.raises(SwitchoverError, match="reappeared with a different uid"):
+            finalization._fix_backup_schedule_collision()
 
         mock_secondary_client.delete_custom_resource.assert_called_once()
         mock_secondary_client.create_custom_resource.assert_not_called()
@@ -793,7 +795,7 @@ class TestFinalization:
     def test_fix_backup_schedule_collision_warns_when_409_schedule_is_in_collision(
         self, mock_sleep, finalization, mock_secondary_client, caplog
     ):
-        """A 409 create conflict with BackupCollision phase should emit manual-remediation warning."""
+        """A 409 create conflict with BackupCollision phase should fail the step."""
         mock_sleep.return_value = None
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -810,9 +812,10 @@ class TestFinalization:
         mock_secondary_client.create_custom_resource.side_effect = ApiException(status=409)
 
         with caplog.at_level(logging.WARNING, logger="acm_switchover"):
-            finalization._fix_backup_schedule_collision()
+            with pytest.raises(SwitchoverError, match="remains in BackupCollision"):
+                finalization._fix_backup_schedule_collision()
 
-        assert "phase is BackupCollision" in caplog.text
+        assert "already exists during recreation" in caplog.text
 
     @patch("modules.finalization.wait_for_condition")
     def test_disable_observability_on_secondary_deletes_mco(
@@ -836,7 +839,7 @@ class TestFinalization:
 
         primary.delete_custom_resource.assert_called_once()
 
-    @patch("modules.finalization.record_gitops_markers")
+    @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.finalization.wait_for_condition")
     def test_disable_observability_on_secondary_warns_for_gitops_managed_mco(
         self, mock_wait, mock_record_markers, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
@@ -863,7 +866,7 @@ class TestFinalization:
         assert "observability" in caplog.text
         primary.delete_custom_resource.assert_called_once()
 
-    @patch("modules.finalization.record_gitops_markers")
+    @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.finalization.wait_for_condition")
     def test_disable_observability_on_secondary_no_gitops_warning_without_markers(
         self, mock_wait, mock_record_markers, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
@@ -889,7 +892,7 @@ class TestFinalization:
         assert "appears GitOps-managed" not in caplog.text
         primary.delete_custom_resource.assert_called_once()
 
-    @patch("modules.finalization.record_gitops_markers")
+    @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.finalization.wait_for_condition")
     def test_disable_observability_on_secondary_continues_when_marker_recording_fails(
         self, mock_wait, mock_record_markers, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
@@ -1004,6 +1007,7 @@ class TestFinalization:
 
         # Mock all required responses with side_effect for sequential calls
         mock_secondary_client.list_custom_resources.side_effect = [
+            [],  # _cleanup_restore_resources
             [{"metadata": {"name": "schedule"}, "spec": {"paused": False}}],  # verify_backup_schedule_enabled
             [
                 {

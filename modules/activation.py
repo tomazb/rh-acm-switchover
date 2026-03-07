@@ -36,7 +36,7 @@ from lib.constants import (
     VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import FatalError, SwitchoverError
-from lib.gitops_detector import record_gitops_markers
+from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
 from lib.waiter import wait_for_condition
@@ -223,16 +223,14 @@ class SecondaryActivation:
 
         # Record GitOps markers if present (non-critical)
         metadata = restore.get("metadata", {})
-        try:
-            record_gitops_markers(
-                context="secondary",
-                namespace=BACKUP_NAMESPACE,
-                kind="Restore",
-                name=restore_name,
-                metadata=metadata,
-            )
-        except Exception as exc:
-            logger.warning("GitOps marker recording failed for Restore %s: %s", restore_name, exc)
+        safe_record_gitops_markers(
+            logger=logger,
+            context="secondary",
+            namespace=BACKUP_NAMESPACE,
+            kind="Restore",
+            name=restore_name,
+            metadata=metadata,
+        )
 
         status = restore.get("status", {})
         phase = status.get("phase", "unknown")
