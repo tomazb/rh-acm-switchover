@@ -7,7 +7,6 @@ This directory contains automated validation scripts for ACM hub switchover oper
 These scripts automate the validation process before and after switchover, ensuring safety and operational readiness.
 
 > ⚠️ **Safety note:** Some utilities mutate cluster state. Review usage and required credentials/state files before running in production.
-
 > **Shell requirement:** These scripts require Bash 4 or newer because shared helpers use associative arrays.
 
 | Script | Purpose | When to Use |

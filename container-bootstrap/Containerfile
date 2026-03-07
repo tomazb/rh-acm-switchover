@@ -22,7 +22,7 @@ FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
 LABEL name="acm-switchover" \
     vendor="Red Hat" \
-    version="1.5.4" \
+    version="1.5.5" \
       release="1" \
       summary="ACM Hub Switchover Automation Tool" \
       description="Automated, idempotent tool for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster." \

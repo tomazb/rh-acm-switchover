@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Postflight ACM version tolerance**: Downgrade unknown new-hub ACM version during auto-import checks to a warning so transient empty status does not fail postflight verification.
+- **Finalization backup ownership guard**: Revalidate that recorded post-switchover backups are ACM-owned before using them for integrity checks.
+- **Finalization passive-sync restore errors**: Wrap old-primary passive sync restore creation failures in `SwitchoverError` with switchover-specific context.
+- **Custom resource 409 reconciliation**: Use a raw non-retrying reread during `create_custom_resource()` conflict handling to avoid nested retry loops.
+- **Bash Argo CD flag handling**: Warn when `--argocd-check` is ignored because `--skip-gitops-check` is set in the validation scripts.
+- **Cross-platform test import**: Guard `tests/test_utils.py` against missing `fcntl` so collection does not fail on platforms without POSIX file locking support.
+- **Scripts README markdown**: Collapse the shell safety note into a single contiguous blockquote to satisfy markdown linting.
+
 ## [1.5.4] - 2026-03-07
 
 ### Fixed
