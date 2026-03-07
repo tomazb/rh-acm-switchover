@@ -905,6 +905,7 @@ class PostActivationVerification:
             cluster_name: Name of the ManagedCluster
         """
         import time as time_module
+
         try:
             # Trigger a rollout restart by patching the deployment
             patch = {

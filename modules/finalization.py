@@ -11,10 +11,10 @@ from kubernetes.client.rest import ApiException
 
 from lib import argocd as argocd_lib
 from lib.constants import (
-    ACM_NAMESPACE,
     ACM_BACKUP_NAME_RE,
     ACM_BACKUP_SCHEDULE_TYPE_LABEL,
     ACM_BACKUP_SCHEDULE_TYPES,
+    ACM_NAMESPACE,
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
@@ -52,6 +52,7 @@ from .backup_schedule import BackupScheduleManager
 from .decommission import Decommission
 
 logger = logging.getLogger("acm_switchover")
+
 
 class Finalization:
     """Handles finalization steps on secondary hub."""
@@ -400,7 +401,11 @@ class Finalization:
                 name=recorded_backup_name,
                 namespace=BACKUP_NAMESPACE,
             )
-            if recorded_backup and self._is_acm_owned_backup(recorded_backup) and self._backup_is_detectable(recorded_backup):
+            if (
+                recorded_backup
+                and self._is_acm_owned_backup(recorded_backup)
+                and self._backup_is_detectable(recorded_backup)
+            ):
                 logger.info("Reusing previously recorded post-switchover backup: %s", recorded_backup_name)
                 self.state.set_config("new_backup_detected", True)
                 self.state.set_config("post_switchover_backup_name", recorded_backup_name)
@@ -682,9 +687,7 @@ class Finalization:
                 )
             backup_name = post_switchover_backup_name
         else:
-            logger.warning(
-                "No post-switchover backup name recorded; falling back to latest backup in namespace"
-            )
+            logger.warning("No post-switchover backup name recorded; falling back to latest backup in namespace")
             backups = self.secondary.list_custom_resources(
                 group="velero.io",
                 version="v1",
@@ -1252,8 +1255,7 @@ class Finalization:
             )
             if not current_schedule:
                 raise SwitchoverError(
-                    "BackupSchedule %s returned 409 on recreate but could not be re-read afterward"
-                    % schedule_name
+                    "BackupSchedule %s returned 409 on recreate but could not be re-read afterward" % schedule_name
                 )
 
             current_phase = current_schedule.get("status", {}).get("phase", "")
@@ -1263,8 +1265,7 @@ class Finalization:
             if schedule_uid and current_uid == schedule_uid:
                 raise SwitchoverError(
                     "BackupSchedule %s returned 409 on recreate but still has the original uid (%s). "
-                    "Manual verification is required before retrying collision repair."
-                    % (schedule_name, current_uid)
+                    "Manual verification is required before retrying collision repair." % (schedule_name, current_uid)
                 )
 
             if current_phase == "BackupCollision":

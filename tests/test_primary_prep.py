@@ -289,7 +289,9 @@ class TestPrimaryPreparation:
 
         assert any(call.args == ("argocd_paused_apps", []) for call in mock_state_manager.set_config.call_args_list)
         assert any(call.args == ("argocd_run_id", None) for call in mock_state_manager.set_config.call_args_list)
-        assert any(call.args == ("argocd_pause_dry_run", False) for call in mock_state_manager.set_config.call_args_list)
+        assert any(
+            call.args == ("argocd_pause_dry_run", False) for call in mock_state_manager.set_config.call_args_list
+        )
 
     def test_pause_argocd_acm_apps_persists_each_app_incrementally(self, mock_primary_client, mock_state_manager):
         """Each paused app must be saved to state independently so a crash preserves prior pauses.
@@ -348,8 +350,7 @@ class TestPrimaryPreparation:
             prep._pause_argocd_acm_apps()
 
         paused_calls = [
-            call for call in mock_state_manager.set_config.call_args_list
-            if call.args[0] == "argocd_paused_apps"
+            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
         ]
         assert len(paused_calls) == 4, "set_config must persist provisional and confirmed state for each app"
 
@@ -504,9 +505,7 @@ class TestPrimaryPreparation:
 
     def test_pause_backup_schedule_nameless_object_raises(self, primary_prep_with_obs, mock_primary_client):
         """BackupSchedule with no name in metadata must raise SwitchoverError, not silently succeed."""
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {}, "spec": {"paused": False}}
-        ]
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {}, "spec": {"paused": False}}]
 
         with pytest.raises(SwitchoverError, match="no name in metadata"):
             primary_prep_with_obs._pause_backup_schedule()

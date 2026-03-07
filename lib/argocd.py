@@ -163,6 +163,8 @@ def _get_crd_presence(
         if required:
             raise
     return None
+
+
 def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     """
     Detect Argo CD installation (operator and/or vanilla).
@@ -205,9 +207,7 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
                 )
         except ApiException as e:
             if e.status != 404:
-                logger.warning(
-                    "Failed to list ArgoCD instances (status=%s); instance list may be incomplete", e.status
-                )
+                logger.warning("Failed to list ArgoCD instances (status=%s); instance list may be incomplete", e.status)
             else:
                 logger.debug("Failed to list ArgoCD instances: %s", e)
         except Exception as e:
@@ -502,12 +502,8 @@ def resume_autosync(
         if e.status == 404:
             logger.debug("Application %s/%s not found: %s", namespace, name, e)
             return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
-        logger.warning(
-            "API error fetching Application %s/%s (status=%s); leaving paused", namespace, name, e.status
-        )
-        return ResumeResult(
-            namespace=namespace, name=name, restored=False, skip_reason=f"fetch error: {e.status}"
-        )
+        logger.warning("API error fetching Application %s/%s (status=%s); leaving paused", namespace, name, e.status)
+        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason=f"fetch error: {e.status}")
     except Exception as e:
         logger.warning("Unexpected error fetching Application %s/%s: %s", namespace, name, e)
         return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason=f"fetch error: {e}")

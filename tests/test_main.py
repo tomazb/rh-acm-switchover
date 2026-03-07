@@ -921,9 +921,8 @@ class TestPreflightPhase:
             _report_argocd_acm_impact(primary, secondary, logger)
 
         assert logger.warning.call_count == 2
-        assert any(
-            "Unable to complete Argo CD check" in call.args[0] for call in logger.warning.call_args_list
-        )
+        assert any("Unable to complete Argo CD check" in call.args[0] for call in logger.warning.call_args_list)
+
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
@@ -1006,6 +1005,7 @@ class TestArgocdResumeOnly:
                 ),
             ]
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+
     def test_resume_only_treats_marker_missing_as_already_resumed(self):
         from acm_switchover import _run_argocd_resume_only
         from lib import argocd as argocd_lib

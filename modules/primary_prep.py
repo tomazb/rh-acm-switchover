@@ -52,11 +52,7 @@ class PrimaryPreparation:
     @staticmethod
     def _pause_entry_matches(entry: Dict[str, Any], hub: str, namespace: str, name: str) -> bool:
         """Return True when an Argo CD pause-state entry matches one Application."""
-        return (
-            entry.get("hub") == hub
-            and entry.get("namespace") == namespace
-            and entry.get("name") == name
-        )
+        return entry.get("hub") == hub and entry.get("namespace") == namespace and entry.get("name") == name
 
     @staticmethod
     def _is_pause_applied(entry: Dict[str, Any]) -> bool:
@@ -109,9 +105,7 @@ class PrimaryPreparation:
         namespace: str,
         name: str,
     ) -> None:
-        paused_apps[:] = [
-            entry for entry in paused_apps if not self._pause_entry_matches(entry, hub, namespace, name)
-        ]
+        paused_apps[:] = [entry for entry in paused_apps if not self._pause_entry_matches(entry, hub, namespace, name)]
 
     def prepare(self) -> bool:
         """

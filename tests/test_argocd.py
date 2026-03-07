@@ -291,6 +291,7 @@ class TestResumeAutosync:
         assert summary.restored == 0
         logger.warning.assert_called_with("  Skip %s/%s (pause state was recorded but not confirmed)", "argocd", "app")
 
+
 @pytest.mark.unit
 class TestDetectArgocdInstallation:
     """Test detect_argocd_installation."""

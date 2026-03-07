@@ -788,17 +788,13 @@ class TestMinManagedClusters:
             min_managed_clusters=min_clusters,
         )
 
-    def test_zero_clusters_with_min_zero_logs_warning_not_error(
-        self, mock_secondary_client, mock_state_manager
-    ):
+    def test_zero_clusters_with_min_zero_logs_warning_not_error(self, mock_secondary_client, mock_state_manager):
         """min_managed_clusters=0 should log a warning when zero clusters found, not raise."""
         mock_secondary_client.list_custom_resources.return_value = []
         act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=0)
         act._verify_managed_clusters_restored()  # Must not raise
 
-    def test_nonzero_min_raises_when_below_threshold(
-        self, mock_secondary_client, mock_state_manager
-    ):
+    def test_nonzero_min_raises_when_below_threshold(self, mock_secondary_client, mock_state_manager):
         """min_managed_clusters > 0 must raise FatalError when fewer clusters are found."""
         mock_secondary_client.list_custom_resources.return_value = []
         act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=2)

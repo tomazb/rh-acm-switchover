@@ -229,6 +229,7 @@ class TestFinalization:
 
             with pytest.raises(SwitchoverError):
                 fin._resume_argocd_apps()
+
     def test_resume_argocd_apps_allows_marker_missing_retry(
         self,
         mock_secondary_client,
@@ -325,6 +326,7 @@ class TestFinalization:
 
             with pytest.raises(SwitchoverError):
                 fin._resume_argocd_apps()
+
     def test_resume_argocd_apps_skips_when_no_state(self, finalization, mock_state_manager):
         """When no paused apps are recorded in state, _resume_argocd_apps returns silently."""
         mock_state_manager.get_config.side_effect = lambda key, default=None: {
@@ -377,6 +379,7 @@ class TestFinalization:
         }.get(key, default)
         with pytest.raises(SwitchoverError, match="dry-run"):
             finalization._resume_argocd_apps()
+
     @patch("modules.finalization.time")
     def test_verify_new_backups_success(self, mock_time, finalization, mock_secondary_client):
         """Test backup verification logic finding a new backup."""
@@ -481,9 +484,7 @@ class TestFinalization:
         assert "name-pattern fallback" in caplog.text
 
     @patch("modules.finalization.time")
-    def test_verify_new_backups_ignores_unrelated_velero_backups(
-        self, mock_time, finalization, mock_secondary_client
-    ):
+    def test_verify_new_backups_ignores_unrelated_velero_backups(self, mock_time, finalization, mock_secondary_client):
         """Only ACM-owned backups should count as post-switchover evidence."""
         mock_time.time.side_effect = [0, 0, 1, 2]
         mock_secondary_client.list_custom_resources.side_effect = [
@@ -597,9 +598,7 @@ class TestFinalization:
 
         finalization._verify_backup_integrity(max_age_seconds=600)
 
-    def test_verify_backup_integrity_enforces_age_with_recorded_backup_name(
-        self, finalization, mock_secondary_client
-    ):
+    def test_verify_backup_integrity_enforces_age_with_recorded_backup_name(self, finalization, mock_secondary_client):
         """Age enforcement fires when backup name is recorded and backup is too old."""
         backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
         backup = {
@@ -673,9 +672,7 @@ class TestFinalization:
         assert call_kwargs.kwargs.get("name") == "acm-backup-switchover"
         mock_secondary_client.list_custom_resources.assert_not_called()
 
-    def test_verify_backup_integrity_fails_when_recorded_backup_missing(
-        self, finalization, mock_secondary_client
-    ):
+    def test_verify_backup_integrity_fails_when_recorded_backup_missing(self, finalization, mock_secondary_client):
         """If the recorded post-switchover backup no longer exists, integrity check must fail."""
         mock_secondary_client.get_custom_resource.return_value = None
         mock_secondary_client.get_pods.return_value = []
@@ -962,6 +959,7 @@ class TestFinalization:
 
         assert "marker recording failed" in caplog.text.lower()
         primary.delete_custom_resource.assert_called_once()
+
     def test_finalize_failure_handling(self, finalization, mock_backup_manager):
         """Test finalization failure handling."""
         mock_backup_manager.ensure_enabled.side_effect = Exception("Backup Error")

@@ -451,6 +451,7 @@ class TestKubeClient:
         assert result is False
         mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once()
         mock_sleep.assert_called_once_with(2.0)
+
     def test_rollout_restart_deployment_dry_run(self, dry_run_client, mock_k8s_apis):
         """Test rollout restart deployment in dry-run mode."""
         result = dry_run_client.rollout_restart_deployment(

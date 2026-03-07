@@ -8,8 +8,8 @@ import inspect
 import json
 import logging
 import os
-import signal
 import shutil
+import signal
 import stat
 from datetime import datetime, timedelta, timezone
 from enum import Enum
