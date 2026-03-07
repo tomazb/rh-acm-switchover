@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Create `.claude/settings.json` with hooks
+## Task 1: Create `.claude/settings.json` with hooks
 
 **Files:**
 - Create: `.claude/settings.json`
@@ -60,7 +60,7 @@ git commit -m "chore: add Claude Code hooks for auto-format and file protection"
 
 ---
 
-### Task 2: Create release skill
+## Task 2: Create release skill
 
 **Files:**
 - Create: `.claude/skills/release/SKILL.md`
@@ -202,7 +202,7 @@ git commit -m "feat: add /release skill for automated version bumps"
 
 ---
 
-### Task 3: Update CLAUDE.md with skill reference
+## Task 3: Update CLAUDE.md with skill reference
 
 **Files:**
 - Modify: `CLAUDE.md`
