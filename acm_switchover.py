@@ -898,47 +898,15 @@ def _run_argocd_resume_only(
         logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
         return False
     logger.info("Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))", run_id, len(paused_apps))
-    restored = 0
-    already_resumed = 0
-    failed = 0
-    for entry in paused_apps:
-        if not isinstance(entry, dict):
-            failed += 1
-            continue
-        hub = entry.get("hub")
-        ns = entry.get("namespace")
-        name = entry.get("name")
-        orig = entry.get("original_sync_policy")
-        if entry.get("dry_run"):
-            failed += 1
-            logger.warning("  Skip %s/%s (pause was dry-run only)", ns, name)
-            continue
-        if not all([hub, ns, name, orig is not None]):
-            failed += 1
-            continue
-        client = primary if hub == "primary" else (secondary if hub == "secondary" else None)
-        if not client:
-            failed += 1
-            logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
-            continue
-        result = argocd_lib.resume_autosync(client, ns, name, orig, run_id)
-        if result.restored:
-            restored += 1
-            logger.info("  Resumed %s/%s on %s", ns, name, hub)
-        elif argocd_lib.is_resume_noop(result):
-            already_resumed += 1
-            logger.info("  Already resumed %s/%s on %s", ns, name, hub)
-        else:
-            failed += 1
-            logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
+    summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, primary, secondary, logger)
     logger.info(
         "Restored %d and already resumed %d of %d Application(s).",
-        restored,
-        already_resumed,
+        summary.restored,
+        summary.already_resumed,
         len(paused_apps),
     )
-    if failed:
-        logger.error("Argo CD auto-sync restore failed for %d Application(s).", failed)
+    if summary.failed:
+        logger.error("Argo CD auto-sync restore failed for %d Application(s).", summary.failed)
         return False
     return True
 

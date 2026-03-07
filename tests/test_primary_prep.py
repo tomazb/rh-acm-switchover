@@ -403,6 +403,51 @@ class TestPrimaryPreparation:
         assert first_list[0]["name"] == "app-1"
         assert second_list[1]["name"] == "app-2"
 
+    def test_pause_argocd_acm_apps_raises_on_patch_failure(self, mock_primary_client, mock_state_manager):
+        """Patch failures must fail the Argo CD pause step instead of being treated as no-op."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=False,
+            argocd_manage=True,
+        )
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": None,
+            "argocd_paused_apps": [],
+        }.get(key, default)
+
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app-1"},
+            "spec": {"syncPolicy": {"automated": {}}},
+            "status": {"resources": [{"kind": "Restore", "namespace": "open-cluster-management-backup"}]},
+        }
+        impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
+
+        with (
+            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch(
+                "modules.primary_prep.argocd_lib.pause_autosync",
+                return_value=argocd_lib.PauseResult(
+                    namespace="argocd",
+                    name="app-1",
+                    original_sync_policy={"automated": {}},
+                    patched=False,
+                    error="403 Forbidden",
+                ),
+            ),
+        ):
+            with pytest.raises(SwitchoverError, match="pause failed for 1"):
+                prep._pause_argocd_acm_apps()
+
     def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client):
         """Test pausing backup schedule for ACM 2.12+."""
         mock_primary_client.list_custom_resources.return_value = [

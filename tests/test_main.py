@@ -973,3 +973,31 @@ class TestArgocdResumeOnly:
                 skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH,
             )
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+
+    def test_resume_only_logs_malformed_state_entries(self, caplog):
+        from acm_switchover import _run_argocd_resume_only
+
+        paused_apps = [
+            "bad-entry",
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": None,
+                "original_sync_policy": {"automated": {}},
+            },
+        ]
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace()
+        primary = Mock()
+        secondary = Mock()
+        logger = logging.getLogger("test")
+
+        with caplog.at_level(logging.WARNING):
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+
+        assert "unexpected format" in caplog.text
+        assert "missing required fields" in caplog.text

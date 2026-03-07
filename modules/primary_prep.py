@@ -102,7 +102,10 @@ class PrimaryPreparation:
         hubs = [(self.primary, "primary")] + ([(self.secondary, "secondary")] if self.secondary else [])
         discoveries = []
         for client, hub_label in hubs:
-            discovery = argocd_lib.detect_argocd_installation(client)
+            try:
+                discovery = argocd_lib.detect_argocd_installation(client)
+            except Exception as exc:
+                raise SwitchoverError(f"Failed to detect Argo CD installation on {hub_label} hub: {exc}") from exc
             discoveries.append((client, hub_label, discovery))
         if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
             logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
@@ -113,12 +116,16 @@ class PrimaryPreparation:
         self.state.set_config("argocd_run_id", run_id)
         self.state.set_config("argocd_pause_dry_run", self.dry_run)
         paused_apps = list(self.state.get_config("argocd_paused_apps") or [])
+        pause_failures = 0
 
         for client, hub_label, discovery in discoveries:
             if not discovery.has_applications_crd:
                 logger.info("Argo CD Applications CRD not found on %s; skipping Argo CD pause", hub_label)
                 continue
-            apps = argocd_lib.list_argocd_applications(client, namespaces=None)
+            try:
+                apps = argocd_lib.list_argocd_applications(client, namespaces=None)
+            except Exception as exc:
+                raise SwitchoverError(f"Failed to list Argo CD Applications on {hub_label} hub: {exc}") from exc
             acm_apps = argocd_lib.find_acm_touching_apps(apps)
             for impact in acm_apps:
                 result = argocd_lib.pause_autosync(client, impact.app, run_id)
@@ -148,8 +155,12 @@ class PrimaryPreparation:
                     # Pass a copy so set_config's equality guard sees a new object each
                     # iteration and marks state dirty even when the list is mutated in-place.
                     self.state.set_config("argocd_paused_apps", list(paused_apps))
+                elif result.error:
+                    pause_failures += 1
                 else:
                     logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
+        if pause_failures:
+            raise SwitchoverError(f"Argo CD auto-sync pause failed for {pause_failures} Application(s)")
         logger.info(
             "Argo CD: %d Application(s) paused (run_id=%s). Left paused by default; use --argocd-resume-after-switchover or --argocd-resume-only after retargeting Git.",
             len(paused_apps),

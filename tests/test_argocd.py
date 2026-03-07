@@ -135,6 +135,8 @@ class TestPauseAutosync:
         }
         result = argocd_lib.pause_autosync(client, app, "run-1")
         assert result.patched is False
+        assert result.skip_reason == argocd_lib.PAUSE_SKIP_REASON_AUTOSYNC_DISABLED
+        assert result.error is None
         assert result.namespace == "argocd"
         assert result.name == "app"
         client.patch_custom_resource.assert_not_called()
@@ -168,6 +170,7 @@ class TestPauseAutosync:
         }
         result = argocd_lib.pause_autosync(client, app, "run-1")
         assert result.patched is False
+        assert result.error == "403 Forbidden"
         assert result.original_sync_policy == {"automated": {"prune": True}}
 
     def test_patches_when_automated_is_empty_map(self):
@@ -301,3 +304,50 @@ class TestDetectArgocdInstallation:
         assert result.install_type == "operator"
         assert len(result.argocd_instances) == 1
         assert result.argocd_instances[0]["namespace"] == "openshift-gitops"
+
+    def test_argocds_crd_lookup_failure_preserves_application_crd_result(self):
+        client = MagicMock()
+        client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "applications.argoproj.io"}},
+            ApiException(status=500, reason="Internal Server Error"),
+        ]
+
+        result = argocd_lib.detect_argocd_installation(client)
+
+        assert result.has_applications_crd is True
+        assert result.has_argocds_crd is False
+        assert result.install_type == "vanilla"
+
+    def test_application_crd_lookup_failure_raises(self):
+        client = MagicMock()
+        client.get_custom_resource.side_effect = ApiException(status=403, reason="Forbidden")
+
+        with pytest.raises(ApiException):
+            argocd_lib.detect_argocd_installation(client)
+
+
+@pytest.mark.unit
+class TestListArgocdApplications:
+    def test_cluster_wide_404_returns_empty(self):
+        client = MagicMock()
+        client.list_custom_resources.side_effect = ApiException(status=404, reason="Not Found")
+
+        assert argocd_lib.list_argocd_applications(client, namespaces=None) == []
+
+    def test_cluster_wide_non_404_raises(self):
+        client = MagicMock()
+        client.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
+
+        with pytest.raises(ApiException):
+            argocd_lib.list_argocd_applications(client, namespaces=None)
+
+    def test_namespaced_listing_aggregates_results(self):
+        client = MagicMock()
+        client.list_custom_resources.side_effect = [
+            [{"metadata": {"namespace": "argocd", "name": "app-1"}}],
+            [{"metadata": {"namespace": "openshift-gitops", "name": "app-2"}}],
+        ]
+
+        apps = argocd_lib.list_argocd_applications(client, namespaces=["argocd", "openshift-gitops"])
+
+        assert [app["metadata"]["name"] for app in apps] == ["app-1", "app-2"]

@@ -37,9 +37,8 @@ ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 
 # ACM namespace regex (must match scripts/argocd-manage.sh).
-# Uses "(-.*)" so any open-cluster-management-* sub-namespace matches, mirroring
-# lib-common.sh prefix semantics (which has no trailing anchor on the group).
-# Built from lib.constants to stay in sync with canonical namespace definitions.
+# open-cluster-management-* sub-namespaces must match, while the other canonical
+# ACM namespaces are exact matches. Built from lib.constants to stay in sync.
 ARGOCD_ACM_NS_REGEX = re.compile(
     r"^("
     + re.escape(ACM_NAMESPACE)
@@ -105,6 +104,8 @@ class PauseResult:
     name: str
     original_sync_policy: Dict[str, Any]
     patched: bool
+    skip_reason: Optional[str] = None
+    error: Optional[str] = None
 
 
 @dataclass
@@ -119,11 +120,50 @@ class ResumeResult:
 
 RESUME_SKIP_REASON_MARKER_MISSING = "marker missing or already resumed"
 RESUME_SKIP_REASON_MARKER_MISMATCH = "marker mismatch (paused by different run)"
+PAUSE_SKIP_REASON_AUTOSYNC_DISABLED = "auto-sync not enabled"
+
+
+@dataclass
+class ResumeSummary:
+    """Aggregated result of restoring a batch of paused Applications."""
+
+    restored: int = 0
+    already_resumed: int = 0
+    failed: int = 0
 
 
 def is_resume_noop(result: ResumeResult) -> bool:
     """Return True when resume did not patch because app is already resumed."""
     return (not result.restored) and (result.skip_reason == RESUME_SKIP_REASON_MARKER_MISSING)
+
+
+def _get_crd_presence(
+    client: KubeClient,
+    crd_name: str,
+    *,
+    required: bool,
+) -> Optional[bool]:
+    """Return CRD presence, or None if an optional lookup failed unexpectedly."""
+    try:
+        crd = client.get_custom_resource(
+            group="apiextensions.k8s.io",
+            version="v1",
+            plural="customresourcedefinitions",
+            name=crd_name,
+        )
+        return crd is not None
+    except ApiException as e:
+        if e.status == 404:
+            logger.debug("CRD %s not found (not installed): %s", crd_name, e)
+            return False
+        logger.warning("Unexpected API error checking CRD %s (status=%s): %s", crd_name, e.status, e)
+        if required:
+            raise
+    except Exception as e:
+        logger.warning("Failed to check CRD %s: %s", crd_name, e)
+        if required:
+            raise
+    return None
 
 
 def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
@@ -139,46 +179,10 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     Returns:
         ArgocdDiscoveryResult with CRD presence and instance list.
     """
-    has_app = False
-    has_argocds = False
+    has_app = _get_crd_presence(client, "applications.argoproj.io", required=True)
+    has_argocds_present = _get_crd_presence(client, "argocds.argoproj.io", required=False)
+    has_argocds = bool(has_argocds_present)
     instances: List[Dict[str, str]] = []
-
-    try:
-        app_crd = client.get_custom_resource(
-            group="apiextensions.k8s.io",
-            version="v1",
-            plural="customresourcedefinitions",
-            name="applications.argoproj.io",
-        )
-        has_app = app_crd is not None
-        argocds_crd = client.get_custom_resource(
-            group="apiextensions.k8s.io",
-            version="v1",
-            plural="customresourcedefinitions",
-            name="argocds.argoproj.io",
-        )
-        has_argocds = argocds_crd is not None
-    except ApiException as e:
-        if e.status == 404:
-            logger.debug("Argo CD CRDs not found (not installed): %s", e)
-        else:
-            logger.warning(
-                "Unexpected API error checking Argo CD CRDs (status=%s): %s",
-                e.status,
-                e,
-            )
-        return ArgocdDiscoveryResult(
-            has_applications_crd=False,
-            has_argocds_crd=False,
-            install_type="none",
-        )
-    except Exception as e:
-        logger.warning("Failed to check Argo CD CRDs: %s", e)
-        return ArgocdDiscoveryResult(
-            has_applications_crd=False,
-            has_argocds_crd=False,
-            install_type="none",
-        )
 
     if not has_app:
         return ArgocdDiscoveryResult(
@@ -228,42 +232,25 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     )
 
 
-def _application_namespaces(client: KubeClient) -> List[str]:
-    """Return namespaces that contain Argo CD Applications (operator or all)."""
+def _list_argocd_applications_once(client: KubeClient, namespace: Optional[str]) -> List[Dict[str, Any]]:
+    """List Argo CD Applications for one namespace scope and surface real errors."""
+    scope_label = namespace or "cluster-wide scope"
     try:
-        argocds_crd = client.get_custom_resource(
-            group="apiextensions.k8s.io",
-            version="v1",
-            plural="customresourcedefinitions",
-            name="argocds.argoproj.io",
-        )
-    except Exception:
-        argocds_crd = None
-    if not argocds_crd:
-        # Vanilla: get all Applications and collect namespaces
-        try:
-            apps = client.list_custom_resources(
-                group=ARGOCD_APP_GROUP,
-                version=ARGOCD_APP_VERSION,
-                plural=ARGOCD_APP_PLURAL,
-                namespace=None,
-            )
-            return list({a.get("metadata", {}).get("namespace", "") for a in apps if a.get("metadata")})
-        except Exception as e:
-            logger.debug("Failed to list Applications cluster-wide: %s", e)
-            return []
-    # Operator: use ArgoCD instance namespaces
-    try:
-        argocds = client.list_custom_resources(
+        return client.list_custom_resources(
             group=ARGOCD_APP_GROUP,
             version=ARGOCD_APP_VERSION,
-            plural=ARGOCD_INSTANCE_CRD_PLURAL,
-            namespace=None,
+            plural=ARGOCD_APP_PLURAL,
+            namespace=namespace,
         )
-        return [a.get("metadata", {}).get("namespace", "") for a in argocds if a.get("metadata", {}).get("namespace")]
+    except ApiException as e:
+        if e.status == 404:
+            logger.debug("Argo CD Applications not found in %s: %s", scope_label, e)
+            return []
+        logger.warning("Failed to list Argo CD Applications in %s (status=%s)", scope_label, e.status)
+        raise
     except Exception as e:
-        logger.debug("Failed to list ArgoCD instances for namespaces: %s", e)
-        return []
+        logger.warning("Failed to list Argo CD Applications in %s: %s", scope_label, e)
+        raise
 
 
 def list_argocd_applications(
@@ -279,47 +266,18 @@ def list_argocd_applications(
 
     Returns:
         List of Application resource dicts.
+
+    Raises:
+        ApiException: When Argo CD discovery fails for reasons other than 404/not-installed.
     """
     if namespaces is not None:
         result: List[Dict[str, Any]] = []
         for ns in namespaces:
             if not ns:
                 continue
-            try:
-                items = client.list_custom_resources(
-                    group=ARGOCD_APP_GROUP,
-                    version=ARGOCD_APP_VERSION,
-                    plural=ARGOCD_APP_PLURAL,
-                    namespace=ns,
-                )
-                result.extend(items)
-            except ApiException as e:
-                if e.status == 404:
-                    logger.debug("Failed to list Applications in %s: %s", ns, e)
-                else:
-                    logger.warning(
-                        "Failed to list Applications in %s (status=%s); these apps will not be managed",
-                        ns,
-                        e.status,
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Failed to list Applications in %s: %s; these apps will not be managed",
-                    ns,
-                    e,
-                )
+            result.extend(_list_argocd_applications_once(client, ns))
         return result
-    # Cluster-wide (works for namespaced Applications)
-    try:
-        return client.list_custom_resources(
-            group=ARGOCD_APP_GROUP,
-            version=ARGOCD_APP_VERSION,
-            plural=ARGOCD_APP_PLURAL,
-            namespace=None,
-        )
-    except Exception as e:
-        logger.debug("Failed to list Applications: %s", e)
-        return []
+    return _list_argocd_applications_once(client, namespace=None)
 
 
 def _resource_touches_acm(resource: Dict[str, Any]) -> bool:
@@ -355,6 +313,63 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
         if acm_count > 0:
             result.append(AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app))
     return result
+
+
+def resume_recorded_applications(
+    paused_apps: List[Any],
+    run_id: str,
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+    logger: logging.Logger,
+) -> ResumeSummary:
+    """Restore auto-sync for recorded pause state and return an aggregated summary."""
+    summary = ResumeSummary()
+    for entry in paused_apps:
+        if not isinstance(entry, dict):
+            summary.failed += 1
+            logger.warning("  Skip entry with unexpected format in Argo CD pause state")
+            continue
+
+        hub = entry.get("hub")
+        ns = entry.get("namespace")
+        name = entry.get("name")
+        original_sync_policy = entry.get("original_sync_policy")
+
+        if entry.get("dry_run"):
+            summary.failed += 1
+            logger.warning("  Skip %s/%s (pause was dry-run only)", ns, name)
+            continue
+        if not all([hub, ns, name, original_sync_policy is not None]):
+            summary.failed += 1
+            logger.warning("  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)", hub, ns, name)
+            continue
+
+        if hub == "primary":
+            client = primary
+        elif hub == "secondary":
+            client = secondary
+        else:
+            summary.failed += 1
+            logger.warning("  Skip %s/%s (unrecognized hub=%s)", ns, name, hub)
+            continue
+
+        if not client:
+            summary.failed += 1
+            logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
+            continue
+
+        result = resume_autosync(client, ns, name, original_sync_policy, run_id)
+        if result.restored:
+            summary.restored += 1
+            logger.info("  Resumed %s/%s on %s", ns, name, hub)
+        elif is_resume_noop(result):
+            summary.already_resumed += 1
+            logger.info("  Already resumed %s/%s on %s", ns, name, hub)
+        else:
+            summary.failed += 1
+            logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
+
+    return summary
 
 
 # NOTE: dry_run_skip was designed for instance methods (it reads self.dry_run).
@@ -393,7 +408,13 @@ def pause_autosync(
     sync_policy = spec.get("syncPolicy") or {}
     original = dict(sync_policy)
     if "automated" not in sync_policy:
-        return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=False)
+        return PauseResult(
+            namespace=ns,
+            name=name,
+            original_sync_policy=original,
+            patched=False,
+            skip_reason=PAUSE_SKIP_REASON_AUTOSYNC_DISABLED,
+        )
     # Remove automated, keep rest; add annotation
     new_sync = {k: v for k, v in sync_policy.items() if k != "automated"}
     patch: Dict[str, Any] = {
@@ -419,15 +440,28 @@ def pause_autosync(
             name,
             detail,
         )
-        return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=False)
+        return PauseResult(
+            namespace=ns,
+            name=name,
+            original_sync_policy=original,
+            patched=False,
+            error=detail,
+        )
     except Exception as e:
+        detail = str(e)
         logger.warning(
             "Failed to patch Application %s/%s to pause auto-sync: %s",
             ns,
             name,
-            str(e),
+            detail,
         )
-        return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=False)
+        return PauseResult(
+            namespace=ns,
+            name=name,
+            original_sync_policy=original,
+            patched=False,
+            error=detail,
+        )
     return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=True)
 
 
