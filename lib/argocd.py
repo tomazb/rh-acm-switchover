@@ -41,7 +41,7 @@ ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 ARGOCD_ACM_NS_REGEX = re.compile(
     r"^("
     + re.escape(ACM_NAMESPACE)
-    + r"($|-)|"
+    + r"($|-.*)|"
     + re.escape(BACKUP_NAMESPACE)
     + r"$|"
     + re.escape(OBSERVABILITY_NAMESPACE)
