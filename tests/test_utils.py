@@ -5,6 +5,7 @@ Tests cover StateManager, Phase enum, version comparison, and logging setup.
 """
 
 import os
+import fcntl
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -408,6 +409,9 @@ class TestStateLoadSafety:
         """An unreadable state file must raise StateLoadError."""
         import stat as stat_mod
 
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("Root can still read chmod 000 files")
+
         state_file = tmp_path / "state.json"
         state_file.write_text('{"version": "1.0"}')
         state_file.chmod(0o000)
@@ -455,7 +459,7 @@ class TestStateLoadSafety:
         state_file = tmp_path / "state.json"
 
         def side_effect(_fd, operation):
-            if operation & 4:  # LOCK_NB
+            if operation & fcntl.LOCK_NB:
                 raise BlockingIOError("already locked")
             return None
 
