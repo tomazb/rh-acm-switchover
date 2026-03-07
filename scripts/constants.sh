@@ -12,8 +12,8 @@
 # - MAJOR: Breaking changes to script behavior or output format
 # - MINOR: New features, new checks, significant improvements
 # - PATCH: Bug fixes, minor improvements
-export SCRIPT_VERSION="1.5.11"
-export SCRIPT_VERSION_DATE="2026-03-06"
+export SCRIPT_VERSION="1.5.12"
+export SCRIPT_VERSION_DATE="2026-03-07"
 
 # Namespaces
 export ACM_NAMESPACE="open-cluster-management"

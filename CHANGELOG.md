@@ -11,10 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Argo CD resume flow deduplication**: Resume-only CLI mode and finalization now share one validation/logging path for restoring paused Applications, keeping malformed state handling and failure semantics aligned.
+- **GitOps marker helper centralization**: Non-critical GitOps marker recording now goes through a shared safe wrapper, reducing duplicated broad exception handling and keeping warning behavior consistent.
+
 ### Fixed
 
+- **Argo CD pause/discovery failure surfacing**: Argo CD detection, Application listing, and pause management now distinguish real API/RBAC failures from safe no-op cases, causing `--argocd-manage` workflows to fail loudly instead of silently skipping protection.
+- **Backup collision step truthfulness**: Finalization now raises explicit errors when BackupSchedule collision repair cannot be completed, preventing the step from being marked complete on warning-and-return paths.
+- **Observability regression-check idempotence**: Old-hub regression verification is now tracked as a state step, so resume does not repeat it after a successful run.
+- **Lock-release observability**: State-file run-lock cleanup now emits debug logs when unlock/close operations fail, improving post-mortem diagnosability.
 - **Pod readiness deadline enforcement**: `wait_for_pods_ready()` now performs one pod-list API call per poll cycle and handles transient poll failures inside the polling loop, so the configured timeout is a true wall-clock deadline rather than being extended by nested client retries.
 - **Managed cluster threshold validation**: `--min-managed-clusters` now rejects negative values instead of silently disabling the post-restore safety check.
+- **Dependency audit remediation**: Dev/test installs now upgrade `setuptools` to a non-vulnerable release so `pip-audit` no longer reports the default venv bootstrap package.
 - **Backup ownership hardening**: Finalization now prefers the ACM backup ownership label and warns while accepting a narrow ACM name-pattern fallback for supported backup names, reducing false negatives when real ACM backups are missing the label.
 
 ## [1.5.10] - 2026-03-06
