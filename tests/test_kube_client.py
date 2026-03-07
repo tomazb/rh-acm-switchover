@@ -5,6 +5,7 @@ Tests cover KubeClient initialization, CRUD operations, and dry-run mode.
 """
 
 import errno
+from itertools import chain, repeat
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -426,7 +427,7 @@ class TestKubeClient:
 
         # start_time=100, loop check=100, remaining-budget check=108 -> 2s left,
         # sleep budget check=109.5 -> 0.5s sleep, next loop check=110.1 -> timeout
-        mock_time.side_effect = [100.0, 100.0, 108.0, 109.5, 110.1]
+        mock_time.side_effect = chain([100.0, 100.0, 108.0, 109.5, 110.1], repeat(110.1))
 
         result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=10)
 
@@ -443,7 +444,7 @@ class TestKubeClient:
     ):
         """Repeated transient poll failures must respect the wall-clock timeout."""
         mock_k8s_apis["core_api"].list_namespaced_pod.side_effect = ApiException(status=500)
-        mock_time.side_effect = [100.0, 100.0, 100.0, 108.0, 110.1]
+        mock_time.side_effect = chain([100.0, 100.0, 100.0, 108.0, 110.1], repeat(110.1))
 
         result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=10)
 
