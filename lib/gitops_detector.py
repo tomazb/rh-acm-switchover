@@ -254,3 +254,26 @@ def record_gitops_markers(
     if markers:
         collector.record(context, namespace, kind, name, markers)
     return markers
+
+
+def safe_record_gitops_markers(
+    logger: logging.Logger,
+    context: str,
+    namespace: str,
+    kind: str,
+    name: str,
+    metadata: Dict,
+) -> List[str]:
+    """Record GitOps markers without letting non-critical detection abort the workflow."""
+    try:
+        return record_gitops_markers(
+            context=context,
+            namespace=namespace,
+            kind=kind,
+            name=name,
+            metadata=metadata,
+        )
+    except Exception as exc:  # noqa: BLE001
+        resource_ref = f"{namespace}/{name}" if namespace else name
+        logger.warning("GitOps marker recording failed for %s %s: %s", kind, resource_ref, exc)
+        return []

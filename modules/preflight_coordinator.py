@@ -1,13 +1,4 @@
-"""
-Pre-flight validation module for ACM switchover.
-
-TODO: This module has very low test coverage (17%). Given its role as the
-orchestrator for pre-flight validation, add integration tests that verify:
-- Correct coordination of all validators
-- Proper handling of validation failures
-- PreflightConfig generation accuracy
-See TEST_REPORT.md for coverage details.
-"""
+"""Pre-flight validation module for ACM switchover."""
 
 # Runbook: Step 0 (pre-flight validation)
 

@@ -1,11 +1,8 @@
-"""
-Finalization and rollback module for ACM switchover.
-"""
+"""Finalization module for ACM switchover."""
 
 # Runbook: Steps 11-12 (finalization) and Step 14 (old hub handling)
 
 import logging
-import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,6 +12,9 @@ from kubernetes.client.rest import ApiException
 from lib import argocd as argocd_lib
 from lib.constants import (
     ACM_NAMESPACE,
+    ACM_BACKUP_NAME_RE,
+    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+    ACM_BACKUP_SCHEDULE_TYPES,
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
     AUTO_IMPORT_STRATEGY_SYNC,
@@ -43,7 +43,7 @@ from lib.constants import (
     VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import SwitchoverError
-from lib.gitops_detector import record_gitops_markers
+from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, dry_run_skip, is_acm_version_ge
 from lib.waiter import wait_for_condition
@@ -52,11 +52,6 @@ from .backup_schedule import BackupScheduleManager
 from .decommission import Decommission
 
 logger = logging.getLogger("acm_switchover")
-
-ACM_BACKUP_SCHEDULE_TYPE_LABEL = "cluster.open-cluster-management.io/backup-schedule-type"
-ACM_BACKUP_SCHEDULE_TYPES = {"managedClusters", "credentials", "resources"}
-ACM_BACKUP_NAME_RE = re.compile(r"^acm-(managed-clusters|credentials|resources)-")
-
 
 class Finalization:
     """Handles finalization steps on secondary hub."""
@@ -145,9 +140,20 @@ class Finalization:
         """Return the most useful timestamp for backup chronology checks."""
         status = backup.get("status", {}) or {}
         metadata = backup.get("metadata", {}) or {}
-        return self._parse_timestamp(
-            status.get("completionTimestamp") or status.get("startTimestamp") or metadata.get("creationTimestamp")
+        candidate_fields = (
+            ("completionTimestamp", status.get("completionTimestamp")),
+            ("startTimestamp", status.get("startTimestamp")),
+            ("creationTimestamp", metadata.get("creationTimestamp")),
         )
+        for _field_name, raw_value in candidate_fields:
+            parsed = self._parse_timestamp(raw_value)
+            if parsed:
+                return parsed
+        raw_candidates = [f"{field}={value}" for field, value in candidate_fields if value]
+        if raw_candidates:
+            backup_name = metadata.get("name", "unknown")
+            logger.warning("Backup %s has unparseable timestamp(s): %s", backup_name, ", ".join(raw_candidates))
+        return None
 
     def _find_post_enable_backup(self, backups: List[Dict], enabled_at: Optional[datetime]) -> Optional[Dict]:
         """Find an ACM-owned backup that proves continuity after enable/resume."""
@@ -178,7 +184,7 @@ class Finalization:
         logger.info("Starting finalization...")
 
         try:
-            # Optional: Disable Observability on old secondary hub before enabling backups
+            # Optional: Disable Observability on the old primary hub before enabling backups
             if self.disable_observability_on_secondary:
                 with self.state.step("disable_observability_on_secondary", logger) as should_run:
                     if should_run:
@@ -226,7 +232,9 @@ class Finalization:
                     self._handle_old_hub()
 
             if self.primary and self.old_hub_action not in ("decommission", "none"):
-                self._verify_old_hub_state()
+                with self.state.step("verify_old_hub_state", logger) as should_run:
+                    if should_run:
+                        self._verify_old_hub_state()
 
             logger.info("Finalization completed successfully")
             return True
@@ -918,21 +926,14 @@ class Finalization:
         for mco in mcos:
             metadata = mco.get("metadata", {})
             mco_name = metadata.get("name", "unknown")
-            try:
-                markers = record_gitops_markers(
-                    context="primary",
-                    namespace="",  # MCO is cluster-scoped
-                    kind="MultiClusterObservability",
-                    name=mco_name,
-                    metadata=metadata,
-                )
-            except Exception as e:
-                logger.warning(
-                    "GitOps marker recording failed for MultiClusterObservability %s: %s",
-                    mco_name,
-                    e,
-                )
-                markers = []
+            markers = safe_record_gitops_markers(
+                logger=logger,
+                context="primary",
+                namespace="",  # MCO is cluster-scoped
+                kind="MultiClusterObservability",
+                name=mco_name,
+                metadata=metadata,
+            )
             if markers:
                 logger.warning(
                     "MultiClusterObservability %s appears GitOps-managed (%s). Coordinate deletion to avoid drift.",
@@ -1116,8 +1117,7 @@ class Finalization:
         schedules = self._get_backup_schedules(force_refresh=True)
 
         if not schedules:
-            logger.warning("No BackupSchedule found on new primary")
-            return
+            raise SwitchoverError("No BackupSchedule found on new primary while repairing collision state")
 
         schedule = schedules[0]
         schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
@@ -1157,13 +1157,11 @@ class Finalization:
         else:
             current_uid = current_schedule.get("metadata", {}).get("uid")
             if schedule_uid and current_uid and current_uid != schedule_uid:
-                logger.warning(
-                    "BackupSchedule %s changed (uid %s -> %s); skipping recreation to avoid deleting unexpected resource",
-                    schedule_name,
-                    schedule_uid,
-                    current_uid,
+                raise SwitchoverError(
+                    "BackupSchedule %s changed identity (uid %s -> %s) before deletion; "
+                    "manual verification is required before retrying collision repair"
+                    % (schedule_name, schedule_uid, current_uid)
                 )
-                return
 
             # Use latest spec to avoid recreating from stale data
             schedule_spec = current_schedule.get("spec", {})
@@ -1200,22 +1198,12 @@ class Finalization:
         if schedule_after_delete:
             after_uid = schedule_after_delete.get("metadata", {}).get("uid")
             if schedule_uid and after_uid and after_uid != schedule_uid:
-                after_phase = schedule_after_delete.get("status", {}).get("phase", "")
-                logger.warning(
-                    "BackupSchedule %s reappeared with uid %s after deletion (previous uid=%s); "
-                    "skipping recreate to avoid mutating a resource created by another process",
-                    schedule_name,
-                    after_uid,
-                    schedule_uid,
-                )
-                if after_phase == "BackupCollision":
-                    logger.warning(
-                        "BackupSchedule %s remains in BackupCollision. Manually delete and recreate the "
-                        "BackupSchedule when no other process is reconciling it.",
-                        schedule_name,
-                    )
                 self._cached_schedules = None
-                return
+                raise SwitchoverError(
+                    "BackupSchedule %s reappeared with a different uid (%s, previous=%s) after deletion. "
+                    "Manual verification is required before retrying collision repair."
+                    % (schedule_name, after_uid, schedule_uid)
+                )
 
         # Recreate the schedule
         try:
@@ -1242,9 +1230,7 @@ class Finalization:
 
         except ApiException as e:
             if e.status != 409:
-                logger.warning("Failed to recreate BackupSchedule: %s", e)
-                logger.warning("You may need to manually delete and recreate the BackupSchedule")
-                return
+                raise SwitchoverError(f"Failed to recreate BackupSchedule {schedule_name}: {e}") from e
 
             logger.warning(
                 "BackupSchedule %s already exists during recreation (409); checking current state", schedule_name
@@ -1257,12 +1243,10 @@ class Finalization:
                 namespace=BACKUP_NAMESPACE,
             )
             if not current_schedule:
-                logger.warning(
-                    "BackupSchedule %s returned 409 on create but was not found immediately after; "
-                    "you may need manual verification",
-                    schedule_name,
+                raise SwitchoverError(
+                    "BackupSchedule %s returned 409 on recreate but could not be re-read afterward"
+                    % schedule_name
                 )
-                return
 
             current_phase = current_schedule.get("status", {}).get("phase", "")
             current_uid = current_schedule.get("metadata", {}).get("uid")
@@ -1288,8 +1272,7 @@ class Finalization:
                     current_phase or "Unknown",
                 )
         except Exception as e:
-            logger.warning("Failed to recreate BackupSchedule: %s", e)
-            logger.warning("You may need to manually delete and recreate the BackupSchedule")
+            raise SwitchoverError(f"Failed to recreate BackupSchedule {schedule_name}: {e}") from e
 
     def _verify_old_hub_state(self):
         """Run regression checks on the old (primary) hub."""
@@ -1498,47 +1481,9 @@ class Finalization:
             len(paused_apps),
             run_id,
         )
-        failures = 0
-        for entry in paused_apps:
-            if not isinstance(entry, dict):
-                failures += 1
-                logger.warning("  Skip entry with unexpected format in Argo CD pause state")
-                continue
-            hub = entry.get("hub")
-            ns = entry.get("namespace")
-            name = entry.get("name")
-            orig = entry.get("original_sync_policy")
-            if entry.get("dry_run"):
-                failures += 1
-                logger.warning("  Skip %s/%s (pause was dry-run only)", ns, name)
-                continue
-            if not all([hub, ns, name, orig is not None]):
-                failures += 1
-                logger.warning("  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)", hub, ns, name)
-                continue
-            if hub == "primary":
-                client = self.primary
-            elif hub == "secondary":
-                client = self.secondary
-            else:
-                failures += 1
-                logger.warning("  Skip %s/%s (unrecognized hub=%s)", ns, name, hub)
-                continue
-            if not client:
-                failures += 1
-                logger.warning("  Skip %s/%s (no client for hub=%s)", ns, name, hub)
-                continue
-            result = argocd_lib.resume_autosync(client, ns, name, orig, run_id)
-            if result.restored:
-                logger.info("  Resumed %s/%s on %s", ns, name, hub)
-            elif argocd_lib.is_resume_noop(result):
-                logger.info("  Already resumed %s/%s on %s", ns, name, hub)
-            else:
-                failures += 1
-                logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
-
-        if failures:
-            raise SwitchoverError(f"Argo CD auto-sync restore failed for {failures} Application(s)")
+        summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, self.primary, self.secondary, logger)
+        if summary.failed:
+            raise SwitchoverError(f"Argo CD auto-sync restore failed for {summary.failed} Application(s)")
 
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""

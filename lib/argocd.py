@@ -36,13 +36,6 @@ ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
 # Annotation key for our pause marker (must match scripts/argocd-manage.sh)
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 
-# ACM namespace regex (must match scripts/argocd-manage.sh).
-# open-cluster-management-* sub-namespaces must match, while the other canonical
-# ACM namespaces are exact matches.
-ARGOCD_ACM_NS_REGEX = re.compile(
-    r"^(open-cluster-management($|-.*)|open-cluster-management-backup$|"
-    r"open-cluster-management-observability$|open-cluster-management-global-set$|"
-    r"multicluster-engine$|local-cluster)$"
 # ACM namespace regex (must match scripts/lib-common.sh)
 # Built from lib.constants to stay in sync with canonical namespace definitions.
 ARGOCD_ACM_NS_REGEX = re.compile(

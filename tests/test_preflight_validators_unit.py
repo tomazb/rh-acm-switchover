@@ -395,7 +395,7 @@ class TestClusterDeploymentValidator:
         ]
 
         with patch(
-            "modules.preflight.cluster_validators.record_gitops_markers",
+            "lib.gitops_detector.record_gitops_markers",
             side_effect=RuntimeError("marker error"),
         ):
             validator.run(mock_kube_client)
@@ -404,7 +404,8 @@ class TestClusterDeploymentValidator:
         assert len(results) == 1
         assert results[0]["passed"] is True
         mock_logger.warning.assert_called_once()
-        assert "GitOps marker recording failed for ClusterDeployment" in mock_logger.warning.call_args[0][0]
+        assert mock_logger.warning.call_args[0][0] == "GitOps marker recording failed for %s %s: %s"
+        assert mock_logger.warning.call_args[0][1] == "ClusterDeployment"
 
 
 class TestKubeconfigValidator:

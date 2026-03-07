@@ -15,7 +15,7 @@ from lib.constants import (
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_USE_MANAGED_SERVICE_ACCOUNT,
 )
-from lib.gitops_detector import record_gitops_markers
+from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.validation import InputValidator, ValidationError
 
@@ -332,20 +332,14 @@ class BackupScheduleValidator(BaseValidator):
             use_msa = spec.get(SPEC_USE_MANAGED_SERVICE_ACCOUNT, False)
 
             # Record GitOps markers if present (non-critical)
-            try:
-                record_gitops_markers(
-                    context="primary",
-                    namespace=BACKUP_NAMESPACE,
-                    kind="BackupSchedule",
-                    name=schedule_name,
-                    metadata=metadata,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "GitOps marker recording failed for BackupSchedule %s: %s",
-                    schedule_name,
-                    exc,
-                )
+            safe_record_gitops_markers(
+                logger=logger,
+                context="primary",
+                namespace=BACKUP_NAMESPACE,
+                kind="BackupSchedule",
+                name=schedule_name,
+                metadata=metadata,
+            )
 
             if use_msa:
                 self.add_result(
@@ -506,20 +500,14 @@ class PassiveSyncValidator(BaseValidator):
             restore_name = metadata.get("name", "") or RESTORE_PASSIVE_SYNC_NAME
 
             # Record GitOps markers if present (non-critical)
-            try:
-                record_gitops_markers(
-                    context="secondary",
-                    namespace=BACKUP_NAMESPACE,
-                    kind="Restore",
-                    name=restore_name,
-                    metadata=metadata,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "GitOps marker recording failed for Restore %s: %s",
-                    restore_name,
-                    exc,
-                )
+            safe_record_gitops_markers(
+                logger=logger,
+                context="secondary",
+                namespace=BACKUP_NAMESPACE,
+                kind="Restore",
+                name=restore_name,
+                metadata=metadata,
+            )
 
             status = restore.get("status", {})
             phase = status.get("phase", "unknown")
