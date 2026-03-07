@@ -258,6 +258,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--skip-observability-checks` | Skip Observability steps even if detected |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
+| `--skip-gitops-check` | Disable GitOps marker detection warnings (ArgoCD, Flux); when set, `--argocd-check` is ignored |
 | `--argocd-check` | Detect Argo CD and report ACM-touching Applications (preflight; no changes) |
 | `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; not valid with `--validate-only` or `--argocd-resume-only`) |
 | `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only` or `--argocd-resume-only`) |
