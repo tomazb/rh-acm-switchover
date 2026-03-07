@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Security dependency override**: Bump `authlib` floor in `requirements-dev.txt` to `>=1.6.7` to address `CVE-2026-28802` reported by `pip-audit`.
+- **Dependency audit remediation**: Dev/test installs now upgrade `setuptools` to a non-vulnerable release so `pip-audit` no longer reports the default venv bootstrap package.
 
 ## [1.5.3] - 2026-01-29
 
