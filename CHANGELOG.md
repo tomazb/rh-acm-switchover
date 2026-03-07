@@ -13,8 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [1.5.4] - 2026-03-07
+
+### Fixed
+
 - **Security dependency override**: Bump `authlib` floor in `requirements-dev.txt` to `>=1.6.7` to address `CVE-2026-28802` reported by `pip-audit`.
 - **Dependency audit remediation**: Dev/test installs now upgrade `setuptools` to a non-vulnerable release so `pip-audit` no longer reports the default venv bootstrap package.
+- **Corrupt state safety**: Preserve unreadable state files for forensics without removing the original path, so retries stay blocked until `--reset-state` or explicit cleanup.
+- **Argo CD pause crash recovery**: Persist provisional pause records before patching and confirm them after success so retries can recover paused Applications without losing resume state.
+- **Argo CD preflight RBAC gating**: Skip Argo CD permission expansion when the Applications CRD is absent on both hubs, avoiding unnecessary preflight failures on clusters without Argo CD.
+- **Argo CD resume-only validation**: Remove the redundant secondary-context check so `--argocd-resume-only` consistently surfaces its dedicated validation error.
+- **`dry_run_skip` keyword handling**: Preserve dry-run callable return values when decorated helpers are invoked with keyword arguments.
 
 ## [1.5.3] - 2026-01-29
 
