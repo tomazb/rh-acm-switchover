@@ -126,17 +126,11 @@ fi
 detect_cli
 
 # -----------------------------------------------------------------------------
-# Get list of Application namespaces: operator install (argocds.argoproj.io) or vanilla (all)
+# Get Application objects cluster-wide so operator installs also include watched
+# namespaces outside the Argo CD control plane namespace.
 # -----------------------------------------------------------------------------
-get_application_namespaces() {
-    if "$CLUSTER_CLI_BIN" --context="$CONTEXT" get crd argocds.argoproj.io &>/dev/null; then
-        "$CLUSTER_CLI_BIN" --context="$CONTEXT" get argocds.argoproj.io -A -o json 2>/dev/null | \
-            jq -r '.items[]? | .metadata.namespace' 2>/dev/null | sort -u || true
-    else
-        # Vanilla: list namespaces that have at least one Application
-        "$CLUSTER_CLI_BIN" --context="$CONTEXT" get applications.argoproj.io -A -o json 2>/dev/null | \
-            jq -r '.items[]? | .metadata.namespace' 2>/dev/null | sort -u || true
-    fi
+get_applications_json() {
+    "$CLUSTER_CLI_BIN" --context="$CONTEXT" get applications.argoproj.io -A -o json 2>/dev/null || echo '{"items":[]}'
 }
 
 # Filter to ACM-touching apps from a JSON list of Application objects (items array)
@@ -198,52 +192,49 @@ run_pause() {
     local apps_array="[]"
     local count=0
 
-    while IFS= read -r ns; do
-        [[ -z "$ns" ]] && continue
-        local apps_json
-        apps_json=$("$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$ns" get applications.argoproj.io -o json 2>/dev/null || echo '{"items":[]}')
-        while IFS=$'\t' read -r app_ns app_name; do
-            [[ -z "$app_name" ]] && continue
-            local app_full
-            app_full=$("$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$app_ns" get application.argoproj.io "$app_name" -o json 2>/dev/null || true)
-            if [[ -z "$app_full" ]]; then
-                echo "Warning: Application $app_ns/$app_name not found, skipping" >&2
-                continue
-            fi
-            local original_sync_policy
-            original_sync_policy=$(echo "$app_full" | jq -c '.spec.syncPolicy // {}' 2>/dev/null || echo "{}")
-            local has_automated
-            has_automated=$(echo "$app_full" | jq -r '.spec.syncPolicy.automated // empty' 2>/dev/null || true)
-            if [[ -z "$has_automated" ]]; then
-                echo "  Skip $app_ns/$app_name (no auto-sync)"
-                continue
-            fi
-            if [[ $DRY_RUN -eq 1 ]]; then
-                echo "  [DRY-RUN] Would pause $app_ns/$app_name"
-                ((count++)) || true
-                apps_array=$(jq -c --arg ns "$app_ns" --arg name "$app_name" --argjson sp "$original_sync_policy" \
-                    '. + [{"namespace":$ns,"name":$name,"original_sync_policy":$sp}]' <<<"$apps_array")
-                continue
-            fi
-            local spec_patch patch_json
-            spec_patch=$(echo "$original_sync_policy" | jq 'del(.automated)' 2>/dev/null || echo "{}")
-            patch_json=$(jq -n -c --arg run_id "$run_id" --argjson sp "$spec_patch" \
-                --arg ann "$ARGOCD_PAUSED_BY_ANNOTATION" \
-                '{ "metadata": { "annotations": { ($ann): $run_id } }, "spec": { "syncPolicy": $sp } }')
-            "$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$app_ns" patch application.argoproj.io "$app_name" --type=merge -p "$patch_json" &>/dev/null || {
-                echo "Error: Failed to patch $app_ns/$app_name" >&2
-                if [[ $count -gt 0 ]]; then
-                    write_pause_state "$run_id" "$paused_at" "$apps_array"
-                    echo "Partial state written to $STATE_FILE (run_id=$run_id)." >&2
-                fi
-                return 1
-            }
-            echo "  Paused $app_ns/$app_name"
+    local apps_json
+    apps_json="$(get_applications_json)"
+    while IFS=$'\t' read -r app_ns app_name; do
+        [[ -z "$app_name" ]] && continue
+        local app_full
+        app_full=$("$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$app_ns" get application.argoproj.io "$app_name" -o json 2>/dev/null || true)
+        if [[ -z "$app_full" ]]; then
+            echo "Warning: Application $app_ns/$app_name not found, skipping" >&2
+            continue
+        fi
+        local original_sync_policy
+        original_sync_policy=$(echo "$app_full" | jq -c '.spec.syncPolicy // {}' 2>/dev/null || echo "{}")
+        local has_automated
+        has_automated=$(echo "$app_full" | jq -r '.spec.syncPolicy.automated // empty' 2>/dev/null || true)
+        if [[ -z "$has_automated" ]]; then
+            echo "  Skip $app_ns/$app_name (no auto-sync)"
+            continue
+        fi
+        if [[ $DRY_RUN -eq 1 ]]; then
+            echo "  [DRY-RUN] Would pause $app_ns/$app_name"
             ((count++)) || true
             apps_array=$(jq -c --arg ns "$app_ns" --arg name "$app_name" --argjson sp "$original_sync_policy" \
                 '. + [{"namespace":$ns,"name":$name,"original_sync_policy":$sp}]' <<<"$apps_array")
-        done < <(filter_acm_touching_apps "$apps_json")
-    done < <(get_application_namespaces)
+            continue
+        fi
+        local spec_patch patch_json
+        spec_patch=$(echo "$original_sync_policy" | jq 'del(.automated)' 2>/dev/null || echo "{}")
+        patch_json=$(jq -n -c --arg run_id "$run_id" --argjson sp "$spec_patch" \
+            --arg ann "$ARGOCD_PAUSED_BY_ANNOTATION" \
+            '{ "metadata": { "annotations": { ($ann): $run_id } }, "spec": { "syncPolicy": $sp } }')
+        "$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$app_ns" patch application.argoproj.io "$app_name" --type=merge -p "$patch_json" &>/dev/null || {
+            echo "Error: Failed to patch $app_ns/$app_name" >&2
+            if [[ $count -gt 0 ]]; then
+                write_pause_state "$run_id" "$paused_at" "$apps_array"
+                echo "Partial state written to $STATE_FILE (run_id=$run_id)." >&2
+            fi
+            return 1
+        }
+        echo "  Paused $app_ns/$app_name"
+        ((count++)) || true
+        apps_array=$(jq -c --arg ns "$app_ns" --arg name "$app_name" --argjson sp "$original_sync_policy" \
+            '. + [{"namespace":$ns,"name":$name,"original_sync_policy":$sp}]' <<<"$apps_array")
+    done < <(filter_acm_touching_apps "$apps_json")
 
     if [[ $count -eq 0 ]]; then
         echo "No ACM-touching Applications with auto-sync found to pause."

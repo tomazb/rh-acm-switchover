@@ -50,19 +50,7 @@ if [[ "$scenario" == "pause_partial_failure" ]]; then
         "--context=test-hub get crd applications.argoproj.io")
             exit 0
             ;;
-        "--context=test-hub get crd argocds.argoproj.io")
-            exit 1
-            ;;
         "--context=test-hub get applications.argoproj.io -A -o json")
-            cat <<'JSON'
-{"items":[
-  {"metadata":{"namespace":"argocd","name":"app-a"}},
-  {"metadata":{"namespace":"argocd","name":"app-b"}}
-]}
-JSON
-            exit 0
-            ;;
-        "--context=test-hub -n argocd get applications.argoproj.io -o json")
             cat <<'JSON'
 {"items":[
   {"metadata":{"namespace":"argocd","name":"app-a"},"status":{"resources":[{"kind":"MultiClusterHub","namespace":"open-cluster-management"}]}},
@@ -116,6 +104,32 @@ JSON
         if [[ "$scenario" == "resume_partial_failure" ]]; then
             exit 1
         fi
+        exit 0
+    fi
+fi
+
+if [[ "$scenario" == "pause_operator_watched_namespace" ]]; then
+    case "$cmd" in
+        "--context=test-hub get crd applications.argoproj.io")
+            exit 0
+            ;;
+        "--context=test-hub get applications.argoproj.io -A -o json")
+            cat <<'JSON'
+{"items":[
+  {"metadata":{"namespace":"team-gitops","name":"managed-hub"},"status":{"resources":[{"kind":"MultiClusterHub","namespace":"open-cluster-management"}]}}
+]}
+JSON
+            exit 0
+            ;;
+        "--context=test-hub -n team-gitops get application.argoproj.io managed-hub -o json")
+            cat <<'JSON'
+{"metadata":{"namespace":"team-gitops","name":"managed-hub","resourceVersion":"3001"},"spec":{"syncPolicy":{"automated":{"prune":true}}}}
+JSON
+            exit 0
+            ;;
+    esac
+
+    if [[ "$cmd" == *"--context=test-hub -n team-gitops patch application.argoproj.io managed-hub --type=merge -p "* ]]; then
         exit 0
     fi
 fi
@@ -227,6 +241,33 @@ def test_resume_returns_success_when_all_patches_succeed(tmp_path):
     assert "Resumed argocd/app-a" in out
     assert "Resumed argocd/app-b" in out
     assert "patch failure" not in out
+
+
+def test_pause_scans_cluster_wide_for_operator_watched_namespaces(tmp_path):
+    """Pause mode must not miss ACM apps outside the Argo CD control plane namespace."""
+    state_file = tmp_path / "pause-state.json"
+
+    code, out = run_argocd_manage(
+        "--context",
+        "test-hub",
+        "--mode",
+        "pause",
+        "--state-file",
+        str(state_file),
+        env=mock_env(tmp_path, "pause_operator_watched_namespace"),
+    )
+
+    assert code == 0
+    assert "Paused team-gitops/managed-hub" in out
+
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    assert payload["apps"] == [
+        {
+            "namespace": "team-gitops",
+            "name": "managed-hub",
+            "original_sync_policy": {"automated": {"prune": True}},
+        }
+    ]
 
 
 def test_rejects_unsupported_target_value():

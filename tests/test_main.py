@@ -12,12 +12,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 # Add parent to path to import modules directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from acm_switchover import _run_phase_preflight, main, parse_args, run_switchover
+from acm_switchover import _report_argocd_acm_impact, _run_phase_preflight, main, parse_args, run_switchover
 from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
+from lib import argocd as argocd_lib
 
 
 @pytest.mark.unit
@@ -208,6 +210,24 @@ class TestArgParsing:
         ):
             with pytest.raises(SystemExit):
                 parse_args()
+
+    def test_argocd_resume_only_parses_without_method_or_old_hub_action(self):
+        """Standalone resume-only mode must not require switchover-only flags."""
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "p2",
+                "--argocd-resume-only",
+            ],
+        ):
+            args = parse_args()
+            assert args.argocd_resume_only is True
+            assert args.method is None
+            assert args.old_hub_action is None
 
 
 @pytest.mark.unit
@@ -688,6 +708,60 @@ class TestMainGitOpsReporting:
         collector.print_report.assert_called_once()
         state.add_error.assert_not_called()
 
+    def test_main_prints_gitops_report_on_argocd_resume_only_exception(self):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._run_argocd_resume_only", side_effect=RuntimeError("boom")
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        collector.print_report.assert_called_once()
+        state.add_error.assert_called_once_with("boom")
+
+    def test_main_prints_gitops_report_on_argocd_resume_only_success(self):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._run_argocd_resume_only", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
+
 
 @pytest.mark.unit
 class TestDecommissionAndSetupHelpers:
@@ -829,6 +903,27 @@ class TestPreflightPhase:
             argocd_manage=True,
         )
         report_argocd_impact.assert_called_once_with(primary, secondary, logger)
+
+    def test_report_argocd_impact_warns_instead_of_raising_on_list_failure(self):
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation", return_value=discovery), patch(
+            "acm_switchover.argocd_lib.list_argocd_applications",
+            side_effect=ApiException(status=403, reason="Forbidden"),
+        ):
+            _report_argocd_acm_impact(primary, secondary, logger)
+
+        assert logger.warning.call_count == 2
+        assert any(
+            "Unable to complete Argo CD check" in call.args[0] for call in logger.warning.call_args_list
+        )
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
@@ -972,7 +1067,7 @@ class TestArgocdResumeOnly:
                 skip_reason=argocd_lib.RESUME_SKIP_REASON_MARKER_MISMATCH,
             )
             assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
- 
+
     def test_resume_only_logs_malformed_state_entries(self, caplog):
         from acm_switchover import _run_argocd_resume_only
 

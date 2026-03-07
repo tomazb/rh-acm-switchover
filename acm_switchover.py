@@ -57,6 +57,10 @@ PhaseHandler = Callable[
 
 def parse_args():
     """Parse command line arguments."""
+    # Keep switchover/decommission CLI contracts intact while allowing
+    # --argocd-resume-only to run as a standalone mode.
+    resume_only_requested = "--argocd-resume-only" in sys.argv[1:]
+
     parser = argparse.ArgumentParser(
         description="ACM Hub Switchover Automation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -112,7 +116,7 @@ Examples:
     parser.add_argument(
         "--method",
         choices=["passive", "full"],
-        required=True,
+        required=not resume_only_requested,
         help="Switchover method: passive (continuous sync) or full (one-time restore)",
     )
 
@@ -164,7 +168,7 @@ Examples:
     parser.add_argument(
         "--old-hub-action",
         choices=["secondary", "decommission", "none"],
-        required=True,
+        required=not resume_only_requested,
         help=(
             "Action for old primary hub after switchover (REQUIRED): "
             "'secondary' sets up passive sync for failback capability, "
@@ -483,34 +487,41 @@ def _report_argocd_acm_impact(
 ) -> None:
     """Run Argo CD detection and log ACM-touching Applications on both hubs."""
     for label, client in (("Primary hub", primary), ("Secondary hub", secondary)):
-        discovery = argocd_lib.detect_argocd_installation(client)
-        if not discovery.has_applications_crd:
-            logger.info("[%s] Argo CD Applications CRD not found (skipping Argo CD check)", label)
-            continue
-        if discovery.install_type == "vanilla":
-            instances = "N/A (vanilla)"
-        else:
-            instances = str(len(discovery.argocd_instances or []))
-        logger.info(
-            "[%s] Argo CD: install_type=%s, argocd_instances=%s",
-            label,
-            discovery.install_type,
-            instances,
-        )
-        apps = argocd_lib.list_argocd_applications(client, namespaces=None)
-        acm_apps = argocd_lib.find_acm_touching_apps(apps)
-        if not acm_apps:
-            logger.info("[%s] No ACM-touching Argo CD Applications detected", label)
-            continue
-        logger.warning(
-            "[%s] ACM resources detected in %d Argo CD Application(s); pause/scope before switchover to avoid drift.",
-            label,
-            len(acm_apps),
-        )
-        for impact in acm_apps[:10]:
-            logger.warning("  - %s/%s (%d ACM resources)", impact.namespace, impact.name, impact.resource_count)
-        if len(acm_apps) > 10:
-            logger.warning("  ... and %d more", len(acm_apps) - 10)
+        try:
+            discovery = argocd_lib.detect_argocd_installation(client)
+            if not discovery.has_applications_crd:
+                logger.info("[%s] Argo CD Applications CRD not found (skipping Argo CD check)", label)
+                continue
+            if discovery.install_type == "vanilla":
+                instances = "N/A (vanilla)"
+            else:
+                instances = str(len(discovery.argocd_instances or []))
+            logger.info(
+                "[%s] Argo CD: install_type=%s, argocd_instances=%s",
+                label,
+                discovery.install_type,
+                instances,
+            )
+            apps = argocd_lib.list_argocd_applications(client, namespaces=None)
+            acm_apps = argocd_lib.find_acm_touching_apps(apps)
+            if not acm_apps:
+                logger.info("[%s] No ACM-touching Argo CD Applications detected", label)
+                continue
+            logger.warning(
+                "[%s] ACM resources detected in %d Argo CD Application(s); pause/scope before switchover to avoid drift.",
+                label,
+                len(acm_apps),
+            )
+            for impact in acm_apps[:10]:
+                logger.warning("  - %s/%s (%d ACM resources)", impact.namespace, impact.name, impact.resource_count)
+            if len(acm_apps) > 10:
+                logger.warning("  ... and %d more", len(acm_apps) - 10)
+        except Exception as e:
+            logger.warning(
+                "[%s] Unable to complete Argo CD check; continuing without blocking switchover: %s",
+                label,
+                e,
+            )
 
 
 def _run_phase_primary_prep(
@@ -805,17 +816,12 @@ def main():  # noqa: C901
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
         sys.exit(EXIT_FAILURE)
 
-    if getattr(args, "argocd_resume_only", False):
-        success = _run_argocd_resume_only(args, state, primary, secondary, logger)
-        if success:
-            logger.info("\n✓ Argo CD resume completed successfully!")
-            sys.exit(EXIT_SUCCESS)
-        logger.error("\n✗ Argo CD resume failed or had nothing to restore.")
-        sys.exit(EXIT_FAILURE)
-
     operation_exit_code = EXIT_FAILURE
     try:
-        success = _execute_operation(args, state, primary, secondary, logger)
+        if getattr(args, "argocd_resume_only", False):
+            success = _run_argocd_resume_only(args, state, primary, secondary, logger)
+        else:
+            success = _execute_operation(args, state, primary, secondary, logger)
     except KeyboardInterrupt:
         logger.warning("\n\nOperation interrupted by user")
         logger.info("State saved to: %s", args.state_file)
@@ -827,10 +833,16 @@ def main():  # noqa: C901
         operation_exit_code = EXIT_FAILURE
     else:
         if success:
-            logger.info("\n✓ Operation completed successfully!")
+            if getattr(args, "argocd_resume_only", False):
+                logger.info("\n✓ Argo CD resume completed successfully!")
+            else:
+                logger.info("\n✓ Operation completed successfully!")
             operation_exit_code = EXIT_SUCCESS
         else:
-            logger.error("\n✗ Operation failed!")
+            if getattr(args, "argocd_resume_only", False):
+                logger.error("\n✗ Argo CD resume failed or had nothing to restore.")
+            else:
+                logger.error("\n✗ Operation failed!")
             operation_exit_code = EXIT_FAILURE
     finally:
         # Print GitOps detection report if any markers were found
