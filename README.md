@@ -193,6 +193,7 @@ python acm_switchover.py --decommission \
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method` | Switchover method: `passive` or `full` (required) |
 | `--activation-method` | Activation option for passive method: `patch` (default) or `restore` |
+| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; must be non-negative (`0` = informational only) |
 | `--old-hub-action` | Action for old hub: `secondary` (**recommended** - enables reverse switchover), `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
