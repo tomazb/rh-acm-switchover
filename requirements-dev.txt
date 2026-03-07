@@ -24,8 +24,10 @@ filelock>=3.20.3; python_version >= "3.10"
 filelock>=3.0.0; python_version < "3.10"
 cryptography>=46.0.5; python_version >= "3.10"
 cryptography>=42.0.0; python_version < "3.10"
-# pillow>=12.1.1 fixes CVE-2026-25990 (out-of-bounds write in PSD handling)
-pillow>=12.1.1
+# Keep the highest available Pillow on each supported Python line.
+# Pillow 12.x drops Python 3.9 wheels, so CI needs a compatible floor there.
+pillow>=12.1.1; python_version >= "3.10"
+pillow>=11.3.0; python_version < "3.10"
 
 # Additional testing utilities
 coverage>=7.3.0
