@@ -675,6 +675,11 @@ class Finalization:
                     f"Post-switchover backup '{post_switchover_backup_name}' no longer exists; "
                     "cannot verify integrity"
                 )
+            if not self._is_acm_owned_backup(latest_backup):
+                raise SwitchoverError(
+                    f"Post-switchover backup '{post_switchover_backup_name}' is not ACM-owned; "
+                    "cannot verify integrity against an unrelated Velero backup"
+                )
             backup_name = post_switchover_backup_name
         else:
             logger.warning(
@@ -1090,13 +1095,16 @@ class Finalization:
             },
         }
 
-        self.primary.create_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
-            body=restore_body,
-            namespace=BACKUP_NAMESPACE,
-        )
+        try:
+            self.primary.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body=restore_body,
+                namespace=BACKUP_NAMESPACE,
+            )
+        except ApiException as e:
+            raise SwitchoverError("Failed to create passive sync restore on old primary hub") from e
         logger.info("Created passive sync restore on old primary hub")
 
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")

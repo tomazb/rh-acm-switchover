@@ -80,6 +80,10 @@ done
 # Configure GitOps detection
 if [[ $SKIP_GITOPS_CHECK -eq 1 ]]; then
     disable_gitops_detection
+    if [[ $ARGOCD_CHECK -eq 1 ]]; then
+        check_warn "--argocd-check ignored because --skip-gitops-check is set."
+        ARGOCD_CHECK=0
+    fi
 fi
 
 # Validate required arguments
@@ -580,7 +584,7 @@ else
 fi
 
 if [[ "$NEW_HUB_VERSION" == "unknown" ]]; then
-    check_fail "New hub: Could not determine ACM version. Skipping auto-import strategy check."
+    check_warn "New hub: Could not determine ACM version. Skipping auto-import strategy check."
 else
     # Check new hub auto-import strategy
     NEW_HUB_STRATEGY=$(get_auto_import_strategy "$NEW_HUB_CONTEXT")

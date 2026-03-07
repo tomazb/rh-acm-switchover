@@ -5,10 +5,14 @@ Tests cover StateManager, Phase enum, version comparison, and logging setup.
 """
 
 import os
-import fcntl
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - platform-specific
+    fcntl = None
 
 from lib.exceptions import StateLoadError, StateLockError
 from lib.utils import (
@@ -463,6 +467,7 @@ class TestStateLoadSafety:
         assert sm1.get_current_phase() == Phase.INIT
         assert sm2.get_current_phase() == Phase.INIT
 
+    @pytest.mark.skipif(fcntl is None, reason="fcntl unavailable on this platform")
     @patch("lib.utils.fcntl.flock")
     def test_conflicting_run_lock_raises_state_lock_error(self, mock_flock, tmp_path):
         """A conflicting OS-level lock should raise StateLockError during initialization."""

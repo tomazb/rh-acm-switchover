@@ -516,6 +516,34 @@ class TestMutatorIdempotency:
         mock_k8s_apis["custom_api"].create_namespaced_custom_object.assert_called_once()
         mock_k8s_apis["custom_api"].get_namespaced_custom_object.assert_called_once()
 
+    def test_create_custom_resource_409_uses_raw_reread_not_retry_wrapped_get(self, kube_client, mock_k8s_apis):
+        """409 reconciliation should not recurse through retry-wrapped get_custom_resource."""
+        body = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns"},
+            "spec": {"syncRestoreWithNewBackups": True},
+        }
+        existing = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns", "resourceVersion": "1"},
+            "spec": {"syncRestoreWithNewBackups": True},
+        }
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=409)
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = existing
+
+        with patch.object(kube_client, "get_custom_resource", side_effect=AssertionError("unexpected wrapper call")):
+            result = kube_client.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body=body,
+                namespace="test-ns",
+            )
+
+        assert result == existing
+
     def test_create_custom_resource_409_reraises_when_resource_absent(self, kube_client, mock_k8s_apis):
         """When create returns 409 but resource is not found on re-read, re-raise the 409."""
         mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=409)

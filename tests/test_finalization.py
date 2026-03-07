@@ -687,6 +687,29 @@ class TestFinalization:
         with pytest.raises(SwitchoverError, match="no longer exists"):
             finalization._verify_backup_integrity(max_age_seconds=600)
 
+    def test_verify_backup_integrity_fails_when_recorded_backup_is_not_acm_owned(
+        self, finalization, mock_secondary_client
+    ):
+        """Recorded backup names must still resolve to ACM-owned backups."""
+        backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "manual-backup", "creationTimestamp": backup_ts},
+            "status": {
+                "phase": "Completed",
+                "completionTimestamp": backup_ts,
+                "errors": 0,
+                "warnings": 0,
+            },
+        }
+        mock_secondary_client.get_pods.return_value = []
+        finalization._cached_schedules = []
+        finalization.state.get_config.side_effect = lambda key, default=None: (
+            "manual-backup" if key == "post_switchover_backup_name" else None
+        )
+
+        with pytest.raises(SwitchoverError, match="not ACM-owned"):
+            finalization._verify_backup_integrity(max_age_seconds=600)
+
     @patch("modules.finalization.wait_for_condition")
     def test_verify_backup_integrity_waits_for_completion(self, mock_wait, finalization, mock_secondary_client):
         """Backup integrity should wait for the recorded post-switchover backup to complete."""
@@ -1127,8 +1150,7 @@ class TestFinalization:
     def test_setup_old_hub_as_secondary_failure_propagates(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
-        """Failed passive restore creation on old hub must propagate as an exception, not log-and-continue."""
-        from kubernetes.client.rest import ApiException
+        """Failed passive restore creation on old hub must raise SwitchoverError with context."""
 
         primary = Mock()
         primary.get_custom_resource.return_value = None
@@ -1142,7 +1164,7 @@ class TestFinalization:
             old_hub_action="secondary",
         )
 
-        with pytest.raises(ApiException):
+        with pytest.raises(SwitchoverError, match="Failed to create passive sync restore on old primary hub"):
             fin._setup_old_hub_as_secondary()
 
     def test_cleanup_restore_resources_archives_before_deletion(

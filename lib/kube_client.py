@@ -551,6 +551,37 @@ class KubeClient:
             resource = self.custom_api.get_cluster_custom_object(group=group, version=version, plural=plural, name=name)
         return resource
 
+    def _get_custom_resource_raw(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        name: str,
+        namespace: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Read a custom resource once without the retry-wrapped public helper."""
+        self._validate_resource_inputs(namespace, name, "custom resource")
+
+        try:
+            if namespace:
+                return self.custom_api.get_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    name=name,
+                )
+            return self.custom_api.get_cluster_custom_object(
+                group=group,
+                version=version,
+                plural=plural,
+                name=name,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            raise
+
     @retry_api_call
     def list_custom_resources(
         self,
@@ -780,7 +811,7 @@ class KubeClient:
             if e.status == 409:
                 # The create may have succeeded server-side but timed out client-side,
                 # or another actor created the resource concurrently. Re-read to decide.
-                existing = self.get_custom_resource(
+                existing = self._get_custom_resource_raw(
                     group=group,
                     version=version,
                     plural=plural,

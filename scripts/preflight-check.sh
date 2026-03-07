@@ -86,6 +86,10 @@ done
 # Configure GitOps detection
 if [[ $SKIP_GITOPS_CHECK -eq 1 ]]; then
     disable_gitops_detection
+    if [[ $ARGOCD_CHECK -eq 1 ]]; then
+        check_warn "--argocd-check ignored because --skip-gitops-check is set."
+        ARGOCD_CHECK=0
+    fi
 fi
 
 # Validate required arguments
