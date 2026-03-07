@@ -269,6 +269,28 @@ class TestResumeAutosync:
         )
         assert argocd_lib.is_resume_noop(result) is False
 
+    def test_resume_recorded_applications_fails_unconfirmed_pause_entries(self):
+        logger = MagicMock()
+        summary = argocd_lib.resume_recorded_applications(
+            paused_apps=[
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app",
+                    "original_sync_policy": {"automated": {}},
+                    "pause_applied": False,
+                }
+            ],
+            run_id="run-1",
+            primary=MagicMock(),
+            secondary=MagicMock(),
+            logger=logger,
+        )
+
+        assert summary.failed == 1
+        assert summary.restored == 0
+        logger.warning.assert_called_with("  Skip %s/%s (pause state was recorded but not confirmed)", "argocd", "app")
+
 @pytest.mark.unit
 class TestDetectArgocdInstallation:
     """Test detect_argocd_installation."""

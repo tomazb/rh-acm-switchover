@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from lib import argocd as argocd_lib
 from modules.preflight_coordinator import PreflightValidator
 
 
@@ -55,9 +56,18 @@ def test_validate_all_passes_expected_argocd_rbac_mode(argocd_check, argocd_mana
     """Preflight should pass the correct Argo CD RBAC mode to RBAC validation."""
     validator = _build_validator(argocd_check=argocd_check, argocd_manage=argocd_manage)
 
+    discovery = argocd_lib.ArgocdDiscoveryResult(
+        has_applications_crd=True,
+        has_argocds_crd=False,
+        install_type="vanilla",
+    )
+
     with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
         "modules.preflight_coordinator.AutoImportStrategyValidator"
-    ) as auto_import_validator:
+    ) as auto_import_validator, patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        return_value=discovery,
+    ):
         auto_import_validator.return_value.run = Mock()
         passed, _config = validator.validate_all()
 
@@ -68,4 +78,34 @@ def test_validate_all_passes_expected_argocd_rbac_mode(argocd_check, argocd_mana
         include_decommission=False,
         skip_observability=False,
         argocd_mode=expected_mode,
+    )
+
+
+@pytest.mark.unit
+def test_validate_all_skips_argocd_rbac_when_applications_crd_missing():
+    """Argo CD RBAC expansion should be skipped when Argo CD is not installed."""
+    validator = _build_validator(argocd_check=True, argocd_manage=False)
+
+    discovery = argocd_lib.ArgocdDiscoveryResult(
+        has_applications_crd=False,
+        has_argocds_crd=False,
+        install_type="none",
+    )
+
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
+        "modules.preflight_coordinator.AutoImportStrategyValidator"
+    ) as auto_import_validator, patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        return_value=discovery,
+    ):
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is True
+    validate_rbac.assert_called_once_with(
+        primary_client=validator.primary,
+        secondary_client=validator.secondary,
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="none",
     )

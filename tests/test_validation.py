@@ -264,6 +264,7 @@ class TestCLIArgumentValidation:
             InputValidator.validate_all_cli_args(args)
         assert "argocd-resume-only" in str(exc_info.value).lower()
         assert "secondary-context" in str(exc_info.value).lower()
+        assert "switchover operations" not in str(exc_info.value).lower()
 
     def test_argocd_resume_only_with_secondary_context_passes(self):
         """--argocd-resume-only with --secondary-context passes validation."""

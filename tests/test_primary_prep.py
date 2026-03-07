@@ -197,13 +197,14 @@ class TestPrimaryPreparation:
 
         pause_autosync.assert_called_once()
 
-        paused_call = next(
+        paused_call = [
             call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
-        )
+        ][-1]
         paused_apps = paused_call.args[1]
         assert len(paused_apps) == 1
         assert paused_apps[0]["namespace"] == "argocd"
         assert paused_apps[0]["name"] == "app-1"
+        assert paused_apps[0]["pause_applied"] is True
 
     def test_pause_argocd_acm_apps_dry_run_records_apps(self, mock_primary_client, mock_state_manager):
         """Dry-run should still report and record ACM-touching apps as would-paused."""
@@ -247,11 +248,12 @@ class TestPrimaryPreparation:
 
             prep._pause_argocd_acm_apps()
 
-        paused_call = next(
+        paused_call = [
             call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
-        )
+        ][-1]
         paused_apps = paused_call.args[1]
         assert paused_apps[0]["dry_run"] is True
+        assert paused_apps[0]["pause_applied"] is False
 
         dry_run_call = next(
             call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_pause_dry_run"
@@ -349,17 +351,21 @@ class TestPrimaryPreparation:
             call for call in mock_state_manager.set_config.call_args_list
             if call.args[0] == "argocd_paused_apps"
         ]
-        assert len(paused_calls) == 2, "set_config must be called once per paused app"
+        assert len(paused_calls) == 4, "set_config must persist provisional and confirmed state for each app"
 
         first_list = paused_calls[0].args[1]
         second_list = paused_calls[1].args[1]
+        third_list = paused_calls[2].args[1]
+        fourth_list = paused_calls[3].args[1]
 
-        # Each call must carry a distinct list object (copies, not the same reference).
-        assert first_list is not second_list, "set_config must receive a copy each iteration, not the same list"
-        assert len(first_list) == 1
-        assert len(second_list) == 2
-        assert first_list[0]["name"] == "app-1"
-        assert second_list[1]["name"] == "app-2"
+        assert first_list is not second_list
+        assert second_list is not third_list
+        assert third_list is not fourth_list
+        assert first_list[0]["pause_applied"] is False
+        assert second_list[0]["pause_applied"] is True
+        assert len(third_list) == 2
+        assert third_list[1]["pause_applied"] is False
+        assert fourth_list[1]["pause_applied"] is True
 
     def test_pause_argocd_acm_apps_raises_on_patch_failure(self, mock_primary_client, mock_state_manager):
         """Patch failures must fail the Argo CD pause step instead of being treated as no-op."""
@@ -405,6 +411,64 @@ class TestPrimaryPreparation:
         ):
             with pytest.raises(SwitchoverError, match="pause failed for 1"):
                 prep._pause_argocd_acm_apps()
+
+        paused_calls = [
+            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
+        ]
+        assert paused_calls[-1].args == ("argocd_paused_apps", [])
+
+    def test_pause_argocd_acm_apps_recovers_pending_entry_when_app_already_paused(
+        self, mock_primary_client, mock_state_manager
+    ):
+        """Retry should confirm a previously recorded pause when the live app is already missing automated sync."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=False,
+            argocd_manage=True,
+        )
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app-1",
+                    "original_sync_policy": {"automated": {"prune": True}},
+                    "pause_applied": False,
+                }
+            ],
+        }.get(key, default)
+
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app-1"},
+            "spec": {"syncPolicy": {"syncOptions": ["CreateNamespace=true"]}},
+            "status": {"resources": [{"kind": "Restore", "namespace": "open-cluster-management-backup"}]},
+        }
+        impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
+
+        with (
+            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+        ):
+            prep._pause_argocd_acm_apps()
+
+        pause_autosync.assert_not_called()
+        paused_call = [
+            call for call in mock_state_manager.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
+        ][-1]
+        paused_apps = paused_call.args[1]
+        assert paused_apps[0]["pause_applied"] is True
+        assert paused_apps[0]["original_sync_policy"] == {"automated": {"prune": True}}
 
     def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client):
         """Test pausing backup schedule for ACM 2.12+."""

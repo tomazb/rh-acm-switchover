@@ -393,17 +393,27 @@ class TestStateLoadSafety:
             StateManager(str(state_file))
 
     def test_corrupt_file_is_preserved_not_deleted(self, tmp_path):
-        """The corrupt state file must be renamed for forensics, not silently deleted."""
+        """The corrupt state file must remain in place while a forensic copy is created."""
         state_file = tmp_path / "state.json"
         state_file.write_text("{invalid}")
 
         with pytest.raises(StateLoadError):
             StateManager(str(state_file))
 
-        # Original file should be gone (renamed), but a .corrupt.* file should exist
-        assert not state_file.exists(), "Original file should have been renamed"
+        assert state_file.exists(), "Original corrupt file should keep blocking reuse"
         corrupt_files = list(tmp_path.glob("state.json.corrupt.*"))
         assert len(corrupt_files) == 1, f"Expected one .corrupt.* file, found: {corrupt_files}"
+
+    def test_corrupt_file_continues_blocking_until_removed(self, tmp_path):
+        """The same corrupt state path must keep failing until the operator resets it."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{invalid}")
+
+        with pytest.raises(StateLoadError):
+            StateManager(str(state_file))
+
+        with pytest.raises(StateLoadError):
+            StateManager(str(state_file))
 
     def test_unreadable_file_raises_state_load_error(self, tmp_path):
         """An unreadable state file must raise StateLoadError."""
@@ -742,6 +752,31 @@ class TestDryRunSkipDecorator:
 
         assert result == "a-b-c"
         assert obj.received_args == ("a", "b", "c")
+
+    def test_decorator_callable_return_value_supports_keyword_invocation(self):
+        """Callable return_value should receive the original keyword-based call shape."""
+
+        class Client:
+            def __init__(self):
+                self.dry_run = True
+
+        @dry_run_skip(
+            message="Keyword invocation",
+            return_value=lambda client, app=None, run_id=None: (client, app, run_id),
+        )
+        def pause_like_function(client, app=None, run_id=None):
+            return "executed"
+
+        client = Client()
+        returned_client, returned_app, returned_run_id = pause_like_function(
+            client=client,
+            app={"metadata": {"name": "app-1"}},
+            run_id="run-1",
+        )
+
+        assert returned_client is client
+        assert returned_app == {"metadata": {"name": "app-1"}}
+        assert returned_run_id == "run-1"
 
     def test_decorator_default_return_value_is_none(self):
         """Test decorator returns None by default when skipping."""

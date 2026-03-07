@@ -374,13 +374,18 @@ class InputValidator:
             if args.min_managed_clusters < 0:
                 raise ValidationError("--min-managed-clusters must be a non-negative integer")
 
-        # Validate that secondary context is provided when not in decommission or setup mode
         is_decommission = hasattr(args, "decommission") and args.decommission
         is_setup = hasattr(args, "setup") and args.setup
-        if not is_decommission and not is_setup:
+        has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
+        has_argocd_resume_after = (
+            hasattr(args, "argocd_resume_after_switchover") and args.argocd_resume_after_switchover
+        )
+        has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
+        has_validate_only = hasattr(args, "validate_only") and args.validate_only
+
+        # Validate that secondary context is provided when not in decommission or setup mode
+        if not is_decommission and not is_setup and not has_argocd_resume_only:
             if hasattr(args, "secondary_context") and not args.secondary_context:
-                if hasattr(args, "argocd_resume_only") and args.argocd_resume_only:
-                    raise ValidationError("--argocd-resume-only requires --secondary-context to resolve state file")
                 raise ValidationError("secondary-context is required for switchover operations")
 
         # Validate activation-method combinations
@@ -403,12 +408,6 @@ class InputValidator:
                 raise ValidationError("--disable-observability-on-secondary requires --old-hub-action secondary")
 
         # Validate Argo CD argument combinations
-        has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
-        has_argocd_resume_after = (
-            hasattr(args, "argocd_resume_after_switchover") and args.argocd_resume_after_switchover
-        )
-        has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
-        has_validate_only = hasattr(args, "validate_only") and args.validate_only
 
         if has_argocd_resume_after:
             if has_argocd_resume_only:

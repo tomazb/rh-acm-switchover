@@ -331,6 +331,10 @@ def resume_recorded_applications(
             summary.failed += 1
             logger.warning("  Skip %s/%s (pause was dry-run only)", ns, name)
             continue
+        if not entry.get("pause_applied", True):
+            summary.failed += 1
+            logger.warning("  Skip %s/%s (pause state was recorded but not confirmed)", ns, name)
+            continue
         if not all([hub, ns, name, original_sync_policy is not None]):
             summary.failed += 1
             logger.warning("  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)", hub, ns, name)

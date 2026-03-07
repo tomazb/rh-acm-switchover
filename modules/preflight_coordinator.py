@@ -5,6 +5,7 @@
 import logging
 from typing import Tuple, TypedDict
 
+from lib import argocd as argocd_lib
 from lib.constants import OBSERVABILITY_NAMESPACE
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
@@ -80,6 +81,23 @@ class PreflightValidator:
             return "check"
         return "none"
 
+    def _get_effective_argocd_rbac_mode(self) -> str:
+        """Require Argo CD RBAC only when Applications CRD exists on at least one hub."""
+        requested_mode = self._get_argocd_rbac_mode()
+        if requested_mode == "none":
+            return "none"
+
+        for client, hub_label in ((self.primary, "primary"), (self.secondary, "secondary")):
+            if client is None:
+                continue
+            discovery = argocd_lib.detect_argocd_installation(client)
+            if discovery.has_applications_crd:
+                return requested_mode
+            logger.info("Argo CD Applications CRD not found on %s hub", hub_label)
+
+        logger.info("Argo CD Applications CRD not found on either hub, skipping Argo CD RBAC permission checks")
+        return "none"
+
     def validate_all(self) -> Tuple[bool, PreflightConfig]:
         """Run all validation checks and return pass/fail with detected config."""
 
@@ -106,7 +124,7 @@ class PreflightValidator:
                     secondary_client=self.secondary,
                     include_decommission=False,  # Checked separately if needed
                     skip_observability=skip_obs,
-                    argocd_mode=self._get_argocd_rbac_mode(),
+                    argocd_mode=self._get_effective_argocd_rbac_mode(),
                 )
                 self.reporter.add_result(
                     "RBAC Permissions",

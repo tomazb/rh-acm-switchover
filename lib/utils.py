@@ -4,10 +4,12 @@ Common utilities for ACM switchover automation.
 
 import atexit
 import functools
+import inspect
 import json
 import logging
 import os
 import signal
+import shutil
 import stat
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -64,10 +66,16 @@ def dry_run_skip(
     """
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        first_param_name = next(iter(inspect.signature(func).parameters), None)
+
         @functools.wraps(func)
-        def wrapper(self, *args, **kwargs) -> T:
+        def wrapper(*args, **kwargs) -> T:
             # Navigate through dot-separated attribute path
-            obj = self
+            root = args[0] if args else None
+            if root is None and first_param_name:
+                root = kwargs.get(first_param_name)
+
+            obj = root
             for attr_name in dry_run_attr.split("."):
                 obj = getattr(obj, attr_name, None)
                 if obj is None:
@@ -78,10 +86,10 @@ def dry_run_skip(
                 logger = logging.getLogger("acm_switchover")
                 logger.info("[DRY-RUN] %s", message)
                 if callable(return_value):
-                    return return_value(self, *args, **kwargs)
+                    return return_value(*args, **kwargs)
                 return return_value
 
-            return func(self, *args, **kwargs)
+            return func(*args, **kwargs)
 
         return wrapper
 
@@ -213,8 +221,9 @@ class StateManager:
         """Load state from file, or create a new state file when none exists.
 
         Raises StateLoadError if the file exists but cannot be read or parsed.
-        The corrupt file is preserved (renamed to *.corrupt.<timestamp>) so that
-        operators can inspect it.  Never silently replaces a corrupt state file —
+        The corrupt file is preserved (copied to *.corrupt.<timestamp>) so that
+        operators can inspect it while the original path continues blocking reuse.
+        Never silently replaces a corrupt state file —
         that would risk replaying mutations that were already applied to a real hub.
         """
         if not os.path.exists(self.state_file):
@@ -241,15 +250,21 @@ class StateManager:
             ) from e
 
     def _preserve_corrupt_state_file(self) -> str:
-        """Rename the corrupt state file to *.corrupt.<timestamp> for forensics.
+        """Copy the corrupt state file to *.corrupt.<timestamp> for forensics.
 
-        Returns the path of the renamed file, or the original path if renaming fails.
+        Returns the path of the forensic copy, or the original path if copying fails.
         """
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         corrupt_path = f"{self.state_file}.corrupt.{ts}"
         try:
-            os.rename(self.state_file, corrupt_path)
-        except OSError:
+            shutil.copy2(self.state_file, corrupt_path)
+        except OSError as exc:
+            logging.getLogger("acm_switchover").warning(
+                "Failed to preserve corrupt state file %s at %s: %s",
+                self.state_file,
+                corrupt_path,
+                exc,
+            )
             corrupt_path = self.state_file
         return corrupt_path
 
