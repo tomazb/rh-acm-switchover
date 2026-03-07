@@ -15,6 +15,11 @@ if [[ -n "${_LIB_COMMON_LOADED:-}" ]]; then
 fi
 _LIB_COMMON_LOADED=1
 
+if (( ${BASH_VERSINFO[0]:-0} < 4 )); then
+    echo "Error: ACM switchover scripts require Bash 4 or newer." >&2
+    return 1 2>/dev/null || exit 1
+fi
+
 # =============================================================================
 # Colors for output
 # =============================================================================

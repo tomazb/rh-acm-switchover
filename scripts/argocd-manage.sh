@@ -266,14 +266,14 @@ run_pause() {
 run_resume() {
     if [[ ! -f "$STATE_FILE" ]]; then
         echo "Error: State file not found: $STATE_FILE" >&2
-        exit 1
+        return 1
     fi
     local run_id state_context
     run_id=$(jq -r '.run_id // empty' "$STATE_FILE")
     state_context=$(jq -r '.context // empty' "$STATE_FILE")
     if [[ -z "$run_id" ]]; then
         echo "Error: Invalid state file (missing run_id)" >&2
-        exit 1
+        return 1
     fi
     if [[ "$state_context" != "$CONTEXT" ]]; then
         echo "Warning: State file context '$state_context' != current --context '$CONTEXT'. Proceeding anyway."
@@ -334,7 +334,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
     echo "[DRY-RUN] No changes will be made."
 fi
 if [[ "$MODE" == "pause" ]]; then
-    run_pause
+    run_pause || exit 1
 else
-    run_resume
+    run_resume || exit 1
 fi

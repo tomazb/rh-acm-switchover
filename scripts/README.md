@@ -8,6 +8,8 @@ These scripts automate the validation process before and after switchover, ensur
 
 > ⚠️ **Safety note:** Some utilities mutate cluster state. Review usage and required credentials/state files before running in production.
 
+> **Shell requirement:** These scripts require Bash 4 or newer because shared helpers use associative arrays.
+
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
 | [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
