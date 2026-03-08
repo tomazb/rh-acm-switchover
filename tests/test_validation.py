@@ -375,6 +375,37 @@ class TestCLIArgumentValidation:
         assert "include-decommission" in str(exc_info.value).lower()
         assert "role" in str(exc_info.value).lower()
 
+    def test_include_decommission_requires_setup(self):
+        """--include-decommission should be rejected outside setup mode."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            include_decommission=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "include-decommission" in str(exc_info.value).lower()
+        assert "setup" in str(exc_info.value).lower()
+
+    def test_setup_include_decommission_allows_operator_role(self):
+        """Operator-capable setup should accept --include-decommission."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            setup=True,
+            admin_kubeconfig=".state/admin.kubeconfig",
+            role="operator",
+            include_decommission=True,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
     def test_argocd_manage_rejects_resume_only(self):
         """--argocd-manage cannot be combined with --argocd-resume-only."""
         args = MockArgs(
@@ -698,7 +729,9 @@ class TestSanitization:
 
         for input_str, expected in test_cases:
             result = InputValidator.sanitize_context_identifier(input_str)
-            assert result == expected, f"Expected '{expected}', got '{result}' for input '{input_str}'"
+            assert (
+                result == expected
+            ), f"Expected '{expected}', got '{result}' for input '{input_str}'"
 
 
 class TestErrorHandling:

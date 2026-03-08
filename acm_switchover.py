@@ -29,13 +29,18 @@ from lib import (
     StateManager,
     __version__,
     __version_date__,
-    validate_rbac_permissions,
 )
 from lib import argocd as argocd_lib
 from lib import (
     setup_logging,
+    validate_rbac_permissions,
 )
-from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, STALE_STATE_THRESHOLD
+from lib.constants import (
+    EXIT_FAILURE,
+    EXIT_INTERRUPT,
+    EXIT_SUCCESS,
+    STALE_STATE_THRESHOLD,
+)
 from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
 from lib.validation import InputValidator, ValidationError
@@ -88,7 +93,9 @@ Examples:
     )
 
     # Context arguments
-    parser.add_argument("--primary-context", required=True, help="Kubernetes context for primary hub")
+    parser.add_argument(
+        "--primary-context", required=True, help="Kubernetes context for primary hub"
+    )
     parser.add_argument(
         "--secondary-context",
         help="Kubernetes context for secondary hub (required for switchover)",
@@ -106,7 +113,9 @@ Examples:
         action="store_true",
         help="Show planned actions without executing them",
     )
-    mode_group.add_argument("--decommission", action="store_true", help="Decommission old hub (interactive)")
+    mode_group.add_argument(
+        "--decommission", action="store_true", help="Decommission old hub (interactive)"
+    )
     mode_group.add_argument(
         "--setup",
         action="store_true",
@@ -271,9 +280,13 @@ Examples:
     )
 
     # Logging
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument(
-        "--force", action="store_true", help="Force execution even with stale state file (use with caution)"
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force execution even with stale state file (use with caution)",
     )
     parser.add_argument(
         "--log-format",
@@ -297,10 +310,14 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         if not getattr(args, "state_file", None):
             env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
             if env_state_dir and env_state_dir.strip():
-                InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
+                InputValidator.validate_safe_filesystem_path(
+                    env_state_dir.strip(), STATE_DIR_ENV_VAR
+                )
         else:
             # Validate user-specified state file path to prevent unsafe locations
-            InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
+            InputValidator.validate_safe_filesystem_path(
+                args.state_file, "--state-file"
+            )
 
     except ValidationError as e:
         logger.error("Validation error: %s", str(e))
@@ -345,18 +362,25 @@ def run_switchover(
             logger.warning("  3. Or use: --force to override (use with caution)")
             logger.warning("")
             if not getattr(args, "force", False):
-                logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
+                logger.error(
+                    "Use --force to proceed with stale state, or remove/reset state file to start fresh."
+                )
                 sys.exit(EXIT_FAILURE)
             logger.warning("--force used: Resetting state to start fresh switchover")
             state.reset()
         else:
-            logger.info("Switchover already completed (state age: %s)", f"{int(state_age.total_seconds() // 60)} minutes")
+            logger.info(
+                "Switchover already completed (state age: %s)",
+                f"{int(state_age.total_seconds() // 60)} minutes",
+            )
             return True
     elif current_phase == Phase.FAILED:
         # Handle resume from failed state - determine which phase to retry
         last_error_phase = state.get_last_error_phase()
         errors = state.get_errors()
-        last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+        last_error_msg = (
+            errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+        )
 
         logger.info("")
         logger.info("⚠️  RESUMING FROM FAILED STATE")
@@ -382,20 +406,31 @@ def run_switchover(
             logger.warning("  3. Or use: --force to reset and retry from beginning")
             logger.warning("")
             if not getattr(args, "force", False):
-                logger.error("Use --force to reset state and retry, or remove state file to start fresh.")
+                logger.error(
+                    "Use --force to reset state and retry, or remove state file to start fresh."
+                )
                 sys.exit(EXIT_FAILURE)
             logger.warning("--force used: Resetting state to start fresh switchover")
             state.reset()
 
     if args.validate_only:
-        return _run_phase_preflight(args, state, primary, secondary, logger)
+        saved_phase = state.get_current_phase()
+        try:
+            return _run_phase_preflight(args, state, primary, secondary, logger)
+        finally:
+            state.set_phase(saved_phase)
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
         (_run_phase_primary_prep, (Phase.PREFLIGHT, Phase.PRIMARY_PREP)),
         (
             _run_phase_activation,
-            (Phase.PREFLIGHT, Phase.PRIMARY_PREP, Phase.SECONDARY_VERIFY, Phase.ACTIVATION),
+            (
+                Phase.PREFLIGHT,
+                Phase.PRIMARY_PREP,
+                Phase.SECONDARY_VERIFY,
+                Phase.ACTIVATION,
+            ),
         ),
         (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION)),
         (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION)),
@@ -426,7 +461,9 @@ def run_switchover(
     logger.info("\n" + "=" * 60)
     logger.info("SWITCHOVER COMPLETED SUCCESSFULLY!")
     logger.info("=" * 60)
-    logger.info("\nSwitchover completed at: %s", datetime.now().astimezone().isoformat())
+    logger.info(
+        "\nSwitchover completed at: %s", datetime.now().astimezone().isoformat()
+    )
     logger.info("State file: %s", args.state_file)
     logger.info("\nNext steps:")
     logger.info("  1. Inform stakeholders that switchover is complete")
@@ -440,9 +477,10 @@ def run_switchover(
 def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
     """Record a phase failure with consistent error metadata and return False.
 
-    Guarantees that every path to Phase.FAILED also records an error entry
-    with the current phase name, so resume logic can always determine which
-    phase to retry without requiring --force.
+    Ensures every transition to Phase.FAILED leaves an error entry for the
+    current phase, reusing the existing last entry when the same phase was
+    already recorded. This keeps resume logic deterministic without adding
+    duplicate same-phase errors.
     """
     logger.error(message)
     current_phase = state.get_current_phase().value
@@ -464,7 +502,9 @@ def _run_phase_preflight(
 
     state.set_phase(Phase.PREFLIGHT)
 
-    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(args, "validate_only", False)
+    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(
+        args, "validate_only", False
+    )
     validator = PreflightValidator(
         primary,
         secondary,
@@ -477,7 +517,9 @@ def _run_phase_preflight(
     passed, config = validator.validate_all()
 
     if not passed:
-        return _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
+        return _fail_phase(
+            state, "Pre-flight validation failed! Cannot proceed.", logger
+        )
 
     state.set_config("primary_version", config["primary_version"])
     state.set_config("secondary_version", config["secondary_version"])
@@ -490,8 +532,13 @@ def _run_phase_preflight(
         config["secondary_observability_detected"],
     )
 
-    primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
-    secondary_obs_enabled = config["secondary_observability_detected"] and not args.skip_observability_checks
+    primary_obs_enabled = (
+        config["primary_observability_detected"] and not args.skip_observability_checks
+    )
+    secondary_obs_enabled = (
+        config["secondary_observability_detected"]
+        and not args.skip_observability_checks
+    )
 
     state.set_config("primary_has_observability", primary_obs_enabled)
     state.set_config("secondary_has_observability", secondary_obs_enabled)
@@ -518,7 +565,10 @@ def _report_argocd_acm_impact(
         try:
             discovery = argocd_lib.detect_argocd_installation(client)
             if not discovery.has_applications_crd:
-                logger.info("[%s] Argo CD Applications CRD not found (skipping Argo CD check)", label)
+                logger.info(
+                    "[%s] Argo CD Applications CRD not found (skipping Argo CD check)",
+                    label,
+                )
                 continue
             if discovery.install_type == "vanilla":
                 instances = "N/A (vanilla)"
@@ -541,7 +591,12 @@ def _report_argocd_acm_impact(
                 len(acm_apps),
             )
             for impact in acm_apps[:10]:
-                logger.warning("  - %s/%s (%d ACM resources)", impact.namespace, impact.name, impact.resource_count)
+                logger.warning(
+                    "  - %s/%s (%d ACM resources)",
+                    impact.namespace,
+                    impact.name,
+                    impact.resource_count,
+                )
             if len(acm_apps) > 10:
                 logger.warning("  ... and %d more", len(acm_apps) - 10)
         except Exception as e:
@@ -650,7 +705,9 @@ def _run_phase_finalization(
         old_hub_action=args.old_hub_action,
         manage_auto_import_strategy=args.manage_auto_import_strategy,
         disable_observability_on_secondary=args.disable_observability_on_secondary,
-        argocd_resume_after_switchover=getattr(args, "argocd_resume_after_switchover", False),
+        argocd_resume_after_switchover=getattr(
+            args, "argocd_resume_after_switchover", False
+        ),
     )
 
     if not finalization.finalize():
@@ -680,7 +737,10 @@ def run_decommission(
 
     has_observability = primary.namespace_exists(OBSERVABILITY_NAMESPACE)
     if has_observability:
-        logger.info("Observability detected on hub (namespace %s exists)", OBSERVABILITY_NAMESPACE)
+        logger.info(
+            "Observability detected on hub (namespace %s exists)",
+            OBSERVABILITY_NAMESPACE,
+        )
 
     if not getattr(args, "skip_rbac_validation", False):
         try:
@@ -706,7 +766,9 @@ def run_decommission(
     )
 
     if args.dry_run:
-        logger.info("[DRY-RUN] Starting decommission workflow (no changes will be made)")
+        logger.info(
+            "[DRY-RUN] Starting decommission workflow (no changes will be made)"
+        )
     else:
         logger.info("Starting decommission workflow")
 
@@ -769,7 +831,9 @@ def run_setup(
     logger.info("  Role: %s", args.role)
     logger.info("  Token duration: %s", args.token_duration)
     logger.info("  Output directory: %s", args.output_dir)
-    logger.info("  Include decommission RBAC: %s", getattr(args, "include_decommission", False))
+    logger.info(
+        "  Include decommission RBAC: %s", getattr(args, "include_decommission", False)
+    )
 
     try:
         result = subprocess.run(  # nosec B603
@@ -929,7 +993,9 @@ def _get_default_state_dir() -> str:
     return ".state"
 
 
-def _resolve_state_file(requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]) -> str:
+def _resolve_state_file(
+    requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]
+) -> str:
     """Derive the state file path based on contexts unless user provided one."""
     if requested_path:
         return requested_path
@@ -956,10 +1022,18 @@ def _run_argocd_resume_only(
     run_id = state.get_config("argocd_run_id")
     paused_apps = state.get_config("argocd_paused_apps") or []
     if not run_id or not paused_apps:
-        logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
+        logger.error(
+            "No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing)."
+        )
         return False
-    logger.info("Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))", run_id, len(paused_apps))
-    summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, primary, secondary, logger)
+    logger.info(
+        "Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))",
+        run_id,
+        len(paused_apps),
+    )
+    summary = argocd_lib.resume_recorded_applications(
+        paused_apps, run_id, primary, secondary, logger
+    )
     logger.info(
         "Restored %d and already resumed %d of %d Application(s).",
         summary.restored,
@@ -967,7 +1041,9 @@ def _run_argocd_resume_only(
         len(paused_apps),
     )
     if summary.failed:
-        logger.error("Argo CD auto-sync restore failed for %d Application(s).", summary.failed)
+        logger.error(
+            "Argo CD auto-sync restore failed for %d Application(s).", summary.failed
+        )
         return False
     return True
 

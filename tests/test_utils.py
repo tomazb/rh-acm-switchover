@@ -159,7 +159,11 @@ class TestStateManager:
         """Test get_last_error_phase handles invalid phase gracefully."""
         # Manually add an error with an invalid phase
         state_manager.state["errors"].append(
-            {"error": "Test error", "phase": "invalid_phase", "timestamp": "2026-01-29T12:00:00+00:00"}
+            {
+                "error": "Test error",
+                "phase": "invalid_phase",
+                "timestamp": "2026-01-29T12:00:00+00:00",
+            }
         )
 
         result = state_manager.get_last_error_phase()
@@ -168,7 +172,9 @@ class TestStateManager:
     def test_get_last_error_phase_missing_phase_field(self, state_manager):
         """Test get_last_error_phase handles missing phase field."""
         # Manually add an error without phase field
-        state_manager.state["errors"].append({"error": "Test error", "timestamp": "2026-01-29T12:00:00+00:00"})
+        state_manager.state["errors"].append(
+            {"error": "Test error", "timestamp": "2026-01-29T12:00:00+00:00"}
+        )
 
         result = state_manager.get_last_error_phase()
         assert result is None
@@ -355,7 +361,9 @@ class TestStateManager:
         age = sm.get_state_age()
 
         assert age is None
-        mock_logging.warning.assert_called_with("State file missing last_updated timestamp")
+        mock_logging.warning.assert_called_with(
+            "State file missing last_updated timestamp"
+        )
 
     @patch("lib.utils.logging")
     def test_get_state_age_malformed_timestamp(self, mock_logging, tmp_path):
@@ -406,7 +414,9 @@ class TestStateLoadSafety:
 
         assert state_file.exists(), "Original corrupt file should keep blocking reuse"
         corrupt_files = list(tmp_path.glob("state.json.corrupt.*"))
-        assert len(corrupt_files) == 1, f"Expected one .corrupt.* file, found: {corrupt_files}"
+        assert (
+            len(corrupt_files) == 1
+        ), f"Expected one .corrupt.* file, found: {corrupt_files}"
 
     def test_corrupt_file_continues_blocking_until_removed(self, tmp_path):
         """The same corrupt state path must keep failing until the operator resets it."""
@@ -514,6 +524,25 @@ class TestPhaseResumeMetadata:
         errors = sm.get_errors()
         assert len(errors) == 1
         assert errors[0]["phase"] == Phase.ACTIVATION.value
+
+    def test_fail_phase_helper_reuses_existing_same_phase_error(self, tmp_path):
+        """_fail_phase should not append another error when the last one is already for this phase."""
+        import logging
+
+        import acm_switchover
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+        sm.add_error("first failure", phase=Phase.ACTIVATION.value)
+
+        logger = logging.getLogger("test")
+        result = acm_switchover._fail_phase(sm, "second failure", logger)
+
+        assert result is False
+        assert sm.get_current_phase() == Phase.FAILED
+        errors = sm.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["error"] == "first failure"
 
     def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
         """After a phase failure, get_last_error_phase returns the phase to retry."""
@@ -982,7 +1011,9 @@ class TestStepContext:
         with state_manager.step("logged_step", mock_logger) as should_run:
             pass
 
-        mock_logger.info.assert_called_once_with("Step already completed: %s", "logged_step")
+        mock_logger.info.assert_called_once_with(
+            "Step already completed: %s", "logged_step"
+        )
         assert should_run is False
 
     def test_step_not_marked_on_exception(self, state_manager):

@@ -97,8 +97,8 @@ Updated static and Helm RBAC manifests:
 
 - `deploy/rbac/clusterrole.yaml` and the Helm operator ClusterRole template now keep baseline operator access non-destructive by default.
 - Added opt-in decommission-only cluster-scoped delete permissions in:
-  - `deploy/rbac/clusterrole-decommission.yaml`
-  - `deploy/rbac/clusterrolebinding-decommission.yaml`
+  - `deploy/rbac/extensions/decommission/clusterrole.yaml`
+  - `deploy/rbac/extensions/decommission/clusterrolebinding.yaml`
 - Added Helm support for the same split via `rbac.includeDecommissionClusterRole`.
 - Updated RBAC documentation to distinguish baseline switchover access from explicit decommission escalation.
 
