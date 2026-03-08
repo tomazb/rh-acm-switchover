@@ -739,6 +739,34 @@ class TestFinalization:
         ):
             fin._ensure_auto_import_default()
 
+    def test_ensure_auto_import_default_handles_404_on_delete(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Deleting an already-absent configmap should succeed idempotently."""
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+        )
+        mock_secondary_client.get_configmap.return_value = {
+            "data": {
+                finalization_module.AUTO_IMPORT_STRATEGY_KEY: finalization_module.AUTO_IMPORT_STRATEGY_SYNC
+            }
+        }
+        mock_secondary_client.delete_configmap.side_effect = ApiException(
+            status=404, reason="Not Found"
+        )
+        mock_state_manager.get_config.side_effect = lambda key, default=None: (
+            True if key == "auto_import_strategy_set" else default
+        )
+
+        # Should NOT raise — 404 is a successful no-op
+        fin._ensure_auto_import_default()
+        mock_state_manager.set_config.assert_any_call("auto_import_strategy_set", False)
+        mock_state_manager.mark_step_completed.assert_any_call(
+            "reset_auto_import_strategy"
+        )
+
     def test_ensure_auto_import_default_warns_and_skips_when_lookup_fails(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
     ):

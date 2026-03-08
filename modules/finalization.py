@@ -1738,10 +1738,17 @@ class Finalization:
                     MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM
                 )
             except ApiException as e:
-                raise SwitchoverError(
-                    "Failed to reset autoImportStrategy to default by deleting "
-                    f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
-                ) from e
+                if getattr(e, "status", None) == 404:
+                    logger.debug(
+                        "ConfigMap %s/%s already absent",
+                        MCE_NAMESPACE,
+                        IMPORT_CONTROLLER_CONFIG_CM,
+                    )
+                else:
+                    raise SwitchoverError(
+                        "Failed to reset autoImportStrategy to default by deleting "
+                        f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
+                    ) from e
             self.state.set_config("auto_import_strategy_set", False)
             # Mark step completed (idempotent - no-op if already completed)
             self.state.mark_step_completed("reset_auto_import_strategy")
