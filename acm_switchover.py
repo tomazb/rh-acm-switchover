@@ -29,6 +29,7 @@ from lib import (
     StateManager,
     __version__,
     __version_date__,
+    validate_rbac_permissions,
 )
 from lib import argocd as argocd_lib
 from lib import (
@@ -203,6 +204,14 @@ Examples:
         "--skip-kubeconfig-generation",
         action="store_true",
         help="Skip kubeconfig generation during setup (deploy RBAC only)",
+    )
+    setup_group.add_argument(
+        "--include-decommission",
+        action="store_true",
+        help=(
+            "With --setup, also deploy and validate the optional decommission RBAC extension "
+            "needed for old-hub teardown."
+        ),
     )
 
     # Optional features
@@ -461,6 +470,7 @@ def _run_phase_preflight(
         secondary,
         args.method,
         skip_rbac_validation=args.skip_rbac_validation,
+        include_decommission=args.old_hub_action == "decommission",
         argocd_check=getattr(args, "argocd_check", False),
         argocd_manage=effective_argocd_manage,
     )
@@ -672,6 +682,23 @@ def run_decommission(
     if has_observability:
         logger.info("Observability detected on hub (namespace %s exists)", OBSERVABILITY_NAMESPACE)
 
+    if not getattr(args, "skip_rbac_validation", False):
+        try:
+            validate_rbac_permissions(
+                primary_client=primary,
+                include_decommission=True,
+                skip_observability=not has_observability,
+            )
+        except ValidationError as exc:
+            logger.error("RBAC validation failed: %s", exc)
+            logger.warning(
+                "Decommission requires the opt-in decommission RBAC extension. "
+                "You can skip this check with --skip-rbac-validation if you have already verified permissions."
+            )
+            return False
+    else:
+        logger.info("RBAC validation skipped (--skip-rbac-validation specified)")
+
     decom = Decommission(
         primary,
         has_observability,
@@ -731,6 +758,9 @@ def run_setup(
     if args.skip_kubeconfig_generation:
         cmd.append("--skip-kubeconfig")
 
+    if getattr(args, "include_decommission", False):
+        cmd.append("--include-decommission")
+
     if args.dry_run:
         cmd.append("--dry-run")
 
@@ -739,6 +769,7 @@ def run_setup(
     logger.info("  Role: %s", args.role)
     logger.info("  Token duration: %s", args.token_duration)
     logger.info("  Output directory: %s", args.output_dir)
+    logger.info("  Include decommission RBAC: %s", getattr(args, "include_decommission", False))
 
     try:
         result = subprocess.run(  # nosec B603

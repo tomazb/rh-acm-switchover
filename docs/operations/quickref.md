@@ -252,6 +252,8 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--decommission` | Decommission old hub (interactive) |
+| `--setup` | Deploy RBAC resources and optionally generate kubeconfigs |
+| `--include-decommission` | With `--setup`, also deploy the opt-in decommission RBAC extension |
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
 | `--reset-state` | Reset state file and start fresh |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
@@ -264,6 +266,8 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only` or `--argocd-resume-only`) |
 | `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; not valid with `--validate-only`, `--argocd-manage`, `--argocd-resume-after-switchover`, `--decommission`, or `--setup`) |
 | `--verbose, -v` | Enable verbose logging |
+
+For `--setup`, `--include-decommission` requires `--role operator` or `--role both`.
 
 > **Note:** When using `--activation-method restore`, ensure the passive restore is fully deleted
 > before creating `restore-acm-activate`. The tool now waits for deletion to propagate; if done

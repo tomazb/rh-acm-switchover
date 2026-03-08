@@ -357,6 +357,24 @@ class TestCLIArgumentValidation:
         assert "argocd-manage" in str(exc_info.value).lower()
         assert "validate-only" in str(exc_info.value).lower()
 
+    def test_setup_include_decommission_rejects_validator_role(self):
+        """--include-decommission is only valid for operator-capable setup roles."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            setup=True,
+            admin_kubeconfig=".state/admin.kubeconfig",
+            role="validator",
+            include_decommission=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "include-decommission" in str(exc_info.value).lower()
+        assert "role" in str(exc_info.value).lower()
+
     def test_argocd_manage_rejects_resume_only(self):
         """--argocd-manage cannot be combined with --argocd-resume-only."""
         args = MockArgs(

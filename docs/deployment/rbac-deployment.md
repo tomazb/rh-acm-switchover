@@ -505,6 +505,7 @@ Automated RBAC deployment and kubeconfig generation.
 | `--admin-kubeconfig <path>` | **Required.** Path to kubeconfig with cluster-admin privileges | - |
 | `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
 | `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
+| `--include-decommission` | Also deploy and validate the opt-in decommission RBAC extension (operator or both only) | - |
 | `--token-duration <dur>` | Token validity duration | `48h` |
 | `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
 | `--skip-kubeconfig` | Skip kubeconfig generation | - |
@@ -518,11 +519,12 @@ Automated RBAC deployment and kubeconfig generation.
   --admin-kubeconfig ~/.kube/admin.yaml \
   --context prod-hub \
   --role operator \
+  --include-decommission \
   --token-duration 72h \
   --output-dir ~/prod-kubeconfigs
 ```
 
-The generated operator kubeconfig is least-privilege by default. Apply `deploy/rbac/extensions/decommission/clusterrole.yaml` and `deploy/rbac/extensions/decommission/clusterrolebinding.yaml` separately if that same service account must run `--decommission`.
+The generated operator kubeconfig is least-privilege by default. Add `--include-decommission` during setup, or apply `deploy/rbac/extensions/decommission/clusterrole.yaml` and `deploy/rbac/extensions/decommission/clusterrolebinding.yaml` separately, if that same service account must run `--decommission`.
 
 ### generate-merged-kubeconfig.sh
 

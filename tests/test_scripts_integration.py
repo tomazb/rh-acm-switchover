@@ -58,6 +58,13 @@ class TestScriptArgumentSafety:
         assert 'KUBECTL_ARGS=(--kubeconfig="$ADMIN_KUBECONFIG" --context="$CONTEXT")' in content
         assert 'kubectl "${KUBECTL_ARGS[@]}"' in content
 
+    def test_setup_rbac_supports_opt_in_decommission_extension(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert "--include-decommission" in content
+        assert 'extensions/decommission/clusterrole.yaml' in content
+        assert 'extensions/decommission/clusterrolebinding.yaml' in content
+
     def test_generate_sa_kubeconfig_uses_array_based_context_args(self):
         content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
 

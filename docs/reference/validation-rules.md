@@ -172,6 +172,7 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--argocd-resume-after-switchover` cannot be used with `--validate-only`
 - `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
 - `--argocd-resume-after-switchover` requires `--argocd-manage`
+- `--include-decommission` is only valid with `--setup` when `--role` is `operator` or `both`
 - With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
 - With `--skip-gitops-check`, `--argocd-check` is ignored (GitOps detection is disabled); a warning is emitted if both are set
 
@@ -321,6 +322,7 @@ except ValidationError as e:
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
 - Managed cluster threshold: `--min-managed-clusters` must be a non-negative integer. `0` keeps the post-restore cluster count check informational-only.
 - Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` and `--argocd-resume-after-switchover` also cannot be combined with `--validate-only`. `--argocd-resume-after-switchover` requires `--argocd-manage` and cannot be combined with `--argocd-resume-only`. With `--skip-gitops-check`, `--argocd-check` is ignored and a warning is shown.
+- Setup RBAC extension: `--include-decommission` is only valid during `--setup`, and only with `--role operator` or `--role both`.
 
 ### Utilities
 

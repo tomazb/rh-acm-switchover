@@ -445,6 +445,8 @@ class InputValidator:
             if hasattr(args, "role") and args.role:
                 if args.role not in ("operator", "validator", "both"):
                     raise ValidationError("--role must be one of: operator, validator, both")
+            if getattr(args, "include_decommission", False) and getattr(args, "role", "operator") == "validator":
+                raise ValidationError("--include-decommission requires --role operator or --role both")
             # Validate token-duration format (basic check for number + unit)
             if hasattr(args, "token_duration") and args.token_duration:
                 if not re.match(r"^\d+[hms]$", args.token_duration):

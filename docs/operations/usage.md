@@ -17,6 +17,7 @@ python acm_switchover.py \
 Optional: add `--argocd-check` to include Argo CD discovery and a summary of which Argo CD Applications touch ACM resources (read-only; no changes). If `--skip-gitops-check` is set, `--argocd-check` is ignored.
 
 Note: `--secondary-context` is required for switchover operations unless you are using `--decommission` or `--setup`.
+For `--setup`, `--include-decommission` is only valid with `--role operator` or `--role both`, and should be used only when the generated operator kubeconfig must support teardown workflows.
 
 **What this checks:**
 - ✓ Required namespaces exist on both hubs

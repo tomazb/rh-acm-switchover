@@ -528,9 +528,16 @@ class RBACValidator:
             report.append("REMEDIATION:")
             report.append("")
             report.append("To fix these issues:")
-            report.append("  1. Apply RBAC manifests from deploy/rbac/ directory")
-            report.append("  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/")
-            report.append("  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/")
+            report.append("  1. Apply the baseline RBAC manifests under deploy/rbac/")
+            if include_decommission:
+                report.append("  2. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/")
+                report.append(
+                    "  3. Or use Helm with --set rbac.includeDecommissionClusterRole=true for operator teardown access"
+                )
+                report.append("  4. Or use Kustomize for the baseline and add the decommission manifests separately")
+            else:
+                report.append("  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/")
+                report.append("  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/")
             report.append("")
             report.append("For more information, see docs/deployment/rbac-requirements.md")
 

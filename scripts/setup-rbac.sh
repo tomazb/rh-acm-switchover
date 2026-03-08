@@ -16,6 +16,7 @@
 #
 # Options:
 #   --role <role>              - Role to deploy: operator, validator, both (default: both)
+#   --include-decommission     - Also deploy/validate optional decommission RBAC for operator teardown
 #   --token-duration <dur>     - Token validity duration (default: 48h)
 #   --output-dir <dir>         - Output directory for kubeconfigs (default: ./kubeconfigs)
 #   --skip-kubeconfig          - Skip kubeconfig generation
@@ -58,6 +59,7 @@ CONTEXT=""
 ROLE="both"
 TOKEN_DURATION="48h"
 OUTPUT_DIR="./kubeconfigs"
+INCLUDE_DECOMMISSION=false
 SKIP_KUBECONFIG=false
 SKIP_VALIDATION=false
 DRY_RUN=false
@@ -107,6 +109,10 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+        --include-decommission)
+            INCLUDE_DECOMMISSION=true
+            shift
+            ;;
         --output-dir)
             if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
                 OUTPUT_DIR="$2"
@@ -139,6 +145,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --role <role>              Role to deploy: operator, validator, both (default: both)"
+            echo "  --include-decommission     Also deploy/validate optional decommission RBAC"
             echo "  --token-duration <dur>     Token validity duration (default: 48h)"
             echo "  --output-dir <dir>         Output directory for kubeconfigs (default: ./kubeconfigs)"
             echo "  --skip-kubeconfig          Skip kubeconfig generation"
@@ -148,6 +155,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Examples:"
             echo "  $0 --admin-kubeconfig ~/.kube/admin.yaml --context prod-hub --role operator"
+            echo "  $0 --admin-kubeconfig ~/.kube/admin.yaml --context prod-hub --role operator --include-decommission"
             echo "  $0 --admin-kubeconfig ~/.kube/admin.yaml --context prod-hub --token-duration 72h"
             echo "  $0 --admin-kubeconfig ~/.kube/admin.yaml --context prod-hub --dry-run"
             exit 0
@@ -189,6 +197,11 @@ fi
 if [[ ! -d "$RBAC_MANIFEST_DIR" ]]; then
     echo "Error: RBAC manifests directory not found: $RBAC_MANIFEST_DIR" >&2
     echo "Are you running this script from the repository root?" >&2
+    exit 1
+fi
+
+if $INCLUDE_DECOMMISSION && [[ "$ROLE" == "validator" ]]; then
+    echo "Error: --include-decommission requires --role operator or --role both" >&2
     exit 1
 fi
 
@@ -341,6 +354,7 @@ check_namespace_exists() {
 echo ""
 echo "Deploying to context: $CONTEXT"
 echo "Role configuration: $ROLE"
+echo "Include decommission RBAC: $INCLUDE_DECOMMISSION"
 echo ""
 
 # Step 1: Create namespace
@@ -354,6 +368,15 @@ apply_role_filtered "${RBAC_MANIFEST_DIR}/clusterrole.yaml" "ClusterRoles" "$ROL
 
 # Step 4: Create ClusterRoleBindings
 apply_role_filtered "${RBAC_MANIFEST_DIR}/clusterrolebinding.yaml" "ClusterRoleBindings" "$ROLE"
+
+if $INCLUDE_DECOMMISSION; then
+    echo ""
+    echo "Applying optional decommission RBAC extension..."
+    apply_manifest "${RBAC_MANIFEST_DIR}/extensions/decommission/clusterrole.yaml" "Decommission ClusterRole"
+    apply_manifest \
+        "${RBAC_MANIFEST_DIR}/extensions/decommission/clusterrolebinding.yaml" \
+        "Decommission ClusterRoleBinding"
+fi
 
 # Step 5: Create namespace-scoped Roles
 # Check which target namespaces exist
@@ -454,30 +477,36 @@ if ! $SKIP_VALIDATION && ! $DRY_RUN && ! $SKIP_KUBECONFIG; then
         validate_role() {
             local role="$1"
             local kubeconfig_file="$2"
+            local include_decommission="$3"
+            local check_args=(--role "$role")
             
             echo ""
             echo "Validating $role role permissions..."
+
+            if [[ "$include_decommission" == "true" ]]; then
+                check_args+=(--include-decommission)
+            fi
             
             # Set KUBECONFIG to use the generated kubeconfig
-            if KUBECONFIG="$kubeconfig_file" python3 "$CHECK_RBAC" --role "$role" 2>/dev/null; then
+            if KUBECONFIG="$kubeconfig_file" python3 "$CHECK_RBAC" "${check_args[@]}" 2>/dev/null; then
                 check_pass "RBAC validation passed for $role role"
             else
                 check_fail "RBAC validation failed for $role role"
                 echo "  Run manually to see details:"
-                echo "  KUBECONFIG=$kubeconfig_file python3 $CHECK_RBAC --role $role --verbose"
+                echo "  KUBECONFIG=$kubeconfig_file python3 $CHECK_RBAC ${check_args[*]} --verbose"
             fi
         }
         
         case "$ROLE" in
             operator)
-                validate_role "operator" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml"
+                validate_role "operator" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml" "$INCLUDE_DECOMMISSION"
                 ;;
             validator)
-                validate_role "validator" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml"
+                validate_role "validator" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml" "false"
                 ;;
             both)
-                validate_role "operator" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml"
-                validate_role "validator" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml"
+                validate_role "operator" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml" "$INCLUDE_DECOMMISSION"
+                validate_role "validator" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml" "false"
                 ;;
         esac
     fi

@@ -681,6 +681,7 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
 | `--admin-kubeconfig <path>` | **Required.** Path to kubeconfig with cluster-admin privileges | - |
 | `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
 | `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
+| `--include-decommission` | Also deploy and validate the opt-in decommission RBAC extension (operator or both only) | - |
 | `--token-duration <dur>` | Token validity duration | `48h` |
 | `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
 | `--skip-kubeconfig` | Skip kubeconfig generation | - |
@@ -694,7 +695,8 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
 ./scripts/setup-rbac.sh \
   --admin-kubeconfig ~/.kube/admin.yaml \
   --context prod-hub \
-  --role operator
+  --role operator \
+  --include-decommission
 
 # Setup both roles with custom token duration
 ./scripts/setup-rbac.sh \
@@ -708,6 +710,8 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
   --context prod-hub \
   --dry-run
 ```
+
+Use `--include-decommission` only when the generated operator kubeconfig must support `--decommission` or `--old-hub-action decommission`. It is rejected with `--role validator`.
 
 ### What It Does
 

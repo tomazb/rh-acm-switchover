@@ -8,7 +8,9 @@ from lib import argocd as argocd_lib
 from modules.preflight_coordinator import PreflightValidator
 
 
-def _build_validator(argocd_check: bool, argocd_manage: bool) -> PreflightValidator:
+def _build_validator(
+    argocd_check: bool, argocd_manage: bool, include_decommission: bool = False
+) -> PreflightValidator:
     """Create PreflightValidator with internal validators stubbed for focused RBAC tests."""
     primary = Mock()
     secondary = Mock()
@@ -20,6 +22,7 @@ def _build_validator(argocd_check: bool, argocd_manage: bool) -> PreflightValida
         secondary_client=secondary,
         method="passive",
         skip_rbac_validation=False,
+        include_decommission=include_decommission,
         argocd_check=argocd_check,
         argocd_manage=argocd_manage,
     )
@@ -106,6 +109,27 @@ def test_validate_all_skips_argocd_rbac_when_applications_crd_missing():
         primary_client=validator.primary,
         secondary_client=validator.secondary,
         include_decommission=False,
+        skip_observability=False,
+        argocd_mode="none",
+    )
+
+
+@pytest.mark.unit
+def test_validate_all_includes_decommission_permissions_when_requested():
+    """Preflight should expand primary-hub RBAC validation for decommission switchovers."""
+    validator = _build_validator(argocd_check=False, argocd_manage=False, include_decommission=True)
+
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
+        "modules.preflight_coordinator.AutoImportStrategyValidator"
+    ) as auto_import_validator:
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is True
+    validate_rbac.assert_called_once_with(
+        primary_client=validator.primary,
+        secondary_client=validator.secondary,
+        include_decommission=True,
         skip_observability=False,
         argocd_mode="none",
     )

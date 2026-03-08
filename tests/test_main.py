@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from acm_switchover import _report_argocd_acm_impact, _run_phase_preflight, main, parse_args, run_switchover
 from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
 from lib import argocd as argocd_lib
+from lib.validation import ValidationError
 
 
 @pytest.mark.unit
@@ -851,13 +852,15 @@ class TestDecommissionAndSetupHelpers:
     def test_run_decommission_uses_namespace_and_interactive_flag(self):
         from acm_switchover import run_decommission
 
-        args = SimpleNamespace(dry_run=False, non_interactive=False)
+        args = SimpleNamespace(dry_run=False, non_interactive=False, skip_rbac_validation=False)
         primary = Mock()
         primary.namespace_exists.return_value = True
         state = Mock()
         logger = Mock()
 
-        with patch("acm_switchover.Decommission") as Decom:
+        with patch("acm_switchover.Decommission") as Decom, patch(
+            "acm_switchover.validate_rbac_permissions"
+        ) as validate_rbac:
             instance = Decom.return_value
             instance.decommission.return_value = True
 
@@ -865,25 +868,76 @@ class TestDecommissionAndSetupHelpers:
 
         assert result is True
         primary.namespace_exists.assert_called_once()
+        validate_rbac.assert_called_once_with(
+            primary_client=primary,
+            include_decommission=True,
+            skip_observability=False,
+        )
         instance.decommission.assert_called_once_with(interactive=True)
 
     def test_run_decommission_respects_non_interactive_flag(self):
         from acm_switchover import run_decommission
 
-        args = SimpleNamespace(dry_run=False, non_interactive=True)
+        args = SimpleNamespace(dry_run=False, non_interactive=True, skip_rbac_validation=False)
         primary = Mock()
         primary.namespace_exists.return_value = False
         state = Mock()
         logger = Mock()
 
-        with patch("acm_switchover.Decommission") as Decom:
+        with patch("acm_switchover.Decommission") as Decom, patch(
+            "acm_switchover.validate_rbac_permissions"
+        ) as validate_rbac:
             instance = Decom.return_value
             instance.decommission.return_value = False
 
             result = run_decommission(args, primary, state, logger)
 
         assert result is False
+        validate_rbac.assert_called_once_with(
+            primary_client=primary,
+            include_decommission=True,
+            skip_observability=True,
+        )
         instance.decommission.assert_called_once_with(interactive=False)
+
+    def test_run_decommission_returns_false_when_rbac_validation_fails(self):
+        from acm_switchover import run_decommission
+
+        args = SimpleNamespace(dry_run=False, non_interactive=False, skip_rbac_validation=False)
+        primary = Mock()
+        primary.namespace_exists.return_value = False
+        state = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.Decommission") as Decom, patch(
+            "acm_switchover.validate_rbac_permissions",
+            side_effect=ValidationError("missing decommission permissions"),
+        ):
+            result = run_decommission(args, primary, state, logger)
+
+        assert result is False
+        Decom.assert_not_called()
+
+    def test_run_decommission_skips_rbac_validation_when_requested(self):
+        from acm_switchover import run_decommission
+
+        args = SimpleNamespace(dry_run=False, non_interactive=False, skip_rbac_validation=True)
+        primary = Mock()
+        primary.namespace_exists.return_value = True
+        state = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.Decommission") as Decom, patch(
+            "acm_switchover.validate_rbac_permissions"
+        ) as validate_rbac:
+            instance = Decom.return_value
+            instance.decommission.return_value = True
+
+            result = run_decommission(args, primary, state, logger)
+
+        assert result is True
+        validate_rbac.assert_not_called()
+        instance.decommission.assert_called_once_with(interactive=True)
 
     def test_run_setup_successful_execution(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
         from acm_switchover import run_setup
@@ -899,6 +953,7 @@ class TestDecommissionAndSetupHelpers:
             role="operator",
             token_duration="48h",
             output_dir=str(tmp_path / "out"),
+            include_decommission=False,
             skip_kubeconfig_generation=False,
             dry_run=False,
         )
@@ -913,6 +968,49 @@ class TestDecommissionAndSetupHelpers:
             run.return_value = SimpleNamespace(returncode=0)
             logger = logging.getLogger("test")
             assert run_setup(args, logger) is True
+            assert run.call_args.args[0] == [
+                str(fake_setup_script),
+                "--admin-kubeconfig",
+                args.admin_kubeconfig,
+                "--context",
+                args.primary_context,
+                "--role",
+                args.role,
+                "--token-duration",
+                args.token_duration,
+                "--output-dir",
+                args.output_dir,
+            ]
+
+    def test_run_setup_passes_include_decommission_flag(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        from acm_switchover import run_setup
+
+        fake_script_dir = tmp_path
+        fake_setup_script = fake_script_dir / "scripts" / "setup-rbac.sh"
+        fake_setup_script.parent.mkdir(parents=True)
+        fake_setup_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+
+        args = SimpleNamespace(
+            admin_kubeconfig=str(tmp_path / "admin-kubeconfig"),
+            primary_context="primary",
+            role="operator",
+            token_duration="48h",
+            output_dir=str(tmp_path / "out"),
+            include_decommission=True,
+            skip_kubeconfig_generation=False,
+            dry_run=False,
+        )
+
+        monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+        monkeypatch.setattr("os.path.isfile", lambda path: True)
+        monkeypatch.setattr("os.path.abspath", lambda _: str(fake_script_dir / "dummy.py"))
+        monkeypatch.setattr("os.path.dirname", lambda p: str(fake_script_dir))
+
+        with patch("subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0)
+            logger = logging.getLogger("test")
+            assert run_setup(args, logger) is True
+            assert run.call_args.args[0][-1] == "--include-decommission"
 
     def test_run_setup_missing_kubeconfig_fails(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
         from acm_switchover import run_setup
@@ -923,6 +1021,7 @@ class TestDecommissionAndSetupHelpers:
             role="operator",
             token_duration="48h",
             output_dir=str(tmp_path / "out"),
+            include_decommission=False,
             skip_kubeconfig_generation=False,
             dry_run=False,
         )
@@ -938,6 +1037,7 @@ class TestPreflightPhase:
     def test_run_phase_preflight_passes_argocd_flags_to_preflight_validator(self):
         args = SimpleNamespace(
             method="passive",
+            old_hub_action="secondary",
             skip_rbac_validation=False,
             argocd_check=True,
             argocd_manage=True,
@@ -968,10 +1068,48 @@ class TestPreflightPhase:
             secondary,
             "passive",
             skip_rbac_validation=False,
+            include_decommission=False,
             argocd_check=True,
             argocd_manage=True,
         )
         report_argocd_impact.assert_called_once_with(primary, secondary, logger)
+
+    def test_run_phase_preflight_passes_decommission_intent_to_preflight_validator(self):
+        args = SimpleNamespace(
+            method="passive",
+            old_hub_action="decommission",
+            skip_rbac_validation=False,
+            argocd_check=False,
+            argocd_manage=False,
+            skip_observability_checks=False,
+            validate_only=False,
+        )
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = _run_phase_preflight(args, state, primary, secondary, logger)
+
+        assert result is True
+        validator_class.assert_called_once_with(
+            primary,
+            secondary,
+            "passive",
+            skip_rbac_validation=False,
+            include_decommission=True,
+            argocd_check=False,
+            argocd_manage=False,
+        )
 
     def test_report_argocd_impact_warns_instead_of_raising_on_list_failure(self):
         primary = Mock()

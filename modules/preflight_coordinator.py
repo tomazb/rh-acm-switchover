@@ -48,6 +48,7 @@ class PreflightValidator:
         secondary_client: KubeClient,
         method: str = "passive",
         skip_rbac_validation: bool = False,
+        include_decommission: bool = False,
         argocd_check: bool = False,
         argocd_manage: bool = False,
     ) -> None:
@@ -55,6 +56,7 @@ class PreflightValidator:
         self.secondary = secondary_client
         self.method = method
         self.skip_rbac_validation = skip_rbac_validation
+        self.include_decommission = include_decommission
         self.argocd_check = argocd_check
         self.argocd_manage = argocd_manage
 
@@ -122,7 +124,7 @@ class PreflightValidator:
                 validate_rbac_permissions(
                     primary_client=self.primary,
                     secondary_client=self.secondary,
-                    include_decommission=False,  # Checked separately if needed
+                    include_decommission=self.include_decommission,
                     skip_observability=skip_obs,
                     argocd_mode=self._get_effective_argocd_rbac_mode(),
                 )
