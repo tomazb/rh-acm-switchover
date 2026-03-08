@@ -41,8 +41,10 @@ Target areas included:
 | Medium | Reliability | Restore cleanup used brittle string matching for not-found errors | `"not found" in str(e).lower()` in finalization restore cleanup | Fixed |
 | Medium | Logic | MCH pod health check treated all non-Running pods as unhealthy | Succeeded job pods could trigger false unhealthy state | Fixed |
 | Medium | Reliability | Backup polling loop aborted on transient API errors | No tolerant handling around backup list calls | Fixed |
-| Medium | Security/Policy | Operator ClusterRole includes broad delete permissions by default | `deploy/rbac/clusterrole.yaml` delete verbs for managedclusters/mch/mco | Open |
-| Low | Documentation | Security docs mention hostname verification CLI flag not exposed in parser | `SECURITY.md` vs CLI parser mismatch | Open |
+| Medium | Security/Policy | Operator ClusterRole included broad delete permissions by default | `deploy/rbac/clusterrole.yaml` delete verbs for managedclusters/mch/mco | Fixed |
+| Low | Documentation | Security docs mentioned hostname verification CLI flag not exposed in parser | `SECURITY.md` vs CLI parser mismatch | Fixed |
+| Medium | Quality | Focused regression coverage was missing for newly hardened control-flow and finalization paths | `tests/test_main.py`, `tests/test_finalization.py`, `tests/test_rbac_integration.py`, `tests/test_scripts_integration.py` | Fixed |
+| Low | Security/Docs | Direct stdout kubeconfig generation examples lacked secure redirection guidance | `scripts/generate-sa-kubeconfig.sh`, `scripts/README.md`, `docs/deployment/rbac-deployment.md` | Fixed |
 | Low | Performance | Immediate config/step persistence may cause extra fsync overhead | `StateManager.set_config/mark_step_completed` immediate persist pattern | Open |
 
 ## Implemented Remediations
@@ -53,7 +55,7 @@ Updated `acm_switchover.py`:
 
 - `--validate-only` now executes preflight directly and exits from that path only.
 - Completed-state handling now returns success for recent completed runs instead of flowing through phase dispatch.
-- Failed-state resume now only accepts runnable retry phases (`PREFLIGHT`, `PRIMARY_PREP`, `ACTIVATION`, `POST_ACTIVATION`, `FINALIZATION`).
+- Failed-state resume now rejects unknown phases but still supports legacy `SECONDARY_VERIFY` resume by routing it through the activation path.
 - Added runnable-phase guard before dispatch; unrunnable phases now fail fast instead of silently completing.
 - Added explicit no-phase-ran guard.
 
@@ -89,26 +91,56 @@ Updated `modules/finalization.py`:
 - `_verify_new_backups(...)` now tolerates transient `ApiException` from backup listing and continues polling.
 - MultiClusterHub pod health check now allows pod phase `Succeeded` to avoid false unhealthy results.
 
+### 6) Least-privilege RBAC split
+
+Updated static and Helm RBAC manifests:
+
+- `deploy/rbac/clusterrole.yaml` and the Helm operator ClusterRole template now keep baseline operator access non-destructive by default.
+- Added opt-in decommission-only cluster-scoped delete permissions in:
+  - `deploy/rbac/clusterrole-decommission.yaml`
+  - `deploy/rbac/clusterrolebinding-decommission.yaml`
+- Added Helm support for the same split via `rbac.includeDecommissionClusterRole`.
+- Updated RBAC documentation to distinguish baseline switchover access from explicit decommission escalation.
+
+### 7) Security documentation alignment
+
+Updated `SECURITY.md` and related release notes:
+
+- Removed the incorrect implication that a public `--disable-hostname-verification` CLI flag exists.
+- Clarified that normal CLI usage keeps hostname verification enabled.
+- Documented the insecure bypass as an internal `KubeClient` capability rather than a supported operator-facing switch.
+
+### 8) Focused regression coverage and credential-output guidance
+
+Updated tests and docs:
+
+- Added targeted regression tests for:
+  - validate-only behavior from a non-`INIT` phase
+  - transient backup-list failures during finalization polling
+  - `Succeeded` ACM pod handling during MultiClusterHub health verification
+  - RBAC least-privilege and decommission-extension manifest structure
+  - shell argument-array hardening in setup scripts
+- Updated direct kubeconfig-generation help and documentation to use secure `umask 077` redirection guidance for stdout-generated kubeconfigs.
+
 ## Validation Results
 
 Executed:
 
-- `./run_tests.sh`
+- `pytest tests/test_rbac_integration.py -q`
+- `pytest tests/test_main.py tests/test_finalization.py tests/test_scripts_integration.py -q`
+- `pytest tests/test_scripts_integration.py tests/test_rbac_integration.py -q`
 
 Result:
 
-- Majority of tests passed.
-- 3 existing failures were observed in script integration tests unrelated to the remediated switchover logic and script argument hardening paths:
-  - `tests/test_scripts_integration.py::test_preflight_success_passive_method`
-  - `tests/test_scripts_integration.py::test_preflight_success_full_method`
-  - One additional script integration preflight case in the same suite
+- All focused verification passed.
+- Verified counts:
+  - `tests/test_rbac_integration.py`: 39 passed
+  - `tests/test_main.py` + `tests/test_finalization.py` + `tests/test_scripts_integration.py`: 106 passed
+  - final script/RBAC recheck: 49 passed
+- No linter diagnostics were reported for the touched files during the final pass.
+- Full-suite execution via `./run_tests.sh` was not re-run as part of this follow-up.
 
 ## Remaining Recommendations
 
-1. Split operator RBAC into baseline and decommission-extended variants to enforce least privilege by default.
-2. Align `SECURITY.md` with current CLI behavior for hostname verification controls.
-3. Consider write batching for non-critical state updates in high-churn paths while preserving crash safety.
-4. Add targeted tests for:
-   - validate-only behavior with non-INIT state
-   - unrunnable phase rejection behavior
-   - shell argument handling with spaces/special characters in context or kubeconfig paths
+1. Consider write batching for non-critical state updates in `lib/utils.py` high-churn paths while preserving current crash-safety guarantees and existing persistence semantics.
+2. If broader confidence is needed before release, run the full suite (`./run_tests.sh`) to validate there are no unrelated regressions outside the focused areas above.
