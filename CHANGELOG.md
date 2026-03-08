@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - No unreleased changes yet.
 
+## [1.5.10] - 2026-03-08
+
+### Fixed
+
+- **Completed-state validate-only handling**: Allow `--validate-only` to run preflight even when the state file shows a recent `COMPLETED` switchover, while keeping stale completed-state protection intact.
+- **Completed-state rerun messaging**: Emit an explicit no-op banner when a recent completed switchover is re-run so operators can see that no phases executed on that invocation.
+- **GitOps collector reset safety**: Clear the active collector instance before resetting the singleton reference so stale test references do not retain prior detections.
+
+### Changed
+
+- **Regression coverage**: Add tests that codify the intended `local-cluster` Argo CD namespace matching and the existing keyword-safe dry-run pause/resume behavior.
+
 ## [1.5.9] - 2026-03-08
 
 ### Changed
