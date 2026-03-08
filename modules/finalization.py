@@ -42,7 +42,8 @@ from lib.constants import (
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
-from lib.exceptions import SwitchoverError
+from lib.exceptions import SwitchoverError, TransientError
+from lib.kube_client import is_retryable_error
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, dry_run_skip, is_acm_version_ge
@@ -439,9 +440,15 @@ class Finalization:
                     namespace=BACKUP_NAMESPACE,
                 )
             except ApiException as exc:
-                logger.warning("Transient error listing backups: %s", exc)
-                time.sleep(BACKUP_POLL_INTERVAL)
-                continue
+                if is_retryable_error(exc):
+                    transient_exc = TransientError(f"Transient error listing Velero backups: {exc}")
+                    logger.warning("%s", transient_exc)
+                    time.sleep(BACKUP_POLL_INTERVAL)
+                    continue
+                raise SwitchoverError(
+                    "Failed to list Velero backups while waiting for a new ACM backup: "
+                    f"{exc.status} {exc.reason}"
+                ) from exc
             current_backups = self._filter_acm_owned_backups(current_backups)
 
             current_backup_names = {b.get("metadata", {}).get("name") for b in current_backups}

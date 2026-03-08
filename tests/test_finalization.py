@@ -512,6 +512,21 @@ class TestFinalization:
         assert mock_secondary_client.list_custom_resources.call_count == 3
         finalization.state.set_config.assert_any_call("post_switchover_backup_name", "acm-backup-001")
 
+    @patch("modules.finalization.time")
+    def test_verify_new_backups_fails_fast_on_permanent_list_error(self, mock_time, finalization, mock_secondary_client):
+        """Permanent backup list failures should surface immediately instead of timing out."""
+        mock_time.time.side_effect = [0, 0]
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [],
+            ApiException(status=403, reason="Forbidden"),
+        ]
+
+        with pytest.raises(SwitchoverError, match="Failed to list Velero backups"):
+            finalization._verify_new_backups(timeout=10)
+
+        mock_time.sleep.assert_not_called()
+        assert mock_secondary_client.list_custom_resources.call_count == 2
+
     def test_verify_backup_integrity_success(self, finalization, mock_secondary_client):
         """Backup integrity should pass for a recent completed backup with no errors (recorded name path)."""
         backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
