@@ -450,6 +450,39 @@ class TestSwitchoverPhaseFlow:
         # Only the first phase handler is guaranteed to run in this setup
         preflight.assert_called_once()
 
+    def test_run_switchover_validate_only_ignores_resumed_non_init_phase(self, tmp_path):
+        """Validate-only must run preflight only, even when state has progressed beyond INIT."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.POST_ACTIVATION)
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
+            "acm_switchover._run_phase_primary_prep", return_value=True
+        ) as primary_prep, patch("acm_switchover._run_phase_activation", return_value=True) as activation, patch(
+            "acm_switchover._run_phase_post_activation", return_value=True
+        ) as post_activation, patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ) as finalization:
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        preflight.assert_called_once()
+        primary_prep.assert_not_called()
+        activation.assert_not_called()
+        post_activation.assert_not_called()
+        finalization.assert_not_called()
+
     def test_run_switchover_resume_from_failed_state_retries_failed_phase(self, tmp_path):
         """Verify that run_switchover resumes from the phase that failed when state is FAILED."""
         from lib.utils import Phase, StateManager

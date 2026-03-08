@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TLS hostname verification docs**: Clarified that hostname verification remains enforced for normal CLI usage and that the insecure bypass is an internal `KubeClient` option rather than a public flag.
+- **Kubeconfig redirect guidance**: Updated script help and deployment docs to use secure `umask 077` redirection for stdout-generated kubeconfigs and merged kubeconfig files.
 - **Postflight ACM version tolerance**: Downgrade unknown new-hub ACM version during auto-import checks to a warning so transient empty status does not fail postflight verification.
 - **Finalization backup ownership guard**: Revalidate that recorded post-switchover backups are ACM-owned before using them for integrity checks.
 - **Finalization passive-sync restore errors**: Wrap old-primary passive sync restore creation failures in `SwitchoverError` with switchover-specific context.

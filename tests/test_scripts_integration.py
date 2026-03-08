@@ -49,6 +49,23 @@ def run_script(script_name: str, *args: str, env=None):
     return proc.returncode, output
 
 
+class TestScriptArgumentSafety:
+    """Regression tests for shell argument handling hardening."""
+
+    def test_setup_rbac_uses_array_based_kubectl_args(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert 'KUBECTL_ARGS=(--kubeconfig="$ADMIN_KUBECONFIG" --context="$CONTEXT")' in content
+        assert 'kubectl "${KUBECTL_ARGS[@]}"' in content
+
+    def test_generate_sa_kubeconfig_uses_array_based_context_args(self):
+        content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
+
+        assert "KUBECTL_CONTEXT_ARGS=()" in content
+        assert 'KUBECTL_CONTEXT_ARGS+=(--context="$CONTEXT")' in content
+        assert 'kubectl "${KUBECTL_CONTEXT_ARGS[@]}"' in content
+
+
 def write_shared_jq_mock(mock_bin: Path) -> None:
     """Create a mock jq that handles minimal cases and delegates to real jq."""
     jq_script = mock_bin / "jq"

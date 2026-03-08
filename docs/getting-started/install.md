@@ -209,17 +209,17 @@ rules:
 # ManagedClusters
 - apiGroups: ["cluster.open-cluster-management.io"]
   resources: ["managedclusters"]
-  verbs: ["get", "list", "patch", "delete"]
+  verbs: ["get", "list", "patch"]
 
 # MultiClusterHub
 - apiGroups: ["operator.open-cluster-management.io"]
   resources: ["multiclusterhubs"]
-  verbs: ["get", "list", "delete"]
+  verbs: ["get", "list"]
 
 # Observability
 - apiGroups: ["observability.open-cluster-management.io"]
   resources: ["multiclusterobservabilities"]
-  verbs: ["get", "list", "delete"]
+  verbs: ["get", "list"]
 
 # Deployments and StatefulSets (for scaling)
 - apiGroups: ["apps"]
@@ -235,6 +235,25 @@ rules:
 - apiGroups: ["hive.openshift.io"]
   resources: ["clusterdeployments"]
   verbs: ["get", "list", "patch"]
+```
+
+For old-hub teardown, grant cluster-scoped delete access separately instead of bundling it into the default operator role:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: acm-switchover-decommission
+rules:
+- apiGroups: ["cluster.open-cluster-management.io"]
+  resources: ["managedclusters"]
+  verbs: ["delete"]
+- apiGroups: ["operator.open-cluster-management.io"]
+  resources: ["multiclusterhubs"]
+  verbs: ["delete"]
+- apiGroups: ["observability.open-cluster-management.io"]
+  resources: ["multiclusterobservabilities"]
+  verbs: ["delete"]
 ```
 
 ### Create Service Account (Optional)

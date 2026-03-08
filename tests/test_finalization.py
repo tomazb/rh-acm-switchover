@@ -497,6 +497,21 @@ class TestFinalization:
 
         finalization.state.set_config.assert_any_call("post_switchover_backup_name", "acm-backup-001")
 
+    @patch("modules.finalization.time")
+    def test_verify_new_backups_retries_after_transient_list_error(self, mock_time, finalization, mock_secondary_client):
+        """Transient backup list failures should be tolerated until a later poll succeeds."""
+        mock_time.time.side_effect = [0, 0, 1]
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [],
+            ApiException(status=500, reason="temporary failure"),
+            [{"metadata": {"name": "acm-backup-001", "labels": ACM_BACKUP_LABEL}, "status": {"phase": "Completed"}}],
+        ]
+
+        finalization._verify_new_backups(timeout=10)
+
+        assert mock_secondary_client.list_custom_resources.call_count == 3
+        finalization.state.set_config.assert_any_call("post_switchover_backup_name", "acm-backup-001")
+
     def test_verify_backup_integrity_success(self, finalization, mock_secondary_client):
         """Backup integrity should pass for a recent completed backup with no errors (recorded name path)."""
         backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -995,6 +1010,21 @@ class TestFinalization:
 
         with pytest.raises(RuntimeError):
             finalization._verify_multiclusterhub_health()
+
+    @patch("modules.finalization.time")
+    def test_verify_multiclusterhub_health_accepts_succeeded_pods(self, mock_time, finalization, mock_secondary_client):
+        """Completed job pods should not block MultiClusterHub health verification."""
+        mock_time.time.side_effect = [0]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "multiclusterhub"},
+            "status": {"phase": "Running"},
+        }
+        mock_secondary_client.get_pods.return_value = [
+            {"metadata": {"name": "acm-operator"}, "status": {"phase": "Running"}},
+            {"metadata": {"name": "mch-hook-job"}, "status": {"phase": "Succeeded"}},
+        ]
+
+        finalization._verify_multiclusterhub_health(timeout=300)
 
     def test_verify_old_hub_state(self, finalization_with_primary, mock_secondary_client):
         """Old hub checks should inspect clusters, backups, and observability pods."""

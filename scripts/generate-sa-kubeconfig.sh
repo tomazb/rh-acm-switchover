@@ -21,17 +21,17 @@
 #
 # Examples:
 #   # Generate kubeconfig for operator service account (current context)
-#   ./generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 #
 #   # Generate kubeconfig with custom token duration
-#   ./generate-sa-kubeconfig.sh --token-duration 8h acm-switchover acm-switchover-operator > kubeconfig.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh --token-duration 8h acm-switchover acm-switchover-operator > kubeconfig.yaml
 #
 #   # Generate kubeconfig using a specific context with custom user name
-#   ./generate-sa-kubeconfig.sh --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml
 #
 #   # Generate unique user names for merging kubeconfigs from multiple clusters
-#   ./generate-sa-kubeconfig.sh --context hub1 --user hub1-operator acm-switchover acm-switchover-operator > hub1.yaml
-#   ./generate-sa-kubeconfig.sh --context hub2 --user hub2-operator acm-switchover acm-switchover-operator > hub2.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh --context hub1 --user hub1-operator acm-switchover acm-switchover-operator > hub1.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh --context hub2 --user hub2-operator acm-switchover acm-switchover-operator > hub2.yaml
 #
 # Prerequisites:
 #   - kubectl configured with cluster access
@@ -103,11 +103,12 @@ while [[ $# -gt 0 ]]; do
             echo "  service-account           - Name of the service account"
             echo ""
             echo "Examples:"
-            echo "  $0 acm-switchover acm-switchover-operator > kubeconfig.yaml"
-            echo "  $0 --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml"
-            echo "  $0 --token-duration 8h acm-switchover acm-switchover-operator > kubeconfig.yaml"
+            echo "  umask 077 && $0 acm-switchover acm-switchover-operator > kubeconfig.yaml"
+            echo "  umask 077 && $0 --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml"
+            echo "  umask 077 && $0 --token-duration 8h acm-switchover acm-switchover-operator > kubeconfig.yaml"
             echo ""
             echo "Note:"
+            echo "  Redirect stdout to a secure file with umask 077."
             echo "  When merging kubeconfigs from multiple clusters, use unique --user names"
             echo "  to prevent credential collisions."
             exit 0
@@ -147,8 +148,12 @@ if [[ -z "$NAMESPACE" || -z "$SA_NAME" ]]; then
     echo "  service-account           - Name of the service account" >&2
     echo "" >&2
     echo "Examples:" >&2
-    echo "  $0 acm-switchover acm-switchover-operator > kubeconfig.yaml" >&2
-    echo "  $0 --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml" >&2
+    echo "  umask 077 && $0 acm-switchover acm-switchover-operator > kubeconfig.yaml" >&2
+    echo "  umask 077 && $0 --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml" >&2
+    echo "" >&2
+    echo "Security:" >&2
+    echo "  Because kubeconfig is written to stdout, redirect it to a secure file with umask 077." >&2
+    echo "  Keep file permissions at 600 if you later move or copy it." >&2
     exit 1
 fi
 

@@ -53,6 +53,8 @@ cd rh-acm-switchover
 # 3. Validate permissions with check_rbac.py
 ```
 
+This bootstrap path deploys the baseline operator role only. If the same service account must also run `--decommission`, apply the optional decommission manifests afterward or enable the Helm decommission extension.
+
 For multi-hub setup:
 
 ```bash
@@ -95,8 +97,13 @@ python acm_switchover.py \
 git clone https://github.com/tomazb/rh-acm-switchover.git
 cd rh-acm-switchover
 
-# Apply RBAC resources
-kubectl apply -f deploy/rbac/
+# Apply baseline RBAC resources
+kubectl apply -f deploy/rbac/namespace.yaml
+kubectl apply -f deploy/rbac/serviceaccount.yaml
+kubectl apply -f deploy/rbac/clusterrole.yaml
+kubectl apply -f deploy/rbac/clusterrolebinding.yaml
+kubectl apply -f deploy/rbac/role.yaml
+kubectl apply -f deploy/rbac/rolebinding.yaml
 
 # Verify deployment
 kubectl get sa,clusterrole,role -n acm-switchover
@@ -120,6 +127,10 @@ kubectl get all -n acm-switchover
 ```bash
 # Install Helm chart
 helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/
+
+# Install with optional decommission ClusterRole/ClusterRoleBinding
+helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/ \
+  --set rbac.includeDecommissionClusterRole=true
 
 # Verify
 helm status acm-switchover-rbac
@@ -156,6 +167,13 @@ kubectl apply -f deploy/rbac/role.yaml
 
 # Create RoleBindings
 kubectl apply -f deploy/rbac/rolebinding.yaml
+```
+
+If the operator service account also needs old-hub teardown permissions, apply the optional decommission extension too:
+
+```bash
+kubectl apply -f deploy/rbac/clusterrole-decommission.yaml
+kubectl apply -f deploy/rbac/clusterrolebinding-decommission.yaml
 ```
 
 #### Step 4: Verify
@@ -300,7 +318,7 @@ For detailed ACM Policy usage, see [deploy/acm-policies/README.md](../../deploy/
 Use the built-in RBAC checker:
 
 ```bash
-# Check operator permissions (default - full operational access)
+# Check operator permissions (baseline switchover access)
 python check_rbac.py --role operator
 
 # Check validator permissions (read-only access)
@@ -315,7 +333,7 @@ python check_rbac.py \
   --secondary-context secondary-hub \
   --role operator
 
-# Include decommission permissions
+# Include decommission permissions (requires the optional decommission RBAC extension)
 python check_rbac.py --include-decommission --role operator
 ```
 
@@ -371,18 +389,18 @@ Use the included helper script with the new `--user` and `--token-duration` flag
 
 ```bash
 # Generate kubeconfig for operator on current context
-./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator \
   > /tmp/operator-kubeconfig.yaml
 
 # Generate with specific context and custom user name (prevents collisions)
-./scripts/generate-sa-kubeconfig.sh \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh \
   --context primary-hub \
   --user primary-operator \
   acm-switchover acm-switchover-operator \
   > /tmp/primary-operator.kubeconfig
 
 # Generate with custom token duration (72 hours for long operations)
-./scripts/generate-sa-kubeconfig.sh \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh \
   --context prod-hub \
   --user prod-operator \
   --token-duration 72h \
@@ -403,6 +421,9 @@ kubectl --kubeconfig=/tmp/operator-kubeconfig.yaml get managedclusters
 
 > **Tip**: Always use `--user` with unique names when generating kubeconfigs for
 > multiple clusters to prevent credential collisions when merging.
+>
+> **Security**: Because `generate-sa-kubeconfig.sh` writes credentials to stdout,
+> redirect with `umask 077` and keep resulting files at `0600`.
 
 ### Merging Kubeconfigs for Multi-Hub Operations
 
@@ -439,17 +460,17 @@ If you prefer manual control:
 
 ```bash
 # Generate kubeconfigs with unique user names
-./scripts/generate-sa-kubeconfig.sh --context primary-hub --user primary-operator \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh --context primary-hub --user primary-operator \
   acm-switchover acm-switchover-operator \
   > /tmp/primary-operator.kubeconfig
 
-./scripts/generate-sa-kubeconfig.sh --context secondary-hub --user secondary-operator \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh --context secondary-hub --user secondary-operator \
   acm-switchover acm-switchover-operator \
   > /tmp/secondary-operator.kubeconfig
 
 # Merge kubeconfigs
 KUBECONFIG="/tmp/primary-operator.kubeconfig:/tmp/secondary-operator.kubeconfig" \
-  kubectl config view --flatten > /tmp/merged-operator.kubeconfig
+  sh -c 'umask 077 && kubectl config view --flatten > /tmp/merged-operator.kubeconfig'
 
 # Verify contexts are available
 kubectl --kubeconfig=/tmp/merged-operator.kubeconfig config get-contexts
@@ -501,6 +522,8 @@ Automated RBAC deployment and kubeconfig generation.
   --output-dir ~/prod-kubeconfigs
 ```
 
+The generated operator kubeconfig is least-privilege by default. Apply `deploy/rbac/clusterrole-decommission.yaml` and `deploy/rbac/clusterrolebinding-decommission.yaml` separately if that same service account must run `--decommission`.
+
 ### generate-merged-kubeconfig.sh
 
 Generate and merge kubeconfigs for multiple clusters.
@@ -547,8 +570,13 @@ kubectl create namespace open-cluster-management-backup
 kubectl create namespace open-cluster-management-observability
 kubectl create namespace multicluster-engine
 
-# Then apply RBAC
-kubectl apply -f deploy/rbac/
+# Then apply baseline RBAC
+kubectl apply -f deploy/rbac/namespace.yaml
+kubectl apply -f deploy/rbac/serviceaccount.yaml
+kubectl apply -f deploy/rbac/clusterrole.yaml
+kubectl apply -f deploy/rbac/clusterrolebinding.yaml
+kubectl apply -f deploy/rbac/role.yaml
+kubectl apply -f deploy/rbac/rolebinding.yaml
 ```
 
 ### Issue: Permission Denied
