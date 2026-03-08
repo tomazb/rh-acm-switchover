@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Decommission RBAC bootstrap**: Move opt-in decommission manifests out of the baseline bulk-apply path, add explicit setup/install support for them, and validate teardown permissions before decommission workflows run.
+- **Finalization Velero list failures**: Fail fast on permanent backup-list API errors instead of masking them behind the new-backup timeout loop.
+
 ## [1.5.5] - 2026-03-07
 
 ### Fixed
