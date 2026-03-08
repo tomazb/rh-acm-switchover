@@ -534,6 +534,7 @@ check_nodes() {
     local context="$1"
     local hub_name="$2"
     local nodes_json
+    local nodes_text
     local oc_stderr_file
     oc_stderr_file="$(mktemp)"
 
@@ -558,8 +559,19 @@ check_nodes() {
     fi
     
     local total ready not_ready
-    total=$(echo "$nodes_json" | jq -r '.items | length' 2>/dev/null || echo "0")
-    ready=$(echo "$nodes_json" | jq -r '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length' 2>/dev/null || echo "0")
+    total=$(echo "$nodes_json" | jq -r '.items | length' 2>/dev/null || echo "")
+    ready=$(echo "$nodes_json" | jq -r '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length' 2>/dev/null || echo "")
+
+    if [[ ! "$total" =~ ^[0-9]+$ ]] || [[ ! "$ready" =~ ^[0-9]+$ ]]; then
+        nodes_text=$("$CLUSTER_CLI_BIN" --context="$context" get nodes --no-headers 2>/dev/null || true)
+        if [[ -z "$nodes_text" ]]; then
+            check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
+            return 0
+        fi
+        total=$(echo "$nodes_text" | sed '/^\s*$/d' | wc -l | tr -d ' ')
+        ready=$(echo "$nodes_text" | grep -E '\bReady\b' | wc -l | tr -d ' ')
+    fi
+
     not_ready=$((total - ready))
     
     if [[ $total -eq 0 ]]; then

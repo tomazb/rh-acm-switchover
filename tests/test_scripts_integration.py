@@ -85,19 +85,112 @@ INPUT=$(cat)
 
 # Handle common expressions; otherwise delegate to real jq
 case "$EXPR" in
+    ".items[0]")
+        if printf "%s" "$INPUT" | grep -q '"items"[[:space:]]*:[[:space:]]*\\['; then
+            if [[ -n "${REAL_JQ:-}" ]]; then
+                printf "%s" "$INPUT" | "$REAL_JQ" "$EXPR" 2>/dev/null || echo "null"
+            else
+                echo "{}"
+            fi
+            exit 0
+        fi
+        echo "null"
+        exit 1
+        ;;
     ".items | length")
         # Prefer real jq if available; otherwise return 0 for stability
         if [[ -n "${REAL_JQ:-}" ]]; then
             printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "0"
         else
-            echo "0"
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(len(i) if isinstance(i, list) else 0)' 2>/dev/null || echo "0"
+        fi
+        ;;
+    ".items[0].metadata.name")
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(i[0].get("metadata", {}).get("name","") if isinstance(i, list) and i else "")' 2>/dev/null || echo ""
+        fi
+        ;;
+    ".items[0].spec.useManagedServiceAccount // false")
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "false"
+        else
+            if echo "$INPUT" | grep -q '"useManagedServiceAccount"[[:space:]]*:[[:space:]]*true'; then
+                echo "true"
+            else
+                echo "false"
+            fi
+        fi
+        ;;
+    *"syncRestoreWithNewBackups"*".metadata.name"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); out=""; 
+for item in d.get("items", []):
+    if item.get("spec", {}).get("syncRestoreWithNewBackups") is True:
+        out=item.get("metadata", {}).get("name", ""); break
+print(out)' 2>/dev/null || echo ""
+        fi
+        ;;
+    *".status.phase"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "unknown"
+        else
+            PHASE=$(echo "$INPUT" | sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+            echo "${PHASE:-unknown}"
+        fi
+        ;;
+    *".status.lastMessage"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            echo "$INPUT" | sed -n 's/.*"lastMessage"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+        fi
+        ;;
+    *".type==\"Ready\""*".status==\"True\""* )
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "0"
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); c=0
+for item in d.get("items", []):
+    for cond in item.get("status", {}).get("conditions", []):
+        if cond.get("type")=="Ready" and cond.get("status")=="True":
+            c+=1; break
+print(c)' 2>/dev/null || echo "0"
         fi
         ;;
     *)
         if [[ -n "${REAL_JQ:-}" ]]; then
             printf "%s" "$INPUT" | "$REAL_JQ" "${ALL_ARGS[@]}" 2>/dev/null || echo ""
         else
-            echo ""
+            if [[ "$EXPR" == *".status.phase"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); print(d.get("status", {}).get("phase", "unknown"))' 2>/dev/null || echo "unknown"
+            elif [[ "$EXPR" == *".status.lastMessage"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); print(d.get("status", {}).get("lastMessage", ""))' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == *"syncRestoreWithNewBackups"* && "$EXPR" == *".metadata.name"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); out=""; 
+for item in d.get("items", []):
+    if item.get("spec", {}).get("syncRestoreWithNewBackups") is True:
+        out=item.get("metadata", {}).get("name", ""); break
+print(out)' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == *".type==\"Ready\""* && "$EXPR" == *".status==\"True\""* && "$EXPR" == *"| length"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); c=0
+for item in d.get("items", []):
+    for cond in item.get("status", {}).get("conditions", []):
+        if cond.get("type")=="Ready" and cond.get("status")=="True":
+            c+=1; break
+print(c)' 2>/dev/null || echo "0"
+            elif [[ "$EXPR" == ".items | length" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(len(i) if isinstance(i, list) else 0)' 2>/dev/null || echo "0"
+            elif [[ "$EXPR" == ".items[0].metadata.name" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(i[0].get("metadata", {}).get("name","") if isinstance(i, list) and i else "")' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == ".items[0].spec.useManagedServiceAccount // false" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print("true" if isinstance(i, list) and i and i[0].get("spec", {}).get("useManagedServiceAccount") is True else "false")' 2>/dev/null || echo "false"
+            else
+                echo ""
+            fi
         fi
         ;;
 esac

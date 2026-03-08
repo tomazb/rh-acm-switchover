@@ -532,8 +532,8 @@ if [[ "$METHOD" == "passive" ]]; then
             check_fail "Secondary hub: Failed to fetch restore '$PASSIVE_RESTORE_NAME' details"
             RESTORE_JSON="{}"
         fi
-        PHASE=$(echo "$RESTORE_JSON" | jq -r '.status.phase // "unknown"')
-        LAST_MESSAGE=$(echo "$RESTORE_JSON" | jq -r '.status.lastMessage // ""')
+        PHASE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "unknown")
+        LAST_MESSAGE=$(oc --context="$SECONDARY_CONTEXT" get $RES_RESTORE "$PASSIVE_RESTORE_NAME" -n "$BACKUP_NAMESPACE" -o jsonpath='{.status.lastMessage}' 2>/dev/null || echo "")
 
         # Detect GitOps markers on Restore
         GITOPS_MARKERS=$(detect_gitops_markers "$RESTORE_JSON")
