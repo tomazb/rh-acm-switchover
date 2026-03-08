@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [1.5.7] - 2026-03-08
+
+### Fixed
+
+- **Old hub action validation**: Fail finalization with `SwitchoverError` when `old_hub_action` has an unexpected value instead of warning and silently skipping old-hub handling.
+
 ## [1.5.6] - 2026-03-08
 
 ### Changed
