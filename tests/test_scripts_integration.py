@@ -110,16 +110,12 @@ INPUT=$(cat)
 # Handle common expressions; otherwise delegate to real jq
 case "$EXPR" in
     ".items[0]")
-        if printf "%s" "$INPUT" | grep -q '"items"[[:space:]]*:[[:space:]]*\\['; then
-            if [[ -n "${REAL_JQ:-}" ]]; then
-                printf "%s" "$INPUT" | "$REAL_JQ" "$EXPR" 2>/dev/null || echo "null"
-            else
-                echo "{}"
-            fi
-            exit 0
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" "$EXPR" 2>/dev/null || echo "null"
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(json.dumps(i[0]) if isinstance(i, list) and i else "null")' 2>/dev/null || echo "null"
         fi
-        echo "null"
-        exit 1
+        exit 0
         ;;
     ".items | length")
         # Prefer real jq if available; otherwise return 0 for stability
@@ -222,6 +218,46 @@ esac
         encoding="utf-8",
     )
     jq_script.chmod(jq_script.stat().st_mode | stat.S_IEXEC)
+
+
+class TestSharedJqMock:
+    """Regression tests for the lightweight jq shim used by script integration tests."""
+
+    def test_items_zero_returns_first_element_without_real_jq(self, tmp_path):
+        mock_bin = tmp_path / "bin"
+        mock_bin.mkdir()
+        write_shared_jq_mock(mock_bin)
+
+        proc = subprocess.run(
+            [str(mock_bin / "jq"), ".items[0]"],
+            input='{"items":[{"metadata":{"name":"cluster1"}}]}',
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=os.environ.copy(),
+            check=False,
+        )
+
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == '{"metadata": {"name": "cluster1"}}'
+
+    def test_items_zero_returns_null_and_success_when_items_missing(self, tmp_path):
+        mock_bin = tmp_path / "bin"
+        mock_bin.mkdir()
+        write_shared_jq_mock(mock_bin)
+
+        proc = subprocess.run(
+            [str(mock_bin / "jq"), ".items[0]"],
+            input='{"kind":"List"}',
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=os.environ.copy(),
+            check=False,
+        )
+
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == "null"
 
 
 @pytest.fixture

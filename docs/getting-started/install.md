@@ -254,6 +254,19 @@ rules:
 - apiGroups: ["observability.open-cluster-management.io"]
   resources: ["multiclusterobservabilities"]
   verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: acm-switchover-decommission-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: acm-switchover-decommission
+subjects:
+- kind: ServiceAccount
+  name: acm-switchover
+  namespace: default
 ```
 
 ### Create Service Account (Optional)
