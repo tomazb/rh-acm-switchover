@@ -209,17 +209,17 @@ rules:
 # ManagedClusters
 - apiGroups: ["cluster.open-cluster-management.io"]
   resources: ["managedclusters"]
-  verbs: ["get", "list", "patch", "delete"]
+  verbs: ["get", "list", "patch"]
 
 # MultiClusterHub
 - apiGroups: ["operator.open-cluster-management.io"]
   resources: ["multiclusterhubs"]
-  verbs: ["get", "list", "delete"]
+  verbs: ["get", "list"]
 
 # Observability
 - apiGroups: ["observability.open-cluster-management.io"]
   resources: ["multiclusterobservabilities"]
-  verbs: ["get", "list", "delete"]
+  verbs: ["get", "list"]
 
 # Deployments and StatefulSets (for scaling)
 - apiGroups: ["apps"]
@@ -237,21 +237,53 @@ rules:
   verbs: ["get", "list", "patch"]
 ```
 
+For old-hub teardown, grant cluster-scoped delete access separately instead of bundling it into the default operator role:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: acm-switchover-decommission
+rules:
+- apiGroups: ["cluster.open-cluster-management.io"]
+  resources: ["managedclusters"]
+  verbs: ["delete"]
+- apiGroups: ["operator.open-cluster-management.io"]
+  resources: ["multiclusterhubs"]
+  verbs: ["delete"]
+- apiGroups: ["observability.open-cluster-management.io"]
+  resources: ["multiclusterobservabilities"]
+  verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: acm-switchover-decommission-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: acm-switchover-decommission
+subjects:
+- kind: ServiceAccount
+  name: acm-switchover-operator
+  namespace: acm-switchover
+```
+
 ### Create Service Account (Optional)
 
 For automated execution:
 
 ```bash
 # Create service account
-kubectl create serviceaccount acm-switchover -n default
+kubectl create serviceaccount acm-switchover-operator -n acm-switchover
 
 # Bind cluster role
 kubectl create clusterrolebinding acm-switchover-binding \
   --clusterrole=acm-switchover-role \
-  --serviceaccount=default:acm-switchover
+  --serviceaccount=acm-switchover:acm-switchover-operator
 
 # Get token
-kubectl create token acm-switchover -n default --duration=24h
+kubectl create token acm-switchover-operator -n acm-switchover --duration=24h
 
 # Configure context with service account
 kubectl config set-credentials acm-switchover --token=<token>

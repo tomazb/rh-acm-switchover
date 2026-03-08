@@ -49,6 +49,30 @@ def run_script(script_name: str, *args: str, env=None):
     return proc.returncode, output
 
 
+class TestScriptArgumentSafety:
+    """Regression tests for shell argument handling hardening."""
+
+    def test_setup_rbac_uses_array_based_kubectl_args(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert 'KUBECTL_ARGS=(--kubeconfig="$ADMIN_KUBECONFIG" --context="$CONTEXT")' in content
+        assert 'kubectl "${KUBECTL_ARGS[@]}"' in content
+
+    def test_setup_rbac_supports_opt_in_decommission_extension(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert "--include-decommission" in content
+        assert 'extensions/decommission/clusterrole.yaml' in content
+        assert 'extensions/decommission/clusterrolebinding.yaml' in content
+
+    def test_generate_sa_kubeconfig_uses_array_based_context_args(self):
+        content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
+
+        assert "KUBECTL_CONTEXT_ARGS=()" in content
+        assert 'KUBECTL_CONTEXT_ARGS+=(--context="$CONTEXT")' in content
+        assert 'kubectl "${KUBECTL_CONTEXT_ARGS[@]}"' in content
+
+
 def write_shared_jq_mock(mock_bin: Path) -> None:
     """Create a mock jq that handles minimal cases and delegates to real jq."""
     jq_script = mock_bin / "jq"
@@ -85,19 +109,108 @@ INPUT=$(cat)
 
 # Handle common expressions; otherwise delegate to real jq
 case "$EXPR" in
+    ".items[0]")
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" "$EXPR" 2>/dev/null || echo "null"
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(json.dumps(i[0]) if isinstance(i, list) and i else "null")' 2>/dev/null || echo "null"
+        fi
+        exit 0
+        ;;
     ".items | length")
         # Prefer real jq if available; otherwise return 0 for stability
         if [[ -n "${REAL_JQ:-}" ]]; then
             printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "0"
         else
-            echo "0"
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(len(i) if isinstance(i, list) else 0)' 2>/dev/null || echo "0"
+        fi
+        ;;
+    ".items[0].metadata.name")
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(i[0].get("metadata", {}).get("name","") if isinstance(i, list) and i else "")' 2>/dev/null || echo ""
+        fi
+        ;;
+    ".items[0].spec.useManagedServiceAccount // false")
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "false"
+        else
+            if echo "$INPUT" | grep -q '"useManagedServiceAccount"[[:space:]]*:[[:space:]]*true'; then
+                echo "true"
+            else
+                echo "false"
+            fi
+        fi
+        ;;
+    *"syncRestoreWithNewBackups"*".metadata.name"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); out=""; 
+for item in d.get("items", []):
+    if item.get("spec", {}).get("syncRestoreWithNewBackups") is True:
+        out=item.get("metadata", {}).get("name", ""); break
+print(out)' 2>/dev/null || echo ""
+        fi
+        ;;
+    *".status.phase"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "unknown"
+        else
+            PHASE=$(echo "$INPUT" | sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+            echo "${PHASE:-unknown}"
+        fi
+        ;;
+    *".status.lastMessage"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            echo "$INPUT" | sed -n 's/.*"lastMessage"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+        fi
+        ;;
+    *".type==\"Ready\""*".status==\"True\""* )
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "0"
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); c=0
+for item in d.get("items", []):
+    for cond in item.get("status", {}).get("conditions", []):
+        if cond.get("type")=="Ready" and cond.get("status")=="True":
+            c+=1; break
+print(c)' 2>/dev/null || echo "0"
         fi
         ;;
     *)
         if [[ -n "${REAL_JQ:-}" ]]; then
             printf "%s" "$INPUT" | "$REAL_JQ" "${ALL_ARGS[@]}" 2>/dev/null || echo ""
         else
-            echo ""
+            if [[ "$EXPR" == *".status.phase"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); print(d.get("status", {}).get("phase", "unknown"))' 2>/dev/null || echo "unknown"
+            elif [[ "$EXPR" == *".status.lastMessage"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); print(d.get("status", {}).get("lastMessage", ""))' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == *"syncRestoreWithNewBackups"* && "$EXPR" == *".metadata.name"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); out=""; 
+for item in d.get("items", []):
+    if item.get("spec", {}).get("syncRestoreWithNewBackups") is True:
+        out=item.get("metadata", {}).get("name", ""); break
+print(out)' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == *".type==\"Ready\""* && "$EXPR" == *".status==\"True\""* && "$EXPR" == *"| length"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); c=0
+for item in d.get("items", []):
+    for cond in item.get("status", {}).get("conditions", []):
+        if cond.get("type")=="Ready" and cond.get("status")=="True":
+            c+=1; break
+print(c)' 2>/dev/null || echo "0"
+            elif [[ "$EXPR" == ".items | length" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(len(i) if isinstance(i, list) else 0)' 2>/dev/null || echo "0"
+            elif [[ "$EXPR" == ".items[0].metadata.name" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(i[0].get("metadata", {}).get("name","") if isinstance(i, list) and i else "")' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == ".items[0].spec.useManagedServiceAccount // false" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print("true" if isinstance(i, list) and i and i[0].get("spec", {}).get("useManagedServiceAccount") is True else "false")' 2>/dev/null || echo "false"
+            else
+                echo ""
+            fi
         fi
         ;;
 esac
@@ -105,6 +218,52 @@ esac
         encoding="utf-8",
     )
     jq_script.chmod(jq_script.stat().st_mode | stat.S_IEXEC)
+
+
+class TestSharedJqMock:
+    """Regression tests for the lightweight jq shim used by script integration tests."""
+
+    def test_items_zero_returns_first_element_without_real_jq(self, tmp_path):
+        mock_bin = tmp_path / "bin"
+        mock_bin.mkdir()
+        write_shared_jq_mock(mock_bin)
+
+        env = os.environ.copy()
+        env.pop("REAL_JQ", None)
+
+        proc = subprocess.run(
+            [str(mock_bin / "jq"), ".items[0]"],
+            input='{"items":[{"metadata":{"name":"cluster1"}}]}',
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == '{"metadata": {"name": "cluster1"}}'
+
+    def test_items_zero_returns_null_and_success_when_items_missing(self, tmp_path):
+        mock_bin = tmp_path / "bin"
+        mock_bin.mkdir()
+        write_shared_jq_mock(mock_bin)
+
+        env = os.environ.copy()
+        env.pop("REAL_JQ", None)
+
+        proc = subprocess.run(
+            [str(mock_bin / "jq"), ".items[0]"],
+            input='{"kind":"List"}',
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == "null"
 
 
 @pytest.fixture

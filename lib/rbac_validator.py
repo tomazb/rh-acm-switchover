@@ -12,6 +12,8 @@ The module supports two roles:
 import logging
 from typing import Dict, List, Optional, Tuple
 
+from kubernetes.client.rest import ApiException
+
 from lib import KubeClient
 from lib.exceptions import ValidationError
 
@@ -26,7 +28,9 @@ VALID_ARGOCD_MODES = ("none", "check", "manage")
 def _validate_argocd_mode(argocd_mode: str) -> None:
     """Validate Argo CD RBAC mode."""
     if argocd_mode not in VALID_ARGOCD_MODES:
-        raise ValueError(f"Invalid argocd_mode '{argocd_mode}'. Must be one of: {VALID_ARGOCD_MODES}")
+        raise ValueError(
+            f"Invalid argocd_mode '{argocd_mode}'. Must be one of: {VALID_ARGOCD_MODES}"
+        )
 
 
 class RBACValidator:
@@ -36,12 +40,28 @@ class RBACValidator:
     OPERATOR_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
         ("", "nodes", ["get", "list"]),  # For cluster health validation per runbook
-        ("config.openshift.io", "clusteroperators", ["get", "list"]),  # For OpenShift health
-        ("config.openshift.io", "clusterversions", ["get", "list"]),  # For upgrade status check
-        ("cluster.open-cluster-management.io", "managedclusters", ["get", "list", "patch"]),
+        (
+            "config.openshift.io",
+            "clusteroperators",
+            ["get", "list"],
+        ),  # For OpenShift health
+        (
+            "config.openshift.io",
+            "clusterversions",
+            ["get", "list"],
+        ),  # For upgrade status check
+        (
+            "cluster.open-cluster-management.io",
+            "managedclusters",
+            ["get", "list", "patch"],
+        ),
         ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["get", "list"],
+        ),
     ]
 
     # Required cluster-scoped permissions for VALIDATOR role (read-only)
@@ -50,10 +70,18 @@ class RBACValidator:
         ("", "nodes", ["get", "list"]),
         ("config.openshift.io", "clusteroperators", ["get", "list"]),
         ("config.openshift.io", "clusterversions", ["get", "list"]),
-        ("cluster.open-cluster-management.io", "managedclusters", ["get", "list"]),  # No patch
+        (
+            "cluster.open-cluster-management.io",
+            "managedclusters",
+            ["get", "list"],
+        ),  # No patch
         ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["get", "list"],
+        ),
     ]
 
     # Alias for backwards compatibility
@@ -65,11 +93,23 @@ class RBACValidator:
             ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
             ("", "secrets", ["get"]),
             ("", "pods", ["get", "list"]),  # For Velero pod health checks
-            ("cluster.open-cluster-management.io", "backupschedules", ["get", "list", "create", "patch", "delete"]),
-            ("cluster.open-cluster-management.io", "restores", ["get", "list", "create", "patch", "delete"]),
+            (
+                "cluster.open-cluster-management.io",
+                "backupschedules",
+                ["get", "list", "create", "patch", "delete"],
+            ),
+            (
+                "cluster.open-cluster-management.io",
+                "restores",
+                ["get", "list", "create", "patch", "delete"],
+            ),
             ("velero.io", "backups", ["get", "list"]),
             ("velero.io", "restores", ["get", "list"]),  # For monitoring restore status
-            ("velero.io", "backupstoragelocations", ["get", "list"]),  # For storage health check
+            (
+                "velero.io",
+                "backupstoragelocations",
+                ["get", "list"],
+            ),  # For storage health check
             ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
         ],
         "open-cluster-management": [
@@ -80,7 +120,11 @@ class RBACValidator:
             ("", "secrets", ["get"]),  # For Thanos object storage config
             ("apps", "deployments", ["get", "patch"]),
             ("apps", "statefulsets", ["get", "patch"]),
-            ("apps", "statefulsets/scale", ["get", "patch"]),  # For Thanos compactor scaling
+            (
+                "apps",
+                "statefulsets/scale",
+                ["get", "patch"],
+            ),  # For Thanos compactor scaling
             ("route.openshift.io", "routes", ["get"]),  # For Grafana route access
         ],
         "multicluster-engine": [
@@ -141,7 +185,11 @@ class RBACValidator:
     DECOMMISSION_PERMISSIONS = [
         ("cluster.open-cluster-management.io", "managedclusters", ["delete"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["delete"]),
-        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["delete"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["delete"],
+        ),
     ]
 
     # Argo CD read permissions required for --argocd-check and --argocd-manage
@@ -175,13 +223,17 @@ class RBACValidator:
             return self.VALIDATOR_CLUSTER_PERMISSIONS
         return self.OPERATOR_CLUSTER_PERMISSIONS
 
-    def _get_hub_namespace_permissions(self) -> Dict[str, List[Tuple[str, str, List[str]]]]:
+    def _get_hub_namespace_permissions(
+        self,
+    ) -> Dict[str, List[Tuple[str, str, List[str]]]]:
         """Get hub namespace permissions based on role."""
         if self.role == "validator":
             return self.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
         return self.OPERATOR_HUB_NAMESPACE_PERMISSIONS
 
-    def _get_managed_cluster_namespace_permissions(self) -> Dict[str, List[Tuple[str, str, List[str]]]]:
+    def _get_managed_cluster_namespace_permissions(
+        self,
+    ) -> Dict[str, List[Tuple[str, str, List[str]]]]:
         """Get managed cluster namespace permissions based on role."""
         if self.role == "validator":
             return self.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
@@ -191,7 +243,9 @@ class RBACValidator:
         """Check if a verb is a write operation."""
         return verb in ("create", "patch", "delete", "update")
 
-    def _get_argocd_cluster_permissions(self, argocd_mode: str) -> List[Tuple[str, str, List[str]]]:
+    def _get_argocd_cluster_permissions(
+        self, argocd_mode: str
+    ) -> List[Tuple[str, str, List[str]]]:
         """Get Argo CD cluster permissions based on mode and role."""
         _validate_argocd_mode(argocd_mode)
 
@@ -217,7 +271,12 @@ class RBACValidator:
 
         Returns:
             Tuple of (has_permission, error_message)
+
+        Raises:
+            ValidationError: If the permission self-check itself cannot be completed
         """
+        group_name = api_group if api_group else "core"
+        scope = f"namespace '{namespace}'" if namespace else "cluster scope"
         try:
             # Use kubectl auth can-i equivalent via Kubernetes API
             # SelfSubjectAccessReview to check permissions
@@ -235,7 +294,9 @@ class RBACValidator:
 
             # Create SelfSubjectAccessReview
             body = k8s_client.V1SelfSubjectAccessReview(
-                spec=k8s_client.V1SelfSubjectAccessReviewSpec(resource_attributes=resource_attrs)
+                spec=k8s_client.V1SelfSubjectAccessReviewSpec(
+                    resource_attributes=resource_attrs
+                )
             )
 
             # Check permission
@@ -247,12 +308,21 @@ class RBACValidator:
                 reason = response.status.reason or "Permission denied"
                 return False, reason
 
+        except ApiException as e:
+            raise ValidationError(
+                f"Unable to check permission {verb} {group_name}/{resource} on {scope}: "
+                f"{e.status} {e.reason}"
+            ) from e
         except Exception as e:
-            logger.warning("Failed to check permission %s/%s: %s", resource, verb, e)
-            return False, f"Error checking permission: {str(e)}"
+            raise ValidationError(
+                f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e}"
+            ) from e
 
     def validate_cluster_permissions(
-        self, include_decommission: bool = False, skip_observability: bool = False, argocd_mode: str = "none"
+        self,
+        include_decommission: bool = False,
+        skip_observability: bool = False,
+        argocd_mode: str = "none",
     ) -> Tuple[bool, List[str]]:
         """
         Validate cluster-scoped permissions based on role.
@@ -264,11 +334,16 @@ class RBACValidator:
 
         Returns:
             Tuple of (all_valid, list of error messages)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         errors = []
         all_valid = True
 
-        logger.info("Validating cluster-scoped RBAC permissions for role: %s", self.role)
+        logger.info(
+            "Validating cluster-scoped RBAC permissions for role: %s", self.role
+        )
 
         # Get permissions based on role
         cluster_permissions = self._get_cluster_permissions()
@@ -277,7 +352,9 @@ class RBACValidator:
         for api_group, resource, verbs in cluster_permissions:
             # Skip observability permissions if requested
             if skip_observability and "observability" in api_group:
-                logger.info("Skipping observability permission: %s/%s", api_group, resource)
+                logger.info(
+                    "Skipping observability permission: %s/%s", api_group, resource
+                )
                 continue
 
             for verb in verbs:
@@ -321,12 +398,18 @@ class RBACValidator:
                         errors.append(error_msg)
                         logger.error(error_msg)
         elif include_decommission and self.role == "validator":
-            logger.info("Skipping decommission permission checks (validator role is read-only)")
+            logger.info(
+                "Skipping decommission permission checks (validator role is read-only)"
+            )
 
         if all_valid:
-            logger.info("✓ All cluster-scoped permissions validated for role: %s", self.role)
+            logger.info(
+                "✓ All cluster-scoped permissions validated for role: %s", self.role
+            )
         else:
-            logger.error("✗ Cluster-scoped permission validation failed for role: %s", self.role)
+            logger.error(
+                "✗ Cluster-scoped permission validation failed for role: %s", self.role
+            )
 
         return all_valid, errors
 
@@ -343,11 +426,16 @@ class RBACValidator:
 
         Returns:
             Tuple of (all_valid, list of error messages)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         errors = []
         all_valid = True
 
-        logger.info("Validating namespace-scoped RBAC permissions for role: %s", self.role)
+        logger.info(
+            "Validating namespace-scoped RBAC permissions for role: %s", self.role
+        )
 
         # Get permissions based on role
         namespace_permissions = self._get_hub_namespace_permissions()
@@ -360,12 +448,17 @@ class RBACValidator:
 
             # Skip agent namespace on hubs (it exists on managed clusters)
             if skip_agent_namespace and namespace == "open-cluster-management-agent":
-                logger.info("Skipping agent namespace: %s (exists on managed clusters only)", namespace)
+                logger.info(
+                    "Skipping agent namespace: %s (exists on managed clusters only)",
+                    namespace,
+                )
                 continue
 
             # Check if namespace exists first
             if not self.client.namespace_exists(namespace):
-                warning = f"Namespace {namespace} does not exist - skipping permission checks"
+                warning = (
+                    f"Namespace {namespace} does not exist - skipping permission checks"
+                )
                 logger.warning(warning)
                 errors.append(warning)
                 all_valid = False
@@ -375,11 +468,16 @@ class RBACValidator:
 
             for api_group, resource, verbs in permissions:
                 for verb in verbs:
-                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                    has_perm, error = self.check_permission(
+                        api_group, resource, verb, namespace
+                    )
                     if not has_perm:
                         all_valid = False
                         group_name = api_group if api_group else "core"
-                        error_msg = f"Missing permission in {namespace}: " f"{verb} {group_name}/{resource}"
+                        error_msg = (
+                            f"Missing permission in {namespace}: "
+                            f"{verb} {group_name}/{resource}"
+                        )
                         if error:
                             error_msg += f" - {error}"
                         errors.append(error_msg)
@@ -406,7 +504,9 @@ class RBACValidator:
         errors = []
         all_valid = True
 
-        logger.info("Validating managed cluster RBAC permissions for role: %s", self.role)
+        logger.info(
+            "Validating managed cluster RBAC permissions for role: %s", self.role
+        )
 
         # Get managed cluster permissions based on role
         namespace_permissions = self._get_managed_cluster_namespace_permissions()
@@ -424,7 +524,9 @@ class RBACValidator:
 
             for api_group, resource, verbs in permissions:
                 for verb in verbs:
-                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                    has_perm, error = self.check_permission(
+                        api_group, resource, verb, namespace
+                    )
                     if not has_perm:
                         all_valid = False
                         group_name = api_group if api_group else "core"
@@ -442,7 +544,10 @@ class RBACValidator:
         return all_valid, errors
 
     def validate_all_permissions(
-        self, include_decommission: bool = False, skip_observability: bool = False, argocd_mode: str = "none"
+        self,
+        include_decommission: bool = False,
+        skip_observability: bool = False,
+        argocd_mode: str = "none",
     ) -> Tuple[bool, Dict[str, List[str]]]:
         """
         Validate all required RBAC permissions.
@@ -454,6 +559,9 @@ class RBACValidator:
 
         Returns:
             Tuple of (all_valid, dict of errors by category)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         all_errors: Dict[str, List[str]] = {}
 
@@ -467,7 +575,9 @@ class RBACValidator:
             all_errors["cluster"] = cluster_errors
 
         # Validate namespace permissions
-        namespace_valid, namespace_errors = self.validate_namespace_permissions(skip_observability)
+        namespace_valid, namespace_errors = self.validate_namespace_permissions(
+            skip_observability
+        )
         if namespace_errors:
             all_errors["namespaces"] = namespace_errors
 
@@ -484,7 +594,10 @@ class RBACValidator:
         return all_valid, all_errors
 
     def generate_permission_report(
-        self, include_decommission: bool = False, skip_observability: bool = False, argocd_mode: str = "none"
+        self,
+        include_decommission: bool = False,
+        skip_observability: bool = False,
+        argocd_mode: str = "none",
     ) -> str:
         """
         Generate a detailed permission validation report.
@@ -511,7 +624,9 @@ class RBACValidator:
         if all_valid:
             report.append("✓ STATUS: ALL PERMISSIONS VALIDATED")
             report.append("")
-            report.append("The current user/service account has all required permissions")
+            report.append(
+                "The current user/service account has all required permissions"
+            )
             report.append("to execute ACM switchover operations.")
         else:
             report.append("✗ STATUS: PERMISSION VALIDATION FAILED")
@@ -528,11 +643,28 @@ class RBACValidator:
             report.append("REMEDIATION:")
             report.append("")
             report.append("To fix these issues:")
-            report.append("  1. Apply RBAC manifests from deploy/rbac/ directory")
-            report.append("  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/")
-            report.append("  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/")
+            report.append("  1. Apply the baseline RBAC manifests under deploy/rbac/")
+            if include_decommission:
+                report.append(
+                    "  2. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/"
+                )
+                report.append(
+                    "  3. Or use Helm with --set rbac.includeDecommissionClusterRole=true for operator teardown access"
+                )
+                report.append(
+                    "  4. Or use Kustomize for the baseline and add the decommission manifests separately"
+                )
+            else:
+                report.append(
+                    "  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/"
+                )
+                report.append(
+                    "  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/"
+                )
             report.append("")
-            report.append("For more information, see docs/deployment/rbac-requirements.md")
+            report.append(
+                "For more information, see docs/deployment/rbac-requirements.md"
+            )
 
         report.append("=" * 80)
         return "\n".join(report)
@@ -564,11 +696,16 @@ def validate_rbac_permissions(
     # Validate primary hub
     logger.info("Validating RBAC permissions on primary hub...")
     primary_validator = RBACValidator(primary_client)
-    primary_valid, primary_errors = primary_validator.validate_all_permissions(
-        include_decommission=include_decommission,
-        skip_observability=skip_observability,
-        argocd_mode=argocd_mode,
-    )
+    try:
+        primary_valid, primary_errors = primary_validator.validate_all_permissions(
+            include_decommission=include_decommission,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+        )
+    except ValidationError as exc:
+        raise ValidationError(
+            f"RBAC permission validation could not be completed on primary hub: {exc}"
+        ) from exc
 
     if not primary_valid:
         report = primary_validator.generate_permission_report(
@@ -577,17 +714,27 @@ def validate_rbac_permissions(
             argocd_mode=argocd_mode,
         )
         logger.error("\n%s", report)
-        raise ValidationError("RBAC permission validation failed on primary hub. " "See report above for details.")
+        raise ValidationError(
+            "RBAC permission validation failed on primary hub. "
+            "See report above for details."
+        )
 
     # Validate secondary hub if provided
     if secondary_client:
         logger.info("Validating RBAC permissions on secondary hub...")
         secondary_validator = RBACValidator(secondary_client)
-        secondary_valid, secondary_errors = secondary_validator.validate_all_permissions(
-            include_decommission=False,  # Decommission only on primary
-            skip_observability=skip_observability,
-            argocd_mode=argocd_mode,
-        )
+        try:
+            secondary_valid, secondary_errors = (
+                secondary_validator.validate_all_permissions(
+                    include_decommission=False,  # Decommission only on primary
+                    skip_observability=skip_observability,
+                    argocd_mode=argocd_mode,
+                )
+            )
+        except ValidationError as exc:
+            raise ValidationError(
+                f"RBAC permission validation could not be completed on secondary hub: {exc}"
+            ) from exc
 
         if not secondary_valid:
             report = secondary_validator.generate_permission_report(

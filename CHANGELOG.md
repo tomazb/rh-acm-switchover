@@ -7,12 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+- No unreleased changes yet.
+
+## [1.5.8] - 2026-03-08
 
 ### Changed
 
+- **Audit report location**: Move the deep audit report from repository root to `docs/development/report.md`.
+
 ### Fixed
 
+- **Argo CD impact reporting**: Keep the preflight Argo CD impact report non-blocking for unexpected exceptions while still warning operators.
+- **Auto-import reset safety**: Fail finalization when this run owns the temporary `ImportAndSync` override but cannot verify the ConfigMap before restoring the default.
+- **Phase failure history**: Preserve distinct failure messages within the same phase instead of deduplicating only by phase name.
+- **Preflight RBAC classification**: Report only expected `ValidationError` failures as RBAC validation problems and let unexpected errors surface normally.
+- **Release metadata cleanup**: Correct changelog comparison links, rename the old-hub observability helper for clarity, and fix the namespace validation comment.
+
+## [1.5.7] - 2026-03-08
+
+### Fixed
+
+- **Old hub action validation**: Fail finalization with `SwitchoverError` when `old_hub_action` has an unexpected value instead of warning and silently skipping old-hub handling.
+
+## [1.5.6] - 2026-03-08
+
+### Changed
+
+- **Setup flag validation**: Reject `--include-decommission` outside `--setup` instead of accepting and ignoring it.
+- **RBAC self-check failures**: Surface API/auth/TLS failures as validation errors instead of misreporting them as missing permissions.
+
+### Fixed
+
+- **Validate-only resume safety**: Preserve the persisted phase when `--validate-only` runs against an in-progress switchover state file.
+- **Finalization initial Velero list failures**: Normalize the first backup-list call so startup failures do not leak raw `ApiException`.
+- **Passive restore preflight overhead**: Reuse fetched restore JSON for phase and message extraction instead of making two extra `oc get` calls.
+- **Deep report manifest paths**: Correct decommission extension paths in `report.md`.
+
+## [1.5.5] - 2026-03-07
+
+### Fixed
+
+- **TLS hostname verification docs**: Clarified that hostname verification remains enforced for normal CLI usage and that the insecure bypass is an internal `KubeClient` option rather than a public flag.
+- **Kubeconfig redirect guidance**: Updated script help and deployment docs to use secure `umask 077` redirection for stdout-generated kubeconfigs and merged kubeconfig files.
 - **Postflight ACM version tolerance**: Downgrade unknown new-hub ACM version during auto-import checks to a warning so transient empty status does not fail postflight verification.
 - **Finalization backup ownership guard**: Revalidate that recorded post-switchover backups are ACM-owned before using them for integrity checks.
 - **Finalization passive-sync restore errors**: Wrap old-primary passive sync restore creation failures in `SwitchoverError` with switchover-specific context.
@@ -823,7 +859,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.8...HEAD
+[1.5.8]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.7...v1.5.8
+[1.5.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...v1.5.7
+[1.5.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.1...v1.5.3

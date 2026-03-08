@@ -557,18 +557,18 @@ Generates a kubeconfig file that can be used to authenticate as a specific Kuber
 
 # Examples:
 # Default 48-hour token from current context
-./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
+umask 077 && ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # Specify explicit cluster context with custom user name (prevents collisions)
-./scripts/generate-sa-kubeconfig.sh --context prod-hub --user prod-operator \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh --context prod-hub --user prod-operator \
   acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # Custom token duration (72 hours for long operations)
-./scripts/generate-sa-kubeconfig.sh --token-duration 72h \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh --token-duration 72h \
   acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # Full example with all options
-./scripts/generate-sa-kubeconfig.sh \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh \
   --context staging-hub \
   --user staging-operator \
   --token-duration 8h \
@@ -594,6 +594,9 @@ oc get managedclusters
 
 > **Tip**: Always use `--user` with unique names when generating kubeconfigs for multiple
 > clusters to prevent credential collisions when merging.
+>
+> **Security**: Because this script writes credentials to stdout, redirect with `umask 077`
+> and keep the resulting kubeconfig at `0600`.
 
 ### What It Does
 
@@ -678,6 +681,7 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
 | `--admin-kubeconfig <path>` | **Required.** Path to kubeconfig with cluster-admin privileges | - |
 | `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
 | `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
+| `--include-decommission` | Also deploy and validate the opt-in decommission RBAC extension (operator or both only) | - |
 | `--token-duration <dur>` | Token validity duration | `48h` |
 | `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
 | `--skip-kubeconfig` | Skip kubeconfig generation | - |
@@ -691,7 +695,8 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
 ./scripts/setup-rbac.sh \
   --admin-kubeconfig ~/.kube/admin.yaml \
   --context prod-hub \
-  --role operator
+  --role operator \
+  --include-decommission
 
 # Setup both roles with custom token duration
 ./scripts/setup-rbac.sh \
@@ -705,6 +710,8 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
   --context prod-hub \
   --dry-run
 ```
+
+Use `--include-decommission` only when the generated operator kubeconfig must support `--decommission` or `--old-hub-action decommission`. It is rejected with `--role validator`.
 
 ### What It Does
 

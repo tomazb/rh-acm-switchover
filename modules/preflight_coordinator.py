@@ -7,6 +7,7 @@ from typing import Tuple, TypedDict
 
 from lib import argocd as argocd_lib
 from lib.constants import OBSERVABILITY_NAMESPACE
+from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
 
@@ -48,6 +49,7 @@ class PreflightValidator:
         secondary_client: KubeClient,
         method: str = "passive",
         skip_rbac_validation: bool = False,
+        include_decommission: bool = False,
         argocd_check: bool = False,
         argocd_manage: bool = False,
     ) -> None:
@@ -55,6 +57,7 @@ class PreflightValidator:
         self.secondary = secondary_client
         self.method = method
         self.skip_rbac_validation = skip_rbac_validation
+        self.include_decommission = include_decommission
         self.argocd_check = argocd_check
         self.argocd_manage = argocd_manage
 
@@ -65,12 +68,18 @@ class PreflightValidator:
         self.hub_component_validator = HubComponentValidator(self.reporter)
         self.backup_validator = BackupValidator(self.reporter)
         self.backup_schedule_validator = BackupScheduleValidator(self.reporter)
-        self.backup_storage_location_validator = BackupStorageLocationValidator(self.reporter)
+        self.backup_storage_location_validator = BackupStorageLocationValidator(
+            self.reporter
+        )
         self.cluster_deployment_validator = ClusterDeploymentValidator(self.reporter)
-        self.managed_cluster_backup_validator = ManagedClusterBackupValidator(self.reporter)
+        self.managed_cluster_backup_validator = ManagedClusterBackupValidator(
+            self.reporter
+        )
         self.passive_sync_validator = PassiveSyncValidator(self.reporter)
         self.observability_detector = ObservabilityDetector(self.reporter)
-        self.observability_prereq_validator = ObservabilityPrereqValidator(self.reporter)
+        self.observability_prereq_validator = ObservabilityPrereqValidator(
+            self.reporter
+        )
         self.tooling_validator = ToolingValidator(self.reporter)
 
     def _get_argocd_rbac_mode(self) -> str:
@@ -87,7 +96,10 @@ class PreflightValidator:
         if requested_mode == "none":
             return "none"
 
-        for client, hub_label in ((self.primary, "primary"), (self.secondary, "secondary")):
+        for client, hub_label in (
+            (self.primary, "primary"),
+            (self.secondary, "secondary"),
+        ):
             if client is None:
                 continue
             discovery = argocd_lib.detect_argocd_installation(client)
@@ -95,7 +107,9 @@ class PreflightValidator:
                 return requested_mode
             logger.info("Argo CD Applications CRD not found on %s hub", hub_label)
 
-        logger.info("Argo CD Applications CRD not found on either hub, skipping Argo CD RBAC permission checks")
+        logger.info(
+            "Argo CD Applications CRD not found on either hub, skipping Argo CD RBAC permission checks"
+        )
         return "none"
 
     def validate_all(self) -> Tuple[bool, PreflightConfig]:
@@ -105,34 +119,31 @@ class PreflightValidator:
 
         # RBAC validation (unless explicitly skipped)
         if not self.skip_rbac_validation:
-            try:
-                logger.info("Validating RBAC permissions...")
-                # Check if observability namespace exists on either hub
-                # If not installed, skip observability permission checks
-                primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
-                secondary_has_obs = (
-                    self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.secondary else False
+            logger.info("Validating RBAC permissions...")
+            # Check if observability namespace exists on either hub
+            # If not installed, skip observability permission checks
+            primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
+            secondary_has_obs = (
+                self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE)
+                if self.secondary
+                else False
+            )
+            skip_obs = not (primary_has_obs or secondary_has_obs)
+            if skip_obs:
+                logger.info(
+                    "Observability namespace not found on either hub, "
+                    "skipping observability permission checks"
                 )
-                skip_obs = not (primary_has_obs or secondary_has_obs)
-                if skip_obs:
-                    logger.info(
-                        "Observability namespace not found on either hub, " "skipping observability permission checks"
-                    )
 
+            try:
                 validate_rbac_permissions(
                     primary_client=self.primary,
                     secondary_client=self.secondary,
-                    include_decommission=False,  # Checked separately if needed
+                    include_decommission=self.include_decommission,
                     skip_observability=skip_obs,
                     argocd_mode=self._get_effective_argocd_rbac_mode(),
                 )
-                self.reporter.add_result(
-                    "RBAC Permissions",
-                    True,
-                    "All required RBAC permissions validated",
-                    critical=True,
-                )
-            except Exception as e:
+            except ValidationError as e:
                 self.reporter.add_result(
                     "RBAC Permissions",
                     False,
@@ -142,6 +153,13 @@ class PreflightValidator:
                 logger.warning(
                     "RBAC validation failed. You can skip this check with --skip-rbac-validation "
                     "if you're confident you have the required permissions."
+                )
+            else:
+                self.reporter.add_result(
+                    "RBAC Permissions",
+                    True,
+                    "All required RBAC permissions validated",
+                    critical=True,
                 )
         else:
             logger.info("RBAC validation skipped (--skip-rbac-validation specified)")
@@ -177,9 +195,11 @@ class PreflightValidator:
         if self.method == "passive":
             self.passive_sync_validator.run(self.secondary)
 
-        primary_observability, secondary_observability = self.observability_detector.detect(
-            self.primary,
-            self.secondary,
+        primary_observability, secondary_observability = (
+            self.observability_detector.detect(
+                self.primary,
+                self.secondary,
+            )
         )
 
         if secondary_observability:

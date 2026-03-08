@@ -33,22 +33,22 @@ rules:
   # ACM Cluster Management - ManagedClusters
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
-    verbs: ["get", "list", "patch", "delete"]
+    verbs: ["get", "list", "patch"]
   
   # Hive - ClusterDeployment validation
   - apiGroups: ["hive.openshift.io"]
     resources: ["clusterdeployments"]
     verbs: ["get", "list"]
   
-  # ACM Operator - Hub detection and decommission
+  # ACM Operator - Hub detection
   - apiGroups: ["operator.open-cluster-management.io"]
     resources: ["multiclusterhubs"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list"]
   
-  # Observability - Auto-detection and decommission
+  # Observability - Auto-detection
   - apiGroups: ["observability.open-cluster-management.io"]
     resources: ["multiclusterobservabilities"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list"]
 
   # Argo CD - Detection and pause/resume (--argocd-check, --argocd-manage)
   - apiGroups: ["argoproj.io"]
@@ -64,6 +64,29 @@ rules:
   {{- with .Values.rbac.customOperatorRules }}
   {{- toYaml . | nindent 2 }}
   {{- end }}
+
+{{- if .Values.rbac.includeDecommissionClusterRole }}
+---
+# ClusterRole for ACM Switchover Decommission
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.clusterRole.decommission.name }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: decommission
+    app.kubernetes.io/role: operator
+rules:
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["delete"]
+  - apiGroups: ["operator.open-cluster-management.io"]
+    resources: ["multiclusterhubs"]
+    verbs: ["delete"]
+  - apiGroups: ["observability.open-cluster-management.io"]
+    resources: ["multiclusterobservabilities"]
+    verbs: ["delete"]
+{{- end }}
 
 ---
 # ClusterRole for ACM Switchover Validator (Read-Only)

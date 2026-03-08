@@ -29,12 +29,14 @@ logger = logging.getLogger("acm_switchover")
 # Based on Kubernetes naming conventions: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
 # DNS-1123 subdomain format: contains only lowercase alphanumeric characters, '-' or '.',
 # starts with an alphanumeric character, ends with an alphanumeric character
-K8S_NAME_PATTERN: Pattern[str] = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+K8S_NAME_PATTERN: Pattern[str] = re.compile(
+    r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+)
 K8S_NAME_MAX_LENGTH = 253
 
 # Kubernetes namespace validation pattern
 # RFC 1123 label format: contains only lowercase alphanumeric characters or '-',
-# starts with an alphabetic character (Kubernetes requires this), ends with an alphanumeric character
+# this project intentionally requires a leading letter even though Kubernetes also allows digits
 K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?$")
 K8S_NAMESPACE_MAX_LENGTH = 63
 
@@ -45,13 +47,17 @@ K8S_LABEL_KEY_PATTERN: Pattern[str] = re.compile(
     r"^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$"
     r"|^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$"
 )
-K8S_LABEL_VALUE_PATTERN: Pattern[str] = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$")
+K8S_LABEL_VALUE_PATTERN: Pattern[str] = re.compile(
+    r"^[a-zA-Z0-9]([a-zA-Z0-9-_.]*[a-zA-Z0-9])?$"
+)
 K8S_LABEL_MAX_LENGTH = 63
 
 # Context name validation pattern (more permissive than K8s names)
 # Allows alphanumeric, hyphens, underscores, dots, forward slashes, and colons
 # This accommodates default oc login contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
-CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
+CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$"
+)
 CONTEXT_NAME_MAX_LENGTH = 128
 
 
@@ -108,7 +114,7 @@ class InputValidator:
             raise ValidationError(
                 f"Invalid namespace '{namespace}'. "
                 f"Must consist of lower case alphanumeric characters or '-', "
-                f"and must start and end with an alphanumeric character"
+                f"must start with a lowercase letter, and end with an alphanumeric character"
             )
 
     @staticmethod
@@ -126,7 +132,9 @@ class InputValidator:
             raise ValidationError("Label key cannot be empty")
 
         if len(key) > K8S_LABEL_MAX_LENGTH:
-            raise ValidationError(f"Label key '{key}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters")
+            raise ValidationError(
+                f"Label key '{key}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters"
+            )
 
         if not K8S_LABEL_KEY_PATTERN.match(key):
             raise ValidationError(
@@ -151,7 +159,9 @@ class InputValidator:
             raise ValidationError("Label value cannot be None")
 
         if len(value) > K8S_LABEL_MAX_LENGTH:
-            raise ValidationError(f"Label value '{value}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters")
+            raise ValidationError(
+                f"Label value '{value}' exceeds maximum length of {K8S_LABEL_MAX_LENGTH} characters"
+            )
 
         # Empty string is valid, only check pattern for non-empty values
         if value and not K8S_LABEL_VALUE_PATTERN.match(value):
@@ -199,7 +209,9 @@ class InputValidator:
             ValidationError: If value is not in valid_choices
         """
         if value not in valid_choices:
-            raise ValidationError(f"Invalid {field_name} '{value}'. Must be one of: {', '.join(valid_choices)}")
+            raise ValidationError(
+                f"Invalid {field_name} '{value}'. Must be one of: {', '.join(valid_choices)}"
+            )
 
     @staticmethod
     def validate_cli_method(method: str) -> None:
@@ -209,12 +221,16 @@ class InputValidator:
     @staticmethod
     def validate_cli_old_hub_action(action: str) -> None:
         """Validate CLI old-hub-action argument."""
-        InputValidator._validate_choice(action, ["secondary", "decommission", "none"], "old-hub-action")
+        InputValidator._validate_choice(
+            action, ["secondary", "decommission", "none"], "old-hub-action"
+        )
 
     @staticmethod
     def validate_cli_activation_method(method: str) -> None:
         """Validate CLI activation-method argument."""
-        InputValidator._validate_choice(method, ["patch", "restore"], "activation-method")
+        InputValidator._validate_choice(
+            method, ["patch", "restore"], "activation-method"
+        )
 
     @staticmethod
     def validate_cli_log_format(log_format: str) -> None:
@@ -280,7 +296,9 @@ class InputValidator:
                 # This prevents symlink-based path bypasses via non-existent parent directories
                 parent = os.path.dirname(path)
                 if parent and os.path.exists(parent):
-                    resolved_path = os.path.join(os.path.realpath(parent), os.path.basename(path))
+                    resolved_path = os.path.join(
+                        os.path.realpath(parent), os.path.basename(path)
+                    )
                 else:
                     raise SecurityValidationError(
                         f"SECURITY: Absolute path '{path}' for {field_name} has a non-existent parent directory. "
@@ -288,7 +306,10 @@ class InputValidator:
                         f"Create the parent directory in an allowed location (/tmp, /var, workspace root, or home directory) before using this path."
                     )
 
-            safe_prefixes = ["/tmp/", "/var/"]  # nosec B108 - path validation, not temp file usage
+            safe_prefixes = [
+                "/tmp/",
+                "/var/",
+            ]  # nosec B108 - path validation, not temp file usage
             # Allow paths under current working directory
             cwd = os.getcwd()
             if cwd:
@@ -341,11 +362,15 @@ class InputValidator:
         # Validate required context arguments
         if hasattr(args, "primary_context") and args.primary_context:
             InputValidator.validate_context_name(args.primary_context)
-            InputValidator.validate_non_empty_string(args.primary_context, "primary-context")
+            InputValidator.validate_non_empty_string(
+                args.primary_context, "primary-context"
+            )
 
         if hasattr(args, "secondary_context") and args.secondary_context:
             InputValidator.validate_context_name(args.secondary_context)
-            InputValidator.validate_non_empty_string(args.secondary_context, "secondary-context")
+            InputValidator.validate_non_empty_string(
+                args.secondary_context, "secondary-context"
+            )
 
         # Validate method
         if hasattr(args, "method") and args.method:
@@ -368,87 +393,150 @@ class InputValidator:
             InputValidator.validate_safe_filesystem_path(args.state_file, "state-file")
 
         # Validate minimum managed cluster threshold
-        if hasattr(args, "min_managed_clusters") and args.min_managed_clusters is not None:
+        if (
+            hasattr(args, "min_managed_clusters")
+            and args.min_managed_clusters is not None
+        ):
             if not isinstance(args.min_managed_clusters, int):
                 raise ValidationError("--min-managed-clusters must be an integer")
             if args.min_managed_clusters < 0:
-                raise ValidationError("--min-managed-clusters must be a non-negative integer")
+                raise ValidationError(
+                    "--min-managed-clusters must be a non-negative integer"
+                )
 
         is_decommission = hasattr(args, "decommission") and args.decommission
         is_setup = hasattr(args, "setup") and args.setup
         has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
         has_argocd_resume_after = (
-            hasattr(args, "argocd_resume_after_switchover") and args.argocd_resume_after_switchover
+            hasattr(args, "argocd_resume_after_switchover")
+            and args.argocd_resume_after_switchover
         )
-        has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
+        has_argocd_resume_only = (
+            hasattr(args, "argocd_resume_only") and args.argocd_resume_only
+        )
         has_validate_only = hasattr(args, "validate_only") and args.validate_only
 
         # Validate that secondary context is provided when not in decommission or setup mode
         if not is_decommission and not is_setup and not has_argocd_resume_only:
             if hasattr(args, "secondary_context") and not args.secondary_context:
-                raise ValidationError("secondary-context is required for switchover operations")
+                raise ValidationError(
+                    "secondary-context is required for switchover operations"
+                )
 
         # Validate activation-method combinations
         # - It is only meaningful for passive method
         # - --activation-method=restore must not be used with --method full
-        if hasattr(args, "method") and hasattr(args, "activation_method") and args.activation_method:
+        if (
+            hasattr(args, "method")
+            and hasattr(args, "activation_method")
+            and args.activation_method
+        ):
             if args.method != "passive" and args.activation_method == "restore":
-                raise ValidationError("--activation-method=restore can only be used with --method passive")
+                raise ValidationError(
+                    "--activation-method=restore can only be used with --method passive"
+                )
 
         # Validate that --non-interactive only makes sense with --decommission
         if hasattr(args, "non_interactive") and args.non_interactive:
             if not is_decommission:
-                raise ValidationError("--non-interactive can only be used with --decommission")
+                raise ValidationError(
+                    "--non-interactive can only be used with --decommission"
+                )
 
         # Validate disable-observability-on-secondary flag
-        if hasattr(args, "disable_observability_on_secondary") and args.disable_observability_on_secondary:
+        if (
+            hasattr(args, "disable_observability_on_secondary")
+            and args.disable_observability_on_secondary
+        ):
             if is_decommission:
-                raise ValidationError("--disable-observability-on-secondary cannot be used with --decommission")
+                raise ValidationError(
+                    "--disable-observability-on-secondary cannot be used with --decommission"
+                )
             if hasattr(args, "old_hub_action") and args.old_hub_action != "secondary":
-                raise ValidationError("--disable-observability-on-secondary requires --old-hub-action secondary")
+                raise ValidationError(
+                    "--disable-observability-on-secondary requires --old-hub-action secondary"
+                )
 
         # Validate Argo CD argument combinations
 
         if has_argocd_resume_after:
             if has_argocd_resume_only:
-                raise ValidationError("--argocd-resume-after-switchover cannot be used with --argocd-resume-only")
+                raise ValidationError(
+                    "--argocd-resume-after-switchover cannot be used with --argocd-resume-only"
+                )
             if has_validate_only:
-                raise ValidationError("--argocd-resume-after-switchover cannot be used with --validate-only")
+                raise ValidationError(
+                    "--argocd-resume-after-switchover cannot be used with --validate-only"
+                )
             if not has_argocd_manage:
-                raise ValidationError("--argocd-resume-after-switchover requires --argocd-manage")
+                raise ValidationError(
+                    "--argocd-resume-after-switchover requires --argocd-manage"
+                )
 
         if has_argocd_manage:
             if has_argocd_resume_only:
-                raise ValidationError("--argocd-manage cannot be used with --argocd-resume-only")
+                raise ValidationError(
+                    "--argocd-manage cannot be used with --argocd-resume-only"
+                )
             if has_validate_only:
-                raise ValidationError("--argocd-manage cannot be used with --validate-only")
+                raise ValidationError(
+                    "--argocd-manage cannot be used with --validate-only"
+                )
 
         # --argocd-resume-only needs state file (primary + secondary context) to restore from
         if has_argocd_resume_only:
             if has_validate_only:
-                raise ValidationError("--argocd-resume-only cannot be used with --validate-only")
+                raise ValidationError(
+                    "--argocd-resume-only cannot be used with --validate-only"
+                )
             if is_decommission:
-                raise ValidationError("--argocd-resume-only cannot be used with --decommission")
+                raise ValidationError(
+                    "--argocd-resume-only cannot be used with --decommission"
+                )
             if is_setup:
-                raise ValidationError("--argocd-resume-only cannot be used with --setup")
+                raise ValidationError(
+                    "--argocd-resume-only cannot be used with --setup"
+                )
             if not (hasattr(args, "secondary_context") and args.secondary_context):
-                raise ValidationError("--argocd-resume-only requires --secondary-context to resolve state file")
+                raise ValidationError(
+                    "--argocd-resume-only requires --secondary-context to resolve state file"
+                )
 
         # Validate setup-specific arguments
+        if getattr(args, "include_decommission", False) and not is_setup:
+            raise ValidationError(
+                "--include-decommission can only be used with --setup"
+            )
+
         if is_setup:
             # --admin-kubeconfig is required for setup
             if not (hasattr(args, "admin_kubeconfig") and args.admin_kubeconfig):
                 raise ValidationError("--admin-kubeconfig is required for --setup mode")
             # Validate admin-kubeconfig path
-            InputValidator.validate_safe_filesystem_path(args.admin_kubeconfig, "admin-kubeconfig")
+            InputValidator.validate_safe_filesystem_path(
+                args.admin_kubeconfig, "admin-kubeconfig"
+            )
             # Validate role if provided
             if hasattr(args, "role") and args.role:
                 if args.role not in ("operator", "validator", "both"):
-                    raise ValidationError("--role must be one of: operator, validator, both")
+                    raise ValidationError(
+                        "--role must be one of: operator, validator, both"
+                    )
+            if (
+                getattr(args, "include_decommission", False)
+                and getattr(args, "role", "operator") == "validator"
+            ):
+                raise ValidationError(
+                    "--include-decommission requires --role operator or --role both"
+                )
             # Validate token-duration format (basic check for number + unit)
             if hasattr(args, "token_duration") and args.token_duration:
                 if not re.match(r"^\d+[hms]$", args.token_duration):
-                    raise ValidationError("--token-duration must be in format like '48h', '30m', or '3600s'")
+                    raise ValidationError(
+                        "--token-duration must be in format like '48h', '30m', or '3600s'"
+                    )
             # Validate output-dir if provided
             if hasattr(args, "output_dir") and args.output_dir:
-                InputValidator.validate_safe_filesystem_path(args.output_dir, "output-dir")
+                InputValidator.validate_safe_filesystem_path(
+                    args.output_dir, "output-dir"
+                )
