@@ -62,8 +62,8 @@ class TestScriptArgumentSafety:
         content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
 
         assert "--include-decommission" in content
-        assert 'extensions/decommission/clusterrole.yaml' in content
-        assert 'extensions/decommission/clusterrolebinding.yaml' in content
+        assert "extensions/decommission/clusterrole.yaml" in content
+        assert "extensions/decommission/clusterrolebinding.yaml" in content
 
     def test_generate_sa_kubeconfig_uses_array_based_context_args(self):
         content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
@@ -1081,8 +1081,8 @@ def test_preflight_missing_namespace_fails():
     )
 
     # Will fail - either from missing oc (127) or validation (1)
-    assert code != 0, f"Expected failure, got success (exit 0)"
-    assert code != 2, f"Expected validation/runtime failure, not arg error (exit 2)"
+    assert code != 0, "Expected failure, got success (exit 0)"
+    assert code != 2, "Expected validation/runtime failure, not arg error (exit 2)"
 
 
 @pytest.mark.integration
@@ -1096,5 +1096,5 @@ def test_postflight_missing_restore_fails():
     )
 
     # Will fail - either from validation (1) or command not found (127)
-    assert code != 0, f"Expected failure, got success (exit 0)"
-    assert code != 2, f"Expected validation/runtime failure, not arg error (exit 2)"
+    assert code != 0, "Expected failure, got success (exit 0)"
+    assert code != 2, "Expected validation/runtime failure, not arg error (exit 2)"

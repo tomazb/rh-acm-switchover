@@ -222,12 +222,7 @@ class TestRBACManifestConsistency:
     def decommission_clusterrolebinding_path(self) -> Path:
         """Get the static decommission ClusterRoleBinding manifest path."""
         return (
-            Path(__file__).parent.parent
-            / "deploy"
-            / "rbac"
-            / "extensions"
-            / "decommission"
-            / "clusterrolebinding.yaml"
+            Path(__file__).parent.parent / "deploy" / "rbac" / "extensions" / "decommission" / "clusterrolebinding.yaml"
         )
 
     @pytest.fixture
@@ -412,7 +407,7 @@ class TestRBACManifestConsistency:
         assert decommission_clusterrole_path.exists(), "Expected static decommission ClusterRole manifest"
         content = decommission_clusterrole_path.read_text(encoding="utf-8")
         required_snippets = [
-            'name: acm-switchover-decommission',
+            "name: acm-switchover-decommission",
             'resources: ["managedclusters"]\n    verbs: ["delete"]',
             'resources: ["multiclusterhubs"]\n    verbs: ["delete"]',
             'resources: ["multiclusterobservabilities"]\n    verbs: ["delete"]',

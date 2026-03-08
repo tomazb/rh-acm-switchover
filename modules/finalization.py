@@ -86,9 +86,7 @@ class Finalization:
             "secondary hub",
             dry_run=dry_run,
         )
-        self._cached_schedules: Optional[List[Dict]] = (
-            None  # Cache for backup schedules
-        )
+        self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
 
     @staticmethod
     def _get_acm_backup_ownership_signal(backup: Dict) -> Optional[str]:
@@ -152,9 +150,7 @@ class Finalization:
             parsed = self._parse_timestamp(raw_value)
             if parsed:
                 return parsed
-        raw_candidates = [
-            f"{field}={value}" for field, value in candidate_fields if value
-        ]
+        raw_candidates = [f"{field}={value}" for field, value in candidate_fields if value]
         if raw_candidates:
             backup_name = metadata.get("name", "unknown")
             logger.warning(
@@ -164,9 +160,7 @@ class Finalization:
             )
         return None
 
-    def _find_post_enable_backup(
-        self, backups: List[Dict], enabled_at: Optional[datetime]
-    ) -> Optional[Dict]:
+    def _find_post_enable_backup(self, backups: List[Dict], enabled_at: Optional[datetime]) -> Optional[Dict]:
         """Find an ACM-owned backup that proves continuity after enable/resume."""
         if enabled_at is None:
             return None
@@ -174,11 +168,7 @@ class Finalization:
         candidates = []
         for backup in backups:
             backup_ts = self._backup_effective_timestamp(backup)
-            if (
-                backup_ts
-                and backup_ts >= enabled_at
-                and self._backup_is_detectable(backup)
-            ):
+            if backup_ts and backup_ts >= enabled_at and self._backup_is_detectable(backup):
                 candidates.append((backup_ts, backup))
 
         if not candidates:
@@ -201,9 +191,7 @@ class Finalization:
         try:
             # Optional: Disable Observability on the old primary hub before enabling backups
             if self.disable_observability_on_secondary:
-                with self.state.step(
-                    "disable_observability_on_secondary", logger
-                ) as should_run:
+                with self.state.step("disable_observability_on_secondary", logger) as should_run:
                     if should_run:
                         self._disable_observability_on_old_hub()
 
@@ -212,9 +200,7 @@ class Finalization:
                 if should_run:
                     self._enable_backup_schedule()
 
-            with self.state.step(
-                "verify_backup_schedule_enabled", logger
-            ) as should_run:
+            with self.state.step("verify_backup_schedule_enabled", logger) as should_run:
                 if should_run:
                     self._verify_backup_schedule_enabled()
 
@@ -281,9 +267,7 @@ class Finalization:
 
         # Now create/enable the BackupSchedule
         self.backup_manager.ensure_enabled(self.acm_version)
-        self.state.set_config(
-            "backup_schedule_enabled_at", datetime.now(timezone.utc).isoformat()
-        )
+        self.state.set_config("backup_schedule_enabled_at", datetime.now(timezone.utc).isoformat())
         self.state.set_config("new_backup_detected", False)
 
     def _cleanup_restore_resources(self):
@@ -349,14 +333,11 @@ class Finalization:
         # Save archived restores to state for audit trail
         if archived_restores:
             self.state.set_config("archived_restores", archived_restores)
-            logger.info(
-                "Saved %s restore record(s) to state file", len(archived_restores)
-            )
+            logger.info("Saved %s restore record(s) to state file", len(archived_restores))
 
         if delete_failures:
             raise SwitchoverError(
-                "Failed to delete restore resource(s) before enabling BackupSchedule: "
-                + "; ".join(delete_failures)
+                "Failed to delete restore resource(s) before enabling BackupSchedule: " + "; ".join(delete_failures)
             )
 
     def _archive_restore_details(self, restore: dict) -> dict:
@@ -386,9 +367,7 @@ class Finalization:
             "archived_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             # Spec details
             "velero_backups": {
-                "veleroManagedClustersBackupName": spec.get(
-                    "veleroManagedClustersBackupName"
-                ),
+                "veleroManagedClustersBackupName": spec.get("veleroManagedClustersBackupName"),
                 "veleroCredentialsBackupName": spec.get("veleroCredentialsBackupName"),
                 "veleroResourcesBackupName": spec.get("veleroResourcesBackupName"),
             },
@@ -398,12 +377,8 @@ class Finalization:
             # Status details
             "phase": status.get("phase"),
             "last_message": status.get("lastMessage"),
-            "velero_managed_clusters_restore_name": status.get(
-                "veleroManagedClustersRestoreName"
-            ),
-            "velero_credentials_restore_name": status.get(
-                "veleroCredentialsRestoreName"
-            ),
+            "velero_managed_clusters_restore_name": status.get("veleroManagedClustersRestoreName"),
+            "velero_credentials_restore_name": status.get("veleroCredentialsRestoreName"),
             "velero_resources_restore_name": status.get("veleroResourcesRestoreName"),
         }
 
@@ -426,8 +401,7 @@ class Finalization:
             current_backups = self._list_acm_owned_velero_backups()
         except TransientError as exc:
             raise SwitchoverError(
-                "Failed to list Velero backups before waiting for a new ACM backup: "
-                f"{exc}"
+                "Failed to list Velero backups before waiting for a new ACM backup: " f"{exc}"
             ) from exc
 
         recorded_backup_name = self.state.get_config("post_switchover_backup_name")
@@ -449,19 +423,13 @@ class Finalization:
                     recorded_backup_name,
                 )
                 self.state.set_config("new_backup_detected", True)
-                self.state.set_config(
-                    "post_switchover_backup_name", recorded_backup_name
-                )
+                self.state.set_config("post_switchover_backup_name", recorded_backup_name)
                 return
 
         enabled_at = self._get_backup_schedule_enabled_at()
-        existing_post_enable_backup = self._find_post_enable_backup(
-            current_backups, enabled_at
-        )
+        existing_post_enable_backup = self._find_post_enable_backup(current_backups, enabled_at)
         if existing_post_enable_backup:
-            existing_backup_name = existing_post_enable_backup.get("metadata", {}).get(
-                "name"
-            )
+            existing_backup_name = existing_post_enable_backup.get("metadata", {}).get("name")
             logger.info(
                 "Found existing post-enable ACM backup on resume: %s",
                 existing_backup_name,
@@ -472,9 +440,7 @@ class Finalization:
 
         initial_backups = current_backups
 
-        initial_backup_names = {
-            b.get("metadata", {}).get("name") for b in initial_backups
-        }
+        initial_backup_names = {b.get("metadata", {}).get("name") for b in initial_backups}
 
         logger.info("Found %s existing backup(s)", len(initial_backups))
         logger.info("Waiting for new backup to appear (timeout: %ss)...", timeout)
@@ -489,9 +455,7 @@ class Finalization:
                 time.sleep(BACKUP_POLL_INTERVAL)
                 continue
 
-            current_backup_names = {
-                b.get("metadata", {}).get("name") for b in current_backups
-            }
+            current_backup_names = {b.get("metadata", {}).get("name") for b in current_backups}
 
             # Check for new backups
             new_backups = current_backup_names - initial_backup_names
@@ -502,11 +466,7 @@ class Finalization:
                 # Verify at least one is in progress or completed
                 for backup_name in new_backups:
                     backup = next(
-                        (
-                            b
-                            for b in current_backups
-                            if b.get("metadata", {}).get("name") == backup_name
-                        ),
+                        (b for b in current_backups if b.get("metadata", {}).get("name") == backup_name),
                         None,
                     )
 
@@ -517,9 +477,7 @@ class Finalization:
                         # Velero uses "InProgress" and "Completed" phases
                         if phase in ("InProgress", "Completed", "New"):
                             self.state.set_config("new_backup_detected", True)
-                            self.state.set_config(
-                                "post_switchover_backup_name", backup_name
-                            )
+                            self.state.set_config("post_switchover_backup_name", backup_name)
                             logger.info("New backup is being created successfully!")
                             return
 
@@ -543,12 +501,9 @@ class Finalization:
             )
         except ApiException as exc:
             if is_retryable_error(exc):
-                raise TransientError(
-                    f"Transient error listing Velero backups: {exc}"
-                ) from exc
+                raise TransientError(f"Transient error listing Velero backups: {exc}") from exc
             raise SwitchoverError(
-                "Failed to list Velero backups while waiting for a new ACM backup: "
-                f"{exc.status} {exc.reason}"
+                "Failed to list Velero backups while waiting for a new ACM backup: " f"{exc.status} {exc.reason}"
             ) from exc
 
         return self._filter_acm_owned_backups(backups)
@@ -593,15 +548,11 @@ class Finalization:
     def _get_backup_schedule_interval_seconds(self) -> Optional[int]:
         schedules = self._get_backup_schedules()
         if not schedules:
-            logger.warning(
-                "No BackupSchedule found; using default backup verification timeout"
-            )
+            logger.warning("No BackupSchedule found; using default backup verification timeout")
             return None
 
         schedule = schedules[0]
-        schedule_name = schedule.get("metadata", {}).get(
-            "name", BACKUP_SCHEDULE_DEFAULT_NAME
-        )
+        schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
         spec = schedule.get("spec", {}) or {}
         cron_expr = spec.get("veleroSchedule")
 
@@ -669,46 +620,21 @@ class Finalization:
             return every_hour * 3600
 
         every_day = _parse_every(dom)
-        if (
-            every_day
-            and month == dow == "*"
-            and _is_number(minute)
-            and _is_number(hour)
-        ):
+        if every_day and month == dow == "*" and _is_number(minute) and _is_number(hour):
             return every_day * 86400
 
-        if (
-            dom == "*"
-            and month == "*"
-            and dow == "*"
-            and _is_number(minute)
-            and _is_number(hour)
-        ):
+        if dom == "*" and month == "*" and dow == "*" and _is_number(minute) and _is_number(hour):
             return 86400
 
-        if (
-            dom == "*"
-            and month == "*"
-            and _is_number(minute)
-            and _is_number(hour)
-            and dow.isdigit()
-        ):
+        if dom == "*" and month == "*" and _is_number(minute) and _is_number(hour) and dow.isdigit():
             return 7 * 86400
 
-        if (
-            _is_number(minute)
-            and _is_number(hour)
-            and dom.isdigit()
-            and month == "*"
-            and dow == "*"
-        ):
+        if _is_number(minute) and _is_number(hour) and dom.isdigit() and month == "*" and dow == "*":
             return 30 * 86400
 
         return None
 
-    def _check_velero_logs_for_backup(
-        self, backup_name: str, tail_lines: int = 2000
-    ) -> None:
+    def _check_velero_logs_for_backup(self, backup_name: str, tail_lines: int = 2000) -> None:
         """Scan recent Velero logs for errors related to a backup."""
         try:
             velero_pods = self.secondary.get_pods(
@@ -743,11 +669,7 @@ class Finalization:
                 continue
 
             lines = [line for line in logs.splitlines() if backup_name in line]
-            error_lines = [
-                line
-                for line in lines
-                if "error" in line.lower() or "failed" in line.lower()
-            ]
+            error_lines = [line for line in lines if "error" in line.lower() or "failed" in line.lower()]
             if error_lines:
                 error_hits += len(error_lines)
                 logger.warning(
@@ -764,9 +686,7 @@ class Finalization:
             )
 
     @dry_run_skip(message="Skipping backup integrity verification")
-    def _verify_backup_integrity(
-        self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS
-    ) -> None:  # noqa: C901
+    def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:  # noqa: C901
         """Verify backup status, logs, and recency for the post-switchover backup.
 
         When a post-switchover backup name was recorded by _verify_new_backups(), that
@@ -779,14 +699,10 @@ class Finalization:
         logger.info("Verifying backup integrity...")
         effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
 
-        post_switchover_backup_name = self.state.get_config(
-            "post_switchover_backup_name"
-        )
+        post_switchover_backup_name = self.state.get_config("post_switchover_backup_name")
 
         if post_switchover_backup_name:
-            logger.info(
-                "Verifying post-switchover backup: %s", post_switchover_backup_name
-            )
+            logger.info("Verifying post-switchover backup: %s", post_switchover_backup_name)
             latest_backup = self.secondary.get_custom_resource(
                 group="velero.io",
                 version="v1",
@@ -806,9 +722,7 @@ class Finalization:
                 )
             backup_name = post_switchover_backup_name
         else:
-            logger.warning(
-                "No post-switchover backup name recorded; falling back to latest backup in namespace"
-            )
+            logger.warning("No post-switchover backup name recorded; falling back to latest backup in namespace")
             backups = self.secondary.list_custom_resources(
                 group="velero.io",
                 version="v1",
@@ -817,9 +731,7 @@ class Finalization:
             )
             backups = self._filter_acm_owned_backups(backups)
             if not backups:
-                raise SwitchoverError(
-                    "No ACM-owned Velero backups found for integrity verification"
-                )
+                raise SwitchoverError("No ACM-owned Velero backups found for integrity verification")
 
             def _backup_sort_key(backup: Dict) -> str:
                 return backup.get("metadata", {}).get("creationTimestamp", "") or ""
@@ -850,16 +762,12 @@ class Finalization:
                         namespace=BACKUP_NAMESPACE,
                     )
                     if not backup:
-                        raise SwitchoverError(
-                            f"Backup {backup_name} disappeared during integrity check"
-                        )
+                        raise SwitchoverError(f"Backup {backup_name} disappeared during integrity check")
                     poll_phase = backup.get("status", {}).get("phase", "unknown")
                     if poll_phase == "Completed":
                         return True, "completed"
                     if poll_phase in ("Failed", "PartiallyFailed"):
-                        raise SwitchoverError(
-                            f"Latest backup {backup_name} failed (phase={poll_phase})"
-                        )
+                        raise SwitchoverError(f"Latest backup {backup_name} failed (phase={poll_phase})")
                     return False, f"phase={poll_phase}"
 
                 completed = wait_for_condition(
@@ -885,20 +793,14 @@ class Finalization:
                 )
                 status = latest_backup.get("status", {}) or {}
             else:
-                raise SwitchoverError(
-                    f"Latest backup {backup_name} not completed (phase={phase})"
-                )
+                raise SwitchoverError(f"Latest backup {backup_name} not completed (phase={phase})")
 
         errors = _to_int(status.get("errors"))
         warnings = _to_int(status.get("warnings"))
         if errors > 0:
-            raise SwitchoverError(
-                f"Latest backup {backup_name} completed with {errors} error(s)"
-            )
+            raise SwitchoverError(f"Latest backup {backup_name} completed with {errors} error(s)")
         if warnings > 0:
-            logger.warning(
-                "Latest backup %s completed with %s warning(s)", backup_name, warnings
-            )
+            logger.warning("Latest backup %s completed with %s warning(s)", backup_name, warnings)
 
         enabled_at = self._get_backup_schedule_enabled_at()
         # A backup is considered "after enable" if its name was recorded by
@@ -906,9 +808,7 @@ class Finalization:
         # or if its timestamp is >= the recorded enable time.
         is_post_switchover_backup = bool(post_switchover_backup_name)
 
-        completion_ts = status.get("completionTimestamp") or status.get(
-            "startTimestamp"
-        )
+        completion_ts = status.get("completionTimestamp") or status.get("startTimestamp")
         creation_ts = latest_backup.get("metadata", {}).get("creationTimestamp")
         ts = completion_ts or creation_ts
         parsed_ts = self._parse_timestamp(ts)
@@ -939,9 +839,7 @@ class Finalization:
                     raise SwitchoverError(
                         f"Latest backup {backup_name} is too old ({age_seconds}s > {effective_max_age_seconds}s)"
                     )
-                logger.info(
-                    "Latest backup %s completed %ss ago", backup_name, age_seconds
-                )
+                logger.info("Latest backup %s completed %ss ago", backup_name, age_seconds)
 
         self._check_velero_logs_for_backup(backup_name)
 
@@ -971,9 +869,7 @@ class Finalization:
         schedules = self._get_backup_schedules()
 
         if not schedules:
-            raise SwitchoverError(
-                "No BackupSchedule found while verifying finalization"
-            )
+            raise SwitchoverError("No BackupSchedule found while verifying finalization")
 
         schedule = schedules[0]
         schedule_name = schedule.get("metadata", {}).get("name", "schedule-rhacm")
@@ -985,9 +881,7 @@ class Finalization:
         logger.info("BackupSchedule %s is enabled", schedule_name)
 
     @dry_run_skip(message="Skipping MultiClusterHub health verification")
-    def _verify_multiclusterhub_health(
-        self, timeout: int = MCH_VERIFY_TIMEOUT, interval: int = MCH_VERIFY_INTERVAL
-    ):
+    def _verify_multiclusterhub_health(self, timeout: int = MCH_VERIFY_TIMEOUT, interval: int = MCH_VERIFY_INTERVAL):
         """Ensure MultiClusterHub reports healthy and pods are running, with wait."""
 
         logger.info("Verifying MultiClusterHub health...")
@@ -1019,9 +913,7 @@ class Finalization:
                     mch = hubs[0]
 
             if not mch:
-                raise SwitchoverError(
-                    "No MultiClusterHub resource found on secondary hub"
-                )
+                raise SwitchoverError("No MultiClusterHub resource found on secondary hub")
 
             mch_name = mch.get("metadata", {}).get("name", "multiclusterhub")
             phase = mch.get("status", {}).get("phase", "unknown")
@@ -1034,16 +926,12 @@ class Finalization:
             ]
 
             if phase == "Running" and not non_running:
-                logger.info(
-                    "MultiClusterHub %s is Running and all pods are healthy", mch_name
-                )
+                logger.info("MultiClusterHub %s is Running and all pods are healthy", mch_name)
                 return
 
             elapsed = time.time() - start
             if elapsed >= timeout:
-                details = ", non-running pods=" + (
-                    ", ".join(non_running) if non_running else "none"
-                )
+                details = ", non-running pods=" + (", ".join(non_running) if non_running else "none")
                 raise SwitchoverError(
                     f"MultiClusterHub {mch_name} not healthy after {timeout}s (phase={phase}{details})"
                 )
@@ -1059,9 +947,7 @@ class Finalization:
     def _disable_observability_on_old_hub(self) -> None:
         """Delete MultiClusterObservability on old hub (optional)."""
         if not self.primary:
-            logger.info(
-                "No primary client available, skipping observability disablement"
-            )
+            logger.info("No primary client available, skipping observability disablement")
             return
         if self.old_hub_action != "secondary":
             logger.info(
@@ -1070,9 +956,7 @@ class Finalization:
             )
             return
 
-        logger.info(
-            "Disabling observability on old hub by deleting MultiClusterObservability..."
-        )
+        logger.info("Disabling observability on old hub by deleting MultiClusterObservability...")
 
         mcos = self.primary.list_custom_resources(
             group="observability.open-cluster-management.io",
@@ -1102,9 +986,7 @@ class Finalization:
                     ", ".join(markers),
                 )
             if self.dry_run:
-                logger.info(
-                    "[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name
-                )
+                logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name)
                 continue
 
             logger.info("Deleting MultiClusterObservability: %s", mco_name)
@@ -1118,9 +1000,7 @@ class Finalization:
                 )
             except ApiException as e:
                 if getattr(e, "status", None) == 404:
-                    logger.info(
-                        "MultiClusterObservability %s already deleted", mco_name
-                    )
+                    logger.info("MultiClusterObservability %s already deleted", mco_name)
                 else:
                     raise
 
@@ -1171,9 +1051,7 @@ class Finalization:
             return
 
         if self.old_hub_action == "secondary":
-            logger.info(
-                "Setting up old primary hub as new secondary (for failback capability)..."
-            )
+            logger.info("Setting up old primary hub as new secondary (for failback capability)...")
             self._setup_old_hub_as_secondary()
             return
 
@@ -1183,8 +1061,7 @@ class Finalization:
             return
 
         raise SwitchoverError(
-            f"Unknown old_hub_action '{self.old_hub_action}'. "
-            "Expected one of: secondary, decommission, none."
+            f"Unknown old_hub_action '{self.old_hub_action}'. " "Expected one of: secondary, decommission, none."
         )
 
     @dry_run_skip(message="Would decommission old primary hub")
@@ -1203,9 +1080,7 @@ class Finalization:
         logger.warning("This will remove ACM components from the old hub!")
         logger.warning("=" * 60)
 
-        decom = Decommission(
-            self.primary, self.primary_has_observability, dry_run=self.dry_run
-        )
+        decom = Decommission(self.primary, self.primary_has_observability, dry_run=self.dry_run)
 
         # Run decommission non-interactively since we're in automated mode
         if decom.decommission(interactive=False):
@@ -1273,9 +1148,7 @@ class Finalization:
                 namespace=BACKUP_NAMESPACE,
             )
         except ApiException as e:
-            raise SwitchoverError(
-                "Failed to create passive sync restore on old primary hub"
-            ) from e
+            raise SwitchoverError("Failed to create passive sync restore on old primary hub") from e
         logger.info("Created passive sync restore on old primary hub")
 
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")
@@ -1296,27 +1169,20 @@ class Finalization:
         schedules = self._get_backup_schedules(force_refresh=True)
 
         if not schedules:
-            raise SwitchoverError(
-                "No BackupSchedule found on new primary while repairing collision state"
-            )
+            raise SwitchoverError("No BackupSchedule found on new primary while repairing collision state")
 
         schedule = schedules[0]
-        schedule_name = schedule.get("metadata", {}).get(
-            "name", BACKUP_SCHEDULE_DEFAULT_NAME
-        )
+        schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
         phase = schedule.get("status", {}).get("phase", "")
 
         # Proactively recreate to prevent collision, or fix if already in collision
         # The collision may not appear immediately - it only shows after Velero
         # schedules run and detect backups from a different cluster ID
         if phase == "BackupCollision":
-            logger.warning(
-                "BackupSchedule %s has collision, recreating...", schedule_name
-            )
+            logger.warning("BackupSchedule %s has collision, recreating...", schedule_name)
         else:
             logger.info(
-                "Proactively recreating BackupSchedule %s to prevent future collision "
-                "(current phase: %s)",
+                "Proactively recreating BackupSchedule %s to prevent future collision " "(current phase: %s)",
                 schedule_name,
                 phase or "Unknown",
             )
@@ -1410,17 +1276,13 @@ class Finalization:
                 body=new_schedule,
                 namespace=BACKUP_NAMESPACE,
             )
-            logger.info(
-                "Recreated BackupSchedule %s to prevent collision", schedule_name
-            )
+            logger.info("Recreated BackupSchedule %s to prevent collision", schedule_name)
             # Invalidate cache since we recreated the schedule
             self._cached_schedules = None
 
         except ApiException as e:
             if e.status != 409:
-                raise SwitchoverError(
-                    f"Failed to recreate BackupSchedule {schedule_name}: {e}"
-                ) from e
+                raise SwitchoverError(f"Failed to recreate BackupSchedule {schedule_name}: {e}") from e
 
             logger.warning(
                 "BackupSchedule %s already exists during recreation (409); checking current state",
@@ -1435,8 +1297,7 @@ class Finalization:
             )
             if not current_schedule:
                 raise SwitchoverError(
-                    "BackupSchedule %s returned 409 on recreate but could not be re-read afterward"
-                    % schedule_name
+                    "BackupSchedule %s returned 409 on recreate but could not be re-read afterward" % schedule_name
                 )
 
             current_phase = current_schedule.get("status", {}).get("phase", "")
@@ -1446,8 +1307,7 @@ class Finalization:
             if schedule_uid and current_uid == schedule_uid:
                 raise SwitchoverError(
                     "BackupSchedule %s returned 409 on recreate but still has the original uid (%s). "
-                    "Manual verification is required before retrying collision repair."
-                    % (schedule_name, current_uid)
+                    "Manual verification is required before retrying collision repair." % (schedule_name, current_uid)
                 )
 
             if current_phase == "BackupCollision":
@@ -1463,9 +1323,7 @@ class Finalization:
                     current_phase or "Unknown",
                 )
         except Exception as e:
-            raise SwitchoverError(
-                f"Failed to recreate BackupSchedule {schedule_name}: {e}"
-            ) from e
+            raise SwitchoverError(f"Failed to recreate BackupSchedule {schedule_name}: {e}") from e
 
     def _verify_old_hub_state(self):
         """Run regression checks on the old (primary) hub."""
@@ -1488,9 +1346,7 @@ class Finalization:
 
             conditions = cluster.get("status", {}).get("conditions", [])
             available = any(
-                c.get("type") == "ManagedClusterConditionAvailable"
-                and c.get("status") == "True"
-                for c in conditions
+                c.get("type") == "ManagedClusterConditionAvailable" and c.get("status") == "True" for c in conditions
             )
             if available:
                 still_available.append(name or "unknown")
@@ -1526,9 +1382,7 @@ class Finalization:
         Scales thanos-compact and observatorium-api to 0 replicas, then waits
         for pods to terminate with polling. Reports status of scale-down operation.
         """
-        assert (
-            self.primary is not None
-        )  # Guaranteed by guard at _verify_old_hub_state entry
+        assert self.primary is not None  # Guaranteed by guard at _verify_old_hub_state entry
         # Check both thanos-compact and observatorium-api pods
         compactor_pods = self.primary.get_pods(
             namespace=OBSERVABILITY_NAMESPACE,
@@ -1543,25 +1397,17 @@ class Finalization:
         if not self.dry_run:
             if compactor_pods:
                 logger.info("Scaling down thanos-compact on old hub")
-                self.primary.scale_statefulset(
-                    THANOS_COMPACTOR_STATEFULSET, OBSERVABILITY_NAMESPACE, 0
-                )
+                self.primary.scale_statefulset(THANOS_COMPACTOR_STATEFULSET, OBSERVABILITY_NAMESPACE, 0)
 
             if api_pods:
                 logger.info("Scaling down observatorium-api on old hub")
-                self.primary.scale_deployment(
-                    OBSERVATORIUM_API_DEPLOYMENT, OBSERVABILITY_NAMESPACE, 0
-                )
+                self.primary.scale_deployment(OBSERVATORIUM_API_DEPLOYMENT, OBSERVABILITY_NAMESPACE, 0)
 
         # Wait for pods to terminate with polling
-        compactor_pods_after, api_pods_after = self._wait_for_observability_scale_down(
-            compactor_pods, api_pods
-        )
+        compactor_pods_after, api_pods_after = self._wait_for_observability_scale_down(compactor_pods, api_pods)
 
         # Report status
-        self._report_observability_scale_down_status(
-            compactor_pods, api_pods, compactor_pods_after, api_pods_after
-        )
+        self._report_observability_scale_down_status(compactor_pods, api_pods, compactor_pods_after, api_pods_after)
 
     def _wait_for_observability_scale_down(
         self,
@@ -1578,9 +1424,7 @@ class Finalization:
         Returns:
             Tuple of (compactor_pods_after, api_pods_after) after waiting
         """
-        assert (
-            self.primary is not None
-        )  # Guaranteed by guard at _verify_old_hub_state entry
+        assert self.primary is not None  # Guaranteed by guard at _verify_old_hub_state entry
         compactor_pods_after = []
         api_pods_after = []
 
@@ -1639,9 +1483,7 @@ class Finalization:
             return
 
         # Report individual component status
-        self._log_component_scale_status(
-            "Thanos compactor", compactor_pods, compactor_pods_after
-        )
+        self._log_component_scale_status("Thanos compactor", compactor_pods, compactor_pods_after)
         self._log_component_scale_status("Observatorium API", api_pods, api_pods_after)
 
         # Report overall status
@@ -1690,26 +1532,18 @@ class Finalization:
             len(paused_apps),
             run_id,
         )
-        summary = argocd_lib.resume_recorded_applications(
-            paused_apps, run_id, self.primary, self.secondary, logger
-        )
+        summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, self.primary, self.secondary, logger)
         if summary.failed:
-            raise SwitchoverError(
-                f"Argo CD auto-sync restore failed for {summary.failed} Application(s)"
-            )
+            raise SwitchoverError(f"Argo CD auto-sync restore failed for {summary.failed} Application(s)")
 
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""
         if not is_acm_version_ge(self.acm_version, "2.14.0"):
             return
 
-        auto_import_strategy_set = self.state.get_config(
-            "auto_import_strategy_set", False
-        )
+        auto_import_strategy_set = self.state.get_config("auto_import_strategy_set", False)
         try:
-            cm = self.secondary.get_configmap(
-                MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM
-            )
+            cm = self.secondary.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
         except ApiException as e:
             if auto_import_strategy_set:
                 raise SwitchoverError(
@@ -1734,9 +1568,7 @@ class Finalization:
                 AUTO_IMPORT_STRATEGY_DEFAULT,
             )
             try:
-                self.secondary.delete_configmap(
-                    MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM
-                )
+                self.secondary.delete_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
             except ApiException as e:
                 if getattr(e, "status", None) == 404:
                     logger.debug(

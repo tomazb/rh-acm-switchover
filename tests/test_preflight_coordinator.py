@@ -9,9 +9,7 @@ from lib.exceptions import ValidationError
 from modules.preflight_coordinator import PreflightValidator
 
 
-def _build_validator(
-    argocd_check: bool, argocd_manage: bool, include_decommission: bool = False
-) -> PreflightValidator:
+def _build_validator(argocd_check: bool, argocd_manage: bool, include_decommission: bool = False) -> PreflightValidator:
     """Create PreflightValidator with internal validators stubbed for focused RBAC tests."""
     primary = Mock()
     secondary = Mock()
@@ -56,9 +54,7 @@ def _build_validator(
         (True, True, "manage"),
     ],
 )
-def test_validate_all_passes_expected_argocd_rbac_mode(
-    argocd_check, argocd_manage, expected_mode
-):
+def test_validate_all_passes_expected_argocd_rbac_mode(argocd_check, argocd_manage, expected_mode):
     """Preflight should pass the correct Argo CD RBAC mode to RBAC validation."""
     validator = _build_validator(argocd_check=argocd_check, argocd_manage=argocd_manage)
 
@@ -68,9 +64,7 @@ def test_validate_all_passes_expected_argocd_rbac_mode(
         install_type="vanilla",
     )
 
-    with patch(
-        "modules.preflight_coordinator.validate_rbac_permissions"
-    ) as validate_rbac, patch(
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
         "modules.preflight_coordinator.AutoImportStrategyValidator"
     ) as auto_import_validator, patch(
         "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
@@ -100,9 +94,7 @@ def test_validate_all_skips_argocd_rbac_when_applications_crd_missing():
         install_type="none",
     )
 
-    with patch(
-        "modules.preflight_coordinator.validate_rbac_permissions"
-    ) as validate_rbac, patch(
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
         "modules.preflight_coordinator.AutoImportStrategyValidator"
     ) as auto_import_validator, patch(
         "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
@@ -124,13 +116,9 @@ def test_validate_all_skips_argocd_rbac_when_applications_crd_missing():
 @pytest.mark.unit
 def test_validate_all_includes_decommission_permissions_when_requested():
     """Preflight should expand primary-hub RBAC validation for decommission switchovers."""
-    validator = _build_validator(
-        argocd_check=False, argocd_manage=False, include_decommission=True
-    )
+    validator = _build_validator(argocd_check=False, argocd_manage=False, include_decommission=True)
 
-    with patch(
-        "modules.preflight_coordinator.validate_rbac_permissions"
-    ) as validate_rbac, patch(
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
         "modules.preflight_coordinator.AutoImportStrategyValidator"
     ) as auto_import_validator:
         auto_import_validator.return_value.run = Mock()
@@ -154,18 +142,12 @@ def test_validate_all_records_validation_error_as_rbac_failure():
     with patch(
         "modules.preflight_coordinator.validate_rbac_permissions",
         side_effect=ValidationError("missing permissions"),
-    ), patch(
-        "modules.preflight_coordinator.AutoImportStrategyValidator"
-    ) as auto_import_validator:
+    ), patch("modules.preflight_coordinator.AutoImportStrategyValidator") as auto_import_validator:
         auto_import_validator.return_value.run = Mock()
         passed, _config = validator.validate_all()
 
     assert passed is False
-    rbac_results = [
-        result
-        for result in validator.reporter.results
-        if result["check"] == "RBAC Permissions"
-    ]
+    rbac_results = [result for result in validator.reporter.results if result["check"] == "RBAC Permissions"]
     assert len(rbac_results) == 1
     assert rbac_results[0]["passed"] is False
     assert "missing permissions" in rbac_results[0]["message"]
@@ -179,9 +161,7 @@ def test_validate_all_does_not_swallow_unexpected_rbac_errors():
     with patch(
         "modules.preflight_coordinator.validate_rbac_permissions",
         side_effect=RuntimeError("bug"),
-    ), patch(
-        "modules.preflight_coordinator.AutoImportStrategyValidator"
-    ) as auto_import_validator:
+    ), patch("modules.preflight_coordinator.AutoImportStrategyValidator") as auto_import_validator:
         auto_import_validator.return_value.run = Mock()
         with pytest.raises(RuntimeError, match="bug"):
             validator.validate_all()

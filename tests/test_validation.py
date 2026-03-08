@@ -729,9 +729,7 @@ class TestSanitization:
 
         for input_str, expected in test_cases:
             result = InputValidator.sanitize_context_identifier(input_str)
-            assert (
-                result == expected
-            ), f"Expected '{expected}', got '{result}' for input '{input_str}'"
+            assert result == expected, f"Expected '{expected}', got '{result}' for input '{input_str}'"
 
 
 class TestErrorHandling:

@@ -463,9 +463,9 @@ class TestCompletedStateTimestampHandling:
 
         with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
             "acm_switchover._run_phase_primary_prep"
-        ), patch("acm_switchover._run_phase_activation"), patch(
-            "acm_switchover._run_phase_post_activation"
-        ), patch("acm_switchover._run_phase_finalization"):
+        ), patch("acm_switchover._run_phase_activation"), patch("acm_switchover._run_phase_post_activation"), patch(
+            "acm_switchover._run_phase_finalization"
+        ):
             assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is True
 
         assert reloaded.get_current_phase() == Phase.COMPLETED
