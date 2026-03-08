@@ -23,8 +23,6 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Optional, Tuple
 
-from kubernetes.client.rest import ApiException
-
 from lib import (
     KubeClient,
     Phase,
@@ -96,9 +94,7 @@ Examples:
     )
 
     # Context arguments
-    parser.add_argument(
-        "--primary-context", required=True, help="Kubernetes context for primary hub"
-    )
+    parser.add_argument("--primary-context", required=True, help="Kubernetes context for primary hub")
     parser.add_argument(
         "--secondary-context",
         help="Kubernetes context for secondary hub (required for switchover)",
@@ -116,9 +112,7 @@ Examples:
         action="store_true",
         help="Show planned actions without executing them",
     )
-    mode_group.add_argument(
-        "--decommission", action="store_true", help="Decommission old hub (interactive)"
-    )
+    mode_group.add_argument("--decommission", action="store_true", help="Decommission old hub (interactive)")
     mode_group.add_argument(
         "--setup",
         action="store_true",
@@ -283,9 +277,7 @@ Examples:
     )
 
     # Logging
-    parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Enable verbose logging"
-    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument(
         "--force",
         action="store_true",
@@ -313,14 +305,10 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         if not getattr(args, "state_file", None):
             env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
             if env_state_dir and env_state_dir.strip():
-                InputValidator.validate_safe_filesystem_path(
-                    env_state_dir.strip(), STATE_DIR_ENV_VAR
-                )
+                InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
         else:
             # Validate user-specified state file path to prevent unsafe locations
-            InputValidator.validate_safe_filesystem_path(
-                args.state_file, "--state-file"
-            )
+            InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
 
     except ValidationError as e:
         logger.error("Validation error: %s", str(e))
@@ -365,25 +353,18 @@ def run_switchover(
             logger.warning("  3. Or use: --force to override (use with caution)")
             logger.warning("")
             if not getattr(args, "force", False):
-                logger.error(
-                    "Use --force to proceed with stale state, or remove/reset state file to start fresh."
-                )
+                logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
                 sys.exit(EXIT_FAILURE)
             logger.warning("--force used: Resetting state to start fresh switchover")
             state.reset()
-        else:
-            logger.info(
-                "Switchover already completed (state age: %s)",
-                f"{int(state_age.total_seconds() // 60)} minutes",
-            )
+        elif not args.validate_only:
+            _log_completed_noop(state, logger, state_age)
             return True
     elif current_phase == Phase.FAILED:
         # Handle resume from failed state - determine which phase to retry
         last_error_phase = state.get_last_error_phase()
         errors = state.get_errors()
-        last_error_msg = (
-            errors[-1].get("error", "Unknown error") if errors else "Unknown error"
-        )
+        last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
 
         logger.info("")
         logger.info("⚠️  RESUMING FROM FAILED STATE")
@@ -409,9 +390,7 @@ def run_switchover(
             logger.warning("  3. Or use: --force to reset and retry from beginning")
             logger.warning("")
             if not getattr(args, "force", False):
-                logger.error(
-                    "Use --force to reset state and retry, or remove state file to start fresh."
-                )
+                logger.error("Use --force to reset state and retry, or remove state file to start fresh.")
                 sys.exit(EXIT_FAILURE)
             logger.warning("--force used: Resetting state to start fresh switchover")
             state.reset()
@@ -464,9 +443,7 @@ def run_switchover(
     logger.info("\n" + "=" * 60)
     logger.info("SWITCHOVER COMPLETED SUCCESSFULLY!")
     logger.info("=" * 60)
-    logger.info(
-        "\nSwitchover completed at: %s", datetime.now().astimezone().isoformat()
-    )
+    logger.info("\nSwitchover completed at: %s", datetime.now().astimezone().isoformat())
     logger.info("State file: %s", args.state_file)
     logger.info("\nNext steps:")
     logger.info("  1. Inform stakeholders that switchover is complete")
@@ -475,6 +452,18 @@ def run_switchover(
     logger.info("  4. Optionally decommission old hub with: --decommission")
 
     return True
+
+
+def _log_completed_noop(state: StateManager, logger: logging.Logger, state_age: timedelta) -> None:
+    """Log an explicit no-op banner for reruns against a recent completed state."""
+
+    age_minutes = int(state_age.total_seconds() // 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("SWITCHOVER ALREADY COMPLETED")
+    logger.info("=" * 60)
+    logger.info("Existing state file age: %s minutes", age_minutes)
+    logger.info("No phases were executed on this run.")
+    logger.info("State file: %s", state.state_file)
 
 
 def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
@@ -506,9 +495,7 @@ def _run_phase_preflight(
 
     state.set_phase(Phase.PREFLIGHT)
 
-    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(
-        args, "validate_only", False
-    )
+    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(args, "validate_only", False)
     validator = PreflightValidator(
         primary,
         secondary,
@@ -521,9 +508,7 @@ def _run_phase_preflight(
     passed, config = validator.validate_all()
 
     if not passed:
-        return _fail_phase(
-            state, "Pre-flight validation failed! Cannot proceed.", logger
-        )
+        return _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
 
     state.set_config("primary_version", config["primary_version"])
     state.set_config("secondary_version", config["secondary_version"])
@@ -536,13 +521,8 @@ def _run_phase_preflight(
         config["secondary_observability_detected"],
     )
 
-    primary_obs_enabled = (
-        config["primary_observability_detected"] and not args.skip_observability_checks
-    )
-    secondary_obs_enabled = (
-        config["secondary_observability_detected"]
-        and not args.skip_observability_checks
-    )
+    primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
+    secondary_obs_enabled = config["secondary_observability_detected"] and not args.skip_observability_checks
 
     state.set_config("primary_has_observability", primary_obs_enabled)
     state.set_config("secondary_has_observability", secondary_obs_enabled)
@@ -709,9 +689,7 @@ def _run_phase_finalization(
         old_hub_action=args.old_hub_action,
         manage_auto_import_strategy=args.manage_auto_import_strategy,
         disable_observability_on_secondary=args.disable_observability_on_secondary,
-        argocd_resume_after_switchover=getattr(
-            args, "argocd_resume_after_switchover", False
-        ),
+        argocd_resume_after_switchover=getattr(args, "argocd_resume_after_switchover", False),
     )
 
     if not finalization.finalize():
@@ -768,9 +746,7 @@ def run_decommission(
     )
 
     if args.dry_run:
-        logger.info(
-            "[DRY-RUN] Starting decommission workflow (no changes will be made)"
-        )
+        logger.info("[DRY-RUN] Starting decommission workflow (no changes will be made)")
     else:
         logger.info("Starting decommission workflow")
 
@@ -833,9 +809,7 @@ def run_setup(
     logger.info("  Role: %s", args.role)
     logger.info("  Token duration: %s", args.token_duration)
     logger.info("  Output directory: %s", args.output_dir)
-    logger.info(
-        "  Include decommission RBAC: %s", getattr(args, "include_decommission", False)
-    )
+    logger.info("  Include decommission RBAC: %s", getattr(args, "include_decommission", False))
 
     try:
         result = subprocess.run(  # nosec B603
@@ -995,9 +969,7 @@ def _get_default_state_dir() -> str:
     return ".state"
 
 
-def _resolve_state_file(
-    requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]
-) -> str:
+def _resolve_state_file(requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]) -> str:
     """Derive the state file path based on contexts unless user provided one."""
     if requested_path:
         return requested_path
@@ -1024,18 +996,14 @@ def _run_argocd_resume_only(
     run_id = state.get_config("argocd_run_id")
     paused_apps = state.get_config("argocd_paused_apps") or []
     if not run_id or not paused_apps:
-        logger.error(
-            "No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing)."
-        )
+        logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
         return False
     logger.info(
         "Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))",
         run_id,
         len(paused_apps),
     )
-    summary = argocd_lib.resume_recorded_applications(
-        paused_apps, run_id, primary, secondary, logger
-    )
+    summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, primary, secondary, logger)
     logger.info(
         "Restored %d and already resumed %d of %d Application(s).",
         summary.restored,
@@ -1043,9 +1011,7 @@ def _run_argocd_resume_only(
         len(paused_apps),
     )
     if summary.failed:
-        logger.error(
-            "Argo CD auto-sync restore failed for %d Application(s).", summary.failed
-        )
+        logger.error("Argo CD auto-sync restore failed for %d Application(s).", summary.failed)
         return False
     return True
 

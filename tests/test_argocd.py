@@ -122,6 +122,23 @@ class TestFindAcmTouchingApps:
             result = argocd_lib.find_acm_touching_apps(apps)
             assert len(result) == 1, f"Expected match for sub-namespace {sub_ns!r}"
 
+    def test_includes_app_with_local_cluster_namespace_by_design(self):
+        apps = [
+            {
+                "metadata": {"namespace": "argocd", "name": "local-cluster-app"},
+                "status": {
+                    "resources": [
+                        {"kind": "ConfigMap", "namespace": "local-cluster", "name": "cfg"},
+                    ]
+                },
+            }
+        ]
+
+        result = argocd_lib.find_acm_touching_apps(apps)
+
+        assert len(result) == 1
+        assert result[0].name == "local-cluster-app"
+
 
 @pytest.mark.unit
 class TestPauseAutosync:
@@ -186,6 +203,21 @@ class TestPauseAutosync:
         patch = client.patch_custom_resource.call_args[1]["patch"]
         assert "automated" not in patch["spec"]["syncPolicy"]
 
+    def test_dry_run_pause_supports_keyword_arguments(self):
+        client = MagicMock()
+        client.dry_run = True
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app"},
+            "spec": {"syncPolicy": {"automated": {"prune": True}}},
+        }
+
+        result = argocd_lib.pause_autosync(client, app=app, run_id="run-1")
+
+        assert result.namespace == "argocd"
+        assert result.name == "app"
+        assert result.patched is True
+        client.patch_custom_resource.assert_not_called()
+
 
 @pytest.mark.unit
 class TestResumeAutosync:
@@ -241,6 +273,23 @@ class TestResumeAutosync:
         result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {"prune": True}}, "run-1")
         assert result.restored is False
         assert "patch failed" in (result.skip_reason or "").lower()
+
+    def test_dry_run_resume_supports_keyword_arguments(self):
+        client = MagicMock()
+        client.dry_run = True
+
+        result = argocd_lib.resume_autosync(
+            client,
+            namespace="argocd",
+            name="app",
+            original_sync_policy={"automated": {"prune": True}},
+            run_id="run-1",
+        )
+
+        assert result.namespace == "argocd"
+        assert result.name == "app"
+        assert result.restored is True
+        client.get_custom_resource.assert_not_called()
 
     def test_is_resume_noop_true_for_marker_missing(self):
         result = argocd_lib.ResumeResult(

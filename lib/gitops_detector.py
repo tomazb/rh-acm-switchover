@@ -81,8 +81,6 @@ class GitOpsCollector:
     """
 
     _instance: Optional["GitOpsCollector"] = None
-    # Class-level init guard preserves singleton semantics across repeated get_instance() calls.
-    _initialized: bool = False
 
     def __new__(cls) -> "GitOpsCollector":
         if cls._instance is None:
@@ -90,12 +88,16 @@ class GitOpsCollector:
         return cls._instance
 
     def __init__(self) -> None:
-        if self._initialized:
+        if hasattr(self, "_records"):
             return
         # Structure: {context: {(namespace, kind, name): [markers]}}
         self._records: Dict[str, Dict[Tuple[str, str, str], List[str]]] = defaultdict(dict)
         self._enabled = True
-        self._initialized = True
+
+    def clear(self) -> None:
+        """Clear in-memory detections and restore the default enabled state."""
+        self._records.clear()
+        self._enabled = True
 
     @classmethod
     def get_instance(cls) -> "GitOpsCollector":
@@ -106,11 +108,12 @@ class GitOpsCollector:
     def reset(cls) -> None:
         """Reset the singleton instance (primarily for testing).
 
-        Clear both singleton and class init guard so the next get_instance()
-        call creates a new object and runs __init__ fully.
+        Clear the current singleton state before dropping the shared reference so
+        stale references do not retain prior detections across test boundaries.
         """
+        if cls._instance is not None:
+            cls._instance.clear()
         cls._instance = None
-        cls._initialized = False
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable or disable GitOps detection.

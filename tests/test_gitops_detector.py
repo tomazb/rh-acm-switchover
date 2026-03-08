@@ -331,15 +331,32 @@ class TestGitOpsCollector:
         assert collector.is_enabled()
         assert not collector.has_detections()
 
-    def test_reset_clears_class_init_guard(self):
-        """Test that reset() clears class-level _initialized flag."""
-        # Simulate stale class flag and ensure reset restores constructor path.
-        GitOpsCollector._initialized = True
+    def test_reset_reinitializes_clean_singleton(self):
+        """Test that reset() recreates a clean enabled collector."""
         GitOpsCollector.reset()
         collector = GitOpsCollector.get_instance()
 
         assert collector.is_enabled()
         assert hasattr(collector, "_records")
+
+    def test_reset_clears_existing_stale_reference_state(self):
+        """Old collector references should not retain detections after reset()."""
+        collector = GitOpsCollector.get_instance()
+        collector.record(
+            context="primary",
+            namespace="ns",
+            kind="Kind",
+            name="name",
+            markers=["label:test"],
+        )
+
+        GitOpsCollector.reset()
+        new_collector = GitOpsCollector.get_instance()
+
+        assert collector is not new_collector
+        assert not collector.has_detections()
+        assert collector.is_enabled()
+        assert not new_collector.has_detections()
 
     @patch("lib.gitops_detector.logger")
     def test_print_report_when_disabled(self, mock_logger):
