@@ -77,7 +77,7 @@ def write_shared_jq_mock(mock_bin: Path) -> None:
     """Create a mock jq that handles minimal cases and delegates to real jq."""
     jq_script = mock_bin / "jq"
     jq_script.write_text(
-        """#!/bin/bash
+        r"""#!/bin/bash
 # Mock jq that handles minimal cases and delegates to real jq when available
 
 ALL_ARGS=("$@")

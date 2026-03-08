@@ -136,6 +136,30 @@ def is_resume_noop(result: ResumeResult) -> bool:
     return (not result.restored) and (result.skip_reason == RESUME_SKIP_REASON_MARKER_MISSING)
 
 
+def _format_exception_detail(exc: Exception) -> str:
+    """Return a compact error string suitable for operator logs."""
+    if isinstance(exc, ApiException):
+        status = getattr(exc, "status", None)
+        reason = getattr(exc, "reason", None)
+        detail = f"{status} {reason}".strip()
+        if detail:
+            return detail
+    return str(exc)
+
+
+def _log_patch_failure(namespace: str, name: str, action: str, exc: Exception) -> str:
+    """Log a consistent Argo CD patch failure and return the rendered detail."""
+    detail = _format_exception_detail(exc)
+    logger.warning(
+        "Failed to patch Application %s/%s to %s: %s",
+        namespace,
+        name,
+        action,
+        detail,
+    )
+    return detail
+
+
 def _get_crd_presence(
     client: KubeClient,
     crd_name: str,
@@ -426,31 +450,8 @@ def pause_autosync(
             patch=patch,
             namespace=ns or None,
         )
-    except ApiException as e:
-        status = getattr(e, "status", None)
-        reason = getattr(e, "reason", None)
-        detail = f"{status} {reason}".strip() if status or reason else str(e)
-        logger.warning(
-            "Failed to patch Application %s/%s to pause auto-sync: %s",
-            ns,
-            name,
-            detail,
-        )
-        return PauseResult(
-            namespace=ns,
-            name=name,
-            original_sync_policy=original,
-            patched=False,
-            error=detail,
-        )
     except Exception as e:
-        detail = str(e)
-        logger.warning(
-            "Failed to patch Application %s/%s to pause auto-sync: %s",
-            ns,
-            name,
-            detail,
-        )
+        detail = _log_patch_failure(ns, name, "pause auto-sync", e)
         return PauseResult(
             namespace=ns,
             name=name,
@@ -538,30 +539,8 @@ def resume_autosync(
             patch=patch,
             namespace=namespace or None,
         )
-    except ApiException as e:
-        status = getattr(e, "status", None)
-        reason = getattr(e, "reason", None)
-        detail = f"{status} {reason}".strip() if status or reason else str(e)
-        logger.warning(
-            "Failed to patch Application %s/%s to resume auto-sync: %s",
-            namespace,
-            name,
-            detail,
-        )
-        return ResumeResult(
-            namespace=namespace,
-            name=name,
-            restored=False,
-            skip_reason=f"patch failed: {detail}",
-        )
     except Exception as e:
-        detail = str(e)
-        logger.warning(
-            "Failed to patch Application %s/%s to resume auto-sync: %s",
-            namespace,
-            name,
-            detail,
-        )
+        detail = _log_patch_failure(namespace, name, "resume auto-sync", e)
         return ResumeResult(
             namespace=namespace,
             name=name,

@@ -81,6 +81,7 @@ class GitOpsCollector:
     """
 
     _instance: Optional["GitOpsCollector"] = None
+    # Class-level init guard preserves singleton semantics across repeated get_instance() calls.
     _initialized: bool = False
 
     def __new__(cls) -> "GitOpsCollector":

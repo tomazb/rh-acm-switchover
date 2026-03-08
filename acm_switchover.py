@@ -603,12 +603,6 @@ def _report_argocd_acm_impact(
                 )
             if len(acm_apps) > 10:
                 logger.warning("  ... and %d more", len(acm_apps) - 10)
-        except (ApiException, ConnectionError, OSError, ValidationError) as e:
-            logger.warning(
-                "[%s] Unable to complete Argo CD check; continuing without blocking switchover: %s",
-                label,
-                e,
-            )
         except Exception as e:
             logger.warning(
                 "[%s] Unable to complete Argo CD check; continuing without blocking switchover: %s",

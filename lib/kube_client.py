@@ -625,8 +625,6 @@ class KubeClient:
             remaining = None
             if max_items is not None:
                 remaining = max_items - len(items)
-                if remaining <= 0:
-                    break
 
             try:
                 if namespace:
