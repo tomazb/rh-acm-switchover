@@ -214,6 +214,16 @@ class TestRBACManifestConsistency:
         return helm_clusterrole_path.read_text(encoding="utf-8")
 
     @pytest.fixture
+    def decommission_clusterrole_path(self) -> Path:
+        """Get the static decommission ClusterRole manifest path."""
+        return Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrole-decommission.yaml"
+
+    @pytest.fixture
+    def decommission_clusterrolebinding_path(self) -> Path:
+        """Get the static decommission ClusterRoleBinding manifest path."""
+        return Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrolebinding-decommission.yaml"
+
+    @pytest.fixture
     def kustomize_roles(self, kustomize_role_path) -> List[dict]:
         """Parse Kustomize role.yaml into list of role definitions."""
         if not kustomize_role_path.exists():
@@ -368,6 +378,57 @@ class TestRBACManifestConsistency:
         ]
         for snippet in snippets:
             assert snippet in kustomize_clusterrole_content
+            assert snippet in helm_clusterrole_content
+
+    def test_operator_clusterrole_omits_decommission_delete_verbs(self, kustomize_clusterrole_content):
+        """Test that baseline operator ClusterRole excludes cluster-wide delete verbs."""
+        forbidden_snippets = [
+            '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
+            '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
+            '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
+        ]
+        for snippet in forbidden_snippets:
+            assert snippet not in kustomize_clusterrole_content
+
+    def test_helm_operator_clusterrole_omits_decommission_delete_verbs(self, helm_clusterrole_content):
+        """Test that Helm baseline operator ClusterRole excludes cluster-wide delete verbs."""
+        forbidden_snippets = [
+            '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
+            '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
+            '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
+        ]
+        for snippet in forbidden_snippets:
+            assert snippet not in helm_clusterrole_content
+
+    def test_static_decommission_clusterrole_exists_with_delete_verbs(self, decommission_clusterrole_path):
+        """Test that delete verbs live in a dedicated static decommission ClusterRole."""
+        assert decommission_clusterrole_path.exists(), "Expected static decommission ClusterRole manifest"
+        content = decommission_clusterrole_path.read_text(encoding="utf-8")
+        required_snippets = [
+            'name: acm-switchover-decommission',
+            'resources: ["managedclusters"]\n    verbs: ["delete"]',
+            'resources: ["multiclusterhubs"]\n    verbs: ["delete"]',
+            'resources: ["multiclusterobservabilities"]\n    verbs: ["delete"]',
+        ]
+        for snippet in required_snippets:
+            assert snippet in content
+
+    def test_static_decommission_clusterrolebinding_exists(self, decommission_clusterrolebinding_path):
+        """Test that static decommission binding exists for opt-in operator escalation."""
+        assert decommission_clusterrolebinding_path.exists(), "Expected static decommission ClusterRoleBinding manifest"
+        content = decommission_clusterrolebinding_path.read_text(encoding="utf-8")
+        assert "name: acm-switchover-decommission" in content
+        assert "kind: ClusterRoleBinding" in content
+
+    def test_helm_clusterrole_supports_optional_decommission_role(self, helm_clusterrole_content):
+        """Test that Helm templates expose an opt-in decommission ClusterRole."""
+        required_snippets = [
+            ".Values.rbac.includeDecommissionClusterRole",
+            ".Values.clusterRole.decommission.name",
+            'resources: ["managedclusters"]',
+            'verbs: ["delete"]',
+        ]
+        for snippet in required_snippets:
             assert snippet in helm_clusterrole_content
 
 
