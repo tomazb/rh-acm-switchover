@@ -36,7 +36,7 @@ K8S_NAME_MAX_LENGTH = 253
 
 # Kubernetes namespace validation pattern
 # RFC 1123 label format: contains only lowercase alphanumeric characters or '-',
-# starts with an alphabetic character (Kubernetes requires this), ends with an alphanumeric character
+# this project intentionally requires a leading letter even though Kubernetes also allows digits
 K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?$")
 K8S_NAMESPACE_MAX_LENGTH = 63
 

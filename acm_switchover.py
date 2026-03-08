@@ -481,14 +481,15 @@ def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bo
     """Record a phase failure with consistent error metadata and return False.
 
     Ensures every transition to Phase.FAILED leaves an error entry for the
-    current phase, skipping a new entry when the same phase was already
-    recorded last. This keeps resume logic deterministic without adding
-    duplicate same-phase errors.
+    current phase, skipping a new entry only when the same phase and error
+    message were already recorded last. This keeps resume logic deterministic
+    without dropping distinct failures from the same phase.
     """
     logger.error(message)
     current_phase = state.get_current_phase().value
     errors = state.get_errors()
-    if not errors or errors[-1].get("phase") != current_phase:
+    last_error = errors[-1] if errors else {}
+    if last_error.get("phase") != current_phase or last_error.get("error") != message:
         state.add_error(message, phase=current_phase)
     state.set_phase(Phase.FAILED)
     return False
@@ -603,6 +604,12 @@ def _report_argocd_acm_impact(
             if len(acm_apps) > 10:
                 logger.warning("  ... and %d more", len(acm_apps) - 10)
         except (ApiException, ConnectionError, OSError, ValidationError) as e:
+            logger.warning(
+                "[%s] Unable to complete Argo CD check; continuing without blocking switchover: %s",
+                label,
+                e,
+            )
+        except Exception as e:
             logger.warning(
                 "[%s] Unable to complete Argo CD check; continuing without blocking switchover: %s",
                 label,

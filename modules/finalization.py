@@ -205,7 +205,7 @@ class Finalization:
                     "disable_observability_on_secondary", logger
                 ) as should_run:
                     if should_run:
-                        self._disable_observability_on_secondary()
+                        self._disable_observability_on_old_hub()
 
             # Step 11: Enable BackupSchedule on new hub
             with self.state.step("enable_backup_schedule", logger) as should_run:
@@ -1056,7 +1056,7 @@ class Finalization:
             )
             time.sleep(interval)
 
-    def _disable_observability_on_secondary(self) -> None:
+    def _disable_observability_on_old_hub(self) -> None:
         """Delete MultiClusterObservability on old hub (optional)."""
         if not self.primary:
             logger.info(
@@ -1157,7 +1157,7 @@ class Finalization:
         Handle the old primary hub based on --old-hub-action setting.
 
         Options:
-        - 'secondary': Set up passive sync restore for failback capability (default)
+        - 'secondary': Set up passive sync restore for failback capability
         - 'decommission': Remove ACM components from old hub
         - 'none': Leave old hub unchanged (manual handling required)
         """
@@ -1703,9 +1703,19 @@ class Finalization:
         if not is_acm_version_ge(self.acm_version, "2.14.0"):
             return
 
+        auto_import_strategy_set = self.state.get_config(
+            "auto_import_strategy_set", False
+        )
         try:
-            cm = self.secondary.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
+            cm = self.secondary.get_configmap(
+                MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM
+            )
         except ApiException as e:
+            if auto_import_strategy_set:
+                raise SwitchoverError(
+                    "Failed to verify autoImportStrategy before restoring default by checking "
+                    f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
+                ) from e
             logger.warning("Unable to verify auto-import strategy: %s", e)
             return
 
@@ -1716,7 +1726,7 @@ class Finalization:
         if strategy != AUTO_IMPORT_STRATEGY_SYNC:
             return
 
-        if self.state.get_config("auto_import_strategy_set", False):
+        if auto_import_strategy_set:
             logger.info(
                 "Removing %s/%s to restore default autoImportStrategy (%s)",
                 MCE_NAMESPACE,
@@ -1724,7 +1734,9 @@ class Finalization:
                 AUTO_IMPORT_STRATEGY_DEFAULT,
             )
             try:
-                self.secondary.delete_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
+                self.secondary.delete_configmap(
+                    MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM
+                )
             except ApiException as e:
                 raise SwitchoverError(
                     "Failed to reset autoImportStrategy to default by deleting "

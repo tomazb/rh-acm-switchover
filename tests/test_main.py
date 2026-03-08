@@ -426,7 +426,9 @@ class TestCompletedStateTimestampHandling:
 
         with patch("acm_switchover._run_phase_preflight") as preflight, patch(
             "acm_switchover._run_phase_primary_prep"
-        ) as primary_prep, patch("acm_switchover._run_phase_activation") as activation, patch(
+        ) as primary_prep, patch(
+            "acm_switchover._run_phase_activation"
+        ) as activation, patch(
             "acm_switchover._run_phase_post_activation"
         ) as post_activation, patch(
             "acm_switchover._run_phase_finalization"
@@ -549,6 +551,34 @@ class TestSwitchoverPhaseFlow:
             result = run_switchover(args, state, Mock(), Mock(), Mock())
 
         assert result is True
+        assert state.get_current_phase() == Phase.POST_ACTIVATION
+
+    def test_run_switchover_validate_only_restores_phase_on_preflight_failure(
+        self, tmp_path
+    ):
+        """Validate-only must restore the original phase even when preflight fails."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.POST_ACTIVATION)
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_check=False,
+            argocd_manage=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=False):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is False
         assert state.get_current_phase() == Phase.POST_ACTIVATION
 
     def test_run_switchover_resume_from_failed_state_retries_failed_phase(
@@ -752,7 +782,21 @@ class TestSwitchoverPhaseFlow:
         assert result is False
         fail_phase.assert_called_once()
 
-    def test_fail_phase_skips_duplicate_same_phase_error(self):
+    def test_fail_phase_skips_exact_duplicate_same_phase_error(self):
+        state = Mock()
+        state.get_current_phase.return_value = SimpleNamespace(value="finalization")
+        state.get_errors.return_value = [
+            {"phase": "finalization", "error": "current failure"}
+        ]
+        logger = Mock()
+
+        result = _fail_phase(state, "current failure", logger)
+
+        assert result is False
+        state.add_error.assert_not_called()
+        state.set_phase.assert_called_once()
+
+    def test_fail_phase_appends_error_when_same_phase_has_different_message(self):
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="finalization")
         state.get_errors.return_value = [{"phase": "finalization", "error": "prior"}]
@@ -761,7 +805,7 @@ class TestSwitchoverPhaseFlow:
         result = _fail_phase(state, "current failure", logger)
 
         assert result is False
-        state.add_error.assert_not_called()
+        state.add_error.assert_called_once_with("current failure", phase="finalization")
         state.set_phase.assert_called_once()
 
     def test_fail_phase_appends_error_when_last_error_is_different_phase(self):
@@ -1313,6 +1357,39 @@ class TestPreflightPhase:
         ), patch(
             "acm_switchover.argocd_lib.list_argocd_applications",
             side_effect=ApiException(status=403, reason="Forbidden"),
+        ):
+            _report_argocd_acm_impact(primary, secondary, logger)
+
+        assert logger.warning.call_count == 2
+        assert any(
+            "Unable to complete Argo CD check" in call.args[0]
+            for call in logger.warning.call_args_list
+        )
+
+    @pytest.mark.parametrize(
+        "side_effect",
+        [
+            ConnectionError("network down"),
+            OSError("socket closed"),
+            TypeError("unexpected payload"),
+        ],
+    )
+    def test_report_argocd_impact_warns_on_non_blocking_failures(self, side_effect):
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+
+        with patch(
+            "acm_switchover.argocd_lib.detect_argocd_installation",
+            return_value=discovery,
+        ), patch(
+            "acm_switchover.argocd_lib.list_argocd_applications",
+            side_effect=side_effect,
         ):
             _report_argocd_acm_impact(primary, secondary, logger)
 

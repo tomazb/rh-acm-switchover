@@ -525,8 +525,29 @@ class TestPhaseResumeMetadata:
         assert len(errors) == 1
         assert errors[0]["phase"] == Phase.ACTIVATION.value
 
-    def test_fail_phase_helper_reuses_existing_same_phase_error(self, tmp_path):
-        """_fail_phase should not append another error when the last one is already for this phase."""
+    def test_fail_phase_helper_reuses_existing_same_phase_and_message_error(
+        self, tmp_path
+    ):
+        """_fail_phase should not append another error when the last entry matches phase and message."""
+        import logging
+
+        import acm_switchover
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+        sm.add_error("same failure", phase=Phase.ACTIVATION.value)
+
+        logger = logging.getLogger("test")
+        result = acm_switchover._fail_phase(sm, "same failure", logger)
+
+        assert result is False
+        assert sm.get_current_phase() == Phase.FAILED
+        errors = sm.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["error"] == "same failure"
+
+    def test_fail_phase_helper_records_new_message_for_same_phase(self, tmp_path):
+        """_fail_phase should keep distinct same-phase failures for troubleshooting."""
         import logging
 
         import acm_switchover
@@ -541,8 +562,8 @@ class TestPhaseResumeMetadata:
         assert result is False
         assert sm.get_current_phase() == Phase.FAILED
         errors = sm.get_errors()
-        assert len(errors) == 1
-        assert errors[0]["error"] == "first failure"
+        assert len(errors) == 2
+        assert errors[-1]["error"] == "second failure"
 
     def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
         """After a phase failure, get_last_error_phase returns the phase to retry."""

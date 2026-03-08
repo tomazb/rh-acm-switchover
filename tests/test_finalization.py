@@ -645,14 +645,10 @@ class TestFinalization:
             status=403, reason="Forbidden"
         )
 
-        with pytest.raises(
-            SwitchoverError, match="Failed to delete restore resource"
-        ):
+        with pytest.raises(SwitchoverError, match="Failed to delete restore resource"):
             finalization._cleanup_restore_resources()
 
-        mock_state_manager.set_config.assert_called_once_with(
-            "archived_restores", ANY
-        )
+        mock_state_manager.set_config.assert_called_once_with("archived_restores", ANY)
 
     @patch("modules.finalization.time")
     def test_verify_new_backups_fails_fast_on_permanent_list_error(
@@ -702,7 +698,8 @@ class TestFinalization:
         finalization._cached_schedules = []
 
         with pytest.raises(
-            SwitchoverError, match="No BackupSchedule found while verifying finalization"
+            SwitchoverError,
+            match="No BackupSchedule found while verifying finalization",
         ):
             finalization._verify_backup_schedule_enabled()
 
@@ -758,6 +755,40 @@ class TestFinalization:
             fin._ensure_auto_import_default()
 
         assert "Unable to verify auto-import strategy" in caplog.text
+        mock_secondary_client.delete_configmap.assert_not_called()
+
+    def test_ensure_auto_import_default_raises_when_owned_lookup_fails(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+        )
+        mock_secondary_client.get_configmap.side_effect = ApiException(
+            status=403, reason="Forbidden"
+        )
+        mock_state_manager.get_config.side_effect = lambda key, default=None: (
+            True if key == "auto_import_strategy_set" else default
+        )
+
+        with pytest.raises(
+            SwitchoverError, match="Failed to verify autoImportStrategy"
+        ):
+            fin._ensure_auto_import_default()
+
+    def test_ensure_auto_import_default_is_noop_before_acm_2_14(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.13.9",
+        )
+
+        fin._ensure_auto_import_default()
+
+        mock_secondary_client.get_configmap.assert_not_called()
         mock_secondary_client.delete_configmap.assert_not_called()
 
     def test_backup_verify_timeout_derived_from_schedule(self, finalization):
@@ -1204,7 +1235,7 @@ class TestFinalization:
         assert "already exists during recreation" in caplog.text
 
     @patch("modules.finalization.wait_for_condition")
-    def test_disable_observability_on_secondary_deletes_mco(
+    def test_disable_observability_on_old_hub_deletes_mco(
         self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
         """Optional MCO deletion should remove observability on old hub."""
@@ -1223,13 +1254,13 @@ class TestFinalization:
         ]
         primary.get_pods.return_value = []
 
-        fin._disable_observability_on_secondary()
+        fin._disable_observability_on_old_hub()
 
         primary.delete_custom_resource.assert_called_once()
 
     @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.finalization.wait_for_condition")
-    def test_disable_observability_on_secondary_warns_for_gitops_managed_mco(
+    def test_disable_observability_on_old_hub_warns_for_gitops_managed_mco(
         self,
         mock_wait,
         mock_record_markers,
@@ -1256,7 +1287,7 @@ class TestFinalization:
         primary.get_pods.return_value = []
 
         with caplog.at_level(logging.WARNING, logger="acm_switchover"):
-            fin._disable_observability_on_secondary()
+            fin._disable_observability_on_old_hub()
 
         assert "appears GitOps-managed" in caplog.text
         assert "observability" in caplog.text
@@ -1264,7 +1295,7 @@ class TestFinalization:
 
     @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.finalization.wait_for_condition")
-    def test_disable_observability_on_secondary_no_gitops_warning_without_markers(
+    def test_disable_observability_on_old_hub_no_gitops_warning_without_markers(
         self,
         mock_wait,
         mock_record_markers,
@@ -1291,14 +1322,14 @@ class TestFinalization:
         primary.get_pods.return_value = []
 
         with caplog.at_level(logging.WARNING, logger="acm_switchover"):
-            fin._disable_observability_on_secondary()
+            fin._disable_observability_on_old_hub()
 
         assert "appears GitOps-managed" not in caplog.text
         primary.delete_custom_resource.assert_called_once()
 
     @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.finalization.wait_for_condition")
-    def test_disable_observability_on_secondary_continues_when_marker_recording_fails(
+    def test_disable_observability_on_old_hub_continues_when_marker_recording_fails(
         self,
         mock_wait,
         mock_record_markers,
@@ -1325,7 +1356,7 @@ class TestFinalization:
         primary.get_pods.return_value = []
 
         with caplog.at_level(logging.WARNING, logger="acm_switchover"):
-            fin._disable_observability_on_secondary()
+            fin._disable_observability_on_old_hub()
 
         assert "marker recording failed" in caplog.text.lower()
         primary.delete_custom_resource.assert_called_once()
@@ -1583,12 +1614,12 @@ class TestFinalization:
             old_hub_action="bogus",
         )
 
-        with patch.object(fin, "_setup_old_hub_as_secondary") as setup_old_hub, patch.object(
+        with patch.object(
+            fin, "_setup_old_hub_as_secondary"
+        ) as setup_old_hub, patch.object(
             fin, "_decommission_old_hub"
         ) as decommission_old_hub:
-            with pytest.raises(
-                SwitchoverError, match="Unknown old_hub_action 'bogus'"
-            ):
+            with pytest.raises(SwitchoverError, match="Unknown old_hub_action 'bogus'"):
                 fin._handle_old_hub()
 
         setup_old_hub.assert_not_called()
