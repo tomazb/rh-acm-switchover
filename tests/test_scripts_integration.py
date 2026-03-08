@@ -228,13 +228,16 @@ class TestSharedJqMock:
         mock_bin.mkdir()
         write_shared_jq_mock(mock_bin)
 
+        env = os.environ.copy()
+        env.pop("REAL_JQ", None)
+
         proc = subprocess.run(
             [str(mock_bin / "jq"), ".items[0]"],
             input='{"items":[{"metadata":{"name":"cluster1"}}]}',
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=os.environ.copy(),
+            env=env,
             check=False,
         )
 
@@ -246,13 +249,16 @@ class TestSharedJqMock:
         mock_bin.mkdir()
         write_shared_jq_mock(mock_bin)
 
+        env = os.environ.copy()
+        env.pop("REAL_JQ", None)
+
         proc = subprocess.run(
             [str(mock_bin / "jq"), ".items[0]"],
             input='{"kind":"List"}',
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=os.environ.copy(),
+            env=env,
             check=False,
         )
 
