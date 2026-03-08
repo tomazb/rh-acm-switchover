@@ -13,8 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Decommission RBAC bootstrap**: Move opt-in decommission manifests out of the baseline bulk-apply path, add explicit setup/install support for them, and validate teardown permissions before decommission workflows run.
-- **Finalization Velero list failures**: Fail fast on permanent backup-list API errors instead of masking them behind the new-backup timeout loop.
+## [1.5.6] - 2026-03-08
+
+### Changed
+
+- **Setup flag validation**: Reject `--include-decommission` outside `--setup` instead of accepting and ignoring it.
+- **RBAC self-check failures**: Surface API/auth/TLS failures as validation errors instead of misreporting them as missing permissions.
+
+### Fixed
+
+- **Validate-only resume safety**: Preserve the persisted phase when `--validate-only` runs against an in-progress switchover state file.
+- **Finalization initial Velero list failures**: Normalize the first backup-list call so startup failures do not leak raw `ApiException`.
+- **Passive restore preflight overhead**: Reuse fetched restore JSON for phase and message extraction instead of making two extra `oc get` calls.
+- **Deep report manifest paths**: Correct decommission extension paths in `report.md`.
 
 ## [1.5.5] - 2026-03-07
 
@@ -832,7 +843,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...HEAD
+[1.5.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.1...v1.5.3
