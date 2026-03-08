@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - No unreleased changes yet.
 
+## [1.5.9] - 2026-03-08
+
+### Changed
+
+- **Argo CD cleanup**: Simplify the non-blocking preflight Argo CD warning path and deduplicate pause/resume patch-failure logging.
+- **Maintenance cleanup**: Remove a redundant `max_items` guard in custom-resource listing and document the GitOps collector singleton init flag.
+
+### Fixed
+
+- **Script integration warning**: Use a raw shell fixture string in `tests/test_scripts_integration.py` so Python no longer emits an invalid escape `SyntaxWarning`.
+
 ## [1.5.8] - 2026-03-08
 
 ### Changed
