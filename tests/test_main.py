@@ -489,6 +489,42 @@ class TestSwitchoverPhaseFlow:
         post_activation.assert_called_once()
         finalization.assert_called_once()
 
+    def test_run_switchover_resume_from_failed_secondary_verify_retries_activation_path(self, tmp_path):
+        """Verify FAILED resume supports legacy SECONDARY_VERIFY by continuing from activation."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.SECONDARY_VERIFY)
+        state.add_error("legacy secondary verification failure", Phase.SECONDARY_VERIFY.value)
+        state.set_phase(Phase.FAILED)
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight, patch(
+            "acm_switchover._run_phase_primary_prep", return_value=True
+        ) as primary_prep, patch("acm_switchover._run_phase_activation", return_value=True) as activation, patch(
+            "acm_switchover._run_phase_post_activation", return_value=True
+        ) as post_activation, patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ) as finalization:
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        preflight.assert_not_called()
+        primary_prep.assert_not_called()
+        activation.assert_called_once()
+        post_activation.assert_not_called()
+        finalization.assert_not_called()
+
     def test_run_switchover_failed_state_without_error_phase_requires_force(self, tmp_path):
         """Verify that FAILED state without determinable error phase requires --force."""
         from lib.utils import Phase, StateManager

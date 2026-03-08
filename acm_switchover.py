@@ -356,6 +356,7 @@ def run_switchover(
         if last_error_phase and last_error_phase in (
             Phase.PREFLIGHT,
             Phase.PRIMARY_PREP,
+            Phase.SECONDARY_VERIFY,
             Phase.ACTIVATION,
             Phase.POST_ACTIVATION,
             Phase.FINALIZATION,
@@ -385,7 +386,7 @@ def run_switchover(
         (_run_phase_primary_prep, (Phase.PREFLIGHT, Phase.PRIMARY_PREP)),
         (
             _run_phase_activation,
-            (Phase.PREFLIGHT, Phase.PRIMARY_PREP, Phase.ACTIVATION),
+            (Phase.PREFLIGHT, Phase.PRIMARY_PREP, Phase.SECONDARY_VERIFY, Phase.ACTIVATION),
         ),
         (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION)),
         (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION)),
