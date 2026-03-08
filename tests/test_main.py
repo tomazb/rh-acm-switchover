@@ -18,6 +18,7 @@ from kubernetes.client.rest import ApiException
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from acm_switchover import (
+    _fail_phase,
     _report_argocd_acm_impact,
     _run_phase_preflight,
     main,
@@ -423,7 +424,20 @@ class TestCompletedStateTimestampHandling:
             skip_observability_checks=False,
         )
 
-        assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is True
+        with patch("acm_switchover._run_phase_preflight") as preflight, patch(
+            "acm_switchover._run_phase_primary_prep"
+        ) as primary_prep, patch("acm_switchover._run_phase_activation") as activation, patch(
+            "acm_switchover._run_phase_post_activation"
+        ) as post_activation, patch(
+            "acm_switchover._run_phase_finalization"
+        ) as finalization:
+            assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is True
+
+        preflight.assert_not_called()
+        primary_prep.assert_not_called()
+        activation.assert_not_called()
+        post_activation.assert_not_called()
+        finalization.assert_not_called()
 
 
 @pytest.mark.unit
@@ -737,6 +751,30 @@ class TestSwitchoverPhaseFlow:
 
         assert result is False
         fail_phase.assert_called_once()
+
+    def test_fail_phase_skips_duplicate_same_phase_error(self):
+        state = Mock()
+        state.get_current_phase.return_value = SimpleNamespace(value="finalization")
+        state.get_errors.return_value = [{"phase": "finalization", "error": "prior"}]
+        logger = Mock()
+
+        result = _fail_phase(state, "current failure", logger)
+
+        assert result is False
+        state.add_error.assert_not_called()
+        state.set_phase.assert_called_once()
+
+    def test_fail_phase_appends_error_when_last_error_is_different_phase(self):
+        state = Mock()
+        state.get_current_phase.return_value = SimpleNamespace(value="finalization")
+        state.get_errors.return_value = [{"phase": "activation", "error": "prior"}]
+        logger = Mock()
+
+        result = _fail_phase(state, "current failure", logger)
+
+        assert result is False
+        state.add_error.assert_called_once_with("current failure", phase="finalization")
+        state.set_phase.assert_called_once()
 
     def test_execute_operation_routes_to_decommission_when_flag_set(self):
         """_execute_operation should call run_decommission when --decommission is set."""

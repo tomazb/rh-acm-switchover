@@ -334,6 +334,9 @@ class RBACValidator:
 
         Returns:
             Tuple of (all_valid, list of error messages)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         errors = []
         all_valid = True
@@ -423,6 +426,9 @@ class RBACValidator:
 
         Returns:
             Tuple of (all_valid, list of error messages)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         errors = []
         all_valid = True
@@ -553,6 +559,9 @@ class RBACValidator:
 
         Returns:
             Tuple of (all_valid, dict of errors by category)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         all_errors: Dict[str, List[str]] = {}
 

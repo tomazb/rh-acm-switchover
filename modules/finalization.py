@@ -299,6 +299,7 @@ class Finalization:
         resources in the backup namespace, rather than relying on hardcoded names.
         """
         archived_restores = []
+        delete_failures = []
 
         # List all restores in the namespace
         all_restores = self.secondary.list_custom_resources(
@@ -340,14 +341,22 @@ class Finalization:
             except ApiException as e:
                 if getattr(e, "status", None) != 404:
                     logger.warning("Error deleting restore %s: %s", restore_name, e)
+                    delete_failures.append(f"{restore_name}: {e.status} {e.reason}")
             except Exception as e:
                 logger.warning("Error deleting restore %s: %s", restore_name, e)
+                delete_failures.append(f"{restore_name}: {e}")
 
         # Save archived restores to state for audit trail
         if archived_restores:
             self.state.set_config("archived_restores", archived_restores)
             logger.info(
                 "Saved %s restore record(s) to state file", len(archived_restores)
+            )
+
+        if delete_failures:
+            raise SwitchoverError(
+                "Failed to delete restore resource(s) before enabling BackupSchedule: "
+                + "; ".join(delete_failures)
             )
 
     def _archive_restore_details(self, restore: dict) -> dict:
@@ -524,7 +533,7 @@ class Finalization:
         )
 
     def _list_acm_owned_velero_backups(self) -> List[Dict]:
-        """List Velero backups and normalize API failures for callers."""
+        """List Velero backups, filter to ACM-owned backups, and normalize API failures."""
         try:
             backups = self.secondary.list_custom_resources(
                 group="velero.io",
@@ -962,14 +971,16 @@ class Finalization:
         schedules = self._get_backup_schedules()
 
         if not schedules:
-            raise RuntimeError("No BackupSchedule found while verifying finalization")
+            raise SwitchoverError(
+                "No BackupSchedule found while verifying finalization"
+            )
 
         schedule = schedules[0]
         schedule_name = schedule.get("metadata", {}).get("name", "schedule-rhacm")
         paused = schedule.get("spec", {}).get("paused", False)
 
         if paused:
-            raise RuntimeError(f"BackupSchedule {schedule_name} is still paused")
+            raise SwitchoverError(f"BackupSchedule {schedule_name} is still paused")
 
         logger.info("BackupSchedule %s is enabled", schedule_name)
 
@@ -1008,7 +1019,9 @@ class Finalization:
                     mch = hubs[0]
 
             if not mch:
-                raise RuntimeError("No MultiClusterHub resource found on secondary hub")
+                raise SwitchoverError(
+                    "No MultiClusterHub resource found on secondary hub"
+                )
 
             mch_name = mch.get("metadata", {}).get("name", "multiclusterhub")
             phase = mch.get("status", {}).get("phase", "unknown")
@@ -1031,7 +1044,7 @@ class Finalization:
                 details = ", non-running pods=" + (
                     ", ".join(non_running) if non_running else "none"
                 )
-                raise RuntimeError(
+                raise SwitchoverError(
                     f"MultiClusterHub {mch_name} not healthy after {timeout}s (phase={phase}{details})"
                 )
 
@@ -1169,7 +1182,10 @@ class Finalization:
             self._decommission_old_hub()
             return
 
-        logger.warning("Unknown old_hub_action: %s, skipping", self.old_hub_action)
+        raise SwitchoverError(
+            f"Unknown old_hub_action '{self.old_hub_action}'. "
+            "Expected one of: secondary, decommission, none."
+        )
 
     @dry_run_skip(message="Would decommission old primary hub")
     def _decommission_old_hub(self):
@@ -1195,8 +1211,10 @@ class Finalization:
         if decom.decommission(interactive=False):
             logger.info("Old hub decommissioned successfully")
         else:
-            logger.warning("Old hub decommission completed with warnings")
-            logger.warning("You may need to manually clean up remaining resources")
+            raise SwitchoverError(
+                "Old hub decommission failed or completed incompletely. "
+                "Manual cleanup is required before considering switchover finalized."
+            )
 
     @dry_run_skip(message="Would set up old primary as secondary with passive sync")
     def _setup_old_hub_as_secondary(self):
@@ -1682,37 +1700,45 @@ class Finalization:
 
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""
+        if not is_acm_version_ge(self.acm_version, "2.14.0"):
+            return
+
         try:
-            if not is_acm_version_ge(self.acm_version, "2.14.0"):
-                return
-            cm = self.secondary.get_configmap(
-                MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM
+            cm = self.secondary.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
+        except ApiException as e:
+            logger.warning("Unable to verify auto-import strategy: %s", e)
+            return
+
+        if not cm:
+            return
+
+        strategy = (cm.get("data") or {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
+        if strategy != AUTO_IMPORT_STRATEGY_SYNC:
+            return
+
+        if self.state.get_config("auto_import_strategy_set", False):
+            logger.info(
+                "Removing %s/%s to restore default autoImportStrategy (%s)",
+                MCE_NAMESPACE,
+                IMPORT_CONTROLLER_CONFIG_CM,
+                AUTO_IMPORT_STRATEGY_DEFAULT,
             )
-            if not cm:
-                return
-            strategy = (cm.get("data") or {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
-            if strategy != AUTO_IMPORT_STRATEGY_SYNC:
-                return
-            if self.state.get_config("auto_import_strategy_set", False):
-                logger.info(
-                    "Removing %s/%s to restore default autoImportStrategy (%s)",
-                    MCE_NAMESPACE,
-                    IMPORT_CONTROLLER_CONFIG_CM,
-                    AUTO_IMPORT_STRATEGY_DEFAULT,
-                )
-                self.secondary.delete_configmap(
-                    MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM
-                )
-                self.state.set_config("auto_import_strategy_set", False)
-                # Mark step completed (idempotent - no-op if already completed)
-                self.state.mark_step_completed("reset_auto_import_strategy")
-            else:
-                logger.warning(
-                    "autoImportStrategy is %s; remove %s/%s to reset to default (%s)",
-                    AUTO_IMPORT_STRATEGY_SYNC,
-                    MCE_NAMESPACE,
-                    IMPORT_CONTROLLER_CONFIG_CM,
-                    AUTO_IMPORT_STRATEGY_DEFAULT,
-                )
-        except Exception as e:
-            logger.warning("Unable to verify/reset auto-import strategy: %s", e)
+            try:
+                self.secondary.delete_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
+            except ApiException as e:
+                raise SwitchoverError(
+                    "Failed to reset autoImportStrategy to default by deleting "
+                    f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
+                ) from e
+            self.state.set_config("auto_import_strategy_set", False)
+            # Mark step completed (idempotent - no-op if already completed)
+            self.state.mark_step_completed("reset_auto_import_strategy")
+            return
+
+        logger.warning(
+            "autoImportStrategy is %s; remove %s/%s to reset to default (%s)",
+            AUTO_IMPORT_STRATEGY_SYNC,
+            MCE_NAMESPACE,
+            IMPORT_CONTROLLER_CONFIG_CM,
+            AUTO_IMPORT_STRATEGY_DEFAULT,
+        )

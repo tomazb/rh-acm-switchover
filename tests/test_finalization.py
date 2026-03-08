@@ -8,7 +8,7 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
@@ -197,6 +197,26 @@ class TestFinalization:
         mock_backup_manager.ensure_enabled.assert_not_called()
         # verify_new_backups is internal method, hard to assert not called directly without mocking class method,
         # but we can infer from lack of client calls if we didn't mock list_custom_resources
+
+    def test_decommission_old_hub_raises_when_decommission_returns_false(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Decommission failure must raise instead of being downgraded to a warning."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=True,
+            old_hub_action="decommission",
+        )
+
+        with patch("modules.finalization.Decommission") as decommission_class:
+            decommission_class.return_value.decommission.return_value = False
+
+            with pytest.raises(SwitchoverError, match="decommission failed"):
+                fin._decommission_old_hub()
 
     def test_resume_argocd_apps_raises_on_failure(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
@@ -614,6 +634,26 @@ class TestFinalization:
 
         assert mock_secondary_client.list_custom_resources.call_count == 1
 
+    def test_cleanup_restore_resources_raises_when_delete_fails(
+        self, finalization, mock_secondary_client, mock_state_manager
+    ):
+        """Restore cleanup must fail closed when a delete request does not succeed."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "restore-1"}, "status": {"phase": "Running"}}
+        ]
+        mock_secondary_client.delete_custom_resource.side_effect = ApiException(
+            status=403, reason="Forbidden"
+        )
+
+        with pytest.raises(
+            SwitchoverError, match="Failed to delete restore resource"
+        ):
+            finalization._cleanup_restore_resources()
+
+        mock_state_manager.set_config.assert_called_once_with(
+            "archived_restores", ANY
+        )
+
     @patch("modules.finalization.time")
     def test_verify_new_backups_fails_fast_on_permanent_list_error(
         self, mock_time, finalization, mock_secondary_client
@@ -655,6 +695,70 @@ class TestFinalization:
         )
 
         finalization._verify_backup_integrity(max_age_seconds=600)
+
+    def test_verify_backup_schedule_enabled_raises_switchover_error_when_missing(
+        self, finalization
+    ):
+        finalization._cached_schedules = []
+
+        with pytest.raises(
+            SwitchoverError, match="No BackupSchedule found while verifying finalization"
+        ):
+            finalization._verify_backup_schedule_enabled()
+
+    def test_verify_multiclusterhub_health_raises_switchover_error_when_missing(
+        self, finalization, mock_secondary_client
+    ):
+        mock_secondary_client.get_custom_resource.return_value = None
+        mock_secondary_client.list_custom_resources.return_value = []
+
+        with pytest.raises(
+            SwitchoverError, match="No MultiClusterHub resource found on secondary hub"
+        ):
+            finalization._verify_multiclusterhub_health(timeout=1, interval=0)
+
+    def test_ensure_auto_import_default_raises_when_delete_fails(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+        )
+        mock_secondary_client.get_configmap.return_value = {
+            "data": {
+                finalization_module.AUTO_IMPORT_STRATEGY_KEY: finalization_module.AUTO_IMPORT_STRATEGY_SYNC
+            }
+        }
+        mock_secondary_client.delete_configmap.side_effect = ApiException(
+            status=403, reason="Forbidden"
+        )
+        mock_state_manager.get_config.side_effect = lambda key, default=None: (
+            True if key == "auto_import_strategy_set" else default
+        )
+
+        with pytest.raises(
+            SwitchoverError, match="Failed to reset autoImportStrategy to default"
+        ):
+            fin._ensure_auto_import_default()
+
+    def test_ensure_auto_import_default_warns_and_skips_when_lookup_fails(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
+    ):
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+        )
+        mock_secondary_client.get_configmap.side_effect = ApiException(
+            status=403, reason="Forbidden"
+        )
+
+        with caplog.at_level(logging.WARNING):
+            fin._ensure_auto_import_default()
+
+        assert "Unable to verify auto-import strategy" in caplog.text
+        mock_secondary_client.delete_configmap.assert_not_called()
 
     def test_backup_verify_timeout_derived_from_schedule(self, finalization):
         schedule = {
@@ -1242,7 +1346,7 @@ class TestFinalization:
             {"metadata": {"name": "schedule"}, "spec": {"paused": True}}
         ]
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(SwitchoverError):
             finalization._verify_backup_schedule_enabled()
 
     @patch("modules.finalization.time")
@@ -1263,7 +1367,7 @@ class TestFinalization:
             {"metadata": {"name": "acm-pod"}, "status": {"phase": "Running"}}
         ]
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(SwitchoverError):
             finalization._verify_multiclusterhub_health()
 
     @patch("modules.finalization.time")
@@ -1466,6 +1570,30 @@ class TestFinalization:
             # _verify_old_hub_state SHOULD be called when old_hub_action is 'secondary'
             mock_verify.assert_called_once()
 
+    def test_handle_old_hub_raises_on_unknown_old_hub_action(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Unknown old_hub_action values must fail closed."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            old_hub_action="bogus",
+        )
+
+        with patch.object(fin, "_setup_old_hub_as_secondary") as setup_old_hub, patch.object(
+            fin, "_decommission_old_hub"
+        ) as decommission_old_hub:
+            with pytest.raises(
+                SwitchoverError, match="Unknown old_hub_action 'bogus'"
+            ):
+                fin._handle_old_hub()
+
+        setup_old_hub.assert_not_called()
+        decommission_old_hub.assert_not_called()
+
     def test_setup_old_hub_as_secondary_failure_propagates(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
@@ -1548,7 +1676,7 @@ class TestFinalization:
             (RuntimeError("boom"), True),
         ],
     )
-    def test_cleanup_restore_resources_tolerates_delete_errors(
+    def test_cleanup_restore_resources_handles_delete_outcomes(
         self,
         finalization,
         mock_secondary_client,
@@ -1557,7 +1685,7 @@ class TestFinalization:
         expect_warning,
         caplog,
     ):
-        """Cleanup should archive restores even when deletion fails."""
+        """Cleanup should ignore 404s but fail closed for other delete errors."""
         mock_restore = {
             "metadata": {"name": "restore-acm-passive-sync"},
             "spec": {},
@@ -1567,7 +1695,13 @@ class TestFinalization:
         mock_secondary_client.delete_custom_resource.side_effect = delete_error
 
         with caplog.at_level(logging.WARNING):
-            finalization._cleanup_restore_resources()
+            if expect_warning:
+                with pytest.raises(
+                    SwitchoverError, match="Failed to delete restore resource"
+                ):
+                    finalization._cleanup_restore_resources()
+            else:
+                finalization._cleanup_restore_resources()
 
         mock_state_manager.set_config.assert_called_once()
         if expect_warning:

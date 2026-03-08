@@ -487,6 +487,24 @@ class TestValidateRBACPermissions:
             validate_rbac_permissions(mock_primary_client)
 
     @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_secondary_checker_failure_raises_contextual_error(
+        self, mock_validator_class, mock_primary_client, mock_secondary_client
+    ):
+        """Infrastructure failures should bubble with secondary-hub context."""
+        primary_validator = MagicMock()
+        primary_validator.validate_all_permissions.return_value = (True, {})
+        secondary_validator = MagicMock()
+        secondary_validator.validate_all_permissions.side_effect = ValidationError(
+            "auth check failed"
+        )
+        mock_validator_class.side_effect = [primary_validator, secondary_validator]
+
+        with pytest.raises(
+            ValidationError, match="could not be completed on secondary hub"
+        ):
+            validate_rbac_permissions(mock_primary_client, mock_secondary_client)
+
+    @patch("lib.rbac_validator.RBACValidator")
     def test_validate_skip_observability(
         self, mock_validator_class, mock_primary_client
     ):

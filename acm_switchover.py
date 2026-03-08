@@ -23,6 +23,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Optional, Tuple
 
+from kubernetes.client.rest import ApiException
+
 from lib import (
     KubeClient,
     Phase,
@@ -39,6 +41,7 @@ from lib.constants import (
     EXIT_FAILURE,
     EXIT_INTERRUPT,
     EXIT_SUCCESS,
+    OBSERVABILITY_NAMESPACE,
     STALE_STATE_THRESHOLD,
 )
 from lib.exceptions import StateLoadError, StateLockError
@@ -478,8 +481,8 @@ def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bo
     """Record a phase failure with consistent error metadata and return False.
 
     Ensures every transition to Phase.FAILED leaves an error entry for the
-    current phase, reusing the existing last entry when the same phase was
-    already recorded. This keeps resume logic deterministic without adding
+    current phase, skipping a new entry when the same phase was already
+    recorded last. This keeps resume logic deterministic without adding
     duplicate same-phase errors.
     """
     logger.error(message)
@@ -599,7 +602,7 @@ def _report_argocd_acm_impact(
                 )
             if len(acm_apps) > 10:
                 logger.warning("  ... and %d more", len(acm_apps) - 10)
-        except Exception as e:
+        except (ApiException, ConnectionError, OSError, ValidationError) as e:
             logger.warning(
                 "[%s] Unable to complete Argo CD check; continuing without blocking switchover: %s",
                 label,
@@ -733,8 +736,6 @@ def run_decommission(
     """Execute decommission of old hub."""
     # Detect observability directly from the cluster, not from state file
     # The state file path may differ when running decommission standalone
-    from lib.constants import OBSERVABILITY_NAMESPACE
-
     has_observability = primary.namespace_exists(OBSERVABILITY_NAMESPACE)
     if has_observability:
         logger.info(
