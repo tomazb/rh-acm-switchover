@@ -195,7 +195,7 @@ fi
 # =============================================================================
 # Setup kubectl with admin credentials
 # =============================================================================
-KUBECTL_ARGS="--kubeconfig=$ADMIN_KUBECONFIG --context=$CONTEXT"
+KUBECTL_ARGS=(--kubeconfig="$ADMIN_KUBECONFIG" --context="$CONTEXT")
 
 # Validate connection
 echo ""
@@ -208,8 +208,7 @@ if $DRY_RUN; then
 fi
 
 echo "Validating cluster connection..."
-# shellcheck disable=SC2086
-if ! kubectl $KUBECTL_ARGS cluster-info &>/dev/null; then
+if ! kubectl "${KUBECTL_ARGS[@]}" cluster-info &>/dev/null; then
     echo "Error: Cannot connect to cluster using context '$CONTEXT'" >&2
     echo "Please verify:" >&2
     echo "  - The kubeconfig path is correct: $ADMIN_KUBECONFIG" >&2
@@ -221,8 +220,7 @@ fi
 check_pass "Connected to cluster via context: $CONTEXT"
 
 # Verify admin privileges by checking if we can access cluster-level resources
-# shellcheck disable=SC2086
-if ! kubectl $KUBECTL_ARGS auth can-i create namespace --all-namespaces &>/dev/null; then
+if ! kubectl "${KUBECTL_ARGS[@]}" auth can-i create namespace --all-namespaces &>/dev/null; then
     check_fail "Insufficient privileges: cluster-admin access required"
     echo "" >&2
     echo "This script needs cluster-admin privileges to:" >&2
@@ -252,16 +250,14 @@ apply_manifest() {
     if $DRY_RUN; then
         echo "  Would apply: $manifest"
         # Validate the manifest is valid YAML
-        # shellcheck disable=SC2086
-        if kubectl $KUBECTL_ARGS apply --dry-run=client -f "$manifest" &>/dev/null; then
+        if kubectl "${KUBECTL_ARGS[@]}" apply --dry-run=client -f "$manifest" &>/dev/null; then
             check_pass "[dry-run] $description"
         else
             check_fail "[dry-run] $description - invalid manifest"
             return 1
         fi
     else
-        # shellcheck disable=SC2086
-        if kubectl $KUBECTL_ARGS apply -f "$manifest" &>/dev/null; then
+        if kubectl "${KUBECTL_ARGS[@]}" apply -f "$manifest" &>/dev/null; then
             check_pass "$description"
         else
             check_fail "$description"
@@ -319,16 +315,14 @@ apply_role_filtered() {
     if $DRY_RUN; then
         echo "  Would apply (filtered for $target_role): $manifest"
         # Validate the filtered manifest is valid YAML
-        # shellcheck disable=SC2086
-        if kubectl $KUBECTL_ARGS apply --dry-run=client -f "$temp_manifest" &>/dev/null; then
+        if kubectl "${KUBECTL_ARGS[@]}" apply --dry-run=client -f "$temp_manifest" &>/dev/null; then
             check_pass "[dry-run] $description (role: $target_role)"
         else
             check_fail "[dry-run] $description (role: $target_role) - invalid manifest"
             return 1
         fi
     else
-        # shellcheck disable=SC2086
-        if kubectl $KUBECTL_ARGS apply -f "$temp_manifest" &>/dev/null; then
+        if kubectl "${KUBECTL_ARGS[@]}" apply -f "$temp_manifest" &>/dev/null; then
             check_pass "$description (role: $target_role)"
         else
             check_fail "$description (role: $target_role)"
@@ -341,8 +335,7 @@ apply_role_filtered() {
 # Check which namespaces exist (for graceful handling of optional components)
 check_namespace_exists() {
     local ns="$1"
-    # shellcheck disable=SC2086
-    kubectl $KUBECTL_ARGS get namespace "$ns" &>/dev/null
+    kubectl "${KUBECTL_ARGS[@]}" get namespace "$ns" &>/dev/null
 }
 
 echo ""
@@ -419,6 +412,7 @@ if ! $SKIP_KUBECONFIG; then
                 --user "$user_name" \
                 --token-duration "$TOKEN_DURATION" \
                 "$SWITCHOVER_NAMESPACE" "$sa_name" > "$output_file" 2>/dev/null; then
+                chmod 600 "$output_file" || true
                 check_pass "Generated kubeconfig: $output_file"
                 echo "  User name: $user_name"
                 echo "  Token duration: $TOKEN_DURATION"

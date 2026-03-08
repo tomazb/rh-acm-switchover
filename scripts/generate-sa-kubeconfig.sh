@@ -128,9 +128,9 @@ NAMESPACE="${1:-}"
 SA_NAME="${2:-}"
 
 # Build kubectl context args
-KUBECTL_CONTEXT_ARGS=""
+KUBECTL_CONTEXT_ARGS=()
 if [[ -n "$CONTEXT" ]]; then
-    KUBECTL_CONTEXT_ARGS="--context=$CONTEXT"
+    KUBECTL_CONTEXT_ARGS+=(--context="$CONTEXT")
 fi
 
 # Validate required arguments
@@ -153,8 +153,7 @@ if [[ -z "$NAMESPACE" || -z "$SA_NAME" ]]; then
 fi
 
 # Check if service account exists
-# shellcheck disable=SC2086
-if ! kubectl $KUBECTL_CONTEXT_ARGS get serviceaccount "$SA_NAME" -n "$NAMESPACE" &>/dev/null; then
+if ! kubectl "${KUBECTL_CONTEXT_ARGS[@]}" get serviceaccount "$SA_NAME" -n "$NAMESPACE" &>/dev/null; then
     echo "Error: Service account '$SA_NAME' not found in namespace '$NAMESPACE'" >&2
     exit 1
 fi
@@ -191,8 +190,7 @@ fi
 CONTEXT_NAME="${USER_NAME}@${CLUSTER_NAME}"
 
 # Generate token
-# shellcheck disable=SC2086
-TOKEN=$(kubectl $KUBECTL_CONTEXT_ARGS create token "$SA_NAME" -n "$NAMESPACE" --duration="$DURATION")
+TOKEN=$(kubectl "${KUBECTL_CONTEXT_ARGS[@]}" create token "$SA_NAME" -n "$NAMESPACE" --duration="$DURATION")
 
 if [[ -z "$TOKEN" ]]; then
     echo "Error: Failed to generate token for service account" >&2

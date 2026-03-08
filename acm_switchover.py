@@ -320,7 +320,6 @@ def run_switchover(
     if current_phase == Phase.COMPLETED:
         state_age = state.get_state_age()
         if state_age is None:
-            # Treat missing/unparseable timestamp as stale
             state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
 
         if state_age.total_seconds() > STALE_STATE_THRESHOLD:
@@ -339,15 +338,11 @@ def run_switchover(
             if not getattr(args, "force", False):
                 logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
                 sys.exit(EXIT_FAILURE)
-            # Reset state completely to start fresh switchover
-            # This clears completed_steps so all phase handlers re-execute their work
             logger.warning("--force used: Resetting state to start fresh switchover")
             state.reset()
         else:
-            logger.info(
-                "Resuming recently completed switchover (state age: %s)",
-                f"{int(state_age.total_seconds() // 60)} minutes",
-            )
+            logger.info("Switchover already completed (state age: %s)", f"{int(state_age.total_seconds() // 60)} minutes")
+            return True
     elif current_phase == Phase.FAILED:
         # Handle resume from failed state - determine which phase to retry
         last_error_phase = state.get_last_error_phase()
@@ -358,13 +353,17 @@ def run_switchover(
         logger.info("⚠️  RESUMING FROM FAILED STATE")
         logger.info("Last error: %s", last_error_msg)
 
-        if last_error_phase:
+        if last_error_phase and last_error_phase in (
+            Phase.PREFLIGHT,
+            Phase.PRIMARY_PREP,
+            Phase.ACTIVATION,
+            Phase.POST_ACTIVATION,
+            Phase.FINALIZATION,
+        ):
             logger.info("Failed at phase: %s", last_error_phase.value)
             logger.info("Will retry from this phase")
-            # Reset phase to the one that failed so the phase_flow loop can pick it up
             state.set_phase(last_error_phase)
         else:
-            # Cannot determine which phase failed - need to start fresh or use --force
             logger.warning("Cannot determine which phase failed from error history")
             logger.warning("")
             logger.warning("Options:")
@@ -378,6 +377,9 @@ def run_switchover(
             logger.warning("--force used: Resetting state to start fresh switchover")
             state.reset()
 
+    if args.validate_only:
+        return _run_phase_preflight(args, state, primary, secondary, logger)
+
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
         (_run_phase_primary_prep, (Phase.PREFLIGHT, Phase.PRIMARY_PREP)),
@@ -389,13 +391,25 @@ def run_switchover(
         (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION)),
     )
 
-    for handler, allowed_phases in phase_flow:
-        if state.get_current_phase() in allowed_phases:
+    current_phase = state.get_current_phase()
+    runnable_phases = {phase for _, phases in phase_flow for phase in phases}
+    if current_phase not in runnable_phases:
+        return _fail_phase(
+            state,
+            f"State phase '{current_phase.value}' is not runnable in switchover flow.",
+            logger,
+        )
+
+    ran_phase = False
+    for handler, allowed_states in phase_flow:
+        if state.get_current_phase() in allowed_states:
+            ran_phase = True
             result = handler(args, state, primary, secondary, logger)
-            if args.validate_only:
-                return result
             if not result:
                 return False
+
+    if not ran_phase:
+        return _fail_phase(state, "No runnable phase matched current state.", logger)
 
     state.set_phase(Phase.COMPLETED)
 
@@ -421,7 +435,10 @@ def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bo
     phase to retry without requiring --force.
     """
     logger.error(message)
-    state.add_error(message, phase=state.get_current_phase().value)
+    current_phase = state.get_current_phase().value
+    errors = state.get_errors()
+    if not errors or errors[-1].get("phase") != current_phase:
+        state.add_error(message, phase=current_phase)
     state.set_phase(Phase.FAILED)
     return False
 

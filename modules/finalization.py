@@ -317,10 +317,11 @@ class Finalization:
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
                 )
                 logger.info("Deleted restore resource: %s", restore_name)
-            except Exception as e:
-                # Not found is OK, other errors should be logged
-                if "not found" not in str(e).lower():
+            except ApiException as e:
+                if getattr(e, "status", None) != 404:
                     logger.warning("Error deleting restore %s: %s", restore_name, e)
+            except Exception as e:
+                logger.warning("Error deleting restore %s: %s", restore_name, e)
 
         # Save archived restores to state for audit trail
         if archived_restores:
@@ -430,12 +431,17 @@ class Finalization:
         start_time = time.time()
 
         while time.time() - start_time < timeout:
-            current_backups = self.secondary.list_custom_resources(
-                group="velero.io",
-                version="v1",
-                plural="backups",
-                namespace=BACKUP_NAMESPACE,
-            )
+            try:
+                current_backups = self.secondary.list_custom_resources(
+                    group="velero.io",
+                    version="v1",
+                    plural="backups",
+                    namespace=BACKUP_NAMESPACE,
+                )
+            except ApiException as exc:
+                logger.warning("Transient error listing backups: %s", exc)
+                time.sleep(BACKUP_POLL_INTERVAL)
+                continue
             current_backups = self._filter_acm_owned_backups(current_backups)
 
             current_backup_names = {b.get("metadata", {}).get("name") for b in current_backups}
@@ -887,7 +893,7 @@ class Finalization:
             non_running = [
                 pod.get("metadata", {}).get("name", "unknown")
                 for pod in pods
-                if pod.get("status", {}).get("phase") != "Running"
+                if pod.get("status", {}).get("phase") not in ("Running", "Succeeded")
             ]
 
             if phase == "Running" and not non_running:
