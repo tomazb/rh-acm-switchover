@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - No unreleased changes yet.
 
+## [1.5.8] - 2026-03-08
+
+### Changed
+
+- **Audit report location**: Move the deep audit report from repository root to `docs/development/report.md`.
+
+### Fixed
+
+- **Argo CD impact reporting**: Keep the preflight Argo CD impact report non-blocking for unexpected exceptions while still warning operators.
+- **Auto-import reset safety**: Fail finalization when this run owns the temporary `ImportAndSync` override but cannot verify the ConfigMap before restoring the default.
+- **Phase failure history**: Preserve distinct failure messages within the same phase instead of deduplicating only by phase name.
+- **Preflight RBAC classification**: Report only expected `ValidationError` failures as RBAC validation problems and let unexpected errors surface normally.
+- **Release metadata cleanup**: Correct changelog comparison links, rename the old-hub observability helper for clarity, and fix the namespace validation comment.
+
 ## [1.5.7] - 2026-03-08
 
 ### Fixed
@@ -845,7 +859,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.8...HEAD
+[1.5.8]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.7...v1.5.8
+[1.5.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...v1.5.4
