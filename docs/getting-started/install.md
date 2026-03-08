@@ -265,8 +265,8 @@ roleRef:
   name: acm-switchover-decommission
 subjects:
 - kind: ServiceAccount
-  name: acm-switchover
-  namespace: default
+  name: acm-switchover-operator
+  namespace: acm-switchover
 ```
 
 ### Create Service Account (Optional)
@@ -275,15 +275,15 @@ For automated execution:
 
 ```bash
 # Create service account
-kubectl create serviceaccount acm-switchover -n default
+kubectl create serviceaccount acm-switchover-operator -n acm-switchover
 
 # Bind cluster role
 kubectl create clusterrolebinding acm-switchover-binding \
   --clusterrole=acm-switchover-role \
-  --serviceaccount=default:acm-switchover
+  --serviceaccount=acm-switchover:acm-switchover-operator
 
 # Get token
-kubectl create token acm-switchover -n default --duration=24h
+kubectl create token acm-switchover-operator -n acm-switchover --duration=24h
 
 # Configure context with service account
 kubectl config set-credentials acm-switchover --token=<token>

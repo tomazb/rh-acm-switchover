@@ -114,7 +114,7 @@ class InputValidator:
             raise ValidationError(
                 f"Invalid namespace '{namespace}'. "
                 f"Must consist of lower case alphanumeric characters or '-', "
-                f"and must start and end with an alphanumeric character"
+                f"must start with a lowercase letter, and end with an alphanumeric character"
             )
 
     @staticmethod
