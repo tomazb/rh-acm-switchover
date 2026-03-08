@@ -172,8 +172,8 @@ kubectl apply -f deploy/rbac/rolebinding.yaml
 If the operator service account also needs old-hub teardown permissions, apply the optional decommission extension too:
 
 ```bash
-kubectl apply -f deploy/rbac/clusterrole-decommission.yaml
-kubectl apply -f deploy/rbac/clusterrolebinding-decommission.yaml
+kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
+kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 ```
 
 #### Step 4: Verify
@@ -522,7 +522,7 @@ Automated RBAC deployment and kubeconfig generation.
   --output-dir ~/prod-kubeconfigs
 ```
 
-The generated operator kubeconfig is least-privilege by default. Apply `deploy/rbac/clusterrole-decommission.yaml` and `deploy/rbac/clusterrolebinding-decommission.yaml` separately if that same service account must run `--decommission`.
+The generated operator kubeconfig is least-privilege by default. Apply `deploy/rbac/extensions/decommission/clusterrole.yaml` and `deploy/rbac/extensions/decommission/clusterrolebinding.yaml` separately if that same service account must run `--decommission`.
 
 ### generate-merged-kubeconfig.sh
 

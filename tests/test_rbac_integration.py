@@ -216,12 +216,19 @@ class TestRBACManifestConsistency:
     @pytest.fixture
     def decommission_clusterrole_path(self) -> Path:
         """Get the static decommission ClusterRole manifest path."""
-        return Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrole-decommission.yaml"
+        return Path(__file__).parent.parent / "deploy" / "rbac" / "extensions" / "decommission" / "clusterrole.yaml"
 
     @pytest.fixture
     def decommission_clusterrolebinding_path(self) -> Path:
         """Get the static decommission ClusterRoleBinding manifest path."""
-        return Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrolebinding-decommission.yaml"
+        return (
+            Path(__file__).parent.parent
+            / "deploy"
+            / "rbac"
+            / "extensions"
+            / "decommission"
+            / "clusterrolebinding.yaml"
+        )
 
     @pytest.fixture
     def kustomize_roles(self, kustomize_role_path) -> List[dict]:
