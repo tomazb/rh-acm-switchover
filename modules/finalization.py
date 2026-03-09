@@ -1536,6 +1536,7 @@ class Finalization:
         if summary.failed:
             raise SwitchoverError(f"Argo CD auto-sync restore failed for {summary.failed} Application(s)")
 
+    @dry_run_skip(message="Would reset autoImportStrategy to default ImportOnly")
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""
         if not is_acm_version_ge(self.acm_version, "2.14.0"):

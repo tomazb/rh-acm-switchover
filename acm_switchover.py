@@ -118,6 +118,14 @@ Examples:
         action="store_true",
         help="Deploy RBAC resources and generate kubeconfigs for switchover",
     )
+    mode_group.add_argument(
+        "--argocd-resume-only",
+        action="store_true",
+        help=(
+            "Load state file and restore Argo CD auto-sync for previously paused Applications, then exit. "
+            "Use after retargeting Git or for failback to original primary."
+        ),
+    )
 
     # Switchover options
     parser.add_argument(
@@ -263,14 +271,6 @@ Examples:
         ),
     )
     parser.add_argument(
-        "--argocd-resume-only",
-        action="store_true",
-        help=(
-            "Load state file and restore Argo CD auto-sync for previously paused Applications, then exit. "
-            "Use after retargeting Git or for failback to original primary."
-        ),
-    )
-    parser.add_argument(
         "--non-interactive",
         action="store_true",
         help="Non-interactive mode for decommission (dangerous)",
@@ -309,6 +309,9 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         else:
             # Validate user-specified state file path to prevent unsafe locations
             InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
+
+        if getattr(args, "validate_only", False) and getattr(args, "argocd_manage", False):
+            logger.warning("--argocd-manage has no effect with --validate-only; continuing without Argo CD management.")
 
     except ValidationError as e:
         logger.error("Validation error: %s", str(e))

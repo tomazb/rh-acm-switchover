@@ -338,8 +338,8 @@ class TestCLIArgumentValidation:
         assert "argocd-resume-only" in str(exc_info.value).lower()
         assert "setup" in str(exc_info.value).lower()
 
-    def test_argocd_manage_rejects_validate_only(self):
-        """--argocd-manage cannot be combined with --validate-only."""
+    def test_argocd_manage_validate_only_is_allowed(self):
+        """--argocd-manage with --validate-only is accepted and handled as no-op later."""
         args = MockArgs(
             primary_context="primary-hub",
             secondary_context="secondary-hub",
@@ -352,10 +352,7 @@ class TestCLIArgumentValidation:
             validate_only=True,
         )
 
-        with pytest.raises(ValidationError) as exc_info:
-            InputValidator.validate_all_cli_args(args)
-        assert "argocd-manage" in str(exc_info.value).lower()
-        assert "validate-only" in str(exc_info.value).lower()
+        InputValidator.validate_all_cli_args(args)
 
     def test_setup_include_decommission_rejects_validator_role(self):
         """--include-decommission is only valid for operator-capable setup roles."""

@@ -148,17 +148,12 @@ class TestRBACValidator:
         assert all_valid is False
         assert any("Missing Argo CD permission: patch argoproj.io/applications" in error for error in errors)
 
-    def test_validate_cluster_permissions_argocd_manage_validator_role_does_not_require_patch(self, mock_client):
-        """Test that validator role remains read-only even when argocd_mode=manage."""
+    def test_validate_cluster_permissions_argocd_manage_validator_role_raises(self, mock_client):
+        """Validator role must reject argocd_mode=manage instead of silently downgrading it."""
         validator = RBACValidator(mock_client, role="validator")
-        validator.check_permission = MagicMock(return_value=(True, ""))
 
-        all_valid, errors = validator.validate_cluster_permissions(argocd_mode="manage")
-
-        assert all_valid is True
-        assert len(errors) == 0
-        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
-        assert ("argoproj.io", "applications", "patch") not in checked
+        with pytest.raises(ValueError, match="validator.*manage"):
+            validator.validate_cluster_permissions(argocd_mode="manage")
 
     def test_validate_cluster_permissions_invalid_argocd_mode_raises(self, validator):
         """Test validate_cluster_permissions rejects invalid argocd_mode values."""

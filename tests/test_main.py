@@ -24,6 +24,7 @@ from acm_switchover import (
     main,
     parse_args,
     run_switchover,
+    validate_args,
 )
 from lib import argocd as argocd_lib
 from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
@@ -236,6 +237,46 @@ class TestArgParsing:
             assert args.argocd_resume_only is True
             assert args.method is None
             assert args.old_hub_action is None
+
+    def test_argocd_resume_only_rejects_dry_run_at_parse_time(self):
+        """Resume-only is a standalone mode and must be mutually exclusive with dry-run."""
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "p2",
+                "--argocd-resume-only",
+                "--dry-run",
+            ],
+        ):
+            with pytest.raises(SystemExit):
+                parse_args()
+
+    def test_validate_args_warns_when_argocd_manage_has_no_effect_in_validate_only(self):
+        """validate_args should warn instead of rejecting argocd-manage with validate-only."""
+        args = SimpleNamespace(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            setup=False,
+            validate_only=True,
+            argocd_manage=True,
+            argocd_resume_only=False,
+            argocd_resume_after_switchover=False,
+            non_interactive=False,
+        )
+        logger = Mock()
+
+        validate_args(args, logger)
+
+        logger.warning.assert_any_call("--argocd-manage has no effect with --validate-only; continuing without Argo CD management.")
 
 
 @pytest.mark.unit

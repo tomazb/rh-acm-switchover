@@ -119,9 +119,14 @@ class PrimaryPreparation:
         try:
             # Optional: Pause Argo CD auto-sync for ACM-touching Applications (both hubs)
             if self.argocd_manage:
-                with self.state.step("pause_argocd_apps", logger) as should_run:
-                    if should_run:
-                        self._pause_argocd_acm_apps()
+                if self.dry_run:
+                    logger.info(
+                        "[DRY-RUN] Would pause Argo CD auto-sync for ACM-touching Applications on configured hubs"
+                    )
+                else:
+                    with self.state.step("pause_argocd_apps", logger) as should_run:
+                        if should_run:
+                            self._pause_argocd_acm_apps()
 
             # Step 1: Pause BackupSchedule
             with self.state.step("pause_backup_schedule", logger) as should_run:

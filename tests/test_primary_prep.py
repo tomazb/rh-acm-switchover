@@ -153,6 +153,27 @@ class TestPrimaryPreparation:
 
         assert result is True
 
+    def test_prepare_dry_run_does_not_mark_argocd_pause_step_completed(self, mock_primary_client, mock_state_manager):
+        """Dry-run should not record the Argo CD pause step as completed."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
+        mock_primary_client.patch_custom_resource.return_value = True
+
+        result = prep.prepare()
+
+        assert result is True
+        assert not any(call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list)
+
     def test_pause_argocd_acm_apps_records_paused(self, mock_primary_client, mock_state_manager):
         """Pause Argo CD auto-sync should record paused apps in state."""
         prep = PrimaryPreparation(

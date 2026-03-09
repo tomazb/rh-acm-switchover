@@ -124,13 +124,13 @@ class StateManager:
         self._active_temp_files: Set[str] = set()  # Track active temp files for cleanup
         self._flushing = False  # Track if we're currently flushing to avoid double-write
         self._previous_signal_handlers: Dict[int, Any] = {}
-        self._run_lock_path = os.path.abspath(self.state_file) + ".run.lock"
+        self._run_lock_path = os.path.realpath(self.state_file) + ".run.lock"
         self._run_lock_handle: Optional[Any] = None
         # Register atexit handlers to flush pending state, clean up temp files,
         # and release the lifetime run lock on process exit.
+        atexit.register(self._release_run_lock)
         atexit.register(self._flush_on_exit)
         atexit.register(self._cleanup_temp_files)
-        atexit.register(self._release_run_lock)
 
         try:
             self._acquire_run_lock()

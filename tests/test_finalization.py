@@ -695,6 +695,24 @@ class TestFinalization:
         mock_state_manager.set_config.assert_any_call("auto_import_strategy_set", False)
         mock_state_manager.mark_step_completed.assert_any_call("reset_auto_import_strategy")
 
+    def test_ensure_auto_import_default_skips_state_updates_in_dry_run(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Dry-run must not mutate state for the auto-import strategy reset step."""
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+            dry_run=True,
+        )
+
+        fin._ensure_auto_import_default()
+
+        mock_secondary_client.get_configmap.assert_not_called()
+        mock_secondary_client.delete_configmap.assert_not_called()
+        mock_state_manager.set_config.assert_not_called()
+        mock_state_manager.mark_step_completed.assert_not_called()
+
     def test_ensure_auto_import_default_warns_and_skips_when_lookup_fails(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
     ):

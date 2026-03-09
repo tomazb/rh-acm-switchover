@@ -247,6 +247,8 @@ class RBACValidator:
 
         if argocd_mode == "none":
             return []
+        if argocd_mode == "manage" and self.role == "validator":
+            raise ValueError("validator role cannot use argocd_mode='manage'")
 
         permissions = list(self.ARGOCD_CHECK_CLUSTER_PERMISSIONS)
         if argocd_mode == "manage" and self.role == "operator":

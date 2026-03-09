@@ -423,8 +423,6 @@ class InputValidator:
         if has_argocd_manage:
             if has_argocd_resume_only:
                 raise ValidationError("--argocd-manage cannot be used with --argocd-resume-only")
-            if has_validate_only:
-                raise ValidationError("--argocd-manage cannot be used with --validate-only")
 
         # --argocd-resume-only needs state file (primary + secondary context) to restore from
         if has_argocd_resume_only:

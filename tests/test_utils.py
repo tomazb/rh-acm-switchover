@@ -519,6 +519,28 @@ class TestPhaseResumeMetadata:
         assert len(errors) == 1
         assert errors[0]["phase"] == Phase.ACTIVATION.value
 
+
+@pytest.mark.unit
+class TestStateManagerExitRegistration:
+    """Tests for exit-handler ordering and canonical lock paths."""
+
+    def test_uses_realpath_for_run_lock_and_registers_release_first(self, tmp_path):
+        """The lock path must follow the canonical target and release must register first."""
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        link_dir = tmp_path / "alias"
+        if not hasattr(os, "symlink"):
+            pytest.skip("symlink not supported on this platform")
+        os.symlink(real_dir, link_dir)
+        state_path = link_dir / "state.json"
+
+        with patch("lib.utils.atexit.register") as register:
+            sm = StateManager(str(state_path))
+
+        assert sm._run_lock_path == os.path.realpath(str(state_path)) + ".run.lock"
+        registered = [call.args[0].__name__ for call in register.call_args_list]
+        assert registered == ["_release_run_lock", "_flush_on_exit", "_cleanup_temp_files"]
+
     def test_fail_phase_helper_reuses_existing_same_phase_and_message_error(self, tmp_path):
         """_fail_phase should not append another error when the last entry matches phase and message."""
         import logging
