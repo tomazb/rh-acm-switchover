@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- No unreleased changes yet.
+### Added
+
+- **Runbook and SKILLS file protection**: `docs/ACM_SWITCHOVER_RUNBOOK.md` and `.claude/skills/**/*.skill.md` are now protected from unapproved AI agent edits via AGENTS.md guidance and a `.claude/settings.json` PreToolUse hook that blocks writes.
 
 ## [1.5.10] - 2026-03-08
 
