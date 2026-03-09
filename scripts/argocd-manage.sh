@@ -129,8 +129,50 @@ detect_cli
 # Get Application objects cluster-wide so operator installs also include watched
 # namespaces outside the Argo CD control plane namespace.
 # -----------------------------------------------------------------------------
+is_not_found_error() {
+    local stderr_text="$1"
+    local lowered
+    lowered=$(printf '%s' "$stderr_text" | tr '[:upper:]' '[:lower:]')
+    [[ "$lowered" == *"the server doesn't have a resource type"* ]] \
+        || [[ "$lowered" == *"error from server (notfound)"* ]] \
+        || [[ "$lowered" == *" not found"* ]] \
+        || [[ "$lowered" == not\ found* ]]
+}
+
+run_json_query() {
+    local missing_value="$1"
+    shift
+
+    local output status
+    set +e
+    output=$("$@" 2>&1)
+    status=$?
+    set -e
+
+    if [[ $status -eq 0 ]]; then
+        printf '%s\n' "$output"
+        return 0
+    fi
+
+    if is_not_found_error "$output"; then
+        printf '%s\n' "$missing_value"
+        return 0
+    fi
+
+    printf '%s\n' "$output" >&2
+    return 1
+}
+
 get_applications_json() {
-    "$CLUSTER_CLI_BIN" --context="$CONTEXT" get applications.argoproj.io -A -o json 2>/dev/null || echo '{"items":[]}'
+    run_json_query '{"items":[]}' \
+        "$CLUSTER_CLI_BIN" --context="$CONTEXT" get applications.argoproj.io -A -o json
+}
+
+get_application_json() {
+    local app_ns="$1"
+    local app_name="$2"
+    run_json_query "" \
+        "$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$app_ns" get application.argoproj.io "$app_name" -o json
 }
 
 # Filter to ACM-touching apps from a JSON list of Application objects (items array)
@@ -157,12 +199,33 @@ write_pause_state() {
     local paused_at="$2"
     local apps_array="$3"
     local tmp_file="${STATE_FILE}.tmp.$$"
+    local existing_json="{}"
+
+    if [[ -f "$STATE_FILE" ]]; then
+        existing_json=$(cat "$STATE_FILE")
+    fi
+
     if ! jq -n -c \
+        --argjson existing "$existing_json" \
         --arg run_id "$run_id" \
         --arg context "$CONTEXT" \
         --arg paused_at "$paused_at" \
         --argjson apps "$apps_array" \
-        '{ run_id: $run_id, context: $context, paused_at: $paused_at, apps: $apps }' > "$tmp_file"; then
+        '
+        def normalize:
+            if type != "object" then {}
+            elif has("run_id") and has("context") then
+                { (.context): { run_id: .run_id, paused_at: .paused_at, apps: (.apps // []) } }
+            else
+                .
+            end;
+        ($existing | normalize) + {
+            ($context): {
+                run_id: $run_id,
+                paused_at: $paused_at,
+                apps: $apps
+            }
+        }' > "$tmp_file"; then
         echo "Error: Failed to generate state JSON" >&2
         rm -f "$tmp_file"
         return 1
@@ -193,11 +256,15 @@ run_pause() {
     local count=0
 
     local apps_json
-    apps_json="$(get_applications_json)"
+    if ! apps_json="$(get_applications_json)"; then
+        return 1
+    fi
     while IFS=$'\t' read -r app_ns app_name; do
         [[ -z "$app_name" ]] && continue
         local app_full
-        app_full=$("$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$app_ns" get application.argoproj.io "$app_name" -o json 2>/dev/null || true)
+        if ! app_full="$(get_application_json "$app_ns" "$app_name")"; then
+            return 1
+        fi
         if [[ -z "$app_full" ]]; then
             echo "Warning: Application $app_ns/$app_name not found, skipping" >&2
             continue
@@ -258,14 +325,25 @@ run_resume() {
         echo "Error: State file not found: $STATE_FILE" >&2
         return 1
     fi
-    local run_id state_context
-    run_id=$(jq -r '.run_id // empty' "$STATE_FILE")
-    state_context=$(jq -r '.context // empty' "$STATE_FILE")
+    local state_entry run_id state_context
+    state_entry=$(jq -c --arg context "$CONTEXT" '
+        if type == "object" and has("run_id") then
+            .
+        else
+            .[$context] // empty
+        end
+    ' "$STATE_FILE" 2>/dev/null || true)
+    if [[ -z "$state_entry" ]]; then
+        echo "Error: No state entry found for context '$CONTEXT' in $STATE_FILE" >&2
+        return 1
+    fi
+    run_id=$(jq -r '.run_id // empty' <<<"$state_entry")
+    state_context=$(jq -r '.context // empty' <<<"$state_entry")
     if [[ -z "$run_id" ]]; then
         echo "Error: Invalid state file (missing run_id)" >&2
         return 1
     fi
-    if [[ "$state_context" != "$CONTEXT" ]]; then
+    if [[ -n "$state_context" ]] && [[ "$state_context" != "$CONTEXT" ]]; then
         echo "Warning: State file context '$state_context' != current --context '$CONTEXT'. Proceeding anyway."
     fi
     echo "Resuming from state file (run_id=$run_id). Only use after Git/desired state is updated for the target hub."
@@ -278,7 +356,9 @@ run_resume() {
         original_sync_policy=$(jq -c '.original_sync_policy' <<<"$line")
         [[ "$app_ns" == "null" || "$app_name" == "null" ]] && continue
         local current
-        current=$("$CLUSTER_CLI_BIN" --context="$CONTEXT" -n "$app_ns" get application.argoproj.io "$app_name" -o json 2>/dev/null || true)
+        if ! current="$(get_application_json "$app_ns" "$app_name")"; then
+            return 1
+        fi
         if [[ -z "$current" ]]; then
             echo "  Skip $app_ns/$app_name (not found)"
             continue
@@ -305,7 +385,7 @@ run_resume() {
             echo "  Error: Failed to patch $app_ns/$app_name" >&2
             ((patch_failures++)) || true
         fi
-    done < <(jq -c '.apps[]?' "$STATE_FILE" 2>/dev/null || true)
+    done < <(jq -c '.apps[]?' <<<"$state_entry" 2>/dev/null || true)
     if [[ $count -eq 0 ]] && [[ $DRY_RUN -eq 0 ]]; then
         echo "No applications were resumed (none matched the state file run_id)."
     fi

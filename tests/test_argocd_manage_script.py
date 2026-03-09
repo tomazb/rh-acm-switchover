@@ -110,6 +110,38 @@ fi
 
 if [[ "$scenario" == "pause_operator_watched_namespace" ]]; then
     case "$cmd" in
+        "--context=ctx-a get crd applications.argoproj.io"|\
+        "--context=ctx-b get crd applications.argoproj.io")
+            exit 0
+            ;;
+        "--context=ctx-a get applications.argoproj.io -A -o json")
+            cat <<'JSON'
+{"items":[
+  {"metadata":{"namespace":"argocd","name":"app-a"},"status":{"resources":[{"kind":"MultiClusterHub","namespace":"open-cluster-management"}]}}
+]}
+JSON
+            exit 0
+            ;;
+        "--context=ctx-b get applications.argoproj.io -A -o json")
+            cat <<'JSON'
+{"items":[
+  {"metadata":{"namespace":"argocd","name":"app-b"},"status":{"resources":[{"kind":"ManagedCluster","namespace":"open-cluster-management"}]}}
+]}
+JSON
+            exit 0
+            ;;
+        "--context=ctx-a -n argocd get application.argoproj.io app-a -o json")
+            cat <<'JSON'
+{"metadata":{"namespace":"argocd","name":"app-a","resourceVersion":"3001"},"spec":{"syncPolicy":{"automated":{"prune":true}}}}
+JSON
+            exit 0
+            ;;
+        "--context=ctx-b -n argocd get application.argoproj.io app-b -o json")
+            cat <<'JSON'
+{"metadata":{"namespace":"argocd","name":"app-b","resourceVersion":"3002"},"spec":{"syncPolicy":{"automated":{"selfHeal":true}}}}
+JSON
+            exit 0
+            ;;
         "--context=test-hub get crd applications.argoproj.io")
             exit 0
             ;;
@@ -129,9 +161,47 @@ JSON
             ;;
     esac
 
+    if [[ "$cmd" == *"--context=ctx-a -n argocd patch application.argoproj.io app-a --type=merge -p "* ]]; then
+        exit 0
+    fi
+    if [[ "$cmd" == *"--context=ctx-b -n argocd patch application.argoproj.io app-b --type=merge -p "* ]]; then
+        exit 0
+    fi
     if [[ "$cmd" == *"--context=test-hub -n team-gitops patch application.argoproj.io managed-hub --type=merge -p "* ]]; then
         exit 0
     fi
+fi
+
+if [[ "$scenario" == "list_error" ]]; then
+    case "$cmd" in
+        "--context=test-hub get crd applications.argoproj.io")
+            exit 0
+            ;;
+        "--context=test-hub get applications.argoproj.io -A -o json")
+            echo "error: You must be logged in to the server" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+if [[ "$scenario" == "get_error" ]]; then
+    case "$cmd" in
+        "--context=test-hub get crd applications.argoproj.io")
+            exit 0
+            ;;
+        "--context=test-hub get applications.argoproj.io -A -o json")
+            cat <<'JSON'
+{"items":[
+  {"metadata":{"namespace":"argocd","name":"app-a"},"status":{"resources":[{"kind":"ManagedCluster","namespace":"open-cluster-management"}]}}
+]}
+JSON
+            exit 0
+            ;;
+        "--context=test-hub -n argocd get application.argoproj.io app-a -o json")
+            echo "error: the server has asked for the client to provide credentials" >&2
+            exit 1
+            ;;
+    esac
 fi
 
 echo "unexpected command for scenario '$scenario': $cmd" >&2
@@ -145,7 +215,7 @@ exit 1
 def mock_env(tmp_path: Path, scenario: str) -> dict:
     """Build an environment with mocked oc command for a specific scenario."""
     mock_bin = tmp_path / "bin"
-    mock_bin.mkdir()
+    mock_bin.mkdir(exist_ok=True)
     write_mock_oc(mock_bin)
     return {
         "PATH": f"{mock_bin}:{os.environ['PATH']}",
@@ -194,11 +264,11 @@ def test_pause_writes_partial_state_before_returning_failure(tmp_path):
     assert state_file.exists()
 
     payload = json.loads(state_file.read_text(encoding="utf-8"))
-    assert payload["context"] == "test-hub"
-    assert len(payload["apps"]) == 1
-    assert payload["apps"][0]["namespace"] == "argocd"
-    assert payload["apps"][0]["name"] == "app-a"
-    assert payload["apps"][0]["original_sync_policy"]["automated"] == {}
+    entry = payload["test-hub"] if "test-hub" in payload else payload
+    assert len(entry["apps"]) == 1
+    assert entry["apps"][0]["namespace"] == "argocd"
+    assert entry["apps"][0]["name"] == "app-a"
+    assert entry["apps"][0]["original_sync_policy"]["automated"] == {}
 
 
 def test_resume_returns_failure_when_any_patch_fails(tmp_path):
@@ -261,13 +331,80 @@ def test_pause_scans_cluster_wide_for_operator_watched_namespaces(tmp_path):
     assert "Paused team-gitops/managed-hub" in out
 
     payload = json.loads(state_file.read_text(encoding="utf-8"))
-    assert payload["apps"] == [
+    entry = payload["test-hub"] if "test-hub" in payload else payload
+    assert entry["apps"] == [
         {
             "namespace": "team-gitops",
             "name": "managed-hub",
             "original_sync_policy": {"automated": {"prune": True}},
         }
     ]
+
+
+def test_pause_namespaces_state_by_context_in_shared_file(tmp_path):
+    """Pause state file must preserve entries for multiple hub contexts."""
+    state_file = tmp_path / "pause-state.json"
+
+    first_code, first_out = run_argocd_manage(
+        "--context",
+        "ctx-a",
+        "--mode",
+        "pause",
+        "--state-file",
+        str(state_file),
+        env=mock_env(tmp_path, "pause_operator_watched_namespace"),
+    )
+    second_code, second_out = run_argocd_manage(
+        "--context",
+        "ctx-b",
+        "--mode",
+        "pause",
+        "--state-file",
+        str(state_file),
+        env=mock_env(tmp_path, "pause_operator_watched_namespace"),
+    )
+
+    assert first_code == 0, first_out
+    assert second_code == 0, second_out
+
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    assert set(payload) == {"ctx-a", "ctx-b"}
+    assert payload["ctx-a"]["apps"][0]["name"] == "app-a"
+    assert payload["ctx-b"]["apps"][0]["name"] == "app-b"
+
+
+def test_pause_exits_non_zero_on_application_list_error(tmp_path):
+    """Generic API/auth failures must not be swallowed during list operations."""
+    state_file = tmp_path / "pause-state.json"
+    code, out = run_argocd_manage(
+        "--context",
+        "test-hub",
+        "--mode",
+        "pause",
+        "--state-file",
+        str(state_file),
+        env=mock_env(tmp_path, "list_error"),
+    )
+
+    assert code == 1
+    assert "You must be logged in to the server" in out
+
+
+def test_pause_exits_non_zero_on_application_get_error(tmp_path):
+    """Generic API/auth failures must not be treated as missing Applications."""
+    state_file = tmp_path / "pause-state.json"
+    code, out = run_argocd_manage(
+        "--context",
+        "test-hub",
+        "--mode",
+        "pause",
+        "--state-file",
+        str(state_file),
+        env=mock_env(tmp_path, "get_error"),
+    )
+
+    assert code == 1
+    assert "provide credentials" in out
 
 
 def test_rejects_unsupported_target_value():

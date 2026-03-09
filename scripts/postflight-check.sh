@@ -317,6 +317,10 @@ if [[ $BACKUP_SCHEDULE -gt 0 ]]; then
     fi
     SCHEDULE_NAME=$(echo "$SCHEDULE_JSON" | jq -r '.metadata.name // ""' 2>/dev/null || echo "")
     PAUSED=$(echo "$SCHEDULE_JSON" | jq -r '.spec.paused // false' 2>/dev/null || echo "")
+    if [[ -z "$SCHEDULE_JSON" ]] || [[ -z "$PAUSED" ]]; then
+        SCHEDULE_NAME="${SCHEDULE_NAME:-}"
+        PAUSED="true"
+    fi
 
     # Detect GitOps markers on BackupSchedule
     if [[ -n "$SCHEDULE_JSON" ]]; then

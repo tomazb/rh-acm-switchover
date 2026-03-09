@@ -971,6 +971,12 @@ print_gitops_report() {
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}Coordinate changes with GitOps to avoid drift after switchover.${NC}"
     echo ""
+    ((WARNING_CHECKS+=count)) || true
+    if [[ $count -eq 1 ]]; then
+        WARNING_MESSAGES+=("GitOps-related marker detected on 1 resource; coordinate changes with GitOps to avoid drift after switchover.")
+    else
+        WARNING_MESSAGES+=("GitOps-related markers detected on $count resources; coordinate changes with GitOps to avoid drift after switchover.")
+    fi
 
     # Sort resources for consistent output (matches Python implementation)
     # Format: index:resource:markers, then sort by resource identifier
