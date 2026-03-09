@@ -329,37 +329,40 @@ graph TD
     J8 -->|No| K[Check Backup Status]
     K --> L{Backups OK?}
     L -->|No| M[FAIL: Backup Issues]
-    L -->|Yes| N[CRITICAL: Check preserveOnDelete]
-    N --> O{All CDs have<br/>preserveOnDelete=true?}
-    O -->|No| P[FAIL: Missing preserveOnDelete<br/>DANGER: Infrastructure at risk!]
-    O -->|Yes| Q{Method?}
-    Q -->|Passive| R[Find & Check Latest Restore]
-    Q -->|Full| S[Skip Passive Check]
-    R --> T{Passive Sync<br/>Enabled?}
-    T -->|No| U[FAIL: Passive Sync Not Ready]
-    T -->|Yes| V[Check Observability CRs & Secrets\n+ Secondary MCO Safety]
-    S --> V
-    V --> V2[Check Auto-Import Strategy<br/>ACM 2.14+]
-    V2 --> V3{Non-default<br/>Strategy?}
-    V3 -->|Yes| V4[WARN: Non-default Strategy]
-    V3 -->|No| V5{Secondary has<br/>existing clusters?}
-    V5 -->|Yes| V6[WARN: Consider ImportAndSync<br/>before restore]
-    V5 -->|No| W
-    V4 --> W
-    V6 --> W
-    W[Generate Summary Report]
-    W --> X{Any Failures?}
-    X -->|Yes| Y[Exit Code 1<br/>Display Failed Checks]
-    X -->|No| Z[Exit Code 0<br/>Ready to Proceed]
+    L -->|Yes| N[CRITICAL: Check useManagedServiceAccount]
+    N --> O{BackupSchedule has<br/>useManagedServiceAccount=true?}
+    O -->|No| P[FAIL: Missing useManagedServiceAccount<br/>Auto-reconnect at risk]
+    O -->|Yes| Q[CRITICAL: Check preserveOnDelete]
+    Q --> R{All CDs have<br/>preserveOnDelete=true?}
+    R -->|No| S[FAIL: Missing preserveOnDelete<br/>DANGER: Infrastructure at risk!]
+    R -->|Yes| T{Method?}
+    T -->|Passive| U[Find & Check Latest Restore]
+    T -->|Full| V[Skip Passive Check]
+    U --> W{Passive Sync<br/>Enabled?}
+    W -->|No| X[FAIL: Passive Sync Not Ready]
+    W -->|Yes| Y[Check Observability CRs & Secrets\n+ Secondary MCO Safety]
+    V --> Y
+    Y --> Y2{Secondary has<br/>existing clusters?}
+    Y2 -->|Yes| Y3[WARN: Consider ImportAndSync<br/>before restore]
+    Y2 -->|No| Y4[Check Auto-Import Strategy<br/>ACM 2.14+]
+    Y3 --> Y4
+    Y4 --> Y5{Non-default<br/>Strategy?}
+    Y5 -->|Yes| Y6[WARN: Non-default Strategy]
+    Y5 -->|No| Z[Generate Summary Report]
+    Y6 --> Z
+    Z --> ZA{Any Failures?}
+    ZA -->|Yes| ZB[Exit Code 1<br/>Display Failed Checks]
+    ZA -->|No| ZC[Exit Code 0<br/>Ready to Proceed]
     
     style P fill:#ff6b6b
+    style S fill:#ff6b6b
     style H fill:#ff6b6b
     style M fill:#ff6b6b
-    style U fill:#ff6b6b
+    style X fill:#ff6b6b
     style J4 fill:#ff6b6b
     style J7 fill:#ff6b6b
     style J9 fill:#ff6b6b
-    style Z fill:#51cf66
+    style ZC fill:#51cf66
 ```
 
 ---
@@ -510,9 +513,13 @@ graph TD
     Y --> AA{Old Hub Clusters<br/>Disconnected?}
     AA -->|No| AB[WARN: Old Hub Still Active]
     AA -->|Yes| AC[Check Old Hub Backup Paused]
-    AB --> Y2
+    AB --> AC
     AC --> AC2[Check Old Hub MCO or\nScaled-down Observability]
-    AC2 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    AC2 --> AC3{Old Hub Passive Sync<br/>Ready for Failback?}
+    AC3 -->|No| AC4[WARN: Failback Not Ready]
+    AC3 -->|Yes| AC5[Check Old Hub ACM<br/>Still Installed or Decommissioned]
+    AC4 --> AC5
+    AC5 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
     Y2 --> Y3{Non-default<br/>Strategy?}
     Y3 -->|Yes| Y4[WARN: Reset Strategy to Default]
     Y3 -->|No| AD
@@ -622,9 +629,7 @@ oc get managedclusters
 ### Exit Codes
 
 - `0` - kubeconfig generated successfully
-- `1` - Missing required arguments
-- `2` - Service account not found
-- `3` - Token creation failed
+- `1` - Invalid arguments or kubeconfig generation failure
 
 ### Workflow Diagram
 
@@ -633,29 +638,28 @@ graph TD
     A[Start] --> B{--help flag?}
     B -->|Yes| C[Show Usage]
     C --> D[Exit 0]
-    B -->|No| E[Parse --context flag]
+    B -->|No| E[Parse Flags<br/>--context, --user, --token-duration]
     E --> F{Namespace &<br/>SA provided?}
     F -->|No| G[Show Usage Error]
     G --> H[Exit 1]
     F -->|Yes| I{Service Account<br/>exists?}
     I -->|No| J[Error: SA not found]
-    J --> K[Exit 2]
-    I -->|Yes| L[Extract cluster info<br/>from context]
-    L --> M{Server URL<br/>found?}
-    M -->|No| N[Error: No cluster URL]
-    N --> K
-    M -->|Yes| O[Generate token<br/>with duration]
-    O --> P{Token<br/>created?}
-    P -->|No| Q[Error: Token failed]
-    Q --> R[Exit 3]
-    P -->|Yes| S[Output kubeconfig<br/>to stdout]
-    S --> T[Exit 0]
+    J --> H
+    I -->|Yes| K[Extract cluster info<br/>from context/current kubeconfig]
+    K --> L{Server URL<br/>found?}
+    L -->|No| M[Error: No cluster URL]
+    M --> H
+    L -->|Yes| N[Resolve user name<br/>and context name]
+    N --> O[Generate token<br/>with duration]
+    O --> P{Token command<br/>succeeds?}
+    P -->|No| Q[Error: Token generation failed]
+    Q --> H
+    P -->|Yes| R[Output kubeconfig<br/>to stdout]
+    R --> T[Exit 0]
     
     style D fill:#51cf66
     style T fill:#51cf66
     style H fill:#ff6b6b
-    style K fill:#ff6b6b
-    style R fill:#ff6b6b
 ```
 
 ---
@@ -930,16 +934,17 @@ graph TD
     K -->|Yes| L[Consider Reverse Switchover]
     K -->|No| M[Troubleshoot & Retry]
     M --> I
-    J -->|Yes| N[Steps 6-11: Post-Activation]
-    N --> O[Verify Metrics in Grafana]
-    O --> P[Monitor for 24 Hours]
-    P --> Q[Step 12: Decommission Old Hub Optional]
-    Q --> R[Switchover Complete]
+    J -->|Yes| N[Steps 6-10: Post-Activation Common Steps]
+    N --> O[Steps 11-12: Finalization]
+    O --> P[Step 13: Inform Stakeholders]
+    P --> Q[Verify Metrics in Grafana<br/>and Monitor for 24 Hours]
+    Q --> R[Step 14: Decommission Old Hub Optional]
+    R --> S[Switchover Complete]
     
     style C fill:#ffd43b
     style J fill:#ffd43b
     style L fill:#ff6b6b
-    style R fill:#51cf66
+    style S fill:#51cf66
 ```
 
 > **Note**: RBAC setup (`setup-rbac.sh`) and kubeconfig generation are **one-time prerequisites** 
