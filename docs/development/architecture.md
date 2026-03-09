@@ -1,688 +1,376 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.5.5
-**Last Updated**: February 20, 2026
+**Version**: 1.5.10  
+**Last Updated**: 2026-03-09
 
-## Project Structure
+## Overview
 
-```
+`rh-acm-switchover` is a Python-first operational CLI for orchestrating ACM hub switchover between a primary and secondary hub. The design favors explicit phases, resumable state, strong validation, and operator-visible safety checks over hidden automation.
+
+The codebase also includes shell helpers for discovery, validation, RBAC bootstrap, kubeconfig generation, and Argo CD auto-sync management. The Python CLI is the main control plane; the shell scripts are focused operational companions.
+
+## Current Project Structure
+
+```text
 rh-acm-switchover/
-├── acm_switchover.py          # Main orchestrator script
-├── check_rbac.py              # RBAC permission validation tool
-├── show_state.py              # State file viewer utility
-├── quick-start.sh             # Interactive setup wizard
-├── run_tests.sh               # Test execution wrapper
-├── requirements.txt           # Python dependencies
-├── requirements-dev.txt       # Development/testing dependencies
-├── setup.cfg                  # Tool configuration (flake8, pytest, etc.)
-├── README.md                  # Project overview
-├── LICENSE                    # MIT License
-├── SECURITY.md                # Security policy
-├── .gitignore                 # Git ignore patterns
-│
-├── container-bootstrap/       # Container build resources
-│   ├── Containerfile          # Multi-stage container build definition
-│   └── get-pip.py             # Python package installer bootstrapper
-│
-├── lib/                       # Core utilities
+├── acm_switchover.py              # Main CLI entrypoint and phase orchestrator
+├── check_rbac.py                  # RBAC validation CLI
+├── show_state.py                  # State file inspection helper
+├── run_tests.sh                   # Test wrapper
+├── lib/
 │   ├── __init__.py
-│   ├── constants.py           # Shared constants
-│   ├── exceptions.py          # Custom exception hierarchy
-│   ├── kube_client.py         # Kubernetes API wrapper
-│   ├── rbac_validator.py      # RBAC permission validation
-│   ├── utils.py               # State management, logging, helpers
-│   ├── validation.py          # Input validation and sanitization
-│   └── waiter.py              # Resource polling and waiting logic
-│
-├── modules/                   # Switchover modules
-│   ├── __init__.py
-│   ├── preflight/             # Modular pre-flight validation package
-│   │   ├── __init__.py
-│   │   ├── base_validator.py      # BaseValidator class for all validators
-│   │   ├── reporter.py            # ValidationReporter for result collection
-│   │   ├── backup_validators.py   # Backup and restore validations
-│   │   ├── cluster_validators.py  # Cluster-related validations
-│   │   ├── namespace_validators.py # Namespace and resource validations
-│   │   └── version_validators.py  # Version and compatibility validations
-│   ├── preflight_coordinator.py   # PreflightValidator orchestrator
-│   ├── preflight_validators.py    # Backward-compat shim (deprecated)
-│   ├── primary_prep.py        # Primary hub preparation
-│   ├── activation.py          # Secondary hub activation
-│   ├── post_activation.py     # Post-activation verification
-│   ├── finalization.py        # Finalization & rollback
-│   ├── decommission.py        # Old hub decommission
-│   └── backup_schedule.py     # Backup schedule management
-│
-├── scripts/                   # Shell helper scripts
-│   ├── constants.sh           # Shared shell variables
-│   ├── lib-common.sh          # Shared helper functions
-│   ├── preflight-check.sh     # Standalone pre-flight check
-│   ├── postflight-check.sh    # Standalone post-flight check
-│   ├── discover-hub.sh        # Auto-discover ACM hubs
-│   ├── setup-rbac.sh          # RBAC bootstrap and kubeconfig generation
-│   ├── generate-sa-kubeconfig.sh     # Service account kubeconfig generator
-│   └── generate-merged-kubeconfig.sh # Multi-cluster kubeconfig merger
-│
-├── deploy/                    # Deployment manifests
-│   ├── rbac/                  # RBAC resources (SA, roles, bindings)
-│   ├── kustomize/             # Kustomize overlays
-│   ├── helm/                  # Helm chart
-│   └── acm-policies/          # ACM governance policies
-│
-├── tests/                     # Unit and integration tests
-│   ├── __init__.py
-│   ├── test_main.py           # Tests for main orchestrator
-│   ├── test_utils.py          # Tests for lib/utils.py
-│   ├── test_kube_client.py    # Tests for lib/kube_client.py
-│   ├── test_preflight.py      # Tests for modules/preflight.py
-│   ├── test_scripts.py        # Tests for shell scripts
-│   └── ... (comprehensive test suite for all modules)
-│
-├── .github/                   # CI/CD configuration
-│   ├── workflows/
-│   │   ├── ci-cd.yml          # Main CI/CD pipeline
-│   │   └── security.yml       # Security scanning workflow
-│   └── ...
-│
-└── docs/                      # Documentation
-    ├── README.md
-    ├── ACM_SWITCHOVER_RUNBOOK.md
-    ├── getting-started/install.md
-    ├── getting-started/container.md
-    ├── operations/quickref.md
-    ├── operations/usage.md
-    ├── deployment/rbac-deployment.md
-    ├── development/architecture.md
-    ├── project/prd.md
-    └── ...
+│   ├── argocd.py                  # Argo CD discovery, pause, and resume helpers
+│   ├── constants.py               # Shared constants and timeouts
+│   ├── exceptions.py              # Switchover exception hierarchy
+│   ├── gitops_detector.py         # GitOps marker collection and reporting
+│   ├── kube_client.py             # Kubernetes API wrapper with retries/dry-run support
+│   ├── rbac_validator.py          # Permission validation helpers
+│   ├── utils.py                   # StateManager, Phase enum, logging, helpers
+│   ├── validation.py              # CLI and input validation
+│   └── waiter.py                  # Polling and wait utilities
+├── modules/
+│   ├── activation.py              # Secondary hub activation logic
+│   ├── backup_schedule.py         # BackupSchedule helpers
+│   ├── decommission.py            # Old-hub teardown workflow
+│   ├── finalization.py            # New-primary finalization and old-hub handling
+│   ├── post_activation.py         # ManagedCluster and Observability verification
+│   ├── preflight/
+│   │   ├── backup_validators.py
+│   │   ├── base_validator.py
+│   │   ├── cluster_validators.py
+│   │   ├── namespace_validators.py
+│   │   ├── reporter.py
+│   │   └── version_validators.py
+│   ├── preflight_coordinator.py   # Modular preflight orchestration
+│   ├── preflight_validators.py    # Deprecated compatibility shim
+│   └── primary_prep.py            # Old-primary preparation logic
+├── scripts/
+│   ├── argocd-manage.sh           # Standalone Argo CD pause/resume helper
+│   ├── discover-hub.sh            # Hub discovery and preflight launcher
+│   ├── generate-merged-kubeconfig.sh
+│   ├── generate-sa-kubeconfig.sh
+│   ├── postflight-check.sh
+│   ├── preflight-check.sh
+│   ├── setup-rbac.sh
+│   └── lib-common.sh
+├── deploy/                        # RBAC, kustomize, Helm, ACM policies
+├── tests/                         # Unit, integration, and E2E-oriented pytest coverage
+└── docs/
 ```
 
-**Total Lines of Code**: ~2,156 lines (excluding documentation and tests)
+## Runtime Branches
 
-## Design Principles
+The entrypoint exposes three distinct execution branches:
 
-### 1. Idempotency
+1. **Standard switchover path**
+   - Uses state tracking, two `KubeClient` instances, phased execution, and optional Argo CD management.
+2. **Setup path (`--setup`)**
+   - Bypasses switchover state/phases and shells out to `scripts/setup-rbac.sh`.
+3. **Argo CD resume-only path (`--argocd-resume-only`)**
+   - Loads recorded pause state and resumes Application auto-sync without running switchover phases.
 
-Every operation is designed to be safely re-runnable:
-
-- **State Tracking**: JSON state file tracks completed steps
-- **Step Checking**: Each step checks if already completed before executing
-- **Resume Capability**: Can resume from last successful step after interruption
-- **Safe Re-runs**: Patches and updates are conditional on current resource state
-
-**Implementation:**
-```python
-if not self.state.is_step_completed("pause_backup_schedule"):
-    self._pause_backup_schedule()
-    self.state.mark_step_completed("pause_backup_schedule")
-else:
-    logger.info("Step already completed: pause_backup_schedule")
+```mermaid
+flowchart TD
+    A[CLI args parsed] --> B{Mode}
+    B -->|--setup| C[Run setup-rbac.sh wrapper]
+    B -->|--argocd-resume-only| D[Load state and resume recorded Argo CD apps]
+    B -->|standard switchover| E[Initialize state and clients]
+    E --> F[PREFLIGHT]
+    F --> G[PRIMARY_PREP]
+    G --> H[ACTIVATION]
+    H --> I[POST_ACTIVATION]
+    I --> J[FINALIZATION]
+    J --> K[COMPLETED]
+    F --> L[FAILED]
+    G --> L
+    H --> L
+    I --> L
+    J --> L
 ```
 
-### 2. Comprehensive Validation
+## Core Design Principles
 
-Pre-flight checks ensure safety before any changes:
+### Idempotency
 
-- **Required Resources**: Verify namespaces, operators, configurations exist
-- **Version Matching**: Ensure ACM versions match between hubs
-- **Backup Status**: Check for completed, recent backups
-- **Data Protection**: CRITICAL check for `preserveOnDelete=true` on ClusterDeployments
-- **Component Detection**: Auto-detect optional components (Observability)
+Every mutating workflow step is designed to be re-runnable.
 
-**Validation Categories:**
-- ✓ Critical validations (must pass)
-- ⚠ Warning validations (logged but not blocking)
+- State tracks completed steps by name
+- Each step checks state before running
+- Re-runs skip work already completed
+- Phase transitions are explicit and persisted immediately
 
-### 3. Auto-Detection
+### Fail fast with clear errors
 
-No manual configuration of environment-specific details:
+The architecture distinguishes validation failures, recoverable API issues, and fatal workflow errors.
 
-- **ACM Version**: Detected from MultiClusterHub resource
-- **Observability**: Detected by namespace existence
-- **Method Selection**: User chooses, but script validates compatibility
-- **Version-Specific Logic**: ACM 2.11 vs 2.12+ handled automatically
+- Critical preflight failures stop before mutation
+- Terminal restore states fail explicitly
+- State captures phase and error context for reruns and debugging
 
-**Example:**
-```python
-if is_acm_version_ge(self.acm_version, "2.12.0"):
-    # Use spec.paused for ACM 2.12+
-    patch = {"spec": {"paused": True}}
-else:
-    # ACM 2.11: Delete and save BackupSchedule
-    self.state.set_config("saved_backup_schedule", bs)
-    self.client.delete_custom_resource(...)
+### Explicit over implicit
+
+- CLI flags choose major workflow branches
+- Old-hub disposition is always explicit via `--old-hub-action`
+- GitOps handling is opt-in for mutation and explicit for detection
+- Decommission is a separate mode rather than an automatic side effect
+
+### Minimize hidden side effects
+
+- `--dry-run` logs intended operations instead of mutating cluster resources
+- `--validate-only` runs checks without entering mutation phases
+- Setup mode and resume-only mode are isolated from the main switchover control flow
+
+## Main Components
+
+### `acm_switchover.py`
+
+The entrypoint owns:
+
+- CLI argument parsing
+- Cross-mode branching
+- logger setup
+- state initialization
+- primary and secondary `KubeClient` construction
+- phase orchestration
+- final GitOps report emission
+
+It is intentionally thin on resource-specific logic; phase modules own most workflow behavior.
+
+### `lib/utils.py`
+
+Provides the operational scaffolding:
+
+- `Phase` enum
+- `StateManager`
+- `dry_run_skip`
+- logging setup
+- version helpers and utility functions
+
+`StateManager` is the backbone for resumability. It persists:
+
+- current phase
+- completed steps
+- config discovered during execution
+- Argo CD pause metadata
+- error history
+
+Critical checkpoints call `flush_state()`. Non-critical changes call `save_state()`.
+
+### `lib/kube_client.py`
+
+Wraps Kubernetes API operations with:
+
+- per-context client loading
+- dry-run-aware mutators
+- retry behavior for transient failures
+- common helpers for Deployments, StatefulSets, Pods, and custom resources
+
+This layer centralizes Kubernetes interaction so workflow modules can stay focused on ACM behavior.
+
+### `lib/validation.py`
+
+Enforces CLI and input safety:
+
+- context and filesystem path validation
+- cross-argument validation
+- guardrails for setup, decommission, activation, and Argo CD flags
+
+This prevents invalid mode combinations from reaching workflow execution.
+
+### `lib/argocd.py` and `lib/gitops_detector.py`
+
+These modules separate two related but different concerns:
+
+- `gitops_detector.py`: generic GitOps ownership marker collection and reporting
+- `argocd.py`: Argo CD-specific discovery, ACM-impact analysis, pause, and resume operations
+
+This split keeps generic “warn about drift risk” logic separate from “mutate Argo CD Applications” logic.
+
+## Phase Modules
+
+### Preflight
+
+`modules/preflight_coordinator.py` orchestrates the modular validators in `modules/preflight/`.
+
+Checks include:
+
+- required namespaces and ACM resources
+- ACM version detection and compatibility
+- OADP and DataProtectionApplication health
+- backup readiness and passive restore readiness
+- ClusterDeployment protection
+- RBAC validation
+- optional GitOps and Argo CD impact reporting
+
+`modules/preflight_validators.py` remains only as a deprecated compatibility shim.
+
+### Primary preparation
+
+`modules/primary_prep.py` prepares the old primary hub by:
+
+- pausing `BackupSchedule`
+- disabling cluster auto-import
+- scaling down Thanos compactor when needed
+- pausing ACM-touching Argo CD Applications when requested
+
+### Activation
+
+`modules/activation.py` promotes the secondary hub.
+
+It supports:
+
+- passive method activation
+- full restore creation
+- restore deletion propagation handling for `--activation-method restore`
+- managed-cluster-count enforcement
+- temporary auto-import strategy handling for newer ACM versions
+
+Important activation-related flags:
+
+- `--activation-method`
+- `--min-managed-clusters`
+- `--manage-auto-import-strategy`
+
+### Post-activation
+
+`modules/post_activation.py` verifies the promoted hub by checking:
+
+- `ManagedCluster` join and availability conditions
+- observability component health and restarts
+- follow-up guidance for operator verification
+
+### Finalization
+
+`modules/finalization.py` completes switchover by:
+
+- re-enabling or recreating `BackupSchedule`
+- verifying new backups after promotion
+- handling old-hub-as-secondary or old-hub decommission prep
+- optionally resuming Argo CD auto-sync
+
+Important finalization-related flags:
+
+- `--old-hub-action`
+- `--disable-observability-on-secondary`
+- `--argocd-resume-after-switchover`
+
+### Decommission
+
+`modules/decommission.py` performs the separate old-hub teardown flow with explicit confirmation and verification.
+
+## Switchover Interaction Model
+
+```mermaid
+sequenceDiagram
+    participant CLI as acm_switchover.py
+    participant State as StateManager
+    participant P as Primary KubeClient
+    participant S as Secondary KubeClient
+    participant Mods as Phase Modules
+    participant Argo as lib.argocd / gitops_detector
+
+    CLI->>State: load or initialize state
+    CLI->>P: create client for primary context
+    CLI->>S: create client for secondary context
+    CLI->>Mods: run preflight coordinator
+    Mods->>Argo: collect GitOps markers / optional Argo CD impact
+    CLI->>Mods: run primary preparation
+    Mods->>Argo: optionally pause ACM-touching Applications
+    CLI->>Mods: run activation
+    Mods->>S: patch restore or create full restore
+    CLI->>Mods: run post-activation verification
+    CLI->>Mods: run finalization
+    Mods->>Argo: optionally resume recorded Applications
+    Mods->>State: persist completion and config
 ```
 
-### 4. Data Protection
+## GitOps and Argo CD Architecture
 
-Multiple layers to prevent accidental data loss:
+GitOps support is intentionally layered:
 
-- **preserveOnDelete Check**: Mandatory validation before switchover
-- **Dry-Run Mode**: Preview all actions without execution
-- **Validate-Only Mode**: Run all checks without any changes
-- **Rollback Capability**: Revert to primary hub if issues occur
-- **Interactive Decommission**: Confirmation prompts for destructive operations
+- **Detection layer**: resource labels/annotations are scanned for GitOps markers so operators know where drift is likely.
+- **Argo CD discovery layer**: the tool can inspect Argo CD installations and Applications that touch ACM resources.
+- **Pause/resume layer**: when requested, the tool records exactly which Applications it paused and can later resume only those Applications.
 
-### 5. Graceful Degradation
+Key design properties:
 
-Handle optional components gracefully:
+- Marker detection can be disabled with `--skip-gitops-check`
+- `--argocd-check` is read-only
+- `--argocd-manage` is mutating and therefore disallowed with `--validate-only`
+- Resume is idempotent for already-resumed Applications when the same run owns the pause marker
+- Git remains the source of truth; the tool only coordinates around temporary drift risk
 
-- **Observability**: If not present, skip related steps automatically
-- **Hive ClusterDeployments**: If not present, skip preservation checks
-- **Missing Resources**: Log warnings for non-critical missing resources
-- **API Errors**: Distinguish between 404 (expected) and real errors
+## State Model
 
-## Phase-to-Runbook Mapping
+State is stored in JSON and keyed by switchover context pair unless an explicit `--state-file` is provided.
 
-The automation phases map to the v2 runbook steps as follows:
+Important state categories:
 
-| Python Phase | Runbook Steps | Module | Key Actions |
-| -------------- | --------------- | -------- | ------------- |
-| `PREFLIGHT` | Step 0 | `preflight_coordinator.py` | Validate both hubs, versions, backups, prerequisites |
-| `PRIMARY_PREP` | Steps 1-3 (Method 1) / F1-F3 (Method 2) | `primary_prep.py` | Pause backups, disable auto-import, scale down Thanos compactor |
-| `ACTIVATION` | Steps 4-5 (Method 1) / F4-F5 (Method 2) | `activation.py` | Verify passive sync or create full restore, activate clusters |
-| `POST_ACTIVATION` | Steps 6-10 / F6 | `post_activation.py` | Verify clusters, restart Observatorium API, metrics checks |
-| `FINALIZATION` | Steps 11-12 | `finalization.py` | Enable backups, verify integrity, handle old hub |
-| (manual) | Step 13 | — | Inform stakeholders (out-of-band) |
-| (separate) | Step 14 | `decommission.py` | Decommission old hub |
-| (separate) | Rollback 1-5 | (manual/partial) | Rollback procedures |
+- `current_phase`
+- `completed_steps`
+- detected config such as ACM version and observability presence
+- saved resources needed for version-specific restore/unpause behavior
+- Argo CD pause metadata such as `argocd_run_id` and `argocd_paused_apps`
+- error history
 
-**Method 2 (Full Restore) Support:** Use `--method full` (examples: `--method=full` or `--method full`). The Python tool runs
-`PRIMARY_PREP` → `ACTIVATION` → `POST_ACTIVATION` → `FINALIZATION` for both methods. Method 2 creates `restore-acm-full`
-via `_create_full_restore()` instead of patching the passive sync restore.
+Operational guarantees:
 
-**Activation Options (Method 1):** `--activation-method patch` (default) patches the passive sync restore.
-`--activation-method restore` deletes the passive sync restore and creates `restore-acm-activate`.
+- atomic writes reduce corruption risk
+- locking protects against concurrent modification
+- signal and exit handlers flush dirty state
+- completed-state reruns remain safe, including validate-only behavior
 
-**Restore Activation Caveat:** The ACM restore controller can briefly treat a deleted restore as still active.
-The implementation waits for deletion to fully propagate before creating `restore-acm-activate`, and treats
-`FinishedWithErrors`/`FailedWithErrors` as fatal restore states to avoid silent hangs.
+## Validation and Safety Model
 
-**Caveat:** The primary hub must be reachable; the tool does not currently support full-restore-only execution when the primary hub is unreachable.
+The architecture treats validation as a first-class subsystem rather than a convenience layer.
 
-## Module Architecture
+- CLI validation rejects bad mode combinations up front
+- preflight validation blocks unsafe execution
+- module-level checks validate assumptions again before critical mutations
+- decommission remains isolated from normal switchover
+- old-hub outcomes stay explicit through `--old-hub-action`
 
-### Constants (`lib/constants.py`)
+## Shell Script Companion Architecture
 
-Centralized constants for maintainability and consistency:
+The shell scripts are not alternate implementations of the full Python workflow. They are companion tools.
 
-**Namespaces:**
-- `BACKUP_NAMESPACE`: `open-cluster-management-backup`
-- `OBSERVABILITY_NAMESPACE`: `open-cluster-management-observability`
-- `ACM_NAMESPACE`: `open-cluster-management`
+- `discover-hub.sh`: hub discovery and smart preflight launcher
+- `preflight-check.sh` / `postflight-check.sh`: standalone operational checks
+- `setup-rbac.sh`: RBAC deployment and kubeconfig generation wrapper
+- `generate-sa-kubeconfig.sh` / `generate-merged-kubeconfig.sh`: credential packaging helpers
+- `argocd-manage.sh`: standalone pause/resume control for Argo CD Applications
 
-**ACM Resource Names:**
-- `RESTORE_PASSIVE_SYNC_NAME`: `restore-acm-passive-sync`
-- `RESTORE_FULL_NAME`: `restore-acm-full`
-- `BACKUP_SCHEDULE_DEFAULT_NAME`: `acm-hub-backup`
+This split keeps the Python CLI focused on orchestration while leaving smaller operator tasks available as composable shell utilities.
 
-**ACM Spec Fields:**
-- `SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME`: `veleroManagedClustersBackupName`
-- `SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS`: `syncRestoreWithNewBackups`
-- `VELERO_BACKUP_LATEST`: `latest`
-- `VELERO_BACKUP_SKIP`: `skip`
+## Setup Architecture
 
-**Timeouts:**
-- `RESTORE_WAIT_TIMEOUT`: 1800s (30 min)
-- `CLUSTER_VERIFY_TIMEOUT`: 600s (10 min)
-- `DECOMMISSION_POD_TIMEOUT`: 1200s (20 min)
+Setup mode is intentionally separate from the switchover phase machine.
 
-**Resource Limits:**
-- `MAX_KUBECONFIG_SIZE`: 10MB default (configurable via `ACM_KUBECONFIG_MAX_SIZE` environment variable). Prevents memory exhaustion when loading large kubeconfig files. Set to 0 or negative to disable size checking.
+- `--setup` calls the shell-based RBAC bootstrap workflow
+- `--admin-kubeconfig` is required for privileged deployment
+- `--role` controls whether operator, validator, or both RBAC sets are installed
+- `--include-decommission` extends setup for teardown-capable operator workflows
+- kubeconfig generation remains optional and script-driven
 
-### State Manager (`lib/utils.py`)
+## Testing Architecture
 
-**Responsibilities:**
-- Load/save state to JSON file with optimized write batching
-- Track current phase and completed steps
-- Store configuration detected during execution
-- Record errors for debugging
-- **Logging**: Configure structured JSON logging or human-readable text logging
-- **Dry-run decorator**: `dry_run_skip` decorator for consistent dry-run handling
-- **State persistence**: Automatic state flushing on critical checkpoints and program termination
+The repository uses layered coverage:
 
-**State Persistence Strategy:**
+- unit tests for modules and library helpers
+- integration-style tests for scripts and RBAC behavior
+- E2E-oriented pytest coverage under `tests/e2e/`
 
-The StateManager uses a two-tier write strategy to optimize performance while ensuring data safety:
+Important test themes include:
 
-- **`save_state()`**: Writes state to disk only if there are pending changes (dirty state). Used for non-critical updates like marking steps completed or setting configuration values.
+- state persistence and resume behavior
+- activation and finalization edge cases
+- Argo CD pause/resume and GitOps reporting
+- CLI validation rules
+- script integration
 
-- **`flush_state()`**: Forces immediate write to disk regardless of dirty state. Used for critical checkpoints:
-  - Phase transitions (`set_phase()`)
-  - Error recording (`add_error()`)
-  - State resets (`reset()`)
-  - Context changes (`ensure_contexts()`)
+## Known Constraints
 
-**Automatic State Protection:**
-
-The StateManager includes multiple safety mechanisms to prevent state loss:
-
-- **Signal handlers**: Registered for `SIGTERM` and `SIGINT` to flush dirty state before process termination
-- **Atexit handlers**: Flush pending state changes and clean up temporary files on normal program exit
-- **Dirty state tracking**: Tracks whether state has pending writes to avoid unnecessary disk I/O
-- **Atomic writes**: Uses temporary files and atomic rename operations to prevent corruption
-- **File locking**: Uses `fcntl` locks (when available) to prevent concurrent write conflicts
-
-**Dry-Run Decorator:**
-
-```python
-from lib.utils import dry_run_skip
-
-class MyModule:
-    def __init__(self, dry_run: bool = False):
-        self.dry_run = dry_run
-
-    @dry_run_skip(message="Would perform action", return_value=True)
-    def perform_action(self):
-        # This code only runs when dry_run=False
-        return do_something()
-```
-
-**State Structure:**
-```json
-{
-  "version": "1.0",
-  "created_at": "2025-11-18T10:00:00Z",
-  "current_phase": "post_activation_verification",
-  "completed_steps": [
-    {"name": "pause_backup_schedule", "timestamp": "2025-11-18T10:15:00Z"},
-    {"name": "disable_auto_import", "timestamp": "2025-11-18T10:16:30Z"}
-  ],
-  "config": {
-    "primary_version": "2.12.0",
-    "secondary_version": "2.12.0",
-    "has_observability": true
-  },
-  "errors": [],
-  "last_updated": "2025-11-18T10:30:00Z"
-}
-```
-
-### Kubernetes Client (`lib/kube_client.py`)
-
-**Responsibilities:**
-- Abstract Kubernetes API interactions
-- Provide high-level methods for ACM resources
-- Support dry-run mode (log actions without execution)
-- Handle custom resources (CRDs)
-- Manage deployments, statefulsets, pods
-- **Reliability**: Automatic retries with exponential backoff for transient errors (5xx, 429)
-- **Timeouts**: Enforced client-side timeouts (default 30s) to prevent hanging operations
-
-**Key Methods:**
-- `get_custom_resource()`: Retrieve ACM custom resources
-- `patch_custom_resource()`: Update resources (dry-run aware)
-- `get_deployment()`: Get deployment by name and namespace
-- `get_statefulset()`: Get statefulset by name and namespace
-- `scale_deployment()`: Scale deployments
-- `scale_statefulset()`: Scale statefulsets
-- `wait_for_pods_ready()`: Poll until pods are ready
-
-### Pre-Flight Validator (`modules/preflight.py`)
-
-**Validations:**
-1. Namespace existence (both hubs)
-2. ACM version detection and matching
-3. OADP operator presence and health
-4. DataProtectionApplication configuration
-5. Backup status and completion
-6. **ClusterDeployment preserveOnDelete** (CRITICAL)
-7. Passive sync status (Method 1 only; `Enabled`, `Finished`, or `Completed` are acceptable)
-8. Observability detection (optional)
-
-**Output:**
-```
-✓ Namespace open-cluster-management (primary): exists
-✓ Namespace open-cluster-management (secondary): exists
-✓ ACM version (primary): detected: 2.12.0
-✓ ACM version (secondary): detected: 2.12.0
-✓ ACM version matching: both hubs running 2.12.0
-✓ OADP operator (primary): installed, 1 Velero pod(s) found
-✓ ClusterDeployment preserveOnDelete: all 5 ClusterDeployments have preserveOnDelete=true
-✓ Passive sync restore: passive sync enabled and running
-```
-
-### GitOps Marker Detection (Scripts)
-
-The preflight and postflight shell scripts scan ACM resources for GitOps ownership markers (Argo CD, Flux) to warn about
-potential drift after switchover. Detection is centralized in `scripts/lib-common.sh`:
-
-- `detect_gitops_markers` inspects labels and annotations for Argo CD/Flux keys. The `app.kubernetes.io/managed-by` label
-  is only considered a GitOps marker when its value exactly matches `argocd`, `flux`, or `fluxcd` (avoids substring false positives).
-- `collect_gitops_markers` aggregates hits across resources (MultiClusterHub, BackupSchedule, ClusterDeployment, Restore,
-  MultiClusterObservability, etc.) and emits a single consolidated report; MCO warnings are reported here instead of per-resource.
-- `print_gitops_report` groups entries by kind, shows up to `GITOPS_MAX_DISPLAY_PER_KIND` per kind, and prints an
-  `... and X more` line when truncated. Counters are guarded to avoid `set -e` exits.
-
-**Control:** `--skip-gitops-check` disables marker detection and reporting when you want to suppress GitOps drift warnings.
-
-### Primary Preparation (`modules/primary_prep.py`)
-
-**Steps:**
-1. Pause BackupSchedule (version-aware)
-2. Add disable-auto-import annotations to ManagedClusters
-3. Scale down Thanos compactor (if Observability)
-
-**Version Handling:**
-- ACM 2.12+: Patch `spec.paused=true`
-- ACM 2.11: Delete BackupSchedule, save to state
-
-### Secondary Activation (`modules/activation.py`)
-
-**Method 1 (Passive Sync):**
-1. Verify passive sync restore status
-2. Patch restore with `veleroManagedClustersBackupName: latest`
-3. Poll until restore Phase is `Finished` or `Completed`
-
-**Method 2 (Full Restore):**
-1. Create new Restore resource with all backup names
-2. Poll until restore Phase="Finished"
-
-**Polling Strategy:**
-- Check every 30 seconds
-- Timeout after 30 minutes
-- Log current phase and elapsed time
-
-### Post-Activation Verification (`modules/post_activation.py`)
-
-**Steps:**
-1. Wait for ManagedClusters to connect (Available=True, Joined=True)
-2. Restart observatorium-api deployment (if Observability)
-3. Verify Observability pods are running
-4. Guide metrics collection verification
-
-**Timeouts:**
-- ManagedCluster connection: 10 minutes
-- Observability pod readiness: 5 minutes
-
-### Finalization (`modules/finalization.py`)
-
-**Steps:**
-1. Enable BackupSchedule on secondary hub (version-aware)
-2. Verify new backups are being created
-3. Generate completion report
-
-**Rollback:**
-1. Delete/pause activation restore on secondary
-2. Remove disable-auto-import annotations on primary
-3. Restart Thanos compactor on primary
-4. Unpause BackupSchedule on primary
-
-### Decommission (`modules/decommission.py`)
-
-**Interactive Steps:**
-1. Delete MultiClusterObservability (if present)
-2. Verify Observability pods terminated
-3. Delete ManagedClusters (excluding local-cluster)
-4. Delete MultiClusterHub
-5. Verify ACM pods removed
-
-**Safety:**
-- Confirmation prompt for each destructive step
-- Verify clusters available on new hub before deletion
-- Non-interactive mode for automation (use with caution)
-
-## Workflow Phases
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    INIT (Initial State)                      │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│           PREFLIGHT (Pre-Flight Validation)                  │
-│  • Check namespaces, versions, operators                    │
-│  • Verify backups, preserveOnDelete                         │
-│  • Detect Observability, ACM version                        │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│         PRIMARY_PREP (Primary Hub Preparation)               │
-│  • Pause BackupSchedule                                     │
-│  • Disable auto-import                                      │
-│  • Scale down Thanos compactor                              │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│           ACTIVATION (Secondary Hub Activation)              │
-│  • Verify passive sync OR create full restore               │
-│  • Activate managed clusters                                │
-│  • Wait for restore completion                              │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│    POST_ACTIVATION (Post-Activation Verification)            │
-│  • Wait for ManagedClusters to connect                      │
-│  • Restart observatorium-api                                │
-│  • Verify Observability pods                                │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│            FINALIZATION (Finalization)                       │
-│  • Enable BackupSchedule on new hub                         │
-│  • Verify new backups created                               │
-│  • Generate completion report                               │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  COMPLETED (Success)                         │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Failure Handling:**
-- Any phase can transition to `FAILED` state
-- State file retains completed steps
-- Re-running resumes from last successful step
-- Rollback available at any point
-
-## Dry-Run Implementation
-
-Dry-run mode is implemented at the Kubernetes client level:
-
-```python
-class KubeClient:
-    def __init__(self, context: str, dry_run: bool = False):
-        self.dry_run = dry_run
-        
-    def patch_custom_resource(self, ...):
-        if self.dry_run:
-            logger.info(f"[DRY-RUN] Would patch {plural}/{name} with: {patch}")
-            return self.get_custom_resource(...)  # Return current state
-        
-        # Actual patch operation
-        return self.custom_api.patch_namespaced_custom_object(...)
-```
-
-**Benefits:**
-- Consistent dry-run behavior across all operations
-- No code duplication in modules
-- Easy to verify planned actions
-
-## Error Handling Strategy
-
-### Exception Hierarchy
-The project uses a custom exception hierarchy defined in `lib/exceptions.py`:
-- `SwitchoverError`: Base class for all application errors
-- `FatalError`: Non-recoverable errors that stop execution immediately
-- `TransientError`: Temporary errors that may be resolved by retrying
-- `ValidationError`: Pre-flight check failures
-- `ConfigurationError`: Missing or invalid configuration
-
-### Validation Errors
-- Stop immediately if critical validations fail
-- Provide actionable error messages
-- Guide user to fix issues
-
-### Runtime Errors
-- Catch specific exceptions (`SwitchoverError`) at module level
-- Record error in state file
-- Log detailed error for debugging
-- Allow resume from last successful step
-
-### Kubernetes API Errors
-- Distinguish 404 (not found) from real errors
-- Handle transient errors with retries (for polling)
-- Provide context in error messages
-
-**Example:**
-```python
-try:
-    self.client.delete_custom_resource(...)
-except ApiException as e:
-    if e.status == 404:
-        logger.debug("Resource already deleted")
-        return False
-    else:
-        logger.error(f"Failed to delete: {e}")
-        raise
-```
-
-## Testing Considerations
-
-### Unit Testing
-- Mock Kubernetes API responses
-- Test state management logic
-- Verify version comparison functions
-- Test dry-run mode
-
-### Integration Testing
-- Test against real ACM hubs in test environment
-- Verify idempotency (run twice, verify same result)
-- Test rollback procedure
-- Validate error recovery
-
-### Production Testing
-1. Run `--validate-only` first
-2. Run `--dry-run` to preview
-3. Test in non-production environment
-4. Practice rollback procedure
-5. Execute in production with monitoring
-
-## Security Considerations
-
-### Credentials
-- Uses existing Kubernetes context credentials
-- No credentials stored in script or state file
-- Relies on RBAC permissions
-
-### Required Permissions
-- Read/write access to ACM custom resources
-- Deployment/StatefulSet scaling permissions
-- Pod listing for health checks
-- Namespace read access
-
-### State File
-- Contains configuration but no secrets
-- Safe to commit to version control (optional)
-- Provides audit trail
-
-## Performance Optimization
-
-### Parallel Operations
-- Future enhancement: Parallel validation checks
-- Future enhancement: Concurrent ManagedCluster annotation updates
-
-### Polling Efficiency
-- 30-second intervals for most polls
-- Longer timeouts for expected long operations
-- Early exit when success detected
-
-### Resource Efficiency
-- Minimal API calls during polling
-- Conditional resource fetching
-- Efficient JSON serialization for state
-
-## Extension Points
-
-### Adding New Validation Checks
-```python
-# In modules/preflight.py
-def _check_custom_validation(self):
-    # Your validation logic
-    self.add_result(
-        "Custom Check",
-        passed,
-        "message",
-        critical=True
-    )
-```
-
-### Adding New Preparation Steps
-```python
-# In modules/primary_prep.py
-def prepare(self):
-    # Existing steps...
-    
-    if not self.state.is_step_completed("custom_step"):
-        self._custom_preparation_step()
-        self.state.mark_step_completed("custom_step")
-```
-
-### Custom Phases
-- Extend `Phase` enum in `lib/utils.py`
-- Add phase handling in `acm_switchover.py`
-- Implement new module for phase logic
-
-## Future Enhancements
-
-1. **Parallel Execution**: Concurrent operations where safe
-2. **Progress Bar**: Visual progress indicator using rich library
-3. **Email/Slack Notifications**: Alert on completion or failure
-4. **Metrics Collection**: Track switchover duration and success rate
-5. **Multi-Hub Support**: Switch multiple hub pairs in sequence
-6. **Pre-Switchover Snapshots**: Etcd backups for additional safety
-7. **Automated Testing**: Verify cluster functionality post-switchover
-8. **Web UI**: Browser-based interface for monitoring
-
-## Maintenance
-
-### Updating for New ACM Versions
-1. Test with new ACM version
-2. Update version detection logic if needed
-3. Add version-specific handling if APIs change
-4. Update documentation
-
-### Dependency Updates
-```bash
-# Update dependencies
-pip install --upgrade -r requirements.txt
-
-# Test with updated dependencies
-python acm_switchover.py --validate-only --help
-```
-
-### Contributing
-1. Follow existing code patterns
-2. Maintain idempotency
-3. Add validation before operations
-4. Update documentation
-5. Test in non-production first
-
-## Support and Troubleshooting
-
-### Debug Mode
-```bash
-python acm_switchover.py --verbose ...
-```
-
-### State Inspection
-```bash
-cat .state/switchover-<primary>__<secondary>.json | python -m json.tool
-```
-
-### Log Analysis
-- Check for `[DRY-RUN]` prefix in dry-run mode
-- Look for `✓` (success) or `✗` (failure) markers
-- Review timestamps in state file for duration analysis
-
-### Common Issues
-- See docs/operations/usage.md "Troubleshooting" section
-- Check state file for error messages
-- Verify Kubernetes contexts are accessible
-- Ensure RBAC permissions are sufficient
+- Normal switchover assumes the old primary hub is reachable
+- The runbook remains the authoritative manual/operational fallback
+- GitOps support is advisory plus targeted Argo CD coordination, not full drift reconciliation
+- `modules/preflight_validators.py` remains in the tree for compatibility and should not be treated as the main implementation
