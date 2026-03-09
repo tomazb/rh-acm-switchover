@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "file=\"$CLAUDE_FILE_PATH\"; case \"$file\" in */completions/*|*/get-pip.py|*.lock) echo 'BLOCK: This is a protected file (generated/vendored/lock). Do not edit.' >&2; exit 2;; esac"
+            "command": "file=\"$CLAUDE_FILE_PATH\"; case \"$file\" in */completions/*|*/get-pip.py|*.lock) echo 'BLOCK: This is a protected file (generated/vendored/lock). Do not edit.' >&2; exit 2;; *ACM_SWITCHOVER_RUNBOOK.md|*.skill.md) echo 'BLOCK: This is a protected operational file (runbook/SKILL). Changes require explicit operator approval. See AGENTS.md Protected Critical Files section.' >&2; exit 2;; esac"
           }
         ]
       }

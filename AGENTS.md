@@ -15,6 +15,24 @@ This is a Python CLI tool for automating Red Hat Advanced Cluster Management (AC
 - **Respect existing patterns and abstractions**: Align with current architecture and style unless there is a strong reason to refactor.
 - **Keep AGENTS.md current**: Update this file when making significant architectural, workflow, module, or CLI changes.
 
+## Protected Critical Files
+
+The following files are **safety-critical operational documents** that AI agents MUST NOT modify without explicit operator approval:
+
+| Protected File | Reason |
+| --- | --- |
+| [`docs/ACM_SWITCHOVER_RUNBOOK.md`](docs/ACM_SWITCHOVER_RUNBOOK.md) | Authoritative blueprint for manual ACM hub switchovers. Contains critical safety warnings, step-by-step procedures, and rollback instructions. Incorrect changes can lead to cluster destruction. |
+| `.claude/skills/**/*.skill.md` | Operational and troubleshooting SKILLS derived from the runbook. Must stay in sync with the runbook at all times. |
+
+### Protection Rules
+
+1. **Read-only by default**: AI agents must treat these files as read-only. Edits are technically blocked by a `.claude/settings.json` PreToolUse hook.
+2. **Explicit operator approval required**: Only modify these files when the operator explicitly requests the change and understands the implications.
+3. **Careful line-by-line review**: Every proposed change must be presented as a diff for the operator to review before committing. Do not batch runbook changes with other unrelated edits.
+4. **Justification required**: Any proposed change must include a clear explanation of _why_ the change is necessary and what operational impact it has.
+5. **Runbook ↔ SKILLS sync obligation**: Changes to the runbook require corresponding SKILLS updates, and vice versa. Never update one without the other.
+6. **No speculative or cosmetic edits**: Do not reformat, reorganize, or "improve" these files unless the operator specifically asks for it.
+
 ## Architecture
 
 **Entry Point**: `acm_switchover.py` - Main orchestrator using `Phase` enum and `StateManager`
@@ -312,4 +330,4 @@ SKILLS are designed for conversational guidance. When helping with switchover:
 Auto-formatting and file protection hooks are configured in `.claude/settings.json`:
 
 - **Auto-format**: After every `Edit`/`Write` on a `.py` file, `black` and `isort` run automatically
-- **File protection**: Edits to `completions/`, `get-pip.py`, and `*.lock` files are blocked
+- **File protection**: Edits to `completions/`, `get-pip.py`, `*.lock`, `ACM_SWITCHOVER_RUNBOOK.md`, and `*.skill.md` files are blocked (see [Protected Critical Files](#protected-critical-files))
