@@ -167,7 +167,7 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--argocd-resume-only` cannot be used with `--validate-only` (resume performs changes)
 - `--argocd-resume-only` cannot be used with `--decommission`
 - `--argocd-resume-only` cannot be used with `--setup`
-- `--argocd-manage` cannot be used with `--validate-only`
+- `--argocd-manage` has no effect with `--validate-only`; a warning is emitted and validation continues
 - `--argocd-manage` cannot be used with `--argocd-resume-only`
 - `--argocd-resume-after-switchover` cannot be used with `--validate-only`
 - `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
@@ -321,7 +321,7 @@ except ValidationError as e:
 - Secondary context requirement: `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
 - Managed cluster threshold: `--min-managed-clusters` must be a non-negative integer. `0` keeps the post-restore cluster count check informational-only.
-- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` and `--argocd-resume-after-switchover` also cannot be combined with `--validate-only`. `--argocd-resume-after-switchover` requires `--argocd-manage` and cannot be combined with `--argocd-resume-only`. With `--skip-gitops-check`, `--argocd-check` is ignored and a warning is shown.
+- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning. `--argocd-resume-after-switchover` cannot be combined with `--validate-only` or `--argocd-resume-only`, and it requires `--argocd-manage`. With `--skip-gitops-check`, `--argocd-check` is ignored and a warning is shown.
 - Setup RBAC extension: `--include-decommission` is only valid during `--setup`, and only with `--role operator` or `--role both`.
 
 ### Utilities

@@ -588,7 +588,7 @@ data:
             mock_v1 = Mock(name=f"v1-{context_name}")
             mock_apps_v1 = Mock(name=f"apps_v1-{context_name}")
             with call_lock:
-                call_log.append((context_name, id(mock_v1)))
+                call_log.append((context_name, mock_v1))
             return mock_v1, mock_apps_v1
 
         verify._build_managed_cluster_clients = fake_build_clients
@@ -623,8 +623,9 @@ data:
         assert len(call_log) == 2
         ctx_names = {entry[0] for entry in call_log}
         assert ctx_names == set(contexts), "Each worker must use its own named context"
-        client_ids = [entry[1] for entry in call_log]
-        assert len(set(client_ids)) == 2, "Each worker must receive a distinct CoreV1Api instance"
+        first_client = next(client for ctx, client in call_log if ctx == "ctx-cluster-a")
+        second_client = next(client for ctx, client in call_log if ctx == "ctx-cluster-b")
+        assert first_client is not second_client, "Each worker must receive a distinct CoreV1Api instance"
 
 
 @pytest.mark.integration

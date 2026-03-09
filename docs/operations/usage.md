@@ -449,7 +449,7 @@ Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and 
 - During finalization (opt-in): add `--argocd-resume-after-switchover` to the same run.
 - Standalone later: `--argocd-resume-only` with `--primary-context` and `--secondary-context` to restore from state.
 
-Note: `--argocd-manage`, `--argocd-resume-after-switchover`, and `--argocd-resume-only` are not compatible with `--validate-only` (they imply restore/pause behavior). `--argocd-resume-only` is also not compatible with `--decommission` or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
+Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-after-switchover` and `--argocd-resume-only` are not compatible with `--validate-only`. `--argocd-resume-only` is also not compatible with `--decommission` or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 

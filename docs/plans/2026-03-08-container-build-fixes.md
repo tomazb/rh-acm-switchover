@@ -18,7 +18,8 @@
 **Step 1: Move the file**
 
 ```bash
-cd /home/tomaz/sources/rh-acm-switchover
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
 git mv container-bootstrap/.containerignore .containerignore
 ```
 

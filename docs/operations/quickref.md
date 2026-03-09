@@ -262,7 +262,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--skip-gitops-check` | Disable GitOps marker detection warnings (ArgoCD, Flux); when set, `--argocd-check` is ignored |
 | `--argocd-check` | Detect Argo CD and report ACM-touching Applications (preflight; no changes) |
-| `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; not valid with `--validate-only` or `--argocd-resume-only`) |
+| `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; with `--validate-only` it is ignored with a warning; not valid with `--argocd-resume-only`) |
 | `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only` or `--argocd-resume-only`) |
 | `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; not valid with `--validate-only`, `--argocd-manage`, `--argocd-resume-after-switchover`, `--decommission`, or `--setup`) |
 | `--verbose, -v` | Enable verbose logging |

@@ -60,32 +60,37 @@ rh-acm-switchover/
 
 ## Runtime Branches
 
-The entrypoint exposes three distinct execution branches:
+The entrypoint exposes four distinct execution branches:
 
 1. **Standard switchover path**
    - Uses state tracking, two `KubeClient` instances, phased execution, and optional Argo CD management.
 2. **Setup path (`--setup`)**
    - Bypasses switchover state/phases and shells out to `scripts/setup-rbac.sh`.
-3. **Argo CD resume-only path (`--argocd-resume-only`)**
+3. **Decommission path (`--decommission`)**
+   - Bypasses the phased switchover workflow and runs the old-hub teardown flow directly.
+4. **Argo CD resume-only path (`--argocd-resume-only`)**
    - Loads recorded pause state and resumes Application auto-sync without running switchover phases.
 
 ```mermaid
 flowchart TD
     A[CLI args parsed] --> B{Mode}
     B -->|--setup| C[Run setup-rbac.sh wrapper]
-    B -->|--argocd-resume-only| D[Load state and resume recorded Argo CD apps]
-    B -->|standard switchover| E[Initialize state and clients]
-    E --> F[PREFLIGHT]
-    F --> G[PRIMARY_PREP]
-    G --> H[ACTIVATION]
-    H --> I[POST_ACTIVATION]
-    I --> J[FINALIZATION]
-    J --> K[COMPLETED]
-    F --> L[FAILED]
+    B -->|--decommission| D[Run decommission flow]
+    B -->|--argocd-resume-only| E[Load state and resume recorded Argo CD apps]
+    B -->|standard switchover| F[Initialize state and clients]
+    D --> K[COMPLETED]
+    D --> L[FAILED]
+    F --> G[PREFLIGHT]
+    G --> H[PRIMARY_PREP]
+    H --> I[ACTIVATION]
+    I --> J[POST_ACTIVATION]
+    J --> M[FINALIZATION]
+    M --> K[COMPLETED]
     G --> L
     H --> L
     I --> L
     J --> L
+    M --> L
 ```
 
 ## Core Design Principles
