@@ -77,42 +77,63 @@ Perform a single restore of credentials, resources, and managed clusters from th
 ```mermaid
 graph TD
     A[Start: Prerequisites Verified] --> B[Step 1: Pause BackupSchedule<br/>on Primary Hub]
-    B --> C[Step 2: Disable Auto-Import<br/>on Primary Hub]
-    C --> D[Step 3: Stop Thanos Compactor<br/>on Primary Hub]
-    D --> E[Step 4: Verify Latest<br/>Passive Restore]
-    E --> F{Passive sync<br/>up to date?}
-    F -->|No| E
-    F -->|Yes| G[Step 5: Activate Managed Clusters<br/>Patch or Create Restore]
-    G --> H[Monitor Restore Status]
-    H --> I{Restore<br/>Finished?}
-    I -->|No, wait| H
-    I -->|Yes| J[POST-ACTIVATION STEPS]
-    J --> K[Step 6: Verify Clusters Connected<br/>5-10 minutes]
-    K --> L[Step 7: Restart Observatorium API]
-    L --> M[Step 8: Verify Observability Pods]
-    M --> N[Step 9: Verify Metrics Collection]
-    N --> O[Step 10: Enable BackupSchedule<br/>on New Hub]
-    O --> P[Step 11: Inform Stakeholders]
-    P --> Q{Decommission<br/>old hub?}
-    Q -->|Yes| R[Step 12: Decommission Primary]
-    Q -->|No| S[Complete: Keep Primary as Backup]
-    R --> S
+    B --> C[Step 2: Prevent Auto-Import<br/>on Primary Hub]
+    C --> D[Step 3: Shut Down Thanos Compactor<br/>on Primary Hub]
+    D --> E[Step 4: Verify Latest Passive Restore<br/>on Secondary Hub]
+    E --> F{Use Step 4b<br/>ImportAndSync override?}
+    F -->|Yes| G[Step 4b: Set Auto-Import Strategy<br/>to ImportAndSync]
+    F -->|No| H[Step 5: Activate Managed Clusters<br/>on Secondary Hub]
+    G --> H
+    H --> I[Monitor Restore Status]
+    I --> J{Restore<br/>Finished?}
+    J -->|No, wait| I
+    J -->|Yes| K[Step 6: Verify ManagedClusters<br/>Are Connected]
+    K --> L[Step 7: Reset Auto-Import Strategy<br/>to Default if Set]
+    L --> M[Step 8: Restart Observatorium API<br/>Gateway Pods]
+    M --> N[Step 9: Verify Observability Pods<br/>Are Running]
+    N --> O[Step 10: Verify Metrics Collection]
+    O --> P{Disable Observability<br/>on old secondary hub?}
+    P -->|Yes| Q[Optional: Disable Observability Permanently<br/>on Old Secondary Hub]
+    P -->|No| R[Step 11: Enable BackupSchedule<br/>on New Active Hub]
+    Q --> R
+    R --> S[Step 12: Verify Backup Integrity]
+    S --> T[Step 13: Inform Stakeholders]
+    T --> U{Decommission<br/>old primary?}
+    U -->|Yes| V[Step 14: Decommission<br/>Old Primary Hub]
+    U -->|No| W[Complete: Keep Old Hub<br/>as Secondary]
+    V --> W
 ```
 
 #### Method 2: Full Restore Flow
 
 ```mermaid
 graph TD
-    A[Start: Prerequisites Verified] --> B[F1: Optional - Pause BackupSchedule<br/>on Primary if accessible]
-    B --> C[F2: Optional - Disable Auto-Import<br/>on Primary if accessible]
-    C --> D[F3: Optional - Stop Thanos Compactor<br/>on Primary if accessible]
-    D --> E[F4: Create Full Restore<br/>on Secondary Hub]
-    E --> F[Monitor Restore Status]
-    F --> G{Restore<br/>Finished?}
-    G -->|No, wait| F
-    G -->|Yes| H[F5: Continue to POST-ACTIVATION]
-    H --> I[Steps 6-12: Same as Method 1]
-    I --> J[Complete]
+    A[Start: Prerequisites Verified] --> B[F1: Pause BackupSchedule<br/>on Primary if Reachable]
+    B --> C[F2: Prevent Auto-Import<br/>on Primary if Reachable]
+    C --> D[F3: Shut Down Thanos Compactor<br/>on Primary if Reachable]
+    D --> E{Use optional F4<br/>ImportAndSync override?}
+    E -->|Yes| F[F4: Set Auto-Import Strategy<br/>to ImportAndSync]
+    E -->|No| G[F5: Create Full Restore<br/>on Secondary Hub]
+    F --> G
+    G --> H[Monitor Restore Status]
+    H --> I{Restore<br/>Finished?}
+    I -->|No, wait| H
+    I -->|Yes| J[F6: Continue with<br/>Post-Activation Common Steps]
+    J --> K[Step 6: Verify ManagedClusters<br/>Are Connected]
+    K --> L[Step 7: Reset Auto-Import Strategy<br/>to Default if Set]
+    L --> M[Step 8: Restart Observatorium API<br/>Gateway Pods]
+    M --> N[Step 9: Verify Observability Pods<br/>Are Running]
+    N --> O[Step 10: Verify Metrics Collection]
+    O --> P{Disable Observability<br/>on old secondary hub?}
+    P -->|Yes| Q[Optional: Disable Observability Permanently<br/>on Old Secondary Hub]
+    P -->|No| R[Step 11: Enable BackupSchedule<br/>on New Active Hub]
+    Q --> R
+    R --> S[Step 12: Verify Backup Integrity]
+    S --> T[Step 13: Inform Stakeholders]
+    T --> U{Decommission<br/>old primary?}
+    U -->|Yes| V[Step 14: Decommission<br/>Old Primary Hub]
+    U -->|No| W[Complete: Keep Old Hub<br/>as Secondary]
+    V --> W
 ```
 
 ---
