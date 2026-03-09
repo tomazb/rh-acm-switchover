@@ -564,9 +564,14 @@ RESTORE_JSON
         exit 0
         ;;
     
-    # Postflight checks
-    "--context=new-hub get restore -n open-cluster-management-backup --sort-by=.metadata.creationTimestamp -o jsonpath="*"")
-        echo "restore-final Finished 2024-11-24T10:00:00Z"
+    # Postflight checks - Restore: empty (BackupSchedule enabled and OADP has cleaned up)
+    # jsonpath pattern MUST come before -o json (jsonpath contains "json" so would match both)
+    *"--context=new-hub"*"get "*"restore"*"-n open-cluster-management-backup"*"jsonpath"*)
+        # Fallback jsonpath query - return empty so RESTORE_NAME is empty
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"restore"*"-n open-cluster-management-backup"*"-o json"*)
+        echo '{"items":[]}'
         exit 0
         ;;
     # ManagedCluster checks - match both short and full API group names
@@ -664,6 +669,20 @@ MCO_JSON
         ;;
     *"--context=new-hub"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "schedule-acm"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupschedule"*"jsonpath"*"spec.paused"*)
+        echo "false"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupschedule"*"schedule-acm"*"jsonpath"*"status.phase"*)
+        echo "Enabled"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'NEWHUB_BS_JSON'
+{"items":[{"metadata":{"name":"schedule-acm"},"spec":{"paused":false,"veleroSchedule":"0 */4 * * *"}}]}
+NEWHUB_BS_JSON
         exit 0
         ;;
     *"--context=new-hub"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"items[0].metadata.name"*)
