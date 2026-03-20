@@ -200,8 +200,8 @@ jobs:
         
     - name: Generate CycloneDX SBOM
       run: |
-        cyclonedx-py requirements requirements.txt --of JSON -o sbom.json
-        cyclonedx-py requirements requirements.txt --of XML -o sbom.xml
+        cyclonedx-py requirements --of JSON -o sbom.json requirements.txt
+        cyclonedx-py requirements --of XML -o sbom.xml requirements.txt
         
     - name: Upload SBOM
       uses: actions/upload-artifact@v4

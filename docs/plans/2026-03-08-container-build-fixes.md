@@ -10,6 +10,8 @@
 
 ---
 
+## Implementation Tasks
+
 ### Task 1: Move `.containerignore` to repo root
 
 **Files:**
