@@ -3,6 +3,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 from lib import argocd as argocd_lib
 from lib.exceptions import ValidationError
@@ -151,6 +152,30 @@ def test_validate_all_records_validation_error_as_rbac_failure():
     assert len(rbac_results) == 1
     assert rbac_results[0]["passed"] is False
     assert "missing permissions" in rbac_results[0]["message"]
+
+
+@pytest.mark.unit
+def test_validate_all_uses_requested_argocd_mode_when_discovery_is_forbidden():
+    """Argo CD discovery auth failures should fall through to RBAC validation, not abort preflight."""
+    validator = _build_validator(argocd_check=True, argocd_manage=False)
+
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
+        "modules.preflight_coordinator.AutoImportStrategyValidator"
+    ) as auto_import_validator, patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        side_effect=ApiException(status=403, reason="Forbidden"),
+    ):
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is True
+    validate_rbac.assert_called_once_with(
+        primary_client=validator.primary,
+        secondary_client=validator.secondary,
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="check",
+    )
 
 
 @pytest.mark.unit

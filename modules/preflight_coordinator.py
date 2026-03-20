@@ -5,6 +5,8 @@
 import logging
 from typing import Tuple, TypedDict
 
+from kubernetes.client.rest import ApiException
+
 from lib import argocd as argocd_lib
 from lib.constants import OBSERVABILITY_NAMESPACE
 from lib.exceptions import ValidationError
@@ -96,7 +98,18 @@ class PreflightValidator:
         ):
             if client is None:
                 continue
-            discovery = argocd_lib.detect_argocd_installation(client)
+            try:
+                discovery = argocd_lib.detect_argocd_installation(client)
+            except ApiException as exc:
+                if exc.status in (401, 403):
+                    logger.info(
+                        "Unable to inspect Argo CD CRDs on %s hub (%s %s); deferring to RBAC validation.",
+                        hub_label,
+                        exc.status,
+                        exc.reason,
+                    )
+                    return requested_mode
+                raise
             if discovery.has_applications_crd:
                 return requested_mode
             logger.info("Argo CD Applications CRD not found on %s hub", hub_label)
