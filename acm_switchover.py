@@ -65,8 +65,8 @@ PhaseHandler = Callable[
 def parse_args():
     """Parse command line arguments."""
     # Keep switchover/decommission CLI contracts intact while allowing
-    # --argocd-resume-only to run as a standalone mode.
-    resume_only_requested = "--argocd-resume-only" in sys.argv[1:]
+    # standalone modes that do not perform a switchover flow.
+    standalone_mode_requested = any(flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only"))
 
     parser = argparse.ArgumentParser(
         description="ACM Hub Switchover Automation",
@@ -131,7 +131,7 @@ Examples:
     parser.add_argument(
         "--method",
         choices=["passive", "full"],
-        required=not resume_only_requested,
+        required=not standalone_mode_requested,
         help="Switchover method: passive (continuous sync) or full (one-time restore)",
     )
 
@@ -183,7 +183,7 @@ Examples:
     parser.add_argument(
         "--old-hub-action",
         choices=["secondary", "decommission", "none"],
-        required=not resume_only_requested,
+        required=not standalone_mode_requested,
         help=(
             "Action for old primary hub after switchover (REQUIRED): "
             "'secondary' sets up passive sync for failback capability, "
@@ -342,7 +342,9 @@ def run_switchover(
         if state_age is None:
             state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
 
-        if state_age.total_seconds() > STALE_STATE_THRESHOLD:
+        if args.validate_only:
+            pass
+        elif state_age.total_seconds() > STALE_STATE_THRESHOLD:
             logger.warning("")
             logger.warning("⚠️  DETECTED STALE COMPLETED STATE")
             logger.warning(

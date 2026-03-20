@@ -72,6 +72,18 @@ class TestScriptArgumentSafety:
         assert 'KUBECTL_CONTEXT_ARGS+=(--context="$CONTEXT")' in content
         assert 'kubectl "${KUBECTL_CONTEXT_ARGS[@]}"' in content
 
+    def test_generate_sa_kubeconfig_supports_explicit_kubeconfig_args(self):
+        content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
+
+        assert "--kubeconfig" in content
+        assert 'KUBECTL_ARGS+=(--kubeconfig="$KUBECONFIG_PATH")' in content
+        assert 'kubectl "${KUBECTL_ARGS[@]}" config view' in content
+
+    def test_setup_rbac_forwards_admin_kubeconfig_to_generator(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert '--kubeconfig "$ADMIN_KUBECONFIG"' in content
+
 
 def write_shared_jq_mock(mock_bin: Path) -> None:
     """Create a mock jq that handles minimal cases and delegates to real jq."""

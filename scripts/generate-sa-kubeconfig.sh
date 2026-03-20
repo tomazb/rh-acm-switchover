@@ -10,6 +10,7 @@
 #   ./generate-sa-kubeconfig.sh [OPTIONS] <namespace> <service-account-name>
 #
 # Options:
+#   --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from
 #   --context <context>       - Kubernetes context to use (default: current context)
 #   --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)
 #   --token-duration <dur>    - Token validity duration (default: 48h)
@@ -47,12 +48,24 @@
 set -euo pipefail
 
 # Parse optional flags first
+KUBECONFIG_PATH=""
 CONTEXT=""
 USER_NAME=""
 DURATION="48h"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --kubeconfig)
+            if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+                KUBECONFIG_PATH="${2}"
+                shift 2
+            else
+                echo "Error: --kubeconfig requires a value (path to kubeconfig)" >&2
+                echo "" >&2
+                echo "Usage: $0 [OPTIONS] <namespace> <service-account-name>" >&2
+                exit 1
+            fi
+            ;;
         --context)
             # Validate that a context value is provided and doesn't look like a flag
             if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
@@ -93,6 +106,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS] <namespace> <service-account-name>"
             echo ""
             echo "Options:"
+            echo "  --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from"
             echo "  --context <context>       - Kubernetes context to use (default: current context)"
             echo "  --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)"
             echo "  --token-duration <dur>    - Token validity duration (default: 48h)"
@@ -129,7 +143,13 @@ NAMESPACE="${1:-}"
 SA_NAME="${2:-}"
 
 # Build kubectl context args
+KUBECTL_ARGS=()
+if [[ -n "$KUBECONFIG_PATH" ]]; then
+    KUBECTL_ARGS+=(--kubeconfig="$KUBECONFIG_PATH")
+fi
+
 KUBECTL_CONTEXT_ARGS=()
+KUBECTL_CONTEXT_ARGS=("${KUBECTL_ARGS[@]}")
 if [[ -n "$CONTEXT" ]]; then
     KUBECTL_CONTEXT_ARGS+=(--context="$CONTEXT")
 fi
@@ -139,6 +159,7 @@ if [[ -z "$NAMESPACE" || -z "$SA_NAME" ]]; then
     echo "Usage: $0 [OPTIONS] <namespace> <service-account-name>" >&2
     echo "" >&2
     echo "Options:" >&2
+    echo "  --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from" >&2
     echo "  --context <context>       - Kubernetes context to use (default: current context)" >&2
     echo "  --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)" >&2
     echo "  --token-duration <dur>    - Token validity duration (default: 48h)" >&2
@@ -165,13 +186,13 @@ fi
 
 # Get cluster info from specified or current context
 if [[ -n "$CONTEXT" ]]; then
-    CLUSTER_NAME=$(kubectl config view -o jsonpath="{.contexts[?(@.name=='$CONTEXT')].context.cluster}")
-    SERVER=$(kubectl config view -o jsonpath="{.clusters[?(@.name=='$CLUSTER_NAME')].cluster.server}")
-    CA_DATA=$(kubectl config view --raw -o jsonpath="{.clusters[?(@.name=='$CLUSTER_NAME')].cluster.certificate-authority-data}")
+    CLUSTER_NAME=$(kubectl "${KUBECTL_ARGS[@]}" config view -o jsonpath="{.contexts[?(@.name=='$CONTEXT')].context.cluster}")
+    SERVER=$(kubectl "${KUBECTL_ARGS[@]}" config view -o jsonpath="{.clusters[?(@.name=='$CLUSTER_NAME')].cluster.server}")
+    CA_DATA=$(kubectl "${KUBECTL_ARGS[@]}" config view --raw -o jsonpath="{.clusters[?(@.name=='$CLUSTER_NAME')].cluster.certificate-authority-data}")
 else
-    CLUSTER_NAME=$(kubectl config view --minify -o jsonpath='{.clusters[0].name}')
-    SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-    CA_DATA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+    CLUSTER_NAME=$(kubectl "${KUBECTL_ARGS[@]}" config view --minify -o jsonpath='{.clusters[0].name}')
+    SERVER=$(kubectl "${KUBECTL_ARGS[@]}" config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    CA_DATA=$(kubectl "${KUBECTL_ARGS[@]}" config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
 fi
 
 # Validate cluster info

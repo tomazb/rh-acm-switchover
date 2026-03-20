@@ -394,6 +394,7 @@ umask 077 && ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-o
 
 # Generate with specific context and custom user name (prevents collisions)
 umask 077 && ./scripts/generate-sa-kubeconfig.sh \
+  --kubeconfig ~/.kube/admin.yaml \
   --context primary-hub \
   --user primary-operator \
   acm-switchover acm-switchover-operator \
@@ -415,6 +416,7 @@ kubectl --kubeconfig=/tmp/operator-kubeconfig.yaml get managedclusters
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--kubeconfig <path>` | Kubeconfig to read cluster metadata and token from | Current kubeconfig |
 | `--context <ctx>` | Kubernetes context to use | Current context |
 | `--user <name>` | Custom user name in kubeconfig | `<context>-<sa-name>` |
 | `--token-duration <dur>` | Token validity duration | `48h` |

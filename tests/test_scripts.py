@@ -208,6 +208,73 @@ def test_postflight_output_format():
     assert "1." in out or "Checking" in out or "Restore" in out
 
 
+def test_generate_sa_kubeconfig_accepts_explicit_kubeconfig(tmp_path):
+    """Generator should use the explicit kubeconfig for cluster metadata and token calls."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    log_file = tmp_path / "kubectl.log"
+    expected_kubeconfig = tmp_path / "admin.kubeconfig"
+    expected_kubeconfig.write_text("apiVersion: v1\nkind: Config\n", encoding="utf-8")
+
+    kubectl_script = mock_bin / "kubectl"
+    kubectl_script.write_text(
+        """#!/bin/bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${MOCK_LOG}"
+if [[ "$*" == *" get serviceaccount "* ]]; then
+    exit 0
+fi
+if [[ "$*" == *" create token "* ]]; then
+    printf 'token-123\\n'
+    exit 0
+fi
+if [[ "$*" == *" config view "* ]]; then
+    if [[ "$*" != *"--kubeconfig=${EXPECTED_KUBECONFIG}"* ]]; then
+        exit 0
+    fi
+    case "$*" in
+        *".contexts["*)
+            printf 'cluster-explicit'
+            ;;
+        *".cluster.server"*)
+            printf 'https://explicit.example:6443'
+            ;;
+        *".certificate-authority-data"*)
+            printf 'Q0EtREFUQQ=='
+            ;;
+    esac
+    exit 0
+fi
+echo "unexpected kubectl args: $*" >&2
+exit 1
+""",
+        encoding="utf-8",
+    )
+    kubectl_script.chmod(0o755)
+
+    code, out = run_script(
+        "generate-sa-kubeconfig.sh",
+        "--kubeconfig",
+        str(expected_kubeconfig),
+        "--context",
+        "prod-hub",
+        "--user",
+        "prod-operator",
+        "acm-switchover",
+        "acm-switchover-operator",
+        env={
+            "PATH": f"{mock_bin}:{os.environ.get('PATH', '')}",
+            "MOCK_LOG": str(log_file),
+            "EXPECTED_KUBECONFIG": str(expected_kubeconfig),
+        },
+    )
+
+    assert code == 0, out
+    assert "https://explicit.example:6443" in out
+    assert "cluster-explicit" in out
+    assert f"--kubeconfig={expected_kubeconfig}" in log_file.read_text(encoding="utf-8")
+
+
 # ============================================================================
 # Integration tests with mocks - BLOCKED by set -e + ((COUNTER++)) bug
 # ============================================================================

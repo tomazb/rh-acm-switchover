@@ -431,6 +431,7 @@ if ! $SKIP_KUBECONFIG; then
         else
             # Use the generate-sa-kubeconfig.sh script
             if "${SCRIPT_DIR}/generate-sa-kubeconfig.sh" \
+                --kubeconfig "$ADMIN_KUBECONFIG" \
                 --context "$CONTEXT" \
                 --user "$user_name" \
                 --token-duration "$TOKEN_DURATION" \

@@ -358,8 +358,6 @@ class TestCLIArgumentValidation:
         """--include-decommission is only valid for operator-capable setup roles."""
         args = MockArgs(
             primary_context="primary-hub",
-            method="passive",
-            old_hub_action="secondary",
             log_format="text",
             setup=True,
             admin_kubeconfig=".state/admin.kubeconfig",
@@ -392,13 +390,23 @@ class TestCLIArgumentValidation:
         """Operator-capable setup should accept --include-decommission."""
         args = MockArgs(
             primary_context="primary-hub",
-            method="passive",
-            old_hub_action="secondary",
             log_format="text",
             setup=True,
             admin_kubeconfig=".state/admin.kubeconfig",
             role="operator",
             include_decommission=True,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_setup_without_switchover_only_args_is_allowed(self):
+        """Setup validation should not require method or old_hub_action."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            log_format="text",
+            setup=True,
+            admin_kubeconfig=".state/admin.kubeconfig",
+            role="operator",
         )
 
         InputValidator.validate_all_cli_args(args)

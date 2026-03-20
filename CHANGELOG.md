@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Runbook and SKILLS file protection**: `docs/ACM_SWITCHOVER_RUNBOOK.md` and `.claude/skills/**/*.skill.md` are now protected from unapproved AI agent edits via AGENTS.md guidance and a `.claude/settings.json` PreToolUse hook that blocks writes.
 
+## [1.5.11] - 2026-03-20
+
+### Fixed
+
+- **Setup CLI requirements**: Allow `--setup` to run without the switchover-only `--method` and `--old-hub-action` flags.
+- **Validate-only stale state fallback**: Allow `--validate-only` to run preflight even when a `COMPLETED` state file is missing or has an invalid `last_updated` timestamp.
+- **Setup kubeconfig source**: Make `setup-rbac.sh` pass the explicit admin kubeconfig into `generate-sa-kubeconfig.sh` so generated kubeconfigs use the intended cluster metadata instead of ambient default kubeconfig state.
+
+### Changed
+
+- **Service account kubeconfig generation**: Add an optional `--kubeconfig` flag to `generate-sa-kubeconfig.sh` for deterministic cluster metadata and token lookups.
+- **Regression coverage**: Add focused tests for setup-only parsing, validate-only stale completed-state handling, and explicit kubeconfig forwarding in shell scripts.
+
 ## [1.5.10] - 2026-03-08
 
 ### Fixed

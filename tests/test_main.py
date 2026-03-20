@@ -238,6 +238,24 @@ class TestArgParsing:
             assert args.method is None
             assert args.old_hub_action is None
 
+    def test_setup_parses_without_method_or_old_hub_action(self):
+        """Setup mode must not require switchover-only flags."""
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--setup",
+                "--admin-kubeconfig",
+                ".state/admin.kubeconfig",
+            ],
+        ):
+            args = parse_args()
+            assert args.setup is True
+            assert args.method is None
+            assert args.old_hub_action is None
+
     def test_argocd_resume_only_rejects_dry_run_at_parse_time(self):
         """Resume-only is a standalone mode and must be mutually exclusive with dry-run."""
         with patch(
@@ -412,7 +430,7 @@ class TestCompletedStateTimestampHandling:
 
         assert exc.value.code == EXIT_FAILURE
 
-    def test_force_with_missing_last_updated_resets_state(self, tmp_path):
+    def test_force_with_missing_last_updated_validate_only_preserves_phase(self, tmp_path):
         from lib.utils import Phase, StateManager
 
         state_file = tmp_path / "state.json"
@@ -432,11 +450,68 @@ class TestCompletedStateTimestampHandling:
             skip_observability_checks=False,
         )
 
-        with patch("acm_switchover._run_phase_preflight", return_value=True):
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight:
             result = run_switchover(args, reloaded, Mock(), Mock(), Mock())
 
         assert result is True
-        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.get_current_phase() == Phase.COMPLETED
+        preflight.assert_called_once()
+
+    def test_validate_only_with_missing_last_updated_still_runs_preflight(self, tmp_path):
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        state.state.pop("last_updated", None)
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+        args = SimpleNamespace(
+            force=False,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_check=False,
+            argocd_manage=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight:
+            assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is True
+
+        assert reloaded.get_current_phase() == Phase.COMPLETED
+        preflight.assert_called_once()
+
+    def test_validate_only_with_malformed_last_updated_still_runs_preflight(self, tmp_path):
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        state.state["last_updated"] = "not-a-timestamp"
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+        args = SimpleNamespace(
+            force=False,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_check=False,
+            argocd_manage=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as preflight:
+            assert run_switchover(args, reloaded, Mock(), Mock(), Mock()) is True
+
+        assert reloaded.get_current_phase() == Phase.COMPLETED
+        preflight.assert_called_once()
 
     def test_recent_completed_state_does_not_require_force(self, tmp_path):
         from lib.constants import STALE_STATE_THRESHOLD

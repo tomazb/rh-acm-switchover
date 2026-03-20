@@ -566,6 +566,11 @@ Generates a kubeconfig file that can be used to authenticate as a specific Kuber
 # Default 48-hour token from current context
 umask 077 && ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
+# Read cluster metadata and token from an explicit admin kubeconfig
+umask 077 && ./scripts/generate-sa-kubeconfig.sh --kubeconfig ~/.kube/admin.yaml \
+  --context prod-hub --user prod-operator \
+  acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
+
 # Specify explicit cluster context with custom user name (prevents collisions)
 umask 077 && ./scripts/generate-sa-kubeconfig.sh --context prod-hub --user prod-operator \
   acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
@@ -590,6 +595,7 @@ oc get managedclusters
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--kubeconfig <path>` | Kubeconfig to read cluster metadata and token from | Current kubeconfig |
 | `--context <context>` | Kubernetes context to use | Current context |
 | `--user <name>` | Custom user name in kubeconfig | `<context>-<sa-name>` |
 | `--token-duration <dur>` | Token lifetime (e.g., `8h`, `48h`, `72h`) | `48h` |
@@ -609,7 +615,7 @@ oc get managedclusters
 
 1. Validates that the service account exists in the specified (or current) namespace
 2. Creates a short-lived token via `kubectl create token` with the specified duration
-3. Extracts cluster information from the specified (or current) kubeconfig context
+3. Extracts cluster information from the specified kubeconfig/context pair, or from the current kubeconfig when `--kubeconfig` is omitted
 4. Generates a new kubeconfig file using the service account token with unique user name
 5. Outputs the kubeconfig to stdout (redirect to file as needed)
 
