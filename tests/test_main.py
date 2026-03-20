@@ -1183,6 +1183,57 @@ class TestMainGitOpsReporting:
         collector.print_report.assert_called_once()
         state.add_error.assert_not_called()
 
+    def test_main_skips_context_enforcement_for_argocd_resume_only(self):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._run_argocd_resume_only", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        state.ensure_contexts.assert_not_called()
+
+    def test_main_enforces_contexts_for_normal_operation(self):
+        args = self._base_args()
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._execute_operation", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        state.ensure_contexts.assert_called_once_with("primary", "secondary")
+
 
 @pytest.mark.unit
 class TestDecommissionAndSetupHelpers:
@@ -1519,6 +1570,52 @@ class TestPreflightPhase:
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
+    def test_resume_only_swaps_clients_when_contexts_are_reversed(self):
+        from acm_switchover import _run_argocd_resume_only
+
+        paused_apps = [
+            {
+                "hub": "primary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+            },
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {"prune": True}},
+            },
+        ]
+        state = Mock()
+        state.state = {
+            "contexts": {
+                "primary": "hub-a",
+                "secondary": "hub-b",
+            }
+        }
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace(primary_context="hub-b", secondary_context="hub-a")
+        primary = Mock(name="primary-client")
+        secondary = Mock(name="secondary-client")
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=2, already_resumed=0, failed=0)
+
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+
+        resume_recorded.assert_called_once_with(
+            paused_apps,
+            "run-1",
+            secondary,
+            primary,
+            logger,
+        )
+
     def test_resume_only_fails_when_state_missing(self):
         from acm_switchover import _run_argocd_resume_only
 

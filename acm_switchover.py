@@ -902,7 +902,8 @@ def main():  # noqa: C901
             logger.error("  or manually remove: %s", resolved_state_file)
         sys.exit(EXIT_FAILURE)
 
-    state.ensure_contexts(args.primary_context, args.secondary_context)
+    if not getattr(args, "argocd_resume_only", False):
+        state.ensure_contexts(args.primary_context, args.secondary_context)
 
     try:
         primary, secondary = _initialize_clients(args, logger)
@@ -1008,7 +1009,41 @@ def _run_argocd_resume_only(
         run_id,
         len(paused_apps),
     )
-    summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, primary, secondary, logger)
+    resume_primary = primary
+    resume_secondary = secondary
+    stored_contexts = getattr(state, "state", {}) or {}
+    if isinstance(stored_contexts, dict):
+        stored_contexts = stored_contexts.get("contexts") or {}
+    else:
+        stored_contexts = {}
+
+    stored_primary_ctx = stored_contexts.get("primary")
+    stored_secondary_ctx = stored_contexts.get("secondary")
+    current_primary_ctx = getattr(args, "primary_context", None)
+    current_secondary_ctx = getattr(args, "secondary_context", None)
+
+    if stored_primary_ctx or stored_secondary_ctx:
+        if stored_primary_ctx == current_secondary_ctx and stored_secondary_ctx == current_primary_ctx:
+            logger.info("Resume-only contexts are reversed from the recorded state; swapping client mapping.")
+            resume_primary, resume_secondary = secondary, primary
+        elif stored_primary_ctx != current_primary_ctx or stored_secondary_ctx != current_secondary_ctx:
+            logger.warning(
+                "Resume-only contexts (%s/%s) differ from recorded state (%s/%s); "
+                "preserving state and using the provided client mapping. "
+                "Use --state-file when resuming from a state file tied to different aliases or ordering.",
+                current_primary_ctx,
+                current_secondary_ctx,
+                stored_primary_ctx,
+                stored_secondary_ctx,
+            )
+
+    summary = argocd_lib.resume_recorded_applications(
+        paused_apps,
+        run_id,
+        resume_primary,
+        resume_secondary,
+        logger,
+    )
     logger.info(
         "Restored %d and already resumed %d of %d Application(s).",
         summary.restored,
