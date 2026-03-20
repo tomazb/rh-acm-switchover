@@ -1505,6 +1505,50 @@ class TestFinalization:
             # _verify_old_hub_state SHOULD be called when old_hub_action is 'secondary'
             mock_verify.assert_called_once()
 
+    def test_finalize_resumes_argocd_after_old_hub_work(
+        self,
+        mock_secondary_client,
+        mock_state_manager,
+        mock_backup_manager,
+    ):
+        """Argo CD resume must wait until old-hub handling and verification finish."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=False,
+            old_hub_action="secondary",
+            argocd_resume_after_switchover=True,
+        )
+
+        call_order = []
+
+        with patch.object(fin, "_enable_backup_schedule"), patch.object(fin, "_verify_backup_schedule_enabled"), patch.object(
+            fin, "_fix_backup_schedule_collision"
+        ), patch.object(fin, "_verify_new_backups"), patch.object(fin, "_verify_backup_integrity"), patch.object(
+            fin, "_verify_multiclusterhub_health"
+        ), patch.object(
+            fin, "_get_backup_verify_timeout", return_value=300
+        ), patch.object(
+            fin, "_ensure_auto_import_default"
+        ), patch.object(
+            fin, "_handle_old_hub", side_effect=lambda: call_order.append("handle_old_hub")
+        ), patch.object(
+            fin, "_verify_old_hub_state", side_effect=lambda: call_order.append("verify_old_hub_state")
+        ), patch.object(
+            fin, "_resume_argocd_apps", side_effect=lambda: call_order.append("resume_argocd_apps")
+        ):
+            result = fin.finalize()
+
+        assert result is True
+        assert call_order == [
+            "handle_old_hub",
+            "verify_old_hub_state",
+            "resume_argocd_apps",
+        ]
+
     def test_handle_old_hub_raises_on_unknown_old_hub_action(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):

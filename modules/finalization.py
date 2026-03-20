@@ -225,12 +225,6 @@ class Finalization:
             # Ensure auto-import strategy reset to default (ACM 2.14+)
             self._ensure_auto_import_default()
 
-            # Optional: Restore Argo CD auto-sync (only when explicitly requested)
-            if self.argocd_resume_after_switchover:
-                with self.state.step("resume_argocd_apps", logger) as should_run:
-                    if should_run:
-                        self._resume_argocd_apps()
-
             # Handle old primary hub based on --old-hub-action
             with self.state.step("handle_old_hub", logger) as should_run:
                 if should_run:
@@ -240,6 +234,12 @@ class Finalization:
                 with self.state.step("verify_old_hub_state", logger) as should_run:
                     if should_run:
                         self._verify_old_hub_state()
+
+            # Optional: Restore Argo CD auto-sync only after all finalization work is finished.
+            if self.argocd_resume_after_switchover:
+                with self.state.step("resume_argocd_apps", logger) as should_run:
+                    if should_run:
+                        self._resume_argocd_apps()
 
             logger.info("Finalization completed successfully")
             return True
