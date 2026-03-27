@@ -136,6 +136,36 @@ class TestDetectGitopsMarkers:
         assert "label:argocd.argoproj.io/instance" in markers
         assert "label:app.kubernetes.io/managed-by" not in markers
 
+    def test_argocd_substring_in_key_not_matched(self):
+        """Test that unrelated keys containing argocd do not match."""
+        metadata = {
+            "labels": {
+                "myargocdtool-config": "enabled",
+            }
+        }
+        markers = detect_gitops_markers(metadata)
+        assert markers == []
+
+    def test_argocd_substring_in_value_not_matched(self):
+        """Test that unrelated values containing argocd do not match."""
+        metadata = {
+            "annotations": {
+                "description": "managed by myargocdtool",
+            }
+        }
+        markers = detect_gitops_markers(metadata)
+        assert markers == []
+
+    def test_non_argocd_argoproj_domain_not_matched(self):
+        """Test that non-Argo CD argoproj.io domains do not match."""
+        metadata = {
+            "annotations": {
+                "rollouts.argoproj.io/revision": "3",
+            }
+        }
+        markers = detect_gitops_markers(metadata)
+        assert markers == []
+
     def test_returns_empty_for_unmarked_resource(self):
         """Test that unmarked resources return empty list."""
         metadata = {

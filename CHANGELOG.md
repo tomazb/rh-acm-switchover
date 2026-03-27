@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Runbook and SKILLS file protection**: `docs/ACM_SWITCHOVER_RUNBOOK.md` and `.claude/skills/**/*.skill.md` are now protected from unapproved AI agent edits via AGENTS.md guidance and a `.claude/settings.json` PreToolUse hook that blocks writes.
 
+## [1.5.12] - 2026-03-27
+
+### Fixed
+
+- **Argo CD GitOps marker precision**: Restrict Argo CD detection to exact `argocd.argoproj.io/*` keys and exact `app.kubernetes.io/managed-by=argocd` matches so unrelated `argocd` substrings and non-Argo `*.argoproj.io` metadata no longer trigger drift warnings.
+
 ## [1.5.11] - 2026-03-20
 
 ### Fixed

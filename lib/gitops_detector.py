@@ -18,7 +18,7 @@ MAX_DISPLAY_PER_KIND = 10
 def detect_gitops_markers(metadata: Dict) -> List[str]:
     """Detect common GitOps markers on a resource.
 
-    This helper performs lightweight substring checks to identify
+    This helper performs lightweight checks to identify common
     GitOps-related labels/annotations. It does not sanitize or
     transform URLs or other user input and must not be used for
     security-sensitive filtering.
@@ -50,19 +50,10 @@ def detect_gitops_markers(metadata: Dict) -> List[str]:
                 continue
 
             key_lower = key.lower()
-            val_lower = value_str.lower()
             # Extract the API group (domain prefix before "/") from the label/annotation key.
             # Kubernetes label/annotation key format: [domain/]name
             key_prefix = key_lower.split("/", 1)[0] if "/" in key_lower else ""
-            # Use separate ifs so one value can match multiple tools (e.g. "argocd-and-flux").
-            # Domain checks use endswith/equality to anchor to proper boundaries and avoid
-            # false positives from substrings (e.g. "evil.argoproj.io" vs ".argoproj.io").
-            if (
-                "argocd" in key_lower
-                or "argocd" in val_lower
-                or key_prefix == "argoproj.io"
-                or key_prefix.endswith(".argoproj.io")
-            ):
+            if key_prefix == "argocd.argoproj.io":
                 markers_set.add(f"{source_name}:{key}")
             if key_prefix == "fluxcd.io" or key_prefix.endswith(".fluxcd.io"):
                 markers_set.add(f"{source_name}:{key}")
