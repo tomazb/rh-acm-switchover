@@ -383,7 +383,7 @@ class TestValidateRBACPermissions:
         """Test validate_rbac_permissions when secondary validation fails."""
 
         # Primary succeeds, secondary fails
-        def mock_validate(include_decommission=False, skip_observability=False, argocd_mode="none"):
+        def mock_validate(include_decommission=False, skip_observability=False, argocd_mode="none", argocd_install_type="unknown"):
             if mock_validator_class.call_count == 1:
                 # Primary validation
                 return (True, {})
@@ -415,6 +415,7 @@ class TestValidateRBACPermissions:
             include_decommission=True,
             skip_observability=False,
             argocd_mode="none",
+            argocd_install_type="unknown",
         )
 
     @patch("lib.rbac_validator.RBACValidator")
@@ -455,6 +456,7 @@ class TestValidateRBACPermissions:
             include_decommission=False,
             skip_observability=True,
             argocd_mode="none",
+            argocd_install_type="unknown",
         )
 
     @patch("lib.rbac_validator.RBACValidator")
@@ -470,6 +472,7 @@ class TestValidateRBACPermissions:
             include_decommission=False,
             skip_observability=False,
             argocd_mode="manage",
+            argocd_install_type="unknown",
         )
 
     @patch("lib.rbac_validator.RBACValidator")

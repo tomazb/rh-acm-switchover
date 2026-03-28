@@ -190,12 +190,21 @@ class RBACValidator:
         ),
     ]
 
-    # Argo CD read permissions required for --argocd-check and --argocd-manage
-    ARGOCD_CHECK_CLUSTER_PERMISSIONS = [
+    # F9 fix: Argo CD RBAC is split into base permissions (always needed)
+    # and operator-install-only permissions (argocds get/list).
+    # Base permissions needed for any Argo CD install type (vanilla or operator)
+    ARGOCD_BASE_CLUSTER_PERMISSIONS = [
         ("argoproj.io", "applications", ["get", "list"]),
-        ("argoproj.io", "argocds", ["get", "list"]),
         ("apiextensions.k8s.io", "customresourcedefinitions", ["get"]),
     ]
+
+    # Additional permissions only required for operator-installed Argo CD
+    ARGOCD_OPERATOR_CLUSTER_PERMISSIONS = [
+        ("argoproj.io", "argocds", ["get", "list"]),
+    ]
+
+    # Backwards-compatible alias (includes all permissions)
+    ARGOCD_CHECK_CLUSTER_PERMISSIONS = ARGOCD_BASE_CLUSTER_PERMISSIONS + ARGOCD_OPERATOR_CLUSTER_PERMISSIONS
 
     # Additional Argo CD write permissions required for --argocd-manage (operator role)
     ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS = [
@@ -241,8 +250,16 @@ class RBACValidator:
         """Check if a verb is a write operation."""
         return verb in ("create", "patch", "delete", "update")
 
-    def _get_argocd_cluster_permissions(self, argocd_mode: str) -> List[Tuple[str, str, List[str]]]:
-        """Get Argo CD cluster permissions based on mode and role."""
+    def _get_argocd_cluster_permissions(
+        self, argocd_mode: str, argocd_install_type: str = "unknown"
+    ) -> List[Tuple[str, str, List[str]]]:
+        """Get Argo CD cluster permissions based on mode, role, and install type.
+
+        Args:
+            argocd_mode: 'none', 'check', or 'manage'
+            argocd_install_type: 'vanilla', 'operator', or 'unknown'. When 'vanilla',
+                argocds permissions are omitted since the CRD does not exist.
+        """
         _validate_argocd_mode(argocd_mode)
 
         if argocd_mode == "none":
@@ -250,7 +267,11 @@ class RBACValidator:
         if argocd_mode == "manage" and self.role == "validator":
             raise ValueError("validator role cannot use argocd_mode='manage'")
 
-        permissions = list(self.ARGOCD_CHECK_CLUSTER_PERMISSIONS)
+        permissions = list(self.ARGOCD_BASE_CLUSTER_PERMISSIONS)
+        # F9: Only require argocds permissions when operator-installed Argo CD
+        # is present. Vanilla installs have no argocds CRD.
+        if argocd_install_type != "vanilla":
+            permissions.extend(self.ARGOCD_OPERATOR_CLUSTER_PERMISSIONS)
         if argocd_mode == "manage" and self.role == "operator":
             permissions.extend(self.ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS)
         return permissions
@@ -316,6 +337,7 @@ class RBACValidator:
         include_decommission: bool = False,
         skip_observability: bool = False,
         argocd_mode: str = "none",
+        argocd_install_type: str = "unknown",
     ) -> Tuple[bool, List[str]]:
         """
         Validate cluster-scoped permissions based on role.
@@ -324,6 +346,7 @@ class RBACValidator:
             include_decommission: Whether to check decommission permissions (operator only)
             skip_observability: Whether to skip observability permission checks
             argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
+            argocd_install_type: 'vanilla', 'operator', or 'unknown'
 
         Returns:
             Tuple of (all_valid, list of error messages)
@@ -358,7 +381,7 @@ class RBACValidator:
                     logger.error(error_msg)
 
         # Check Argo CD permissions if requested
-        argocd_permissions = self._get_argocd_cluster_permissions(argocd_mode)
+        argocd_permissions = self._get_argocd_cluster_permissions(argocd_mode, argocd_install_type)
         if argocd_permissions:
             logger.info("Including Argo CD RBAC checks (mode: %s)", argocd_mode)
             for api_group, resource, verbs in argocd_permissions:
@@ -522,6 +545,7 @@ class RBACValidator:
         include_decommission: bool = False,
         skip_observability: bool = False,
         argocd_mode: str = "none",
+        argocd_install_type: str = "unknown",
     ) -> Tuple[bool, Dict[str, List[str]]]:
         """
         Validate all required RBAC permissions.
@@ -530,6 +554,7 @@ class RBACValidator:
             include_decommission: Whether to check decommission permissions
             skip_observability: Whether to skip observability checks
             argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
+            argocd_install_type: 'vanilla', 'operator', or 'unknown'
 
         Returns:
             Tuple of (all_valid, dict of errors by category)
@@ -544,6 +569,7 @@ class RBACValidator:
             include_decommission=include_decommission,
             skip_observability=skip_observability,
             argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
         )
         if cluster_errors:
             all_errors["cluster"] = cluster_errors
@@ -570,6 +596,7 @@ class RBACValidator:
         include_decommission: bool = False,
         skip_observability: bool = False,
         argocd_mode: str = "none",
+        argocd_install_type: str = "unknown",
     ) -> str:
         """
         Generate a detailed permission validation report.
@@ -578,6 +605,7 @@ class RBACValidator:
             include_decommission: Whether to check decommission permissions
             skip_observability: Whether to skip observability checks
             argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
+            argocd_install_type: 'vanilla', 'operator', or 'unknown'
 
         Returns:
             Formatted report string
@@ -586,6 +614,7 @@ class RBACValidator:
             include_decommission=include_decommission,
             skip_observability=skip_observability,
             argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
         )
 
         report = ["=" * 80]
@@ -636,6 +665,7 @@ def validate_rbac_permissions(
     include_decommission: bool = False,
     skip_observability: bool = False,
     argocd_mode: str = "none",
+    argocd_install_type: str = "unknown",
 ) -> None:
     """
     Validate RBAC permissions on primary and optionally secondary hub.
@@ -646,6 +676,7 @@ def validate_rbac_permissions(
         include_decommission: Whether to check decommission permissions
         skip_observability: Whether to skip observability checks
         argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
+        argocd_install_type: 'vanilla', 'operator', or 'unknown'
 
     Raises:
         ValidationError: If RBAC validation fails
@@ -661,6 +692,7 @@ def validate_rbac_permissions(
             include_decommission=include_decommission,
             skip_observability=skip_observability,
             argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
         )
     except ValidationError as exc:
         raise ValidationError(f"RBAC permission validation could not be completed on primary hub: {exc}") from exc
@@ -670,6 +702,7 @@ def validate_rbac_permissions(
             include_decommission=include_decommission,
             skip_observability=skip_observability,
             argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
         )
         logger.error("\n%s", report)
         raise ValidationError("RBAC permission validation failed on primary hub. " "See report above for details.")
@@ -683,6 +716,7 @@ def validate_rbac_permissions(
                 include_decommission=False,  # Decommission only on primary
                 skip_observability=skip_observability,
                 argocd_mode=argocd_mode,
+                argocd_install_type=argocd_install_type,
             )
         except ValidationError as exc:
             raise ValidationError(f"RBAC permission validation could not be completed on secondary hub: {exc}") from exc
@@ -692,6 +726,7 @@ def validate_rbac_permissions(
                 include_decommission=False,
                 skip_observability=skip_observability,
                 argocd_mode=argocd_mode,
+                argocd_install_type=argocd_install_type,
             )
             logger.error("\n%s", report)
             # Include error count in exception message for debugging

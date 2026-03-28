@@ -81,6 +81,7 @@ def test_validate_all_passes_expected_argocd_rbac_mode(argocd_check, argocd_mana
         include_decommission=False,
         skip_observability=False,
         argocd_mode=expected_mode,
+        argocd_install_type="vanilla" if expected_mode != "none" else "unknown",
     )
 
 
@@ -111,6 +112,7 @@ def test_validate_all_skips_argocd_rbac_when_applications_crd_missing():
         include_decommission=False,
         skip_observability=False,
         argocd_mode="none",
+        argocd_install_type="unknown",
     )
 
 
@@ -132,6 +134,7 @@ def test_validate_all_includes_decommission_permissions_when_requested():
         include_decommission=True,
         skip_observability=False,
         argocd_mode="none",
+        argocd_install_type="unknown",
     )
 
 
@@ -175,6 +178,7 @@ def test_validate_all_uses_requested_argocd_mode_when_discovery_is_forbidden():
         include_decommission=False,
         skip_observability=False,
         argocd_mode="check",
+        argocd_install_type="unknown",
     )
 
 
