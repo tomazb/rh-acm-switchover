@@ -387,7 +387,11 @@ class RBACValidator:
                         errors.append(error_msg)
                         logger.error(error_msg)
         elif include_decommission and self.role == "validator":
-            logger.info("Skipping decommission permission checks (validator role is read-only)")
+            # F7 fix: Reject this combination explicitly instead of silently skipping.
+            raise ValueError(
+                "include_decommission=True is not valid for the validator role. "
+                "Decommission permissions are only applicable to the operator role."
+            )
 
         if all_valid:
             logger.info("✓ All cluster-scoped permissions validated for role: %s", self.role)
