@@ -51,9 +51,15 @@ cd rh-acm-switchover
 # 1. Deploy all RBAC resources (namespace, SA, roles, bindings)
 # 2. Generate a kubeconfig with unique user name
 # 3. Validate permissions with check_rbac.py
+
+# OpenShift oc-login context names containing '/' or ':' are fully supported.
+# The script sanitizes them for safe output filenames while using the original
+# value for all cluster API operations.
+# Example: --context "admin/api-prod.example.com:6443"
+#   generates: kubeconfigs/admin_api-prod.example.com_6443-operator.yaml
 ```
 
-This bootstrap path deploys the baseline operator role only. If the same service account must also run `--decommission`, apply the optional decommission manifests afterward or enable the Helm decommission extension.
+This bootstrap path deploys the baseline operator role only.
 
 For multi-hub setup:
 
@@ -334,6 +340,8 @@ python check_rbac.py \
   --role operator
 
 # Include decommission permissions (requires the optional decommission RBAC extension)
+# Note: --include-decommission is only valid with --role operator.
+# Combining it with --role validator is rejected with an explicit error.
 python check_rbac.py --include-decommission --role operator
 ```
 

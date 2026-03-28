@@ -173,6 +173,7 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
 - `--argocd-resume-after-switchover` requires `--argocd-manage`
 - `--include-decommission` is only valid with `--setup` when `--role` is `operator` or `both`
+- In `check_rbac.py`, `--include-decommission` is only valid with `--role operator`; combining it with `--role validator` is rejected with an explicit error (decommission permissions are operator-only)
 - With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
 - With `--skip-gitops-check`, `--argocd-check` is ignored (GitOps detection is disabled); a warning is emitted if both are set
 

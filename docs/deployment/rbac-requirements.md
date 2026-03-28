@@ -178,6 +178,27 @@ The RBAC model is designed following the principle of least privilege:
 - **Scope**: Namespace-scoped (various)
 - **Purpose**: Retrieve route hostnames for connectivity verification
 
+### Argo CD API Groups (optional — required only when using `--argocd-check` or `--argocd-manage`)
+
+These permissions are validated during preflight only when Argo CD detection is requested. The exact permissions required depend on the Argo CD install type detected on the cluster:
+
+#### All Argo CD installs (vanilla and operator)
+- **Resources**: `applications.argoproj.io` (get, list)
+- **Resources**: `customresourcedefinitions.apiextensions.k8s.io` (get) — to detect install type
+- **Scope**: Cluster-wide
+
+#### Operator-installed Argo CD only (argocds CRD is present)
+- **Resources**: `argocds.argoproj.io` (get, list)
+- **Scope**: Cluster-wide
+- **Purpose**: List Argo CD instances for informational display
+
+#### Additionally required for `--argocd-manage` (operator role only)
+- **Resources**: `applications.argoproj.io` (patch)
+- **Scope**: Cluster-wide
+- **Purpose**: Remove auto-sync from ACM-touching Applications
+
+> **Note**: On vanilla Argo CD installs (no `argocds` CRD), `argocds` permissions are **not** required. The preflight RBAC validator automatically detects the install type and skips the `argocds` check when appropriate.
+
 ## Namespace-Scoped vs Cluster-Scoped Permissions
 
 ### Cluster-Scoped Resources
