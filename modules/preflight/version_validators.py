@@ -1,11 +1,4 @@
-"""Version and compatibility validation checks.
-
-TODO: This module has low test coverage (49%). Expand test cases to cover:
-- Version comparison edge cases (pre-release versions, build metadata)
-- Token expiration validation with various token formats
-- ACM version detection from different MCH states
-See TEST_REPORT.md for coverage details.
-"""
+"""Version and compatibility validation checks."""
 
 import base64
 import json
@@ -23,6 +16,7 @@ from lib.constants import (
     LOCAL_CLUSTER_NAME,
     MCE_NAMESPACE,
 )
+from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import is_acm_version_ge
 from lib.validation import InputValidator, ValidationError
@@ -301,6 +295,19 @@ class VersionValidator(BaseValidator):
                     mch = mchs[0]
 
             if mch:
+                metadata = mch.get("metadata", {})
+                mch_name = metadata.get("name", "multiclusterhub")
+
+                # Record GitOps markers if present (non-critical; failures must not abort version detection)
+                safe_record_gitops_markers(
+                    logger=logger,
+                    context=hub_name,
+                    namespace=ACM_NAMESPACE,
+                    kind="MultiClusterHub",
+                    name=mch_name,
+                    metadata=metadata,
+                )
+
                 version = mch.get("status", {}).get("currentVersion", "unknown")
                 self.add_result(
                     f"ACM version ({hub_name})",

@@ -99,15 +99,26 @@ classDiagram
     class InputValidator {
         +validate_kubernetes_name()
         +validate_kubernetes_namespace()
+        +validate_kubernetes_label_key()
+        +validate_kubernetes_label_value()
         +validate_context_name()
         +validate_cli_method()
+        +validate_cli_old_hub_action()
+        +validate_cli_activation_method()
+        +validate_cli_log_format()
+        +validate_non_empty_string()
         +validate_safe_filesystem_path()
-        +validate_all_cli_args()
         +sanitize_context_identifier()
+        +validate_all_cli_args()
     }
 
     class SwitchoverError {
         <<Base Exception>>
+        +__init__()
+    }
+
+    class TransientError {
+        <<Recoverable>>
         +__init__()
     }
 
@@ -131,10 +142,23 @@ classDiagram
         +__init__()
     }
 
+    class StateLoadError {
+        <<State Corruption / I-O>>
+        +__init__()
+    }
+
+    class StateLockError {
+        <<Concurrent Run Blocked>>
+        +__init__()
+    }
+
+    SwitchoverError <|-- TransientError : Inherits
     SwitchoverError <|-- FatalError : Inherits
     FatalError <|-- ConfigurationError : Inherits
     ConfigurationError <|-- ValidationError : Inherits
     ValidationError <|-- SecurityValidationError : Inherits
+    FatalError <|-- StateLoadError : Inherits
+    FatalError <|-- StateLockError : Inherits
     InputValidator --> ValidationError : Raises
     InputValidator --> SecurityValidationError : Raises
 ```
@@ -369,11 +393,23 @@ classDiagram
         +message: str
     }
 
+    class StateLoadError {
+        <<State Corruption / I-O>>
+        +message: str
+    }
+
+    class StateLockError {
+        <<Concurrent Run Blocked>>
+        +message: str
+    }
+
     SwitchoverError <|-- TransientError
     SwitchoverError <|-- FatalError
     FatalError <|-- ConfigurationError
     ConfigurationError <|-- ValidationError
     ValidationError <|-- SecurityValidationError
+    FatalError <|-- StateLoadError
+    FatalError <|-- StateLockError
 ```
 
 ### Error Message Format
@@ -568,18 +604,17 @@ class InputValidator:
 
 ```mermaid
 gantt
-    title Validation Enhancement Roadmap
+    title Validation Maintenance Roadmap
     dateFormat  YYYY-MM-DD
-    section Phase 1 (Current)
-    Core Validation Implementation   :done,    des1, 2024-11-01, 2024-11-15
-    Security Validation              :done,    des2, 2024-11-16, 2024-11-30
-    Test Suite Development            :done,    des3, 2024-12-01, 2024-12-10
-    section Phase 2 (Next)
-    Custom Validation Rules          :active,  des4, 2024-12-15, 30d
-    Internationalization Support      :         des5, 2025-01-01, 20d
-    section Phase 3 (Future)
-    Performance Optimization         :         des6, 2025-01-20, 15d
-    Enhanced Security Patterns       :         des7, 2025-02-01, 30d
+    section Historical
+    Core Validation Implementation   :done,    hist1, 2024-11-01, 2024-12-10
+    Shell Security Hardening         :done,    hist2, 2024-11-16, 2024-12-20
+    section Current Maintenance
+    CLI Rule Updates and Docs Sync   :active,  curr1, 2026-03-01, 21d
+    Exception Hierarchy Refresh      :active,  curr2, 2026-03-09, 14d
+    section Future
+    Performance Review of Validation :         fut1, 2026-04-01, 21d
+    Additional Security Patterns     :         fut2, 2026-04-15, 30d
 ```
 
 ## Conclusion

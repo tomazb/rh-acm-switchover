@@ -97,6 +97,29 @@ class TestPostActivationVerification:
         assert verify.state == mock_state_manager
         assert verify.has_observability is True
 
+    def test_build_managed_cluster_clients_disables_kubeconfig_persistence(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Per-context clients should not persist refreshed credentials back to kubeconfig."""
+        verify = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+        )
+        api_client = Mock(name="api_client")
+        core_v1 = Mock(name="core_v1")
+        apps_v1 = Mock(name="apps_v1")
+
+        with patch("modules.post_activation.config.new_client_from_config", return_value=api_client) as new_client:
+            with patch("modules.post_activation.client.CoreV1Api", return_value=core_v1) as core_ctor:
+                with patch("modules.post_activation.client.AppsV1Api", return_value=apps_v1) as apps_ctor:
+                    result = verify._build_managed_cluster_clients("managed-context")
+
+        new_client.assert_called_once_with(context="managed-context", persist_config=False)
+        core_ctor.assert_called_once_with(api_client=api_client)
+        apps_ctor.assert_called_once_with(api_client=api_client)
+        assert result == (core_v1, apps_v1)
+
     def test_klusterlet_verification_bypasses_kubeconfig_size_limit(self, mock_secondary_client, mock_state_manager):
         """Klusterlet verification should bypass kubeconfig size limits."""
         verify = PostActivationVerification(
@@ -325,7 +348,8 @@ class TestPostActivationVerification:
         post_verify_with_obs._restart_observatorium_api()
 
         mock_secondary_client.rollout_restart_deployment.assert_called_once_with(
-            namespace=OBSERVABILITY_NAMESPACE, name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT
+            namespace=OBSERVABILITY_NAMESPACE,
+            name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT,
         )
         mock_secondary_client.get_pods.assert_called()
 
@@ -501,15 +525,74 @@ class TestPostActivationVerification:
 class TestKlusterletReconnect:
     """Test cases for force klusterlet reconnect functionality."""
 
-    def test_force_klusterlet_reconnect_success(self, mock_secondary_client, mock_state_manager):
-        """Test successful klusterlet reconnect with import secret."""
-        verify = PostActivationVerification(
+    def _make_verify(self, mock_secondary_client, mock_state_manager):
+        return PostActivationVerification(
             secondary_client=mock_secondary_client,
             state_manager=mock_state_manager,
             has_observability=False,
         )
 
-        # Mock get_secret to return valid import secret with bootstrap secret
+    def test_force_klusterlet_reconnect_success(self, mock_secondary_client, mock_state_manager):
+        """Test successful klusterlet reconnect with import secret."""
+        import base64
+
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        mock_v1.delete_namespaced_secret.side_effect = ApiException(status=404)
+        mock_v1.create_namespaced_secret.return_value = None
+        mock_apps_v1.patch_namespaced_deployment.return_value = None
+
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=True):
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is True
+        verify._build_managed_cluster_clients.assert_called_once_with("test-context")
+        mock_secondary_client.get_secret.assert_called_once_with(namespace="test-cluster", name="test-cluster-import")
+
+    def test_force_klusterlet_reconnect_no_secret(self, mock_secondary_client, mock_state_manager):
+        """Test klusterlet reconnect when import secret not found."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+        mock_secondary_client.get_secret.return_value = None
+
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is False
+
+    def test_parallel_workers_use_isolated_clients(self, mock_secondary_client, mock_state_manager):
+        """Each parallel worker must receive its own ApiClient; no global context mutation."""
+        import threading
+
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        call_log = []
+        call_lock = threading.Lock()
+
+        def fake_build_clients(context_name):
+            mock_v1 = Mock(name=f"v1-{context_name}")
+            mock_apps_v1 = Mock(name=f"apps_v1-{context_name}")
+            with call_lock:
+                call_log.append((context_name, mock_v1))
+            return mock_v1, mock_apps_v1
+
+        verify._build_managed_cluster_clients = fake_build_clients
+
         import base64
 
         import_docs = """---
@@ -525,41 +608,24 @@ data:
             "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
         }
 
-        # Mock Kubernetes client methods
-        with patch("modules.post_activation.config.load_kube_config"):
-            with patch("modules.post_activation.client.CoreV1Api") as mock_core_api:
-                with patch("modules.post_activation.client.AppsV1Api") as mock_apps_api:
-                    mock_core_instance = mock_core_api.return_value
-                    mock_apps_instance = mock_apps_api.return_value
+        with patch("modules.post_activation.wait_for_condition", return_value=True):
+            from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                    # Mock the delete to raise 404 (not found)
-                    mock_core_instance.delete_namespaced_secret.side_effect = ApiException(status=404)
-                    # Mock the create
-                    mock_core_instance.create_namespaced_secret.return_value = None
-                    # Mock the deployment patch
-                    mock_apps_instance.patch_namespaced_deployment.return_value = None
+            contexts = ["ctx-cluster-a", "ctx-cluster-b"]
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(verify._force_klusterlet_reconnect, f"cluster-{i}", ctx)
+                    for i, ctx in enumerate(contexts)
+                ]
+                for f in as_completed(futures):
+                    f.result()
 
-                    result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
-
-                    assert result is True
-                    mock_secondary_client.get_secret.assert_called_once_with(
-                        namespace="test-cluster", name="test-cluster-import"
-                    )
-
-    def test_force_klusterlet_reconnect_no_secret(self, mock_secondary_client, mock_state_manager):
-        """Test klusterlet reconnect when import secret not found."""
-        verify = PostActivationVerification(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            has_observability=False,
-        )
-
-        # Mock get_secret to return None (not found)
-        mock_secondary_client.get_secret.return_value = None
-
-        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
-
-        assert result is False
+        assert len(call_log) == 2
+        ctx_names = {entry[0] for entry in call_log}
+        assert ctx_names == set(contexts), "Each worker must use its own named context"
+        first_client = next(client for ctx, client in call_log if ctx == "ctx-cluster-a")
+        second_client = next(client for ctx, client in call_log if ctx == "ctx-cluster-b")
+        assert first_client is not second_client, "Each worker must receive a distinct CoreV1Api instance"
 
 
 @pytest.mark.integration

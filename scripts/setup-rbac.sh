@@ -16,6 +16,7 @@
 #
 # Options:
 #   --role <role>              - Role to deploy: operator, validator, both (default: both)
+#   --include-decommission     - Also deploy/validate optional decommission RBAC for operator teardown
 #   --token-duration <dur>     - Token validity duration (default: 48h)
 #   --output-dir <dir>         - Output directory for kubeconfigs (default: ./kubeconfigs)
 #   --skip-kubeconfig          - Skip kubeconfig generation
@@ -58,6 +59,7 @@ CONTEXT=""
 ROLE="both"
 TOKEN_DURATION="48h"
 OUTPUT_DIR="./kubeconfigs"
+INCLUDE_DECOMMISSION=false
 SKIP_KUBECONFIG=false
 SKIP_VALIDATION=false
 DRY_RUN=false
@@ -107,6 +109,10 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+        --include-decommission)
+            INCLUDE_DECOMMISSION=true
+            shift
+            ;;
         --output-dir)
             if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
                 OUTPUT_DIR="$2"
@@ -139,6 +145,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --role <role>              Role to deploy: operator, validator, both (default: both)"
+            echo "  --include-decommission     Also deploy/validate optional decommission RBAC"
             echo "  --token-duration <dur>     Token validity duration (default: 48h)"
             echo "  --output-dir <dir>         Output directory for kubeconfigs (default: ./kubeconfigs)"
             echo "  --skip-kubeconfig          Skip kubeconfig generation"
@@ -148,6 +155,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Examples:"
             echo "  $0 --admin-kubeconfig ~/.kube/admin.yaml --context prod-hub --role operator"
+            echo "  $0 --admin-kubeconfig ~/.kube/admin.yaml --context prod-hub --role operator --include-decommission"
             echo "  $0 --admin-kubeconfig ~/.kube/admin.yaml --context prod-hub --token-duration 72h"
             echo "  $0 --admin-kubeconfig ~/.kube/admin.yaml --context prod-hub --dry-run"
             exit 0
@@ -192,10 +200,24 @@ if [[ ! -d "$RBAC_MANIFEST_DIR" ]]; then
     exit 1
 fi
 
+# F4 fix: Sanitize context name for filesystem-safe filenames.
+# Contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
+# contain characters that break filename interpolation.
+# Matches Python InputValidator.sanitize_context_identifier().
+sanitize_context() {
+    echo "$1" | sed 's/[^A-Za-z0-9._-]/_/g'
+}
+SANITIZED_CONTEXT=$(sanitize_context "$CONTEXT")
+
+if $INCLUDE_DECOMMISSION && [[ "$ROLE" == "validator" ]]; then
+    echo "Error: --include-decommission requires --role operator or --role both" >&2
+    exit 1
+fi
+
 # =============================================================================
 # Setup kubectl with admin credentials
 # =============================================================================
-KUBECTL_ARGS="--kubeconfig=$ADMIN_KUBECONFIG --context=$CONTEXT"
+KUBECTL_ARGS=(--kubeconfig="$ADMIN_KUBECONFIG" --context="$CONTEXT")
 
 # Validate connection
 echo ""
@@ -208,8 +230,7 @@ if $DRY_RUN; then
 fi
 
 echo "Validating cluster connection..."
-# shellcheck disable=SC2086
-if ! kubectl $KUBECTL_ARGS cluster-info &>/dev/null; then
+if ! kubectl "${KUBECTL_ARGS[@]}" cluster-info &>/dev/null; then
     echo "Error: Cannot connect to cluster using context '$CONTEXT'" >&2
     echo "Please verify:" >&2
     echo "  - The kubeconfig path is correct: $ADMIN_KUBECONFIG" >&2
@@ -221,8 +242,7 @@ fi
 check_pass "Connected to cluster via context: $CONTEXT"
 
 # Verify admin privileges by checking if we can access cluster-level resources
-# shellcheck disable=SC2086
-if ! kubectl $KUBECTL_ARGS auth can-i create namespace --all-namespaces &>/dev/null; then
+if ! kubectl "${KUBECTL_ARGS[@]}" auth can-i create namespace --all-namespaces &>/dev/null; then
     check_fail "Insufficient privileges: cluster-admin access required"
     echo "" >&2
     echo "This script needs cluster-admin privileges to:" >&2
@@ -252,16 +272,14 @@ apply_manifest() {
     if $DRY_RUN; then
         echo "  Would apply: $manifest"
         # Validate the manifest is valid YAML
-        # shellcheck disable=SC2086
-        if kubectl $KUBECTL_ARGS apply --dry-run=client -f "$manifest" &>/dev/null; then
+        if kubectl "${KUBECTL_ARGS[@]}" apply --dry-run=client -f "$manifest" &>/dev/null; then
             check_pass "[dry-run] $description"
         else
             check_fail "[dry-run] $description - invalid manifest"
             return 1
         fi
     else
-        # shellcheck disable=SC2086
-        if kubectl $KUBECTL_ARGS apply -f "$manifest" &>/dev/null; then
+        if kubectl "${KUBECTL_ARGS[@]}" apply -f "$manifest" &>/dev/null; then
             check_pass "$description"
         else
             check_fail "$description"
@@ -319,16 +337,14 @@ apply_role_filtered() {
     if $DRY_RUN; then
         echo "  Would apply (filtered for $target_role): $manifest"
         # Validate the filtered manifest is valid YAML
-        # shellcheck disable=SC2086
-        if kubectl $KUBECTL_ARGS apply --dry-run=client -f "$temp_manifest" &>/dev/null; then
+        if kubectl "${KUBECTL_ARGS[@]}" apply --dry-run=client -f "$temp_manifest" &>/dev/null; then
             check_pass "[dry-run] $description (role: $target_role)"
         else
             check_fail "[dry-run] $description (role: $target_role) - invalid manifest"
             return 1
         fi
     else
-        # shellcheck disable=SC2086
-        if kubectl $KUBECTL_ARGS apply -f "$temp_manifest" &>/dev/null; then
+        if kubectl "${KUBECTL_ARGS[@]}" apply -f "$temp_manifest" &>/dev/null; then
             check_pass "$description (role: $target_role)"
         else
             check_fail "$description (role: $target_role)"
@@ -341,13 +357,13 @@ apply_role_filtered() {
 # Check which namespaces exist (for graceful handling of optional components)
 check_namespace_exists() {
     local ns="$1"
-    # shellcheck disable=SC2086
-    kubectl $KUBECTL_ARGS get namespace "$ns" &>/dev/null
+    kubectl "${KUBECTL_ARGS[@]}" get namespace "$ns" &>/dev/null
 }
 
 echo ""
 echo "Deploying to context: $CONTEXT"
 echo "Role configuration: $ROLE"
+echo "Include decommission RBAC: $INCLUDE_DECOMMISSION"
 echo ""
 
 # Step 1: Create namespace
@@ -361,6 +377,15 @@ apply_role_filtered "${RBAC_MANIFEST_DIR}/clusterrole.yaml" "ClusterRoles" "$ROL
 
 # Step 4: Create ClusterRoleBindings
 apply_role_filtered "${RBAC_MANIFEST_DIR}/clusterrolebinding.yaml" "ClusterRoleBindings" "$ROLE"
+
+if $INCLUDE_DECOMMISSION; then
+    echo ""
+    echo "Applying optional decommission RBAC extension..."
+    apply_manifest "${RBAC_MANIFEST_DIR}/extensions/decommission/clusterrole.yaml" "Decommission ClusterRole"
+    apply_manifest \
+        "${RBAC_MANIFEST_DIR}/extensions/decommission/clusterrolebinding.yaml" \
+        "Decommission ClusterRoleBinding"
+fi
 
 # Step 5: Create namespace-scoped Roles
 # Check which target namespaces exist
@@ -415,10 +440,12 @@ if ! $SKIP_KUBECONFIG; then
         else
             # Use the generate-sa-kubeconfig.sh script
             if "${SCRIPT_DIR}/generate-sa-kubeconfig.sh" \
+                --kubeconfig "$ADMIN_KUBECONFIG" \
                 --context "$CONTEXT" \
                 --user "$user_name" \
                 --token-duration "$TOKEN_DURATION" \
                 "$SWITCHOVER_NAMESPACE" "$sa_name" > "$output_file" 2>/dev/null; then
+                chmod 600 "$output_file" || true
                 check_pass "Generated kubeconfig: $output_file"
                 echo "  User name: $user_name"
                 echo "  Token duration: $TOKEN_DURATION"
@@ -434,14 +461,14 @@ if ! $SKIP_KUBECONFIG; then
     
     case "$ROLE" in
         operator)
-            generate_kubeconfig "$OPERATOR_SA" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml" "${CONTEXT}-operator"
+            generate_kubeconfig "$OPERATOR_SA" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml" "${SANITIZED_CONTEXT}-operator"
             ;;
         validator)
-            generate_kubeconfig "$VALIDATOR_SA" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml" "${CONTEXT}-validator"
+            generate_kubeconfig "$VALIDATOR_SA" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml" "${SANITIZED_CONTEXT}-validator"
             ;;
         both)
-            generate_kubeconfig "$OPERATOR_SA" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml" "${CONTEXT}-operator"
-            generate_kubeconfig "$VALIDATOR_SA" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml" "${CONTEXT}-validator"
+            generate_kubeconfig "$OPERATOR_SA" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml" "${SANITIZED_CONTEXT}-operator"
+            generate_kubeconfig "$VALIDATOR_SA" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml" "${SANITIZED_CONTEXT}-validator"
             ;;
     esac
 fi
@@ -460,30 +487,36 @@ if ! $SKIP_VALIDATION && ! $DRY_RUN && ! $SKIP_KUBECONFIG; then
         validate_role() {
             local role="$1"
             local kubeconfig_file="$2"
+            local include_decommission="$3"
+            local check_args=(--role "$role")
             
             echo ""
             echo "Validating $role role permissions..."
+
+            if [[ "$include_decommission" == "true" ]]; then
+                check_args+=(--include-decommission)
+            fi
             
             # Set KUBECONFIG to use the generated kubeconfig
-            if KUBECONFIG="$kubeconfig_file" python3 "$CHECK_RBAC" --role "$role" 2>/dev/null; then
+            if KUBECONFIG="$kubeconfig_file" python3 "$CHECK_RBAC" "${check_args[@]}" 2>/dev/null; then
                 check_pass "RBAC validation passed for $role role"
             else
                 check_fail "RBAC validation failed for $role role"
                 echo "  Run manually to see details:"
-                echo "  KUBECONFIG=$kubeconfig_file python3 $CHECK_RBAC --role $role --verbose"
+                echo "  KUBECONFIG=$kubeconfig_file python3 $CHECK_RBAC ${check_args[*]} --verbose"
             fi
         }
         
         case "$ROLE" in
             operator)
-                validate_role "operator" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml"
+                validate_role "operator" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml" "$INCLUDE_DECOMMISSION"
                 ;;
             validator)
-                validate_role "validator" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml"
+                validate_role "validator" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml" "false"
                 ;;
             both)
-                validate_role "operator" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml"
-                validate_role "validator" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml"
+                validate_role "operator" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml" "$INCLUDE_DECOMMISSION"
+                validate_role "validator" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml" "false"
                 ;;
         esac
     fi
@@ -511,14 +544,14 @@ else
         echo "Generated kubeconfigs:"
         case "$ROLE" in
             operator)
-                echo "  Operator: ${OUTPUT_DIR}/${CONTEXT}-operator.yaml"
+                echo "  Operator: ${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml"
                 ;;
             validator)
-                echo "  Validator: ${OUTPUT_DIR}/${CONTEXT}-validator.yaml"
+                echo "  Validator: ${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml"
                 ;;
             both)
-                echo "  Operator: ${OUTPUT_DIR}/${CONTEXT}-operator.yaml"
-                echo "  Validator: ${OUTPUT_DIR}/${CONTEXT}-validator.yaml"
+                echo "  Operator: ${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml"
+                echo "  Validator: ${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml"
                 ;;
         esac
         echo ""
@@ -527,8 +560,8 @@ else
     
     echo ""
     echo "Next steps:"
-    echo "  1. Test the kubeconfig: KUBECONFIG=${OUTPUT_DIR}/${CONTEXT}-operator.yaml kubectl get ns"
-    echo "  2. Run preflight check: python3 acm_switchover.py --validate-only --primary-context ${CONTEXT}-operator@..."
+    echo "  1. Test the kubeconfig: KUBECONFIG=${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml kubectl get ns"
+    echo "  2. Run preflight check: python3 acm_switchover.py --validate-only --primary-context ${SANITIZED_CONTEXT}-operator@..."
     echo ""
     echo "For multi-hub setup, run this script for each hub, then use"
     echo "generate-merged-kubeconfig.sh to create a single merged kubeconfig."

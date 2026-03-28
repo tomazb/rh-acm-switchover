@@ -2,7 +2,7 @@
 
 **Passive (Continuous) and One-Time Full Restore**
 
-**Last Updated:** 2026-01-28
+**Last Updated:** 2026-02-20
 
 ---
 
@@ -77,42 +77,63 @@ Perform a single restore of credentials, resources, and managed clusters from th
 ```mermaid
 graph TD
     A[Start: Prerequisites Verified] --> B[Step 1: Pause BackupSchedule<br/>on Primary Hub]
-    B --> C[Step 2: Disable Auto-Import<br/>on Primary Hub]
-    C --> D[Step 3: Stop Thanos Compactor<br/>on Primary Hub]
-    D --> E[Step 4: Verify Latest<br/>Passive Restore]
-    E --> F{Passive sync<br/>up to date?}
-    F -->|No| E
-    F -->|Yes| G[Step 5: Activate Managed Clusters<br/>Patch or Create Restore]
-    G --> H[Monitor Restore Status]
-    H --> I{Restore<br/>Finished?}
-    I -->|No, wait| H
-    I -->|Yes| J[POST-ACTIVATION STEPS]
-    J --> K[Step 6: Verify Clusters Connected<br/>5-10 minutes]
-    K --> L[Step 7: Restart Observatorium API]
-    L --> M[Step 8: Verify Observability Pods]
-    M --> N[Step 9: Verify Metrics Collection]
-    N --> O[Step 10: Enable BackupSchedule<br/>on New Hub]
-    O --> P[Step 11: Inform Stakeholders]
-    P --> Q{Decommission<br/>old hub?}
-    Q -->|Yes| R[Step 12: Decommission Primary]
-    Q -->|No| S[Complete: Keep Primary as Backup]
-    R --> S
+    B --> C[Step 2: Prevent Auto-Import<br/>on Primary Hub]
+    C --> D[Step 3: Shut Down Thanos Compactor<br/>on Primary Hub]
+    D --> E[Step 4: Verify Latest Passive Restore<br/>on Secondary Hub]
+    E --> F{Use Step 4b<br/>ImportAndSync override?}
+    F -->|Yes| G[Step 4b: Set Auto-Import Strategy<br/>to ImportAndSync]
+    F -->|No| H[Step 5: Activate Managed Clusters<br/>on Secondary Hub]
+    G --> H
+    H --> I[Monitor Restore Status]
+    I --> J{Restore<br/>Finished?}
+    J -->|No, wait| I
+    J -->|Yes| K[Step 6: Verify ManagedClusters<br/>Are Connected]
+    K --> L[Step 7: Reset Auto-Import Strategy<br/>to Default if Set]
+    L --> M[Step 8: Restart Observatorium API<br/>Gateway Pods]
+    M --> N[Step 9: Verify Observability Pods<br/>Are Running]
+    N --> O[Step 10: Verify Metrics Collection]
+    O --> P{Disable Observability<br/>on old secondary hub?}
+    P -->|Yes| Q[Optional: Disable Observability Permanently<br/>on Old Secondary Hub]
+    P -->|No| R[Step 11: Enable BackupSchedule<br/>on New Active Hub]
+    Q --> R
+    R --> S[Step 12: Verify Backup Integrity]
+    S --> T[Step 13: Inform Stakeholders]
+    T --> U{Decommission<br/>old primary?}
+    U -->|Yes| V[Step 14: Decommission<br/>Old Primary Hub]
+    U -->|No| W[Complete: Keep Old Hub<br/>as Secondary]
+    V --> W
 ```
 
 #### Method 2: Full Restore Flow
 
 ```mermaid
 graph TD
-    A[Start: Prerequisites Verified] --> B[F1: Optional - Pause BackupSchedule<br/>on Primary if accessible]
-    B --> C[F2: Optional - Disable Auto-Import<br/>on Primary if accessible]
-    C --> D[F3: Optional - Stop Thanos Compactor<br/>on Primary if accessible]
-    D --> E[F4: Create Full Restore<br/>on Secondary Hub]
-    E --> F[Monitor Restore Status]
-    F --> G{Restore<br/>Finished?}
-    G -->|No, wait| F
-    G -->|Yes| H[F5: Continue to POST-ACTIVATION]
-    H --> I[Steps 6-12: Same as Method 1]
-    I --> J[Complete]
+    A[Start: Prerequisites Verified] --> B[F1: Pause BackupSchedule<br/>on Primary if Reachable]
+    B --> C[F2: Prevent Auto-Import<br/>on Primary if Reachable]
+    C --> D[F3: Shut Down Thanos Compactor<br/>on Primary if Reachable]
+    D --> E{Use optional F4<br/>ImportAndSync override?}
+    E -->|Yes| F[F4: Set Auto-Import Strategy<br/>to ImportAndSync]
+    E -->|No| G[F5: Create Full Restore<br/>on Secondary Hub]
+    F --> G
+    G --> H[Monitor Restore Status]
+    H --> I{Restore<br/>Finished?}
+    I -->|No, wait| H
+    I -->|Yes| J[F6: Continue with<br/>Post-Activation Common Steps]
+    J --> K[Step 6: Verify ManagedClusters<br/>Are Connected]
+    K --> L[Step 7: Reset Auto-Import Strategy<br/>to Default if Set]
+    L --> M[Step 8: Restart Observatorium API<br/>Gateway Pods]
+    M --> N[Step 9: Verify Observability Pods<br/>Are Running]
+    N --> O[Step 10: Verify Metrics Collection]
+    O --> P{Disable Observability<br/>on old secondary hub?}
+    P -->|Yes| Q[Optional: Disable Observability Permanently<br/>on Old Secondary Hub]
+    P -->|No| R[Step 11: Enable BackupSchedule<br/>on New Active Hub]
+    Q --> R
+    R --> S[Step 12: Verify Backup Integrity]
+    S --> T[Step 13: Inform Stakeholders]
+    T --> U{Decommission<br/>old primary?}
+    U -->|Yes| V[Step 14: Decommission<br/>Old Primary Hub]
+    U -->|No| W[Complete: Keep Old Hub<br/>as Secondary]
+    V --> W
 ```
 
 ---
@@ -223,6 +244,39 @@ done
 **Verify all show "true" before proceeding with switchover.**
 
 > **WITHOUT THIS:** Deleting ManagedClusters from old hub will DESTROY the underlying cluster infrastructure!
+
+---
+
+### Optional: Pause Argo CD Auto-Sync (when GitOps manages ACM resources)
+
+If Argo CD (or OpenShift GitOps) manages ACM resources (BackupSchedule, Restore, ManagedCluster, MCO, etc.), auto-sync can revert switchover steps. Pause auto-sync for ACM-touching Applications **before** Step 1 and resume only **after** Git/desired state has been updated for the new hub.
+
+**Detection (preflight):**
+```bash
+# Bash: include Argo CD check in preflight
+./scripts/preflight-check.sh --primary-context <primary> --secondary-context <secondary> --method passive --argocd-check
+
+# Python: validation-only with Argo CD report
+python acm_switchover.py --validate-only --primary-context <primary> --secondary-context <secondary> --argocd-check
+```
+
+Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
+
+**Pause (before starting switchover steps):**
+- **Automated (Python):** Run switchover with `--argocd-manage`; the tool pauses ACM-touching Applications on primary (and optionally secondary) during primary prep.
+- **Manual (Bash):** Use the Argo CD management script with a state file:
+  ```bash
+  ./scripts/argocd-manage.sh --context <primary> --mode pause --state-file .state/argocd-pause.json
+  # Optionally on secondary if GitOps there could mutate Restore/BackupSchedule before activation:
+  ./scripts/argocd-manage.sh --context <secondary> --mode pause --state-file .state/argocd-pause.json
+  ```
+
+**Resume (only after Git/desired state reflects the new hub):**
+- **During finalization (Python):** Add `--argocd-resume-after-switchover` to the switchover run.
+- **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>`
+- **Bash:** `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
+
+If you do not pause, GitOps may re-apply Git state and undo pause-backup, disable-auto-import, or activation changes. Do not resume until Git is updated for the new primary; otherwise Argo CD can revert the switchover.
 
 ---
 

@@ -188,6 +188,44 @@ class TestRBACManifestConsistency:
         return Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "role.yaml"
 
     @pytest.fixture
+    def kustomize_clusterrole_path(self) -> Path:
+        """Get the Kustomize clusterrole.yaml path."""
+        return Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrole.yaml"
+
+    @pytest.fixture
+    def helm_clusterrole_path(self) -> Path:
+        """Get the Helm clusterrole.yaml path."""
+        return (
+            Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "clusterrole.yaml"
+        )
+
+    @pytest.fixture
+    def kustomize_clusterrole_content(self, kustomize_clusterrole_path) -> str:
+        """Read Kustomize clusterrole manifest as text."""
+        if not kustomize_clusterrole_path.exists():
+            pytest.skip("Kustomize clusterrole.yaml not found")
+        return kustomize_clusterrole_path.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def helm_clusterrole_content(self, helm_clusterrole_path) -> str:
+        """Read Helm clusterrole template as text."""
+        if not helm_clusterrole_path.exists():
+            pytest.skip("Helm clusterrole.yaml not found")
+        return helm_clusterrole_path.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def decommission_clusterrole_path(self) -> Path:
+        """Get the static decommission ClusterRole manifest path."""
+        return Path(__file__).parent.parent / "deploy" / "rbac" / "extensions" / "decommission" / "clusterrole.yaml"
+
+    @pytest.fixture
+    def decommission_clusterrolebinding_path(self) -> Path:
+        """Get the static decommission ClusterRoleBinding manifest path."""
+        return (
+            Path(__file__).parent.parent / "deploy" / "rbac" / "extensions" / "decommission" / "clusterrolebinding.yaml"
+        )
+
+    @pytest.fixture
     def kustomize_roles(self, kustomize_role_path) -> List[dict]:
         """Parse Kustomize role.yaml into list of role definitions."""
         if not kustomize_role_path.exists():
@@ -254,7 +292,10 @@ class TestRBACManifestConsistency:
 
         assert backup_operator_role is not None, "Expected backup operator role"
 
-        pods_rule = next((rule for rule in backup_operator_role["rules"] if "pods" in rule.get("resources", [])), None)
+        pods_rule = next(
+            (rule for rule in backup_operator_role["rules"] if "pods" in rule.get("resources", [])),
+            None,
+        )
 
         assert pods_rule is not None, "Expected pods rule in backup operator role"
         assert "get" in pods_rule["verbs"], "Expected 'get' verb for pods"
@@ -274,7 +315,10 @@ class TestRBACManifestConsistency:
 
         assert obs_operator_role is not None, "Expected observability operator role"
 
-        routes_rule = next((rule for rule in obs_operator_role["rules"] if "routes" in rule.get("resources", [])), None)
+        routes_rule = next(
+            (rule for rule in obs_operator_role["rules"] if "routes" in rule.get("resources", [])),
+            None,
+        )
 
         assert routes_rule is not None, "Expected routes rule in observability operator role"
         # Check that route.openshift.io is in the apiGroups list
@@ -296,10 +340,98 @@ class TestRBACManifestConsistency:
         assert obs_operator_role is not None, "Expected observability operator role"
 
         secrets_rule = next(
-            (rule for rule in obs_operator_role["rules"] if "secrets" in rule.get("resources", [])), None
+            (rule for rule in obs_operator_role["rules"] if "secrets" in rule.get("resources", [])),
+            None,
         )
 
         assert secrets_rule is not None, "Expected secrets rule in observability operator role"
+
+    def test_kustomize_clusterrole_has_argocd_rules(self, kustomize_clusterrole_content):
+        """Test that static clusterrole includes Argo CD read/manage permissions."""
+        expected_snippets = [
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
+        ]
+        for snippet in expected_snippets:
+            assert snippet in kustomize_clusterrole_content, f"Missing Argo CD snippet in static clusterrole: {snippet}"
+
+    def test_helm_clusterrole_has_argocd_rules(self, helm_clusterrole_content):
+        """Test that Helm clusterrole includes Argo CD read/manage permissions."""
+        expected_snippets = [
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
+        ]
+        for snippet in expected_snippets:
+            assert snippet in helm_clusterrole_content, f"Missing Argo CD snippet in Helm clusterrole: {snippet}"
+
+    def test_clusterrole_argocd_snippets_match_between_static_and_helm(
+        self, kustomize_clusterrole_content, helm_clusterrole_content
+    ):
+        """Test that static and Helm clusterroles both include the same Argo CD rule snippets."""
+        snippets = [
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
+            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
+        ]
+        for snippet in snippets:
+            assert snippet in kustomize_clusterrole_content
+            assert snippet in helm_clusterrole_content
+
+    def test_operator_clusterrole_omits_decommission_delete_verbs(self, kustomize_clusterrole_content):
+        """Test that baseline operator ClusterRole excludes cluster-wide delete verbs."""
+        forbidden_snippets = [
+            '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
+            '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
+            '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
+        ]
+        for snippet in forbidden_snippets:
+            assert snippet not in kustomize_clusterrole_content
+
+    def test_helm_operator_clusterrole_omits_decommission_delete_verbs(self, helm_clusterrole_content):
+        """Test that Helm baseline operator ClusterRole excludes cluster-wide delete verbs."""
+        forbidden_snippets = [
+            '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
+            '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
+            '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
+        ]
+        for snippet in forbidden_snippets:
+            assert snippet not in helm_clusterrole_content
+
+    def test_static_decommission_clusterrole_exists_with_delete_verbs(self, decommission_clusterrole_path):
+        """Test that delete verbs live in a dedicated static decommission ClusterRole."""
+        assert decommission_clusterrole_path.exists(), "Expected static decommission ClusterRole manifest"
+        content = decommission_clusterrole_path.read_text(encoding="utf-8")
+        required_snippets = [
+            "name: acm-switchover-decommission",
+            'resources: ["managedclusters"]\n    verbs: ["delete"]',
+            'resources: ["multiclusterhubs"]\n    verbs: ["delete"]',
+            'resources: ["multiclusterobservabilities"]\n    verbs: ["delete"]',
+        ]
+        for snippet in required_snippets:
+            assert snippet in content
+
+    def test_static_decommission_clusterrolebinding_exists(self, decommission_clusterrolebinding_path):
+        """Test that static decommission binding exists for opt-in operator escalation."""
+        assert decommission_clusterrolebinding_path.exists(), "Expected static decommission ClusterRoleBinding manifest"
+        content = decommission_clusterrolebinding_path.read_text(encoding="utf-8")
+        assert "name: acm-switchover-decommission" in content
+        assert "kind: ClusterRoleBinding" in content
+
+    def test_helm_clusterrole_supports_optional_decommission_role(self, helm_clusterrole_content):
+        """Test that Helm templates expose an opt-in decommission ClusterRole."""
+        required_snippets = [
+            ".Values.rbac.includeDecommissionClusterRole",
+            ".Values.clusterRole.decommission.name",
+            'resources: ["managedclusters"]',
+            'verbs: ["delete"]',
+        ]
+        for snippet in required_snippets:
+            assert snippet in helm_clusterrole_content
 
 
 class TestCheckRBACArgumentParsing:
@@ -432,8 +564,14 @@ class TestRBACValidatorRoleAware:
     def test_operator_role_has_more_permissions_than_validator(self):
         """Test that operator role has more permissions than validator."""
         # Cluster permissions - operator should have patch on managedclusters
-        operator_mc = next((p for p in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"), None)
-        validator_mc = next((p for p in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"), None)
+        operator_mc = next(
+            (p for p in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"),
+            None,
+        )
+        validator_mc = next(
+            (p for p in RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS if p[1] == "managedclusters"),
+            None,
+        )
 
         assert operator_mc is not None
         assert validator_mc is not None
@@ -444,7 +582,10 @@ class TestRBACValidatorRoleAware:
         """Test that validator namespace permissions are read-only."""
         write_verbs = {"create", "patch", "delete", "update"}
 
-        for namespace, perms in RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.items():
+        for (
+            namespace,
+            perms,
+        ) in RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.items():
             for api_group, resource, verbs in perms:
                 has_write = any(v in write_verbs for v in verbs)
                 assert not has_write, (

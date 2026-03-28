@@ -1,6 +1,4 @@
-"""
-Finalization and rollback module for ACM switchover.
-"""
+"""Finalization module for ACM switchover."""
 
 # Runbook: Steps 11-12 (finalization) and Step 14 (old hub handling)
 
@@ -11,7 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from kubernetes.client.rest import ApiException
 
+from lib import argocd as argocd_lib
 from lib.constants import (
+    ACM_BACKUP_NAME_RE,
+    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+    ACM_BACKUP_SCHEDULE_TYPES,
     ACM_NAMESPACE,
     AUTO_IMPORT_STRATEGY_DEFAULT,
     AUTO_IMPORT_STRATEGY_KEY,
@@ -22,6 +24,7 @@ from lib.constants import (
     BACKUP_SCHEDULE_DEFAULT_NAME,
     BACKUP_SCHEDULE_DELETE_WAIT,
     BACKUP_VERIFY_TIMEOUT,
+    CLEANUP_BEFORE_RESTORE_VALUE,
     DELETE_REQUEST_TIMEOUT,
     IMPORT_CONTROLLER_CONFIG_CM,
     LOCAL_CLUSTER_NAME,
@@ -39,8 +42,9 @@ from lib.constants import (
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
-from lib.exceptions import SwitchoverError
-from lib.kube_client import KubeClient
+from lib.exceptions import SwitchoverError, TransientError
+from lib.gitops_detector import safe_record_gitops_markers
+from lib.kube_client import KubeClient, is_retryable_error
 from lib.utils import StateManager, dry_run_skip, is_acm_version_ge
 from lib.waiter import wait_for_condition
 
@@ -64,6 +68,7 @@ class Finalization:
         old_hub_action: str = "secondary",
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,
+        argocd_resume_after_switchover: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -74,6 +79,7 @@ class Finalization:
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.disable_observability_on_secondary = disable_observability_on_secondary
+        self.argocd_resume_after_switchover = argocd_resume_after_switchover
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -82,7 +88,98 @@ class Finalization:
         )
         self._cached_schedules: Optional[List[Dict]] = None  # Cache for backup schedules
 
-    def finalize(self) -> bool:
+    @staticmethod
+    def _get_acm_backup_ownership_signal(backup: Dict) -> Optional[str]:
+        """Return the ownership signal proving a Velero backup is ACM-owned.
+
+        Preferred signal is the ACM backup-schedule-type label. As a hardened
+        fallback, accept the well-known ACM backup naming convention if the
+        label is missing.
+        """
+        labels = backup.get("metadata", {}).get("labels", {}) or {}
+        label_value = labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL)
+        if label_value in ACM_BACKUP_SCHEDULE_TYPES:
+            return "label"
+
+        backup_name = backup.get("metadata", {}).get("name", "")
+        if ACM_BACKUP_NAME_RE.match(backup_name):
+            return "name-pattern"
+
+        return None
+
+    def _is_acm_owned_backup(self, backup: Dict) -> bool:
+        """Return True when the backup has a recognized ACM ownership signal."""
+        return self._get_acm_backup_ownership_signal(backup) is not None
+
+    def _filter_acm_owned_backups(self, backups: List[Dict]) -> List[Dict]:
+        """Filter Velero backups down to ACM-owned backups only.
+
+        Warn when the label is missing but a known ACM backup name pattern is
+        used as the fallback ownership signal.
+        """
+        acm_backups = []
+        for backup in backups:
+            signal = self._get_acm_backup_ownership_signal(backup)
+            if signal == "name-pattern":
+                backup_name = backup.get("metadata", {}).get("name", "unknown")
+                logger.warning(
+                    "Backup %s is missing ACM ownership label %s; accepting ACM name-pattern fallback",
+                    backup_name,
+                    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+                )
+            if signal:
+                acm_backups.append(backup)
+        return acm_backups
+
+    @staticmethod
+    def _backup_is_detectable(backup: Dict) -> bool:
+        """Return True when a backup phase proves backup creation has started."""
+        phase = backup.get("status", {}).get("phase", "unknown")
+        return phase in ("InProgress", "Completed", "New")
+
+    def _backup_effective_timestamp(self, backup: Dict) -> Optional[datetime]:
+        """Return the most useful timestamp for backup chronology checks."""
+        status = backup.get("status", {}) or {}
+        metadata = backup.get("metadata", {}) or {}
+        candidate_fields = (
+            ("completionTimestamp", status.get("completionTimestamp")),
+            ("startTimestamp", status.get("startTimestamp")),
+            ("creationTimestamp", metadata.get("creationTimestamp")),
+        )
+        for _field_name, raw_value in candidate_fields:
+            parsed = self._parse_timestamp(raw_value)
+            if parsed:
+                return parsed
+        raw_candidates = [f"{field}={value}" for field, value in candidate_fields if value]
+        if raw_candidates:
+            backup_name = metadata.get("name", "unknown")
+            logger.warning(
+                "Backup %s has unparseable timestamp(s): %s",
+                backup_name,
+                ", ".join(raw_candidates),
+            )
+        return None
+
+    def _find_post_enable_backup(self, backups: List[Dict], enabled_at: Optional[datetime]) -> Optional[Dict]:
+        """Find an ACM-owned backup that proves continuity after enable/resume."""
+        if enabled_at is None:
+            return None
+
+        candidates = []
+        for backup in backups:
+            backup_ts = self._backup_effective_timestamp(backup)
+            if backup_ts and backup_ts >= enabled_at and self._backup_is_detectable(backup):
+                candidates.append((backup_ts, backup))
+
+        if not candidates:
+            return None
+
+        # Pick the earliest post-enable backup so resume reuses the first proof point
+        # instead of requiring a later backup to appear.
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+
+    def finalize(self) -> bool:  # noqa: C901
         """
         Execute finalization steps.
 
@@ -92,11 +189,11 @@ class Finalization:
         logger.info("Starting finalization...")
 
         try:
-            # Optional: Disable Observability on old secondary hub before enabling backups
+            # Optional: Disable Observability on the old primary hub before enabling backups
             if self.disable_observability_on_secondary:
                 with self.state.step("disable_observability_on_secondary", logger) as should_run:
                     if should_run:
-                        self._disable_observability_on_secondary()
+                        self._disable_observability_on_old_hub()
 
             # Step 11: Enable BackupSchedule on new hub
             with self.state.step("enable_backup_schedule", logger) as should_run:
@@ -134,7 +231,15 @@ class Finalization:
                     self._handle_old_hub()
 
             if self.primary and self.old_hub_action not in ("decommission", "none"):
-                self._verify_old_hub_state()
+                with self.state.step("verify_old_hub_state", logger) as should_run:
+                    if should_run:
+                        self._verify_old_hub_state()
+
+            # Optional: Restore Argo CD auto-sync only after all finalization work is finished.
+            if self.argocd_resume_after_switchover:
+                with self.state.step("resume_argocd_apps", logger) as should_run:
+                    if should_run:
+                        self._resume_argocd_apps()
 
             logger.info("Finalization completed successfully")
             return True
@@ -178,6 +283,7 @@ class Finalization:
         resources in the backup namespace, rather than relying on hardcoded names.
         """
         archived_restores = []
+        delete_failures = []
 
         # List all restores in the namespace
         all_restores = self.secondary.list_custom_resources(
@@ -216,15 +322,23 @@ class Finalization:
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
                 )
                 logger.info("Deleted restore resource: %s", restore_name)
-            except Exception as e:
-                # Not found is OK, other errors should be logged
-                if "not found" not in str(e).lower():
+            except ApiException as e:
+                if getattr(e, "status", None) != 404:
                     logger.warning("Error deleting restore %s: %s", restore_name, e)
+                    delete_failures.append(f"{restore_name}: {e.status} {e.reason}")
+            except Exception as e:
+                logger.warning("Error deleting restore %s: %s", restore_name, e)
+                delete_failures.append(f"{restore_name}: {e}")
 
         # Save archived restores to state for audit trail
         if archived_restores:
             self.state.set_config("archived_restores", archived_restores)
             logger.info("Saved %s restore record(s) to state file", len(archived_restores))
+
+        if delete_failures:
+            raise SwitchoverError(
+                "Failed to delete restore resource(s) before enabling BackupSchedule: " + "; ".join(delete_failures)
+            )
 
     def _archive_restore_details(self, restore: dict) -> dict:
         """Extract and return important details from a Restore resource for archiving.
@@ -271,7 +385,10 @@ class Finalization:
     @dry_run_skip(message="Skipping new backup verification")
     def _verify_new_backups(self, timeout: int = BACKUP_VERIFY_TIMEOUT):
         """
-        Verify new backups are being created.
+        Verify new backups are being created after enabling BackupSchedule.
+
+        Fails with SwitchoverError if no new backup appears within the timeout.
+        Records the detected backup name in state for downstream integrity verification.
 
         Args:
             timeout: Maximum wait time in seconds
@@ -279,13 +396,49 @@ class Finalization:
 
         logger.info("Verifying new backups are being created...")
 
-        # Get current backup list (Velero Backups use velero.io/v1)
-        initial_backups = self.secondary.list_custom_resources(
-            group="velero.io",
-            version="v1",
-            plural="backups",
-            namespace=BACKUP_NAMESPACE,
-        )
+        # Get current ACM-owned backup list (Velero Backups use velero.io/v1)
+        try:
+            current_backups = self._list_acm_owned_velero_backups()
+        except TransientError as exc:
+            raise SwitchoverError(
+                "Failed to list Velero backups before waiting for a new ACM backup: " f"{exc}"
+            ) from exc
+
+        recorded_backup_name = self.state.get_config("post_switchover_backup_name")
+        if recorded_backup_name:
+            recorded_backup = self.secondary.get_custom_resource(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                name=recorded_backup_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if (
+                recorded_backup
+                and self._is_acm_owned_backup(recorded_backup)
+                and self._backup_is_detectable(recorded_backup)
+            ):
+                logger.info(
+                    "Reusing previously recorded post-switchover backup: %s",
+                    recorded_backup_name,
+                )
+                self.state.set_config("new_backup_detected", True)
+                self.state.set_config("post_switchover_backup_name", recorded_backup_name)
+                return
+
+        enabled_at = self._get_backup_schedule_enabled_at()
+        existing_post_enable_backup = self._find_post_enable_backup(current_backups, enabled_at)
+        if existing_post_enable_backup:
+            existing_backup_name = existing_post_enable_backup.get("metadata", {}).get("name")
+            logger.info(
+                "Found existing post-enable ACM backup on resume: %s",
+                existing_backup_name,
+            )
+            self.state.set_config("new_backup_detected", True)
+            self.state.set_config("post_switchover_backup_name", existing_backup_name)
+            return
+
+        initial_backups = current_backups
 
         initial_backup_names = {b.get("metadata", {}).get("name") for b in initial_backups}
 
@@ -295,12 +448,12 @@ class Finalization:
         start_time = time.time()
 
         while time.time() - start_time < timeout:
-            current_backups = self.secondary.list_custom_resources(
-                group="velero.io",
-                version="v1",
-                plural="backups",
-                namespace=BACKUP_NAMESPACE,
-            )
+            try:
+                current_backups = self._list_acm_owned_velero_backups()
+            except TransientError as exc:
+                logger.warning("%s", exc)
+                time.sleep(BACKUP_POLL_INTERVAL)
+                continue
 
             current_backup_names = {b.get("metadata", {}).get("name") for b in current_backups}
 
@@ -324,6 +477,7 @@ class Finalization:
                         # Velero uses "InProgress" and "Completed" phases
                         if phase in ("InProgress", "Completed", "New"):
                             self.state.set_config("new_backup_detected", True)
+                            self.state.set_config("post_switchover_backup_name", backup_name)
                             logger.info("New backup is being created successfully!")
                             return
 
@@ -331,9 +485,28 @@ class Finalization:
             logger.debug("Waiting for new backup... (elapsed: %ss)", elapsed)
             time.sleep(BACKUP_POLL_INTERVAL)
 
-        logger.warning(
-            f"No new backups detected after {timeout}s. " "BackupSchedule may take time to create first backup."
+        raise SwitchoverError(
+            f"No new backup created within {timeout}s after enabling BackupSchedule on new hub. "
+            "Finalization cannot succeed without proof of backup continuity."
         )
+
+    def _list_acm_owned_velero_backups(self) -> List[Dict]:
+        """List Velero backups, filter to ACM-owned backups, and normalize API failures."""
+        try:
+            backups = self.secondary.list_custom_resources(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                namespace=BACKUP_NAMESPACE,
+            )
+        except ApiException as exc:
+            if is_retryable_error(exc):
+                raise TransientError(f"Transient error listing Velero backups: {exc}") from exc
+            raise SwitchoverError(
+                "Failed to list Velero backups while waiting for a new ACM backup: " f"{exc.status} {exc.reason}"
+            ) from exc
+
+        return self._filter_acm_owned_backups(backups)
 
     def _get_backup_verify_timeout(self) -> int:
         """Derive backup verification timeout from BackupSchedule cadence."""
@@ -507,32 +680,65 @@ class Finalization:
                 )
 
         if error_hits == 0:
-            logger.info("No Velero log errors found for backup %s (recent logs checked)", backup_name)
+            logger.info(
+                "No Velero log errors found for backup %s (recent logs checked)",
+                backup_name,
+            )
 
     @dry_run_skip(message="Skipping backup integrity verification")
-    def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:
-        """Verify latest backup status, logs, and recency.
+    def _verify_backup_integrity(self, max_age_seconds: int = BACKUP_INTEGRITY_MAX_AGE_SECONDS) -> None:  # noqa: C901
+        """Verify backup status, logs, and recency for the post-switchover backup.
 
-        Backup age enforcement is skipped until a new backup is detected after enabling the schedule.
+        When a post-switchover backup name was recorded by _verify_new_backups(), that
+        specific backup is fetched and verified. This prevents unrelated backups in the
+        namespace from masking a missing or failed ACM backup.
+
+        Falls back to the latest-by-timestamp backup (with a warning) only when no
+        recorded name is available (e.g. during a dry-run).
         """
         logger.info("Verifying backup integrity...")
         effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
 
-        backups = self.secondary.list_custom_resources(
-            group="velero.io",
-            version="v1",
-            plural="backups",
-            namespace=BACKUP_NAMESPACE,
-        )
+        post_switchover_backup_name = self.state.get_config("post_switchover_backup_name")
 
-        if not backups:
-            raise SwitchoverError("No Velero backups found for integrity verification")
+        if post_switchover_backup_name:
+            logger.info("Verifying post-switchover backup: %s", post_switchover_backup_name)
+            latest_backup = self.secondary.get_custom_resource(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                name=post_switchover_backup_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not latest_backup:
+                raise SwitchoverError(
+                    f"Post-switchover backup '{post_switchover_backup_name}' no longer exists; "
+                    "cannot verify integrity"
+                )
+            if not self._is_acm_owned_backup(latest_backup):
+                raise SwitchoverError(
+                    f"Post-switchover backup '{post_switchover_backup_name}' is not ACM-owned; "
+                    "cannot verify integrity against an unrelated Velero backup"
+                )
+            backup_name = post_switchover_backup_name
+        else:
+            logger.warning("No post-switchover backup name recorded; falling back to latest backup in namespace")
+            backups = self.secondary.list_custom_resources(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                namespace=BACKUP_NAMESPACE,
+            )
+            backups = self._filter_acm_owned_backups(backups)
+            if not backups:
+                raise SwitchoverError("No ACM-owned Velero backups found for integrity verification")
 
-        def _backup_sort_key(backup: Dict) -> str:
-            return backup.get("metadata", {}).get("creationTimestamp", "") or ""
+            def _backup_sort_key(backup: Dict) -> str:
+                return backup.get("metadata", {}).get("creationTimestamp", "") or ""
 
-        latest_backup = max(backups, key=_backup_sort_key)
-        backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
+            latest_backup = max(backups, key=_backup_sort_key)
+            backup_name = latest_backup.get("metadata", {}).get("name", "unknown")
+
         status = latest_backup.get("status", {}) or {}
 
         phase = status.get("phase", "unknown")
@@ -556,16 +762,12 @@ class Finalization:
                         namespace=BACKUP_NAMESPACE,
                     )
                     if not backup:
-                        raise SwitchoverError(
-                            f"Backup {backup_name} disappeared during integrity check"
-                        )
+                        raise SwitchoverError(f"Backup {backup_name} disappeared during integrity check")
                     poll_phase = backup.get("status", {}).get("phase", "unknown")
                     if poll_phase == "Completed":
                         return True, "completed"
                     if poll_phase in ("Failed", "PartiallyFailed"):
-                        raise SwitchoverError(
-                            f"Latest backup {backup_name} failed (phase={poll_phase})"
-                        )
+                        raise SwitchoverError(f"Latest backup {backup_name} failed (phase={poll_phase})")
                     return False, f"phase={poll_phase}"
 
                 completed = wait_for_condition(
@@ -601,7 +803,10 @@ class Finalization:
             logger.warning("Latest backup %s completed with %s warning(s)", backup_name, warnings)
 
         enabled_at = self._get_backup_schedule_enabled_at()
-        new_backup_detected = bool(self.state.get_config("new_backup_detected", False))
+        # A backup is considered "after enable" if its name was recorded by
+        # _verify_new_backups (meaning it was detected after enabling the schedule),
+        # or if its timestamp is >= the recorded enable time.
+        is_post_switchover_backup = bool(post_switchover_backup_name)
 
         completion_ts = status.get("completionTimestamp") or status.get("startTimestamp")
         creation_ts = latest_backup.get("metadata", {}).get("creationTimestamp")
@@ -609,14 +814,18 @@ class Finalization:
         parsed_ts = self._parse_timestamp(ts)
 
         if not parsed_ts:
-            logger.warning("Unable to parse timestamp for backup %s (timestamp=%s)", backup_name, ts)
+            logger.warning(
+                "Unable to parse timestamp for backup %s (timestamp=%s)",
+                backup_name,
+                ts,
+            )
         else:
             age_seconds = int((datetime.now(timezone.utc) - parsed_ts).total_seconds())
             backup_after_enable = False
             if enabled_at:
                 backup_after_enable = parsed_ts >= enabled_at
             else:
-                backup_after_enable = new_backup_detected
+                backup_after_enable = is_post_switchover_backup
 
             if not backup_after_enable:
                 logger.warning(
@@ -660,14 +869,14 @@ class Finalization:
         schedules = self._get_backup_schedules()
 
         if not schedules:
-            raise RuntimeError("No BackupSchedule found while verifying finalization")
+            raise SwitchoverError("No BackupSchedule found while verifying finalization")
 
         schedule = schedules[0]
         schedule_name = schedule.get("metadata", {}).get("name", "schedule-rhacm")
         paused = schedule.get("spec", {}).get("paused", False)
 
         if paused:
-            raise RuntimeError(f"BackupSchedule {schedule_name} is still paused")
+            raise SwitchoverError(f"BackupSchedule {schedule_name} is still paused")
 
         logger.info("BackupSchedule %s is enabled", schedule_name)
 
@@ -704,7 +913,7 @@ class Finalization:
                     mch = hubs[0]
 
             if not mch:
-                raise RuntimeError("No MultiClusterHub resource found on secondary hub")
+                raise SwitchoverError("No MultiClusterHub resource found on secondary hub")
 
             mch_name = mch.get("metadata", {}).get("name", "multiclusterhub")
             phase = mch.get("status", {}).get("phase", "unknown")
@@ -713,7 +922,7 @@ class Finalization:
             non_running = [
                 pod.get("metadata", {}).get("name", "unknown")
                 for pod in pods
-                if pod.get("status", {}).get("phase") != "Running"
+                if pod.get("status", {}).get("phase") not in ("Running", "Succeeded")
             ]
 
             if phase == "Running" and not non_running:
@@ -723,7 +932,9 @@ class Finalization:
             elapsed = time.time() - start
             if elapsed >= timeout:
                 details = ", non-running pods=" + (", ".join(non_running) if non_running else "none")
-                raise RuntimeError(f"MultiClusterHub {mch_name} not healthy after {timeout}s (phase={phase}{details})")
+                raise SwitchoverError(
+                    f"MultiClusterHub {mch_name} not healthy after {timeout}s (phase={phase}{details})"
+                )
 
             logger.info(
                 "Waiting for MultiClusterHub %s to become healthy (phase=%s, non-running pods=%s)...",
@@ -733,34 +944,7 @@ class Finalization:
             )
             time.sleep(interval)
 
-    def _gitops_markers(self, metadata: Dict) -> List[str]:
-        """Detect common GitOps markers on a resource.
-
-        This helper performs lightweight substring checks to identify
-        GitOps-related labels/annotations. It does not sanitize or
-        transform URLs or other user input and must not be used for
-        security-sensitive filtering.
-        """
-
-        markers: List[str] = []
-        labels = metadata.get("labels") or {}
-        annotations = metadata.get("annotations") or {}
-
-        def _scan(source: Dict[str, str], source_name: str) -> None:
-            for key, value in source.items():
-                combined = f"{key}={value}".lower()
-                if "argocd" in combined or "argoproj.io" in combined:
-                    markers.append(f"{source_name}:{key}")
-                if "fluxcd.io" in combined or "toolkit.fluxcd.io" in combined:
-                    markers.append(f"{source_name}:{key}")
-                if key == "app.kubernetes.io/managed-by" and value.lower() in ("argocd", "fluxcd"):
-                    markers.append(f"{source_name}:{key}")
-
-        _scan(labels, "label")
-        _scan(annotations, "annotation")
-        return markers
-
-    def _disable_observability_on_secondary(self) -> None:
+    def _disable_observability_on_old_hub(self) -> None:
         """Delete MultiClusterObservability on old hub (optional)."""
         if not self.primary:
             logger.info("No primary client available, skipping observability disablement")
@@ -787,14 +971,20 @@ class Finalization:
         for mco in mcos:
             metadata = mco.get("metadata", {})
             mco_name = metadata.get("name", "unknown")
-            markers = self._gitops_markers(metadata)
+            markers = safe_record_gitops_markers(
+                logger=logger,
+                context="primary",
+                namespace="",  # MCO is cluster-scoped
+                kind="MultiClusterObservability",
+                name=mco_name,
+                metadata=metadata,
+            )
             if markers:
                 logger.warning(
                     "MultiClusterObservability %s appears GitOps-managed (%s). Coordinate deletion to avoid drift.",
                     mco_name,
                     ", ".join(markers),
                 )
-
             if self.dry_run:
                 logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name)
                 continue
@@ -819,6 +1009,7 @@ class Finalization:
             return
 
         def _observability_terminated():
+            assert self.primary is not None  # Guaranteed by guard at method entry
             pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
             if not pods:
                 return True, "no observability pods remaining"
@@ -846,7 +1037,7 @@ class Finalization:
         Handle the old primary hub based on --old-hub-action setting.
 
         Options:
-        - 'secondary': Set up passive sync restore for failback capability (default)
+        - 'secondary': Set up passive sync restore for failback capability
         - 'decommission': Remove ACM components from old hub
         - 'none': Leave old hub unchanged (manual handling required)
         """
@@ -869,7 +1060,9 @@ class Finalization:
             self._decommission_old_hub()
             return
 
-        logger.warning("Unknown old_hub_action: %s, skipping", self.old_hub_action)
+        raise SwitchoverError(
+            f"Unknown old_hub_action '{self.old_hub_action}'. " "Expected one of: secondary, decommission, none."
+        )
 
     @dry_run_skip(message="Would decommission old primary hub")
     def _decommission_old_hub(self):
@@ -893,8 +1086,10 @@ class Finalization:
         if decom.decommission(interactive=False):
             logger.info("Old hub decommissioned successfully")
         else:
-            logger.warning("Old hub decommission completed with warnings")
-            logger.warning("You may need to manually clean up remaining resources")
+            raise SwitchoverError(
+                "Old hub decommission failed or completed incompletely. "
+                "Manual cleanup is required before considering switchover finalized."
+            )
 
     @dry_run_skip(message="Would set up old primary as secondary with passive sync")
     def _setup_old_hub_as_secondary(self):
@@ -937,7 +1132,7 @@ class Finalization:
             "spec": {
                 SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
                 "restoreSyncInterval": "10m",
-                "cleanupBeforeRestore": "CleanupRestored",
+                "cleanupBeforeRestore": CLEANUP_BEFORE_RESTORE_VALUE,
                 SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
                 "veleroCredentialsBackupName": VELERO_BACKUP_LATEST,
                 "veleroResourcesBackupName": VELERO_BACKUP_LATEST,
@@ -952,10 +1147,9 @@ class Finalization:
                 body=restore_body,
                 namespace=BACKUP_NAMESPACE,
             )
-            logger.info("Created passive sync restore on old primary hub")
-        except Exception as e:
-            logger.warning("Failed to create passive sync restore on old primary: %s", e)
-            logger.warning("You may need to manually create it for failback capability")
+        except ApiException as e:
+            raise SwitchoverError("Failed to create passive sync restore on old primary hub") from e
+        logger.info("Created passive sync restore on old primary hub")
 
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")
     def _fix_backup_schedule_collision(self):
@@ -975,8 +1169,7 @@ class Finalization:
         schedules = self._get_backup_schedules(force_refresh=True)
 
         if not schedules:
-            logger.warning("No BackupSchedule found on new primary")
-            return
+            raise SwitchoverError("No BackupSchedule found on new primary while repairing collision state")
 
         schedule = schedules[0]
         schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
@@ -1016,13 +1209,11 @@ class Finalization:
         else:
             current_uid = current_schedule.get("metadata", {}).get("uid")
             if schedule_uid and current_uid and current_uid != schedule_uid:
-                logger.warning(
-                    "BackupSchedule %s changed (uid %s -> %s); skipping recreation to avoid deleting unexpected resource",
-                    schedule_name,
-                    schedule_uid,
-                    current_uid,
+                raise SwitchoverError(
+                    "BackupSchedule %s changed identity (uid %s -> %s) before deletion; "
+                    "manual verification is required before retrying collision repair"
+                    % (schedule_name, schedule_uid, current_uid)
                 )
-                return
 
             # Use latest spec to avoid recreating from stale data
             schedule_spec = current_schedule.get("spec", {})
@@ -1048,6 +1239,24 @@ class Finalization:
         # Wait a moment for deletion to complete (even if already deleted, wait for API sync)
         time.sleep(BACKUP_SCHEDULE_DELETE_WAIT)
 
+        # Re-check before create to avoid racing with external controllers/processes
+        schedule_after_delete = self.secondary.get_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name=schedule_name,
+            namespace=BACKUP_NAMESPACE,
+        )
+        if schedule_after_delete:
+            after_uid = schedule_after_delete.get("metadata", {}).get("uid")
+            if schedule_uid and after_uid and after_uid != schedule_uid:
+                self._cached_schedules = None
+                raise SwitchoverError(
+                    "BackupSchedule %s reappeared with a different uid (%s, previous=%s) after deletion. "
+                    "Manual verification is required before retrying collision repair."
+                    % (schedule_name, after_uid, schedule_uid)
+                )
+
         # Recreate the schedule
         try:
             new_schedule = {
@@ -1071,9 +1280,50 @@ class Finalization:
             # Invalidate cache since we recreated the schedule
             self._cached_schedules = None
 
+        except ApiException as e:
+            if e.status != 409:
+                raise SwitchoverError(f"Failed to recreate BackupSchedule {schedule_name}: {e}") from e
+
+            logger.warning(
+                "BackupSchedule %s already exists during recreation (409); checking current state",
+                schedule_name,
+            )
+            current_schedule = self.secondary.get_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="backupschedules",
+                name=schedule_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not current_schedule:
+                raise SwitchoverError(
+                    "BackupSchedule %s returned 409 on recreate but could not be re-read afterward" % schedule_name
+                )
+
+            current_phase = current_schedule.get("status", {}).get("phase", "")
+            current_uid = current_schedule.get("metadata", {}).get("uid")
+            self._cached_schedules = None
+
+            if schedule_uid and current_uid == schedule_uid:
+                raise SwitchoverError(
+                    "BackupSchedule %s returned 409 on recreate but still has the original uid (%s). "
+                    "Manual verification is required before retrying collision repair." % (schedule_name, current_uid)
+                )
+
+            if current_phase == "BackupCollision":
+                raise SwitchoverError(
+                    "BackupSchedule %s exists after recreate conflict (uid=%s) but remains in BackupCollision"
+                    % (schedule_name, current_uid or "unknown")
+                )
+            else:
+                logger.info(
+                    "BackupSchedule %s exists after conflict (uid=%s, phase=%s); continuing",
+                    schedule_name,
+                    current_uid or "unknown",
+                    current_phase or "Unknown",
+                )
         except Exception as e:
-            logger.warning("Failed to recreate BackupSchedule: %s", e)
-            logger.warning("You may need to manually delete and recreate the BackupSchedule")
+            raise SwitchoverError(f"Failed to recreate BackupSchedule {schedule_name}: {e}") from e
 
     def _verify_old_hub_state(self):
         """Run regression checks on the old (primary) hub."""
@@ -1132,6 +1382,7 @@ class Finalization:
         Scales thanos-compact and observatorium-api to 0 replicas, then waits
         for pods to terminate with polling. Reports status of scale-down operation.
         """
+        assert self.primary is not None  # Guaranteed by guard at _verify_old_hub_state entry
         # Check both thanos-compact and observatorium-api pods
         compactor_pods = self.primary.get_pods(
             namespace=OBSERVABILITY_NAMESPACE,
@@ -1173,6 +1424,7 @@ class Finalization:
         Returns:
             Tuple of (compactor_pods_after, api_pods_after) after waiting
         """
+        assert self.primary is not None  # Guaranteed by guard at _verify_old_hub_state entry
         compactor_pods_after = []
         api_pods_after = []
 
@@ -1262,35 +1514,83 @@ class Finalization:
         else:
             logger.info("%s is scaled down on old hub", component_name)
 
+    @dry_run_skip(message="Would resume Argo CD auto-sync for paused apps")
+    def _resume_argocd_apps(self) -> None:
+        """Restore auto-sync for Argo CD Applications recorded in state (only when --argocd-resume-after-switchover)."""
+        if self.state.get_config("argocd_pause_dry_run", False):
+            raise SwitchoverError(
+                "Argo CD auto-sync resume requested, but the pause step was run in dry-run mode. "
+                "Re-run pause without --dry-run to generate resumable state."
+            )
+        run_id = self.state.get_config("argocd_run_id")
+        paused_apps = self.state.get_config("argocd_paused_apps") or []
+        if not run_id or not paused_apps:
+            logger.info("No Argo CD paused apps in state; skipping resume")
+            return
+        logger.info(
+            "Resuming Argo CD auto-sync for %d Application(s) (run_id=%s)",
+            len(paused_apps),
+            run_id,
+        )
+        summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, self.primary, self.secondary, logger)
+        if summary.failed:
+            raise SwitchoverError(f"Argo CD auto-sync restore failed for {summary.failed} Application(s)")
+
+    @dry_run_skip(message="Would reset autoImportStrategy to default ImportOnly")
     def _ensure_auto_import_default(self) -> None:
         """Reset autoImportStrategy to default ImportOnly when applicable."""
+        if not is_acm_version_ge(self.acm_version, "2.14.0"):
+            return
+
+        auto_import_strategy_set = self.state.get_config("auto_import_strategy_set", False)
         try:
-            if not is_acm_version_ge(self.acm_version, "2.14.0"):
-                return
             cm = self.secondary.get_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
-            if not cm:
-                return
-            strategy = (cm.get("data") or {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
-            if strategy != AUTO_IMPORT_STRATEGY_SYNC:
-                return
-            if self.state.get_config("auto_import_strategy_set", False):
-                logger.info(
-                    "Removing %s/%s to restore default autoImportStrategy (%s)",
-                    MCE_NAMESPACE,
-                    IMPORT_CONTROLLER_CONFIG_CM,
-                    AUTO_IMPORT_STRATEGY_DEFAULT,
-                )
+        except ApiException as e:
+            if auto_import_strategy_set:
+                raise SwitchoverError(
+                    "Failed to verify autoImportStrategy before restoring default by checking "
+                    f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
+                ) from e
+            logger.warning("Unable to verify auto-import strategy: %s", e)
+            return
+
+        if not cm:
+            return
+
+        strategy = (cm.get("data") or {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
+        if strategy != AUTO_IMPORT_STRATEGY_SYNC:
+            return
+
+        if auto_import_strategy_set:
+            logger.info(
+                "Removing %s/%s to restore default autoImportStrategy (%s)",
+                MCE_NAMESPACE,
+                IMPORT_CONTROLLER_CONFIG_CM,
+                AUTO_IMPORT_STRATEGY_DEFAULT,
+            )
+            try:
                 self.secondary.delete_configmap(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
-                self.state.set_config("auto_import_strategy_set", False)
-                # Mark step completed (idempotent - no-op if already completed)
-                self.state.mark_step_completed("reset_auto_import_strategy")
-            else:
-                logger.warning(
-                    "autoImportStrategy is %s; remove %s/%s to reset to default (%s)",
-                    AUTO_IMPORT_STRATEGY_SYNC,
-                    MCE_NAMESPACE,
-                    IMPORT_CONTROLLER_CONFIG_CM,
-                    AUTO_IMPORT_STRATEGY_DEFAULT,
-                )
-        except Exception as e:
-            logger.warning("Unable to verify/reset auto-import strategy: %s", e)
+            except ApiException as e:
+                if getattr(e, "status", None) == 404:
+                    logger.debug(
+                        "ConfigMap %s/%s already absent",
+                        MCE_NAMESPACE,
+                        IMPORT_CONTROLLER_CONFIG_CM,
+                    )
+                else:
+                    raise SwitchoverError(
+                        "Failed to reset autoImportStrategy to default by deleting "
+                        f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
+                    ) from e
+            self.state.set_config("auto_import_strategy_set", False)
+            # Mark step completed (idempotent - no-op if already completed)
+            self.state.mark_step_completed("reset_auto_import_strategy")
+            return
+
+        logger.warning(
+            "autoImportStrategy is %s; remove %s/%s to reset to default (%s)",
+            AUTO_IMPORT_STRATEGY_SYNC,
+            MCE_NAMESPACE,
+            IMPORT_CONTROLLER_CONFIG_CM,
+            AUTO_IMPORT_STRATEGY_DEFAULT,
+        )

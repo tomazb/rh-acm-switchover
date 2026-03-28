@@ -34,6 +34,10 @@ clusterRole:
   operator:
     # Name of the operator cluster role
     name: acm-switchover-operator
+
+  decommission:
+    # Name of the optional decommission cluster role
+    name: acm-switchover-decommission
   
   validator:
     # Name of the validator cluster role
@@ -78,6 +82,11 @@ environment: production
 rbac:
   # Whether to create RBAC resources
   enabled: true
+
+  # Create an extra ClusterRole/ClusterRoleBinding that grants delete access
+  # for explicit old-hub decommission operations. Disabled by default so the
+  # baseline operator service account stays least-privilege.
+  includeDecommissionClusterRole: false
   
   # Additional custom rules for operator ClusterRole
   # Example:

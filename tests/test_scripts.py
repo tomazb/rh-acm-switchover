@@ -57,9 +57,12 @@ def run_script(script_name: str, *args: str, env=None):
     [
         (
             "preflight-check.sh",
-            ["--primary-context", "--secondary-context", "--method"],
+            ["--primary-context", "--secondary-context", "--method", "--skip-gitops-check"],
         ),
-        ("postflight-check.sh", ["--new-hub-context", "--old-hub-context"]),
+        (
+            "postflight-check.sh",
+            ["--new-hub-context", "--old-hub-context", "--skip-gitops-check"],
+        ),
     ],
 )
 def test_help_output(script, expected_args):
@@ -127,6 +130,23 @@ def test_preflight_invalid_method():
         assert "Primary Hub:" in out or "Secondary Hub:" in out
 
 
+def test_preflight_warns_when_argocd_check_is_ignored():
+    """Explicit Argo CD discovery should warn when GitOps detection is disabled."""
+    code, out = run_script(
+        "preflight-check.sh",
+        "--primary-context",
+        "fake-primary",
+        "--secondary-context",
+        "fake-secondary",
+        "--method",
+        "passive",
+        "--skip-gitops-check",
+        "--argocd-check",
+    )
+    assert code != 2, "Argument parsing should succeed"
+    assert "--argocd-check ignored because --skip-gitops-check is set." in out
+
+
 def test_postflight_with_optional_old_hub():
     """Test postflight with optional old-hub-context (will fail on cluster access but args parse)."""
     code, out = run_script(
@@ -141,6 +161,19 @@ def test_postflight_with_optional_old_hub():
     # If script started, should show header
     if code in (0, 1):
         assert "New Hub:" in out
+
+
+def test_postflight_warns_when_argocd_check_is_ignored():
+    """Postflight should mirror the same warning for ignored explicit Argo CD discovery."""
+    code, out = run_script(
+        "postflight-check.sh",
+        "--new-hub-context",
+        "fake-new",
+        "--skip-gitops-check",
+        "--argocd-check",
+    )
+    assert code != 2, "Argument parsing should succeed"
+    assert "--argocd-check ignored because --skip-gitops-check is set." in out
 
 
 def test_preflight_output_format():
@@ -173,6 +206,73 @@ def test_postflight_output_format():
     assert "ACM Switchover Post-flight Verification" in out or "New Hub:" in out
     # Should attempt to show sections
     assert "1." in out or "Checking" in out or "Restore" in out
+
+
+def test_generate_sa_kubeconfig_accepts_explicit_kubeconfig(tmp_path):
+    """Generator should use the explicit kubeconfig for cluster metadata and token calls."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    log_file = tmp_path / "kubectl.log"
+    expected_kubeconfig = tmp_path / "admin.kubeconfig"
+    expected_kubeconfig.write_text("apiVersion: v1\nkind: Config\n", encoding="utf-8")
+
+    kubectl_script = mock_bin / "kubectl"
+    kubectl_script.write_text(
+        """#!/bin/bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${MOCK_LOG}"
+if [[ "$*" == *" get serviceaccount "* ]]; then
+    exit 0
+fi
+if [[ "$*" == *" create token "* ]]; then
+    printf 'token-123\\n'
+    exit 0
+fi
+if [[ "$*" == *" config view "* ]]; then
+    if [[ "$*" != *"--kubeconfig=${EXPECTED_KUBECONFIG}"* ]]; then
+        exit 0
+    fi
+    case "$*" in
+        *".contexts["*)
+            printf 'cluster-explicit'
+            ;;
+        *".cluster.server"*)
+            printf 'https://explicit.example:6443'
+            ;;
+        *".certificate-authority-data"*)
+            printf 'Q0EtREFUQQ=='
+            ;;
+    esac
+    exit 0
+fi
+echo "unexpected kubectl args: $*" >&2
+exit 1
+""",
+        encoding="utf-8",
+    )
+    kubectl_script.chmod(0o755)
+
+    code, out = run_script(
+        "generate-sa-kubeconfig.sh",
+        "--kubeconfig",
+        str(expected_kubeconfig),
+        "--context",
+        "prod-hub",
+        "--user",
+        "prod-operator",
+        "acm-switchover",
+        "acm-switchover-operator",
+        env={
+            "PATH": f"{mock_bin}:{os.environ.get('PATH', '')}",
+            "MOCK_LOG": str(log_file),
+            "EXPECTED_KUBECONFIG": str(expected_kubeconfig),
+        },
+    )
+
+    assert code == 0, out
+    assert "https://explicit.example:6443" in out
+    assert "cluster-explicit" in out
+    assert f"--kubeconfig={expected_kubeconfig}" in log_file.read_text(encoding="utf-8")
 
 
 # ============================================================================

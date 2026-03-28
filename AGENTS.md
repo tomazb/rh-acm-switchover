@@ -15,6 +15,24 @@ This is a Python CLI tool for automating Red Hat Advanced Cluster Management (AC
 - **Respect existing patterns and abstractions**: Align with current architecture and style unless there is a strong reason to refactor.
 - **Keep AGENTS.md current**: Update this file when making significant architectural, workflow, module, or CLI changes.
 
+## Protected Critical Files
+
+The following files are **safety-critical operational documents** that AI agents MUST NOT modify without explicit operator approval:
+
+| Protected File | Reason |
+| --- | --- |
+| [`docs/ACM_SWITCHOVER_RUNBOOK.md`](docs/ACM_SWITCHOVER_RUNBOOK.md) | Authoritative blueprint for manual ACM hub switchovers. Contains critical safety warnings, step-by-step procedures, and rollback instructions. Incorrect changes can lead to cluster destruction. |
+| `.claude/skills/**/*.skill.md` | Operational and troubleshooting SKILLS derived from the runbook. Must stay in sync with the runbook at all times. |
+
+### Protection Rules
+
+1. **Read-only by default**: AI agents must treat these files as read-only. Edits are technically blocked by a `.claude/settings.json` PreToolUse hook.
+2. **Explicit operator approval required**: Only modify these files when the operator explicitly requests the change and understands the implications.
+3. **Careful line-by-line review**: Every proposed change must be presented as a diff for the operator to review before committing. Do not batch runbook changes with other unrelated edits.
+4. **Justification required**: Any proposed change must include a clear explanation of _why_ the change is necessary and what operational impact it has.
+5. **Runbook ↔ SKILLS sync obligation**: Changes to the runbook require corresponding SKILLS updates, and vice versa. Never update one without the other.
+6. **No speculative or cosmetic edits**: Do not reformat, reorganize, or "improve" these files unless the operator specifically asks for it.
+
 ## Architecture
 
 **Entry Point**: `acm_switchover.py` - Main orchestrator using `Phase` enum and `StateManager`
@@ -153,12 +171,14 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 **New workflow step**: Follow idempotent pattern with `state.is_step_completed()` / `mark_step_completed()`
 **New validation**: Add to `lib/validation.py` with `InputValidator` static method
 **Hub discovery and preflight**: Use `./scripts/discover-hub.sh --auto --run` to discover hub contexts and run smart preflight checks
+**Argo CD pause/resume**: Use `./scripts/argocd-manage.sh --context <ctx> --mode pause|resume --state-file <path>` to pause/resume auto-sync on ACM-touching Applications; add `--argocd-check` or `--argocd-manage` to the Python tool for integrated handling. See `scripts/README.md` for full usage and `docs/operations/usage.md` for Python flags (`--argocd-manage`, `--argocd-resume-after-switchover`, `--argocd-resume-only`). Note: `app.kubernetes.io/instance` is flagged as `UNRELIABLE` by GitOps marker detection and must not be used as a definitive GitOps signal.
 
 ### CLI Validation Guidance (Contributor note)
 - CLI validation is implemented in `lib/validation.py` (class `InputValidator`). When changing existing arguments or adding new ones, update the validator accordingly and add tests in `tests/test_validation.py`.
 - Current important cross-argument rules (enforced by `InputValidator.validate_all_cli_args`):
     - `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
     - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
+    - `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`.
     - `--setup` requires `--admin-kubeconfig` and validates `--token-duration` format (e.g., `48h`, `30m`, `3600s`).
 - If you change these rules, update `docs/reference/validation-rules.md`, `docs/operations/usage.md`, and `docs/operations/quickref.md` to match.
 
@@ -196,7 +216,7 @@ Container image and Helm chart metadata follow the same version: the Containerfi
 | **Python Tool** | `lib/__init__.py` | `__version__`, `__version_date__` |
 | **README** | `README.md` | Version badge at top of file |
 | **Container Image** | `container-bootstrap/Containerfile` | `LABEL version` |
-| **Helm Chart** | `deploy/helm/Chart.yaml` | `version`, `appVersion` (appVersion = tool version) |
+| **Helm Chart** | `deploy/helm/acm-switchover-rbac/Chart.yaml` | `version`, `appVersion` (appVersion = tool version) |
 
 ### Bash Scripts Version
 
@@ -248,7 +268,7 @@ When making script changes:
 1. [ ] Update `SCRIPT_VERSION` in `scripts/constants.sh`
 2. [ ] Update `SCRIPT_VERSION_DATE` to current date
 3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
-4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/Chart.yaml](deploy/helm/Chart.yaml)
+4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
 5. [ ] Update version in `README.md` (top of file)
 6. [ ] Add changelog entry in `CHANGELOG.md`
 7. [ ] Update `scripts/README.md` if new features/checks added
@@ -258,7 +278,7 @@ When making Python code changes:
 1. [ ] Update `__version__` in `lib/__init__.py`
 2. [ ] Update `__version_date__` to current date
 3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
-4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/Chart.yaml](deploy/helm/Chart.yaml)
+4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
 5. [ ] Update version in `README.md` (top of file)
 6. [ ] Add changelog entry in `CHANGELOG.md`
 7. [ ] Keep Python and Bash versions in sync if changes affect both
@@ -291,6 +311,12 @@ The `.claude/skills/` directory contains conversational guides for Claude to hel
 | [grafana-no-data.skill.md](.claude/skills/troubleshooting/grafana-no-data.skill.md) | No metrics in Grafana dashboards | Observatorium restart, collector checks |
 | [restore-stuck.skill.md](.claude/skills/troubleshooting/restore-stuck.skill.md) | Restore stuck in "Running" state | Velero diagnostics, storage checks |
 
+### Automation SKILLS
+|
+| SKILL | Purpose | Invocation |
+| --- | --- | --- |
+| [release/SKILL.md](.claude/skills/release/SKILL.md) | Bump version across all 6 project version locations | `/release X.Y.Z` |
+
 ### Using SKILLS
 
 SKILLS are designed for conversational guidance. When helping with switchover:
@@ -298,3 +324,10 @@ SKILLS are designed for conversational guidance. When helping with switchover:
 2. Follow the appropriate method (passive or full restore)
 3. Use troubleshooting SKILLS when issues arise
 4. Reference the runbook for detailed command explanations
+
+### Claude Code Hooks
+
+Auto-formatting and file protection hooks are configured in `.claude/settings.json`:
+
+- **Auto-format**: After every `Edit`/`Write` on a `.py` file, `black` and `isort` run automatically
+- **File protection**: Edits to `completions/`, `get-pip.py`, `*.lock`, `ACM_SWITCHOVER_RUNBOOK.md`, and `*.skill.md` files are blocked (see [Protected Critical Files](#protected-critical-files))

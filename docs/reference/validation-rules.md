@@ -163,6 +163,19 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--secondary-context` is required for switchover operations (unless `--decommission` or `--setup`)
 - `--non-interactive` is only valid with `--decommission`
 - `--disable-observability-on-secondary` requires `--old-hub-action secondary` and is not valid with `--decommission`
+- `--argocd-resume-only` requires `--secondary-context` (used to resolve the state file for restoring Argo CD auto-sync)
+- `--argocd-resume-only` cannot be used with `--validate-only` (resume performs changes)
+- `--argocd-resume-only` cannot be used with `--decommission`
+- `--argocd-resume-only` cannot be used with `--setup`
+- `--argocd-manage` has no effect with `--validate-only`; a warning is emitted and validation continues
+- `--argocd-manage` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-after-switchover` cannot be used with `--validate-only`
+- `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-after-switchover` requires `--argocd-manage`
+- `--include-decommission` is only valid with `--setup` when `--role` is `operator` or `both`
+- In `check_rbac.py`, `--include-decommission` is only valid with `--role operator`; combining it with `--role validator` is rejected with an explicit error (decommission permissions are operator-only)
+- With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
+- With `--skip-gitops-check`, `--argocd-check` is ignored (GitOps detection is disabled); a warning is emitted if both are set
 
 ### 6. Filesystem Path Validation
 
@@ -306,8 +319,11 @@ except ValidationError as e:
 
 ### Cross-Argument Rules
 
-- Secondary context requirement: `secondary-context` is required for switchover operations unless `--decommission` is set.
+- Secondary context requirement: `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
+- Managed cluster threshold: `--min-managed-clusters` must be a non-negative integer. `0` keeps the post-restore cluster count check informational-only.
+- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning. `--argocd-resume-after-switchover` cannot be combined with `--validate-only` or `--argocd-resume-only`, and it requires `--argocd-manage`. With `--skip-gitops-check`, `--argocd-check` is ignored and a warning is shown.
+- Setup RBAC extension: `--include-decommission` is only valid during `--setup`, and only with `--role operator` or `--role both`.
 
 ### Utilities
 

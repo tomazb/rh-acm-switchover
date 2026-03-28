@@ -72,7 +72,7 @@ oc logs -n hive deployment/hive-controllers --context <secondary> | grep "$CLUST
 
 **Option A: Wait for auto-import (ACM 2.14+ with ImportAndSync)**
 
-If you configured `ImportAndSync` strategy (see Step 4b in [ACM_SWITCHOVER_RUNBOOK.md](../../../docs/ACM_SWITCHOVER_RUNBOOK.md): "Configure auto-import strategy"), clusters should auto-import. Wait 10-15 minutes.
+If you configured `ImportAndSync` strategy (see Step 4b in [ACM_SWITCHOVER_RUNBOOK.md](../../../docs/ACM_SWITCHOVER_RUNBOOK.md): "Set Auto-Import Strategy to ImportAndSync"), clusters should auto-import. Wait 10-15 minutes.
 
 **Option B: Trigger reimport**
 

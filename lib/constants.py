@@ -3,6 +3,7 @@
 import logging
 import math
 import os
+import re
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -67,6 +68,7 @@ OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 ACM_NAMESPACE = "open-cluster-management"
 # MCE (used for auto-import strategy ConfigMap)
 MCE_NAMESPACE = "multicluster-engine"
+GLOBAL_SET_NAMESPACE = "open-cluster-management-global-set"
 # Managed cluster agent namespace (on spoke clusters)
 MANAGED_CLUSTER_AGENT_NAMESPACE = "open-cluster-management-agent"
 
@@ -92,6 +94,7 @@ SPEC_USE_MANAGED_SERVICE_ACCOUNT = "useManagedServiceAccount"
 # ACM Spec Field Values
 VELERO_BACKUP_LATEST = "latest"
 VELERO_BACKUP_SKIP = "skip"
+CLEANUP_BEFORE_RESTORE_VALUE = "CleanupRestored"
 
 # Patch verification settings
 PATCH_VERIFY_MAX_RETRIES = 5
@@ -141,6 +144,9 @@ except (ValueError, TypeError, OverflowError) as e:
 BACKUP_VERIFY_TIMEOUT = 600
 BACKUP_POLL_INTERVAL = 30
 BACKUP_INTEGRITY_MAX_AGE_SECONDS = 600
+ACM_BACKUP_SCHEDULE_TYPE_LABEL = "cluster.open-cluster-management.io/backup-schedule-type"
+ACM_BACKUP_SCHEDULE_TYPES = frozenset({"managedClusters", "credentials", "resources"})
+ACM_BACKUP_NAME_RE = re.compile(r"^acm-(managed-clusters|credentials|resources)-")
 
 # MultiClusterHub verification settings
 MCH_VERIFY_TIMEOUT = 300

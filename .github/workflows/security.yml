@@ -138,25 +138,23 @@ jobs:
   container-security:
     name: Container Image Security
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Create Dockerfile
-      run: |
-        cat > Dockerfile << 'EOF'
-        FROM python:3.11-slim
-        WORKDIR /app
-        COPY requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY . .
-        ENTRYPOINT ["python", "acm_switchover.py"]
-        EOF
-        
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
     - name: Build image
-      run: docker build -t acm-switchover:scan .
-      
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./container-bootstrap/Containerfile
+        push: false
+        load: true
+        tags: acm-switchover:scan
+
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
@@ -165,14 +163,14 @@ jobs:
         output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
       continue-on-error: true
-        
+
     - name: Upload Trivy results
       uses: github/codeql-action/upload-sarif@v3
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
       continue-on-error: true
-        
+
     - name: Run Trivy for detailed report
       uses: aquasecurity/trivy-action@master
       with:
@@ -202,8 +200,8 @@ jobs:
         
     - name: Generate CycloneDX SBOM
       run: |
-        cyclonedx-py -r -i requirements.txt -o sbom.json
-        cyclonedx-py -r -i requirements.txt -o sbom.xml --format xml
+        cyclonedx-py requirements --of JSON -o sbom.json requirements.txt
+        cyclonedx-py requirements --of XML -o sbom.xml requirements.txt
         
     - name: Upload SBOM
       uses: actions/upload-artifact@v4

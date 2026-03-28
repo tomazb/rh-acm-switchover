@@ -1,6 +1,6 @@
 ---
 # ClusterRole for ACM Switchover Operator
-# Provides full operational permissions for switchover execution
+# Provides baseline switchover permissions without decommission deletes
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -33,22 +33,33 @@ rules:
   # ACM Cluster Management - ManagedClusters
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
-    verbs: ["get", "list", "patch", "delete"]
+    verbs: ["get", "list", "patch"]
   
   # Hive - ClusterDeployment validation
   - apiGroups: ["hive.openshift.io"]
     resources: ["clusterdeployments"]
     verbs: ["get", "list"]
   
-  # ACM Operator - Hub detection and decommission
+  # ACM Operator - Hub detection
   - apiGroups: ["operator.open-cluster-management.io"]
     resources: ["multiclusterhubs"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list"]
   
-  # Observability - Auto-detection and decommission
+  # Observability - Auto-detection
   - apiGroups: ["observability.open-cluster-management.io"]
     resources: ["multiclusterobservabilities"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list"]
+
+  # Argo CD - Detection and pause/resume (--argocd-check, --argocd-manage)
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["argocds"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
 
 ---
 # ClusterRole for ACM Switchover Validator (Read-Only)
@@ -101,3 +112,14 @@ rules:
   - apiGroups: ["observability.open-cluster-management.io"]
     resources: ["multiclusterobservabilities"]
     verbs: ["get", "list"]
+
+  # Argo CD - Detection only (--argocd-check, read-only)
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["argocds"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
