@@ -513,6 +513,85 @@ class TestCompletedStateTimestampHandling:
         assert reloaded.get_current_phase() == Phase.COMPLETED
         preflight.assert_called_once()
 
+    def test_validate_only_does_not_refresh_last_updated(self, tmp_path):
+        """Validate-only must not update last_updated, preserving stale-state detection (F1)."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        original_timestamp = "2024-01-01T00:00:00+00:00"
+        state.state["last_updated"] = original_timestamp
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+        args = SimpleNamespace(
+            force=False,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_check=False,
+            argocd_manage=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True):
+            result = run_switchover(args, reloaded, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert reloaded.get_current_phase() == Phase.COMPLETED
+        # Re-read from disk to verify last_updated was NOT refreshed
+        final_state = StateManager(str(state_file))
+        assert final_state.state["last_updated"] == original_timestamp
+
+    def test_stale_completed_state_remains_stale_after_validate_only(self, tmp_path):
+        """A stale completed state must remain stale after validate-only (F1)."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        stale_timestamp = "2023-01-01T00:00:00+00:00"
+        state.state["last_updated"] = stale_timestamp
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+        args = SimpleNamespace(
+            force=False,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_check=False,
+            argocd_manage=False,
+        )
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True):
+            run_switchover(args, reloaded, Mock(), Mock(), Mock())
+
+        # Re-read from disk: timestamp must still be stale
+        final_state = StateManager(str(state_file))
+        assert final_state.state["last_updated"] == stale_timestamp
+        assert final_state.get_current_phase() == Phase.COMPLETED
+
+        # Subsequent non-validate-only run must detect the stale state
+        reloaded2 = StateManager(str(state_file))
+        args2 = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+        with pytest.raises(SystemExit) as exc:
+            run_switchover(args2, reloaded2, Mock(), Mock(), Mock())
+        assert exc.value.code == EXIT_FAILURE
+
     def test_recent_completed_state_does_not_require_force(self, tmp_path):
         from lib.constants import STALE_STATE_THRESHOLD
         from lib.utils import Phase, StateManager

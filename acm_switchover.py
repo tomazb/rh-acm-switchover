@@ -402,10 +402,17 @@ def run_switchover(
 
     if args.validate_only:
         saved_phase = state.get_current_phase()
+        saved_last_updated = state.state.get("last_updated")
         try:
             return _run_phase_preflight(args, state, primary, secondary, logger)
         finally:
-            state.set_phase(saved_phase)
+            # Restore phase and timestamp without going through set_phase()/flush_state(),
+            # which would refresh last_updated and defeat stale-state detection (F1 fix).
+            state.state["current_phase"] = saved_phase.value
+            if saved_last_updated is not None:
+                state.state["last_updated"] = saved_last_updated
+            state._dirty = False
+            state._write_state(state.state)
 
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
