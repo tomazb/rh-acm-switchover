@@ -1097,7 +1097,16 @@ check_argocd_acm_resources() {
     if "$CLUSTER_CLI_BIN" --context="$context" get crd argocds.argoproj.io &>/dev/null; then
         has_argocds_crd=1
         local argocd_json
-        argocd_json=$("$CLUSTER_CLI_BIN" --context="$context" get argocds.argoproj.io -A -o json 2>/dev/null || echo '{"items":[]}')
+        local argocd_list_stderr_file
+        argocd_list_stderr_file=$(mktemp)
+        local argocd_list_rc=0
+        argocd_json=$("$CLUSTER_CLI_BIN" --context="$context" get argocds.argoproj.io -A -o json 2>"$argocd_list_stderr_file") || argocd_list_rc=$?
+        if [[ $argocd_list_rc -ne 0 ]]; then
+            check_warn "$label: Unable to list ArgoCD instances (API error); continuing without instance details"
+            echo -e "${YELLOW}       Error: $(cat "$argocd_list_stderr_file")${NC}"
+            argocd_json='{"items":[]}'
+        fi
+        rm -f "$argocd_list_stderr_file"
         argocd_count=$(echo "$argocd_json" | jq '.items | length' 2>/dev/null || echo 0)
 
         if [[ $argocd_count -gt 0 ]]; then
@@ -1112,7 +1121,17 @@ check_argocd_acm_resources() {
     # Operator-based Argo CD can watch namespaces other than its own control-plane
     # namespace, so per-instance-namespace scans miss watched-namespace Applications.
     local all_apps_json
-    all_apps_json=$("$CLUSTER_CLI_BIN" --context="$context" get applications.argoproj.io -A -o json 2>/dev/null || echo '{"items":[]}')
+    local apps_list_stderr_file
+    apps_list_stderr_file=$(mktemp)
+    local apps_list_rc=0
+    all_apps_json=$("$CLUSTER_CLI_BIN" --context="$context" get applications.argoproj.io -A -o json 2>"$apps_list_stderr_file") || apps_list_rc=$?
+    if [[ $apps_list_rc -ne 0 ]]; then
+        check_warn "$label: Unable to list Argo CD Applications (API error); cannot determine GitOps risk"
+        echo -e "${YELLOW}       Error: $(cat "$apps_list_stderr_file")${NC}"
+        rm -f "$apps_list_stderr_file"
+        return 0
+    fi
+    rm -f "$apps_list_stderr_file"
     local app_count
     app_count=$(echo "$all_apps_json" | jq '.items | length' 2>/dev/null || echo 0)
 

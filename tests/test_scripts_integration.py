@@ -1291,6 +1291,72 @@ esac""",
     assert "acm-policies" in out.lower() or "team-a" in out
 
 
+@pytest.mark.integration
+def test_argocd_app_list_forbidden_warns_not_false_clean(tmp_path):
+    """CRD exists but Application list is Forbidden must warn, not report 'No Applications found'."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    # CRD check succeeds, but listing Applications is denied
+    env = _write_argocd_test_harness(
+        mock_bin,
+        r"""case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "NAME  CREATED AT"
+        echo "applications.argoproj.io  2024-01-01"
+        exit 0
+        ;;
+    *"get crd argocds.argoproj.io"*)
+        exit 1
+        ;;
+    *"get applications.argoproj.io -A -o json"*)
+        echo "Error from server (Forbidden): applications.argoproj.io is forbidden: User cannot list resource" >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "Unable to list Argo CD Applications" in out
+    assert "cannot determine GitOps risk" in out
+    assert "No Argo CD Applications found" not in out
+
+
+@pytest.mark.integration
+def test_argocd_app_list_api_error_warns_not_false_clean(tmp_path):
+    """CRD exists but Application list hits API error must warn, not report 'No Applications found'."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    # CRD check succeeds, but listing Applications gets a transient error
+    env = _write_argocd_test_harness(
+        mock_bin,
+        r"""case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "NAME  CREATED AT"
+        echo "applications.argoproj.io  2024-01-01"
+        exit 0
+        ;;
+    *"get crd argocds.argoproj.io"*)
+        exit 1
+        ;;
+    *"get applications.argoproj.io -A -o json"*)
+        echo "Error from server: etcdserver: leader changed" >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "Unable to list Argo CD Applications" in out
+    assert "cannot determine GitOps risk" in out
+    assert "No Argo CD Applications found" not in out
+
+
 # ============================================================================
 # F4: Setup Filename Sanitization Tests
 # ============================================================================
