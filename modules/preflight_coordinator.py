@@ -70,12 +70,18 @@ class PreflightValidator:
         self.hub_component_validator = HubComponentValidator(self.reporter)
         self.backup_validator = BackupValidator(self.reporter)
         self.backup_schedule_validator = BackupScheduleValidator(self.reporter)
-        self.backup_storage_location_validator = BackupStorageLocationValidator(self.reporter)
+        self.backup_storage_location_validator = BackupStorageLocationValidator(
+            self.reporter
+        )
         self.cluster_deployment_validator = ClusterDeploymentValidator(self.reporter)
-        self.managed_cluster_backup_validator = ManagedClusterBackupValidator(self.reporter)
+        self.managed_cluster_backup_validator = ManagedClusterBackupValidator(
+            self.reporter
+        )
         self.passive_sync_validator = PassiveSyncValidator(self.reporter)
         self.observability_detector = ObservabilityDetector(self.reporter)
-        self.observability_prereq_validator = ObservabilityPrereqValidator(self.reporter)
+        self.observability_prereq_validator = ObservabilityPrereqValidator(
+            self.reporter
+        )
         self.tooling_validator = ToolingValidator(self.reporter)
 
     def _get_argocd_rbac_mode(self) -> str:
@@ -119,7 +125,9 @@ class PreflightValidator:
                 return requested_mode, discovery.install_type
             logger.info("Argo CD Applications CRD not found on %s hub", hub_label)
 
-        logger.info("Argo CD Applications CRD not found on either hub, skipping Argo CD RBAC permission checks")
+        logger.info(
+            "Argo CD Applications CRD not found on either hub, skipping Argo CD RBAC permission checks"
+        )
         return "none", "unknown"
 
     def validate_all(self) -> Tuple[bool, PreflightConfig]:
@@ -139,7 +147,9 @@ class PreflightValidator:
                 # If not installed, skip observability permission checks
                 primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
                 secondary_has_obs = (
-                    self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.secondary else False
+                    self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE)
+                    if self.secondary
+                    else False
                 )
                 skip_obs = not (primary_has_obs or secondary_has_obs)
                 if skip_obs:
@@ -148,7 +158,9 @@ class PreflightValidator:
                         "skipping observability permission checks"
                     )
 
-                effective_argocd_mode, argocd_install_type = self._get_effective_argocd_rbac_mode()
+                effective_argocd_mode, argocd_install_type = (
+                    self._get_effective_argocd_rbac_mode()
+                )
                 validate_rbac_permissions(
                     primary_client=self.primary,
                     secondary_client=self.secondary,
@@ -222,9 +234,11 @@ class PreflightValidator:
         if self.method == "passive":
             self.passive_sync_validator.run(self.secondary)
 
-        primary_observability, secondary_observability = self.observability_detector.detect(
-            self.primary,
-            self.secondary,
+        primary_observability, secondary_observability = (
+            self.observability_detector.detect(
+                self.primary,
+                self.secondary,
+            )
         )
 
         if secondary_observability:

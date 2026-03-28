@@ -560,24 +560,26 @@ class TestStateManagerExitRegistration:
         assert len(errors) == 1
         assert errors[0]["error"] == "same failure"
 
-    def test_fail_phase_helper_records_new_message_for_same_phase(self, tmp_path):
-        """_fail_phase should keep distinct same-phase failures for troubleshooting."""
+    def test_fail_phase_helper_skips_generic_when_module_already_recorded_same_phase(self, tmp_path):
+        """F8: _fail_phase should NOT append a generic wrapper when the module
+        already recorded a specific error for the same phase."""
         import logging
 
         import acm_switchover
 
         sm = StateManager(str(tmp_path / "state.json"))
         sm.set_phase(Phase.ACTIVATION)
-        sm.add_error("first failure", phase=Phase.ACTIVATION.value)
+        sm.add_error("specific root cause", phase=Phase.ACTIVATION.value)
 
         logger = logging.getLogger("test")
-        result = acm_switchover._fail_phase(sm, "second failure", logger)
+        result = acm_switchover._fail_phase(sm, "Secondary hub activation failed!", logger)
 
         assert result is False
         assert sm.get_current_phase() == Phase.FAILED
         errors = sm.get_errors()
-        assert len(errors) == 2
-        assert errors[-1]["error"] == "second failure"
+        # Only the module's specific error should be present
+        assert len(errors) == 1
+        assert errors[-1]["error"] == "specific root cause"
 
     def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
         """After a phase failure, get_last_error_phase returns the phase to retry."""
