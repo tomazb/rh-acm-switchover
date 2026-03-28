@@ -1020,16 +1020,18 @@ class TestSwitchoverPhaseFlow:
         state.add_error.assert_not_called()
         state.set_phase.assert_called_once()
 
-    def test_fail_phase_appends_error_when_same_phase_has_different_message(self):
+    def test_fail_phase_skips_generic_when_module_already_recorded_same_phase_error(self):
+        """F8: When the module already added a specific error for the current phase,
+        _fail_phase should NOT overwrite it with a generic wrapper message."""
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="finalization")
-        state.get_errors.return_value = [{"phase": "finalization", "error": "prior"}]
+        state.get_errors.return_value = [{"phase": "finalization", "error": "specific root cause"}]
         logger = Mock()
 
-        result = _fail_phase(state, "current failure", logger)
+        result = _fail_phase(state, "Finalization failed!", logger)
 
         assert result is False
-        state.add_error.assert_called_once_with("current failure", phase="finalization")
+        state.add_error.assert_not_called()
         state.set_phase.assert_called_once()
 
     def test_fail_phase_appends_error_when_last_error_is_different_phase(self):

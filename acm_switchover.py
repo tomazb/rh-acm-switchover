@@ -481,16 +481,18 @@ def _log_completed_noop(state: StateManager, logger: logging.Logger, state_age: 
 def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
     """Record a phase failure with consistent error metadata and return False.
 
-    Ensures every transition to Phase.FAILED leaves an error entry for the
-    current phase, skipping a new entry only when the same phase and error
-    message were already recorded last. This keeps resume logic deterministic
-    without dropping distinct failures from the same phase.
+    F8 fix: Only append the generic wrapper message when the phase module
+    has NOT already recorded a specific error for the current phase. This
+    keeps the most recent (and most actionable) error visible to resume
+    logic and troubleshooting output.
     """
     logger.error(message)
     current_phase = state.get_current_phase().value
     errors = state.get_errors()
     last_error = errors[-1] if errors else {}
-    if last_error.get("phase") != current_phase or last_error.get("error") != message:
+    # If the module already recorded an error for this phase, don't overwrite
+    # it with the generic wrapper message.
+    if last_error.get("phase") != current_phase:
         state.add_error(message, phase=current_phase)
     state.set_phase(Phase.FAILED)
     return False
