@@ -125,17 +125,24 @@ class PreflightValidator:
         # RBAC validation (unless explicitly skipped)
         if not self.skip_rbac_validation:
             logger.info("Validating RBAC permissions...")
-            # Check if observability namespace exists on either hub
-            # If not installed, skip observability permission checks
-            primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
-            secondary_has_obs = self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.secondary else False
-            skip_obs = not (primary_has_obs or secondary_has_obs)
-            if skip_obs:
-                logger.info(
-                    "Observability namespace not found on either hub, " "skipping observability permission checks"
-                )
-
             try:
+                # F6 fix: Wrap the entire RBAC block so routine API failures
+                # (from namespace_exists, Argo CD discovery, or RBAC checks)
+                # are converted into structured validation results instead of
+                # escaping as uncaught exceptions.
+                # Check if observability namespace exists on either hub
+                # If not installed, skip observability permission checks
+                primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
+                secondary_has_obs = (
+                    self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.secondary else False
+                )
+                skip_obs = not (primary_has_obs or secondary_has_obs)
+                if skip_obs:
+                    logger.info(
+                        "Observability namespace not found on either hub, "
+                        "skipping observability permission checks"
+                    )
+
                 validate_rbac_permissions(
                     primary_client=self.primary,
                     secondary_client=self.secondary,
@@ -153,6 +160,19 @@ class PreflightValidator:
                 logger.warning(
                     "RBAC validation failed. You can skip this check with --skip-rbac-validation "
                     "if you're confident you have the required permissions."
+                )
+            except ApiException as e:
+                self.reporter.add_result(
+                    "RBAC Permissions",
+                    False,
+                    f"RBAC validation failed due to API error: {e.status} {e.reason}",
+                    critical=True,
+                )
+                logger.warning(
+                    "RBAC validation could not complete due to an API error (%s %s). "
+                    "You can skip this check with --skip-rbac-validation.",
+                    e.status,
+                    e.reason,
                 )
             else:
                 self.reporter.add_result(

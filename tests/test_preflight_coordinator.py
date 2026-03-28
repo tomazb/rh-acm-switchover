@@ -190,3 +190,40 @@ def test_validate_all_does_not_swallow_unexpected_rbac_errors():
         auto_import_validator.return_value.run = Mock()
         with pytest.raises(RuntimeError, match="bug"):
             validator.validate_all()
+
+
+@pytest.mark.unit
+def test_validate_all_api_error_in_namespace_exists_becomes_validation_failure():
+    """API errors from namespace_exists() should become structured RBAC failures, not uncaught exceptions (F6)."""
+    validator = _build_validator(argocd_check=False, argocd_manage=False)
+    # Simulate namespace_exists() raising a 500 ApiException
+    validator.primary.namespace_exists.side_effect = ApiException(status=500, reason="Internal Server Error")
+
+    with patch("modules.preflight_coordinator.AutoImportStrategyValidator") as auto_import_validator:
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is False
+    rbac_results = [r for r in validator.reporter.results if r["check"] == "RBAC Permissions"]
+    assert len(rbac_results) == 1
+    assert rbac_results[0]["passed"] is False
+    assert "API error" in rbac_results[0]["message"]
+
+
+@pytest.mark.unit
+def test_validate_all_api_error_in_argocd_discovery_becomes_validation_failure():
+    """Non-401/403 API errors from Argo CD discovery should become structured failures (F6)."""
+    validator = _build_validator(argocd_check=True, argocd_manage=False)
+
+    with patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        side_effect=ApiException(status=500, reason="Internal Server Error"),
+    ), patch("modules.preflight_coordinator.AutoImportStrategyValidator") as auto_import_validator:
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is False
+    rbac_results = [r for r in validator.reporter.results if r["check"] == "RBAC Permissions"]
+    assert len(rbac_results) == 1
+    assert rbac_results[0]["passed"] is False
+    assert "API error" in rbac_results[0]["message"]
