@@ -1129,3 +1129,220 @@ def test_postflight_missing_restore_fails():
     # Will fail - either from validation (1) or command not found (127)
     assert code != 0, "Expected failure, got success (exit 0)"
     assert code != 2, "Expected validation/runtime failure, not arg error (exit 2)"
+
+
+# ============================================================================
+# F2/F3: Argo CD Detection Shell Tests
+# ============================================================================
+
+
+def _write_argocd_test_harness(mock_bin: Path, oc_body: str) -> dict:
+    """Create a test harness that sources lib-common.sh and calls check_argocd_acm_resources.
+
+    Returns env dict with mock_bin in PATH.
+    """
+    oc_script = mock_bin / "oc"
+    oc_script.write_text(f"#!/bin/bash\n{oc_body}\n", encoding="utf-8")
+    oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
+
+    write_shared_jq_mock(mock_bin)
+
+    # Create a test runner that sources the libs and calls the function
+    runner = mock_bin / "run_argocd_check.sh"
+    runner.write_text(
+        f"""#!/bin/bash
+set -uo pipefail
+export SCRIPT_DIR="{SCRIPTS_DIR}"
+source "$SCRIPT_DIR/constants.sh"
+source "$SCRIPT_DIR/lib-common.sh"
+CLUSTER_CLI_BIN="oc"
+GITOPS_DETECTION_ENABLED=1
+check_argocd_acm_resources "$1" "$2"
+exit $?
+""",
+        encoding="utf-8",
+    )
+    runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+
+    env = os.environ.copy()
+    env["REAL_JQ"] = shutil.which("jq") or ""
+    env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
+    return env
+
+
+def _run_argocd_check(mock_bin: Path, env: dict, context: str = "test-ctx", label: str = "Test hub") -> tuple:
+    """Run the argocd check harness and return (exit_code, stripped_output)."""
+    proc = subprocess.run(
+        [str(mock_bin / "run_argocd_check.sh"), context, label],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+        timeout=10,
+    )
+    return proc.returncode, strip_ansi(proc.stdout)
+
+
+@pytest.mark.integration
+def test_argocd_f3_forbidden_crd_access_not_reported_as_crd_not_found(tmp_path):
+    """F3: Forbidden CRD access must produce an auth/RBAC warning, not 'CRD not found'."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    env = _write_argocd_test_harness(
+        mock_bin,
+        """case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "Error from server (Forbidden): clusterroles.rbac.authorization.k8s.io is forbidden" >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "auth/RBAC denied" in out
+    assert "CRD not found" not in out
+
+
+@pytest.mark.integration
+def test_argocd_f3_transient_api_failure_not_reported_as_crd_not_found(tmp_path):
+    """F3: Transient API failure must produce an API error warning, not 'CRD not found'."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    env = _write_argocd_test_harness(
+        mock_bin,
+        """case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "Error from server: etcdserver: request timed out" >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "API error" in out
+    assert "CRD not found" not in out
+
+
+@pytest.mark.integration
+def test_argocd_f3_real_crd_absence_still_says_not_found(tmp_path):
+    """F3: Genuine CRD absence must still produce the 'CRD not found' pass message."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    env = _write_argocd_test_harness(
+        mock_bin,
+        """case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo 'Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "applications.argoproj.io" not found' >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "CRD not found" in out
+
+
+@pytest.mark.integration
+def test_argocd_f2_operator_install_detects_apps_outside_instance_namespace(tmp_path):
+    """F2: Operator-installed Argo CD must detect Applications living outside the instance namespace."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    # The Application lives in 'team-a' namespace, not in 'openshift-gitops' (the instance namespace)
+    env = _write_argocd_test_harness(
+        mock_bin,
+        r"""case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "NAME  CREATED AT"
+        echo "applications.argoproj.io  2024-01-01"
+        exit 0
+        ;;
+    *"get crd argocds.argoproj.io"*)
+        echo "NAME  CREATED AT"
+        echo "argocds.argoproj.io  2024-01-01"
+        exit 0
+        ;;
+    *"get argocds.argoproj.io -A -o json"*)
+        echo '{"items":[{"metadata":{"namespace":"openshift-gitops","name":"openshift-gitops"}}]}'
+        exit 0
+        ;;
+    *"get applications.argoproj.io -A -o json"*)
+        cat << 'EOF'
+{"items":[{"metadata":{"namespace":"team-a","name":"acm-policies"},"spec":{},"status":{"resources":[{"kind":"Policy","namespace":"open-cluster-management","name":"enforce-labels"}]}}]}
+EOF
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "ACM resources" in out
+    assert "acm-policies" in out.lower() or "team-a" in out
+
+
+# ============================================================================
+# F4: Setup Filename Sanitization Tests
+# ============================================================================
+
+
+@pytest.mark.integration
+class TestSetupRbacSanitization:
+    """Tests for F4: sanitize_context() in setup-rbac.sh."""
+
+    def test_sanitize_context_function_exists(self):
+        """setup-rbac.sh must define sanitize_context."""
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+        assert "sanitize_context()" in content
+
+    def test_sanitize_context_replaces_slashes(self, tmp_path):
+        """Context names with '/' must be sanitized to '_' in filenames."""
+        result = subprocess.run(
+            ["bash", "-c", 'sanitize_context() { echo "$1" | sed "s/[^A-Za-z0-9._-]/_/g"; }; sanitize_context "admin/api-ci-aws"'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == "admin_api-ci-aws"
+
+    def test_sanitize_context_replaces_colons(self, tmp_path):
+        """Context names with ':' must be sanitized to '_' in filenames."""
+        result = subprocess.run(
+            ["bash", "-c", 'sanitize_context() { echo "$1" | sed "s/[^A-Za-z0-9._-]/_/g"; }; sanitize_context "default/api.example.com:6443/admin"'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == "default_api.example.com_6443_admin"
+
+    def test_sanitize_context_preserves_safe_chars(self, tmp_path):
+        """Safe characters (alphanumeric, dot, underscore, dash) must remain unchanged."""
+        result = subprocess.run(
+            ["bash", "-c", 'sanitize_context() { echo "$1" | sed "s/[^A-Za-z0-9._-]/_/g"; }; sanitize_context "prod-hub.example_01"'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == "prod-hub.example_01"
+
+    def test_setup_script_uses_sanitized_context_in_filenames(self):
+        """setup-rbac.sh must use SANITIZED_CONTEXT, not raw CONTEXT, in output filenames."""
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+        # Kubeconfig generation should use sanitized context
+        assert "${SANITIZED_CONTEXT}-operator" in content
+        assert "${SANITIZED_CONTEXT}-validator" in content
+        # Raw CONTEXT should NOT appear in filename-building patterns
+        assert "${CONTEXT}-operator.yaml" not in content
+        assert "${CONTEXT}-validator.yaml" not in content
+
+    def test_setup_script_still_uses_raw_context_for_cluster_operations(self):
+        """setup-rbac.sh must still use raw CONTEXT for kubectl --context."""
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+        assert '--context="$CONTEXT"' in content or "--context=$CONTEXT" in content
