@@ -200,6 +200,15 @@ if [[ ! -d "$RBAC_MANIFEST_DIR" ]]; then
     exit 1
 fi
 
+# F4 fix: Sanitize context name for filesystem-safe filenames.
+# Contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
+# contain characters that break filename interpolation.
+# Matches Python InputValidator.sanitize_context_identifier().
+sanitize_context() {
+    echo "$1" | sed 's/[^A-Za-z0-9._-]/_/g'
+}
+SANITIZED_CONTEXT=$(sanitize_context "$CONTEXT")
+
 if $INCLUDE_DECOMMISSION && [[ "$ROLE" == "validator" ]]; then
     echo "Error: --include-decommission requires --role operator or --role both" >&2
     exit 1
@@ -452,14 +461,14 @@ if ! $SKIP_KUBECONFIG; then
     
     case "$ROLE" in
         operator)
-            generate_kubeconfig "$OPERATOR_SA" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml" "${CONTEXT}-operator"
+            generate_kubeconfig "$OPERATOR_SA" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml" "${SANITIZED_CONTEXT}-operator"
             ;;
         validator)
-            generate_kubeconfig "$VALIDATOR_SA" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml" "${CONTEXT}-validator"
+            generate_kubeconfig "$VALIDATOR_SA" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml" "${SANITIZED_CONTEXT}-validator"
             ;;
         both)
-            generate_kubeconfig "$OPERATOR_SA" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml" "${CONTEXT}-operator"
-            generate_kubeconfig "$VALIDATOR_SA" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml" "${CONTEXT}-validator"
+            generate_kubeconfig "$OPERATOR_SA" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml" "${SANITIZED_CONTEXT}-operator"
+            generate_kubeconfig "$VALIDATOR_SA" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml" "${SANITIZED_CONTEXT}-validator"
             ;;
     esac
 fi
@@ -500,14 +509,14 @@ if ! $SKIP_VALIDATION && ! $DRY_RUN && ! $SKIP_KUBECONFIG; then
         
         case "$ROLE" in
             operator)
-                validate_role "operator" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml" "$INCLUDE_DECOMMISSION"
+                validate_role "operator" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml" "$INCLUDE_DECOMMISSION"
                 ;;
             validator)
-                validate_role "validator" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml" "false"
+                validate_role "validator" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml" "false"
                 ;;
             both)
-                validate_role "operator" "${OUTPUT_DIR}/${CONTEXT}-operator.yaml" "$INCLUDE_DECOMMISSION"
-                validate_role "validator" "${OUTPUT_DIR}/${CONTEXT}-validator.yaml" "false"
+                validate_role "operator" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml" "$INCLUDE_DECOMMISSION"
+                validate_role "validator" "${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml" "false"
                 ;;
         esac
     fi
@@ -535,14 +544,14 @@ else
         echo "Generated kubeconfigs:"
         case "$ROLE" in
             operator)
-                echo "  Operator: ${OUTPUT_DIR}/${CONTEXT}-operator.yaml"
+                echo "  Operator: ${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml"
                 ;;
             validator)
-                echo "  Validator: ${OUTPUT_DIR}/${CONTEXT}-validator.yaml"
+                echo "  Validator: ${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml"
                 ;;
             both)
-                echo "  Operator: ${OUTPUT_DIR}/${CONTEXT}-operator.yaml"
-                echo "  Validator: ${OUTPUT_DIR}/${CONTEXT}-validator.yaml"
+                echo "  Operator: ${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml"
+                echo "  Validator: ${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml"
                 ;;
         esac
         echo ""
@@ -551,8 +560,8 @@ else
     
     echo ""
     echo "Next steps:"
-    echo "  1. Test the kubeconfig: KUBECONFIG=${OUTPUT_DIR}/${CONTEXT}-operator.yaml kubectl get ns"
-    echo "  2. Run preflight check: python3 acm_switchover.py --validate-only --primary-context ${CONTEXT}-operator@..."
+    echo "  1. Test the kubeconfig: KUBECONFIG=${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml kubectl get ns"
+    echo "  2. Run preflight check: python3 acm_switchover.py --validate-only --primary-context ${SANITIZED_CONTEXT}-operator@..."
     echo ""
     echo "For multi-hub setup, run this script for each hub, then use"
     echo "generate-merged-kubeconfig.sh to create a single merged kubeconfig."
