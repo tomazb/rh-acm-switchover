@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [1.5.13] - 2026-03-28
 
-- **Runbook and SKILLS file protection**: `docs/ACM_SWITCHOVER_RUNBOOK.md` and `.claude/skills/**/*.skill.md` are now protected from unapproved AI agent edits via AGENTS.md guidance and a `.claude/settings.json` PreToolUse hook that blocks writes.
+### Fixed
+
+- **validate-only timestamp safety (F1)**: `--validate-only` no longer refreshes `last_updated` when restoring the saved phase, preserving stale-state detection for subsequent real switchover runs.
+- **Shell Argo CD detection coverage (F2)**: `check_argocd_acm_resources` in `lib-common.sh` now always scans Applications cluster-wide regardless of install type, so operator-based Argo CD watching external namespaces is no longer missed.
+- **Shell Argo CD CRD error classification (F3)**: Auth/RBAC failures and transient API errors during CRD inspection now produce distinct warnings instead of being silently downgraded to "CRD not found".
+- **Setup kubeconfig filename sanitization (F4)**: `setup-rbac.sh` now sanitizes context names for output filenames; contexts containing `/` or `:` (common in `oc login` defaults) no longer create broken nested paths.
+- **Docker/Buildx build context (F5)**: Added `.dockerignore` symlink so Docker and Buildx honour the existing ignore rules; previously only Podman/Buildah respected `.containerignore`.
+- **Preflight RBAC API error handling (F6)**: `namespace_exists()` and Argo CD discovery calls inside the RBAC validation block are now wrapped to convert non-transient `ApiException`s into structured preflight validation failures instead of uncaught top-level exceptions.
+- **check_rbac.py validator+decommission false green (F7)**: `check_rbac.py --role validator --include-decommission` is now rejected with an explicit error; previously decommission checks were silently skipped, producing a misleading pass result.
+- **Phase failure root-cause preservation (F8)**: `_fail_phase()` no longer appends a generic wrapper message when the phase module already recorded a specific error, keeping the most actionable message visible in resume output.
+- **Argo CD RBAC over-requirement on vanilla installs (F9)**: RBAC validation no longer requires `argocds get/list` permissions on vanilla Argo CD installs; the `argocds` check is now gated on the discovered install type.
 
 ## [1.5.12] - 2026-03-27
 
