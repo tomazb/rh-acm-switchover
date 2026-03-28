@@ -1066,10 +1066,24 @@ check_argocd_acm_resources() {
         return 0
     fi
 
-    # Need at least applications.argoproj.io to do any Argo CD check
-    if ! "$CLUSTER_CLI_BIN" --context="$context" get crd applications.argoproj.io &>/dev/null; then
-        check_pass "$label: Argo CD Applications CRD not found (skipping ArgoCD GitOps check)"
-        return 0
+    # F3 fix: Differentiate CRD-not-found from auth/API failures instead of
+    # treating any non-zero exit as "CRD absent".
+    local crd_stderr
+    local crd_rc=0
+    crd_stderr=$("$CLUSTER_CLI_BIN" --context="$context" get crd applications.argoproj.io 2>&1 >/dev/null) || crd_rc=$?
+    if [[ $crd_rc -ne 0 ]]; then
+        if echo "$crd_stderr" | grep -qiE '(NotFound|not found|no matches|the server doesn.t have a resource)'; then
+            check_pass "$label: Argo CD Applications CRD not found (skipping ArgoCD GitOps check)"
+            return 0
+        elif echo "$crd_stderr" | grep -qiE '(Unauthorized|Forbidden|forbidden|unauthorized)'; then
+            check_warn "$label: Unable to check Argo CD CRD (auth/RBAC denied); cannot determine GitOps risk"
+            echo -e "${YELLOW}       Error: ${crd_stderr}${NC}"
+            return 0
+        else
+            check_warn "$label: Unable to check Argo CD CRD (API error); cannot determine GitOps risk"
+            echo -e "${YELLOW}       Error: ${crd_stderr}${NC}"
+            return 0
+        fi
     fi
 
     local ns_regex='^(open-cluster-management($|-.*)|open-cluster-management-backup$|open-cluster-management-observability$|open-cluster-management-global-set$|multicluster-engine$|local-cluster)$'
@@ -1079,7 +1093,7 @@ check_argocd_acm_resources() {
     local has_argocds_crd=0
     local argocd_count=0
 
-    # Operator install: argocds.argoproj.io exists -> list instances and scan apps per instance namespace
+    # Operator install: argocds.argoproj.io exists -> list instances (informational)
     if "$CLUSTER_CLI_BIN" --context="$context" get crd argocds.argoproj.io &>/dev/null; then
         has_argocds_crd=1
         local argocd_json
@@ -1092,92 +1106,60 @@ check_argocd_acm_resources() {
             echo "$argocd_json" | jq -r '.items[] | "  - \(.metadata.namespace)/\(.metadata.name)"'
             echo ""
         fi
-
-        while IFS=$'\t' read -r argocd_ns _; do
-            local apps_json
-            apps_json=$("$CLUSTER_CLI_BIN" --context="$context" -n "$argocd_ns" get applications.argoproj.io -o json 2>/dev/null || echo '{"items":[]}')
-            local app_output
-            app_output=$(echo "$apps_json" | jq -r --arg ns_regex "$ns_regex" --argjson kinds "$kinds_json" '
-                    def fmt($r):
-                        ($r.namespace // "-") as $ns
-                        | if $ns == "-" then
-                                "    - \($r.kind) \($r.name)"
-                            else
-                                "    - \($r.kind) \($ns)/\($r.name)"
-                            end;
-                    (.items // [])
-                    | map(select(type=="object"))
-                    | .[]
-                    | . as $app
-                    | ($app.status.resources // [])
-                    | if type=="array" then . else [] end
-                    | map(select(type=="object") | select(has("kind")))
-                    | map(select(((.namespace // "") | test($ns_regex)) or (.kind as $k | ($kinds | index($k)))))
-                    | sort_by(.kind,.namespace,.name)
-                    | if length>0 then
-                            ("\n  Application: \($app.metadata.name) (\(length) resources)"),
-                            (.[0:5] | map(fmt(.))[]),
-                            (if length > 5 then "    - ... and \(length - 5) more" else empty end)
-                        else empty end
-            ')
-            if [[ -n "$app_output" ]]; then
-                found_any=1
-                echo -e "${YELLOW}ACM resources managed by ArgoCD in namespace ${argocd_ns}:${NC}"
-                echo "$app_output"
-            fi
-        done < <(echo "$argocd_json" | jq -r '.items[] | "\(.metadata.namespace)\t\(.metadata.name)"')
     fi
 
-    # Vanilla Argo CD (or no ArgoCD instances): scan all Applications cluster-wide
-    if [[ $found_any -eq 0 && ( $has_argocds_crd -eq 0 || $argocd_count -eq 0 ) ]]; then
-        local all_apps_json
-        all_apps_json=$("$CLUSTER_CLI_BIN" --context="$context" get applications.argoproj.io -A -o json 2>/dev/null || echo '{"items":[]}')
-        local app_count
-        app_count=$(echo "$all_apps_json" | jq '.items | length' 2>/dev/null || echo 0)
+    # F2 fix: Always scan Applications cluster-wide regardless of install type.
+    # Operator-based Argo CD can watch namespaces other than its own control-plane
+    # namespace, so per-instance-namespace scans miss watched-namespace Applications.
+    local all_apps_json
+    all_apps_json=$("$CLUSTER_CLI_BIN" --context="$context" get applications.argoproj.io -A -o json 2>/dev/null || echo '{"items":[]}')
+    local app_count
+    app_count=$(echo "$all_apps_json" | jq '.items | length' 2>/dev/null || echo 0)
 
-        if [[ $app_count -eq 0 ]]; then
-            check_pass "$label: No Argo CD Applications found"
-            return 0
-        fi
+    if [[ $app_count -eq 0 ]]; then
+        check_pass "$label: No Argo CD Applications found"
+        return 0
+    fi
 
-        echo ""
-        echo -e "${BLUE}Argo CD on ${label}:${NC}"
-        if [[ $has_argocds_crd -eq 0 ]]; then
-            echo -e "  (Vanilla install: applications.argoproj.io only, no argocds.argoproj.io)"
-        else
-            echo -e "  (No ArgoCD instances detected; scanning Applications cluster-wide)"
-        fi
-        echo ""
+    echo ""
+    echo -e "${BLUE}Argo CD on ${label}:${NC}"
+    if [[ $has_argocds_crd -eq 0 ]]; then
+        echo -e "  (Vanilla install: applications.argoproj.io only, no argocds.argoproj.io)"
+    elif [[ $argocd_count -gt 0 ]]; then
+        echo -e "  (Operator install: $argocd_count instance(s); scanning all Applications cluster-wide)"
+    else
+        echo -e "  (No ArgoCD instances detected; scanning Applications cluster-wide)"
+    fi
+    echo ""
 
-        local app_output
-        app_output=$(echo "$all_apps_json" | jq -r --arg ns_regex "$ns_regex" --argjson kinds "$kinds_json" '
-                def fmt($r):
-                    ($r.namespace // "-") as $ns
-                    | if $ns == "-" then
-                            "    - \($r.kind) \($r.name)"
-                        else
-                            "    - \($r.kind) \($ns)/\($r.name)"
-                        end;
-                (.items // [])
-                | map(select(type=="object"))
-                | .[]
-                | . as $app
-                | ($app.status.resources // [])
-                | if type=="array" then . else [] end
-                | map(select(type=="object") | select(has("kind")))
-                | map(select(((.namespace // "") | test($ns_regex)) or (.kind as $k | ($kinds | index($k)))))
-                | sort_by(.kind,.namespace,.name)
-                | if length>0 then
-                        ("\n  Application: \($app.metadata.namespace)/\($app.metadata.name) (\(length) resources)"),
-                        (.[0:5] | map(fmt(.))[]),
-                        (if length > 5 then "    - ... and \(length - 5) more" else empty end)
-                    else empty end
-        ')
-        if [[ -n "$app_output" ]]; then
-            found_any=1
-            echo -e "${YELLOW}ACM resources managed by Argo CD Applications:${NC}"
-            echo "$app_output"
-        fi
+    local app_output
+    app_output=$(echo "$all_apps_json" | jq -r --arg ns_regex "$ns_regex" --argjson kinds "$kinds_json" '
+            def fmt($r):
+                ($r.namespace // "-") as $ns
+                | if $ns == "-" then
+                        "    - \($r.kind) \($r.name)"
+                    else
+                        "    - \($r.kind) \($ns)/\($r.name)"
+                    end;
+            (.items // [])
+            | map(select(type=="object"))
+            | .[]
+            | . as $app
+            | ($app.status.resources // [])
+            | if type=="array" then . else [] end
+            | map(select(type=="object") | select(has("kind")))
+            | map(select(((.namespace // "") | test($ns_regex)) or (.kind as $k | ($kinds | index($k)))))
+            | sort_by(.kind,.namespace,.name)
+            | if length>0 then
+                    ("\n  Application: \($app.metadata.namespace)/\($app.metadata.name) (\(length) resources)"),
+                    (.[0:5] | map(fmt(.))[]),
+                    (if length > 5 then "    - ... and \(length - 5) more" else empty end)
+                else empty end
+    ')
+    if [[ -n "$app_output" ]]; then
+        found_any=1
+        echo -e "${YELLOW}ACM resources managed by Argo CD Applications:${NC}"
+        echo "$app_output"
     fi
 
     if [[ $found_any -eq 1 ]]; then
