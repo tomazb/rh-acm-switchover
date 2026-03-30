@@ -807,6 +807,12 @@ class KubeClient:
             return result
         except ApiException as e:
             if e.status == 409:
+                if not resource_name:
+                    logger.error(
+                        "409 on create %s but resource has no name; cannot reread to reconcile conflict",
+                        plural,
+                    )
+                    raise
                 # The create may have succeeded server-side but timed out client-side,
                 # or another actor created the resource concurrently. Re-read to decide.
                 existing = self._get_custom_resource_raw(

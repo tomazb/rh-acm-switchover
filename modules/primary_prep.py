@@ -180,7 +180,7 @@ class PrimaryPreparation:
         run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
         self.state.set_config("argocd_run_id", run_id)
         self.state.set_config("argocd_pause_dry_run", self.dry_run)
-        paused_apps = list(self.state.get_config("argocd_paused_apps") or [])
+        paused_apps = copy.deepcopy(self.state.get_config("argocd_paused_apps") or [])
         pause_failures = 0
 
         for client, hub_label, discovery in discoveries:

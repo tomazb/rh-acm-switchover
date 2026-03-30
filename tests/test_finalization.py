@@ -154,10 +154,14 @@ class TestFinalization:
             ],  # verify_backup_integrity
         ]
 
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": "multiclusterhub"},
-            "status": {"phase": "Running"},
-        }
+        mch_response = {"metadata": {"name": "multiclusterhub"}, "status": {"phase": "Running"}}
+        # _fix_backup_schedule_collision calls get_custom_resource twice (before-delete read + post-delete
+        # re-read), then _verify_mch_health calls it once for the MCH object.
+        mock_secondary_client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}},  # before deletion
+            None,  # after deletion — schedule gone, safe to create
+            mch_response,  # MCH health check
+        ]
         mock_secondary_client.get_pods.return_value = []
 
         result = finalization.finalize()
@@ -1409,10 +1413,11 @@ class TestFinalization:
                 }
             ],  # verify_backup_integrity
         ]
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": "multiclusterhub"},
-            "status": {"phase": "Running"},
-        }
+        mock_secondary_client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}},  # before deletion
+            None,  # after deletion
+            {"metadata": {"name": "multiclusterhub"}, "status": {"phase": "Running"}},  # MCH health
+        ]
         mock_secondary_client.get_pods.return_value = []
 
         # Ensure we track if _verify_old_hub_state was called
@@ -1492,10 +1497,11 @@ class TestFinalization:
                 }
             ],  # verify_backup_integrity
         ]
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": "multiclusterhub"},
-            "status": {"phase": "Running"},
-        }
+        mock_secondary_client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "schedule", "uid": "uid-1"}, "spec": {}},  # before deletion
+            None,  # after deletion
+            {"metadata": {"name": "multiclusterhub"}, "status": {"phase": "Running"}},  # MCH health
+        ]
         mock_secondary_client.get_pods.return_value = []
 
         with patch.object(fin, "_verify_old_hub_state") as mock_verify:

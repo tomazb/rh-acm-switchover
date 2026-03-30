@@ -1249,13 +1249,18 @@ class Finalization:
         )
         if schedule_after_delete:
             after_uid = schedule_after_delete.get("metadata", {}).get("uid")
+            self._cached_schedules = None
             if schedule_uid and after_uid and after_uid != schedule_uid:
-                self._cached_schedules = None
                 raise SwitchoverError(
                     "BackupSchedule %s reappeared with a different uid (%s, previous=%s) after deletion. "
                     "Manual verification is required before retrying collision repair."
                     % (schedule_name, after_uid, schedule_uid)
                 )
+            raise SwitchoverError(
+                "BackupSchedule %s still present (uid=%s) after deletion attempt. "
+                "Deletion has not completed; manual verification is required before retrying collision repair."
+                % (schedule_name, after_uid or "unknown")
+            )
 
         # Recreate the schedule
         try:
@@ -1555,10 +1560,16 @@ class Finalization:
             return
 
         if not cm:
+            if auto_import_strategy_set:
+                # ConfigMap is gone — reset is complete; clear flag so retries skip re-entering
+                self.state.set_config("auto_import_strategy_set", False)
             return
 
         strategy = (cm.get("data") or {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
         if strategy != AUTO_IMPORT_STRATEGY_SYNC:
+            if auto_import_strategy_set:
+                # Strategy already at non-sync value — reset is complete; clear flag
+                self.state.set_config("auto_import_strategy_set", False)
             return
 
         if auto_import_strategy_set:
