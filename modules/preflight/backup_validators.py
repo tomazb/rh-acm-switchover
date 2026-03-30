@@ -20,6 +20,7 @@ from lib.kube_client import KubeClient
 from lib.validation import InputValidator, ValidationError
 
 from .base_validator import BaseValidator
+from ..restore_discovery import find_passive_sync_restore
 
 logger = logging.getLogger("acm_switchover")
 
@@ -442,30 +443,7 @@ class PassiveSyncValidator(BaseValidator):
 
             context = secondary.context or "default"
 
-            # Prefer discovery by spec.syncRestoreWithNewBackups=true (matches bash scripts)
-            restores = secondary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
-                namespace=BACKUP_NAMESPACE,
-            )
-
-            def _creation_ts(item: dict) -> str:
-                return item.get("metadata", {}).get("creationTimestamp", "")
-
-            passive_candidates = [r for r in restores if r.get("spec", {}).get("syncRestoreWithNewBackups") is True]
-            passive_candidates.sort(key=_creation_ts, reverse=True)
-
-            restore = passive_candidates[0] if passive_candidates else None
-            if not restore:
-                # Fallback to the conventional name
-                restore = secondary.get_custom_resource(
-                    group="cluster.open-cluster-management.io",
-                    version="v1beta1",
-                    plural="restores",
-                    name=RESTORE_PASSIVE_SYNC_NAME,
-                    namespace=BACKUP_NAMESPACE,
-                )
+            restore = find_passive_sync_restore(secondary, namespace=BACKUP_NAMESPACE)
 
             if not restore:
                 self.add_result(

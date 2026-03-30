@@ -120,6 +120,8 @@ class PostActivationVerification:
         First tries a brief wait for clusters to connect automatically.
         If that fails, attempts to fix klusterlet connections and waits again.
         """
+        klusterlet_step_checked = False
+
         with self.state.step("verify_clusters_connected", logger) as should_run:
             if should_run:
                 try:
@@ -132,9 +134,10 @@ class PostActivationVerification:
                         e,
                     )
                     logger.info("Checking if klusterlets need to be fixed (may be pointing to old hub)...")
-                    # Try to fix klusterlet connections first
-                    self._verify_klusterlet_connections()
-                    self.state.mark_step_completed("verify_klusterlet_connections")
+                    with self.state.step("verify_klusterlet_connections", logger) as should_run_fix:
+                        klusterlet_step_checked = True
+                        if should_run_fix:
+                            self._verify_klusterlet_connections()
 
                     # Now wait longer for clusters to reconnect after fix
                     logger.info("Waiting for ManagedClusters to reconnect after klusterlet fix...")
@@ -142,9 +145,10 @@ class PostActivationVerification:
 
         # Optional: Verify klusterlet connections (non-blocking)
         # This may have already been done above if clusters didn't connect initially
-        with self.state.step("verify_klusterlet_connections", logger) as should_run:
-            if should_run:
-                self._verify_klusterlet_connections()
+        if not klusterlet_step_checked:
+            with self.state.step("verify_klusterlet_connections", logger) as should_run:
+                if should_run:
+                    self._verify_klusterlet_connections()
 
     def _verify_auto_import_cleanup_step(self) -> None:
         """Verify disable-auto-import annotations are cleared from ManagedClusters."""

@@ -313,9 +313,10 @@ class TestPostActivationVerification:
         # wait_for_condition should be called at least twice
         # (initial brief wait + wait after klusterlet fix)
         assert mock_wait.call_count >= 2
-        # verify_klusterlet_connections step should be marked completed
+        # verify_klusterlet_connections should be recorded exactly once even when the
+        # fallback path runs it before the later optional verification block.
         calls = [call[0][0] for call in mock_state_manager.mark_step_completed.call_args_list]
-        assert "verify_klusterlet_connections" in calls
+        assert calls.count("verify_klusterlet_connections") == 1
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_no_clusters(self, mock_wait, post_verify_with_obs, mock_secondary_client):

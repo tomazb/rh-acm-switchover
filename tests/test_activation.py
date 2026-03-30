@@ -776,6 +776,25 @@ class TestFindPassiveSyncRestore:
         # Should not have tried fallback
         mock_secondary_client.get_custom_resource.assert_not_called()
 
+    def test_find_prefers_newest_passive_sync_restore(self, mock_secondary_client):
+        """Passive restore discovery should prefer the newest sync-enabled restore."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "older-passive-sync", "creationTimestamp": "2026-03-29T09:00:00Z"},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            },
+            {
+                "metadata": {"name": "newer-passive-sync", "creationTimestamp": "2026-03-30T09:00:00Z"},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+            },
+        ]
+
+        result = activation_module.find_passive_sync_restore(mock_secondary_client)
+
+        assert result is not None
+        assert result["metadata"]["name"] == "newer-passive-sync"
+        mock_secondary_client.get_custom_resource.assert_not_called()
+
 
 @pytest.mark.unit
 class TestMinManagedClusters:

@@ -40,55 +40,13 @@ from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
 from lib.waiter import wait_for_condition
+from .restore_discovery import find_passive_sync_restore
 
 logger = logging.getLogger("acm_switchover")
 
 # Minimum number of ManagedClusters expected (excluding local-cluster)
 # Set to 0 to allow switchover with only local-cluster
 MIN_MANAGED_CLUSTERS = 0
-
-
-def find_passive_sync_restore(client: KubeClient, namespace: str = BACKUP_NAMESPACE) -> Optional[Dict]:
-    """
-    Find an existing passive sync restore on the cluster.
-
-    A passive sync restore is identified by spec.syncRestoreWithNewBackups = true.
-    This works both before activation (when veleroManagedClustersBackupName is 'skip')
-    and after activation (when it's 'latest').
-
-    Args:
-        client: KubeClient for the cluster
-        namespace: Namespace to search in (default: open-cluster-management-backup)
-
-    Returns:
-        The restore resource dict if found, None otherwise
-    """
-    restores = client.list_custom_resources(
-        group="cluster.open-cluster-management.io",
-        version="v1beta1",
-        plural="restores",
-        namespace=namespace,
-    )
-
-    for restore in restores:
-        spec = restore.get("spec", {})
-        # Primary identifier: syncRestoreWithNewBackups = true
-        if spec.get(SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS) is True:
-            name = restore.get("metadata", {}).get("name", "unknown")
-            logger.debug("Found passive sync restore: %s", name)
-            return restore
-
-    # Fallback: check for well-known name (backward compatibility)
-    fallback = client.get_custom_resource(
-        group="cluster.open-cluster-management.io",
-        version="v1beta1",
-        plural="restores",
-        name=RESTORE_PASSIVE_SYNC_NAME,
-        namespace=namespace,
-    )
-    if fallback:
-        logger.debug("Found passive sync restore by fallback name: %s", RESTORE_PASSIVE_SYNC_NAME)
-    return fallback
 
 
 class SecondaryActivation:

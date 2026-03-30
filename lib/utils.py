@@ -233,7 +233,9 @@ class StateManager:
 
         try:
             with open(self.state_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                state = json.load(f)
+                self._validate_loaded_state(state)
+                return state
         except json.JSONDecodeError as e:
             corrupt_path = self._preserve_corrupt_state_file()
             raise StateLoadError(
@@ -248,6 +250,29 @@ class StateManager:
                 f"I/O error: {e}\n"
                 "Check file permissions. To start a fresh switchover, use --reset-state."
             ) from e
+
+    def _validate_loaded_state(self, state: Any) -> None:
+        """Validate persisted state before the workflow consumes it."""
+        if not isinstance(state, dict):
+            corrupt_path = self._preserve_corrupt_state_file()
+            raise StateLoadError(
+                f"State file has invalid structure: {self.state_file}\n"
+                f"Expected a JSON object, got {type(state).__name__}.\n"
+                f"The invalid file has been preserved at: {corrupt_path}\n"
+                "To start a fresh switchover, use --reset-state or remove the state file."
+            )
+
+        raw_phase = state.get("current_phase", Phase.INIT.value)
+        try:
+            Phase(raw_phase)
+        except ValueError as exc:
+            corrupt_path = self._preserve_corrupt_state_file()
+            raise StateLoadError(
+                f"State file has an Unknown phase: {raw_phase}\n"
+                f"State file: {self.state_file}\n"
+                f"The invalid file has been preserved at: {corrupt_path}\n"
+                "Do not continue with this state file. Use --reset-state or remove it after review."
+            ) from exc
 
     def _preserve_corrupt_state_file(self) -> str:
         """Copy the corrupt state file to *.corrupt.<timestamp> for forensics.
@@ -395,6 +420,26 @@ class StateManager:
         self.state["current_phase"] = phase.value
         self.flush_state()  # Phase transitions are critical checkpoints
 
+    def capture_runtime_checkpoint(self) -> Dict[str, Optional[str]]:
+        """Capture the durable state fields that validate-only must preserve."""
+        return {
+            "current_phase": self.state.get("current_phase", Phase.INIT.value),
+            "last_updated": self.state.get("last_updated"),
+        }
+
+    def restore_runtime_checkpoint(self, checkpoint: Dict[str, Optional[str]]) -> None:
+        """Restore a previously captured runtime checkpoint without touching other state."""
+        self.state["current_phase"] = checkpoint.get("current_phase", Phase.INIT.value)
+
+        last_updated = checkpoint.get("last_updated")
+        if last_updated is None:
+            self.state.pop("last_updated", None)
+        else:
+            self.state["last_updated"] = last_updated
+
+        self._dirty = False
+        self._write_state(self.state)
+
     def mark_step_completed(self, step_name: str) -> None:
         """Mark a step as completed."""
         if not self.is_step_completed(step_name):
@@ -488,15 +533,12 @@ class StateManager:
         raw_phase = self.state.get("current_phase", Phase.INIT.value)
         try:
             return Phase(raw_phase)
-        except ValueError:
-            logging.warning(
-                "Unknown phase '%s' in state file %s. Falling back to INIT.",
-                raw_phase,
-                self.state_file,
-            )
-            self.state["current_phase"] = Phase.INIT.value
-            self.flush_state()  # Phase correction is a critical checkpoint
-            return Phase.INIT
+        except ValueError as exc:
+            raise StateLoadError(
+                f"State file has an Unknown phase: {raw_phase}\n"
+                f"State file: {self.state_file}\n"
+                "Use --reset-state or remove the state file after review."
+            ) from exc
 
     def get_state_age(self) -> Optional[timedelta]:
         """Get the age of the state file based on last_updated timestamp.

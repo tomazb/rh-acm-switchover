@@ -695,9 +695,9 @@ class TestFinalization:
         )
 
         # Should NOT raise — 404 is a successful no-op
-        fin._ensure_auto_import_default()
+        assert fin._ensure_auto_import_default() is True
         mock_state_manager.set_config.assert_any_call("auto_import_strategy_set", False)
-        mock_state_manager.mark_step_completed.assert_any_call("reset_auto_import_strategy")
+        mock_state_manager.mark_step_completed.assert_not_called()
 
     def test_ensure_auto_import_default_skips_state_updates_in_dry_run(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
@@ -710,7 +710,7 @@ class TestFinalization:
             dry_run=True,
         )
 
-        fin._ensure_auto_import_default()
+        assert fin._ensure_auto_import_default() is True
 
         mock_secondary_client.get_configmap.assert_not_called()
         mock_secondary_client.delete_configmap.assert_not_called()
@@ -728,7 +728,7 @@ class TestFinalization:
         mock_secondary_client.get_configmap.side_effect = ApiException(status=403, reason="Forbidden")
 
         with caplog.at_level(logging.WARNING):
-            fin._ensure_auto_import_default()
+            assert fin._ensure_auto_import_default() is True
 
         assert "Unable to verify auto-import strategy" in caplog.text
         mock_secondary_client.delete_configmap.assert_not_called()
@@ -758,10 +758,35 @@ class TestFinalization:
             acm_version="2.13.9",
         )
 
-        fin._ensure_auto_import_default()
+        assert fin._ensure_auto_import_default() is True
 
         mock_secondary_client.get_configmap.assert_not_called()
         mock_secondary_client.delete_configmap.assert_not_called()
+
+    def test_finalize_exposes_reset_auto_import_strategy_as_explicit_step(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Finalization should expose auto-import reset in the visible step sequence."""
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+        )
+
+        with patch.object(fin, "_enable_backup_schedule"), patch.object(fin, "_verify_backup_schedule_enabled"), patch.object(
+            fin, "_fix_backup_schedule_collision"
+        ), patch.object(fin, "_verify_new_backups"), patch.object(fin, "_verify_backup_integrity"), patch.object(
+            fin, "_verify_multiclusterhub_health"
+        ), patch.object(
+            fin, "_ensure_auto_import_default", return_value=True
+        ) as reset_auto_import, patch.object(fin, "_handle_old_hub"), patch.object(
+            fin, "_get_backup_verify_timeout", return_value=600
+        ):
+            assert fin.finalize() is True
+
+        mock_state_manager.is_step_completed.assert_any_call("reset_auto_import_strategy")
+        reset_auto_import.assert_called_once()
+        mock_state_manager.mark_step_completed.assert_any_call("reset_auto_import_strategy")
 
     def test_backup_verify_timeout_derived_from_schedule(self, finalization):
         schedule = {

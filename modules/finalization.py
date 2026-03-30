@@ -223,7 +223,7 @@ class Finalization:
                     self._verify_multiclusterhub_health()
 
             # Ensure auto-import strategy reset to default (ACM 2.14+)
-            self._ensure_auto_import_default()
+            self._run_reset_auto_import_strategy_step()
 
             # Handle old primary hub based on --old-hub-action
             with self.state.step("handle_old_hub", logger) as should_run:
@@ -1541,11 +1541,24 @@ class Finalization:
         if summary.failed:
             raise SwitchoverError(f"Argo CD auto-sync restore failed for {summary.failed} Application(s)")
 
-    @dry_run_skip(message="Would reset autoImportStrategy to default ImportOnly")
-    def _ensure_auto_import_default(self) -> None:
-        """Reset autoImportStrategy to default ImportOnly when applicable."""
+    def _run_reset_auto_import_strategy_step(self) -> None:
+        """Execute the explicit reset_auto_import_strategy step when applicable."""
         if not is_acm_version_ge(self.acm_version, "2.14.0"):
             return
+
+        step_name = "reset_auto_import_strategy"
+        if self.state.is_step_completed(step_name):
+            logger.info("Step already completed: %s", step_name)
+            return
+
+        if self._ensure_auto_import_default():
+            self.state.mark_step_completed(step_name)
+
+    @dry_run_skip(message="Would reset autoImportStrategy to default ImportOnly", return_value=True)
+    def _ensure_auto_import_default(self) -> bool:
+        """Reset autoImportStrategy to default ImportOnly when applicable."""
+        if not is_acm_version_ge(self.acm_version, "2.14.0"):
+            return True
 
         auto_import_strategy_set = self.state.get_config("auto_import_strategy_set", False)
         try:
@@ -1557,20 +1570,20 @@ class Finalization:
                     f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
                 ) from e
             logger.warning("Unable to verify auto-import strategy: %s", e)
-            return
+            return True
 
         if not cm:
             if auto_import_strategy_set:
                 # ConfigMap is gone — reset is complete; clear flag so retries skip re-entering
                 self.state.set_config("auto_import_strategy_set", False)
-            return
+            return True
 
         strategy = (cm.get("data") or {}).get(AUTO_IMPORT_STRATEGY_KEY, "default")
         if strategy != AUTO_IMPORT_STRATEGY_SYNC:
             if auto_import_strategy_set:
                 # Strategy already at non-sync value — reset is complete; clear flag
                 self.state.set_config("auto_import_strategy_set", False)
-            return
+            return True
 
         if auto_import_strategy_set:
             logger.info(
@@ -1594,9 +1607,7 @@ class Finalization:
                         f"{MCE_NAMESPACE}/{IMPORT_CONTROLLER_CONFIG_CM}: {e.status} {e.reason}"
                     ) from e
             self.state.set_config("auto_import_strategy_set", False)
-            # Mark step completed (idempotent - no-op if already completed)
-            self.state.mark_step_completed("reset_auto_import_strategy")
-            return
+            return True
 
         logger.warning(
             "autoImportStrategy is %s; remove %s/%s to reset to default (%s)",
@@ -1605,3 +1616,4 @@ class Finalization:
             IMPORT_CONTROLLER_CONFIG_CM,
             AUTO_IMPORT_STRATEGY_DEFAULT,
         )
+        return False

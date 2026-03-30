@@ -115,7 +115,15 @@ section_header "1. Checking Restore Status"
 
 # Try to find passive sync restore by syncRestoreWithNewBackups=true first
 PASSIVE_SYNC_RESTORE=$(oc --context="$NEW_HUB_CONTEXT" get $RES_RESTORE -n "$BACKUP_NAMESPACE" -o json 2>/dev/null | \
-    jq -r '.items[] | select(.spec.syncRestoreWithNewBackups == true) | "\(.metadata.name) \(.status.phase // "unknown") \(.metadata.creationTimestamp)"' | head -1 || true)
+    jq -r '
+        [.items[] | select(.spec.syncRestoreWithNewBackups == true)]
+        | if length == 0 then
+            empty
+          else
+            (sort_by(.metadata.creationTimestamp) | reverse | .[0])
+            | "\(.metadata.name) \(.status.phase // "unknown") \(.metadata.creationTimestamp)"
+          end
+    ' || true)
 
 if [[ -n "$PASSIVE_SYNC_RESTORE" ]]; then
     read -r RESTORE_NAME RESTORE_PHASE RESTORE_TIME <<< "$PASSIVE_SYNC_RESTORE"

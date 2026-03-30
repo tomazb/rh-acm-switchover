@@ -175,9 +175,10 @@ case "$EXPR" in
             printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
         else
             printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); out=""; 
-for item in d.get("items", []):
-    if item.get("spec", {}).get("syncRestoreWithNewBackups") is True:
-        out=item.get("metadata", {}).get("name", ""); break
+items=[item for item in d.get("items", []) if item.get("spec", {}).get("syncRestoreWithNewBackups") is True]
+items.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""), reverse=True)
+if items:
+    out=items[0].get("metadata", {}).get("name", "")
 print(out)' 2>/dev/null || echo ""
         fi
         ;;
@@ -218,9 +219,10 @@ print(c)' 2>/dev/null || echo "0"
                 printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); print(d.get("status", {}).get("lastMessage", ""))' 2>/dev/null || echo ""
             elif [[ "$EXPR" == *"syncRestoreWithNewBackups"* && "$EXPR" == *".metadata.name"* ]]; then
                 printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); out=""; 
-for item in d.get("items", []):
-    if item.get("spec", {}).get("syncRestoreWithNewBackups") is True:
-        out=item.get("metadata", {}).get("name", ""); break
+items=[item for item in d.get("items", []) if item.get("spec", {}).get("syncRestoreWithNewBackups") is True]
+items.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""), reverse=True)
+if items:
+    out=items[0].get("metadata", {}).get("name", "")
 print(out)' 2>/dev/null || echo ""
             elif [[ "$EXPR" == *".type==\"Ready\""* && "$EXPR" == *".status==\"True\""* && "$EXPR" == *"| length"* ]]; then
                 printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); c=0
@@ -984,6 +986,57 @@ esac
     return env
 
 
+@pytest.fixture
+def mock_oc_postflight_newest_restore(tmp_path):
+    """Create mocked oc/jq binaries that expose multiple passive restores out of order."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    oc_script = mock_bin / "oc"
+    oc_script.write_text(
+        """#!/bin/bash
+case "$*" in
+    "config get-contexts new-hub")
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"restore"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'RESTORE_JSON'
+{"items":[
+  {"metadata":{"name":"older-passive-sync","creationTimestamp":"2026-03-29T09:00:00Z"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Finished"}},
+  {"metadata":{"name":"newer-passive-sync","creationTimestamp":"2026-03-30T09:00:00Z"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Finished"}}
+]}
+RESTORE_JSON
+        exit 0
+        ;;
+    *"get "*"backupschedule"*"paused"*)
+        echo "false"
+        exit 0
+        ;;
+    *"get "*"managedcluster"*"--no-headers"*)
+        echo "cluster1   True   True"
+        exit 0
+        ;;
+    *"get "*"managedcluster"*"-o json"*)
+        cat << 'MC_JSON'
+{"items":[{"metadata":{"name":"cluster1"},"status":{"conditions":[{"type":"ManagedClusterConditionAvailable","status":"True"},{"type":"ManagedClusterJoined","status":"True"}]}}]}
+MC_JSON
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
+
+    write_shared_jq_mock(mock_bin)
+
+    env = os.environ.copy()
+    env["REAL_JQ"] = shutil.which("jq") or ""
+    env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
+    return env
+
+
 # ============================================================================
 # Integration Tests - Success Paths
 # ============================================================================
@@ -1065,6 +1118,21 @@ def test_postflight_success(mock_oc_success):
     else:
         # Exit 1 but only from warnings (not failures)
         assert "Warnings:" in out
+
+
+@pytest.mark.integration
+def test_postflight_prefers_newest_passive_restore(mock_oc_postflight_newest_restore):
+    """Postflight should report the newest passive restore when several candidates exist."""
+    code, out = run_script(
+        "postflight-check.sh",
+        "--new-hub-context",
+        "new-hub",
+        env=mock_oc_postflight_newest_restore,
+    )
+
+    assert code in (0, 1), f"Expected script execution, got {code}. Output:\n{out}"
+    assert "Latest restore 'newer-passive-sync' completed successfully" in out
+    assert "older-passive-sync" not in out
 
 
 # ============================================================================

@@ -255,20 +255,31 @@ class TestStateManager:
         assert len(completed) == 1
         assert completed[0]["name"] == "step1"
 
-    @patch("lib.utils.logging")
-    def test_get_current_phase_handles_unknown(self, mock_logging, temp_state_file):
-        """Unknown persisted phase should reset to INIT with warning."""
+    def test_invalid_persisted_phase_raises_state_load_error(self, temp_state_file):
+        """Unknown persisted phase must fail fast instead of being rewritten."""
         sm = StateManager(str(temp_state_file))
         sm.state["current_phase"] = "mystery-phase"
         sm.flush_state()  # Force write even if not dirty
 
-        # Reload to simulate separate run
-        sm_reloaded = StateManager(str(temp_state_file))
-        phase = sm_reloaded.get_current_phase()
+        with pytest.raises(StateLoadError, match="Unknown phase"):
+            StateManager(str(temp_state_file))
 
-        assert phase == Phase.INIT
-        assert sm_reloaded.state["current_phase"] == Phase.INIT.value
-        mock_logging.warning.assert_called()
+    def test_restore_runtime_checkpoint_restores_phase_and_timestamp_only(self, tmp_path):
+        """Runtime checkpoint restore should preserve config updates while restoring durable state."""
+        state_path = tmp_path / "runtime-checkpoint.json"
+        sm = StateManager(str(state_path))
+        original_timestamp = sm.state["last_updated"]
+        checkpoint = sm.capture_runtime_checkpoint()
+
+        sm.set_phase(Phase.PREFLIGHT)
+        sm.set_config("primary_version", "2.14.0")
+
+        sm.restore_runtime_checkpoint(checkpoint)
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.get_config("primary_version") == "2.14.0"
+        assert reloaded.state["last_updated"] == original_timestamp
 
     def test_ensure_contexts_stores_values(self, tmp_path):
         """Contexts should be persisted and reloaded."""

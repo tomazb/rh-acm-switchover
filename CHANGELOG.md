@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.15] - 2026-03-30
+
+### Fixed
+
+- **State file phase safety**: invalid persisted `current_phase` values now fail fast during state load instead of being silently rewritten to `INIT`.
+- **Validate-only state encapsulation**: `--validate-only` now uses a public `StateManager` runtime-checkpoint API rather than mutating internal state fields directly.
+- **Post-activation step recording**: klusterlet fallback verification now records `verify_klusterlet_connections` only once, keeping resume semantics consistent.
+- **Finalization step visibility**: resetting `autoImportStrategy` is now executed as an explicit `reset_auto_import_strategy` workflow step instead of a hidden side effect.
+- **Passive restore discovery parity**: Python restore discovery is centralized in a shared helper and postflight now selects the newest passive-sync restore candidate.
+
 ## [1.5.14] - 2026-03-30
 
 ### Fixed
