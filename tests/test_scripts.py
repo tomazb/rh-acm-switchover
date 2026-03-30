@@ -47,6 +47,20 @@ def run_script(script_name: str, *args: str, env=None):
     return proc.returncode, output
 
 
+def run_lib_common(command: str):
+    """Run a bash snippet after sourcing constants.sh and lib-common.sh."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    proc = subprocess.run(
+        ["bash", "-lc", f"source '{constants}' && source '{lib_common}' && {command}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=30,
+    )
+    return proc.returncode, strip_ansi(proc.stdout)
+
+
 # ============================================================================
 # Argument Validation Tests
 # ============================================================================
@@ -206,6 +220,35 @@ def test_postflight_output_format():
     assert "ACM Switchover Post-flight Verification" in out or "New Hub:" in out
     # Should attempt to show sections
     assert "1." in out or "Checking" in out or "Restore" in out
+
+
+@pytest.mark.parametrize(
+    ("resource_json", "expected"),
+    [
+        ('{"metadata":{"annotations":{"argocd.argoproj.io/sync-wave":"5"}}}', "annotation:argocd.argoproj.io/sync-wave"),
+        ('{"metadata":{"labels":{"kustomize.toolkit.fluxcd.io/name":"app"}}}', "label:kustomize.toolkit.fluxcd.io/name"),
+    ],
+)
+def test_detect_gitops_markers_matches_valid_gitops_keys(resource_json, expected):
+    """Shell detector should still report canonical Argo CD and Flux keys."""
+    code, out = run_lib_common(f"detect_gitops_markers '{resource_json}'")
+    assert code == 0
+    assert expected in out.strip()
+
+
+@pytest.mark.parametrize(
+    "resource_json",
+    [
+        '{"metadata":{"annotations":{"description":"managed by myargocdtool"}}}',
+        '{"metadata":{"annotations":{"note":"https://example/fluxcd.io/docs"}}}',
+        '{"metadata":{"annotations":{"rollouts.argoproj.io/revision":"3"}}}',
+    ],
+)
+def test_detect_gitops_markers_ignores_non_gitops_values_and_domains(resource_json):
+    """Shell detector must ignore value-only mentions and non-Argo argoproj.io domains."""
+    code, out = run_lib_common(f"detect_gitops_markers '{resource_json}'")
+    assert code == 0
+    assert out.strip() == ""
 
 
 def test_generate_sa_kubeconfig_accepts_explicit_kubeconfig(tmp_path):

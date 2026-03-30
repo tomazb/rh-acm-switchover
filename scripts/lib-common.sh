@@ -867,15 +867,19 @@ detect_gitops_markers() {
                 markers+="label:app.kubernetes.io/managed-by"
             fi
         else
-            local label_lower
-            label_lower=$(echo "$label" | tr '[:upper:]' '[:lower:]')
+            local key_lower
+            local key_prefix=""
+            key_lower=$(echo "$key" | tr '[:upper:]' '[:lower:]')
+            if [[ "$key_lower" == */* ]]; then
+                key_prefix="${key_lower%%/*}"
+            fi
 
-            # ArgoCD detection
-            if [[ "$label_lower" == *"argocd"* ]] || [[ "$label_lower" == *"argoproj.io"* ]]; then
+            # Match exact GitOps API groups to avoid false positives from unrelated domains like rollouts.argoproj.io.
+            if [[ "$key_prefix" == "argocd.argoproj.io" ]]; then
                 [[ -n "$markers" ]] && markers+=","
                 markers+="label:${key}"
             # Flux detection
-            elif [[ "$label_lower" == *"fluxcd.io"* ]] || [[ "$label_lower" == *"toolkit.fluxcd.io"* ]]; then
+            elif [[ "$key_prefix" == "fluxcd.io" ]] || [[ "$key_prefix" == *.fluxcd.io ]]; then
                 [[ -n "$markers" ]] && markers+=","
                 markers+="label:${key}"
             fi
@@ -886,8 +890,6 @@ detect_gitops_markers() {
     while IFS= read -r annotation; do
         [[ -z "$annotation" ]] && continue
         local key="${annotation%%=*}"
-        local annotation_lower
-        annotation_lower=$(echo "$annotation" | tr '[:upper:]' '[:lower:]')
 
         # Argo CD instance tracking key (explicit match)
         if [[ "$key" == "app.kubernetes.io/instance" ]]; then
@@ -901,12 +903,19 @@ detect_gitops_markers() {
             continue
         fi
 
-        # ArgoCD detection
-        if [[ "$annotation_lower" == *"argocd"* ]] || [[ "$annotation_lower" == *"argoproj.io"* ]]; then
+        local key_lower
+        local key_prefix=""
+        key_lower=$(echo "$key" | tr '[:upper:]' '[:lower:]')
+        if [[ "$key_lower" == */* ]]; then
+            key_prefix="${key_lower%%/*}"
+        fi
+
+        # Match exact GitOps API groups to avoid false positives from unrelated domains like rollouts.argoproj.io.
+        if [[ "$key_prefix" == "argocd.argoproj.io" ]]; then
             [[ -n "$markers" ]] && markers+=","
             markers+="annotation:${key}"
         # Flux detection
-        elif [[ "$annotation_lower" == *"fluxcd.io"* ]] || [[ "$annotation_lower" == *"toolkit.fluxcd.io"* ]]; then
+        elif [[ "$key_prefix" == "fluxcd.io" ]] || [[ "$key_prefix" == *.fluxcd.io ]]; then
             [[ -n "$markers" ]] && markers+=","
             markers+="annotation:${key}"
         fi
@@ -972,6 +981,7 @@ print_gitops_report() {
     echo -e "${YELLOW}Coordinate changes with GitOps to avoid drift after switchover.${NC}"
     echo ""
     ((WARNING_CHECKS+=count)) || true
+    ((TOTAL_CHECKS+=count)) || true
     if [[ $count -eq 1 ]]; then
         WARNING_MESSAGES+=("GitOps-related marker detected on 1 resource; coordinate changes with GitOps to avoid drift after switchover.")
     else

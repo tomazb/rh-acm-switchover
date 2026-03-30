@@ -49,6 +49,21 @@ def run_script(script_name: str, *args: str, env=None):
     return proc.returncode, output
 
 
+def run_setup_rbac_sanitize(context: str):
+    """Execute the real sanitize_context() function from setup-rbac.sh."""
+    content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+    match = re.search(r"sanitize_context\(\)\s*\{.*?^\}", content, re.MULTILINE | re.DOTALL)
+    assert match, "sanitize_context() definition not found in setup-rbac.sh"
+
+    proc = subprocess.run(
+        ["bash", "-lc", f"{match.group(0)}; sanitize_context {subprocess.list2cmdline([context])}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return proc
+
+
 class TestScriptArgumentSafety:
     """Regression tests for shell argument handling hardening."""
 
@@ -1373,30 +1388,32 @@ class TestSetupRbacSanitization:
 
     def test_sanitize_context_replaces_slashes(self, tmp_path):
         """Context names with '/' must be sanitized to '_' in filenames."""
-        result = subprocess.run(
-            ["bash", "-c", 'sanitize_context() { echo "$1" | sed "s/[^A-Za-z0-9._-]/_/g"; }; sanitize_context "admin/api-ci-aws"'],
-            capture_output=True,
-            text=True,
-        )
-        assert result.stdout.strip() == "admin_api-ci-aws"
+        result = run_setup_rbac_sanitize("admin/api-ci-aws")
+        assert result.returncode == 0
+        assert re.fullmatch(r"admin_api-ci-aws_[0-9a-f]{8}", result.stdout.strip())
 
     def test_sanitize_context_replaces_colons(self, tmp_path):
         """Context names with ':' must be sanitized to '_' in filenames."""
-        result = subprocess.run(
-            ["bash", "-c", 'sanitize_context() { echo "$1" | sed "s/[^A-Za-z0-9._-]/_/g"; }; sanitize_context "default/api.example.com:6443/admin"'],
-            capture_output=True,
-            text=True,
-        )
-        assert result.stdout.strip() == "default_api.example.com_6443_admin"
+        result = run_setup_rbac_sanitize("default/api.example.com:6443/admin")
+        assert result.returncode == 0
+        assert re.fullmatch(r"default_api\.example\.com_6443_admin_[0-9a-f]{8}", result.stdout.strip())
 
     def test_sanitize_context_preserves_safe_chars(self, tmp_path):
         """Safe characters (alphanumeric, dot, underscore, dash) must remain unchanged."""
-        result = subprocess.run(
-            ["bash", "-c", 'sanitize_context() { echo "$1" | sed "s/[^A-Za-z0-9._-]/_/g"; }; sanitize_context "prod-hub.example_01"'],
-            capture_output=True,
-            text=True,
-        )
-        assert result.stdout.strip() == "prod-hub.example_01"
+        result = run_setup_rbac_sanitize("prod-hub.example_01")
+        assert result.returncode == 0
+        assert re.fullmatch(r"prod-hub\.example_01_[0-9a-f]{8}", result.stdout.strip())
+
+    def test_sanitize_context_appends_unique_hash_for_colliding_slugs(self):
+        """Distinct contexts with the same sanitized slug must still produce unique outputs."""
+        slash_result = run_setup_rbac_sanitize("admin/api-ci-aws")
+        colon_result = run_setup_rbac_sanitize("admin:api-ci-aws")
+
+        assert slash_result.returncode == 0
+        assert colon_result.returncode == 0
+        assert slash_result.stdout.strip().startswith("admin_api-ci-aws_")
+        assert colon_result.stdout.strip().startswith("admin_api-ci-aws_")
+        assert slash_result.stdout.strip() != colon_result.stdout.strip()
 
     def test_setup_script_uses_sanitized_context_in_filenames(self):
         """setup-rbac.sh must use SANITIZED_CONTEXT, not raw CONTEXT, in output filenames."""

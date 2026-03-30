@@ -203,9 +203,14 @@ fi
 # F4 fix: Sanitize context name for filesystem-safe filenames.
 # Contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
 # contain characters that break filename interpolation.
-# Matches Python InputValidator.sanitize_context_identifier().
+# A short sha256 fingerprint is appended so distinct contexts that sanitize to the
+# same string (e.g. 'admin/api-ci-aws' vs 'admin:api-ci-aws') produce unique names.
 sanitize_context() {
-    echo "$1" | sed 's/[^A-Za-z0-9._-]/_/g'
+    local clean
+    clean=$(echo "$1" | sed 's/[^A-Za-z0-9._-]/_/g')
+    local hash
+    hash=$(printf '%s' "$1" | sha256sum | cut -c1-8)
+    echo "${clean}_${hash}"
 }
 SANITIZED_CONTEXT=$(sanitize_context "$CONTEXT")
 
@@ -560,8 +565,13 @@ else
     
     echo ""
     echo "Next steps:"
-    echo "  1. Test the kubeconfig: KUBECONFIG=${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml kubectl get ns"
-    echo "  2. Run preflight check: python3 acm_switchover.py --validate-only --primary-context ${SANITIZED_CONTEXT}-operator@..."
+    if [[ "$ROLE" == "validator" ]]; then
+        echo "  1. Test the kubeconfig: KUBECONFIG=${OUTPUT_DIR}/${SANITIZED_CONTEXT}-validator.yaml kubectl get ns"
+        echo "  2. Run preflight check: python3 acm_switchover.py --validate-only --primary-context ${SANITIZED_CONTEXT}-validator@..."
+    else
+        echo "  1. Test the kubeconfig: KUBECONFIG=${OUTPUT_DIR}/${SANITIZED_CONTEXT}-operator.yaml kubectl get ns"
+        echo "  2. Run preflight check: python3 acm_switchover.py --validate-only --primary-context ${SANITIZED_CONTEXT}-operator@..."
+    fi
     echo ""
     echo "For multi-hub setup, run this script for each hub, then use"
     echo "generate-merged-kubeconfig.sh to create a single merged kubeconfig."
