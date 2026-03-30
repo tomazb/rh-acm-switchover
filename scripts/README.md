@@ -896,13 +896,13 @@ Pause or resume auto-sync on Argo CD Applications that touch ACM namespaces/kind
 
 ```bash
 # Pause ACM-touching Applications on a hub (store state for later resume)
-./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause.json
+./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause-state.json
 
 # Resume auto-sync using saved state (only after Git/desired state updated for target hub)
-./scripts/argocd-manage.sh --context <kubecontext> --mode resume --state-file .state/argocd-pause.json
+./scripts/argocd-manage.sh --context <kubecontext> --mode resume --state-file .state/argocd-pause-state.json
 
 # Dry-run to see which apps would be paused
-./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause.json --dry-run
+./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause-state.json --dry-run
 ```
 
 **Options:** `--context`, `--mode pause|resume`, `--state-file` (optional; default: `.state/argocd-pause-state.json`), `--target acm` (default), `--dry-run`, `--help`.
@@ -912,9 +912,9 @@ Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io
 ### Recommended sequence with GitOps
 
 1. Run preflight with Argo CD check: `./scripts/preflight-check.sh --primary-context <p> --secondary-context <s> --method passive --argocd-check`
-2. Pause ACM-touching Applications on primary (and optionally secondary): `./scripts/argocd-manage.sh --context <p> --mode pause --state-file .state/argocd-pause.json` (repeat for secondary if desired)
+2. Pause ACM-touching Applications on primary (and optionally secondary): `./scripts/argocd-manage.sh --context <p> --mode pause --state-file .state/argocd-pause-state.json` (repeat for secondary if desired)
 3. Run switchover (Python tool or manual runbook steps)
-4. After updating Git/desired state for the new hub, resume: `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
+4. After updating Git/desired state for the new hub, resume: `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause-state.json`
 
 The Python tool can perform pause/resume during switchover when using `--argocd-manage` and optionally `--argocd-resume-after-switchover` or `--argocd-resume-only`; see [usage.md](../docs/operations/usage.md).
 
