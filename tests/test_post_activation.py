@@ -617,8 +617,8 @@ data:
                     executor.submit(verify._force_klusterlet_reconnect, f"cluster-{i}", ctx)
                     for i, ctx in enumerate(contexts)
                 ]
-                for f in as_completed(futures):
-                    f.result()
+                results = [f.result() for f in as_completed(futures)]
+        assert all(results), f"Expected all workers to return True, got {results}"
 
         assert len(call_log) == 2
         ctx_names = {entry[0] for entry in call_log}
