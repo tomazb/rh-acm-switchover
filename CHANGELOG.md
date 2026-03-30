@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.14] - 2026-03-30
+
+### Fixed
+
+- **Shell GitOps marker precision**: Align `lib-common.sh` detection with the Python implementation so only exact `argocd.argoproj.io/*` and Flux API-group keys are flagged; unrelated domains like `rollouts.argoproj.io/*` no longer trigger drift warnings.
+- **setup-rbac sanitization coverage**: Update shell integration tests to execute the real `sanitize_context()` implementation, including hashed output validation and collision-proofing coverage.
+
 ## [1.5.13] - 2026-03-28
 
 ### Fixed
@@ -913,7 +920,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.10...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.13...HEAD
+[1.5.13]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.12...v1.5.13
+[1.5.12]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.11...v1.5.12
+[1.5.11]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.10...v1.5.11
 [1.5.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.9...v1.5.10
 [1.5.9]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.8...v1.5.9
 [1.5.8]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.7...v1.5.8
