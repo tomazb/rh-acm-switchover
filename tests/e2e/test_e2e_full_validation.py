@@ -485,3 +485,152 @@ class TestFullValidation:
             passed = True
         finally:
             PhaseTracker.mark("phase9", passed)
+
+    # ── Phase 10: Soak Test ───────────────────────────────────────────
+
+    @pytest.mark.e2e_soak
+    @pytest.mark.slow
+    def test_phase10_soak(self, request, require_cluster_contexts):
+        """4-hour soak with ArgoCD mode rotation and periodic cross-validation."""
+        PhaseTracker.require("phase9")
+        passed = False
+        try:
+            argocd_mode = request.config.getoption("--e2e-argocd-mode", "rotate")
+            run_hours = request.config.getoption("--e2e-run-hours") or 4.0
+            cooldown = request.config.getoption("--e2e-cooldown") or 60
+
+            argocd_rotation = [
+                ("no-argocd", []),
+                ("argocd-pause", ["--argocd-manage"]),
+                (
+                    "argocd-full",
+                    ["--argocd-manage", "--argocd-resume-after-switchover"],
+                ),
+            ]
+
+            # After phase 9: self._primary is original primary
+            current_primary = self._primary
+            current_secondary = self._secondary
+
+            deadline = time.time() + (run_hours * 3600)
+            cycle = 0
+            failures = 0
+            consecutive_failures = 0
+            max_consecutive = 3
+            results_log = self._output_dir / "soak_results.jsonl"
+
+            while time.time() < deadline and consecutive_failures < max_consecutive:
+                cycle += 1
+
+                # Select ArgoCD mode
+                if argocd_mode == "rotate":
+                    _, argocd_args = argocd_rotation[cycle % len(argocd_rotation)]
+                    mode_label = argocd_rotation[cycle % len(argocd_rotation)][0]
+                elif argocd_mode == "none":
+                    argocd_args, mode_label = [], "no-argocd"
+                elif argocd_mode == "pause":
+                    argocd_args, mode_label = ["--argocd-manage"], "argocd-pause"
+                else:
+                    argocd_args = [
+                        "--argocd-manage",
+                        "--argocd-resume-after-switchover",
+                    ]
+                    mode_label = "argocd-full"
+
+                state = self._state_file(f"soak-cycle-{cycle:04d}")
+                start = time.time()
+
+                result = run_switchover(
+                    current_primary,
+                    current_secondary,
+                    extra_args=["--state-file", state] + argocd_args,
+                    timeout=900,
+                )
+                duration = time.time() - start
+                success = result.ok
+
+                # Log result
+                entry = {
+                    "cycle": cycle,
+                    "primary": current_primary,
+                    "secondary": current_secondary,
+                    "argocd_mode": mode_label,
+                    "success": success,
+                    "duration_seconds": round(duration, 1),
+                    "returncode": result.returncode,
+                }
+                with open(results_log, "a") as f:
+                    f.write(json.dumps(entry) + "\n")
+
+                if success:
+                    consecutive_failures = 0
+                    logger.info(
+                        "Soak cycle %d OK (%s, %.0fs) %s→%s",
+                        cycle,
+                        mode_label,
+                        duration,
+                        current_primary,
+                        current_secondary,
+                    )
+                else:
+                    failures += 1
+                    consecutive_failures += 1
+                    logger.warning(
+                        "Soak cycle %d FAILED (%s, %.0fs) %s→%s\n%s",
+                        cycle,
+                        mode_label,
+                        duration,
+                        current_primary,
+                        current_secondary,
+                        result.output[-500:],
+                    )
+
+                # If argocd-pause (no auto-resume), do a standalone resume
+                if success and mode_label == "argocd-pause":
+                    resume_result = run_switchover(
+                        current_secondary,
+                        current_secondary,
+                        extra_args=[
+                            "--argocd-resume-only",
+                            "--state-file",
+                            state,
+                        ],
+                        timeout=120,
+                    )
+                    if not resume_result.ok:
+                        logger.warning(
+                            "Soak cycle %d: argocd-resume-only failed", cycle
+                        )
+
+                # Periodic cross-validation every 5th cycle
+                if cycle % 5 == 0 and success:
+                    run_shell_script(
+                        "postflight-check.sh",
+                        ["--context", current_secondary],
+                        timeout=120,
+                    )
+
+                # Swap directions for next cycle
+                current_primary, current_secondary = (
+                    current_secondary,
+                    current_primary,
+                )
+
+                # Cooldown
+                if time.time() < deadline:
+                    time.sleep(cooldown)
+
+            # Report
+            logger.info(
+                "Soak complete: %d cycles, %d failures, %d consecutive failures",
+                cycle,
+                failures,
+                consecutive_failures,
+            )
+            assert (
+                consecutive_failures < max_consecutive
+            ), f"Soak stopped early: {max_consecutive} consecutive failures"
+
+            passed = True
+        finally:
+            PhaseTracker.mark("phase10", passed)
