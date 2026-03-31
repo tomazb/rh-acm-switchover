@@ -29,6 +29,7 @@ from typing import ClassVar
 
 import pytest
 
+from tests.e2e.full_validation_helpers import get_argocd_apps  # noqa: F401
 from tests.e2e.full_validation_helpers import (
     PhaseTracker,
     assert_hub_is_primary,
@@ -38,6 +39,7 @@ from tests.e2e.full_validation_helpers import (
     run_python_tool,
     run_shell_script,
     run_switchover,
+    wait_and_assert_hub_is_primary,
 )
 
 logger = logging.getLogger("e2e_full_validation")
@@ -224,3 +226,78 @@ class TestFullValidation:
             passed = True
         finally:
             PhaseTracker.mark("phase3", passed)
+
+    # ── Phase 4: Real Switchover — No ArgoCD ──────────────────────────
+
+    def test_phase4_switchover_no_argocd(self, require_cluster_contexts):
+        """Real switchover primary->secondary without Argo CD management."""
+        PhaseTracker.require("phase2")
+        passed = False
+        try:
+            state = self._state_file("phase4-no-argocd")
+            result = run_switchover(
+                self._primary,
+                self._secondary,
+                extra_args=["--state-file", state],
+                timeout=900,
+            )
+            result.assert_success("Phase 4 switchover failed")
+
+            # After switchover: secondary becomes new primary
+            wait_and_assert_hub_is_primary(self._secondary, timeout=300)
+
+            # Verify state file shows COMPLETED
+            with open(state) as f:
+                st = json.load(f)
+            assert (
+                st.get("current_phase") == "COMPLETED"
+            ), f"Expected COMPLETED, got {st.get('current_phase')}"
+
+            logger.info(
+                "Phase 4 switchover %s->%s completed",
+                self._primary,
+                self._secondary,
+            )
+            passed = True
+        finally:
+            PhaseTracker.mark("phase4", passed)
+
+    # ── Phase 5: Post-Switchover Cross-Validation ─────────────────────
+
+    def test_phase5_post_switchover_validation(self, require_cluster_contexts):
+        """Cross-validate with shell scripts after phase 4 switchover."""
+        PhaseTracker.require("phase4")
+        passed = False
+        try:
+            new_primary = self._secondary  # roles are swapped after phase 4
+
+            # postflight-check against new primary
+            result = run_shell_script(
+                "postflight-check.sh",
+                ["--context", new_primary],
+                timeout=120,
+            )
+            logger.info(
+                "postflight exit=%d\n%s",
+                result.returncode,
+                result.stdout[:2000],
+            )
+
+            # discover-hub to confirm role swap
+            contexts = f"{self._primary},{self._secondary}"
+            result = run_shell_script(
+                "discover-hub.sh",
+                ["--contexts", contexts, "--verbose"],
+                timeout=60,
+            )
+            result.assert_success("discover-hub post-switchover failed")
+            logger.info("discover-hub post-switchover:\n%s", result.stdout[:2000])
+
+            # show_state.py for the phase4 state file
+            state = self._state_file("phase4-no-argocd")
+            result = run_python_tool("show_state.py", ["--state-file", state])
+            logger.info("show_state:\n%s", result.output[:1000])
+
+            passed = True
+        finally:
+            PhaseTracker.mark("phase5", passed)
