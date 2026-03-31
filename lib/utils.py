@@ -534,6 +534,9 @@ class StateManager:
         try:
             return Phase(raw_phase)
         except ValueError as exc:
+            # Defense-in-depth: _validate_loaded_state already catches this at
+            # load time, but we guard here as a safety net against direct
+            # state dict mutation (e.g. self.state["current_phase"] = "bad").
             raise StateLoadError(
                 f"State file has an Unknown phase: {raw_phase}\n"
                 f"State file: {self.state_file}\n"
