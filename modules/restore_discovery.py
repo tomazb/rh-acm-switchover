@@ -7,7 +7,14 @@ from lib.kube_client import KubeClient
 
 
 def find_passive_sync_restore(client: KubeClient, namespace: str = BACKUP_NAMESPACE) -> Optional[Dict]:
-    """Return the newest passive-sync restore, with fallback to the conventional name."""
+    """Return the newest passive-sync restore, with fallback to the conventional name.
+
+    When multiple restores carry the syncRestoreWithNewBackups spec flag,
+    the one with the most recent creationTimestamp is selected.  This avoids
+    non-deterministic results from unordered Kubernetes API list responses.
+    If no spec-matching candidate exists, falls back to a lookup by the
+    conventional resource name (RESTORE_PASSIVE_SYNC_NAME).
+    """
     restores = client.list_custom_resources(
         group="cluster.open-cluster-management.io",
         version="v1beta1",
