@@ -124,11 +124,23 @@ def pytest_addoption(parser):
         help="Phase at which to inject failure (env: E2E_INJECT_AT_PHASE, default: activation)",
     )
 
+    group.addoption(
+        "--e2e-argocd-mode",
+        action="store",
+        default=os.environ.get("E2E_ARGOCD_MODE", "rotate"),
+        choices=["none", "pause", "pause-resume", "rotate"],
+        help="Argo CD mode for full validation soak (env: E2E_ARGOCD_MODE, default: rotate)",
+    )
+
 
 def pytest_configure(config):
     """Register E2E and resilience markers."""
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring real clusters")
     config.addinivalue_line("markers", "resilience: Resilience tests with failure injection")
+    config.addinivalue_line(
+        "markers", "e2e_full_validation: Full validation E2E suite against real clusters"
+    )
+    config.addinivalue_line("markers", "e2e_soak: Soak testing subset (long-running)")
 
 
 @pytest.fixture(scope="session")
