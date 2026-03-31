@@ -398,3 +398,90 @@ class TestFullValidation:
             passed = True
         finally:
             PhaseTracker.mark("phase7", passed)
+
+    # ── Phase 8: Switchover — ArgoCD Pause + Auto-Resume ──────────────
+
+    def test_phase8_switchover_argocd_pause_resume(self, require_cluster_contexts):
+        """Switchover with --argocd-manage + --argocd-resume-after-switchover."""
+        PhaseTracker.require("phase7")
+        passed = False
+        try:
+            # After phase 6, self._primary is primary again
+            current_primary = self._primary
+            current_secondary = self._secondary
+
+            state = self._state_file("phase8-argocd-full")
+            result = run_switchover(
+                current_primary,
+                current_secondary,
+                extra_args=[
+                    "--argocd-manage",
+                    "--argocd-resume-after-switchover",
+                    "--state-file",
+                    state,
+                ],
+                timeout=900,
+            )
+            result.assert_success("Phase 8 switchover failed")
+
+            # New primary is self._secondary
+            wait_and_assert_hub_is_primary(current_secondary, timeout=300)
+
+            # With auto-resume, apps should NOT have paused annotation
+            apps = get_argocd_apps(current_secondary)
+            still_paused = [
+                a
+                for a in apps
+                if a.get("metadata", {})
+                .get("annotations", {})
+                .get("acm-switchover.argoproj.io/paused-by")
+            ]
+            assert len(still_paused) == 0, (
+                f"Phase 8: expected 0 paused apps after auto-resume, "
+                f"found {len(still_paused)}"
+            )
+            logger.info("Phase 8: switchover + auto-resume OK on %s", current_secondary)
+
+            passed = True
+        finally:
+            PhaseTracker.mark("phase8", passed)
+
+    # ── Phase 9: Reverse Switchover — Restore Original Topology ───────
+
+    def test_phase9_reverse_to_original(self, require_cluster_contexts):
+        """Reverse switchover to restore original hub topology."""
+        PhaseTracker.require("phase8")
+        passed = False
+        try:
+            # After phase 8: secondary is primary.  Swap back.
+            current_primary = self._secondary
+            current_secondary = self._primary
+
+            state = self._state_file("phase9-reverse")
+            result = run_switchover(
+                current_primary,
+                current_secondary,
+                extra_args=["--state-file", state],
+                timeout=900,
+            )
+            result.assert_success("Phase 9 reverse switchover failed")
+
+            # Original primary (self._primary) is primary again
+            wait_and_assert_hub_is_primary(self._primary, timeout=300)
+
+            # Shell cross-validation
+            result = run_shell_script(
+                "preflight-check.sh",
+                ["--context", self._primary, "--quick"],
+                timeout=120,
+            )
+            result.assert_success("Phase 9 preflight on restored primary failed")
+
+            logger.info(
+                "Phase 9: original topology restored, %s is primary",
+                self._primary,
+            )
+
+            passed = True
+        finally:
+            PhaseTracker.mark("phase9", passed)
