@@ -301,3 +301,100 @@ class TestFullValidation:
             passed = True
         finally:
             PhaseTracker.mark("phase5", passed)
+
+    # ── Phase 6: Switchover — ArgoCD Pause-Only ───────────────────────
+
+    def test_phase6_switchover_argocd_pause(self, require_cluster_contexts):
+        """Switchover with --argocd-manage (pause-only, no resume)."""
+        PhaseTracker.require("phase4")
+        passed = False
+        try:
+            # After phase 4, roles are swapped: secondary is now primary
+            current_primary = self._secondary
+            current_secondary = self._primary
+
+            state = self._state_file("phase6-argocd-pause")
+            result = run_switchover(
+                current_primary,
+                current_secondary,
+                extra_args=["--argocd-manage", "--state-file", state],
+                timeout=900,
+            )
+            result.assert_success("Phase 6 switchover failed")
+
+            # New primary is self._primary again (swapped back)
+            wait_and_assert_hub_is_primary(current_secondary, timeout=300)
+
+            # Verify Argo CD apps on the NEW primary have paused annotation
+            apps = get_argocd_apps(current_secondary)
+            paused_apps = [
+                a
+                for a in apps
+                if a.get("metadata", {})
+                .get("annotations", {})
+                .get("acm-switchover.argoproj.io/paused-by")
+            ]
+            logger.info(
+                "Phase 6: %d/%d apps have paused-by annotation on %s",
+                len(paused_apps),
+                len(apps),
+                current_secondary,
+            )
+
+            # Verify argocd-manage.sh status shows paused state
+            result = run_shell_script(
+                "argocd-manage.sh",
+                ["--context", current_secondary, "--mode", "status"],
+                timeout=60,
+            )
+            logger.info("argocd status:\n%s", result.output[:2000])
+
+            # Verify state file records completion
+            with open(state) as f:
+                st = json.load(f)
+            assert st.get("current_phase") == "COMPLETED"
+
+            passed = True
+        finally:
+            PhaseTracker.mark("phase6", passed)
+
+    # ── Phase 7: ArgoCD Resume-Only ───────────────────────────────────
+
+    def test_phase7_argocd_resume_only(self, require_cluster_contexts):
+        """Standalone --argocd-resume-only to restore paused apps."""
+        PhaseTracker.require("phase6")
+        passed = False
+        try:
+            # After phase 6: self._primary is now primary again
+            resume_target = self._primary
+            state = self._state_file("phase6-argocd-pause")
+
+            result = run_switchover(
+                resume_target,
+                resume_target,
+                extra_args=[
+                    "--argocd-resume-only",
+                    "--state-file",
+                    state,
+                ],
+                timeout=120,
+            )
+            result.assert_success("Phase 7 argocd-resume-only failed")
+
+            # Verify paused-by annotations are removed
+            apps = get_argocd_apps(resume_target)
+            still_paused = [
+                a
+                for a in apps
+                if a.get("metadata", {})
+                .get("annotations", {})
+                .get("acm-switchover.argoproj.io/paused-by")
+            ]
+            assert (
+                len(still_paused) == 0
+            ), f"Expected 0 paused apps after resume, found {len(still_paused)}"
+            logger.info("Phase 7: all apps resumed on %s", resume_target)
+
+            passed = True
+        finally:
+            PhaseTracker.mark("phase7", passed)
