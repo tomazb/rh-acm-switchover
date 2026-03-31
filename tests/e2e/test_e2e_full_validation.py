@@ -634,3 +634,65 @@ class TestFullValidation:
             passed = True
         finally:
             PhaseTracker.mark("phase10", passed)
+
+    # ── Phase 11: Final Validation ────────────────────────────────────
+
+    def test_phase11_final_validation(self, require_cluster_contexts):
+        """Final cross-validation after all switchovers and soak."""
+        # Run even if soak was skipped, as long as phase 9 passed
+        PhaseTracker.require("phase9")
+        passed = False
+        try:
+            # Determine who is currently primary based on whether soak ran
+            # After phase 9, self._primary is primary.
+            # After soak (even cycles), it depends on cycle count — check live.
+            primary_phase = get_backup_schedule_phase(self._primary)
+            secondary_phase = get_backup_schedule_phase(self._secondary)
+
+            if primary_phase == "Enabled":
+                current_primary = self._primary
+            elif secondary_phase == "Enabled":
+                current_primary = self._secondary
+            else:
+                pytest.fail(
+                    f"Neither hub has BackupSchedule Enabled: "
+                    f"{self._primary}={primary_phase}, "
+                    f"{self._secondary}={secondary_phase}"
+                )
+
+            # discover-hub
+            contexts = f"{self._primary},{self._secondary}"
+            result = run_shell_script(
+                "discover-hub.sh",
+                ["--contexts", contexts, "--verbose"],
+                timeout=60,
+            )
+            result.assert_success("Final discover-hub failed")
+            logger.info("Final discover-hub:\n%s", result.output[:3000])
+
+            # postflight on whoever is primary
+            result = run_shell_script(
+                "postflight-check.sh",
+                ["--context", current_primary],
+                timeout=120,
+            )
+            logger.info(
+                "Final postflight exit=%d\n%s",
+                result.returncode,
+                result.output[:2000],
+            )
+
+            # check_rbac on both
+            for ctx in [self._primary, self._secondary]:
+                result = run_python_tool("check_rbac.py", ["--context", ctx])
+                logger.info("Final check_rbac %s exit=%d", ctx, result.returncode)
+
+            # Managed cluster count sanity
+            for ctx in [self._primary, self._secondary]:
+                count = get_managed_cluster_count(ctx)
+                logger.info("Final MC count on %s: %d", ctx, count)
+
+            logger.info("=== Full Validation Suite PASSED ===")
+            passed = True
+        finally:
+            PhaseTracker.mark("phase11", passed)
