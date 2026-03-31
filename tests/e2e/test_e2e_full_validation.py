@@ -157,6 +157,17 @@ class TestFullValidation:
                 "check_rbac exit=%d\n%s", result.returncode, result.output[:1000]
             )
 
+            # show_state.py
+            state = self._state_file("phase1-show-state")
+            result = run_python_tool(
+                "show_state.py",
+                ["--state-file", state],
+                timeout=60,
+            )
+            logger.info(
+                "show_state exit=%d\n%s", result.returncode, result.output[:1000]
+            )
+
             passed = True
         finally:
             PhaseTracker.mark("phase1", passed)
@@ -354,6 +365,12 @@ class TestFullValidation:
                 st = json.load(f)
             assert st.get("current_phase") == "COMPLETED"
 
+            # show_state.py after real switchover
+            result = run_python_tool(
+                "show_state.py", ["--state-file", state], timeout=60
+            )
+            logger.info("Phase 6 show_state exit=%d", result.returncode)
+
             passed = True
         finally:
             PhaseTracker.mark("phase6", passed)
@@ -394,6 +411,14 @@ class TestFullValidation:
                 len(still_paused) == 0
             ), f"Expected 0 paused apps after resume, found {len(still_paused)}"
             logger.info("Phase 7: all apps resumed on %s", resume_target)
+
+            # argocd-manage.sh status after resume
+            result = run_shell_script(
+                "argocd-manage.sh",
+                ["--context", resume_target, "--mode", "status"],
+                timeout=60,
+            )
+            logger.info("Phase 7 argocd status:\n%s", result.output[:2000])
 
             passed = True
         finally:
@@ -442,6 +467,20 @@ class TestFullValidation:
             )
             logger.info("Phase 8: switchover + auto-resume OK on %s", current_secondary)
 
+            # argocd-manage.sh status after auto-resume
+            result = run_shell_script(
+                "argocd-manage.sh",
+                ["--context", current_secondary, "--mode", "status"],
+                timeout=60,
+            )
+            logger.info("Phase 8 argocd status:\n%s", result.output[:2000])
+
+            # show_state.py after real switchover
+            result = run_python_tool(
+                "show_state.py", ["--state-file", state], timeout=60
+            )
+            logger.info("Phase 8 show_state exit=%d", result.returncode)
+
             passed = True
         finally:
             PhaseTracker.mark("phase8", passed)
@@ -469,13 +508,19 @@ class TestFullValidation:
             # Original primary (self._primary) is primary again
             wait_and_assert_hub_is_primary(self._primary, timeout=300)
 
-            # Shell cross-validation
+            # Shell cross-validation — postflight on restored primary
             result = run_shell_script(
-                "preflight-check.sh",
-                ["--context", self._primary, "--quick"],
+                "postflight-check.sh",
+                ["--context", self._primary],
                 timeout=120,
             )
-            result.assert_success("Phase 9 preflight on restored primary failed")
+            result.assert_success("Phase 9 postflight on restored primary failed")
+
+            # show_state.py after real switchover
+            result = run_python_tool(
+                "show_state.py", ["--state-file", state], timeout=60
+            )
+            logger.info("Phase 9 show_state exit=%d", result.returncode)
 
             logger.info(
                 "Phase 9: original topology restored, %s is primary",
