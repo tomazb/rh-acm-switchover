@@ -437,6 +437,8 @@ class StateManager:
         else:
             self.state["last_updated"] = last_updated
 
+        # Write directly (not via _do_flush) to preserve the checkpoint's
+        # original last_updated timestamp instead of stamping a new one.
         self._dirty = False
         self._write_state(self.state)
 
