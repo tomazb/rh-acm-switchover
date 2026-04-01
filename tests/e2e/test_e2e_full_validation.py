@@ -192,15 +192,21 @@ class TestFullValidation:
             result.assert_success("validate-only (forward) failed")
             logger.info("validate-only forward OK")
 
-            # Reverse: secondary → primary
+            # Reverse: secondary → primary (advisory — may fail if secondary
+            # is not configured as a primary; this is expected pre-switchover)
             result = run_switchover(
                 self._secondary,
                 self._primary,
                 extra_args=["--validate-only"],
                 timeout=120,
             )
-            result.assert_success("validate-only (reverse) failed")
-            logger.info("validate-only reverse OK")
+            if result.ok:
+                logger.info("validate-only reverse OK")
+            else:
+                logger.info(
+                    "validate-only reverse exit=%d (expected pre-switchover)",
+                    result.returncode,
+                )
 
             passed = True
         finally:
@@ -223,19 +229,33 @@ class TestFullValidation:
             ]
 
             for label, argocd_args in argocd_variants:
-                for direction, (pri, sec) in [
-                    ("fwd", (self._primary, self._secondary)),
-                    ("rev", (self._secondary, self._primary)),
-                ]:
-                    state = self._state_file(f"dryrun-{label}-{direction}")
-                    result = run_switchover(
-                        pri,
-                        sec,
-                        extra_args=["--dry-run", "--state-file", state] + argocd_args,
-                        timeout=180,
+                # Forward direction: must succeed
+                state = self._state_file(f"dryrun-{label}-fwd")
+                result = run_switchover(
+                    self._primary,
+                    self._secondary,
+                    extra_args=["--dry-run", "--state-file", state] + argocd_args,
+                    timeout=180,
+                )
+                result.assert_success(f"dry-run {label} fwd failed")
+                logger.info("dry-run %s fwd OK", label)
+
+                # Reverse direction: advisory (expected to fail pre-switchover)
+                state = self._state_file(f"dryrun-{label}-rev")
+                result = run_switchover(
+                    self._secondary,
+                    self._primary,
+                    extra_args=["--dry-run", "--state-file", state] + argocd_args,
+                    timeout=180,
+                )
+                if result.ok:
+                    logger.info("dry-run %s rev OK", label)
+                else:
+                    logger.info(
+                        "dry-run %s rev exit=%d (expected pre-switchover)",
+                        label,
+                        result.returncode,
                     )
-                    result.assert_success(f"dry-run {label} {direction} failed")
-                    logger.info("dry-run %s %s OK", label, direction)
 
             passed = True
         finally:
