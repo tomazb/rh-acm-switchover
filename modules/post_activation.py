@@ -554,7 +554,12 @@ class PostActivationVerification:
             logger.warning("Unable to query Grafana route: %s", exc)
 
     def _verify_disable_auto_import_cleared(self):
-        """Ensure disable-auto-import annotations were removed after activation."""
+        """Ensure disable-auto-import annotations are cleared from ManagedClusters.
+
+        Annotations may be present on the secondary hub if the passive-sync
+        backup was taken after PRIMARY_PREP added them on the primary hub.
+        This method actively removes any stale annotations before verifying.
+        """
 
         # Skip verification in dry-run mode since annotations weren't actually cleared
         if self.dry_run:
@@ -566,7 +571,8 @@ class PostActivationVerification:
         # which may have taken time and annotations could have been cleared
         managed_clusters = self._get_managed_clusters(force_refresh=True)
 
-        flagged = []
+        # Remove stale annotations that were synced from primary via backup/restore
+        removed = []
         for mc in managed_clusters:
             mc_name = mc.get("metadata", {}).get("name")
             if mc_name == LOCAL_CLUSTER_NAME:
@@ -574,12 +580,48 @@ class PostActivationVerification:
 
             annotations = mc.get("metadata", {}).get("annotations") or {}
             if DISABLE_AUTO_IMPORT_ANNOTATION in annotations:
+                try:
+                    patch = {
+                        "metadata": {
+                            "annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: None}
+                        }
+                    }
+                    self.secondary.patch_custom_resource(
+                        group="cluster.open-cluster-management.io",
+                        version="v1",
+                        plural="managedclusters",
+                        name=mc_name,
+                        body=patch,
+                    )
+                    removed.append(mc_name)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to remove disable-auto-import annotation from %s: %s",
+                        mc_name,
+                        exc,
+                    )
+
+        if removed:
+            logger.info(
+                "Removed stale disable-auto-import annotations from: %s",
+                ", ".join(removed),
+            )
+
+        # Verify all annotations are now cleared
+        managed_clusters = self._get_managed_clusters(force_refresh=True)
+        flagged = []
+        for mc in managed_clusters:
+            mc_name = mc.get("metadata", {}).get("name")
+            if mc_name == LOCAL_CLUSTER_NAME:
+                continue
+            annotations = mc.get("metadata", {}).get("annotations") or {}
+            if DISABLE_AUTO_IMPORT_ANNOTATION in annotations:
                 flagged.append(mc_name or "unknown")
 
         if flagged:
             raise SwitchoverError("disable-auto-import annotation still present on: " + ", ".join(flagged))
 
-        logger.info("All ManagedClusters cleared disable-auto-import annotation")
+        logger.info("All ManagedClusters cleared of disable-auto-import annotation")
 
     @dry_run_skip(message="Skipping klusterlet connection verification")
     def _verify_klusterlet_connections(self):  # noqa: C901
