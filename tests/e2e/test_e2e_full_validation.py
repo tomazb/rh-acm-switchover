@@ -175,6 +175,47 @@ class TestFullValidation:
             # Verify primary is healthy
             assert_hub_is_primary(self._primary)
 
+            # Clean stale ArgoCD paused-by markers from previous failed runs
+            for ctx in (self._primary, self._secondary):
+                apps = get_argocd_apps(ctx)
+                for app in apps:
+                    ann = app.get("metadata", {}).get("annotations", {})
+                    if ann.get("acm-switchover.argoproj.io/paused-by"):
+                        name = app["metadata"]["name"]
+                        logger.warning(
+                            "Clearing stale paused-by marker on %s/%s",
+                            ctx,
+                            name,
+                        )
+                        kubectl(
+                            ctx,
+                            "annotate",
+                            "applications.argoproj.io",
+                            name,
+                            "-n",
+                            "openshift-gitops",
+                            "acm-switchover.argoproj.io/paused-by-",
+                        )
+
+            # Also ensure ArgoCD auto-sync is re-enabled on key backup apps
+            for ctx, app_name in (
+                (self._primary, "hub-backup-schedule"),
+                (self._secondary, "hub-backup-standby"),
+            ):
+                kubectl(
+                    ctx,
+                    "patch",
+                    "applications.argoproj.io",
+                    app_name,
+                    "-n",
+                    "openshift-gitops",
+                    "--type",
+                    "merge",
+                    "-p",
+                    '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}',
+                    timeout=10,
+                )
+
             # Verify secondary has a passive-sync restore or is clean
             mc_count = get_managed_cluster_count(secondary)
             logger.info(
