@@ -572,6 +572,44 @@ class TestFullValidation:
             phase6_secondary = self._primary
             state = self._state_file("phase6-argocd-pause")
 
+            # Clean stale paused-by markers that don't match the expected
+            # run_id.  The passive-sync restore can overwrite markers set
+            # during phase 6 with old backup data containing annotations
+            # from previous runs.
+            with open(state) as f:
+                expected_run_id = json.load(f).get("config", {}).get(
+                    "argocd_run_id", ""
+                )
+            if expected_run_id:
+                for ctx in (phase6_primary, phase6_secondary):
+                    apps = get_argocd_apps(ctx)
+                    for app in apps:
+                        marker = (
+                            app.get("metadata", {})
+                            .get("annotations", {})
+                            .get("acm-switchover.argoproj.io/paused-by", "")
+                        )
+                        if marker and marker != expected_run_id:
+                            app_name = app["metadata"]["name"]
+                            logger.info(
+                                "Phase 7: removing stale marker %s from %s/%s "
+                                "(expected %s)",
+                                marker,
+                                ctx,
+                                app_name,
+                                expected_run_id,
+                            )
+                            kubectl(
+                                ctx,
+                                "annotate",
+                                "applications.argoproj.io",
+                                app_name,
+                                "-n",
+                                "openshift-gitops",
+                                "acm-switchover.argoproj.io/paused-by-",
+                                timeout=10,
+                            )
+
             result = run_switchover(
                 phase6_primary,
                 phase6_secondary,
