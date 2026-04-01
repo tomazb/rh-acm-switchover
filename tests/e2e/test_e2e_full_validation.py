@@ -216,6 +216,30 @@ class TestFullValidation:
                     timeout=10,
                 )
 
+            # Wait for passive-sync restore to settle (Running → Enabled)
+            # After baseline cleanup, the restore may be actively syncing
+            # a recent backup. Wait up to 120s for it to finish.
+            for attempt in range(12):
+                restore_out = kubectl(
+                    secondary,
+                    "get",
+                    "restores.cluster.open-cluster-management.io",
+                    "-n",
+                    "open-cluster-management-backup",
+                    "-o",
+                    "jsonpath={.items[0].status.phase}",
+                    timeout=10,
+                )
+                phase_val = restore_out.stdout.strip()
+                if phase_val in ("Enabled", ""):
+                    break
+                logger.info(
+                    "Waiting for restore to settle (attempt %d/12, phase=%s)",
+                    attempt + 1,
+                    phase_val,
+                )
+                time.sleep(10)
+
             # Verify secondary has a passive-sync restore or is clean
             mc_count = get_managed_cluster_count(secondary)
             logger.info(
