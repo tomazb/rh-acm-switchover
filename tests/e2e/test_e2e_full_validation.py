@@ -477,7 +477,7 @@ class TestFullValidation:
             # postflight-check against new primary
             result = run_shell_script(
                 "postflight-check.sh",
-                ["--context", new_primary],
+                ["--new-hub-context", new_primary],
                 timeout=120,
             )
             logger.info(
@@ -773,7 +773,7 @@ class TestFullValidation:
             # Shell cross-validation — postflight on restored primary
             result = run_shell_script(
                 "postflight-check.sh",
-                ["--context", self._primary],
+                ["--new-hub-context", self._primary],
                 timeout=120,
             )
             result.assert_success("Phase 9 postflight on restored primary failed")
@@ -916,7 +916,7 @@ class TestFullValidation:
                 if cycle % 5 == 0 and success:
                     run_shell_script(
                         "postflight-check.sh",
-                        ["--context", current_secondary],
+                        ["--new-hub-context", current_secondary],
                         timeout=120,
                     )
 
@@ -984,7 +984,7 @@ class TestFullValidation:
             # postflight on whoever is primary
             result = run_shell_script(
                 "postflight-check.sh",
-                ["--context", current_primary],
+                ["--new-hub-context", current_primary],
                 timeout=120,
             )
             logger.info(
