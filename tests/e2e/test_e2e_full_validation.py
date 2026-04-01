@@ -325,12 +325,25 @@ class TestFullValidation:
         passed = False
         try:
             # Forward: primary → secondary
-            result = run_switchover(
-                self._primary,
-                self._secondary,
-                extra_args=["--validate-only"],
-                timeout=120,
-            )
+            # Retry up to 3 times because the passive-sync restore may be
+            # transiently in "Running" state while syncing a new backup.
+            for attempt in range(3):
+                result = run_switchover(
+                    self._primary,
+                    self._secondary,
+                    extra_args=["--validate-only"],
+                    timeout=120,
+                )
+                if result.ok:
+                    break
+                if "unexpected state: Running" in result.stderr and attempt < 2:
+                    logger.info(
+                        "validate-only failed (restore syncing), retry %d/3 in 60s",
+                        attempt + 1,
+                    )
+                    time.sleep(60)
+                    continue
+                break
             result.assert_success("validate-only (forward) failed")
             logger.info("validate-only forward OK")
 
