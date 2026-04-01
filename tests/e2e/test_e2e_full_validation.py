@@ -72,6 +72,83 @@ class TestFullValidation:
     def _state_file(self, label: str) -> str:
         return str(self._state_dir / f"{label}-state.json")
 
+    def _cleanup_argocd_conflicts(self, primary: str, secondary: str) -> None:
+        """Remove ArgoCD-recreated resources that conflict with new hub roles.
+
+        After switchover, ArgoCD apps resume and may recreate resources matching
+        the OLD role (e.g. hub-backup-standby recreates a Restore on the new
+        primary).  Delete conflicting resources and pause the offending apps.
+        """
+        # New primary should NOT have a Restore (standby ArgoCD may recreate it)
+        r = kubectl(
+            primary,
+            "get", "restores.cluster.open-cluster-management.io",
+            "-n", "open-cluster-management-backup",
+            "--no-headers",
+        )
+        if r.ok and r.stdout.strip():
+            restore_name = r.stdout.strip().split()[0]
+            logger.warning(
+                "Stale Restore %s on new primary %s — deleting",
+                restore_name,
+                primary,
+            )
+            # Pause the ArgoCD app that manages it to stop recreation
+            kubectl(
+                primary,
+                "patch", "applications.argoproj.io", "hub-backup-standby",
+                "-n", "openshift-gitops",
+                "--type", "json",
+                "-p", '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
+                timeout=10,
+            )
+            kubectl(
+                primary,
+                "delete",
+                f"restores.cluster.open-cluster-management.io/{restore_name}",
+                "-n", "open-cluster-management-backup",
+            )
+
+        # New secondary should NOT have a BackupSchedule (schedule ArgoCD
+        # may recreate it).  Only delete if a Restore already exists.
+        bs = kubectl(
+            secondary,
+            "get", "backupschedules.cluster.open-cluster-management.io",
+            "-n", "open-cluster-management-backup",
+            "--no-headers",
+        )
+        if bs.ok and bs.stdout.strip():
+            rs = kubectl(
+                secondary,
+                "get", "restores.cluster.open-cluster-management.io",
+                "-n", "open-cluster-management-backup",
+                "--no-headers",
+            )
+            if rs.ok and rs.stdout.strip():
+                bs_name = bs.stdout.strip().split()[0]
+                logger.warning(
+                    "Stale BackupSchedule %s on new secondary %s — deleting",
+                    bs_name,
+                    secondary,
+                )
+                kubectl(
+                    secondary,
+                    "patch", "applications.argoproj.io", "hub-backup-schedule",
+                    "-n", "openshift-gitops",
+                    "--type", "json",
+                    "-p", '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
+                    timeout=10,
+                )
+                kubectl(
+                    secondary,
+                    "delete",
+                    f"backupschedules.cluster.open-cluster-management.io/{bs_name}",
+                    "-n", "open-cluster-management-backup",
+                )
+
+        # Give ACM a moment to reconcile
+        time.sleep(10)
+
     # ── Phase 0: Baseline Cleanup ─────────────────────────────────────
 
     def test_phase0_baseline_cleanup(self, require_cluster_contexts):
@@ -311,6 +388,13 @@ class TestFullValidation:
         passed = False
         try:
             new_primary = self._secondary  # roles are swapped after phase 4
+            new_secondary = self._primary
+
+            # After switchover with --argocd-manage, ArgoCD apps resume and
+            # may recreate conflicting resources (e.g. hub-backup-standby
+            # recreates a Restore on the new primary that conflicts with the
+            # new BackupSchedule).  Clean up before validation.
+            self._cleanup_argocd_conflicts(new_primary, new_secondary)
 
             # postflight-check against new primary
             result = run_shell_script(
@@ -553,6 +637,9 @@ class TestFullValidation:
 
             # Original primary (self._primary) is primary again
             wait_and_assert_hub_is_primary(self._primary, timeout=300)
+
+            # Clean ArgoCD conflicts before validation
+            self._cleanup_argocd_conflicts(self._primary, self._secondary)
 
             # Shell cross-validation — postflight on restored primary
             result = run_shell_script(
