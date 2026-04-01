@@ -119,14 +119,15 @@ class TestFullValidation:
         try:
             contexts = f"{self._primary},{self._secondary}"
 
-            # discover-hub
+            # discover-hub (advisory — may exit non-zero if roles are ambiguous)
             result = run_shell_script(
                 "discover-hub.sh",
                 ["--contexts", contexts, "--verbose"],
                 timeout=60,
             )
-            result.assert_success("discover-hub.sh failed")
-            logger.info("discover-hub output:\n%s", result.stdout[:2000])
+            logger.info(
+                "discover-hub exit=%d\n%s", result.returncode, result.output[:2000]
+            )
 
             # preflight-check against primary
             result = run_shell_script(

@@ -107,6 +107,8 @@ def run_switchover(
     extra_args: Optional[List[str]] = None,
     timeout: int = 900,
     state_file: Optional[str] = None,
+    method: str = "passive",
+    old_hub_action: str = "secondary",
 ) -> RunResult:
     """Run acm_switchover.py as a subprocess.
 
@@ -120,6 +122,10 @@ def run_switchover(
         primary,
         "--secondary-context",
         secondary,
+        "--method",
+        method,
+        "--old-hub-action",
+        old_hub_action,
     ]
     if state_file:
         cmd.extend(["--state-file", state_file])
