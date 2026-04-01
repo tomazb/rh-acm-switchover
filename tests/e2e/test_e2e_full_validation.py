@@ -261,18 +261,25 @@ class TestFullValidation:
         finally:
             PhaseTracker.mark("phase3", passed)
 
-    # ── Phase 4: Real Switchover — No ArgoCD ──────────────────────────
+    # ── Phase 4: Real Switchover — Basic ─────────────────────────────
 
     def test_phase4_switchover_no_argocd(self, require_cluster_contexts):
-        """Real switchover primary->secondary without Argo CD management."""
+        """Real switchover primary->secondary (adds --argocd-manage when needed)."""
         PhaseTracker.require("phase2")
         passed = False
         try:
             state = self._state_file("phase4-no-argocd")
+            # On clusters with ArgoCD apps managing backup resources,
+            # --argocd-manage is required to prevent GitOps drift during
+            # finalization.  Detect and add automatically.
+            extra = ["--state-file", state]
+            if get_argocd_apps(self._primary):
+                logger.info("ArgoCD apps detected — adding --argocd-manage")
+                extra.append("--argocd-manage")
             result = run_switchover(
                 self._primary,
                 self._secondary,
-                extra_args=["--state-file", state],
+                extra_args=extra,
                 timeout=900,
             )
             result.assert_success("Phase 4 switchover failed")
@@ -532,10 +539,14 @@ class TestFullValidation:
             assert_hub_is_primary(current_primary)
 
             state = self._state_file("phase9-reverse")
+            extra = ["--state-file", state]
+            if get_argocd_apps(current_primary):
+                logger.info("ArgoCD apps detected — adding --argocd-manage")
+                extra.append("--argocd-manage")
             result = run_switchover(
                 current_primary,
                 current_secondary,
-                extra_args=["--state-file", state],
+                extra_args=extra,
                 timeout=900,
             )
             result.assert_success("Phase 9 reverse switchover failed")
