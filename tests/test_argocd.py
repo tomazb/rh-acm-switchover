@@ -264,6 +264,30 @@ class TestResumeAutosync:
         assert result.restored is False
         client.patch_custom_resource.assert_not_called()
 
+    def test_marker_mismatch_with_autosync_cleans_stale_marker(self):
+        """When marker doesn't match but auto-sync is already enabled,
+        the stale marker should be cleaned and result treated as noop."""
+        client = MagicMock()
+        client.get_custom_resource.return_value = {
+            "metadata": {
+                "resourceVersion": "500",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "old-run"},
+            },
+            "spec": {
+                "syncPolicy": {
+                    "automated": {"prune": True, "selfHeal": True},
+                },
+            },
+        }
+        result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {}}, "run-1")
+        assert result.restored is False
+        assert result.skip_reason == argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING
+        assert argocd_lib.is_resume_noop(result)
+        # Should have patched to remove the stale marker
+        client.patch_custom_resource.assert_called_once()
+        patch_kw = client.patch_custom_resource.call_args[1]
+        assert patch_kw["patch"]["metadata"]["annotations"][argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION] is None
+
     def test_patch_exception_returns_skip_reason(self):
         client = MagicMock()
         client.get_custom_resource.return_value = {
