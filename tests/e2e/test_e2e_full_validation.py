@@ -280,12 +280,12 @@ class TestFullValidation:
             # After switchover: secondary becomes new primary
             wait_and_assert_hub_is_primary(self._secondary, timeout=300)
 
-            # Verify state file shows COMPLETED
+            # Verify state file shows completed (Phase.COMPLETED.value)
             with open(state) as f:
                 st = json.load(f)
             assert (
-                st.get("current_phase") == "COMPLETED"
-            ), f"Expected COMPLETED, got {st.get('current_phase')}"
+                st.get("current_phase") == "completed"
+            ), f"Expected completed, got {st.get('current_phase')}"
 
             logger.info(
                 "Phase 4 switchover %s->%s completed",
@@ -390,7 +390,7 @@ class TestFullValidation:
             # Verify state file records completion
             with open(state) as f:
                 st = json.load(f)
-            assert st.get("current_phase") == "COMPLETED"
+            assert st.get("current_phase") == "completed"
 
             # show_state.py after real switchover
             result = run_python_tool(
