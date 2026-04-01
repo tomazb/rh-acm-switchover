@@ -231,7 +231,7 @@ class TestFullValidation:
                     timeout=10,
                 )
                 phase_val = restore_out.stdout.strip()
-                if phase_val in ("Enabled", ""):
+                if phase_val in ("Enabled", "Finished", ""):
                     break
                 logger.info(
                     "Waiting for restore to settle (attempt %d/12, phase=%s)",
