@@ -500,13 +500,16 @@ class TestFullValidation:
         PhaseTracker.require("phase6")
         passed = False
         try:
-            # After phase 6: self._primary is now primary again
-            resume_target = self._primary
+            # Phase 6 ran switchover(self._secondary, self._primary) so the
+            # state file maps apps to those contexts.  Resume must use the
+            # same primary/secondary pair to reconnect to the right hubs.
+            phase6_primary = self._secondary
+            phase6_secondary = self._primary
             state = self._state_file("phase6-argocd-pause")
 
             result = run_switchover(
-                resume_target,
-                resume_target,
+                phase6_primary,
+                phase6_secondary,
                 extra_args=[
                     "--argocd-resume-only",
                     "--state-file",
@@ -516,30 +519,40 @@ class TestFullValidation:
             )
             result.assert_success("Phase 7 argocd-resume-only failed")
 
-            # Verify paused-by annotations are removed
-            apps = get_argocd_apps(resume_target)
-            assert (
-                len(apps) > 0
-            ), f"No ArgoCD apps found on {resume_target} — possible API failure"
-            still_paused = [
-                a
-                for a in apps
-                if a.get("metadata", {})
-                .get("annotations", {})
-                .get("acm-switchover.argoproj.io/paused-by")
-            ]
-            assert (
-                len(still_paused) == 0
-            ), f"Expected 0 paused apps after resume, found {len(still_paused)}"
-            logger.info("Phase 7: all apps resumed on %s", resume_target)
-
-            # argocd-manage.sh status after resume
-            result = run_shell_script(
-                "argocd-manage.sh",
-                ["--context", resume_target, "--mode", "status"],
-                timeout=60,
+            # Verify paused-by annotations are removed on both hubs
+            for ctx in (phase6_primary, phase6_secondary):
+                apps = get_argocd_apps(ctx)
+                assert (
+                    len(apps) > 0
+                ), f"No ArgoCD apps found on {ctx} — possible API failure"
+                still_paused = [
+                    a
+                    for a in apps
+                    if a.get("metadata", {})
+                    .get("annotations", {})
+                    .get("acm-switchover.argoproj.io/paused-by")
+                ]
+                assert (
+                    len(still_paused) == 0
+                ), f"Expected 0 paused apps on {ctx} after resume, found {len(still_paused)}"
+            logger.info(
+                "Phase 7: all apps resumed on %s and %s",
+                phase6_primary,
+                phase6_secondary,
             )
-            logger.info("Phase 7 argocd status:\n%s", result.output[:2000])
+
+            # argocd-manage.sh status after resume (check both hubs)
+            for ctx in (phase6_primary, phase6_secondary):
+                result = run_shell_script(
+                    "argocd-manage.sh",
+                    ["--context", ctx, "--mode", "status"],
+                    timeout=60,
+                )
+                logger.info(
+                    "Phase 7 argocd status on %s:\n%s",
+                    ctx,
+                    result.output[:2000],
+                )
 
             passed = True
         finally:
