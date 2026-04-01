@@ -72,6 +72,35 @@ class RunResult:
         return self
 
 
+def _safe_run(cmd: List[str], timeout: int, **kwargs) -> RunResult:
+    """Run subprocess with TimeoutExpired handling."""
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            **kwargs,
+        )
+        return RunResult(proc.returncode, proc.stdout, proc.stderr, cmd)
+    except subprocess.TimeoutExpired as exc:
+        return RunResult(
+            returncode=-1,
+            stdout=(
+                (exc.stdout or b"").decode("utf-8", errors="replace")
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or "")
+            ),
+            stderr=(
+                (exc.stderr or b"").decode("utf-8", errors="replace")
+                if isinstance(exc.stderr, bytes)
+                else (exc.stderr or "")
+            ),
+            cmd=cmd,
+        )
+
+
 def run_switchover(
     primary: str,
     secondary: str,
@@ -97,15 +126,7 @@ def run_switchover(
     if extra_args:
         cmd.extend(extra_args)
 
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
-        cwd=str(REPO_ROOT),
-    )
-    return RunResult(proc.returncode, proc.stdout, proc.stderr, cmd)
+    return _safe_run(cmd, timeout=timeout, cwd=str(REPO_ROOT))
 
 
 def run_shell_script(
@@ -124,16 +145,7 @@ def run_shell_script(
     if env_overrides:
         env.update(env_overrides)
 
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
-        cwd=str(REPO_ROOT),
-        env=env,
-    )
-    return RunResult(proc.returncode, proc.stdout, proc.stderr, cmd)
+    return _safe_run(cmd, timeout=timeout, cwd=str(REPO_ROOT), env=env)
 
 
 def run_python_tool(
@@ -147,28 +159,13 @@ def run_python_tool(
     if args:
         cmd.extend(args)
 
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
-        cwd=str(REPO_ROOT),
-    )
-    return RunResult(proc.returncode, proc.stdout, proc.stderr, cmd)
+    return _safe_run(cmd, timeout=timeout, cwd=str(REPO_ROOT))
 
 
 def kubectl(context: str, *args: str, timeout: int = 30) -> RunResult:
     """Run a kubectl command against a specific context."""
     cmd = ["kubectl", "--context", context] + list(args)
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
-    )
-    return RunResult(proc.returncode, proc.stdout, proc.stderr, cmd)
+    return _safe_run(cmd, timeout=timeout)
 
 
 def get_backup_schedule_phase(context: str, name: str = "acm-hub-backup") -> str:
@@ -207,7 +204,11 @@ def get_argocd_apps(context: str, namespace: str = "openshift-gitops") -> List[D
     )
     if not result.ok:
         return []
-    data = json.loads(result.stdout)
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("Failed to parse ArgoCD apps JSON from %s", context)
+        return []
     return data.get("items", [])
 
 

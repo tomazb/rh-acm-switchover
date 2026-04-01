@@ -14,6 +14,15 @@ import pytest
 from tests.e2e.orchestrator import E2EOrchestrator, RunConfig
 
 
+@pytest.fixture(scope="class", autouse=True)
+def _reset_phase_tracker():
+    """Reset PhaseTracker between test classes to prevent cross-class leakage."""
+    from tests.e2e.full_validation_helpers import PhaseTracker
+
+    PhaseTracker.reset()
+    yield
+
+
 def pytest_addoption(parser):
     """Add E2E-specific command line options."""
     group = parser.getgroup("e2e", "E2E Testing Options")
@@ -73,7 +82,8 @@ def pytest_addoption(parser):
     group.addoption(
         "--e2e-stop-on-failure",
         action="store_true",
-        default=os.environ.get("E2E_STOP_ON_FAILURE", "").lower() in ("1", "true", "yes"),
+        default=os.environ.get("E2E_STOP_ON_FAILURE", "").lower()
+        in ("1", "true", "yes"),
         help="Stop on first cycle failure (env: E2E_STOP_ON_FAILURE)",
     )
 
@@ -120,7 +130,13 @@ def pytest_addoption(parser):
         "--e2e-inject-at-phase",
         action="store",
         default=os.environ.get("E2E_INJECT_AT_PHASE", "activation"),
-        choices=["preflight", "primary_prep", "activation", "post_activation", "finalization"],
+        choices=[
+            "preflight",
+            "primary_prep",
+            "activation",
+            "post_activation",
+            "finalization",
+        ],
         help="Phase at which to inject failure (env: E2E_INJECT_AT_PHASE, default: activation)",
     )
 
@@ -136,9 +152,12 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """Register E2E and resilience markers."""
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring real clusters")
-    config.addinivalue_line("markers", "resilience: Resilience tests with failure injection")
     config.addinivalue_line(
-        "markers", "e2e_full_validation: Full validation E2E suite against real clusters"
+        "markers", "resilience: Resilience tests with failure injection"
+    )
+    config.addinivalue_line(
+        "markers",
+        "e2e_full_validation: Full validation E2E suite against real clusters",
     )
     config.addinivalue_line("markers", "e2e_soak: Soak testing subset (long-running)")
 
@@ -200,7 +219,9 @@ def require_cluster_contexts(e2e_config: RunConfig):
         pytest.skip("--primary-context not provided (required for real cluster tests)")
 
     if not e2e_config.secondary_context:
-        pytest.skip("--secondary-context not provided (required for real cluster tests)")
+        pytest.skip(
+            "--secondary-context not provided (required for real cluster tests)"
+        )
 
 
 @pytest.fixture(scope="session")

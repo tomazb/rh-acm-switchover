@@ -54,11 +54,13 @@ class TestFullValidation:
     _secondary: ClassVar[str] = ""
     _output_dir: ClassVar[Path] = Path(".")
     _state_dir: ClassVar[Path] = Path(".")
+    _initialized: ClassVar[bool] = False
 
     @pytest.fixture(autouse=True)
     def _inject_config(self, e2e_config, tmp_path_factory):
         """Inject cluster contexts from conftest into class-level state."""
-        if not TestFullValidation._primary:
+        if not TestFullValidation._initialized:
+            TestFullValidation._initialized = True
             TestFullValidation._primary = e2e_config.primary_context
             TestFullValidation._secondary = e2e_config.secondary_context
             base = tmp_path_factory.mktemp("full_validation")
@@ -323,6 +325,7 @@ class TestFullValidation:
             # After phase 4, roles are swapped: secondary is now primary
             current_primary = self._secondary
             current_secondary = self._primary
+            assert_hub_is_primary(current_primary)
 
             state = self._state_file("phase6-argocd-pause")
             result = run_switchover(
@@ -434,6 +437,7 @@ class TestFullValidation:
             # After phase 6, self._primary is primary again
             current_primary = self._primary
             current_secondary = self._secondary
+            assert_hub_is_primary(current_primary)
 
             state = self._state_file("phase8-argocd-full")
             result = run_switchover(
@@ -495,6 +499,7 @@ class TestFullValidation:
             # After phase 8: secondary is primary.  Swap back.
             current_primary = self._secondary
             current_secondary = self._primary
+            assert_hub_is_primary(current_primary)
 
             state = self._state_file("phase9-reverse")
             result = run_switchover(
@@ -655,11 +660,12 @@ class TestFullValidation:
                         timeout=120,
                     )
 
-                # Swap directions for next cycle
-                current_primary, current_secondary = (
-                    current_secondary,
-                    current_primary,
-                )
+                # Swap directions for next cycle (only if switchover succeeded)
+                if success:
+                    current_primary, current_secondary = (
+                        current_secondary,
+                        current_primary,
+                    )
 
                 # Cooldown
                 if time.time() < deadline:
