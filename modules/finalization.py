@@ -750,7 +750,7 @@ class Finalization:
                 return 0
 
         if phase != "Completed":
-            if phase in ("New", "InProgress"):
+            if phase in ("New", "InProgress", "Finalizing"):
                 backup_verify_timeout = self._get_backup_verify_timeout()
 
                 def _poll_backup_completion() -> Tuple[bool, str]:
