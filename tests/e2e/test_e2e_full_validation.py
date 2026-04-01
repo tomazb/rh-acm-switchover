@@ -341,6 +341,9 @@ class TestFullValidation:
 
             # Verify Argo CD apps on the NEW primary have paused annotation
             apps = get_argocd_apps(current_secondary)
+            assert (
+                len(apps) > 0
+            ), f"No ArgoCD apps found on {current_secondary} — possible API failure"
             paused_apps = [
                 a
                 for a in apps
@@ -403,6 +406,9 @@ class TestFullValidation:
 
             # Verify paused-by annotations are removed
             apps = get_argocd_apps(resume_target)
+            assert (
+                len(apps) > 0
+            ), f"No ArgoCD apps found on {resume_target} — possible API failure"
             still_paused = [
                 a
                 for a in apps
@@ -458,6 +464,9 @@ class TestFullValidation:
 
             # With auto-resume, apps should NOT have paused annotation
             apps = get_argocd_apps(current_secondary)
+            assert (
+                len(apps) > 0
+            ), f"No ArgoCD apps found on {current_secondary} — possible API failure"
             still_paused = [
                 a
                 for a in apps
@@ -609,8 +618,11 @@ class TestFullValidation:
                     "duration_seconds": round(duration, 1),
                     "returncode": result.returncode,
                 }
-                with open(results_log, "a") as f:
-                    f.write(json.dumps(entry) + "\n")
+                try:
+                    with open(results_log, "a") as f:
+                        f.write(json.dumps(entry) + "\n")
+                except OSError as exc:
+                    logger.warning("Failed to write soak results: %s", exc)
 
                 if success:
                     consecutive_failures = 0
