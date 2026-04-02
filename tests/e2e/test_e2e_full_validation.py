@@ -45,6 +45,76 @@ from tests.e2e.full_validation_helpers import (
 logger = logging.getLogger("e2e_full_validation")
 
 
+def test_soak_argocd_pause_resume_uses_original_cycle_hub_pair(tmp_path):
+    """Soak resume-only must reuse the switchover cycle's recorded primary/secondary pair."""
+    PhaseTracker.reset()
+    PhaseTracker.mark("phase9", True)
+
+    suite = TestFullValidation()
+    TestFullValidation._primary = "hub-a"
+    TestFullValidation._secondary = "hub-b"
+    TestFullValidation._output_dir = tmp_path / "output"
+    TestFullValidation._output_dir.mkdir()
+    TestFullValidation._state_dir = tmp_path / "states"
+    TestFullValidation._state_dir.mkdir()
+
+    request = type(
+        "Request",
+        (),
+        {
+            "config": type(
+                "Config",
+                (),
+                {
+                    "getoption": staticmethod(
+                        lambda name, default=None: {
+                            "--e2e-argocd-mode": "pause",
+                            "--e2e-run-hours": 0.0001,
+                            "--e2e-cooldown": 0,
+                        }.get(name, default)
+                    )
+                },
+            )()
+        },
+    )()
+
+    calls = []
+
+    def run_switchover_side_effect(primary, secondary, **kwargs):
+        calls.append((primary, secondary, kwargs))
+        return type(
+            "Result",
+            (),
+            {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+                "output": "",
+            },
+        )()
+
+    with patch("tests.e2e.test_e2e_full_validation.run_switchover", side_effect=run_switchover_side_effect), patch(
+        "tests.e2e.test_e2e_full_validation.run_shell_script"
+    ) as run_shell, patch(
+        "tests.e2e.test_e2e_full_validation.time.sleep"
+    ), patch(
+        "tests.e2e.test_e2e_full_validation.time.time",
+        side_effect=[0.0, 0.0, 0.05, 0.10, 1.0],
+    ):
+        run_shell.return_value = type("Result", (), {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "output": ""})()
+        suite.test_phase10_soak(request, require_cluster_contexts=None)
+
+    assert len(calls) == 2
+    assert calls[0][0:2] == ("hub-a", "hub-b")
+    assert calls[1][0:2] == ("hub-a", "hub-b")
+    assert calls[1][2]["extra_args"] == [
+        "--argocd-resume-only",
+        "--state-file",
+        calls[0][2]["extra_args"][1],
+    ]
+
+
 @pytest.mark.e2e
 @pytest.mark.e2e_full_validation
 class TestFullValidation:
@@ -157,10 +227,28 @@ class TestFullValidation:
         try:
             secondary = self._secondary
 
-            # Delete colliding BackupSchedule if in BackupCollision state
-            phase = get_backup_schedule_phase(secondary)
-            if phase == "BackupCollision":
-                logger.info("Cleaning up BackupCollision on %s", secondary)
+            # Delete any BackupSchedule on secondary (leftover from failed switchover)
+            bs_phase = get_backup_schedule_phase(secondary)
+            if bs_phase:
+                logger.warning(
+                    "BackupSchedule on secondary %s in phase '%s' — deleting",
+                    secondary,
+                    bs_phase,
+                )
+                # Disable ArgoCD auto-sync first to prevent recreation
+                kubectl(
+                    secondary,
+                    "patch",
+                    "applications.argoproj.io",
+                    "hub-backup-schedule",
+                    "-n",
+                    "openshift-gitops",
+                    "--type",
+                    "json",
+                    "-p",
+                    '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
+                    timeout=10,
+                )
                 kubectl(
                     secondary,
                     "delete",
@@ -169,6 +257,34 @@ class TestFullValidation:
                     "-n",
                     "open-cluster-management-backup",
                     "--ignore-not-found",
+                )
+                time.sleep(5)
+
+            # Delete broken restore on secondary (FinishedWithErrors from BS conflict)
+            restore_out = kubectl(
+                secondary,
+                "get",
+                "restores.cluster.open-cluster-management.io",
+                "-n",
+                "open-cluster-management-backup",
+                "-o",
+                "jsonpath={.items[0].status.phase}",
+                timeout=10,
+            )
+            restore_phase = restore_out.stdout.strip()
+            if restore_phase in ("FinishedWithErrors", "Failed"):
+                logger.warning(
+                    "Restore on %s in '%s' state — deleting for ArgoCD to recreate",
+                    secondary,
+                    restore_phase,
+                )
+                kubectl(
+                    secondary,
+                    "delete",
+                    "restore.cluster.open-cluster-management.io",
+                    "--all",
+                    "-n",
+                    "open-cluster-management-backup",
                 )
                 time.sleep(5)
 
