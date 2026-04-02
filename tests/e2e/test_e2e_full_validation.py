@@ -1102,6 +1102,35 @@ class TestFullValidation:
                     f"{self._secondary}={secondary_phase}"
                 )
 
+            # Wait for restore on secondary to settle (may still be Running
+            # after the reverse switchover in phase 9 recreated it)
+            secondary_ctx = (
+                self._secondary
+                if current_primary == self._primary
+                else self._primary
+            )
+            for _wait in range(12):  # up to 120s
+                r = kubectl(
+                    secondary_ctx,
+                    "get",
+                    "restores.cluster.open-cluster-management.io",
+                    "-n",
+                    "open-cluster-management-backup",
+                    "-o",
+                    "jsonpath={.items[0].status.phase}",
+                    timeout=10,
+                )
+                rp = r.stdout.strip()
+                if rp in ("Enabled", "Finished"):
+                    logger.info("Restore on %s settled: %s", secondary_ctx, rp)
+                    break
+                logger.info(
+                    "Waiting for restore on %s to settle (phase=%s)",
+                    secondary_ctx,
+                    rp,
+                )
+                time.sleep(10)
+
             # discover-hub
             contexts = f"{self._primary},{self._secondary}"
             result = run_shell_script(
