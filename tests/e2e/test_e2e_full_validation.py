@@ -643,6 +643,28 @@ class TestFullValidation:
                 result.stdout[:2000],
             )
 
+            # Wait for restore on new secondary to settle before discover-hub
+            for _wait in range(12):  # up to 120s
+                r = kubectl(
+                    new_secondary,
+                    "get",
+                    "restores.cluster.open-cluster-management.io",
+                    "-n",
+                    "open-cluster-management-backup",
+                    "-o",
+                    "jsonpath={.items[0].status.phase}",
+                    timeout=10,
+                )
+                rp = r.stdout.strip()
+                if rp in ("Enabled", "Finished"):
+                    break
+                logger.info(
+                    "Waiting for restore on %s to settle (phase=%s)",
+                    new_secondary,
+                    rp,
+                )
+                time.sleep(10)
+
             # discover-hub to confirm role swap
             contexts = f"{self._primary},{self._secondary}"
             result = run_shell_script(
