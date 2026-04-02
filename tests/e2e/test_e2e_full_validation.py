@@ -216,9 +216,11 @@ class TestFullValidation:
                     timeout=10,
                 )
 
-            # Wait for passive-sync restore to settle (Running → Enabled)
-            # After baseline cleanup, the restore may be actively syncing
-            # a recent backup. Wait up to 120s for it to finish.
+            # Wait for passive-sync restore to exist and settle (Running → Enabled)
+            # After baseline cleanup or a previous failed run, the restore may
+            # not yet exist (ArgoCD recreating) or may be actively syncing.
+            # Wait up to 120s for it to appear and reach a stable state.
+            restore_ready = False
             for attempt in range(12):
                 restore_out = kubectl(
                     secondary,
@@ -231,14 +233,20 @@ class TestFullValidation:
                     timeout=10,
                 )
                 phase_val = restore_out.stdout.strip()
-                if phase_val in ("Enabled", "Finished", ""):
+                if phase_val in ("Enabled", "Finished"):
+                    restore_ready = True
                     break
                 logger.info(
                     "Waiting for restore to settle (attempt %d/12, phase=%s)",
                     attempt + 1,
-                    phase_val,
+                    phase_val or "not-found",
                 )
                 time.sleep(10)
+            if not restore_ready:
+                logger.warning(
+                    "Restore did not settle after 120s (phase=%s), proceeding anyway",
+                    phase_val or "not-found",
+                )
 
             # Verify secondary has a passive-sync restore or is clean
             mc_count = get_managed_cluster_count(secondary)
