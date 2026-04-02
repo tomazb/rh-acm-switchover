@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.16] - 2026-04-02
+
+### Fixed
+
+- **ManagedCluster cleanup patching**: Post-activation disable-auto-import cleanup now calls `KubeClient.patch_custom_resource()` with the supported `patch=` keyword, so stale annotations are actually removed instead of failing behind a swallowed `TypeError`.
+- **Argo CD pause retry state persistence**: `argocd-manage.sh --mode pause` now reuses the recorded per-context `run_id` and merges previously paused apps when retried with the same state file, keeping later resume operations reversible.
+- **Argo CD JSON command handling**: Successful `oc`/`kubectl` warnings on stderr are now kept separate from stdout JSON in `argocd-manage.sh`, preventing warning-prefixed output from breaking downstream `jq` parsing.
+- **Full-validation Argo CD discovery failures**: `get_argocd_apps()` now fails fast on command and JSON errors so E2E flows do not silently treat auth/API failures as “no Argo CD apps”.
+- **Soak resume-only hub mapping**: The soak `argocd-pause` path now resumes against the same hub pair that created the state file, avoiding false resume failures against the wrong cluster mapping.
+
 ## [1.5.15] - 2026-03-30
 
 ### Fixed
