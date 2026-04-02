@@ -78,15 +78,16 @@ flowchart TD
     B -->|--decommission| D[Run decommission flow]
     B -->|--argocd-resume-only| E[Load state and resume recorded Argo CD apps]
     B -->|standard switchover| F[Initialize state and clients]
-    D --> K[COMPLETED]
-    D --> L[FAILED]
+    D --> D1{Success?}
+    D1 -->|yes| D2[Exit 0]
+    D1 -->|no| D3[Exit 1]
     F --> G[PREFLIGHT]
     G --> H[PRIMARY_PREP]
     H --> I[ACTIVATION]
     I --> J[POST_ACTIVATION]
     J --> M[FINALIZATION]
     M --> K[COMPLETED]
-    G --> L
+    G --> L[FAILED]
     H --> L
     I --> L
     J --> L
@@ -278,7 +279,8 @@ sequenceDiagram
     CLI->>P: create client for primary context
     CLI->>S: create client for secondary context
     CLI->>Mods: run preflight coordinator
-    Mods->>Argo: collect GitOps markers / optional Argo CD impact
+    Mods->>Argo: detect Argo CD CRDs for RBAC scoping
+    CLI->>Argo: report Argo CD ACM impact (optional, after preflight)
     CLI->>Mods: run primary preparation
     Mods->>Argo: optionally pause ACM-touching Applications
     CLI->>Mods: run activation

@@ -810,8 +810,10 @@ graph TD
     B -->|Yes| E[Parse context:role pairs]
     E --> F[Create temp directory]
     F --> G[For each context:role]
-    G --> H{Valid role?}
-    H -->|No| I[Error: Invalid role]
+    G --> G2{Valid format<br/>with : separator?}
+    G2 -->|No| I[Error: Invalid entry]
+    G2 -->|Yes| H{Valid role?}
+    H -->|No| I
     I --> J[Increment failed count]
     H -->|Yes| K[Call generate-sa-kubeconfig.sh]
     K --> L{Generation<br/>successful?}
@@ -825,8 +827,9 @@ graph TD
     P -->|No| Q{Any successful?}
     Q -->|No| R[Error: No kubeconfigs generated]
     R --> D
-    Q -->|Yes| S[Merge kubeconfigs]
-    S --> T[Write to output file]
+    Q -->|Yes| S[Rename cluster names<br/>to avoid collisions]
+    S --> S2[Merge kubeconfigs]
+    S2 --> T[Write to output file]
     T --> U[Print summary]
     U --> V[Exit 0]
     
@@ -860,10 +863,10 @@ graph TD
     K -->|No| L[Error: Insufficient privileges]
     L --> D
     K -->|Yes| M[Deploy RBAC manifests]
-    M --> N{Skip kubeconfig?}
+    M --> N{Skip kubeconfig<br/>or dry-run?}
     N -->|Yes| O[Skip kubeconfig generation]
     N -->|No| P[Generate SA kubeconfigs]
-    P --> Q{Skip validation?}
+    P --> Q{Skip validation<br/>or dry-run<br/>or skip kubeconfig?}
     O --> Q
     Q -->|Yes| R[Skip RBAC validation]
     Q -->|No| S[Run check_rbac.py]
