@@ -238,3 +238,31 @@ def wait_and_assert_hub_is_primary(context: str, timeout: int = 300, poll: int =
     pytest.fail(
         f"Hub {context} did not become primary within {timeout}s " f"(last BackupSchedule phase: '{last_phase}')"
     )
+
+
+def wait_for_restore_settled(context: str, timeout: int = 120, poll: int = 10) -> None:
+    """Wait for the passive-sync restore on a hub to reach a stable state.
+
+    After a switchover, the restore on the new secondary may be Running/InProgress.
+    The tool's preflight and discover-hub.sh require it to be Enabled or Finished.
+    """
+    deadline = time.time() + timeout
+    last_phase = ""
+    while time.time() < deadline:
+        result = kubectl(
+            context,
+            "get",
+            "restores.cluster.open-cluster-management.io",
+            "-n",
+            "open-cluster-management-backup",
+            "-o",
+            "jsonpath={.items[0].status.phase}",
+            timeout=10,
+        )
+        last_phase = result.stdout.strip()
+        if last_phase in ("Enabled", "Finished"):
+            logger.info("Restore on %s settled: %s", context, last_phase)
+            return
+        logger.info("Waiting for restore on %s to settle (phase=%s)", context, last_phase)
+        time.sleep(poll)
+    logger.warning("Restore on %s did not settle within %ds (phase=%s)", context, timeout, last_phase)

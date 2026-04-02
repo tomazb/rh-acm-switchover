@@ -41,6 +41,7 @@ from tests.e2e.full_validation_helpers import (
     run_shell_script,
     run_switchover,
     wait_and_assert_hub_is_primary,
+    wait_for_restore_settled,
 )
 
 logger = logging.getLogger("e2e_full_validation")
@@ -712,26 +713,7 @@ class TestFullValidation:
             )
 
             # Wait for restore on new secondary to settle before discover-hub
-            for _wait in range(12):  # up to 120s
-                r = kubectl(
-                    new_secondary,
-                    "get",
-                    "restores.cluster.open-cluster-management.io",
-                    "-n",
-                    "open-cluster-management-backup",
-                    "-o",
-                    "jsonpath={.items[0].status.phase}",
-                    timeout=10,
-                )
-                rp = r.stdout.strip()
-                if rp in ("Enabled", "Finished"):
-                    break
-                logger.info(
-                    "Waiting for restore on %s to settle (phase=%s)",
-                    new_secondary,
-                    rp,
-                )
-                time.sleep(10)
+            wait_for_restore_settled(new_secondary)
 
             # discover-hub to confirm role swap
             contexts = f"{self._primary},{self._secondary}"
@@ -763,6 +745,9 @@ class TestFullValidation:
             current_primary = self._secondary
             current_secondary = self._primary
             assert_hub_is_primary(current_primary)
+
+            # Wait for restore on current secondary to settle
+            wait_for_restore_settled(current_secondary)
 
             state = self._state_file("phase6-argocd-pause")
             result = run_switchover(
@@ -920,6 +905,10 @@ class TestFullValidation:
             current_secondary = self._secondary
             assert_hub_is_primary(current_primary)
 
+            # Wait for restore on secondary to settle (may still be syncing
+            # from phase 7's ArgoCD resume operations)
+            wait_for_restore_settled(current_secondary)
+
             state = self._state_file("phase8-argocd-full")
             result = run_switchover(
                 current_primary,
@@ -977,6 +966,9 @@ class TestFullValidation:
             current_primary = self._secondary
             current_secondary = self._primary
             assert_hub_is_primary(current_primary)
+
+            # Wait for restore on current secondary to settle
+            wait_for_restore_settled(current_secondary)
 
             state = self._state_file("phase9-reverse")
             extra = ["--state-file", state]
@@ -1199,27 +1191,7 @@ class TestFullValidation:
                 if current_primary == self._primary
                 else self._primary
             )
-            for _wait in range(12):  # up to 120s
-                r = kubectl(
-                    secondary_ctx,
-                    "get",
-                    "restores.cluster.open-cluster-management.io",
-                    "-n",
-                    "open-cluster-management-backup",
-                    "-o",
-                    "jsonpath={.items[0].status.phase}",
-                    timeout=10,
-                )
-                rp = r.stdout.strip()
-                if rp in ("Enabled", "Finished"):
-                    logger.info("Restore on %s settled: %s", secondary_ctx, rp)
-                    break
-                logger.info(
-                    "Waiting for restore on %s to settle (phase=%s)",
-                    secondary_ctx,
-                    rp,
-                )
-                time.sleep(10)
+            wait_for_restore_settled(secondary_ctx)
 
             # discover-hub
             contexts = f"{self._primary},{self._secondary}"
