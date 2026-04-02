@@ -172,6 +172,34 @@ class TestFullValidation:
                 )
                 time.sleep(5)
 
+            # Unpause BackupSchedule on primary if left paused by a failed run
+            primary_bs_phase = get_backup_schedule_phase(self._primary)
+            if primary_bs_phase == "Paused":
+                logger.warning(
+                    "BackupSchedule on %s is Paused (leftover from failed run), unpausing",
+                    self._primary,
+                )
+                kubectl(
+                    self._primary,
+                    "patch",
+                    "backupschedules.cluster.open-cluster-management.io/acm-hub-backup",
+                    "-n",
+                    "open-cluster-management-backup",
+                    "--type",
+                    "merge",
+                    "-p",
+                    '{"spec":{"paused":false}}',
+                )
+                # Poll for BS to become Enabled (up to 60s)
+                for _wait in range(6):
+                    time.sleep(10)
+                    primary_bs_phase = get_backup_schedule_phase(self._primary)
+                    if primary_bs_phase == "Enabled":
+                        break
+                    logger.info(
+                        "Waiting for BS to unpause (phase=%s)", primary_bs_phase
+                    )
+
             # Verify primary is healthy
             assert_hub_is_primary(self._primary)
 
