@@ -54,7 +54,7 @@ class TestCLIArgumentValidation:
         invalid_names = [
             "",  # empty
             "my cluster",  # spaces
-            "my@cluster",  # invalid character
+            "my cluster!",  # invalid character
             "/admin",  # starts with slash
             "admin/",  # ends with slash
             ":6443",  # starts with colon

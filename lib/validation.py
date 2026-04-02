@@ -51,7 +51,7 @@ K8S_LABEL_MAX_LENGTH = 63
 # Context name validation pattern (more permissive than K8s names)
 # Allows alphanumeric, hyphens, underscores, dots, forward slashes, and colons
 # This accommodates default oc login contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
-CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
+CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/@]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
 CONTEXT_NAME_MAX_LENGTH = 128
 
 
@@ -182,7 +182,7 @@ class InputValidator:
         if not CONTEXT_NAME_PATTERN.match(context):
             raise ValidationError(
                 f"Invalid context name '{context}'. "
-                f"Must consist of alphanumeric characters, '-', '_', '.', ':', or '/', "
+                f"Must consist of alphanumeric characters, '-', '_', '.', ':', '/', or '@', "
                 f"and must start and end with an alphanumeric character"
             )
 

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Full restore fails when passive-sync restore is active**: `_create_full_restore()` now deletes any existing passive-sync Restore resource before creating the full restore, preventing ACM from rejecting the new restore with "FinishedWithErrors" because only one active Restore is allowed at a time.
+- **Context name validation rejects `@` character**: The `InputValidator` context name pattern now allows `@`, which is valid in Kubernetes context names and used by `--setup`-generated service account kubeconfigs (e.g., `mgmt1_abc123-validator@mgmt1-cluster`).
 
 ## [1.5.16] - 2026-04-02
 
