@@ -240,98 +240,166 @@ class TestFullValidation:
 
     # ── Phase 0: Baseline Cleanup ─────────────────────────────────────
 
-    def test_phase0_baseline_cleanup(self, require_cluster_contexts):
-        """Clean up BackupCollision on secondary, ensure known-good baseline."""
-        passed = False
-        try:
-            secondary = self._secondary
+    def _ensure_bs_on_primary(self):
+        """Ensure the designated primary (self._primary) has an active BS.
 
-            # Delete any BackupSchedule on secondary (leftover from failed switchover)
-            bs_phase = get_backup_schedule_phase(secondary)
-            if bs_phase:
-                logger.warning(
-                    "BackupSchedule on secondary %s in phase '%s' — deleting",
-                    secondary,
-                    bs_phase,
-                )
-                # Disable ArgoCD auto-sync first to prevent recreation
-                kubectl(
-                    secondary,
-                    "patch",
-                    "applications.argoproj.io",
-                    "hub-backup-schedule",
-                    "-n",
-                    "openshift-gitops",
-                    "--type",
-                    "json",
-                    "-p",
-                    '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
-                    timeout=10,
-                )
-                kubectl(
-                    secondary,
-                    "delete",
-                    "backupschedule",
-                    "acm-hub-backup",
-                    "-n",
-                    "open-cluster-management-backup",
-                    "--ignore-not-found",
-                )
-                time.sleep(5)
+        Handles three scenarios:
+        1. BS Enabled — nothing to do
+        2. BS Paused — unpause and wait
+        3. BS missing/empty — re-enable ArgoCD auto-sync to recreate
+        """
+        primary = self._primary
+        phase = get_backup_schedule_phase(primary)
 
-            # Delete broken restore on secondary (FinishedWithErrors from BS conflict)
-            restore_out = kubectl(
-                secondary,
+        if phase == "Enabled":
+            return
+
+        if phase == "Paused":
+            logger.warning("BS on %s is Paused — unpausing", primary)
+            kubectl(
+                primary,
+                "patch",
+                "backupschedules.cluster.open-cluster-management.io/acm-hub-backup",
+                "-n",
+                "open-cluster-management-backup",
+                "--type",
+                "merge",
+                "-p",
+                '{"spec":{"paused":false}}',
+            )
+        elif phase in ("FailedValidation", ""):
+            # BS missing or in failed state — re-enable ArgoCD to recreate
+            logger.warning(
+                "BS on %s in phase '%s' — re-enabling ArgoCD auto-sync",
+                primary,
+                phase,
+            )
+            kubectl(
+                primary,
+                "patch",
+                "applications.argoproj.io",
+                "hub-backup-schedule",
+                "-n",
+                "openshift-gitops",
+                "--type",
+                "merge",
+                "-p",
+                '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}',
+                timeout=10,
+            )
+            # If there's a stale restore on primary, delete it (BS won't activate
+            # while a restore exists)
+            r = kubectl(
+                primary,
                 "get",
                 "restores.cluster.open-cluster-management.io",
                 "-n",
                 "open-cluster-management-backup",
-                "-o",
-                "jsonpath={.items[0].status.phase}",
+                "--no-headers",
                 timeout=10,
             )
-            restore_phase = restore_out.stdout.strip()
-            if restore_phase in ("FinishedWithErrors", "Failed"):
-                logger.warning(
-                    "Restore on %s in '%s' state — deleting for ArgoCD to recreate",
-                    secondary,
-                    restore_phase,
-                )
+            if r.ok and r.stdout.strip():
+                logger.warning("Deleting stale restore on primary %s", primary)
                 kubectl(
-                    secondary,
+                    primary,
                     "delete",
                     "restore.cluster.open-cluster-management.io",
                     "--all",
                     "-n",
                     "open-cluster-management-backup",
                 )
-                time.sleep(5)
+        else:
+            logger.warning("BS on %s in unexpected phase '%s'", primary, phase)
 
-            # Unpause BackupSchedule on primary if left paused by a failed run
-            primary_bs_phase = get_backup_schedule_phase(self._primary)
-            if primary_bs_phase == "Paused":
-                logger.warning(
-                    "BackupSchedule on %s is Paused (leftover from failed run), unpausing",
-                    self._primary,
-                )
-                kubectl(
-                    self._primary,
-                    "patch",
-                    "backupschedules.cluster.open-cluster-management.io/acm-hub-backup",
-                    "-n",
-                    "open-cluster-management-backup",
-                    "--type",
-                    "merge",
-                    "-p",
-                    '{"spec":{"paused":false}}',
-                )
-                # Poll for BS to become Enabled (up to 60s)
-                for _wait in range(6):
-                    time.sleep(10)
-                    primary_bs_phase = get_backup_schedule_phase(self._primary)
-                    if primary_bs_phase == "Enabled":
-                        break
-                    logger.info("Waiting for BS to unpause (phase=%s)", primary_bs_phase)
+        # Poll for BS to become Enabled (up to 120s)
+        for _wait in range(12):
+            time.sleep(10)
+            phase = get_backup_schedule_phase(primary)
+            if phase == "Enabled":
+                logger.info("BS on %s is now Enabled", primary)
+                return
+            logger.info("Waiting for BS on %s (phase=%s)", primary, phase)
+
+        logger.error("BS on %s still not Enabled (phase=%s)", primary, phase)
+
+    def _cleanup_secondary_bs(self):
+        """Delete any BackupSchedule on the secondary hub."""
+        secondary = self._secondary
+        bs_phase = get_backup_schedule_phase(secondary)
+        if not bs_phase:
+            return
+
+        logger.warning(
+            "BackupSchedule on secondary %s in phase '%s' — deleting",
+            secondary,
+            bs_phase,
+        )
+        # Disable ArgoCD auto-sync to prevent recreation
+        kubectl(
+            secondary,
+            "patch",
+            "applications.argoproj.io",
+            "hub-backup-schedule",
+            "-n",
+            "openshift-gitops",
+            "--type",
+            "json",
+            "-p",
+            '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
+            timeout=10,
+        )
+        kubectl(
+            secondary,
+            "delete",
+            "backupschedule",
+            "acm-hub-backup",
+            "-n",
+            "open-cluster-management-backup",
+            "--ignore-not-found",
+        )
+        time.sleep(5)
+
+    def _cleanup_secondary_restore(self):
+        """Delete broken restore on secondary (FinishedWithErrors/Failed)."""
+        secondary = self._secondary
+        restore_out = kubectl(
+            secondary,
+            "get",
+            "restores.cluster.open-cluster-management.io",
+            "-n",
+            "open-cluster-management-backup",
+            "-o",
+            "jsonpath={.items[0].status.phase}",
+            timeout=10,
+        )
+        restore_phase = restore_out.stdout.strip()
+        if restore_phase in ("FinishedWithErrors", "Failed"):
+            logger.warning(
+                "Restore on %s in '%s' state — deleting for ArgoCD to recreate",
+                secondary,
+                restore_phase,
+            )
+            kubectl(
+                secondary,
+                "delete",
+                "restore.cluster.open-cluster-management.io",
+                "--all",
+                "-n",
+                "open-cluster-management-backup",
+            )
+            time.sleep(5)
+
+    def test_phase0_baseline_cleanup(self, require_cluster_contexts):
+        """Clean up BackupCollision on secondary, ensure known-good baseline."""
+        passed = False
+        try:
+            # Step 1: Ensure primary has active BS FIRST (before touching secondary)
+            # This handles: Paused BS, missing BS, FailedValidation
+            self._ensure_bs_on_primary()
+
+            # Step 2: Now safe to clean secondary (primary is active)
+            self._cleanup_secondary_bs()
+            self._cleanup_secondary_restore()
 
             # Verify primary is healthy
             assert_hub_is_primary(self._primary)
@@ -384,7 +452,7 @@ class TestFullValidation:
             restore_ready = False
             for attempt in range(12):
                 restore_out = kubectl(
-                    secondary,
+                    self._secondary,
                     "get",
                     "restores.cluster.open-cluster-management.io",
                     "-n",
@@ -410,11 +478,11 @@ class TestFullValidation:
                 )
 
             # Verify secondary has a passive-sync restore or is clean
-            mc_count = get_managed_cluster_count(secondary)
+            mc_count = get_managed_cluster_count(self._secondary)
             logger.info(
                 "Baseline: primary=%s (primary), secondary=%s (%d MCs)",
                 self._primary,
-                secondary,
+                self._secondary,
                 mc_count,
             )
             passed = True
