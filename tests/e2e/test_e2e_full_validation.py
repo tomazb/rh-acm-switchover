@@ -26,6 +26,7 @@ import logging
 import time
 from pathlib import Path
 from typing import ClassVar
+from unittest.mock import patch
 
 import pytest
 
@@ -96,13 +97,13 @@ def test_soak_argocd_pause_resume_uses_original_cycle_hub_pair(tmp_path):
 
     with patch("tests.e2e.test_e2e_full_validation.run_switchover", side_effect=run_switchover_side_effect), patch(
         "tests.e2e.test_e2e_full_validation.run_shell_script"
-    ) as run_shell, patch(
-        "tests.e2e.test_e2e_full_validation.time.sleep"
-    ), patch(
+    ) as run_shell, patch("tests.e2e.test_e2e_full_validation.time.sleep"), patch(
         "tests.e2e.test_e2e_full_validation.time.time",
-        side_effect=[0.0, 0.0, 0.05, 0.10, 1.0],
+        side_effect=[0.0, 0.0, 0.05, 0.10, 1.0, 1.0, 1.0],
     ):
-        run_shell.return_value = type("Result", (), {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "output": ""})()
+        run_shell.return_value = type(
+            "Result", (), {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "output": ""}
+        )()
         suite.test_phase10_soak(request, require_cluster_contexts=None)
 
     assert len(calls) == 2
@@ -152,8 +153,10 @@ class TestFullValidation:
         # New primary should NOT have a Restore (standby ArgoCD may recreate it)
         r = kubectl(
             primary,
-            "get", "restores.cluster.open-cluster-management.io",
-            "-n", "open-cluster-management-backup",
+            "get",
+            "restores.cluster.open-cluster-management.io",
+            "-n",
+            "open-cluster-management-backup",
             "--no-headers",
         )
         if r.ok and r.stdout.strip():
@@ -166,32 +169,42 @@ class TestFullValidation:
             # Pause the ArgoCD app that manages it to stop recreation
             kubectl(
                 primary,
-                "patch", "applications.argoproj.io", "hub-backup-standby",
-                "-n", "openshift-gitops",
-                "--type", "json",
-                "-p", '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
+                "patch",
+                "applications.argoproj.io",
+                "hub-backup-standby",
+                "-n",
+                "openshift-gitops",
+                "--type",
+                "json",
+                "-p",
+                '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
                 timeout=10,
             )
             kubectl(
                 primary,
                 "delete",
                 f"restores.cluster.open-cluster-management.io/{restore_name}",
-                "-n", "open-cluster-management-backup",
+                "-n",
+                "open-cluster-management-backup",
             )
 
         # New secondary should NOT have a BackupSchedule (schedule ArgoCD
         # may recreate it).  Only delete if a Restore already exists.
         bs = kubectl(
             secondary,
-            "get", "backupschedules.cluster.open-cluster-management.io",
-            "-n", "open-cluster-management-backup",
+            "get",
+            "backupschedules.cluster.open-cluster-management.io",
+            "-n",
+            "open-cluster-management-backup",
             "--no-headers",
         )
         if bs.ok and bs.stdout.strip():
             rs = kubectl(
                 secondary,
-                "get", "restores.cluster.open-cluster-management.io",
-                "-n", "open-cluster-management-backup",
+                "get",
+                "restores.cluster.open-cluster-management.io",
+                "-n",
+                "open-cluster-management-backup",
                 "--no-headers",
             )
             if rs.ok and rs.stdout.strip():
@@ -203,17 +216,23 @@ class TestFullValidation:
                 )
                 kubectl(
                     secondary,
-                    "patch", "applications.argoproj.io", "hub-backup-schedule",
-                    "-n", "openshift-gitops",
-                    "--type", "json",
-                    "-p", '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
+                    "patch",
+                    "applications.argoproj.io",
+                    "hub-backup-schedule",
+                    "-n",
+                    "openshift-gitops",
+                    "--type",
+                    "json",
+                    "-p",
+                    '[{"op":"remove","path":"/spec/syncPolicy/automated"}]',
                     timeout=10,
                 )
                 kubectl(
                     secondary,
                     "delete",
                     f"backupschedules.cluster.open-cluster-management.io/{bs_name}",
-                    "-n", "open-cluster-management-backup",
+                    "-n",
+                    "open-cluster-management-backup",
                 )
 
         # Give ACM a moment to reconcile
@@ -312,9 +331,7 @@ class TestFullValidation:
                     primary_bs_phase = get_backup_schedule_phase(self._primary)
                     if primary_bs_phase == "Enabled":
                         break
-                    logger.info(
-                        "Waiting for BS to unpause (phase=%s)", primary_bs_phase
-                    )
+                    logger.info("Waiting for BS to unpause (phase=%s)", primary_bs_phase)
 
             # Verify primary is healthy
             assert_hub_is_primary(self._primary)
@@ -419,9 +436,7 @@ class TestFullValidation:
                 ["--contexts", contexts, "--verbose"],
                 timeout=60,
             )
-            logger.info(
-                "discover-hub exit=%d\n%s", result.returncode, result.output[:2000]
-            )
+            logger.info("discover-hub exit=%d\n%s", result.returncode, result.output[:2000])
 
             # preflight-check against primary
             result = run_shell_script(
@@ -429,9 +444,7 @@ class TestFullValidation:
                 ["--context", self._primary],
                 timeout=120,
             )
-            logger.info(
-                "preflight exit=%d\n%s", result.returncode, result.stdout[:2000]
-            )
+            logger.info("preflight exit=%d\n%s", result.returncode, result.stdout[:2000])
 
             # argocd-check via Python tool
             result = run_switchover(
@@ -440,9 +453,7 @@ class TestFullValidation:
                 extra_args=["--argocd-check"],
                 timeout=120,
             )
-            logger.info(
-                "argocd-check exit=%d\n%s", result.returncode, result.output[:2000]
-            )
+            logger.info("argocd-check exit=%d\n%s", result.returncode, result.output[:2000])
 
             # check_rbac.py
             result = run_python_tool(
@@ -450,9 +461,7 @@ class TestFullValidation:
                 ["--context", self._primary],
                 timeout=60,
             )
-            logger.info(
-                "check_rbac exit=%d\n%s", result.returncode, result.output[:1000]
-            )
+            logger.info("check_rbac exit=%d\n%s", result.returncode, result.output[:1000])
 
             # show_state.py
             state = self._state_file("phase1-show-state")
@@ -461,9 +470,7 @@ class TestFullValidation:
                 ["--state-file", state],
                 timeout=60,
             )
-            logger.info(
-                "show_state exit=%d\n%s", result.returncode, result.output[:1000]
-            )
+            logger.info("show_state exit=%d\n%s", result.returncode, result.output[:1000])
 
             passed = True
         finally:
@@ -597,9 +604,7 @@ class TestFullValidation:
             # Verify state file shows completed (Phase.COMPLETED.value)
             with open(state) as f:
                 st = json.load(f)
-            assert (
-                st.get("current_phase") == "completed"
-            ), f"Expected completed, got {st.get('current_phase')}"
+            assert st.get("current_phase") == "completed", f"Expected completed, got {st.get('current_phase')}"
 
             logger.info(
                 "Phase 4 switchover %s->%s completed",
@@ -683,15 +688,11 @@ class TestFullValidation:
 
             # Verify Argo CD apps on the NEW primary have paused annotation
             apps = get_argocd_apps(current_secondary)
-            assert (
-                len(apps) > 0
-            ), f"No ArgoCD apps found on {current_secondary} — possible API failure"
+            assert len(apps) > 0, f"No ArgoCD apps found on {current_secondary} — possible API failure"
             paused_apps = [
                 a
                 for a in apps
-                if a.get("metadata", {})
-                .get("annotations", {})
-                .get("acm-switchover.argoproj.io/paused-by")
+                if a.get("metadata", {}).get("annotations", {}).get("acm-switchover.argoproj.io/paused-by")
             ]
             logger.info(
                 "Phase 6: %d/%d apps have paused-by annotation on %s",
@@ -714,9 +715,7 @@ class TestFullValidation:
             assert st.get("current_phase") == "completed"
 
             # show_state.py after real switchover
-            result = run_python_tool(
-                "show_state.py", ["--state-file", state], timeout=60
-            )
+            result = run_python_tool("show_state.py", ["--state-file", state], timeout=60)
             logger.info("Phase 6 show_state exit=%d", result.returncode)
 
             passed = True
@@ -742,9 +741,7 @@ class TestFullValidation:
             # during phase 6 with old backup data containing annotations
             # from previous runs.
             with open(state) as f:
-                expected_run_id = json.load(f).get("config", {}).get(
-                    "argocd_run_id", ""
-                )
+                expected_run_id = json.load(f).get("config", {}).get("argocd_run_id", "")
             if expected_run_id:
                 for ctx in (phase6_primary, phase6_secondary):
                     apps = get_argocd_apps(ctx)
@@ -757,8 +754,7 @@ class TestFullValidation:
                         if marker and marker != expected_run_id:
                             app_name = app["metadata"]["name"]
                             logger.info(
-                                "Phase 7: removing stale marker %s from %s/%s "
-                                "(expected %s)",
+                                "Phase 7: removing stale marker %s from %s/%s " "(expected %s)",
                                 marker,
                                 ctx,
                                 app_name,
@@ -790,15 +786,11 @@ class TestFullValidation:
             # Verify paused-by annotations are removed on both hubs
             for ctx in (phase6_primary, phase6_secondary):
                 apps = get_argocd_apps(ctx)
-                assert (
-                    len(apps) > 0
-                ), f"No ArgoCD apps found on {ctx} — possible API failure"
+                assert len(apps) > 0, f"No ArgoCD apps found on {ctx} — possible API failure"
                 still_paused = [
                     a
                     for a in apps
-                    if a.get("metadata", {})
-                    .get("annotations", {})
-                    .get("acm-switchover.argoproj.io/paused-by")
+                    if a.get("metadata", {}).get("annotations", {}).get("acm-switchover.argoproj.io/paused-by")
                 ]
                 assert (
                     len(still_paused) == 0
@@ -857,19 +849,14 @@ class TestFullValidation:
 
             # With auto-resume, apps should NOT have paused annotation
             apps = get_argocd_apps(current_secondary)
-            assert (
-                len(apps) > 0
-            ), f"No ArgoCD apps found on {current_secondary} — possible API failure"
+            assert len(apps) > 0, f"No ArgoCD apps found on {current_secondary} — possible API failure"
             still_paused = [
                 a
                 for a in apps
-                if a.get("metadata", {})
-                .get("annotations", {})
-                .get("acm-switchover.argoproj.io/paused-by")
+                if a.get("metadata", {}).get("annotations", {}).get("acm-switchover.argoproj.io/paused-by")
             ]
             assert len(still_paused) == 0, (
-                f"Phase 8: expected 0 paused apps after auto-resume, "
-                f"found {len(still_paused)}"
+                f"Phase 8: expected 0 paused apps after auto-resume, " f"found {len(still_paused)}"
             )
             logger.info("Phase 8: switchover + auto-resume OK on %s", current_secondary)
 
@@ -882,9 +869,7 @@ class TestFullValidation:
             logger.info("Phase 8 argocd status:\n%s", result.output[:2000])
 
             # show_state.py after real switchover
-            result = run_python_tool(
-                "show_state.py", ["--state-file", state], timeout=60
-            )
+            result = run_python_tool("show_state.py", ["--state-file", state], timeout=60)
             logger.info("Phase 8 show_state exit=%d", result.returncode)
 
             passed = True
@@ -931,9 +916,7 @@ class TestFullValidation:
             result.assert_success("Phase 9 postflight on restored primary failed")
 
             # show_state.py after real switchover
-            result = run_python_tool(
-                "show_state.py", ["--state-file", state], timeout=60
-            )
+            result = run_python_tool("show_state.py", ["--state-file", state], timeout=60)
             logger.info("Phase 9 show_state exit=%d", result.returncode)
 
             logger.info(
@@ -1050,7 +1033,7 @@ class TestFullValidation:
                 # If argocd-pause (no auto-resume), do a standalone resume
                 if success and mode_label == "argocd-pause":
                     resume_result = run_switchover(
-                        current_secondary,
+                        current_primary,
                         current_secondary,
                         extra_args=[
                             "--argocd-resume-only",
@@ -1060,9 +1043,7 @@ class TestFullValidation:
                         timeout=120,
                     )
                     if not resume_result.ok:
-                        logger.warning(
-                            "Soak cycle %d: argocd-resume-only failed", cycle
-                        )
+                        logger.warning("Soak cycle %d: argocd-resume-only failed", cycle)
 
                 # Periodic cross-validation every 5th cycle
                 if cycle % 5 == 0 and success:
@@ -1090,9 +1071,7 @@ class TestFullValidation:
                 failures,
                 consecutive_failures,
             )
-            assert (
-                consecutive_failures < max_consecutive
-            ), f"Soak stopped early: {max_consecutive} consecutive failures"
+            assert consecutive_failures < max_consecutive, f"Soak stopped early: {max_consecutive} consecutive failures"
 
             passed = True
         finally:

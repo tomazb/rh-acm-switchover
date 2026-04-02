@@ -581,17 +581,13 @@ class PostActivationVerification:
             annotations = mc.get("metadata", {}).get("annotations") or {}
             if DISABLE_AUTO_IMPORT_ANNOTATION in annotations:
                 try:
-                    patch = {
-                        "metadata": {
-                            "annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: None}
-                        }
-                    }
+                    patch = {"metadata": {"annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: None}}}
                     self.secondary.patch_custom_resource(
                         group="cluster.open-cluster-management.io",
                         version="v1",
                         plural="managedclusters",
                         name=mc_name,
-                        body=patch,
+                        patch=patch,
                     )
                     removed.append(mc_name)
                 except Exception as exc:

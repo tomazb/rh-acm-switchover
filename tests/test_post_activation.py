@@ -521,6 +521,34 @@ class TestPostActivationVerification:
         with pytest.raises(Exception):
             post_verify_with_obs._verify_disable_auto_import_cleared()
 
+    def test_verify_disable_auto_import_cleanup_patches_with_supported_keyword(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
+        """disable-auto-import cleanup must call KubeClient.patch_custom_resource with patch=."""
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [
+                {
+                    "metadata": {
+                        "name": "cluster1",
+                        "annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: ""},
+                    }
+                },
+                {"metadata": {"name": "local-cluster"}},
+            ],
+            [
+                {"metadata": {"name": "cluster1", "annotations": {}}},
+                {"metadata": {"name": "local-cluster"}},
+            ],
+        ]
+
+        post_verify_with_obs._verify_disable_auto_import_cleared()
+
+        mock_secondary_client.patch_custom_resource.assert_called_once()
+        kwargs = mock_secondary_client.patch_custom_resource.call_args.kwargs
+        assert kwargs["name"] == "cluster1"
+        assert kwargs["patch"] == {"metadata": {"annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: None}}}
+        assert "body" not in kwargs
+
 
 @pytest.mark.unit
 class TestKlusterletReconnect:

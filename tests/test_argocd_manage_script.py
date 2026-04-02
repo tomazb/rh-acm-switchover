@@ -81,6 +81,52 @@ JSON
     fi
 fi
 
+if [[ "$scenario" == "pause_retry_merge" ]]; then
+    retry_step="${MOCK_RETRY_STEP:-1}"
+    case "$cmd" in
+        "--context=test-hub get crd applications.argoproj.io")
+            exit 0
+            ;;
+        "--context=test-hub get applications.argoproj.io -A -o json")
+            cat <<'JSON'
+{"items":[
+  {"metadata":{"namespace":"argocd","name":"app-a"},"status":{"resources":[{"kind":"MultiClusterHub","namespace":"open-cluster-management"}]}},
+  {"metadata":{"namespace":"argocd","name":"app-b"},"status":{"resources":[{"kind":"ManagedCluster","namespace":"open-cluster-management"}]}}
+]}
+JSON
+            exit 0
+            ;;
+        "--context=test-hub -n argocd get application.argoproj.io app-a -o json")
+            if [[ "$retry_step" == "1" ]]; then
+                cat <<'JSON'
+{"metadata":{"namespace":"argocd","name":"app-a","resourceVersion":"4001"},"spec":{"syncPolicy":{"automated":{},"syncOptions":["CreateNamespace=true"]}}}
+JSON
+            else
+                cat <<'JSON'
+{"metadata":{"namespace":"argocd","name":"app-a","resourceVersion":"4001","annotations":{"acm-switchover.argoproj.io/paused-by":"retry-run"}},"spec":{"syncPolicy":{"syncOptions":["CreateNamespace=true"]}}}
+JSON
+            fi
+            exit 0
+            ;;
+        "--context=test-hub -n argocd get application.argoproj.io app-b -o json")
+            cat <<'JSON'
+{"metadata":{"namespace":"argocd","name":"app-b","resourceVersion":"4002"},"spec":{"syncPolicy":{"automated":{"prune":true}}}}
+JSON
+            exit 0
+            ;;
+    esac
+
+    if [[ "$cmd" == *"--context=test-hub -n argocd patch application.argoproj.io app-a --type=merge -p "* ]]; then
+        exit 0
+    fi
+    if [[ "$cmd" == *"--context=test-hub -n argocd patch application.argoproj.io app-b --type=merge -p "* ]]; then
+        if [[ "$retry_step" == "1" ]]; then
+            exit 1
+        fi
+        exit 0
+    fi
+fi
+
 if [[ "$scenario" == "resume_partial_failure" || "$scenario" == "resume_success" ]]; then
     case "$cmd" in
         "--context=test-hub -n argocd get application.argoproj.io app-a -o json")
@@ -184,6 +230,33 @@ if [[ "$scenario" == "list_error" ]]; then
     esac
 fi
 
+if [[ "$scenario" == "list_warning_success" ]]; then
+    case "$cmd" in
+        "--context=test-hub get crd applications.argoproj.io")
+            exit 0
+            ;;
+        "--context=test-hub get applications.argoproj.io -A -o json")
+            echo "Warning: would violate PodSecurity" >&2
+            cat <<'JSON'
+{"items":[
+  {"metadata":{"namespace":"argocd","name":"app-a"},"status":{"resources":[{"kind":"ManagedCluster","namespace":"open-cluster-management"}]}}
+]}
+JSON
+            exit 0
+            ;;
+        "--context=test-hub -n argocd get application.argoproj.io app-a -o json")
+            cat <<'JSON'
+{"metadata":{"namespace":"argocd","name":"app-a","resourceVersion":"5001"},"spec":{"syncPolicy":{"automated":{"prune":true}}}}
+JSON
+            exit 0
+            ;;
+    esac
+
+    if [[ "$cmd" == *"--context=test-hub -n argocd patch application.argoproj.io app-a --type=merge -p "* ]]; then
+        exit 0
+    fi
+fi
+
 if [[ "$scenario" == "get_error" ]]; then
     case "$cmd" in
         "--context=test-hub get crd applications.argoproj.io")
@@ -269,6 +342,66 @@ def test_pause_writes_partial_state_before_returning_failure(tmp_path):
     assert entry["apps"][0]["namespace"] == "argocd"
     assert entry["apps"][0]["name"] == "app-a"
     assert entry["apps"][0]["original_sync_policy"]["automated"] == {}
+
+
+def test_pause_retry_preserves_existing_apps_and_run_id(tmp_path):
+    """Retrying pause with the same state file must merge prior paused apps for that context."""
+    state_file = tmp_path / "pause-state.json"
+
+    first_code, first_out = run_argocd_manage(
+        "--context",
+        "test-hub",
+        "--mode",
+        "pause",
+        "--state-file",
+        str(state_file),
+        env={**mock_env(tmp_path, "pause_retry_merge"), "MOCK_RETRY_STEP": "1"},
+    )
+
+    assert first_code == 1, first_out
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    first_entry = payload["test-hub"] if "test-hub" in payload else payload
+    first_run_id = first_entry["run_id"]
+    assert [app["name"] for app in first_entry["apps"]] == ["app-a"]
+
+    second_code, second_out = run_argocd_manage(
+        "--context",
+        "test-hub",
+        "--mode",
+        "pause",
+        "--state-file",
+        str(state_file),
+        env={**mock_env(tmp_path, "pause_retry_merge"), "MOCK_RETRY_STEP": "2"},
+    )
+
+    assert second_code == 0, second_out
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    entry = payload["test-hub"] if "test-hub" in payload else payload
+    assert entry["run_id"] == first_run_id
+    assert {app["name"] for app in entry["apps"]} == {"app-a", "app-b"}
+
+
+def test_pause_keeps_json_valid_when_kubectl_warns_on_stderr(tmp_path):
+    """Successful JSON queries must still work when oc prints warnings on stderr."""
+    state_file = tmp_path / "pause-state.json"
+
+    code, out = run_argocd_manage(
+        "--context",
+        "test-hub",
+        "--mode",
+        "pause",
+        "--state-file",
+        str(state_file),
+        env=mock_env(tmp_path, "list_warning_success"),
+    )
+
+    assert code == 0
+    assert "Warning: would violate PodSecurity" in out
+    assert "Paused argocd/app-a" in out
+
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    entry = payload["test-hub"] if "test-hub" in payload else payload
+    assert entry["apps"][0]["name"] == "app-a"
 
 
 def test_resume_returns_failure_when_any_patch_fails(tmp_path):

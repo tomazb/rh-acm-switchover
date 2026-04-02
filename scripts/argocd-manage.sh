@@ -143,23 +143,35 @@ run_json_query() {
     local missing_value="$1"
     shift
 
-    local output status
+    local stdout_file stderr_file stdout_text stderr_text status
+    stdout_file=$(mktemp)
+    stderr_file=$(mktemp)
     set +e
-    output=$("$@" 2>&1)
+    "$@" >"$stdout_file" 2>"$stderr_file"
     status=$?
     set -e
+    stdout_text=$(cat "$stdout_file")
+    stderr_text=$(cat "$stderr_file")
+    rm -f "$stdout_file" "$stderr_file"
 
     if [[ $status -eq 0 ]]; then
-        printf '%s\n' "$output"
+        if [[ -n "$stderr_text" ]]; then
+            printf '%s\n' "$stderr_text" >&2
+        fi
+        printf '%s\n' "$stdout_text"
         return 0
     fi
 
-    if is_not_found_error "$output"; then
+    if is_not_found_error "$stderr_text"; then
         printf '%s\n' "$missing_value"
         return 0
     fi
 
-    printf '%s\n' "$output" >&2
+    if [[ -n "$stderr_text" ]]; then
+        printf '%s\n' "$stderr_text" >&2
+    elif [[ -n "$stdout_text" ]]; then
+        printf '%s\n' "$stdout_text" >&2
+    fi
     return 1
 }
 
@@ -212,6 +224,12 @@ write_pause_state() {
         --arg paused_at "$paused_at" \
         --argjson apps "$apps_array" \
         '
+        def app_key:
+            "\(.namespace // "")/\(.name // "")";
+        def merge_apps(existing; incoming):
+            reduce ((existing // []) + (incoming // []))[] as $app
+                ({}; .[$app | app_key] = $app)
+            | [.[]];
         def normalize:
             if type != "object" then {}
             elif has("run_id") and has("context") then
@@ -219,11 +237,13 @@ write_pause_state() {
             else
                 .
             end;
-        ($existing | normalize) + {
+        ($existing | normalize) as $state
+        | ($state[$context] // {}) as $current
+        | $state + {
             ($context): {
-                run_id: $run_id,
-                paused_at: $paused_at,
-                apps: $apps
+                run_id: ($current.run_id // $run_id),
+                paused_at: ($current.paused_at // $paused_at),
+                apps: merge_apps(($current.apps // []); $apps)
             }
         }' > "$tmp_file"; then
         echo "Error: Failed to generate state JSON" >&2
@@ -236,16 +256,38 @@ write_pause_state() {
         return 1
     fi
 }
+
+read_pause_state_entry() {
+    if [[ ! -f "$STATE_FILE" ]]; then
+        return 0
+    fi
+
+    jq -c --arg context "$CONTEXT" '
+        if type == "object" and has("run_id") then
+            .
+        else
+            .[$context] // empty
+        end
+    ' "$STATE_FILE" 2>/dev/null || true
+}
+
 run_pause() {
     if ! "$CLUSTER_CLI_BIN" --context="$CONTEXT" get crd applications.argoproj.io &>/dev/null; then
         echo "Applications CRD not found; nothing to pause." >&2
         return 0
     fi
 
-    local run_id
+    local existing_entry run_id
+    existing_entry="$(read_pause_state_entry)"
     run_id="$(date -u +%Y%m%d%H%M%S)-${RANDOM:-0}"
     local paused_at
     paused_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ -n "$existing_entry" ]]; then
+        run_id="$(jq -r '.run_id // empty' <<<"$existing_entry")"
+        paused_at="$(jq -r '.paused_at // empty' <<<"$existing_entry")"
+        [[ -n "$run_id" ]] || run_id="$(date -u +%Y%m%d%H%M%S)-${RANDOM:-0}"
+        [[ -n "$paused_at" ]] || paused_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
     local state_dir
     state_dir="$(dirname "$STATE_FILE")"
     if [[ -n "$state_dir" ]] && [[ ! -d "$state_dir" ]]; then

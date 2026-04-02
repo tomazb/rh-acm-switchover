@@ -66,9 +66,7 @@ class RunResult:
 
     def assert_success(self, msg: str = "") -> "RunResult":
         label = msg or f"Command failed: {' '.join(self.cmd)}"
-        assert (
-            self.ok
-        ), f"{label}\n--- stdout ---\n{self.stdout}\n--- stderr ---\n{self.stderr}"
+        assert self.ok, f"{label}\n--- stdout ---\n{self.stdout}\n--- stderr ---\n{self.stderr}"
         return self
 
 
@@ -209,28 +207,25 @@ def get_argocd_apps(context: str, namespace: str = "openshift-gitops") -> List[D
         "json",
     )
     if not result.ok:
-        return []
+        detail = result.output.strip() or "no command output"
+        pytest.fail(f"Failed to list Argo CD Applications on {context}: {detail}")
     try:
         data = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError):
-        logger.warning("Failed to parse ArgoCD apps JSON from %s", context)
-        return []
+        detail = result.stdout.strip() or result.stderr.strip() or "empty output"
+        pytest.fail(f"Invalid Argo CD Applications JSON on {context}: {detail}")
     return data.get("items", [])
 
 
 def assert_hub_is_primary(context: str) -> None:
     """Assert that the given context is the active primary hub."""
     phase = get_backup_schedule_phase(context)
-    assert (
-        phase == "Enabled"
-    ), f"Expected hub {context} to have BackupSchedule phase 'Enabled', got '{phase}'"
+    assert phase == "Enabled", f"Expected hub {context} to have BackupSchedule phase 'Enabled', got '{phase}'"
     count = get_managed_cluster_count(context)
     assert count > 0, f"Expected hub {context} to have ManagedClusters, got {count}"
 
 
-def wait_and_assert_hub_is_primary(
-    context: str, timeout: int = 300, poll: int = 15
-) -> None:
+def wait_and_assert_hub_is_primary(context: str, timeout: int = 300, poll: int = 15) -> None:
     """Poll until the hub becomes primary (BackupSchedule Enabled + ManagedClusters present)."""
     deadline = time.time() + timeout
     last_phase = ""
@@ -241,6 +236,5 @@ def wait_and_assert_hub_is_primary(
             return
         time.sleep(poll)
     pytest.fail(
-        f"Hub {context} did not become primary within {timeout}s "
-        f"(last BackupSchedule phase: '{last_phase}')"
+        f"Hub {context} did not become primary within {timeout}s " f"(last BackupSchedule phase: '{last_phase}')"
     )
