@@ -985,6 +985,80 @@ class TestSwitchoverPhaseFlow:
         # Should start from the beginning after reset
         preflight.assert_called_once()
 
+    def test_run_switchover_validate_only_preserves_failed_state(self, tmp_path):
+        """Validate-only must NOT mutate durable state when the phase is FAILED."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        # Simulate a failure during POST_ACTIVATION
+        state.set_phase(Phase.POST_ACTIVATION)
+        state.add_error("some error", Phase.POST_ACTIVATION.value)
+        state.set_phase(Phase.FAILED)
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_check=False,
+            argocd_manage=False,
+        )
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        # Critical: FAILED marker and error history must survive
+        assert state.get_current_phase() == Phase.FAILED
+        assert len(state.get_errors()) == 1
+
+    def test_run_switchover_force_validate_only_preserves_failed_state(self, tmp_path):
+        """--force --validate-only must NOT reset/wipe state when the phase is FAILED."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.ACTIVATION)
+        state.add_error("activation error", Phase.ACTIVATION.value)
+        state.set_phase(Phase.FAILED)
+
+        args = SimpleNamespace(
+            force=True,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_check=False,
+            argocd_manage=False,
+        )
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.FAILED
+        assert len(state.get_errors()) == 1
+
     def test_run_switchover_rejects_non_runnable_phase(self):
         """Unexpected state phases should fail fast instead of flowing through as success."""
 

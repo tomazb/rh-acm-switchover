@@ -711,18 +711,23 @@ class Finalization:
                 namespace=BACKUP_NAMESPACE,
             )
             if not latest_backup:
-                raise SwitchoverError(
-                    f"Post-switchover backup '{post_switchover_backup_name}' no longer exists; "
-                    "cannot verify integrity"
+                logger.warning(
+                    "Post-switchover backup '%s' no longer exists (likely pruned by retention); "
+                    "falling back to latest ACM-owned backup",
+                    post_switchover_backup_name,
                 )
-            if not self._is_acm_owned_backup(latest_backup):
+                post_switchover_backup_name = None
+            elif not self._is_acm_owned_backup(latest_backup):
                 raise SwitchoverError(
                     f"Post-switchover backup '{post_switchover_backup_name}' is not ACM-owned; "
                     "cannot verify integrity against an unrelated Velero backup"
                 )
-            backup_name = post_switchover_backup_name
-        else:
-            logger.warning("No post-switchover backup name recorded; falling back to latest backup in namespace")
+            else:
+                backup_name = post_switchover_backup_name
+
+        if not post_switchover_backup_name:
+            if not self.state.get_config("post_switchover_backup_name"):
+                logger.warning("No post-switchover backup name recorded; falling back to latest backup in namespace")
             backups = self.secondary.list_custom_resources(
                 group="velero.io",
                 version="v1",

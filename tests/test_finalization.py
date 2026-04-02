@@ -962,16 +962,33 @@ class TestFinalization:
         mock_secondary_client.list_custom_resources.assert_not_called()
 
     def test_verify_backup_integrity_fails_when_recorded_backup_missing(self, finalization, mock_secondary_client):
-        """If the recorded post-switchover backup no longer exists, integrity check must fail."""
+        """If the recorded post-switchover backup is pruned, fall back to latest ACM-owned backup."""
+        backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        fallback_backup = {
+            "metadata": {
+                "name": "acm-backup-newer",
+                "creationTimestamp": backup_ts,
+                "labels": ACM_BACKUP_LABEL,
+            },
+            "status": {
+                "phase": "Completed",
+                "completionTimestamp": backup_ts,
+                "errors": 0,
+                "warnings": 0,
+            },
+        }
+        # get_custom_resource returns None for the recorded name (pruned)
         mock_secondary_client.get_custom_resource.return_value = None
+        # list_custom_resources returns a fallback backup
+        mock_secondary_client.list_custom_resources.return_value = [fallback_backup]
         mock_secondary_client.get_pods.return_value = []
         finalization._cached_schedules = []
         finalization.state.get_config.side_effect = lambda key, default=None: (
             "acm-backup-switchover" if key == "post_switchover_backup_name" else None
         )
 
-        with pytest.raises(SwitchoverError, match="no longer exists"):
-            finalization._verify_backup_integrity(max_age_seconds=600)
+        # Should NOT raise — should fall back to latest ACM-owned backup
+        finalization._verify_backup_integrity(max_age_seconds=600)
 
     def test_verify_backup_integrity_fails_when_recorded_backup_is_not_acm_owned(
         self, finalization, mock_secondary_client

@@ -365,8 +365,10 @@ def run_switchover(
         elif not args.validate_only:
             _log_completed_noop(state, logger, state_age)
             return True
-    elif current_phase == Phase.FAILED:
+    elif current_phase == Phase.FAILED and not args.validate_only:
         # Handle resume from failed state - determine which phase to retry
+        # Skip when --validate-only: the checkpoint mechanism preserves the
+        # original FAILED phase; mutating state here would destroy it.
         last_error_phase = state.get_last_error_phase()
         errors = state.get_errors()
         last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
