@@ -199,8 +199,9 @@ class TestSecondaryActivation:
         """Test successful full activation."""
         mock_wait.return_value = True
 
+        # No existing passive-sync restore to delete
+        mock_secondary_client.list_custom_resources.return_value = []
         # Mock check for existing restore (returns None -> create new)
-        # Then get_custom_resource is called inside wait loop (mocked by wait_for_condition, but we mock return for safety)
         mock_secondary_client.get_custom_resource.return_value = None
 
         result = activation_full.activate()
@@ -215,6 +216,36 @@ class TestSecondaryActivation:
         # Verify wait
         mock_wait.assert_called_once()
         assert "restore-acm-full" in mock_wait.call_args[0][0]
+
+    @patch("modules.activation.wait_for_condition")
+    def test_activate_full_deletes_existing_passive_sync(
+        self, mock_wait, activation_full, mock_secondary_client
+    ):
+        """Test full activation deletes existing passive-sync restore first."""
+        mock_wait.return_value = True
+
+        # Simulate an existing passive-sync restore
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = None
+
+        result = activation_full.activate()
+
+        assert result is True
+
+        # Verify passive-sync restore was deleted before full restore created
+        delete_calls = mock_secondary_client.delete_custom_resource.call_args_list
+        assert len(delete_calls) == 1
+        assert delete_calls[0][1]["name"] == "restore-acm-passive-sync"
+
+        # Verify full restore was created
+        create_calls = mock_secondary_client.create_custom_resource.call_args_list
+        assert len(create_calls) == 1
+        assert create_calls[0][1]["body"]["metadata"]["name"] == "restore-acm-full"
 
     def test_verify_passive_sync_failure(self, activation_passive, mock_secondary_client):
         """Test failure when passive sync restore is not found."""

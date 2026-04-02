@@ -101,6 +101,9 @@ class GitOpsCollector:
 
         Clear the current singleton state before dropping the shared reference so
         stale references do not retain prior detections across test boundaries.
+
+        Maintenance note: if new instance variables are added to ``__init__``,
+        ensure ``clear()`` also reinitializes them so this method stays correct.
         """
         if cls._instance is not None:
             cls._instance.clear()

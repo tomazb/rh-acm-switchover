@@ -722,7 +722,34 @@ class SecondaryActivation:
         logger.info("Creating full restore resource...")
         self._activation_restore_name = RESTORE_FULL_NAME
 
-        # Check if restore already exists
+        # Delete any existing passive-sync restore first — ACM only allows one active
+        # Restore resource at a time; a full restore will be rejected if one is active.
+        passive_restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
+        if passive_restore:
+            passive_name = passive_restore["metadata"]["name"]
+            logger.info(
+                "Deleting existing passive sync restore %s before creating full restore",
+                passive_name,
+            )
+            try:
+                self.secondary.delete_custom_resource(
+                    group="cluster.open-cluster-management.io",
+                    version="v1beta1",
+                    plural="restores",
+                    name=passive_name,
+                    namespace=BACKUP_NAMESPACE,
+                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
+                )
+                self._wait_for_restore_deletion(passive_name)
+            except ApiException as e:
+                if getattr(e, "status", None) == 404:
+                    logger.info("Passive sync restore %s already deleted", passive_name)
+                else:
+                    raise FatalError(
+                        f"Failed to delete passive sync restore {passive_name}: {e}"
+                    ) from e
+
+        # Check if full restore already exists (idempotent resume)
         existing_restore = self.secondary.get_custom_resource(
             group="cluster.open-cluster-management.io",
             version="v1beta1",
