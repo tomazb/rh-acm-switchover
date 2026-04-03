@@ -156,6 +156,22 @@ def pytest_addoption(parser):
         help="Delete MCO on old hub instead of just scaling down (env: E2E_DISABLE_OBSERVABILITY_ON_SECONDARY)",
     )
 
+    group.addoption(
+        "--e2e-argocd-manage",
+        action="store_true",
+        default=os.environ.get("E2E_ARGOCD_MANAGE", "").lower()
+        in ("1", "true", "yes"),
+        help="Pause ArgoCD auto-sync for ACM-touching apps during switchover (env: E2E_ARGOCD_MANAGE)",
+    )
+
+    group.addoption(
+        "--e2e-argocd-resume-after-switchover",
+        action="store_true",
+        default=os.environ.get("E2E_ARGOCD_RESUME_AFTER_SWITCHOVER", "").lower()
+        in ("1", "true", "yes"),
+        help="Resume ArgoCD auto-sync after switchover completes (env: E2E_ARGOCD_RESUME_AFTER_SWITCHOVER)",
+    )
+
 
 def pytest_configure(config):
     """Register E2E and resilience markers."""
@@ -209,6 +225,8 @@ def e2e_config(request, tmp_path_factory) -> RunConfig:
         inject_failure=request.config.getoption("--e2e-inject-failure"),
         inject_at_phase=request.config.getoption("--e2e-inject-at-phase"),
         disable_observability_on_secondary=request.config.getoption("--e2e-disable-observability-on-secondary"),
+        argocd_manage=request.config.getoption("--e2e-argocd-manage"),
+        argocd_resume_after_switchover=request.config.getoption("--e2e-argocd-resume-after-switchover"),
     )
 
 

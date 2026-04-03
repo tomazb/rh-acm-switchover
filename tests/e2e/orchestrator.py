@@ -44,6 +44,8 @@ class RunConfig:
     skip_rbac_validation: bool = False
     manage_auto_import_strategy: bool = False
     disable_observability_on_secondary: bool = False
+    argocd_manage: bool = False
+    argocd_resume_after_switchover: bool = False
     # Soak testing controls
     run_hours: Optional[float] = None
     max_failures: Optional[int] = None
@@ -573,6 +575,8 @@ class E2EOrchestrator:
                 skip_rbac_validation=self.config.skip_rbac_validation,
                 manage_auto_import_strategy=self.config.manage_auto_import_strategy,
                 disable_observability_on_secondary=self.config.disable_observability_on_secondary,
+                argocd_manage=self.config.argocd_manage,
+                argocd_resume_after_switchover=self.config.argocd_resume_after_switchover,
                 phase_callback=phase_callback,
             )
 

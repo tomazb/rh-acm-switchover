@@ -173,6 +173,8 @@ class PhaseHandlers:
         acm_version: str,
         has_observability: bool,
         dry_run: bool = False,
+        argocd_manage: bool = False,
+        secondary_client: Optional[KubeClient] = None,
     ) -> PhaseResult:
         """
         Run primary hub preparation phase.
@@ -183,6 +185,8 @@ class PhaseHandlers:
             acm_version: ACM version string
             has_observability: Whether observability is installed
             dry_run: Whether to run in dry-run mode
+            argocd_manage: Whether to pause ArgoCD auto-sync for ACM-touching apps
+            secondary_client: KubeClient for secondary hub (needed for ArgoCD pause on both hubs)
 
         Returns:
             PhaseResult with timing and status
@@ -193,6 +197,8 @@ class PhaseHandlers:
             acm_version,
             has_observability,
             dry_run=dry_run,
+            argocd_manage=argocd_manage,
+            secondary_client=secondary_client,
         )
 
         return self._run_timed_phase("primary_prep", prep.prepare)
@@ -264,6 +270,7 @@ class PhaseHandlers:
         old_hub_action: str = "secondary",
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,
+        argocd_resume_after_switchover: bool = False,
     ) -> PhaseResult:
         """
         Run finalization phase.
@@ -278,6 +285,7 @@ class PhaseHandlers:
             old_hub_action: Action for old hub (secondary/decommission/none)
             manage_auto_import_strategy: Whether to manage auto-import strategy
             disable_observability_on_secondary: Whether to delete MCO on old hub
+            argocd_resume_after_switchover: Whether to resume ArgoCD auto-sync after switchover
 
         Returns:
             PhaseResult with timing and status
@@ -292,6 +300,7 @@ class PhaseHandlers:
             old_hub_action=old_hub_action,
             manage_auto_import_strategy=manage_auto_import_strategy,
             disable_observability_on_secondary=disable_observability_on_secondary,
+            argocd_resume_after_switchover=argocd_resume_after_switchover,
         )
 
         return self._run_timed_phase("finalization", finalization.finalize)
@@ -308,6 +317,8 @@ class PhaseHandlers:
         skip_rbac_validation: bool = False,
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,
+        argocd_manage: bool = False,
+        argocd_resume_after_switchover: bool = False,
         phase_callback: Optional[Callable[[str, str], None]] = None,
     ) -> List[PhaseResult]:
         """
@@ -326,6 +337,9 @@ class PhaseHandlers:
             skip_observability_checks: Whether to skip observability checks
             skip_rbac_validation: Whether to skip RBAC validation
             manage_auto_import_strategy: Whether to manage auto-import strategy
+            disable_observability_on_secondary: Whether to delete MCO on old hub
+            argocd_manage: Whether to pause ArgoCD auto-sync during primary_prep
+            argocd_resume_after_switchover: Whether to resume ArgoCD auto-sync during finalization
             phase_callback: Optional callback called before each phase with (phase_name, "before")
                            and after each phase with (phase_name, "after")
 
@@ -396,6 +410,8 @@ class PhaseHandlers:
             acm_version,
             primary_has_obs,
             dry_run=dry_run,
+            argocd_manage=argocd_manage,
+            secondary_client=secondary_client,
         )
         results.append(primary_prep_result)
 
@@ -473,6 +489,7 @@ class PhaseHandlers:
             old_hub_action=old_hub_action,
             manage_auto_import_strategy=manage_auto_import_strategy,
             disable_observability_on_secondary=disable_observability_on_secondary,
+            argocd_resume_after_switchover=argocd_resume_after_switchover,
         )
         results.append(finalization_result)
 
