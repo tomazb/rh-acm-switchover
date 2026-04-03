@@ -1013,8 +1013,8 @@ def _run_argocd_resume_only(
         run_id,
         len(paused_apps),
     )
-    resume_primary = primary
-    resume_secondary = secondary
+    resume_primary: Optional[KubeClient] = primary
+    resume_secondary: Optional[KubeClient] = secondary
     stored_contexts = getattr(state, "state", {}) or {}
     if isinstance(stored_contexts, dict):
         stored_contexts = stored_contexts.get("contexts") or {}

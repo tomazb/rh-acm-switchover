@@ -317,7 +317,7 @@ class KubeClient:
             None (uses api_call decorator for error handling)
         """
         result = self.core_v1.list_namespace()
-        return [ns.to_dict() for ns in result.items]
+        return [ns.to_dict() for ns in (result.items or [])]
 
     @api_call(not_found_value=None, log_on_error=False)
     def get_secret(self, namespace: str, name: str) -> Optional[Dict]:
@@ -1085,7 +1085,7 @@ class KubeClient:
             kwargs["_request_timeout"] = request_timeout
 
         result = self.core_v1.list_namespaced_pod(**kwargs)
-        return [pod.to_dict() for pod in result.items]
+        return [pod.to_dict() for pod in (result.items or [])]
 
     @api_call(not_found_value=[], log_on_error=False)
     def get_pods(
