@@ -196,7 +196,8 @@ class SecondaryActivation:
 
         # "Enabled" = continuous sync running
         # "Finished"/"Completed" = initial sync completed successfully (also valid for activation)
-        if phase not in ("Enabled", "Finished", "Completed"):
+        # "Running" = actively syncing a new backup (transient, restore still functional)
+        if phase not in ("Enabled", "Finished", "Completed", "Running"):
             raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
 
         logger.info("Passive sync verified (%s): %s", phase, message)
