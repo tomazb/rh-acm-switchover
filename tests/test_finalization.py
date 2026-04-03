@@ -1345,7 +1345,7 @@ class TestFinalization:
         """MCH verification should fail when not running, without real-time waits."""
         # Simulate fast timeout without real sleeping:
         # start=0, then enough time has elapsed on next checks to exceed timeout.
-        mock_time.time.side_effect = [0, 301, 302]
+        mock_time.time.side_effect = [0, 601, 602]
         mock_time.sleep.return_value = None
 
         mock_secondary_client.get_custom_resource.return_value = {

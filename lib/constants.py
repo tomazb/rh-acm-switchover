@@ -149,7 +149,7 @@ ACM_BACKUP_SCHEDULE_TYPES = frozenset({"managedClusters", "credentials", "resour
 ACM_BACKUP_NAME_RE = re.compile(r"^acm-(managed-clusters|credentials|resources)-")
 
 # MultiClusterHub verification settings
-MCH_VERIFY_TIMEOUT = 300
+MCH_VERIFY_TIMEOUT = 600
 MCH_VERIFY_INTERVAL = 10
 
 # BackupSchedule deletion wait (for recreation)
