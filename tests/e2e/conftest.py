@@ -148,6 +148,14 @@ def pytest_addoption(parser):
         help="Argo CD mode for full validation soak (env: E2E_ARGOCD_MODE, default: rotate)",
     )
 
+    group.addoption(
+        "--e2e-disable-observability-on-secondary",
+        action="store_true",
+        default=os.environ.get("E2E_DISABLE_OBSERVABILITY_ON_SECONDARY", "").lower()
+        in ("1", "true", "yes"),
+        help="Delete MCO on old hub instead of just scaling down (env: E2E_DISABLE_OBSERVABILITY_ON_SECONDARY)",
+    )
+
 
 def pytest_configure(config):
     """Register E2E and resilience markers."""
@@ -200,6 +208,7 @@ def e2e_config(request, tmp_path_factory) -> RunConfig:
         resume=request.config.getoption("--e2e-resume"),
         inject_failure=request.config.getoption("--e2e-inject-failure"),
         inject_at_phase=request.config.getoption("--e2e-inject-at-phase"),
+        disable_observability_on_secondary=request.config.getoption("--e2e-disable-observability-on-secondary"),
     )
 
 

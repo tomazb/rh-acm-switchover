@@ -263,6 +263,7 @@ class PhaseHandlers:
         dry_run: bool = False,
         old_hub_action: str = "secondary",
         manage_auto_import_strategy: bool = False,
+        disable_observability_on_secondary: bool = False,
     ) -> PhaseResult:
         """
         Run finalization phase.
@@ -276,6 +277,7 @@ class PhaseHandlers:
             dry_run: Whether to run in dry-run mode
             old_hub_action: Action for old hub (secondary/decommission/none)
             manage_auto_import_strategy: Whether to manage auto-import strategy
+            disable_observability_on_secondary: Whether to delete MCO on old hub
 
         Returns:
             PhaseResult with timing and status
@@ -289,6 +291,7 @@ class PhaseHandlers:
             dry_run=dry_run,
             old_hub_action=old_hub_action,
             manage_auto_import_strategy=manage_auto_import_strategy,
+            disable_observability_on_secondary=disable_observability_on_secondary,
         )
 
         return self._run_timed_phase("finalization", finalization.finalize)
@@ -304,6 +307,7 @@ class PhaseHandlers:
         skip_observability_checks: bool = False,
         skip_rbac_validation: bool = False,
         manage_auto_import_strategy: bool = False,
+        disable_observability_on_secondary: bool = False,
         phase_callback: Optional[Callable[[str, str], None]] = None,
     ) -> List[PhaseResult]:
         """
@@ -468,6 +472,7 @@ class PhaseHandlers:
             dry_run=dry_run,
             old_hub_action=old_hub_action,
             manage_auto_import_strategy=manage_auto_import_strategy,
+            disable_observability_on_secondary=disable_observability_on_secondary,
         )
         results.append(finalization_result)
 
