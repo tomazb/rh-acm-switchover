@@ -49,11 +49,12 @@ for cluster in $(oc get managedcluster.cluster.open-cluster-management.io -o nam
   oc annotate $cluster import.open-cluster-management.io/disable-auto-import=''
 done
 
-# 3. Stop Thanos compactor
+# 3. Stop Thanos compactor (temporary — MCO operator will re-scale within minutes)
 oc scale statefulset observability-thanos-compact \
   -n open-cluster-management-observability --replicas=0
 
 # Optional: pause Observatorium API on OLD hub during switchover window
+# (also temporary — will be re-scaled by MCO operator within minutes)
 oc scale deployment observability-observatorium-api \
   -n open-cluster-management-observability --replicas=0
 ```
@@ -163,7 +164,8 @@ oc logs -n open-cluster-management-backup deployment/velero -c velero | grep "$B
 ## Decommission Old Hub (Optional)
 
 WARNING: Do NOT re-enable Thanos compactor or observatorium-api on the OLD hub while the new hub is active.
-If keeping the old hub as a long-lived secondary, delete MCO there to avoid dual writers.
+Scaling is not durable — the MCO operator will re-scale back to defaults within minutes.
+If keeping the old hub as a long-lived secondary, you MUST delete MCO there to avoid dual writers.
 
 ```bash
 # On OLD HUB - only after verifying all clusters AVAILABLE on new hub
@@ -219,7 +221,7 @@ oc scale statefulset observability-thanos-compact \
 
 # Re-enable Observatorium API if you paused it in Step 3
 oc scale deployment observability-observatorium-api \
-  -n open-cluster-management-observability --replicas=1
+  -n open-cluster-management-observability --replicas=2
 
 # Unpause BackupSchedule
 oc patch backupschedule.cluster.open-cluster-management.io "$BACKUP_SCHEDULE_NAME" \

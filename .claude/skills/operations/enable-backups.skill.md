@@ -164,6 +164,8 @@ Both hubs share the same object storage. Re-enabling on old hub will cause:
 - Write conflicts
 - Split-brain scenarios
 
+**Note:** The MCO operator will **re-scale Thanos and Observatorium back to defaults within minutes**, so manual scaling is not durable. If keeping the old hub as a secondary, you **must** delete the MCO object — see [verify-switchover.skill.md](verify-switchover.skill.md) "Optional: Disable Observability on Old Hub".
+
 **Only re-enable when:**
 1. You are switching BACK to that hub as primary
 2. You have stopped Thanos on the current active hub first
@@ -215,7 +217,7 @@ Before proceeding, confirm:
 - [ ] BackupSchedule is enabled (not paused)
 - [ ] BackupSchedule shows Phase=Enabled
 - [ ] First backup completed successfully
-- [ ] Old hub Thanos/Observatorium remain scaled to 0
+- [ ] Old hub Observability: MCO deleted (if keeping as secondary) or scaled to 0 during decommission window
 
 ---
 

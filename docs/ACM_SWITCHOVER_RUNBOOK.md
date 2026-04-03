@@ -372,7 +372,7 @@ Stop the Thanos compactor to prevent write conflicts on shared object storage wh
 
 > **Defaults (RHACM 2.3–2.14):** `observability-thanos-compact` runs as a StatefulSet with **1** replica by default, and `observability-observatorium-api` runs as a Deployment with **2** replicas for high availability.
 >
-> **IMPORTANT:** Scaling these components down is a **temporary mitigation during the active switchover window only**. In a long‑lived secondary hub scenario, scaling alone is not reliable because operators/controllers (or GitOps) will eventually reconcile replicas back to their defaults. For any hub that will remain as a secondary, Observability must ultimately be disabled by **deleting the `MultiClusterObservability` (MCO) object** on that hub. The MCO object is included in ACM backups and will be restored correctly when that hub is promoted again during a future switchover.
+> **IMPORTANT:** Scaling these components down is a **temporary mitigation during the active switchover window only**. The MCO operator will **automatically revert replica counts back to defaults within minutes**, making manual scaling unreliable for anything beyond the immediate switchover. For any hub that will remain as a secondary, Observability must be disabled by **deleting the `MultiClusterObservability` (MCO) object** on that hub. See [Optional: Disable Observability Permanently on Old Secondary Hub](#optional-disable-observability-permanently-on-old-secondary-hub-non-decommission-case). The MCO object is included in ACM backups and will be restored correctly when that hub is promoted again during a future switchover.
 
 ```bash
 oc scale statefulset observability-thanos-compact \
@@ -898,7 +898,7 @@ oc get backup.velero.io -n open-cluster-management-backup \
 > 3. **Then perform restore** on the target hub to make it the new primary
 > 4. **Only after restore completes:** Re-enable Thanos Compactor and Observatorium API on the newly activated hub
 >
-> **Exception:** If you paused the Observatorium API on the old hub in Step 3 and are **decommissioning** it (Step 14), you can leave it scaled to 0 - it will be removed during decommissioning.
+> **Scaling is not durable:** The MCO operator will **re-scale Thanos and Observatorium back to defaults within minutes**. If you are keeping the old hub as a long-lived secondary, you **must** delete the MCO object — see [Optional: Disable Observability Permanently on Old Secondary Hub](#optional-disable-observability-permanently-on-old-secondary-hub-non-decommission-case). If you are **decommissioning** the old hub (Step 14), the components will be removed during decommissioning.
 >
 > **For rollback scenarios:** See the [Rollback Procedure](#rollback-procedure-if-needed) which includes the correct sequence for re-enabling components.
 
@@ -1106,7 +1106,7 @@ oc scale statefulset observability-thanos-compact \
 **Re-enable Observatorium API (only if you paused it in Step 3):**
 ```bash
 oc scale deployment observability-observatorium-api \
-  -n open-cluster-management-observability --replicas=1
+  -n open-cluster-management-observability --replicas=2
 ```
 
 **Unpause BackupSchedule:**

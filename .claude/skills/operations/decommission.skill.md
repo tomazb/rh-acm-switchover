@@ -72,7 +72,7 @@ oc get multiclusterobservability.observability.open-cluster-management.io -A --c
 
 ```bash
 oc delete multiclusterobservability.observability.open-cluster-management.io observability \
-  -n open-cluster-management-observability --context <primary>
+  --context <primary>
 ```
 
 ### Wait for observability pods to terminate
