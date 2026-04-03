@@ -475,7 +475,9 @@ class PassiveSyncValidator(BaseValidator):
 
             # "Enabled" = continuous sync running
             # "Finished"/"Completed" = initial sync completed successfully (valid for switchover)
-            if phase in ("Enabled", "Finished", "Completed"):
+            # "Running" = actively syncing a new backup (transient, valid for passive-sync)
+            # "Unknown" = Velero restore in intermediate state during sync (transient)
+            if phase in ("Enabled", "Finished", "Completed", "Running", "Unknown"):
                 self.add_result(
                     "Passive sync restore",
                     True,

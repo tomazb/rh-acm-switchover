@@ -680,6 +680,36 @@ class TestPassiveSyncValidator:
         assert len(results) == 1
         assert results[0]["passed"] is True
 
+    def test_passive_sync_running(self, reporter, mock_kube_client):
+        """Test success when passive sync is actively running (transient state during sync)."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {"phase": "Running", "lastMessage": "Velero restore executing"}
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "Running" in results[0]["message"]
+
+    def test_passive_sync_unknown(self, reporter, mock_kube_client):
+        """Test success when passive sync is in Unknown state (transient during Velero sync)."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {"phase": "Unknown", "lastMessage": "Unknown status for Velero restore"}
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "Unknown" in results[0]["message"]
+
     def test_passive_sync_not_found(self, reporter, mock_kube_client):
         """Test critical failure when passive sync restore not found."""
         validator = PassiveSyncValidator(reporter)
