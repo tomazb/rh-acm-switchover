@@ -253,11 +253,11 @@ If Argo CD (or OpenShift GitOps) manages ACM resources (BackupSchedule, Restore,
 
 **Detection (preflight):**
 ```bash
-# Bash: include Argo CD check in preflight
-./scripts/preflight-check.sh --primary-context <primary> --secondary-context <secondary> --method passive --argocd-check
+# Bash: Argo CD detection runs automatically when CRD is found
+./scripts/preflight-check.sh --primary-context <primary> --secondary-context <secondary> --method passive
 
-# Python: validation-only with Argo CD report
-python acm_switchover.py --validate-only --primary-context <primary> --secondary-context <secondary> --argocd-check
+# Python: validation-only (Argo CD detection is automatic)
+python acm_switchover.py --validate-only --primary-context <primary> --secondary-context <secondary>
 ```
 
 Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
