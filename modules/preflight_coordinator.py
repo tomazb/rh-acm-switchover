@@ -52,16 +52,16 @@ class PreflightValidator:
         method: str = "passive",
         skip_rbac_validation: bool = False,
         include_decommission: bool = False,
-        argocd_check: bool = False,
         argocd_manage: bool = False,
+        skip_gitops_check: bool = False,
     ) -> None:
         self.primary = primary_client
         self.secondary = secondary_client
         self.method = method
         self.skip_rbac_validation = skip_rbac_validation
         self.include_decommission = include_decommission
-        self.argocd_check = argocd_check
         self.argocd_manage = argocd_manage
+        self.skip_gitops_check = skip_gitops_check
 
         self.reporter = ValidationReporter()
         self.kubeconfig_validator = KubeconfigValidator(self.reporter)
@@ -85,12 +85,15 @@ class PreflightValidator:
         self.tooling_validator = ToolingValidator(self.reporter)
 
     def _get_argocd_rbac_mode(self) -> str:
-        """Get Argo CD RBAC validation mode based on requested CLI behavior."""
+        """Get Argo CD RBAC validation mode. Auto-enables 'check' when not skipped.
+
+        Priority: skip_gitops_check ('none') > argocd_manage ('manage') > default ('check').
+        """
+        if self.skip_gitops_check:
+            return "none"
         if self.argocd_manage:
             return "manage"
-        if self.argocd_check:
-            return "check"
-        return "none"
+        return "check"
 
     def _get_effective_argocd_rbac_mode(self) -> Tuple[str, str]:
         """Require Argo CD RBAC only when Applications CRD exists on at least one hub.
