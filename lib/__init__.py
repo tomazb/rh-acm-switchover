@@ -2,8 +2,8 @@
 Library package for ACM switchover automation.
 """
 
-__version__ = "1.5.16"
-__version_date__ = "2026-04-02"
+__version__ = "1.6.0"
+__version_date__ = "2026-04-04"
 
 from .exceptions import (
     ConfigurationError,

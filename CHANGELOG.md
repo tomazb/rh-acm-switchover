@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-04-04
+
 ### Changed
 
 - ArgoCD deep-dive detection now runs automatically during preflight when Applications CRD is found on either hub
