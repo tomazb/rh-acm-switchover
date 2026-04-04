@@ -1780,6 +1780,129 @@ class TestPreflightPhase:
 
         report_argocd_impact.assert_not_called()
 
+    def test_argocd_advisory_warning_shown_without_argocd_manage(self):
+        """Advisory warning logged when ACM-touching apps with auto-sync exist and argocd_manage=False."""
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        acm_app = argocd_lib.AppImpact(
+            namespace="openshift-gitops",
+            name="acm-config",
+            resource_count=3,
+            app={
+                "spec": {
+                    "syncPolicy": {
+                        "automated": {"prune": True, "selfHeal": True}
+                    }
+                }
+            },
+        )
+
+        with patch(
+            "acm_switchover.argocd_lib.detect_argocd_installation",
+            return_value=discovery,
+        ), patch(
+            "acm_switchover.argocd_lib.list_argocd_applications",
+            return_value=[{"metadata": {"name": "acm-config"}}],
+        ), patch(
+            "acm_switchover.argocd_lib.find_acm_touching_apps",
+            return_value=[acm_app],
+        ):
+            _report_argocd_acm_impact(primary, secondary, logger, argocd_manage=False)
+
+        warning_texts = [
+            call.args[0] % call.args[1:] if len(call.args) > 1 else call.args[0]
+            for call in logger.warning.call_args_list
+        ]
+        assert any("Consider --argocd-manage" in t for t in warning_texts), (
+            f"Expected advisory warning with 'Consider --argocd-manage', got: {warning_texts}"
+        )
+
+    def test_argocd_advisory_warning_hidden_with_argocd_manage(self):
+        """No advisory warning when argocd_manage=True even with ACM-touching auto-sync apps."""
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        acm_app = argocd_lib.AppImpact(
+            namespace="openshift-gitops",
+            name="acm-config",
+            resource_count=3,
+            app={
+                "spec": {
+                    "syncPolicy": {
+                        "automated": {"prune": True, "selfHeal": True}
+                    }
+                }
+            },
+        )
+
+        with patch(
+            "acm_switchover.argocd_lib.detect_argocd_installation",
+            return_value=discovery,
+        ), patch(
+            "acm_switchover.argocd_lib.list_argocd_applications",
+            return_value=[{"metadata": {"name": "acm-config"}}],
+        ), patch(
+            "acm_switchover.argocd_lib.find_acm_touching_apps",
+            return_value=[acm_app],
+        ):
+            _report_argocd_acm_impact(primary, secondary, logger, argocd_manage=True)
+
+        warning_texts = [
+            call.args[0] % call.args[1:] if len(call.args) > 1 else call.args[0]
+            for call in logger.warning.call_args_list
+        ]
+        assert not any("Consider --argocd-manage" in t for t in warning_texts), (
+            f"Advisory warning should NOT appear when argocd_manage=True, got: {warning_texts}"
+        )
+
+    def test_argocd_advisory_warning_only_for_autosync_apps(self):
+        """No advisory warning when ACM-touching apps exist but none have auto-sync."""
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        acm_app_no_sync = argocd_lib.AppImpact(
+            namespace="openshift-gitops",
+            name="acm-config",
+            resource_count=3,
+            app={"spec": {"syncPolicy": {}}},
+        )
+
+        with patch(
+            "acm_switchover.argocd_lib.detect_argocd_installation",
+            return_value=discovery,
+        ), patch(
+            "acm_switchover.argocd_lib.list_argocd_applications",
+            return_value=[{"metadata": {"name": "acm-config"}}],
+        ), patch(
+            "acm_switchover.argocd_lib.find_acm_touching_apps",
+            return_value=[acm_app_no_sync],
+        ):
+            _report_argocd_acm_impact(primary, secondary, logger, argocd_manage=False)
+
+        warning_texts = [
+            call.args[0] % call.args[1:] if len(call.args) > 1 else call.args[0]
+            for call in logger.warning.call_args_list
+        ]
+        assert not any("Consider --argocd-manage" in t for t in warning_texts), (
+            f"Advisory warning should NOT appear without auto-sync apps, got: {warning_texts}"
+        )
+
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:

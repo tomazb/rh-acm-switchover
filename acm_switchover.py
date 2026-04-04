@@ -550,6 +550,7 @@ def _report_argocd_acm_impact(
     argocd_manage: bool = False,  # Used by advisory-warning task to emit warning when ACM apps found
 ) -> None:
     """Run Argo CD detection and log ACM-touching Applications on both hubs."""
+    all_acm_apps: list = []
     for label, client in (("Primary hub", primary), ("Secondary hub", secondary)):
         try:
             discovery = argocd_lib.detect_argocd_installation(client)
@@ -574,6 +575,7 @@ def _report_argocd_acm_impact(
             if not acm_apps:
                 logger.info("[%s] No ACM-touching Argo CD Applications detected", label)
                 continue
+            all_acm_apps.extend(acm_apps)
             logger.warning(
                 "[%s] ACM resources detected in %d Argo CD Application(s); pause/scope before switchover to avoid drift.",
                 label,
@@ -593,6 +595,21 @@ def _report_argocd_acm_impact(
                 "[%s] Unable to complete Argo CD check; continuing without blocking switchover: %s",
                 label,
                 e,
+            )
+
+    if not argocd_manage and all_acm_apps:
+        autosync_count = sum(
+            1
+            for a in all_acm_apps
+            if (a.app.get("spec", {}) or {}).get("syncPolicy", {}).get("automated")
+        )
+        if autosync_count:
+            logger.warning(
+                "\n⚠ ArgoCD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
+                "  Consider --argocd-manage to pause auto-sync during switchover.\n"
+                "  Without pausing, ArgoCD may revert switchover changes.\n"
+                "  To suppress: --skip-gitops-check",
+                autosync_count,
             )
 
 
