@@ -815,6 +815,7 @@ GITOPS_DETECTED_RESOURCES=()
 GITOPS_DETECTED_MARKERS=()
 GITOPS_DETECTION_ENABLED=1  # 1=enabled, 0=disabled
 GITOPS_MAX_DISPLAY_PER_KIND=10
+ARGOCD_ACM_APP_COUNT=0
 
 # Disable GitOps detection (used with --skip-gitops-check)
 # Usage: disable_gitops_detection
@@ -1065,6 +1066,38 @@ print_gitops_report() {
     echo ""
 }
 
+# Print advisory warning when ACM-touching ArgoCD Applications are found
+# but --argocd-manage was not used. Non-blocking.
+print_argocd_advisory_warning() {
+    if [[ ${ARGOCD_ACM_APP_COUNT:-0} -gt 0 ]]; then
+        echo ""
+        echo -e "${YELLOW}⚠ Argo CD Applications managing ACM resources detected.${NC}"
+        echo -e "${YELLOW}  Consider using --argocd-manage (Python tool) to pause auto-sync during switchover.${NC}"
+        echo -e "${YELLOW}  Without pausing, Argo CD may revert switchover changes.${NC}"
+        echo -e "${YELLOW}  To suppress this warning: --skip-gitops-check${NC}"
+        echo ""
+        ((WARNING_CHECKS+=1)) || true
+        ((TOTAL_CHECKS+=1)) || true
+        WARNING_MESSAGES+=("Argo CD Applications managing ACM resources detected; consider using --argocd-manage to pause auto-sync.")
+    fi
+}
+
+# Returns 0 if applications.argoproj.io CRD exists, 1 if not found,
+# 2 if unable to determine (auth/API error).
+probe_argocd_crd() {
+    local context="$1"
+    local crd_stderr
+    local crd_rc=0
+    crd_stderr=$("$CLUSTER_CLI_BIN" --context="$context" get crd applications.argoproj.io 2>&1 >/dev/null) || crd_rc=$?
+    if [[ $crd_rc -ne 0 ]]; then
+        if echo "$crd_stderr" | grep -qiE '(NotFound|not found|no matches|the server doesn.t have a resource)'; then
+            return 1
+        fi
+        return 2
+    fi
+    return 0
+}
+
 # Check ArgoCD instances and ACM-related resources managed by ArgoCD Applications.
 # Supports both operator install (argocds.argoproj.io) and vanilla Argo CD (applications.argoproj.io only).
 # Usage: check_argocd_acm_resources "context" "label"
@@ -1187,6 +1220,9 @@ check_argocd_acm_resources() {
     ')
     if [[ -n "$app_output" ]]; then
         found_any=1
+        local acm_app_count
+        acm_app_count=$(echo "$app_output" | grep -c '^\s*Application:' || true)
+        ((ARGOCD_ACM_APP_COUNT+=acm_app_count)) || true
         echo -e "${YELLOW}ACM resources managed by Argo CD Applications:${NC}"
         echo "$app_output"
     fi
