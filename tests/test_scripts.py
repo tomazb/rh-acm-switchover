@@ -144,8 +144,8 @@ def test_preflight_invalid_method():
         assert "Primary Hub:" in out or "Secondary Hub:" in out
 
 
-def test_preflight_warns_when_argocd_check_is_ignored():
-    """Explicit Argo CD discovery should warn when GitOps detection is disabled."""
+def test_preflight_rejects_unknown_argocd_check_flag():
+    """--argocd-check was removed; scripts should reject it as unknown."""
     code, out = run_script(
         "preflight-check.sh",
         "--primary-context",
@@ -154,11 +154,9 @@ def test_preflight_warns_when_argocd_check_is_ignored():
         "fake-secondary",
         "--method",
         "passive",
-        "--skip-gitops-check",
         "--argocd-check",
     )
-    assert code != 2, "Argument parsing should succeed"
-    assert "--argocd-check ignored because --skip-gitops-check is set." in out
+    assert code == 2, f"Expected exit code 2 for unknown flag, got {code}"
 
 
 def test_postflight_with_optional_old_hub():
@@ -177,17 +175,15 @@ def test_postflight_with_optional_old_hub():
         assert "New Hub:" in out
 
 
-def test_postflight_warns_when_argocd_check_is_ignored():
-    """Postflight should mirror the same warning for ignored explicit Argo CD discovery."""
+def test_postflight_rejects_unknown_argocd_check_flag():
+    """--argocd-check was removed; scripts should reject it as unknown."""
     code, out = run_script(
         "postflight-check.sh",
         "--new-hub-context",
         "fake-new",
-        "--skip-gitops-check",
         "--argocd-check",
     )
-    assert code != 2, "Argument parsing should succeed"
-    assert "--argocd-check ignored because --skip-gitops-check is set." in out
+    assert code == 2, f"Expected exit code 2 for unknown flag, got {code}"
 
 
 def test_preflight_output_format():
