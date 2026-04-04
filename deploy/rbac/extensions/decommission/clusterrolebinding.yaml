@@ -1,0 +1,19 @@
+---
+# ClusterRoleBinding for ACM Switchover Decommission
+# Opt-in binding that extends the operator service account for hub teardown
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: acm-switchover-decommission
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: decommission
+    app.kubernetes.io/role: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: acm-switchover-decommission
+subjects:
+  - kind: ServiceAccount
+    name: acm-switchover-operator
+    namespace: acm-switchover

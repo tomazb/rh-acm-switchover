@@ -7,11 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Fixed
+
+- **Full restore fails when passive-sync restore is active**: `_create_full_restore()` now deletes any existing passive-sync Restore resource before creating the full restore, preventing ACM from rejecting the new restore with "FinishedWithErrors" because only one active Restore is allowed at a time.
+- **Context name validation rejects `@` character**: The `InputValidator` context name pattern now allows `@`, which is valid in Kubernetes context names and used by `--setup`-generated service account kubeconfigs (e.g., `mgmt1_abc123-validator@mgmt1-cluster`).
+
+## [1.5.16] - 2026-04-02
+
+### Fixed
+
+- **ManagedCluster cleanup patching**: Post-activation disable-auto-import cleanup now calls `KubeClient.patch_custom_resource()` with the supported `patch=` keyword, so stale annotations are actually removed instead of failing behind a swallowed `TypeError`.
+- **Argo CD pause retry state persistence**: `argocd-manage.sh --mode pause` now reuses the recorded per-context `run_id` and merges previously paused apps when retried with the same state file, keeping later resume operations reversible.
+- **Argo CD JSON command handling**: Successful `oc`/`kubectl` warnings on stderr are now kept separate from stdout JSON in `argocd-manage.sh`, preventing warning-prefixed output from breaking downstream `jq` parsing.
+- **Full-validation Argo CD discovery failures**: `get_argocd_apps()` now fails fast on command and JSON errors so E2E flows do not silently treat auth/API failures as “no Argo CD apps”.
+- **Soak resume-only hub mapping**: The soak `argocd-pause` path now resumes against the same hub pair that created the state file, avoiding false resume failures against the wrong cluster mapping.
+
+## [1.5.15] - 2026-03-30
+
+### Fixed
+
+- **State file phase safety**: invalid persisted `current_phase` values now fail fast during state load instead of being silently rewritten to `INIT`.
+- **Validate-only state encapsulation**: `--validate-only` now uses a public `StateManager` runtime-checkpoint API rather than mutating internal state fields directly.
+- **Post-activation step recording**: klusterlet fallback verification now records `verify_klusterlet_connections` only once, keeping resume semantics consistent.
+- **Finalization step visibility**: resetting `autoImportStrategy` is now executed as an explicit `reset_auto_import_strategy` workflow step instead of a hidden side effect.
+- **Passive restore discovery parity**: Python restore discovery is centralized in a shared helper and postflight now selects the newest passive-sync restore candidate.
+
+## [1.5.14] - 2026-03-30
+
+### Fixed
+
+- **Shell GitOps marker precision**: Align `lib-common.sh` detection with the Python implementation so only exact `argocd.argoproj.io/*` and Flux API-group keys are flagged; unrelated domains like `rollouts.argoproj.io/*` no longer trigger drift warnings.
+- **setup-rbac sanitization coverage**: Update shell integration tests to execute the real `sanitize_context()` implementation, including hashed output validation and collision-proofing coverage.
+
+## [1.5.13] - 2026-03-28
+
+### Fixed
+
+- **validate-only timestamp safety (F1)**: `--validate-only` no longer refreshes `last_updated` when restoring the saved phase, preserving stale-state detection for subsequent real switchover runs.
+- **Shell Argo CD detection coverage (F2)**: `check_argocd_acm_resources` in `lib-common.sh` now always scans Applications cluster-wide regardless of install type, so operator-based Argo CD watching external namespaces is no longer missed.
+- **Shell Argo CD CRD error classification (F3)**: Auth/RBAC failures and transient API errors during CRD inspection now produce distinct warnings instead of being silently downgraded to "CRD not found".
+- **Setup kubeconfig filename sanitization (F4)**: `setup-rbac.sh` now sanitizes context names for output filenames; contexts containing `/` or `:` (common in `oc login` defaults) no longer create broken nested paths.
+- **Docker/Buildx build context (F5)**: Added `.dockerignore` symlink so Docker and Buildx honour the existing ignore rules; previously only Podman/Buildah respected `.containerignore`.
+- **Preflight RBAC API error handling (F6)**: `namespace_exists()` and Argo CD discovery calls inside the RBAC validation block are now wrapped to convert non-transient `ApiException`s into structured preflight validation failures instead of uncaught top-level exceptions.
+- **check_rbac.py validator+decommission false green (F7)**: `check_rbac.py --role validator --include-decommission` is now rejected with an explicit error; previously decommission checks were silently skipped, producing a misleading pass result.
+- **Phase failure root-cause preservation (F8)**: `_fail_phase()` no longer appends a generic wrapper message when the phase module already recorded a specific error, keeping the most actionable message visible in resume output.
+- **Argo CD RBAC over-requirement on vanilla installs (F9)**: RBAC validation no longer requires `argocds get/list` permissions on vanilla Argo CD installs; the `argocds` check is now gated on the discovered install type.
+
+## [1.5.12] - 2026-03-27
+
+### Fixed
+
+- **Argo CD GitOps marker precision**: Restrict Argo CD detection to exact `argocd.argoproj.io/*` keys and exact `app.kubernetes.io/managed-by=argocd` matches so unrelated `argocd` substrings and non-Argo `*.argoproj.io` metadata no longer trigger drift warnings.
+
+## [1.5.11] - 2026-03-20
+
+### Fixed
+
+- **Setup CLI requirements**: Allow `--setup` to run without the switchover-only `--method` and `--old-hub-action` flags.
+- **Validate-only stale state fallback**: Allow `--validate-only` to run preflight even when a `COMPLETED` state file is missing or has an invalid `last_updated` timestamp.
+- **Setup kubeconfig source**: Make `setup-rbac.sh` pass the explicit admin kubeconfig into `generate-sa-kubeconfig.sh` so generated kubeconfigs use the intended cluster metadata instead of ambient default kubeconfig state.
 
 ### Changed
 
+- **Service account kubeconfig generation**: Add an optional `--kubeconfig` flag to `generate-sa-kubeconfig.sh` for deterministic cluster metadata and token lookups.
+- **Regression coverage**: Add focused tests for setup-only parsing, validate-only stale completed-state handling, and explicit kubeconfig forwarding in shell scripts.
+
+## [1.5.10] - 2026-03-08
+
 ### Fixed
+
+- **Completed-state validate-only handling**: Allow `--validate-only` to run preflight even when the state file shows a recent `COMPLETED` switchover, while keeping stale completed-state protection intact.
+- **Completed-state rerun messaging**: Emit an explicit no-op banner when a recent completed switchover is re-run so operators can see that no phases executed on that invocation.
+- **GitOps collector reset safety**: Clear the active collector instance before resetting the singleton reference so stale test references do not retain prior detections.
+
+### Changed
+
+- **Regression coverage**: Add tests that codify the intended `local-cluster` Argo CD namespace matching and the existing keyword-safe dry-run pause/resume behavior.
+
+## [1.5.9] - 2026-03-08
+
+### Changed
+
+- **Argo CD cleanup**: Simplify the non-blocking preflight Argo CD warning path and deduplicate pause/resume patch-failure logging.
+- **Maintenance cleanup**: Remove a redundant `max_items` guard in custom-resource listing and document the GitOps collector singleton init flag.
+
+### Fixed
+
+- **Script integration warning**: Use a raw shell fixture string in `tests/test_scripts_integration.py` so Python no longer emits an invalid escape `SyntaxWarning`.
+
+## [1.5.8] - 2026-03-08
+
+### Changed
+
+- **Audit report location**: Move the deep audit report from repository root to `docs/development/report.md`.
+
+### Fixed
+
+- **Argo CD impact reporting**: Keep the preflight Argo CD impact report non-blocking for unexpected exceptions while still warning operators.
+- **Auto-import reset safety**: Fail finalization when this run owns the temporary `ImportAndSync` override but cannot verify the ConfigMap before restoring the default.
+- **Phase failure history**: Preserve distinct failure messages within the same phase instead of deduplicating only by phase name.
+- **Preflight RBAC classification**: Report only expected `ValidationError` failures as RBAC validation problems and let unexpected errors surface normally.
+- **Release metadata cleanup**: Correct changelog comparison links, rename the old-hub observability helper for clarity, and fix the namespace validation comment.
+
+## [1.5.7] - 2026-03-08
+
+### Fixed
+
+- **Old hub action validation**: Fail finalization with `SwitchoverError` when `old_hub_action` has an unexpected value instead of warning and silently skipping old-hub handling.
+
+## [1.5.6] - 2026-03-08
+
+### Changed
+
+- **Setup flag validation**: Reject `--include-decommission` outside `--setup` instead of accepting and ignoring it.
+- **RBAC self-check failures**: Surface API/auth/TLS failures as validation errors instead of misreporting them as missing permissions.
+
+### Fixed
+
+- **Validate-only resume safety**: Preserve the persisted phase when `--validate-only` runs against an in-progress switchover state file.
+- **Finalization initial Velero list failures**: Normalize the first backup-list call so startup failures do not leak raw `ApiException`.
+- **Passive restore preflight overhead**: Reuse fetched restore JSON for phase and message extraction instead of making two extra `oc get` calls.
+- **Deep report manifest paths**: Correct decommission extension paths in `report.md`.
+
+## [1.5.5] - 2026-03-07
+
+### Fixed
+
+- **TLS hostname verification docs**: Clarified that hostname verification remains enforced for normal CLI usage and that the insecure bypass is an internal `KubeClient` option rather than a public flag.
+- **Kubeconfig redirect guidance**: Updated script help and deployment docs to use secure `umask 077` redirection for stdout-generated kubeconfigs and merged kubeconfig files.
+- **Postflight ACM version tolerance**: Downgrade unknown new-hub ACM version during auto-import checks to a warning so transient empty status does not fail postflight verification.
+- **Finalization backup ownership guard**: Revalidate that recorded post-switchover backups are ACM-owned before using them for integrity checks.
+- **Finalization passive-sync restore errors**: Wrap old-primary passive sync restore creation failures in `SwitchoverError` with switchover-specific context.
+- **Custom resource 409 reconciliation**: Use a raw non-retrying reread during `create_custom_resource()` conflict handling to avoid nested retry loops.
+- **Bash Argo CD flag handling**: Warn when `--argocd-check` is ignored because `--skip-gitops-check` is set in the validation scripts.
+- **Cross-platform test import**: Guard `tests/test_utils.py` against missing `fcntl` so collection does not fail on platforms without POSIX file locking support.
+- **Scripts README markdown**: Collapse the shell safety note into a single contiguous blockquote to satisfy markdown linting.
+
+## [1.5.4] - 2026-03-07
+
+### Fixed
+
+- **Security dependency override**: Bump `authlib` floor in `requirements-dev.txt` to `>=1.6.7` to address `CVE-2026-28802` reported by `pip-audit`.
+- **Dependency audit remediation**: Dev/test installs now upgrade `setuptools` to a non-vulnerable release so `pip-audit` no longer reports the default venv bootstrap package.
+- **Corrupt state safety**: Preserve unreadable state files for forensics without removing the original path, so retries stay blocked until `--reset-state` or explicit cleanup.
+- **Argo CD pause crash recovery**: Persist provisional pause records before patching and confirm them after success so retries can recover paused Applications without losing resume state.
+- **Argo CD preflight RBAC gating**: Skip Argo CD permission expansion when the Applications CRD is absent on both hubs, avoiding unnecessary preflight failures on clusters without Argo CD.
+- **Argo CD resume-only validation**: Remove the redundant secondary-context check so `--argocd-resume-only` consistently surfaces its dedicated validation error.
+- **`dry_run_skip` keyword handling**: Preserve dry-run callable return values when decorated helpers are invoked with keyword arguments.
 
 ## [1.5.3] - 2026-01-29
 
@@ -803,7 +945,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.13...HEAD
+[1.5.13]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.12...v1.5.13
+[1.5.12]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.11...v1.5.12
+[1.5.11]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.10...v1.5.11
+[1.5.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.9...v1.5.10
+[1.5.9]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.8...v1.5.9
+[1.5.8]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.7...v1.5.8
+[1.5.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.6...v1.5.7
+[1.5.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.5...v1.5.6
+[1.5.5]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.1...v1.5.3
 [1.5.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.13...v1.5.0
@@ -974,7 +1126,6 @@ pip install -r requirements.txt
 
 ---
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.11...HEAD
 [1.4.11]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.10...v1.4.11
 [1.4.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.9...v1.4.10
 [1.4.9]: https://github.com/tomazb/rh-acm-switchover/compare/v1.4.8...v1.4.9

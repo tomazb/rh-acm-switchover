@@ -98,6 +98,16 @@ def main():
     """Main entry point."""
     args = parse_args()
 
+    # F7 fix: Reject --role validator --include-decommission early,
+    # consistent with the main CLI's validation in InputValidator.
+    if args.role == "validator" and args.include_decommission:
+        print(
+            "Error: --include-decommission cannot be used with --role validator. "
+            "Decommission permissions are only applicable to the operator role.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # Set up logging
     setup_logging(verbose=args.verbose, log_format="text")
     logger = logging.getLogger("acm_switchover")
@@ -205,11 +215,11 @@ def main():
                     include_decommission=args.include_decommission,
                     skip_observability=args.skip_observability,
                 )
-                report = validator.generate_permission_report(
+                report_text = validator.generate_permission_report(
                     include_decommission=args.include_decommission,
                     skip_observability=args.skip_observability,
                 )
-                print(report)
+                print(report_text)
 
             # Exit with appropriate code
             if all_valid:

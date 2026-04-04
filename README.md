@@ -1,6 +1,6 @@
 # ACM Hub Switchover Automation
 
-**Version 1.5.3** (2026-01-29)
+**Version 1.5.16** (2026-04-02)
 
 Automated, idempotent script for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster.
 
@@ -193,6 +193,7 @@ python acm_switchover.py --decommission \
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method` | Switchover method: `passive` or `full` (required) |
 | `--activation-method` | Activation option for passive method: `patch` (default) or `restore` |
+| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; must be non-negative (`0` = informational only) |
 | `--old-hub-action` | Action for old hub: `secondary` (**recommended** - enables reverse switchover), `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |

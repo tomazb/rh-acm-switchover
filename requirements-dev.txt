@@ -6,8 +6,8 @@ pytest-mock>=3.11.0
 # Code quality
 flake8>=6.1.0
 pylint>=3.0.0
-black>=23.7.0
-isort>=5.12.0
+black>=25.1.0,<26
+isort>=5.12.0,<8
 mypy>=1.5.0
 
 # Type stubs for mypy
@@ -18,14 +18,22 @@ bandit>=1.7.5
 pip-audit>=2.6.0
 
 # Patched transitive dependencies (pip-audit output)
-authlib>=1.6.6
-filelock>=3.20.3
+authlib>=1.6.7
+setuptools>=78.1.1
+filelock>=3.20.3; python_version >= "3.10"
+filelock>=3.0.0; python_version < "3.10"
+cryptography>=46.0.6; python_version >= "3.10"
+cryptography>=42.0.0; python_version < "3.10"
+# Keep the highest available Pillow on each supported Python line.
+# Pillow 12.x drops Python 3.9 wheels, so CI needs a compatible floor there.
+pillow>=12.1.1; python_version >= "3.10"
+pillow>=11.3.0; python_version < "3.10"
 
 # Additional testing utilities
 coverage>=7.3.0
 
 # E2E analyzer dependencies
-# pandas>=2.3.0 excludes vulnerable 2.2.x releases (CVE-2024-9880, CVE-2024-42992)
-pandas>=2.3.0
+# pandas>=2.3.0 excludes vulnerable 2.2.x releases (CVE-2024-9880, CVE-2024-42992); <3 guards against breaking 3.x API changes
+pandas>=2.3.0,<3
 matplotlib>=3.7.0
 seaborn>=0.12.0

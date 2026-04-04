@@ -68,7 +68,7 @@ class TestBackupValidator:
         # Mock time functions to simulate timeout immediately
         # First call returns 0, second call returns timeout+1 to exit loop immediately
         mocker.patch("modules.preflight.backup_validators.time.sleep")
-        mocker.patch("modules.preflight.backup_validators.time.time", side_effect=[0, 601])
+        mocker.patch("modules.preflight.backup_validators.time.time", side_effect=[0, 601, 602, 603])
 
         validator = BackupValidator(reporter)
         # Mock backups with one in progress - stays in progress through all polls
@@ -384,6 +384,27 @@ class TestClusterDeploymentValidator:
         assert "ns2/bad-cluster" in results[0]["message"]
         assert "DESTROY" in results[0]["message"]
 
+    @patch("modules.preflight.cluster_validators.logger")
+    def test_gitops_marker_record_failure_is_non_fatal(self, mock_logger, reporter, mock_kube_client):
+        """Test marker recording exceptions are logged but do not fail validation."""
+        validator = ClusterDeploymentValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster1", "namespace": "ns1"}, "spec": {"preserveOnDelete": True}},
+        ]
+
+        with patch(
+            "lib.gitops_detector.record_gitops_markers",
+            side_effect=RuntimeError("marker error"),
+        ):
+            validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        mock_logger.warning.assert_called_once()
+        assert mock_logger.warning.call_args[0][0] == "GitOps marker recording failed for %s %s: %s"
+        assert mock_logger.warning.call_args[0][1] == "ClusterDeployment"
+
 
 class TestKubeconfigValidator:
     """Tests for KubeconfigValidator."""
@@ -658,6 +679,36 @@ class TestPassiveSyncValidator:
         results = reporter.results
         assert len(results) == 1
         assert results[0]["passed"] is True
+
+    def test_passive_sync_running(self, reporter, mock_kube_client):
+        """Test success when passive sync is actively running (transient state during sync)."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {"phase": "Running", "lastMessage": "Velero restore executing"}
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "Running" in results[0]["message"]
+
+    def test_passive_sync_unknown(self, reporter, mock_kube_client):
+        """Test success when passive sync is in Unknown state (transient during Velero sync)."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {"phase": "Unknown", "lastMessage": "Unknown status for Velero restore"}
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert "Unknown" in results[0]["message"]
 
     def test_passive_sync_not_found(self, reporter, mock_kube_client):
         """Test critical failure when passive sync restore not found."""

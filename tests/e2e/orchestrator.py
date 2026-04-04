@@ -43,6 +43,9 @@ class RunConfig:
     skip_observability_checks: bool = False
     skip_rbac_validation: bool = False
     manage_auto_import_strategy: bool = False
+    disable_observability_on_secondary: bool = False
+    argocd_manage: bool = False
+    argocd_resume_after_switchover: bool = False
     # Soak testing controls
     run_hours: Optional[float] = None
     max_failures: Optional[int] = None
@@ -457,6 +460,25 @@ class E2EOrchestrator:
 
         self.logger.info("Summary written to: %s", summary_file)
 
+    @staticmethod
+    def _cycle_changed_hubs(cycle_result: "CycleResult") -> bool:
+        """Check if a cycle actually performed a switchover (hubs changed roles).
+
+        A switchover changes hub roles only if the activation phase completed
+        successfully (or a later phase ran). If the cycle failed before or during
+        activation, the hubs are still in their original roles.
+        """
+        if cycle_result.success:
+            return True
+        # Phases that run after activation indicates hubs changed
+        post_activation_phases = {"post_activation", "finalization"}
+        for pr in cycle_result.phase_results:
+            if pr.phase_name == "activation" and pr.success:
+                return True
+            if pr.phase_name in post_activation_phases:
+                return True
+        return False
+
     def _run_cycle(
         self,
         cycle_num: int,
@@ -552,6 +574,9 @@ class E2EOrchestrator:
                 skip_observability_checks=self.config.skip_observability_checks,
                 skip_rbac_validation=self.config.skip_rbac_validation,
                 manage_auto_import_strategy=self.config.manage_auto_import_strategy,
+                disable_observability_on_secondary=self.config.disable_observability_on_secondary,
+                argocd_manage=self.config.argocd_manage,
+                argocd_resume_after_switchover=self.config.argocd_resume_after_switchover,
                 phase_callback=phase_callback,
             )
 
@@ -729,8 +754,20 @@ class E2EOrchestrator:
             else:
                 failure_count += 1
 
-            # Calculate next cycle's contexts (swap for bi-directional switchover)
-            next_primary, next_secondary = current_secondary, current_primary
+            # Only swap contexts if the cycle actually changed hub roles.
+            # If the cycle failed before activation completed, the hubs are
+            # still in the same roles and retrying the same direction is correct.
+            hubs_changed = self._cycle_changed_hubs(cycle_result)
+            if hubs_changed:
+                next_primary, next_secondary = current_secondary, current_primary
+            else:
+                next_primary, next_secondary = current_primary, current_secondary
+                if not cycle_result.success:
+                    self.logger.info(
+                        "Keeping same context order (switchover did not complete): Primary=%s, Secondary=%s",
+                        current_primary,
+                        current_secondary,
+                    )
 
             # Save resume state after each cycle (before any early exit checks)
             # This ensures resume works correctly even when stopping early
@@ -758,12 +795,15 @@ class E2EOrchestrator:
                 )
                 break
 
-            # Swap contexts for next cycle
+            # Apply context swap for next cycle
             if cycle_num < self.config.cycles:
                 current_primary, current_secondary = next_primary, next_secondary
-                self.logger.info(
-                    "Swapped contexts for next cycle: Primary=%s, Secondary=%s", current_primary, current_secondary
-                )
+                if hubs_changed:
+                    self.logger.info(
+                        "Swapped contexts for next cycle: Primary=%s, Secondary=%s",
+                        current_primary,
+                        current_secondary,
+                    )
 
                 # Cooldown between cycles
                 if self.config.cooldown_seconds > 0:

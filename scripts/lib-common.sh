@@ -15,6 +15,11 @@ if [[ -n "${_LIB_COMMON_LOADED:-}" ]]; then
 fi
 _LIB_COMMON_LOADED=1
 
+if (( ${BASH_VERSINFO[0]:-0} < 4 )); then
+    echo "Error: ACM switchover scripts require Bash 4 or newer." >&2
+    return 1 2>/dev/null || exit 1
+fi
+
 # =============================================================================
 # Colors for output
 # =============================================================================
@@ -529,6 +534,7 @@ check_nodes() {
     local context="$1"
     local hub_name="$2"
     local nodes_json
+    local nodes_text
     local oc_stderr_file
     oc_stderr_file="$(mktemp)"
 
@@ -553,8 +559,19 @@ check_nodes() {
     fi
     
     local total ready not_ready
-    total=$(echo "$nodes_json" | jq -r '.items | length' 2>/dev/null || echo "0")
-    ready=$(echo "$nodes_json" | jq -r '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length' 2>/dev/null || echo "0")
+    total=$(echo "$nodes_json" | jq -r '.items | length' 2>/dev/null || echo "")
+    ready=$(echo "$nodes_json" | jq -r '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length' 2>/dev/null || echo "")
+
+    if [[ ! "$total" =~ ^[0-9]+$ ]] || [[ ! "$ready" =~ ^[0-9]+$ ]]; then
+        nodes_text=$("$CLUSTER_CLI_BIN" --context="$context" get nodes --no-headers 2>/dev/null || true)
+        if [[ -z "$nodes_text" ]]; then
+            check_fail "$hub_name: Could not retrieve nodes (insufficient permissions or cluster issue)"
+            return 0
+        fi
+        total=$(echo "$nodes_text" | sed '/^\s*$/d' | wc -l | tr -d ' ')
+        ready=$(echo "$nodes_text" | grep -E '\bReady\b' | wc -l | tr -d ' ')
+    fi
+
     not_ready=$((total - ready))
     
     if [[ $total -eq 0 ]]; then
@@ -782,7 +799,403 @@ print_summary() {
             echo "If issues persist, consider rollback procedure in the runbook."
         fi
         echo ""
-        
+
         return 1
+    fi
+}
+
+# =============================================================================
+# GitOps Detection Helpers
+# =============================================================================
+
+# Indexed arrays for collecting GitOps-managed resources
+# Format: GITOPS_DETECTED_RESOURCES[index]="[context] namespace/Kind/name"
+#         GITOPS_DETECTED_MARKERS[index]="marker1,marker2,..."
+GITOPS_DETECTED_RESOURCES=()
+GITOPS_DETECTED_MARKERS=()
+GITOPS_DETECTION_ENABLED=1  # 1=enabled, 0=disabled
+GITOPS_MAX_DISPLAY_PER_KIND=10
+
+# Disable GitOps detection (used with --skip-gitops-check)
+# Usage: disable_gitops_detection
+disable_gitops_detection() {
+    GITOPS_DETECTION_ENABLED=0
+}
+
+# Check if a resource has GitOps markers (ArgoCD, Flux)
+# Usage: detect_gitops_markers "$RESOURCE_JSON"
+# Returns: comma-separated list of markers, or empty string if none
+# Example: detect_gitops_markers "$(oc get backupschedule foo -o json)"
+detect_gitops_markers() {
+    local resource_json="$1"
+    local markers=""
+
+    if [[ -z "$resource_json" ]]; then
+        echo ""
+        return 0
+    fi
+
+    # Extract labels and annotations
+    local labels annotations
+    labels=$(echo "$resource_json" | jq -r '.metadata.labels // {} | to_entries | .[] | "\(.key)=\(.value)"' 2>/dev/null || echo "")
+    annotations=$(echo "$resource_json" | jq -r '.metadata.annotations // {} | to_entries | .[] | "\(.key)=\(.value)"' 2>/dev/null || echo "")
+
+    # Check labels for GitOps markers
+    while IFS= read -r label; do
+        [[ -z "$label" ]] && continue
+        local key="${label%%=*}"
+        local value="${label#*=}"
+
+        # Argo CD instance tracking keys (explicit match)
+        if [[ "$key" == "app.kubernetes.io/instance" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="label:${key} (UNRELIABLE)"
+            continue
+        fi
+        if [[ "$key" == "argocd.argoproj.io/instance" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="label:${key}"
+            continue
+        fi
+
+        # managed-by detection (exact value match to avoid substring false positives)
+        if [[ "$key" == "app.kubernetes.io/managed-by" ]]; then
+            local value_lower
+            value_lower=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+            if [[ "$value_lower" == "argocd" ]] || [[ "$value_lower" == "flux" ]] || [[ "$value_lower" == "fluxcd" ]]; then
+                [[ -n "$markers" ]] && markers+=","
+                markers+="label:app.kubernetes.io/managed-by"
+            fi
+        else
+            local key_lower
+            local key_prefix=""
+            key_lower=$(echo "$key" | tr '[:upper:]' '[:lower:]')
+            if [[ "$key_lower" == */* ]]; then
+                key_prefix="${key_lower%%/*}"
+            fi
+
+            # Match exact GitOps API groups to avoid false positives from unrelated domains like rollouts.argoproj.io.
+            if [[ "$key_prefix" == "argocd.argoproj.io" ]]; then
+                [[ -n "$markers" ]] && markers+=","
+                markers+="label:${key}"
+            # Flux detection
+            elif [[ "$key_prefix" == "fluxcd.io" ]] || [[ "$key_prefix" == *.fluxcd.io ]]; then
+                [[ -n "$markers" ]] && markers+=","
+                markers+="label:${key}"
+            fi
+        fi
+    done <<< "$labels"
+
+    # Check annotations for GitOps markers
+    while IFS= read -r annotation; do
+        [[ -z "$annotation" ]] && continue
+        local key="${annotation%%=*}"
+
+        # Argo CD instance tracking key (explicit match)
+        if [[ "$key" == "app.kubernetes.io/instance" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="annotation:${key} (UNRELIABLE)"
+            continue
+        fi
+        if [[ "$key" == "argocd.argoproj.io/instance" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="annotation:${key}"
+            continue
+        fi
+
+        local key_lower
+        local key_prefix=""
+        key_lower=$(echo "$key" | tr '[:upper:]' '[:lower:]')
+        if [[ "$key_lower" == */* ]]; then
+            key_prefix="${key_lower%%/*}"
+        fi
+
+        # Match exact GitOps API groups to avoid false positives from unrelated domains like rollouts.argoproj.io.
+        if [[ "$key_prefix" == "argocd.argoproj.io" ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="annotation:${key}"
+        # Flux detection
+        elif [[ "$key_prefix" == "fluxcd.io" ]] || [[ "$key_prefix" == *.fluxcd.io ]]; then
+            [[ -n "$markers" ]] && markers+=","
+            markers+="annotation:${key}"
+        fi
+    done <<< "$annotations"
+
+    # Deduplicate and return comma-separated (deterministic order)
+    if [[ -n "$markers" ]]; then
+        echo "$markers" | tr ',' '\n' | sort -u | paste -sd ',' -
+    fi
+}
+
+# Collect a GitOps-managed resource for later reporting
+# Usage: collect_gitops_markers "context" "namespace" "Kind" "name" "markers"
+# Example: collect_gitops_markers "primary" "open-cluster-management-backup" "BackupSchedule" "acm-backup" "label:managed-by"
+collect_gitops_markers() {
+    local context="$1"
+    local namespace="$2"
+    local kind="$3"
+    local name="$4"
+    local markers="$5"
+
+    # Skip if detection is disabled or no markers
+    if [[ $GITOPS_DETECTION_ENABLED -eq 0 ]] || [[ -z "$markers" ]]; then
+        return 0
+    fi
+
+    # Build resource identifier
+    local resource_id
+    if [[ -n "$namespace" ]]; then
+        resource_id="[${context}] ${namespace}/${kind}/${name}"
+    else
+        resource_id="[${context}] ${kind}/${name}"
+    fi
+
+    # Add to arrays
+    GITOPS_DETECTED_RESOURCES+=("$resource_id")
+    GITOPS_DETECTED_MARKERS+=("$markers")
+}
+
+# Print consolidated GitOps detection report
+# Usage: print_gitops_report
+print_gitops_report() {
+    # Skip if detection is disabled
+    if [[ $GITOPS_DETECTION_ENABLED -eq 0 ]]; then
+        return 0
+    fi
+
+    local count=${#GITOPS_DETECTED_RESOURCES[@]}
+
+    # Skip if no detections
+    if [[ $count -eq 0 ]]; then
+        return 0
+    fi
+
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    if [[ $count -eq 1 ]]; then
+        echo -e "${YELLOW}GitOps-related markers detected ($count warning)${NC}"
+    else
+        echo -e "${YELLOW}GitOps-related markers detected ($count warnings)${NC}"
+    fi
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}Coordinate changes with GitOps to avoid drift after switchover.${NC}"
+    echo ""
+    ((WARNING_CHECKS+=count)) || true
+    ((TOTAL_CHECKS+=count)) || true
+    if [[ $count -eq 1 ]]; then
+        WARNING_MESSAGES+=("GitOps-related marker detected on 1 resource; coordinate changes with GitOps to avoid drift after switchover.")
+    else
+        WARNING_MESSAGES+=("GitOps-related markers detected on $count resources; coordinate changes with GitOps to avoid drift after switchover.")
+    fi
+
+    # Sort resources for consistent output (matches Python implementation)
+    # Format: index:resource:markers, then sort by resource identifier
+    local -a sorted_entries
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+        sorted_entries+=("$i|${GITOPS_DETECTED_RESOURCES[$i]}|${GITOPS_DETECTED_MARKERS[$i]}")
+    done
+
+    # Sort by resource identifier (field 2), then rebuild arrays
+    local -a sorted_resources
+    local -a sorted_markers
+    local -a sorted_indices
+
+    while IFS='|' read -r idx resource markers; do
+        sorted_indices+=("$idx")
+        sorted_resources+=("$resource")
+        sorted_markers+=("$markers")
+    done < <(printf '%s\n' "${sorted_entries[@]}" | sort -t'|' -k2)
+
+    # Replace original arrays with sorted versions
+    GITOPS_DETECTED_RESOURCES=("${sorted_resources[@]}")
+    GITOPS_DETECTED_MARKERS=("${sorted_markers[@]}")
+
+    # Group by kind for summarization
+    declare -A kind_counts
+    declare -A kind_displayed
+    local i
+
+    # Count resources by kind (arrays are now sorted)
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+        local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
+        # Extract kind from resource identifier
+        # Format: "[context] namespace/Kind/name" or "[context] Kind/name"
+        local kind
+        kind=$(echo "$resource" | sed -E 's/^\[[^]]+\] ([^/]+\/)?([^/]+)\/[^/]+$/\2/')
+        # Use default expansion to avoid unbound variable errors under set -u
+        if [[ -z "${kind_counts[$kind]:-}" ]]; then
+            kind_counts[$kind]=0
+            kind_displayed[$kind]=0
+        fi
+        ((++kind_counts[$kind])) || true
+    done
+
+    # Display resources with truncation per kind (arrays are now sorted)
+    for i in "${!GITOPS_DETECTED_RESOURCES[@]}"; do
+        local resource="${GITOPS_DETECTED_RESOURCES[$i]}"
+        local markers="${GITOPS_DETECTED_MARKERS[$i]}"
+
+        # Extract kind
+        local kind
+        kind=$(echo "$resource" | sed -E 's/^\[[^]]+\] ([^/]+\/)?([^/]+)\/[^/]+$/\2/')
+
+        # Check if we've hit the display limit for this kind
+        # Use default expansion to avoid unbound variable errors under set -u
+        if [[ ${kind_displayed[$kind]:-0} -ge $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
+            # Only show "and X more" message once per kind
+            if [[ ${kind_displayed[$kind]:-0} -eq $GITOPS_MAX_DISPLAY_PER_KIND ]]; then
+                local remaining=$((${kind_counts[$kind]:-0} - GITOPS_MAX_DISPLAY_PER_KIND))
+                echo -e "${YELLOW}  ... and $remaining more ${kind}(s)${NC}"
+                # Increment to prevent showing message again
+                ((kind_displayed[$kind]++)) || true
+            fi
+            continue
+        fi
+
+        echo -e "${YELLOW}${resource}${NC}"
+        # Print each marker
+        IFS=',' read -ra marker_array <<< "$markers"
+        for marker in "${marker_array[@]}"; do
+            echo -e "${YELLOW}  → ${marker}${NC}"
+        done
+
+        ((kind_displayed[$kind]++)) || true
+    done
+
+    echo ""
+}
+
+# Check ArgoCD instances and ACM-related resources managed by ArgoCD Applications.
+# Supports both operator install (argocds.argoproj.io) and vanilla Argo CD (applications.argoproj.io only).
+# Usage: check_argocd_acm_resources "context" "label"
+check_argocd_acm_resources() {
+    local context="$1"
+    local label="$2"
+
+    if [[ $GITOPS_DETECTION_ENABLED -eq 0 ]]; then
+        return 0
+    fi
+
+    # F3 fix: Differentiate CRD-not-found from auth/API failures instead of
+    # treating any non-zero exit as "CRD absent".
+    local crd_stderr
+    local crd_rc=0
+    crd_stderr=$("$CLUSTER_CLI_BIN" --context="$context" get crd applications.argoproj.io 2>&1 >/dev/null) || crd_rc=$?
+    if [[ $crd_rc -ne 0 ]]; then
+        if echo "$crd_stderr" | grep -qiE '(NotFound|not found|no matches|the server doesn.t have a resource)'; then
+            check_pass "$label: Argo CD Applications CRD not found (skipping ArgoCD GitOps check)"
+            return 0
+        elif echo "$crd_stderr" | grep -qiE '(Unauthorized|Forbidden|forbidden|unauthorized)'; then
+            check_warn "$label: Unable to check Argo CD CRD (auth/RBAC denied); cannot determine GitOps risk"
+            echo -e "${YELLOW}       Error: ${crd_stderr}${NC}"
+            return 0
+        else
+            check_warn "$label: Unable to check Argo CD CRD (API error); cannot determine GitOps risk"
+            echo -e "${YELLOW}       Error: ${crd_stderr}${NC}"
+            return 0
+        fi
+    fi
+
+    local ns_regex='^(open-cluster-management($|-.*)|open-cluster-management-backup$|open-cluster-management-observability$|open-cluster-management-global-set$|multicluster-engine$|local-cluster)$'
+    local kinds_json='["MultiClusterHub","MultiClusterEngine","MultiClusterObservability","ManagedCluster","ManagedClusterSet","ManagedClusterSetBinding","Placement","PlacementBinding","Policy","PolicySet","BackupSchedule","Restore","DataProtectionApplication","ClusterDeployment"]'
+
+    local found_any=0
+    local has_argocds_crd=0
+    local argocd_count=0
+
+    # Operator install: argocds.argoproj.io exists -> list instances (informational)
+    if "$CLUSTER_CLI_BIN" --context="$context" get crd argocds.argoproj.io &>/dev/null; then
+        has_argocds_crd=1
+        local argocd_json
+        local argocd_list_stderr_file
+        argocd_list_stderr_file=$(mktemp)
+        local argocd_list_rc=0
+        argocd_json=$("$CLUSTER_CLI_BIN" --context="$context" get argocds.argoproj.io -A -o json 2>"$argocd_list_stderr_file") || argocd_list_rc=$?
+        if [[ $argocd_list_rc -ne 0 ]]; then
+            check_warn "$label: Unable to list ArgoCD instances (API error); continuing without instance details"
+            echo -e "${YELLOW}       Error: $(cat "$argocd_list_stderr_file")${NC}"
+            argocd_json='{"items":[]}'
+        fi
+        rm -f "$argocd_list_stderr_file"
+        argocd_count=$(echo "$argocd_json" | jq '.items | length' 2>/dev/null || echo 0)
+
+        if [[ $argocd_count -gt 0 ]]; then
+            echo ""
+            echo -e "${BLUE}ArgoCD instances on ${label}:${NC}"
+            echo "$argocd_json" | jq -r '.items[] | "  - \(.metadata.namespace)/\(.metadata.name)"'
+            echo ""
+        fi
+    fi
+
+    # F2 fix: Always scan Applications cluster-wide regardless of install type.
+    # Operator-based Argo CD can watch namespaces other than its own control-plane
+    # namespace, so per-instance-namespace scans miss watched-namespace Applications.
+    local all_apps_json
+    local apps_list_stderr_file
+    apps_list_stderr_file=$(mktemp)
+    local apps_list_rc=0
+    all_apps_json=$("$CLUSTER_CLI_BIN" --context="$context" get applications.argoproj.io -A -o json 2>"$apps_list_stderr_file") || apps_list_rc=$?
+    if [[ $apps_list_rc -ne 0 ]]; then
+        check_warn "$label: Unable to list Argo CD Applications (API error); cannot determine GitOps risk"
+        echo -e "${YELLOW}       Error: $(cat "$apps_list_stderr_file")${NC}"
+        rm -f "$apps_list_stderr_file"
+        return 0
+    fi
+    rm -f "$apps_list_stderr_file"
+    local app_count
+    app_count=$(echo "$all_apps_json" | jq '.items | length' 2>/dev/null || echo 0)
+
+    if [[ $app_count -eq 0 ]]; then
+        check_pass "$label: No Argo CD Applications found"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${BLUE}Argo CD on ${label}:${NC}"
+    if [[ $has_argocds_crd -eq 0 ]]; then
+        echo -e "  (Vanilla install: applications.argoproj.io only, no argocds.argoproj.io)"
+    elif [[ $argocd_count -gt 0 ]]; then
+        echo -e "  (Operator install: $argocd_count instance(s); scanning all Applications cluster-wide)"
+    else
+        echo -e "  (No ArgoCD instances detected; scanning Applications cluster-wide)"
+    fi
+    echo ""
+
+    local app_output
+    app_output=$(echo "$all_apps_json" | jq -r --arg ns_regex "$ns_regex" --argjson kinds "$kinds_json" '
+            def fmt($r):
+                ($r.namespace // "-") as $ns
+                | if $ns == "-" then
+                        "    - \($r.kind) \($r.name)"
+                    else
+                        "    - \($r.kind) \($ns)/\($r.name)"
+                    end;
+            (.items // [])
+            | map(select(type=="object"))
+            | .[]
+            | . as $app
+            | ($app.status.resources // [])
+            | if type=="array" then . else [] end
+            | map(select(type=="object") | select(has("kind")))
+            | map(select(((.namespace // "") | test($ns_regex)) or (.kind as $k | ($kinds | index($k)))))
+            | sort_by(.kind,.namespace,.name)
+            | if length>0 then
+                    ("\n  Application: \($app.metadata.namespace)/\($app.metadata.name) (\(length) resources)"),
+                    (.[0:5] | map(fmt(.))[]),
+                    (if length > 5 then "    - ... and \(length - 5) more" else empty end)
+                else empty end
+    ')
+    if [[ -n "$app_output" ]]; then
+        found_any=1
+        echo -e "${YELLOW}ACM resources managed by Argo CD Applications:${NC}"
+        echo "$app_output"
+    fi
+
+    if [[ $found_any -eq 1 ]]; then
+        check_warn "$label: ACM resources detected in ArgoCD Applications"
+        echo -e "${YELLOW}       GitOps reconciliation may override switchover changes and cause drift.${NC}"
+        echo -e "${YELLOW}       Pause/scope ArgoCD apps for ACM resources before switchover.${NC}"
+    else
+        check_pass "$label: No ACM resources detected in ArgoCD Applications"
     fi
 }

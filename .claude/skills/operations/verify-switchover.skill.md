@@ -130,8 +130,9 @@ oc get route grafana -n open-cluster-management-observability --context <seconda
 
 ## Optional: Disable Observability on Old Hub (between Steps 10-11)
 
-> Use this when keeping the old hub as a secondary (not decommissioning).
-> If GitOps manages the MCO, coordinate deletion to avoid drift.
+> **Required when keeping the old hub as a secondary** (not decommissioning).
+> Scaling Thanos/Observatorium to 0 is unreliable — the MCO operator will re-scale them back to defaults within minutes.
+> If GitOps manages the MCO, pause or adjust GitOps before deleting to avoid drift.
 
 ```bash
 oc delete multiclusterobservability.observability.open-cluster-management.io observability \

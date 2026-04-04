@@ -18,6 +18,27 @@ subjects:
     name: {{ .Values.serviceAccount.operator.name }}
     namespace: {{ .Values.namespace }}
 
+{{- if .Values.rbac.includeDecommissionClusterRole }}
+---
+# ClusterRoleBinding for ACM Switchover Decommission
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.clusterRole.decommission.name }}
+  labels:
+    {{- include "acm-switchover-rbac.labels" . | nindent 4 }}
+    app.kubernetes.io/component: decommission
+    app.kubernetes.io/role: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Values.clusterRole.decommission.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.operator.name }}
+    namespace: {{ .Values.namespace }}
+{{- end }}
+
 ---
 # ClusterRoleBinding for ACM Switchover Validator (Read-Only)
 apiVersion: rbac.authorization.k8s.io/v1

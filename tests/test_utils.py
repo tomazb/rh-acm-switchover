@@ -9,6 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - platform-specific
+    fcntl = None
+
+from lib.exceptions import StateLoadError, StateLockError
 from lib.utils import (
     Phase,
     StateManager,
@@ -152,11 +158,13 @@ class TestStateManager:
     def test_get_last_error_phase_invalid_phase(self, state_manager):
         """Test get_last_error_phase handles invalid phase gracefully."""
         # Manually add an error with an invalid phase
-        state_manager.state["errors"].append({
-            "error": "Test error",
-            "phase": "invalid_phase",
-            "timestamp": "2026-01-29T12:00:00+00:00"
-        })
+        state_manager.state["errors"].append(
+            {
+                "error": "Test error",
+                "phase": "invalid_phase",
+                "timestamp": "2026-01-29T12:00:00+00:00",
+            }
+        )
 
         result = state_manager.get_last_error_phase()
         assert result is None
@@ -164,10 +172,7 @@ class TestStateManager:
     def test_get_last_error_phase_missing_phase_field(self, state_manager):
         """Test get_last_error_phase handles missing phase field."""
         # Manually add an error without phase field
-        state_manager.state["errors"].append({
-            "error": "Test error",
-            "timestamp": "2026-01-29T12:00:00+00:00"
-        })
+        state_manager.state["errors"].append({"error": "Test error", "timestamp": "2026-01-29T12:00:00+00:00"})
 
         result = state_manager.get_last_error_phase()
         assert result is None
@@ -250,20 +255,31 @@ class TestStateManager:
         assert len(completed) == 1
         assert completed[0]["name"] == "step1"
 
-    @patch("lib.utils.logging")
-    def test_get_current_phase_handles_unknown(self, mock_logging, temp_state_file):
-        """Unknown persisted phase should reset to INIT with warning."""
+    def test_invalid_persisted_phase_raises_state_load_error(self, temp_state_file):
+        """Unknown persisted phase must fail fast instead of being rewritten."""
         sm = StateManager(str(temp_state_file))
         sm.state["current_phase"] = "mystery-phase"
         sm.flush_state()  # Force write even if not dirty
 
-        # Reload to simulate separate run
-        sm_reloaded = StateManager(str(temp_state_file))
-        phase = sm_reloaded.get_current_phase()
+        with pytest.raises(StateLoadError, match="Unknown phase"):
+            StateManager(str(temp_state_file))
 
-        assert phase == Phase.INIT
-        assert sm_reloaded.state["current_phase"] == Phase.INIT.value
-        mock_logging.warning.assert_called()
+    def test_restore_runtime_checkpoint_restores_phase_and_timestamp_only(self, tmp_path):
+        """Runtime checkpoint restore should preserve config updates while restoring durable state."""
+        state_path = tmp_path / "runtime-checkpoint.json"
+        sm = StateManager(str(state_path))
+        original_timestamp = sm.state["last_updated"]
+        checkpoint = sm.capture_runtime_checkpoint()
+
+        sm.set_phase(Phase.PREFLIGHT)
+        sm.set_config("primary_version", "2.14.0")
+
+        sm.restore_runtime_checkpoint(checkpoint)
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.get_config("primary_version") == "2.14.0"
+        assert reloaded.state["last_updated"] == original_timestamp
 
     def test_ensure_contexts_stores_values(self, tmp_path):
         """Contexts should be persisted and reloaded."""
@@ -381,6 +397,209 @@ class TestStateManager:
         assert mock_logging.warning.called
         call_args = mock_logging.warning.call_args[0]
         assert "Could not parse state timestamp" in call_args[0]
+
+
+@pytest.mark.unit
+class TestStateLoadSafety:
+    """Tests for fail-fast behavior on corrupt or unreadable state files."""
+
+    def test_corrupt_json_raises_state_load_error(self, tmp_path):
+        """A corrupt state file must raise StateLoadError, not silently reset."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{invalid json %%}")
+
+        with pytest.raises(StateLoadError, match="corrupt"):
+            StateManager(str(state_file))
+
+    def test_corrupt_file_is_preserved_not_deleted(self, tmp_path):
+        """The corrupt state file must remain in place while a forensic copy is created."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{invalid}")
+
+        with pytest.raises(StateLoadError):
+            StateManager(str(state_file))
+
+        assert state_file.exists(), "Original corrupt file should keep blocking reuse"
+        corrupt_files = list(tmp_path.glob("state.json.corrupt.*"))
+        assert len(corrupt_files) == 1, f"Expected one .corrupt.* file, found: {corrupt_files}"
+
+    def test_corrupt_file_continues_blocking_until_removed(self, tmp_path):
+        """The same corrupt state path must keep failing until the operator resets it."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{invalid}")
+
+        with pytest.raises(StateLoadError):
+            StateManager(str(state_file))
+
+        with pytest.raises(StateLoadError):
+            StateManager(str(state_file))
+
+    def test_unreadable_file_raises_state_load_error(self, tmp_path):
+        """An unreadable state file must raise StateLoadError."""
+        import stat as stat_mod
+
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("Root can still read chmod 000 files")
+
+        state_file = tmp_path / "state.json"
+        state_file.write_text('{"version": "1.0"}')
+        state_file.chmod(0o000)
+
+        try:
+            with pytest.raises(StateLoadError, match="cannot be read"):
+                StateManager(str(state_file))
+        finally:
+            state_file.chmod(stat_mod.S_IRUSR | stat_mod.S_IWUSR)
+
+    def test_missing_file_creates_fresh_state(self, tmp_path):
+        """When no state file exists, a fresh one must be created without error."""
+        state_file = tmp_path / "new-state.json"
+        assert not state_file.exists()
+
+        sm = StateManager(str(state_file))
+
+        assert state_file.exists()
+        assert sm.get_current_phase() == Phase.INIT
+
+    def test_reset_state_flag_allows_recovery_from_corrupt_file(self, tmp_path):
+        """Simulates the --reset-state path: delete file before constructing StateManager."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{invalid}")
+
+        # --reset-state removes the file before constructing StateManager
+        state_file.unlink()
+        sm = StateManager(str(state_file))
+
+        assert sm.get_current_phase() == Phase.INIT
+
+    def test_same_process_reuses_run_lock(self, tmp_path):
+        """Multiple StateManager instances in the same process should share the run lock."""
+        state_file = tmp_path / "state.json"
+
+        sm1 = StateManager(str(state_file))
+        sm2 = StateManager(str(state_file))
+
+        assert sm1.get_current_phase() == Phase.INIT
+        assert sm2.get_current_phase() == Phase.INIT
+
+    @pytest.mark.skipif(fcntl is None, reason="fcntl unavailable on this platform")
+    @patch("lib.utils.fcntl.flock")
+    def test_conflicting_run_lock_raises_state_lock_error(self, mock_flock, tmp_path):
+        """A conflicting OS-level lock should raise StateLockError during initialization."""
+        state_file = tmp_path / "state.json"
+
+        def side_effect(_fd, operation):
+            if operation & fcntl.LOCK_NB:
+                raise BlockingIOError("already locked")
+            return None
+
+        mock_flock.side_effect = side_effect
+
+        with pytest.raises(StateLockError, match="already using state file"):
+            StateManager(str(state_file))
+
+
+@pytest.mark.unit
+class TestPhaseResumeMetadata:
+    """Tests for reliable failure metadata required by resume logic."""
+
+    def test_add_error_captures_current_phase(self, tmp_path):
+        """add_error records the current phase so get_last_error_phase can locate it."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+        sm.add_error("activation step failed")
+
+        last_phase = sm.get_last_error_phase()
+        assert last_phase == Phase.ACTIVATION
+
+    def test_fail_phase_helper_records_both_error_and_failed_state(self, tmp_path):
+        """_fail_phase must record an error entry AND set phase to FAILED."""
+        import logging
+
+        import acm_switchover
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+
+        logger = logging.getLogger("test")
+        result = acm_switchover._fail_phase(sm, "something broke", logger)
+
+        assert result is False
+        assert sm.get_current_phase() == Phase.FAILED
+        errors = sm.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["phase"] == Phase.ACTIVATION.value
+
+
+@pytest.mark.unit
+class TestStateManagerExitRegistration:
+    """Tests for exit-handler ordering and canonical lock paths."""
+
+    def test_uses_realpath_for_run_lock_and_registers_release_first(self, tmp_path):
+        """The lock path must follow the canonical target and release must register first."""
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        link_dir = tmp_path / "alias"
+        if not hasattr(os, "symlink"):
+            pytest.skip("symlink not supported on this platform")
+        os.symlink(real_dir, link_dir)
+        state_path = link_dir / "state.json"
+
+        with patch("lib.utils.atexit.register") as register:
+            sm = StateManager(str(state_path))
+
+        assert sm._run_lock_path == os.path.realpath(str(state_path)) + ".run.lock"
+        registered = [call.args[0].__name__ for call in register.call_args_list]
+        assert registered == ["_release_run_lock", "_flush_on_exit", "_cleanup_temp_files"]
+
+    def test_fail_phase_helper_reuses_existing_same_phase_and_message_error(self, tmp_path):
+        """_fail_phase should not append another error when the last entry matches phase and message."""
+        import logging
+
+        import acm_switchover
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+        sm.add_error("same failure", phase=Phase.ACTIVATION.value)
+
+        logger = logging.getLogger("test")
+        result = acm_switchover._fail_phase(sm, "same failure", logger)
+
+        assert result is False
+        assert sm.get_current_phase() == Phase.FAILED
+        errors = sm.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["error"] == "same failure"
+
+    def test_fail_phase_helper_skips_generic_when_module_already_recorded_same_phase(self, tmp_path):
+        """F8: _fail_phase should NOT append a generic wrapper when the module
+        already recorded a specific error for the same phase."""
+        import logging
+
+        import acm_switchover
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+        sm.add_error("specific root cause", phase=Phase.ACTIVATION.value)
+
+        logger = logging.getLogger("test")
+        result = acm_switchover._fail_phase(sm, "Secondary hub activation failed!", logger)
+
+        assert result is False
+        assert sm.get_current_phase() == Phase.FAILED
+        errors = sm.get_errors()
+        # Only the module's specific error should be present
+        assert len(errors) == 1
+        assert errors[-1]["error"] == "specific root cause"
+
+    def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
+        """After a phase failure, get_last_error_phase returns the phase to retry."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.add_error("prep failed", phase=Phase.PRIMARY_PREP.value)
+        sm.set_phase(Phase.FAILED)
+
+        assert sm.get_last_error_phase() == Phase.PRIMARY_PREP
 
 
 @pytest.mark.unit
@@ -615,6 +834,31 @@ class TestDryRunSkipDecorator:
 
         assert result == "a-b-c"
         assert obj.received_args == ("a", "b", "c")
+
+    def test_decorator_callable_return_value_supports_keyword_invocation(self):
+        """Callable return_value should receive the original keyword-based call shape."""
+
+        class Client:
+            def __init__(self):
+                self.dry_run = True
+
+        @dry_run_skip(
+            message="Keyword invocation",
+            return_value=lambda client, app=None, run_id=None: (client, app, run_id),
+        )
+        def pause_like_function(client, app=None, run_id=None):
+            return "executed"
+
+        client = Client()
+        returned_client, returned_app, returned_run_id = pause_like_function(
+            client=client,
+            app={"metadata": {"name": "app-1"}},
+            run_id="run-1",
+        )
+
+        assert returned_client is client
+        assert returned_app == {"metadata": {"name": "app-1"}}
+        assert returned_run_id == "run-1"
 
     def test_decorator_default_return_value_is_none(self):
         """Test decorator returns None by default when skipping."""

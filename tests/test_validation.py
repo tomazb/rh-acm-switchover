@@ -54,7 +54,7 @@ class TestCLIArgumentValidation:
         invalid_names = [
             "",  # empty
             "my cluster",  # spaces
-            "my@cluster",  # invalid character
+            "my cluster!",  # invalid character
             "/admin",  # starts with slash
             "admin/",  # ends with slash
             ":6443",  # starts with colon
@@ -199,6 +199,295 @@ class TestCLIArgumentValidation:
 
         with pytest.raises(ValidationError):
             InputValidator.validate_all_cli_args(args)
+
+    def test_min_managed_clusters_rejects_negative(self):
+        """--min-managed-clusters must be zero or greater."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            min_managed_clusters=-1,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "min-managed-clusters" in str(exc_info.value)
+        assert "non-negative" in str(exc_info.value)
+
+    def test_min_managed_clusters_zero_passes_validation(self):
+        """--min-managed-clusters=0 remains the informational default."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            min_managed_clusters=0,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_min_managed_clusters_positive_passes_validation(self):
+        """Positive managed cluster thresholds remain valid."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            min_managed_clusters=2,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_argocd_resume_only_requires_secondary_context(self):
+        """--argocd-resume-only requires --secondary-context to resolve state file."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context=None,
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            decommission=False,
+            argocd_resume_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+        assert "secondary-context" in str(exc_info.value).lower()
+        assert "switchover operations" not in str(exc_info.value).lower()
+
+    def test_argocd_resume_only_with_secondary_context_passes(self):
+        """--argocd-resume-only with --secondary-context passes validation."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_resume_only=True,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_argocd_resume_only_rejects_validate_only(self):
+        """--argocd-resume-only cannot be combined with --validate-only."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_resume_only=True,
+            validate_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+        assert "validate-only" in str(exc_info.value).lower()
+
+    def test_argocd_resume_only_rejects_decommission(self):
+        """--argocd-resume-only cannot be combined with --decommission."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=True,
+            argocd_resume_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+        assert "decommission" in str(exc_info.value).lower()
+
+    def test_argocd_resume_only_rejects_setup(self):
+        """--argocd-resume-only cannot be combined with --setup."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            setup=True,
+            admin_kubeconfig=".state/admin.kubeconfig",
+            argocd_resume_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+        assert "setup" in str(exc_info.value).lower()
+
+    def test_argocd_manage_validate_only_is_allowed(self):
+        """--argocd-manage with --validate-only is accepted and handled as no-op later."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_manage=True,
+            validate_only=True,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_setup_include_decommission_rejects_validator_role(self):
+        """--include-decommission is only valid for operator-capable setup roles."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            log_format="text",
+            setup=True,
+            admin_kubeconfig=".state/admin.kubeconfig",
+            role="validator",
+            include_decommission=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "include-decommission" in str(exc_info.value).lower()
+        assert "role" in str(exc_info.value).lower()
+
+    def test_include_decommission_requires_setup(self):
+        """--include-decommission should be rejected outside setup mode."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            include_decommission=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "include-decommission" in str(exc_info.value).lower()
+        assert "setup" in str(exc_info.value).lower()
+
+    def test_setup_include_decommission_allows_operator_role(self):
+        """Operator-capable setup should accept --include-decommission."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            log_format="text",
+            setup=True,
+            admin_kubeconfig=".state/admin.kubeconfig",
+            role="operator",
+            include_decommission=True,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_setup_without_switchover_only_args_is_allowed(self):
+        """Setup validation should not require method or old_hub_action."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            log_format="text",
+            setup=True,
+            admin_kubeconfig=".state/admin.kubeconfig",
+            role="operator",
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_argocd_manage_rejects_resume_only(self):
+        """--argocd-manage cannot be combined with --argocd-resume-only."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_manage=True,
+            argocd_resume_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-manage" in str(exc_info.value).lower()
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+
+    def test_argocd_resume_after_requires_manage(self):
+        """--argocd-resume-after-switchover requires --argocd-manage."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_resume_after_switchover=True,
+            argocd_manage=False,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
+        assert "argocd-manage" in str(exc_info.value).lower()
+
+    def test_argocd_resume_after_rejects_resume_only(self):
+        """--argocd-resume-after-switchover cannot be combined with --argocd-resume-only."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_resume_after_switchover=True,
+            argocd_manage=True,
+            argocd_resume_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+
+    def test_argocd_resume_after_rejects_validate_only(self):
+        """--argocd-resume-after-switchover cannot be combined with --validate-only."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_resume_after_switchover=True,
+            argocd_manage=True,
+            validate_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
+        assert "validate-only" in str(exc_info.value).lower()
 
 
 class TestKubernetesResourceValidation:

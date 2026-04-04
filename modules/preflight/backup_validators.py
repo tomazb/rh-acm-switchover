@@ -15,10 +15,12 @@ from lib.constants import (
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_USE_MANAGED_SERVICE_ACCOUNT,
 )
+from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.validation import InputValidator, ValidationError
 
 from .base_validator import BaseValidator
+from ..restore_discovery import find_passive_sync_restore
 
 logger = logging.getLogger("acm_switchover")
 
@@ -170,7 +172,7 @@ class BackupValidator(BaseValidator):
             logger.debug("Failed to parse backup timestamp %s: %s", completion_timestamp, e)
             return ""
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Run validation with primary client.
 
         Args:
@@ -287,7 +289,7 @@ class BackupScheduleValidator(BaseValidator):
     the old hub.
     """
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Check that BackupSchedule has useManagedServiceAccount enabled.
 
         Args:
@@ -313,9 +315,20 @@ class BackupScheduleValidator(BaseValidator):
 
             # Check the first (typically only) BackupSchedule
             schedule = backup_schedules[0]
-            schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
+            metadata = schedule.get("metadata", {})
+            schedule_name = metadata.get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
             spec = schedule.get("spec", {})
             use_msa = spec.get(SPEC_USE_MANAGED_SERVICE_ACCOUNT, False)
+
+            # Record GitOps markers if present (non-critical)
+            safe_record_gitops_markers(
+                logger=logger,
+                context="primary",
+                namespace=BACKUP_NAMESPACE,
+                kind="BackupSchedule",
+                name=schedule_name,
+                metadata=metadata,
+            )
 
             if use_msa:
                 self.add_result(
@@ -430,30 +443,7 @@ class PassiveSyncValidator(BaseValidator):
 
             context = secondary.context or "default"
 
-            # Prefer discovery by spec.syncRestoreWithNewBackups=true (matches bash scripts)
-            restores = secondary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
-                namespace=BACKUP_NAMESPACE,
-            )
-
-            def _creation_ts(item: dict) -> str:
-                return item.get("metadata", {}).get("creationTimestamp", "")
-
-            passive_candidates = [r for r in restores if r.get("spec", {}).get("syncRestoreWithNewBackups") is True]
-            passive_candidates.sort(key=_creation_ts, reverse=True)
-
-            restore = passive_candidates[0] if passive_candidates else None
-            if not restore:
-                # Fallback to the conventional name
-                restore = secondary.get_custom_resource(
-                    group="cluster.open-cluster-management.io",
-                    version="v1beta1",
-                    plural="restores",
-                    name=RESTORE_PASSIVE_SYNC_NAME,
-                    namespace=BACKUP_NAMESPACE,
-                )
+            restore = find_passive_sync_restore(secondary, namespace=BACKUP_NAMESPACE)
 
             if not restore:
                 self.add_result(
@@ -466,7 +456,18 @@ class PassiveSyncValidator(BaseValidator):
                 )
                 return
 
-            restore_name = restore.get("metadata", {}).get("name", "") or RESTORE_PASSIVE_SYNC_NAME
+            metadata = restore.get("metadata", {})
+            restore_name = metadata.get("name", "") or RESTORE_PASSIVE_SYNC_NAME
+
+            # Record GitOps markers if present (non-critical)
+            safe_record_gitops_markers(
+                logger=logger,
+                context="secondary",
+                namespace=BACKUP_NAMESPACE,
+                kind="Restore",
+                name=restore_name,
+                metadata=metadata,
+            )
 
             status = restore.get("status", {})
             phase = status.get("phase", "unknown")
@@ -474,7 +475,9 @@ class PassiveSyncValidator(BaseValidator):
 
             # "Enabled" = continuous sync running
             # "Finished"/"Completed" = initial sync completed successfully (valid for switchover)
-            if phase in ("Enabled", "Finished", "Completed"):
+            # "Running" = actively syncing a new backup (transient, valid for passive-sync)
+            # "Unknown" = Velero restore in intermediate state during sync (transient)
+            if phase in ("Enabled", "Finished", "Completed", "Running", "Unknown"):
                 self.add_result(
                     "Passive sync restore",
                     True,
@@ -513,7 +516,11 @@ class PassiveSyncValidator(BaseValidator):
                             else:
                                 velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
                     except Exception as exc:
-                        logger.debug("Failed to fetch Velero restore %s details: %s", velero_restore_name, exc)
+                        logger.debug(
+                            "Failed to fetch Velero restore %s details: %s",
+                            velero_restore_name,
+                            exc,
+                        )
 
                 error_message = f"{restore_name} in unexpected state: {phase} - {message}"
                 if velero_details:
@@ -545,7 +552,7 @@ class PassiveSyncValidator(BaseValidator):
 class ManagedClusterBackupValidator(BaseValidator):
     """Validates that all joined ManagedClusters are included in the latest backup."""
 
-    def run(self, primary: KubeClient) -> None:
+    def run(self, primary: KubeClient) -> None:  # noqa: C901
         """Check that all joined ManagedClusters are in the latest managed-clusters backup."""
         try:
             # Get all joined ManagedClusters (excluding local-cluster)

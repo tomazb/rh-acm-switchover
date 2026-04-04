@@ -115,6 +115,39 @@ oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync \
 
 ---
 
+### Argo CD / GitOps (optional)
+
+If Argo CD or OpenShift GitOps manages ACM resources (BackupSchedule, Restore, ManagedCluster, MCO, etc.), auto-sync can revert switchover steps. Detect and pause before Step 1; resume only after Git/desired state has been updated for the new hub.
+
+**Detection (preflight):**
+```bash
+# Bash preflight with Argo CD report
+./scripts/preflight-check.sh --primary-context <primary> --secondary-context <secondary> --method passive --argocd-check
+
+# Python validation-only with Argo CD report
+python acm_switchover.py --validate-only --primary-context <primary> --secondary-context <secondary> --argocd-check
+```
+
+> **Note:** GitOps marker detection is heuristic. The label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` and must not be treated as a definitive GitOps signal. Marker collection or reporting issues should surface as warnings in the report rather than hard blockers, but the presence of GitOps-managed resources is still important for planning the switchover.
+
+**Pause (before starting switchover steps):**
+- **Automated (Python):** Run switchover with `--argocd-manage`; pauses ACM-touching Applications during primary prep. (Note: cannot be used with `--validate-only`)
+- **Manual (Bash):**
+  ```bash
+  ./scripts/argocd-manage.sh --context <primary> --mode pause --state-file .state/argocd-pause.json
+  # Optionally on secondary (to prevent Restore/BackupSchedule mutation before activation):
+  ./scripts/argocd-manage.sh --context <secondary> --mode pause --state-file .state/argocd-pause.json
+  ```
+
+**Resume (only after Git/desired state reflects the new hub):**
+- **During finalization (Python):** Add `--argocd-resume-after-switchover` to the switchover run (requires `--argocd-manage`; cannot be used with `--validate-only`).
+- **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>` (cannot be used with `--validate-only`, `--decommission`, `--setup`, `--argocd-manage`, or `--argocd-resume-after-switchover`)
+- **Bash:** `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
+
+**Decision:** If the report shows ACM-touching Applications → advise pausing before Step 1. If pausing is skipped, warn that GitOps may re-apply Git state and undo pause-backup, disable-auto-import, or activation changes. Do not resume until Git reflects the new primary.
+
+---
+
 ### ACM 2.14+: Auto-Import Strategy Check
 
 ```bash
@@ -165,6 +198,7 @@ Suggest using the automated script:
   --primary-context <primary> \
   --secondary-context <secondary> \
   --method passive  # or "full" for Method 2
+# If GitOps (Argo CD) manages ACM resources, add: --argocd-check
 ```
 
 ---

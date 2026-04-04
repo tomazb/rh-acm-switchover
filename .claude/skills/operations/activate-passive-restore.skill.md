@@ -69,6 +69,8 @@ oc scale deployment observability-observatorium-api \
   -n open-cluster-management-observability --context <primary> --replicas=0
 ```
 
+> **⚠️ Scaling is temporary:** The MCO operator will re-scale Thanos and Observatorium back to defaults within minutes. If the old hub will remain as a long-lived secondary, you must delete the MCO object — see [verify-switchover.skill.md](verify-switchover.skill.md) "Optional: Disable Observability on Old Hub".
+
 ---
 
 ## Step 4: Verify Passive Restore on Secondary Hub

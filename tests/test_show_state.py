@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +11,6 @@ from show_state import (
     find_state_files,
     format_timestamp,
     load_state,
-    main,
 )
 
 

@@ -6,12 +6,16 @@ This directory contains automated validation scripts for ACM hub switchover oper
 
 These scripts automate the validation process before and after switchover, ensuring safety and operational readiness.
 
+> ⚠️ **Safety note:** Some utilities mutate cluster state. Review usage and required credentials/state files before running in production.
+> **Shell requirement:** These scripts require Bash 4 or newer because shared helpers use associative arrays.
+
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
 | [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
 | [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
 | [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
-| [`setup-rbac.sh`](setup-rbac.sh) | Deploy RBAC and generate kubeconfigs | Initial setup of switchover access |
+| [`argocd-manage.sh`](argocd-manage.sh) | ⚠️ **Mutating / requires state file**: Pause or resume Argo CD auto-sync for ACM-touching Applications ([usage](#argo-cd-management-script)) | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume |
+| [`setup-rbac.sh`](setup-rbac.sh) | ⚠️ **Mutating (initial setup)**: Deploy RBAC and generate kubeconfigs ([usage](#rbac-bootstrap-script)) | Initial setup of switchover access |
 | [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
 | [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access |
 | [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
@@ -37,18 +41,18 @@ When reporting issues, always include the script version from the output.
 
 ## Idempotency & Safety
 
-**Scripts are fully idempotent and safe to run multiple times:**
+**Scripts are designed for safe re-runs when used as documented:**
 
-- ✅ **Read-only operations** - Only perform `oc get`, `oc describe`, and similar read operations
-- ✅ **No state modifications** - Never modify cluster resources or configuration
-- ✅ **No side effects** - Can be run repeatedly without affecting cluster state
-- ✅ **Safe in production** - No risk of accidental changes or disruptions
+- ✅ **Read-only checks** - `discover-hub.sh`, `preflight-check.sh`, and `postflight-check.sh` only perform `oc get`, `oc describe`, and similar read operations
+- ⚠️ **Mutating with rollback state** - `argocd-manage.sh` patches Argo CD Application sync policy and requires a state file for safe resume
+- ⚠️ **Mutating setup step** - `setup-rbac.sh` creates RBAC resources and service accounts as an initial bootstrap action
+- ✅ **Predictable behavior** - Other utilities are non-disruptive when run with expected inputs
 
 **You can safely:**
-- Run pre-flight checks multiple times before switchover
-- Re-run post-flight verification to monitor stabilization
-- Use scripts for ongoing health monitoring
-- Run in parallel with other operations (read-only)
+- Run pre-flight/post-flight checks multiple times before and after switchover
+- Use read-only scripts for ongoing health monitoring
+- Re-run `argocd-manage.sh` with the same state file to keep pause/resume reversible
+- Run mutating scripts only during planned maintenance windows with the required credentials
 
 ---
 
@@ -198,6 +202,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 - `--primary-context` - Kubernetes context for primary hub (required)
 - `--secondary-context` - Kubernetes context for secondary hub (required)
 - `--method` - Switchover method: `passive` or `full` (required)
+- `--argocd-check` - Run Argo CD discovery and report ACM-touching Applications (optional)
 - `--help` - Show help message
 
 ### What It Checks
@@ -324,37 +329,40 @@ graph TD
     J8 -->|No| K[Check Backup Status]
     K --> L{Backups OK?}
     L -->|No| M[FAIL: Backup Issues]
-    L -->|Yes| N[CRITICAL: Check preserveOnDelete]
-    N --> O{All CDs have<br/>preserveOnDelete=true?}
-    O -->|No| P[FAIL: Missing preserveOnDelete<br/>DANGER: Infrastructure at risk!]
-    O -->|Yes| Q{Method?}
-    Q -->|Passive| R[Find & Check Latest Restore]
-    Q -->|Full| S[Skip Passive Check]
-    R --> T{Passive Sync<br/>Enabled?}
-    T -->|No| U[FAIL: Passive Sync Not Ready]
-    T -->|Yes| V[Check Observability CRs & Secrets\n+ Secondary MCO Safety]
-    S --> V
-    V --> V2[Check Auto-Import Strategy<br/>ACM 2.14+]
-    V2 --> V3{Non-default<br/>Strategy?}
-    V3 -->|Yes| V4[WARN: Non-default Strategy]
-    V3 -->|No| V5{Secondary has<br/>existing clusters?}
-    V5 -->|Yes| V6[WARN: Consider ImportAndSync<br/>before restore]
-    V5 -->|No| W
-    V4 --> W
-    V6 --> W
-    W[Generate Summary Report]
-    W --> X{Any Failures?}
-    X -->|Yes| Y[Exit Code 1<br/>Display Failed Checks]
-    X -->|No| Z[Exit Code 0<br/>Ready to Proceed]
+    L -->|Yes| N[CRITICAL: Check useManagedServiceAccount]
+    N --> O{BackupSchedule has<br/>useManagedServiceAccount=true?}
+    O -->|No| P[FAIL: Missing useManagedServiceAccount<br/>Auto-reconnect at risk]
+    O -->|Yes| Q[CRITICAL: Check preserveOnDelete]
+    Q --> R{All CDs have<br/>preserveOnDelete=true?}
+    R -->|No| S[FAIL: Missing preserveOnDelete<br/>DANGER: Infrastructure at risk!]
+    R -->|Yes| T{Method?}
+    T -->|Passive| U[Find & Check Latest Restore]
+    T -->|Full| V[Skip Passive Check]
+    U --> W{Passive Sync<br/>Enabled?}
+    W -->|No| X[FAIL: Passive Sync Not Ready]
+    W -->|Yes| Y[Check Observability CRs & Secrets\n+ Secondary MCO Safety]
+    V --> Y
+    Y --> Y2{Secondary has<br/>existing clusters?}
+    Y2 -->|Yes| Y3[WARN: Consider ImportAndSync<br/>before restore]
+    Y2 -->|No| Y4[Check Auto-Import Strategy<br/>ACM 2.14+]
+    Y3 --> Y4
+    Y4 --> Y5{Non-default<br/>Strategy?}
+    Y5 -->|Yes| Y6[WARN: Non-default Strategy]
+    Y5 -->|No| Z[Generate Summary Report]
+    Y6 --> Z
+    Z --> ZA{Any Failures?}
+    ZA -->|Yes| ZB[Exit Code 1<br/>Display Failed Checks]
+    ZA -->|No| ZC[Exit Code 0<br/>Ready to Proceed]
     
     style P fill:#ff6b6b
+    style S fill:#ff6b6b
     style H fill:#ff6b6b
     style M fill:#ff6b6b
-    style U fill:#ff6b6b
+    style X fill:#ff6b6b
     style J4 fill:#ff6b6b
     style J7 fill:#ff6b6b
     style J9 fill:#ff6b6b
-    style Z fill:#51cf66
+    style ZC fill:#51cf66
 ```
 
 ---
@@ -505,9 +513,13 @@ graph TD
     Y --> AA{Old Hub Clusters<br/>Disconnected?}
     AA -->|No| AB[WARN: Old Hub Still Active]
     AA -->|Yes| AC[Check Old Hub Backup Paused]
-    AB --> Y2
+    AB --> AC
     AC --> AC2[Check Old Hub MCO or\nScaled-down Observability]
-    AC2 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    AC2 --> AC3{Old Hub Passive Sync<br/>Ready for Failback?}
+    AC3 -->|No| AC4[WARN: Failback Not Ready]
+    AC3 -->|Yes| AC5[Check Old Hub ACM<br/>Still Installed or Decommissioned]
+    AC4 --> AC5
+    AC5 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
     Y2 --> Y3{Non-default<br/>Strategy?}
     Y3 -->|Yes| Y4[WARN: Reset Strategy to Default]
     Y3 -->|No| AD
@@ -552,18 +564,23 @@ Generates a kubeconfig file that can be used to authenticate as a specific Kuber
 
 # Examples:
 # Default 48-hour token from current context
-./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
+umask 077 && ./scripts/generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
+
+# Read cluster metadata and token from an explicit admin kubeconfig
+umask 077 && ./scripts/generate-sa-kubeconfig.sh --kubeconfig ~/.kube/admin.yaml \
+  --context prod-hub --user prod-operator \
+  acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # Specify explicit cluster context with custom user name (prevents collisions)
-./scripts/generate-sa-kubeconfig.sh --context prod-hub --user prod-operator \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh --context prod-hub --user prod-operator \
   acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # Custom token duration (72 hours for long operations)
-./scripts/generate-sa-kubeconfig.sh --token-duration 72h \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh --token-duration 72h \
   acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 
 # Full example with all options
-./scripts/generate-sa-kubeconfig.sh \
+umask 077 && ./scripts/generate-sa-kubeconfig.sh \
   --context staging-hub \
   --user staging-operator \
   --token-duration 8h \
@@ -578,6 +595,7 @@ oc get managedclusters
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--kubeconfig <path>` | Kubeconfig to read cluster metadata and token from | Current kubeconfig |
 | `--context <context>` | Kubernetes context to use | Current context |
 | `--user <name>` | Custom user name in kubeconfig | `<context>-<sa-name>` |
 | `--token-duration <dur>` | Token lifetime (e.g., `8h`, `48h`, `72h`) | `48h` |
@@ -589,12 +607,15 @@ oc get managedclusters
 
 > **Tip**: Always use `--user` with unique names when generating kubeconfigs for multiple
 > clusters to prevent credential collisions when merging.
+>
+> **Security**: Because this script writes credentials to stdout, redirect with `umask 077`
+> and keep the resulting kubeconfig at `0600`.
 
 ### What It Does
 
 1. Validates that the service account exists in the specified (or current) namespace
 2. Creates a short-lived token via `kubectl create token` with the specified duration
-3. Extracts cluster information from the specified (or current) kubeconfig context
+3. Extracts cluster information from the specified kubeconfig/context pair, or from the current kubeconfig when `--kubeconfig` is omitted
 4. Generates a new kubeconfig file using the service account token with unique user name
 5. Outputs the kubeconfig to stdout (redirect to file as needed)
 
@@ -614,9 +635,7 @@ oc get managedclusters
 ### Exit Codes
 
 - `0` - kubeconfig generated successfully
-- `1` - Missing required arguments
-- `2` - Service account not found
-- `3` - Token creation failed
+- `1` - Invalid arguments or kubeconfig generation failure
 
 ### Workflow Diagram
 
@@ -625,29 +644,28 @@ graph TD
     A[Start] --> B{--help flag?}
     B -->|Yes| C[Show Usage]
     C --> D[Exit 0]
-    B -->|No| E[Parse --context flag]
+    B -->|No| E[Parse Flags<br/>--context, --user, --token-duration]
     E --> F{Namespace &<br/>SA provided?}
     F -->|No| G[Show Usage Error]
     G --> H[Exit 1]
     F -->|Yes| I{Service Account<br/>exists?}
     I -->|No| J[Error: SA not found]
-    J --> K[Exit 2]
-    I -->|Yes| L[Extract cluster info<br/>from context]
-    L --> M{Server URL<br/>found?}
-    M -->|No| N[Error: No cluster URL]
-    N --> K
-    M -->|Yes| O[Generate token<br/>with duration]
-    O --> P{Token<br/>created?}
-    P -->|No| Q[Error: Token failed]
-    Q --> R[Exit 3]
-    P -->|Yes| S[Output kubeconfig<br/>to stdout]
-    S --> T[Exit 0]
+    J --> H
+    I -->|Yes| K[Extract cluster info<br/>from context/current kubeconfig]
+    K --> L{Server URL<br/>found?}
+    L -->|No| M[Error: No cluster URL]
+    M --> H
+    L -->|Yes| N[Resolve user name<br/>and context name]
+    N --> O[Generate token<br/>with duration]
+    O --> P{Token command<br/>succeeds?}
+    P -->|No| Q[Error: Token generation failed]
+    Q --> H
+    P -->|Yes| R[Output kubeconfig<br/>to stdout]
+    R --> T[Exit 0]
     
     style D fill:#51cf66
     style T fill:#51cf66
     style H fill:#ff6b6b
-    style K fill:#ff6b6b
-    style R fill:#ff6b6b
 ```
 
 ---
@@ -673,6 +691,7 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
 | `--admin-kubeconfig <path>` | **Required.** Path to kubeconfig with cluster-admin privileges | - |
 | `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
 | `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
+| `--include-decommission` | Also deploy and validate the opt-in decommission RBAC extension (operator or both only) | - |
 | `--token-duration <dur>` | Token validity duration | `48h` |
 | `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
 | `--skip-kubeconfig` | Skip kubeconfig generation | - |
@@ -686,7 +705,8 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
 ./scripts/setup-rbac.sh \
   --admin-kubeconfig ~/.kube/admin.yaml \
   --context prod-hub \
-  --role operator
+  --role operator \
+  --include-decommission
 
 # Setup both roles with custom token duration
 ./scripts/setup-rbac.sh \
@@ -700,6 +720,8 @@ Automates the complete RBAC setup for the ACM switchover tool. This script deplo
   --context prod-hub \
   --dry-run
 ```
+
+Use `--include-decommission` only when the generated operator kubeconfig must support `--decommission` or `--old-hub-action decommission`. It is rejected with `--role validator`.
 
 ### What It Does
 
@@ -788,8 +810,10 @@ graph TD
     B -->|Yes| E[Parse context:role pairs]
     E --> F[Create temp directory]
     F --> G[For each context:role]
-    G --> H{Valid role?}
-    H -->|No| I[Error: Invalid role]
+    G --> G2{Valid format<br/>with : separator?}
+    G2 -->|No| I[Error: Invalid entry]
+    G2 -->|Yes| H{Valid role?}
+    H -->|No| I
     I --> J[Increment failed count]
     H -->|Yes| K[Call generate-sa-kubeconfig.sh]
     K --> L{Generation<br/>successful?}
@@ -803,8 +827,9 @@ graph TD
     P -->|No| Q{Any successful?}
     Q -->|No| R[Error: No kubeconfigs generated]
     R --> D
-    Q -->|Yes| S[Merge kubeconfigs]
-    S --> T[Write to output file]
+    Q -->|Yes| S[Rename cluster names<br/>to avoid collisions]
+    S --> S2[Merge kubeconfigs]
+    S2 --> T[Write to output file]
     T --> U[Print summary]
     U --> V[Exit 0]
     
@@ -838,10 +863,10 @@ graph TD
     K -->|No| L[Error: Insufficient privileges]
     L --> D
     K -->|Yes| M[Deploy RBAC manifests]
-    M --> N{Skip kubeconfig?}
+    M --> N{Skip kubeconfig<br/>or dry-run?}
     N -->|Yes| O[Skip kubeconfig generation]
     N -->|No| P[Generate SA kubeconfigs]
-    P --> Q{Skip validation?}
+    P --> Q{Skip validation<br/>or dry-run<br/>or skip kubeconfig?}
     O --> Q
     Q -->|Yes| R[Skip RBAC validation]
     Q -->|No| S[Run check_rbac.py]
@@ -859,6 +884,42 @@ graph TD
     style U fill:#ffd43b
     style W fill:#51cf66
 ```
+
+---
+
+## Argo CD Management Script
+
+**File:** `argocd-manage.sh`
+
+### Purpose
+
+Pause or resume auto-sync on Argo CD Applications that touch ACM namespaces/kinds, so GitOps does not revert switchover steps. Uses a JSON state file to record original sync policies and restore them safely.
+
+### Usage
+
+```bash
+# Pause ACM-touching Applications on a hub (store state for later resume)
+./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause-state.json
+
+# Resume auto-sync using saved state (only after Git/desired state updated for target hub)
+./scripts/argocd-manage.sh --context <kubecontext> --mode resume --state-file .state/argocd-pause-state.json
+
+# Dry-run to see which apps would be paused
+./scripts/argocd-manage.sh --context <kubecontext> --mode pause --state-file .state/argocd-pause-state.json --dry-run
+```
+
+**Options:** `--context`, `--mode pause|resume`, `--state-file` (optional; default: `.state/argocd-pause-state.json`), `--target acm` (default), `--dry-run`, `--help`.
+
+Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
+
+### Recommended sequence with GitOps
+
+1. Run preflight with Argo CD check: `./scripts/preflight-check.sh --primary-context <p> --secondary-context <s> --method passive --argocd-check`
+2. Pause ACM-touching Applications on primary (and optionally secondary): `./scripts/argocd-manage.sh --context <p> --mode pause --state-file .state/argocd-pause-state.json` (repeat for secondary if desired)
+3. Run switchover (Python tool or manual runbook steps)
+4. After updating Git/desired state for the new hub, resume: `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause-state.json`
+
+The Python tool can perform pause/resume during switchover when using `--argocd-manage` and optionally `--argocd-resume-after-switchover` or `--argocd-resume-only`; see [usage.md](../docs/operations/usage.md).
 
 ---
 
@@ -882,16 +943,17 @@ graph TD
     K -->|Yes| L[Consider Reverse Switchover]
     K -->|No| M[Troubleshoot & Retry]
     M --> I
-    J -->|Yes| N[Steps 6-11: Post-Activation]
-    N --> O[Verify Metrics in Grafana]
-    O --> P[Monitor for 24 Hours]
-    P --> Q[Step 12: Decommission Old Hub Optional]
-    Q --> R[Switchover Complete]
+    J -->|Yes| N[Steps 6-10: Post-Activation Common Steps]
+    N --> O[Steps 11-12: Finalization]
+    O --> P[Step 13: Inform Stakeholders]
+    P --> Q[Verify Metrics in Grafana<br/>and Monitor for 24 Hours]
+    Q --> R[Step 14: Decommission Old Hub Optional]
+    R --> S[Switchover Complete]
     
     style C fill:#ffd43b
     style J fill:#ffd43b
     style L fill:#ff6b6b
-    style R fill:#51cf66
+    style S fill:#51cf66
 ```
 
 > **Note**: RBAC setup (`setup-rbac.sh`) and kubeconfig generation are **one-time prerequisites** 

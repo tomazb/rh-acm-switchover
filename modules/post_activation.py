@@ -120,6 +120,8 @@ class PostActivationVerification:
         First tries a brief wait for clusters to connect automatically.
         If that fails, attempts to fix klusterlet connections and waits again.
         """
+        klusterlet_step_checked = False
+
         with self.state.step("verify_clusters_connected", logger) as should_run:
             if should_run:
                 try:
@@ -132,9 +134,10 @@ class PostActivationVerification:
                         e,
                     )
                     logger.info("Checking if klusterlets need to be fixed (may be pointing to old hub)...")
-                    # Try to fix klusterlet connections first
-                    self._verify_klusterlet_connections()
-                    self.state.mark_step_completed("verify_klusterlet_connections")
+                    with self.state.step("verify_klusterlet_connections", logger) as should_run_fix:
+                        klusterlet_step_checked = True
+                        if should_run_fix:
+                            self._verify_klusterlet_connections()
 
                     # Now wait longer for clusters to reconnect after fix
                     logger.info("Waiting for ManagedClusters to reconnect after klusterlet fix...")
@@ -142,9 +145,10 @@ class PostActivationVerification:
 
         # Optional: Verify klusterlet connections (non-blocking)
         # This may have already been done above if clusters didn't connect initially
-        with self.state.step("verify_klusterlet_connections", logger) as should_run:
-            if should_run:
-                self._verify_klusterlet_connections()
+        if not klusterlet_step_checked:
+            with self.state.step("verify_klusterlet_connections", logger) as should_run:
+                if should_run:
+                    self._verify_klusterlet_connections()
 
     def _verify_auto_import_cleanup_step(self) -> None:
         """Verify disable-auto-import annotations are cleared from ManagedClusters."""
@@ -550,7 +554,12 @@ class PostActivationVerification:
             logger.warning("Unable to query Grafana route: %s", exc)
 
     def _verify_disable_auto_import_cleared(self):
-        """Ensure disable-auto-import annotations were removed after activation."""
+        """Ensure disable-auto-import annotations are cleared from ManagedClusters.
+
+        Annotations may be present on the secondary hub if the passive-sync
+        backup was taken after PRIMARY_PREP added them on the primary hub.
+        This method actively removes any stale annotations before verifying.
+        """
 
         # Skip verification in dry-run mode since annotations weren't actually cleared
         if self.dry_run:
@@ -562,7 +571,8 @@ class PostActivationVerification:
         # which may have taken time and annotations could have been cleared
         managed_clusters = self._get_managed_clusters(force_refresh=True)
 
-        flagged = []
+        # Remove stale annotations that were synced from primary via backup/restore
+        removed = []
         for mc in managed_clusters:
             mc_name = mc.get("metadata", {}).get("name")
             if mc_name == LOCAL_CLUSTER_NAME:
@@ -570,15 +580,47 @@ class PostActivationVerification:
 
             annotations = mc.get("metadata", {}).get("annotations") or {}
             if DISABLE_AUTO_IMPORT_ANNOTATION in annotations:
+                try:
+                    patch = {"metadata": {"annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: None}}}
+                    self.secondary.patch_custom_resource(
+                        group="cluster.open-cluster-management.io",
+                        version="v1",
+                        plural="managedclusters",
+                        name=mc_name,
+                        patch=patch,
+                    )
+                    removed.append(mc_name)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to remove disable-auto-import annotation from %s: %s",
+                        mc_name,
+                        exc,
+                    )
+
+        if removed:
+            logger.info(
+                "Removed stale disable-auto-import annotations from: %s",
+                ", ".join(removed),
+            )
+
+        # Verify all annotations are now cleared
+        managed_clusters = self._get_managed_clusters(force_refresh=True)
+        flagged = []
+        for mc in managed_clusters:
+            mc_name = mc.get("metadata", {}).get("name")
+            if mc_name == LOCAL_CLUSTER_NAME:
+                continue
+            annotations = mc.get("metadata", {}).get("annotations") or {}
+            if DISABLE_AUTO_IMPORT_ANNOTATION in annotations:
                 flagged.append(mc_name or "unknown")
 
         if flagged:
             raise SwitchoverError("disable-auto-import annotation still present on: " + ", ".join(flagged))
 
-        logger.info("All ManagedClusters cleared disable-auto-import annotation")
+        logger.info("All ManagedClusters cleared of disable-auto-import annotation")
 
     @dry_run_skip(message="Skipping klusterlet connection verification")
-    def _verify_klusterlet_connections(self):
+    def _verify_klusterlet_connections(self):  # noqa: C901
         """
         Verify and fix klusterlet agents on managed clusters to connect to the new hub.
 
@@ -742,15 +784,19 @@ class PostActivationVerification:
             if not import_yaml:
                 return False
 
+            # Build isolated per-context clients once; all steps share the same
+            # ApiClient so no further global kubeconfig mutation is needed.
+            v1, apps_v1 = self._build_managed_cluster_clients(context_name)
+
             # Step 2: Connect to the managed cluster and delete the bootstrap secret
-            self._delete_bootstrap_secret(context_name, cluster_name)
+            self._delete_bootstrap_secret(v1, cluster_name)
 
             # Step 3: Apply the import manifest to recreate the bootstrap secret
-            self._apply_import_manifest(context_name, import_yaml, cluster_name)
+            self._apply_import_manifest(v1, import_yaml, cluster_name)
 
             # Step 4: Wait for secret to be visible, then restart the klusterlet deployment
-            self._wait_for_secret_visibility(context_name, cluster_name)
-            self._restart_klusterlet(context_name, cluster_name)
+            self._wait_for_secret_visibility(v1, cluster_name)
+            self._restart_klusterlet(apps_v1, cluster_name)
 
             logger.info("Force-reconnected klusterlet for %s", cluster_name)
             return True
@@ -758,6 +804,24 @@ class PostActivationVerification:
         except (ApiException, Exception) as e:
             logger.warning("Failed to force-reconnect klusterlet for %s: %s", cluster_name, e)
             return False
+
+    def _build_managed_cluster_clients(self, context_name: str) -> tuple:
+        """Build isolated per-context CoreV1Api and AppsV1Api for a managed cluster.
+
+        Creates an ApiClient bound to the named context without mutating global
+        kubernetes configuration. Safe to call from concurrent threads.
+
+        Args:
+            context_name: Kubeconfig context name
+
+        Returns:
+            Tuple of (CoreV1Api, AppsV1Api) bound to the named context
+
+        Raises:
+            config.ConfigException: If context does not exist in kubeconfig
+        """
+        api_client = config.new_client_from_config(context=context_name, persist_config=False)
+        return client.CoreV1Api(api_client=api_client), client.AppsV1Api(api_client=api_client)
 
     def _get_import_secret(self, cluster_name: str) -> Optional[str]:
         """Get and decode the import secret from the new hub.
@@ -783,16 +847,13 @@ class PostActivationVerification:
 
         return base64.b64decode(import_yaml_b64).decode("utf-8")
 
-    def _delete_bootstrap_secret(self, context_name: str, cluster_name: str) -> None:
+    def _delete_bootstrap_secret(self, v1: client.CoreV1Api, cluster_name: str) -> None:
         """Delete the bootstrap-hub-kubeconfig secret on the managed cluster.
 
         Args:
-            context_name: Kubeconfig context to use for connecting to the cluster
+            v1: CoreV1Api bound to the managed cluster's context
             cluster_name: Name of the ManagedCluster
         """
-        # Load the correct context before creating API client
-        config.load_kube_config(context=context_name)
-        v1 = client.CoreV1Api()
         try:
             v1.delete_namespaced_secret(
                 name="bootstrap-hub-kubeconfig",
@@ -803,17 +864,14 @@ class PostActivationVerification:
             if e.status != 404:
                 logger.warning("Failed to delete bootstrap secret on %s: %s", cluster_name, e)
 
-    def _apply_import_manifest(self, context_name: str, import_yaml: str, cluster_name: str) -> None:
+    def _apply_import_manifest(self, v1: client.CoreV1Api, import_yaml: str, cluster_name: str) -> None:
         """Apply the import manifest to recreate the bootstrap secret.
 
         Args:
-            context_name: Kubeconfig context to use for connecting to the cluster
+            v1: CoreV1Api bound to the managed cluster's context
             import_yaml: Decoded import YAML string
             cluster_name: Name of the ManagedCluster
         """
-        # Load the correct context before creating API clients
-        config.load_kube_config(context=context_name)
-        v1 = client.CoreV1Api()
 
         # Parse the import YAML and apply each resource
         import_docs = list(yaml.safe_load_all(import_yaml))
@@ -849,16 +907,13 @@ class PostActivationVerification:
                         getattr(e, "reason", None),
                     )
 
-    def _wait_for_secret_visibility(self, context_name: str, cluster_name: str) -> None:
+    def _wait_for_secret_visibility(self, v1: client.CoreV1Api, cluster_name: str) -> None:
         """Wait for the bootstrap-hub-kubeconfig secret to be visible.
 
         Args:
-            context_name: Kubeconfig context to use for connecting to the cluster
+            v1: CoreV1Api bound to the managed cluster's context
             cluster_name: Name of the ManagedCluster
         """
-        # Load the correct context before creating API client
-        config.load_kube_config(context=context_name)
-        v1 = client.CoreV1Api()
 
         def secret_exists() -> tuple:
             """Check if bootstrap-hub-kubeconfig secret exists."""
@@ -884,18 +939,15 @@ class PostActivationVerification:
         if not secret_ready:
             logger.warning("bootstrap-hub-kubeconfig secret not visible on %s after timeout", cluster_name)
 
-    def _restart_klusterlet(self, context_name: str, cluster_name: str) -> None:
+    def _restart_klusterlet(self, apps_v1: client.AppsV1Api, cluster_name: str) -> None:
         """Restart the klusterlet deployment on the managed cluster.
 
         Args:
-            context_name: Kubeconfig context to use for connecting to the cluster
+            apps_v1: AppsV1Api bound to the managed cluster's context
             cluster_name: Name of the ManagedCluster
         """
         import time as time_module
 
-        # Load the correct context before creating API client
-        config.load_kube_config(context=context_name)
-        apps_v1 = client.AppsV1Api()
         try:
             # Trigger a rollout restart by patching the deployment
             patch = {
@@ -938,7 +990,7 @@ class PostActivationVerification:
 
         return ""
 
-    def _load_kubeconfig_data(self, max_size: Optional[int] = None, force_reload: bool = False) -> dict:
+    def _load_kubeconfig_data(self, max_size: Optional[int] = None, force_reload: bool = False) -> dict:  # noqa: C901
         """Load and merge kubeconfig data from all KUBECONFIG paths.
 
         Handles the KUBECONFIG environment variable which can contain multiple
@@ -1011,6 +1063,7 @@ class PostActivationVerification:
                 try:
                     # Check file size before loading to prevent memory exhaustion
                     if check_size:
+                        assert size_limit is not None  # Guaranteed by check_size logic
                         kubeconfig_size = os.path.getsize(expanded_path)
                         if kubeconfig_size > size_limit:
                             logger.warning(
@@ -1116,7 +1169,9 @@ class PostActivationVerification:
 
         return ""
 
-    def _check_klusterlet_connection(self, context_name: str, cluster_name: str, expected_hub: str) -> str:
+    def _check_klusterlet_connection(  # noqa: C901
+        self, context_name: str, cluster_name: str, expected_hub: str
+    ) -> str:
         """
         Check if a managed cluster's klusterlet is connected to the expected hub.
 
@@ -1135,9 +1190,8 @@ class PostActivationVerification:
             "unreachable" if can't connect to cluster
         """
         try:
-            # Try to load kubeconfig using the discovered context name
-            config.load_kube_config(context=context_name)
-            v1 = client.CoreV1Api()
+            # Build an isolated per-context client; does not mutate global config.
+            v1, _ = self._build_managed_cluster_clients(context_name)
 
             # Get the hub-kubeconfig-secret
             try:
