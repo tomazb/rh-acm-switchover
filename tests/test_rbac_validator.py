@@ -118,7 +118,13 @@ class TestRBACValidator:
         assert ("argoproj.io", "applications", "patch") not in checked
 
     def test_validate_cluster_permissions_argocd_check_adds_read_permissions(self, validator):
-        """Test that argocd_mode=check validates Argo CD read permissions."""
+        """Test that argocd_mode=check validates Argo CD read-only permissions.
+
+        This covers the auto-detection scenario where preflight discovers ArgoCD
+        CRDs on the cluster and automatically enables argocd_mode="check". In that
+        mode only read-only permissions (get/list) are validated — never patch,
+        which is reserved for the explicit "manage" mode.
+        """
         validator.check_permission = MagicMock(return_value=(True, ""))
 
         all_valid, errors = validator.validate_cluster_permissions(argocd_mode="check")
