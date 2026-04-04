@@ -178,7 +178,7 @@ The RBAC model is designed following the principle of least privilege:
 - **Scope**: Namespace-scoped (various)
 - **Purpose**: Retrieve route hostnames for connectivity verification
 
-### Argo CD API Groups (optional — required only when using `--argocd-check` or `--argocd-manage`)
+### Argo CD API Groups (validated automatically when ArgoCD CRD is detected; additional write permissions required with `--argocd-manage`)
 
 These permissions are validated during preflight only when Argo CD detection is requested. The exact permissions required depend on the Argo CD install type detected on the cluster:
 

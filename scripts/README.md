@@ -202,8 +202,9 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 - `--primary-context` - Kubernetes context for primary hub (required)
 - `--secondary-context` - Kubernetes context for secondary hub (required)
 - `--method` - Switchover method: `passive` or `full` (required)
-- `--argocd-check` - Run Argo CD discovery and report ACM-touching Applications (optional)
 - `--help` - Show help message
+
+> **Note:** Argo CD detection runs automatically when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable.
 
 ### What It Checks
 
@@ -914,7 +915,7 @@ Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io
 
 ### Recommended sequence with GitOps
 
-1. Run preflight with Argo CD check: `./scripts/preflight-check.sh --primary-context <p> --secondary-context <s> --method passive --argocd-check`
+1. Run preflight (Argo CD detection is automatic): `./scripts/preflight-check.sh --primary-context <p> --secondary-context <s> --method passive`
 2. Pause ACM-touching Applications on primary (and optionally secondary): `./scripts/argocd-manage.sh --context <p> --mode pause --state-file .state/argocd-pause-state.json` (repeat for secondary if desired)
 3. Run switchover (Python tool or manual runbook steps)
 4. After updating Git/desired state for the new hub, resume: `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause-state.json`

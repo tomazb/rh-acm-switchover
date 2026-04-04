@@ -302,7 +302,7 @@ GitOps support is intentionally layered:
 Key design properties:
 
 - Marker detection can be disabled with `--skip-gitops-check`
-- `--argocd-check` is read-only
+- ArgoCD detection runs automatically (read-only) when Applications CRD is detected
 - `--argocd-manage` is mutating and therefore disallowed with `--validate-only`
 - Resume is idempotent for already-resumed Applications when the same run owns the pause marker
 - Git remains the source of truth; the tool only coordinates around temporary drift risk

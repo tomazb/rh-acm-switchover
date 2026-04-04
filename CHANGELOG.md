@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- ArgoCD deep-dive detection now runs automatically during preflight when Applications CRD is found on either hub
+- Read-only ArgoCD RBAC permissions are validated automatically when CRD is detected
+- Advisory warning shown when ACM-touching Applications with auto-sync are detected without `--argocd-manage`
+- Bash preflight and postflight scripts auto-detect ArgoCD CRD presence
+
+### Removed
+
+- `--argocd-check` CLI flag (Python tool and bash scripts) — replaced by automatic detection
+
 ### Fixed
 
 - **Full restore fails when passive-sync restore is active**: `_create_full_restore()` now deletes any existing passive-sync Restore resource before creating the full restore, preventing ACM from rejecting the new restore with "FinishedWithErrors" because only one active Restore is allowed at a time.

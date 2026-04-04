@@ -14,7 +14,7 @@ python acm_switchover.py \
   --method passive
 ```
 
-Optional: add `--argocd-check` to include Argo CD discovery and a summary of which Argo CD Applications touch ACM resources (read-only; no changes). If `--skip-gitops-check` is set, `--argocd-check` is ignored.
+Argo CD detection runs automatically during preflight when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable all GitOps detection including Argo CD deep dive.
 
 Note: `--secondary-context` is required for switchover operations unless you are using `--decommission` or `--setup`.
 For `--setup`, `--include-decommission` is only valid with `--role operator` or `--role both`, and should be used only when the generated operator kubeconfig must support teardown workflows.
@@ -29,7 +29,7 @@ For `--setup`, `--include-decommission` is only valid with `--role operator` or 
 - ✓ Passive sync restore is current (Method 1 only)
 - ✓ ACM Observability detected (if present)
 - ✓ GitOps marker detection warnings for ArgoCD/Flux (unless `--skip-gitops-check`)
-- ✓ Argo CD discovery and ACM-impact summary on both hubs (when `--argocd-check` is set)
+- ✓ Argo CD discovery and ACM-impact summary on both hubs (automatic when CRD detected)
 
 Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io/instance` is flagged as `UNRELIABLE` when present and should not be treated as a definitive GitOps signal.
 
@@ -429,8 +429,7 @@ When Argo CD manages ACM resources (BackupSchedule, Restore, ManagedCluster, etc
 python acm_switchover.py \
   --validate-only \
   --primary-context primary-acm-hub \
-  --secondary-context secondary-acm-hub \
-  --argocd-check
+  --secondary-context secondary-acm-hub
 ```
 
 **Pause auto-sync during switchover (recommended if GitOps manages ACM):**
@@ -454,7 +453,7 @@ Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect 
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 
-**Bash alternative:** Use `./scripts/preflight-check.sh --argocd-check` and `./scripts/argocd-manage.sh` for detection and pause/resume with a state file. See [scripts/README.md](../../scripts/README.md).
+**Bash alternative:** Use `./scripts/preflight-check.sh` (Argo CD detection is automatic) and `./scripts/argocd-manage.sh` for pause/resume with a state file. See [scripts/README.md](../../scripts/README.md).
 
 ### Issue: Script Hangs During Restore
 

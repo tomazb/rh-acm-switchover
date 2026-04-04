@@ -50,7 +50,7 @@ rules:
     resources: ["multiclusterobservabilities"]
     verbs: ["get", "list"]
 
-  # Argo CD - Detection and pause/resume (--argocd-check, --argocd-manage)
+  # Argo CD - Detection and pause/resume (auto-detected, --argocd-manage)
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
     verbs: ["get", "list", "patch"]
@@ -113,7 +113,7 @@ rules:
     resources: ["multiclusterobservabilities"]
     verbs: ["get", "list"]
 
-  # Argo CD - Detection only (--argocd-check, read-only)
+  # Argo CD - Detection only (auto-detected, read-only)
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
     verbs: ["get", "list"]
