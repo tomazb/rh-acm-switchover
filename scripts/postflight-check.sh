@@ -38,7 +38,6 @@ fi
 NEW_HUB_CONTEXT=""
 OLD_HUB_CONTEXT=""
 SKIP_GITOPS_CHECK=0
-ARGOCD_CHECK=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -54,18 +53,13 @@ while [[ $# -gt 0 ]]; do
             SKIP_GITOPS_CHECK=1
             shift
             ;;
-        --argocd-check)
-            ARGOCD_CHECK=1
-            shift
-            ;;
         --help|-h)
-            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>] [--skip-gitops-check] [--argocd-check]"
+            echo "Usage: $0 --new-hub-context <context> [--old-hub-context <context>] [--skip-gitops-check]"
             echo ""
             echo "Options:"
             echo "  --new-hub-context     Kubernetes context for new active hub (required)"
             echo "  --old-hub-context     Kubernetes context for old primary hub (optional)"
             echo "  --skip-gitops-check   Disable GitOps marker detection (ArgoCD, Flux)"
-            echo "  --argocd-check        Detect ArgoCD instances and ACM resources managed by GitOps"
             echo "  --help, -h            Show this help message"
             exit "$EXIT_SUCCESS"
             ;;
@@ -80,10 +74,6 @@ done
 # Configure GitOps detection
 if [[ $SKIP_GITOPS_CHECK -eq 1 ]]; then
     disable_gitops_detection
-    if [[ $ARGOCD_CHECK -eq 1 ]]; then
-        check_warn "--argocd-check ignored because --skip-gitops-check is set."
-        ARGOCD_CHECK=0
-    fi
 fi
 
 # Validate required arguments
@@ -641,16 +631,29 @@ else
     fi
 fi
 
-if [[ $ARGOCD_CHECK -eq 1 ]]; then
-    section_header "10. Checking ArgoCD GitOps Management (Optional)"
-    check_argocd_acm_resources "$NEW_HUB_CONTEXT" "New hub"
-    if [[ -n "$OLD_HUB_CONTEXT" ]]; then
-        check_argocd_acm_resources "$OLD_HUB_CONTEXT" "Old hub"
+if [[ $SKIP_GITOPS_CHECK -eq 0 ]]; then
+    argocd_found=0
+    if probe_argocd_crd "$NEW_HUB_CONTEXT"; then
+        argocd_found=1
+    fi
+    if [[ $argocd_found -eq 0 ]] && [[ -n "$OLD_HUB_CONTEXT" ]]; then
+        if probe_argocd_crd "$OLD_HUB_CONTEXT"; then
+            argocd_found=1
+        fi
+    fi
+    if [[ $argocd_found -eq 1 ]]; then
+        section_header "10. Checking ArgoCD GitOps Management"
+        check_argocd_acm_resources "$NEW_HUB_CONTEXT" "New hub"
+        if [[ -n "$OLD_HUB_CONTEXT" ]]; then
+            check_argocd_acm_resources "$OLD_HUB_CONTEXT" "Old hub"
+        fi
+        print_argocd_advisory_warning
+        print_gitops_report
+    elif [[ ${#GITOPS_DETECTED_RESOURCES[@]} -gt 0 ]]; then
+        section_header "10. GitOps Detection Report"
+        print_gitops_report
     fi
 fi
-
-# Print GitOps detection report if any markers were found
-print_gitops_report
 
 # Summary and exit
 if print_summary "postflight"; then
