@@ -250,11 +250,6 @@ Examples:
         help="Skip RBAC permission validation during pre-flight checks",
     )
     parser.add_argument(
-        "--argocd-check",
-        action="store_true",
-        help="Detect Argo CD and report ACM-touching Applications (no changes)",
-    )
-    parser.add_argument(
         "--argocd-manage",
         action="store_true",
         help=(
@@ -511,8 +506,8 @@ def _run_phase_preflight(
         args.method,
         skip_rbac_validation=args.skip_rbac_validation,
         include_decommission=args.old_hub_action == "decommission",
-        argocd_check=getattr(args, "argocd_check", False),
         argocd_manage=effective_argocd_manage,
+        skip_gitops_check=getattr(args, "skip_gitops_check", False),
     )
     passed, config = validator.validate_all()
 
@@ -537,8 +532,8 @@ def _run_phase_preflight(
     state.set_config("secondary_has_observability", secondary_obs_enabled)
     state.set_config("has_observability", primary_obs_enabled or secondary_obs_enabled)
 
-    if getattr(args, "argocd_check", False):
-        _report_argocd_acm_impact(primary, secondary, logger)
+    if not getattr(args, "skip_gitops_check", False):
+        _report_argocd_acm_impact(primary, secondary, logger, argocd_manage=getattr(args, "argocd_manage", False))
 
     if args.validate_only:
         logger.info("\n✓ Validation complete. Exiting (--validate-only mode)")
@@ -552,6 +547,7 @@ def _report_argocd_acm_impact(
     primary: KubeClient,
     secondary: KubeClient,
     logger: logging.Logger,
+    argocd_manage: bool = False,  # Used by advisory-warning task to emit warning when ACM apps found
 ) -> None:
     """Run Argo CD detection and log ACM-touching Applications on both hubs."""
     for label, client in (("Primary hub", primary), ("Secondary hub", secondary)):
@@ -858,9 +854,6 @@ def main():  # noqa: C901
     if args.skip_gitops_check:
         GitOpsCollector.get_instance().set_enabled(False)
         logger.debug("GitOps marker detection disabled")
-        if getattr(args, "argocd_check", False):
-            logger.warning("--argocd-check ignored because --skip-gitops-check is set.")
-            args.argocd_check = False
 
     # Setup mode doesn't need state tracking or Kubernetes clients
     # It uses the admin-kubeconfig directly via the shell script

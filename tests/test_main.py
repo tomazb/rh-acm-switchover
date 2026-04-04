@@ -475,7 +475,6 @@ class TestCompletedStateTimestampHandling:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
 
@@ -503,7 +502,6 @@ class TestCompletedStateTimestampHandling:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
 
@@ -533,7 +531,6 @@ class TestCompletedStateTimestampHandling:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
 
@@ -566,7 +563,6 @@ class TestCompletedStateTimestampHandling:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
 
@@ -652,7 +648,6 @@ class TestCompletedStateTimestampHandling:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
 
@@ -788,7 +783,6 @@ class TestSwitchoverPhaseFlow:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
         config = {
@@ -821,7 +815,6 @@ class TestSwitchoverPhaseFlow:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
 
@@ -1004,7 +997,6 @@ class TestSwitchoverPhaseFlow:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
         config = {
@@ -1041,7 +1033,6 @@ class TestSwitchoverPhaseFlow:
             skip_rbac_validation=True,
             skip_observability_checks=False,
             old_hub_action="secondary",
-            argocd_check=False,
             argocd_manage=False,
         )
         config = {
@@ -1172,7 +1163,6 @@ class TestMainGitOpsReporting:
             primary_context="primary",
             secondary_context="secondary",
             skip_gitops_check=False,
-            argocd_check=False,
             validate_only=False,
             argocd_manage=False,
             setup=False,
@@ -1596,8 +1586,8 @@ class TestPreflightPhase:
             method="passive",
             old_hub_action="secondary",
             skip_rbac_validation=False,
-            argocd_check=True,
             argocd_manage=True,
+            skip_gitops_check=False,
             skip_observability_checks=False,
             validate_only=False,
         )
@@ -1626,10 +1616,12 @@ class TestPreflightPhase:
             "passive",
             skip_rbac_validation=False,
             include_decommission=False,
-            argocd_check=True,
             argocd_manage=True,
+            skip_gitops_check=False,
         )
-        report_argocd_impact.assert_called_once_with(primary, secondary, logger)
+        report_argocd_impact.assert_called_once_with(
+            primary, secondary, logger, argocd_manage=True
+        )
 
     def test_run_phase_preflight_passes_decommission_intent_to_preflight_validator(
         self,
@@ -1638,8 +1630,8 @@ class TestPreflightPhase:
             method="passive",
             old_hub_action="decommission",
             skip_rbac_validation=False,
-            argocd_check=False,
             argocd_manage=False,
+            skip_gitops_check=False,
             skip_observability_checks=False,
             validate_only=False,
         )
@@ -1655,7 +1647,9 @@ class TestPreflightPhase:
             "has_observability": False,
         }
 
-        with patch("acm_switchover.PreflightValidator") as validator_class:
+        with patch("acm_switchover.PreflightValidator") as validator_class, patch(
+            "acm_switchover._report_argocd_acm_impact"
+        ):
             validator_class.return_value.validate_all.return_value = (True, config)
             result = _run_phase_preflight(args, state, primary, secondary, logger)
 
@@ -1666,8 +1660,8 @@ class TestPreflightPhase:
             "passive",
             skip_rbac_validation=False,
             include_decommission=True,
-            argocd_check=False,
             argocd_manage=False,
+            skip_gitops_check=False,
         )
 
     def test_report_argocd_impact_warns_instead_of_raising_on_list_failure(self):
@@ -1721,6 +1715,70 @@ class TestPreflightPhase:
 
         assert logger.warning.call_count == 2
         assert any("Unable to complete Argo CD check" in call.args[0] for call in logger.warning.call_args_list)
+
+    def test_argocd_detection_runs_automatically_in_preflight(self):
+        """When skip_gitops_check=False, _report_argocd_acm_impact is called automatically."""
+        args = SimpleNamespace(
+            method="passive",
+            old_hub_action="secondary",
+            skip_rbac_validation=False,
+            argocd_manage=False,
+            skip_gitops_check=False,
+            skip_observability_checks=False,
+            validate_only=False,
+        )
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class, patch(
+            "acm_switchover._report_argocd_acm_impact"
+        ) as report_argocd_impact:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            _run_phase_preflight(args, state, primary, secondary, logger)
+
+        report_argocd_impact.assert_called_once_with(
+            primary, secondary, logger, argocd_manage=False
+        )
+
+    def test_argocd_detection_skipped_when_skip_gitops_check(self):
+        """When skip_gitops_check=True, _report_argocd_acm_impact is NOT called."""
+        args = SimpleNamespace(
+            method="passive",
+            old_hub_action="secondary",
+            skip_rbac_validation=False,
+            argocd_manage=False,
+            skip_gitops_check=True,
+            skip_observability_checks=False,
+            validate_only=False,
+        )
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class, patch(
+            "acm_switchover._report_argocd_acm_impact"
+        ) as report_argocd_impact:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            _run_phase_preflight(args, state, primary, secondary, logger)
+
+        report_argocd_impact.assert_not_called()
 
 
 @pytest.mark.unit
