@@ -31,4 +31,5 @@ coverage.xml
 .planning/
 .validation/
 kubeconfigs/
+e2e-soak-24h/
 
