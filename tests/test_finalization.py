@@ -1597,6 +1597,45 @@ class TestFinalization:
             "resume_argocd_apps",
         ]
 
+    def test_finalize_rejects_argocd_resume_when_old_hub_action_is_decommission(
+        self,
+        mock_secondary_client,
+        mock_state_manager,
+        mock_backup_manager,
+    ):
+        """Decommission finalization must fail closed before resuming Argo CD apps."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            primary_has_observability=False,
+            old_hub_action="decommission",
+            argocd_resume_after_switchover=True,
+        )
+
+        with patch.object(fin, "_enable_backup_schedule"), patch.object(fin, "_verify_backup_schedule_enabled"), patch.object(
+            fin, "_fix_backup_schedule_collision"
+        ), patch.object(fin, "_verify_new_backups"), patch.object(fin, "_verify_backup_integrity"), patch.object(
+            fin, "_verify_multiclusterhub_health"
+        ), patch.object(
+            fin, "_get_backup_verify_timeout", return_value=300
+        ), patch.object(
+            fin, "_ensure_auto_import_default"
+        ), patch.object(
+            fin, "_handle_old_hub"
+        ), patch.object(
+            fin, "_resume_argocd_apps"
+        ) as resume_argocd_apps:
+            result = fin.finalize()
+
+        assert result is False
+        resume_argocd_apps.assert_not_called()
+        mock_state_manager.add_error.assert_called_once()
+        assert "argocd-resume-after-switchover" in mock_state_manager.add_error.call_args.args[0]
+        assert "decommission" in mock_state_manager.add_error.call_args.args[0]
+
     def test_handle_old_hub_raises_on_unknown_old_hub_action(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):

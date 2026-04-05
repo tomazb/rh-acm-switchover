@@ -172,6 +172,7 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--argocd-resume-after-switchover` cannot be used with `--validate-only`
 - `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
 - `--argocd-resume-after-switchover` requires `--argocd-manage`
+- `--argocd-resume-after-switchover` cannot be used with `--old-hub-action decommission`
 - `--include-decommission` is only valid with `--setup` when `--role` is `operator` or `both`
 - In `check_rbac.py`, `--include-decommission` is only valid with `--role operator`; combining it with `--role validator` is rejected with an explicit error (decommission permissions are operator-only)
 - With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
@@ -322,7 +323,7 @@ except ValidationError as e:
 - Secondary context requirement: `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
 - Managed cluster threshold: `--min-managed-clusters` must be a non-negative integer. `0` keeps the post-restore cluster count check informational-only.
-- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning. `--argocd-resume-after-switchover` cannot be combined with `--validate-only` or `--argocd-resume-only`, and it requires `--argocd-manage`.
+- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning. `--argocd-resume-after-switchover` cannot be combined with `--validate-only`, `--argocd-resume-only`, or `--old-hub-action decommission`, and it requires `--argocd-manage`.
 - Setup RBAC extension: `--include-decommission` is only valid during `--setup`, and only with `--role operator` or `--role both`.
 
 ### Utilities

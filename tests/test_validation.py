@@ -489,6 +489,25 @@ class TestCLIArgumentValidation:
         assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
         assert "validate-only" in str(exc_info.value).lower()
 
+    def test_argocd_resume_after_rejects_old_hub_action_decommission(self):
+        """--argocd-resume-after-switchover cannot be combined with old-hub decommission."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="decommission",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_resume_after_switchover=True,
+            argocd_manage=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
+        assert "decommission" in str(exc_info.value).lower()
+
 
 class TestKubernetesResourceValidation:
     """Test Kubernetes resource name validation."""

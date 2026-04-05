@@ -419,6 +419,10 @@ class InputValidator:
                 raise ValidationError("--argocd-resume-after-switchover cannot be used with --validate-only")
             if not has_argocd_manage:
                 raise ValidationError("--argocd-resume-after-switchover requires --argocd-manage")
+            if getattr(args, "old_hub_action", None) == "decommission":
+                raise ValidationError(
+                    "--argocd-resume-after-switchover cannot be used with --old-hub-action decommission"
+                )
 
         if has_argocd_manage:
             if has_argocd_resume_only:

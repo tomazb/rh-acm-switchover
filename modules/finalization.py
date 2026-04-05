@@ -237,6 +237,10 @@ class Finalization:
 
             # Optional: Restore Argo CD auto-sync only after all finalization work is finished.
             if self.argocd_resume_after_switchover:
+                if self.old_hub_action == "decommission":
+                    raise SwitchoverError(
+                        "--argocd-resume-after-switchover cannot be used with --old-hub-action decommission"
+                    )
                 with self.state.step("resume_argocd_apps", logger) as should_run:
                     if should_run:
                         self._resume_argocd_apps()

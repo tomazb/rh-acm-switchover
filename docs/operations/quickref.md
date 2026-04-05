@@ -262,8 +262,8 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--skip-gitops-check` | Disable all GitOps detection including Argo CD deep dive |
 | `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; with `--validate-only` it is ignored with a warning; not valid with `--argocd-resume-only`) |
-| `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only` or `--argocd-resume-only`) |
-| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; not valid with `--validate-only`, `--argocd-manage`, `--argocd-resume-after-switchover`, `--decommission`, or `--setup`) |
+| `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only`, `--argocd-resume-only`, or `--old-hub-action decommission`) |
+| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; auto-discovers a swapped-context state file when unambiguous; not valid with `--validate-only`, `--argocd-manage`, `--argocd-resume-after-switchover`, `--decommission`, or `--setup`) |
 | `--verbose, -v` | Enable verbose logging |
 
 For `--setup`, `--include-decommission` requires `--role operator` or `--role both`.
