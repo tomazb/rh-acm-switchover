@@ -479,6 +479,82 @@ class TestSecondaryActivation:
             # Verify get_custom_resource was called by the callback
             assert mock_secondary_client.get_custom_resource.called
 
+    def test_poll_restore_finished_with_errors_clusters_already_available(
+        self, activation_passive, mock_secondary_client
+    ):
+        """FinishedWithErrors with 'already available' messages should succeed for consecutive switchovers."""
+        call_count = [0]
+
+        def get_custom_resource_side_effect(**kwargs):
+            call_count[0] += 1
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
+                return {
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "200"},
+                    "status": {
+                        "phase": "FinishedWithErrors",
+                        "lastMessage": "Velero restores have run to completion but encountered 1+ errors",
+                        "messages": [
+                            "managed cluster prod1 already available",
+                            "managed cluster prod2 already available",
+                            "managed cluster prod3 already available",
+                        ],
+                        "veleroManagedClustersRestoreName": "test-velero-mc-restore",
+                    },
+                }
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
+                return {"status": {"phase": "Completed", "progress": {"itemsRestored": 50}}}
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "prod1"}},
+            {"metadata": {"name": "prod2"}},
+            {"metadata": {"name": "prod3"}},
+            {"metadata": {"name": "local-cluster"}},
+        ]
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+            def side_effect(desc, callback, **kwargs):
+                return callback()[0]
+
+            mock_wait.side_effect = side_effect
+            activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
+
+            # Should NOT raise - FinishedWithErrors with "already available" is treated as success
+            activation_passive._wait_for_restore_completion()
+
+    def test_poll_restore_finished_with_errors_real_errors_raises(
+        self, activation_passive, mock_secondary_client
+    ):
+        """FinishedWithErrors with non-'already available' messages should still raise."""
+
+        def get_custom_resource_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
+                return {
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "300"},
+                    "status": {
+                        "phase": "FinishedWithErrors",
+                        "lastMessage": "Velero restores failed",
+                        "messages": ["restore of secret xyz failed"],
+                    },
+                }
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": RESTORE_PASSIVE_SYNC_NAME}, "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}},
+        ]
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+            def side_effect(desc, callback, **kwargs):
+                return callback()[0]
+
+            mock_wait.side_effect = side_effect
+            activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
+
+            with pytest.raises(FatalError, match="Restore failed: FinishedWithErrors"):
+                activation_passive._wait_for_restore_completion()
+
     @patch("modules.activation.wait_for_condition")
     def test_activate_passive_restore_method(self, mock_wait, mock_secondary_client, mock_state_manager):
         """Test passive activation using restore-acm-activate (Option B)."""

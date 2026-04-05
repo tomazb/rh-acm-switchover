@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--argocd-resume-only` now reuses the reversed default state file when swapped contexts match exactly one existing state file
 - `--argocd-resume-after-switchover` is now rejected when combined with `--old-hub-action decommission`, and finalization fails closed if the combination reaches runtime
 - Retried phase failures now record a fresh wrapper error when no new same-attempt phase error was added
+- `FinishedWithErrors` restore phase now treated as success when all messages indicate managed clusters are "already available" (expected for consecutive switchovers)
 
 ## [1.6.1] - 2026-04-05
 

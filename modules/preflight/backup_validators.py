@@ -484,61 +484,25 @@ class PassiveSyncValidator(BaseValidator):
                     f"{restore_name} ready ({phase}): {message}",
                     critical=True,
                 )
-            else:
-                # If the ACM restore controller referenced a Velero restore, surface its validation errors.
-                velero_details = ""
-                bsl_details = ""
-                bsl_unavailable = _collect_bsl_unavailable_details(secondary)
-                if bsl_unavailable:
-                    bsl_details = (
-                        " BackupStorageLocation issue(s): "
-                        f"{bsl_unavailable}. Restore cannot proceed until BSL is Available."
+            elif phase == "FinishedWithErrors":
+                messages = status.get("messages", [])
+                if messages and all(
+                    "already available" in m for m in messages
+                ):
+                    self.add_result(
+                        "Passive sync restore",
+                        True,
+                        f"{restore_name} ({phase}): clusters already available"
+                        " (expected for consecutive switchovers)",
+                        critical=True,
                     )
-
-                velero_match = re.search(r"Velero restore\s+(\S+)", message)
-                if velero_match:
-                    velero_restore_name = velero_match.group(1)
-                    try:
-                        velero_restore = secondary.get_custom_resource(
-                            group="velero.io",
-                            version="v1",
-                            plural="restores",
-                            name=velero_restore_name,
-                            namespace=BACKUP_NAMESPACE,
-                        )
-                        if velero_restore:
-                            velero_status = velero_restore.get("status", {})
-                            velero_phase = velero_status.get("phase", "unknown")
-                            validation_errors = velero_status.get("validationErrors") or []
-                            if validation_errors:
-                                joined = "; ".join(str(e) for e in validation_errors)
-                                velero_details = f" Velero restore {velero_restore_name} phase={velero_phase} validationErrors={joined}."
-                            else:
-                                velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
-                    except Exception as exc:
-                        logger.debug(
-                            "Failed to fetch Velero restore %s details: %s",
-                            velero_restore_name,
-                            exc,
-                        )
-
-                error_message = f"{restore_name} in unexpected state: {phase} - {message}"
-                if velero_details:
-                    error_message += f" {velero_details.strip()}"
-                if bsl_details:
-                    error_message += f"{bsl_details}"
-                error_message += (
-                    " (check ACM restore + Velero restore for details). "
-                    f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get "
-                    f"restore.cluster.open-cluster-management.io {restore_name} -o yaml; "
-                    f"oc --context={context} -n {BACKUP_NAMESPACE} get restore.velero.io -o wide"
-                )
-
-                self.add_result(
-                    "Passive sync restore",
-                    False,
-                    error_message,
-                    critical=True,
+                else:
+                    self._report_restore_failure(
+                        restore_name, phase, message, context, secondary
+                    )
+            else:
+                self._report_restore_failure(
+                    restore_name, phase, message, context, secondary
                 )
         except Exception as exc:
             self.add_result(
@@ -547,6 +511,70 @@ class PassiveSyncValidator(BaseValidator):
                 f"error checking passive sync: {exc}",
                 critical=True,
             )
+
+    def _report_restore_failure(
+        self,
+        restore_name: str,
+        phase: str,
+        message: str,
+        context: str,
+        secondary: KubeClient,
+    ) -> None:
+        """Build an enriched error message for a failed restore and add it as a critical result."""
+        velero_details = ""
+        bsl_details = ""
+        bsl_unavailable = _collect_bsl_unavailable_details(secondary)
+        if bsl_unavailable:
+            bsl_details = (
+                " BackupStorageLocation issue(s): "
+                f"{bsl_unavailable}. Restore cannot proceed until BSL is Available."
+            )
+
+        velero_match = re.search(r"Velero restore\s+(\S+)", message)
+        if velero_match:
+            velero_restore_name = velero_match.group(1)
+            try:
+                velero_restore = secondary.get_custom_resource(
+                    group="velero.io",
+                    version="v1",
+                    plural="restores",
+                    name=velero_restore_name,
+                    namespace=BACKUP_NAMESPACE,
+                )
+                if velero_restore:
+                    velero_status = velero_restore.get("status", {})
+                    velero_phase = velero_status.get("phase", "unknown")
+                    validation_errors = velero_status.get("validationErrors") or []
+                    if validation_errors:
+                        joined = "; ".join(str(e) for e in validation_errors)
+                        velero_details = f" Velero restore {velero_restore_name} phase={velero_phase} validationErrors={joined}."
+                    else:
+                        velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
+            except Exception as exc:
+                logger.debug(
+                    "Failed to fetch Velero restore %s details: %s",
+                    velero_restore_name,
+                    exc,
+                )
+
+        error_message = f"{restore_name} in unexpected state: {phase} - {message}"
+        if velero_details:
+            error_message += f" {velero_details.strip()}"
+        if bsl_details:
+            error_message += f"{bsl_details}"
+        error_message += (
+            " (check ACM restore + Velero restore for details). "
+            f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get "
+            f"restore.cluster.open-cluster-management.io {restore_name} -o yaml; "
+            f"oc --context={context} -n {BACKUP_NAMESPACE} get restore.velero.io -o wide"
+        )
+
+        self.add_result(
+            "Passive sync restore",
+            False,
+            error_message,
+            critical=True,
+        )
 
 
 class ManagedClusterBackupValidator(BaseValidator):

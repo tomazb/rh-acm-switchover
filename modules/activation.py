@@ -197,10 +197,22 @@ class SecondaryActivation:
         # "Enabled" = continuous sync running
         # "Finished"/"Completed" = initial sync completed successfully (also valid for activation)
         # "Running" = actively syncing a new backup (transient, restore still functional)
-        if phase not in ("Enabled", "Finished", "Completed", "Running"):
+        if phase in ("Enabled", "Finished", "Completed", "Running"):
+            logger.info("Passive sync verified (%s): %s", phase, message)
+        elif phase == "FinishedWithErrors":
+            messages = status.get("messages", [])
+            if messages and all("already available" in m for m in messages):
+                logger.warning(
+                    "Passive sync restore %s in %s state but all errors are"
+                    " 'already available' clusters (expected for consecutive"
+                    " switchovers). Proceeding.",
+                    restore_name,
+                    phase,
+                )
+            else:
+                raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
+        else:
             raise FatalError(f"Passive sync restore not ready: {phase} - {message}")
-
-        logger.info("Passive sync verified (%s): %s", phase, message)
 
     def _activate_via_passive_sync(self):
         """Activate managed clusters by patching passive sync restore."""
@@ -830,7 +842,21 @@ class SecondaryActivation:
                 return True, message or "passive sync enabled and running"
             if phase in ("Finished", "Completed"):
                 return True, message or "restore completed"
-            if phase in ("Failed", "PartiallyFailed", "FinishedWithErrors", "FailedWithErrors"):
+            if phase == "FinishedWithErrors":
+                messages = status.get("messages", [])
+                if messages and all(
+                    "already available" in m for m in messages
+                ):
+                    logger.warning(
+                        "Restore %s reported FinishedWithErrors but all errors are"
+                        " 'already available' clusters (expected for consecutive"
+                        " switchovers): %s",
+                        restore_name,
+                        "; ".join(messages),
+                    )
+                    return True, message or "restore completed (clusters already available)"
+                raise FatalError(f"Restore failed: {phase} - {message}")
+            if phase in ("Failed", "PartiallyFailed", "FailedWithErrors"):
                 raise FatalError(f"Restore failed: {phase} - {message}")
 
             return False, f"phase={phase} message={message}"
