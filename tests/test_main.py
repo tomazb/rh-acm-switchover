@@ -1103,12 +1103,32 @@ class TestSwitchoverPhaseFlow:
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="finalization")
         state.get_errors.return_value = [{"phase": "activation", "error": "prior"}]
+        state.get_config.return_value = None
         logger = Mock()
 
         result = _fail_phase(state, "current failure", logger)
 
         assert result is False
         state.add_error.assert_called_once_with("current failure", phase="finalization")
+        state.set_phase.assert_called_once()
+
+    def test_fail_phase_appends_wrapper_after_retry_when_last_error_is_stale_same_phase(self):
+        state = Mock()
+        state.get_current_phase.return_value = SimpleNamespace(value="preflight_validation")
+        state.get_errors.return_value = [{"phase": "preflight_validation", "error": "old failure"}]
+        state._retry_error_baseline = {
+            "phase": "preflight_validation",
+            "count": 1,
+        }
+        logger = Mock()
+
+        result = _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
+
+        assert result is False
+        state.add_error.assert_called_once_with(
+            "Pre-flight validation failed! Cannot proceed.",
+            phase="preflight_validation",
+        )
         state.set_phase.assert_called_once()
 
     def test_execute_operation_routes_to_decommission_when_flag_set(self):
@@ -1353,6 +1373,37 @@ class TestMainGitOpsReporting:
 
         assert exc_info.value.code == EXIT_SUCCESS
         state.ensure_contexts.assert_not_called()
+
+    def test_main_resume_only_uses_existing_reversed_default_state_file(self, tmp_path, monkeypatch):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        args.state_file = None
+        args.primary_context = "primary-a"
+        args.secondary_context = "secondary-b"
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+        reversed_path = tmp_path / "switchover-secondary-b__primary-a.json"
+        reversed_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover.StateManager", return_value=state
+        ) as state_manager, patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ), patch(
+            "acm_switchover._run_argocd_resume_only", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        state_manager.assert_called_once_with(str(reversed_path))
+        assert args.state_file == str(reversed_path)
 
     def test_main_enforces_contexts_for_normal_operation(self):
         args = self._base_args()

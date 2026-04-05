@@ -382,6 +382,10 @@ def run_switchover(
         ):
             logger.info("Failed at phase: %s", last_error_phase.value)
             logger.info("Will retry from this phase")
+            state._retry_error_baseline = {
+                "phase": last_error_phase.value,
+                "count": len(errors),
+            }
             state.set_phase(last_error_phase)
         else:
             logger.warning("Cannot determine which phase failed from error history")
@@ -480,9 +484,15 @@ def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bo
     current_phase = state.get_current_phase().value
     errors = state.get_errors()
     last_error = errors[-1] if errors else {}
+    retry_error_baseline = getattr(state, "_retry_error_baseline", None)
+    retry_has_no_new_phase_error = (
+        isinstance(retry_error_baseline, dict)
+        and retry_error_baseline.get("phase") == current_phase
+        and len(errors) == retry_error_baseline.get("count", -1)
+    )
     # If the module already recorded an error for this phase, don't overwrite
     # it with the generic wrapper message.
-    if last_error.get("phase") != current_phase:
+    if retry_has_no_new_phase_error or last_error.get("phase") != current_phase:
         state.add_error(message, phase=current_phase)
     state.set_phase(Phase.FAILED)
     return False
@@ -856,11 +866,16 @@ def main():  # noqa: C901
     logger = setup_logging(args.verbose, args.log_format)
 
     validate_args(args, logger)
-    resolved_state_file = _resolve_state_file(
-        args.state_file,
-        args.primary_context,
-        args.secondary_context,
-    )
+    try:
+        resolved_state_file = _resolve_state_file(
+            args.state_file,
+            args.primary_context,
+            args.secondary_context,
+            argocd_resume_only=getattr(args, "argocd_resume_only", False),
+        )
+    except ValueError as exc:
+        logger.error("%s", exc)
+        sys.exit(EXIT_FAILURE)
     args.state_file = resolved_state_file
 
     logger.info("ACM Hub Switchover Automation v%s (%s)", __version__, __version_date__)
@@ -989,14 +1004,42 @@ def _get_default_state_dir() -> str:
     return ".state"
 
 
-def _resolve_state_file(requested_path: Optional[str], primary_ctx: str, secondary_ctx: Optional[str]) -> str:
+def _build_default_state_file(primary_ctx: str, secondary_ctx: Optional[str]) -> str:
+    """Build the default state file path for the provided context ordering."""
+    secondary_label = secondary_ctx or "none"
+    slug = f"{_sanitize_context_identifier(primary_ctx)}__{_sanitize_context_identifier(secondary_label)}"
+    return os.path.join(_get_default_state_dir(), f"switchover-{slug}.json")
+
+
+def _resolve_state_file(
+    requested_path: Optional[str],
+    primary_ctx: str,
+    secondary_ctx: Optional[str],
+    argocd_resume_only: bool = False,
+) -> str:
     """Derive the state file path based on contexts unless user provided one."""
     if requested_path:
         return requested_path
 
-    secondary_label = secondary_ctx or "none"
-    slug = f"{_sanitize_context_identifier(primary_ctx)}__{_sanitize_context_identifier(secondary_label)}"
-    return os.path.join(_get_default_state_dir(), f"switchover-{slug}.json")
+    default_path = _build_default_state_file(primary_ctx, secondary_ctx)
+    if not argocd_resume_only or not secondary_ctx:
+        return default_path
+
+    reversed_path = _build_default_state_file(secondary_ctx, primary_ctx)
+    default_exists = os.path.exists(default_path)
+    reversed_exists = os.path.exists(reversed_path)
+
+    if reversed_exists and not default_exists:
+        return reversed_path
+
+    if default_exists and reversed_exists and default_path != reversed_path:
+        raise ValueError(
+            "Multiple candidate state files found for --argocd-resume-only "
+            f"({default_path} and {reversed_path}). "
+            "Pass --state-file explicitly to choose the correct resume state."
+        )
+
+    return default_path
 
 
 def _run_argocd_resume_only(

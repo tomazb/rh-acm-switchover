@@ -63,3 +63,31 @@ def test_invalid_env_state_dir_rejected_when_state_file_not_set(
 
     with pytest.raises(SystemExit):
         validate_args(args, logger)
+
+
+def test_resume_only_prefers_existing_reversed_default_state_file(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+    reversed_path = tmp_path / "switchover-secondary-b__primary-a.json"
+    reversed_path.write_text("{}", encoding="utf-8")
+
+    resolved = _resolve_state_file(
+        requested_path=None,
+        primary_ctx="primary-a",
+        secondary_ctx="secondary-b",
+        argocd_resume_only=True,
+    )
+
+    assert resolved == str(reversed_path)
+
+
+def test_resume_only_keeps_current_order_when_reversed_file_missing(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+
+    resolved = _resolve_state_file(
+        requested_path=None,
+        primary_ctx="primary-a",
+        secondary_ctx="secondary-b",
+        argocd_resume_only=True,
+    )
+
+    assert resolved == os.path.join(str(tmp_path), "switchover-primary-a__secondary-b.json")

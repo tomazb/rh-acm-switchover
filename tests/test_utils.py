@@ -592,6 +592,27 @@ class TestStateManagerExitRegistration:
         assert len(errors) == 1
         assert errors[-1]["error"] == "specific root cause"
 
+    def test_fail_phase_preserves_same_attempt_specific_error_without_generic_wrapper(self, tmp_path):
+        """A retry should still prefer a new same-attempt specific error over the wrapper."""
+        import logging
+
+        import acm_switchover
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm.set_phase(Phase.ACTIVATION)
+        sm.add_error("stale prior failure", phase=Phase.ACTIVATION.value)
+        sm._retry_error_baseline = {"phase": Phase.ACTIVATION.value, "count": 1}
+        sm.add_error("specific root cause", phase=Phase.ACTIVATION.value)
+
+        logger = logging.getLogger("test")
+        result = acm_switchover._fail_phase(sm, "Secondary hub activation failed!", logger)
+
+        assert result is False
+        assert sm.get_current_phase() == Phase.FAILED
+        errors = sm.get_errors()
+        assert len(errors) == 2
+        assert errors[-1]["error"] == "specific root cause"
+
     def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
         """After a phase failure, get_last_error_phase returns the phase to retry."""
         sm = StateManager(str(tmp_path / "state.json"))

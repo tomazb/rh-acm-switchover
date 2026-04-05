@@ -176,6 +176,8 @@ python acm_switchover.py \
   --old-hub-action secondary
 ```
 
+If you later use `--argocd-resume-only` after a reverse switchover, the CLI will reuse the original state file automatically when the swapped-context match is unambiguous. If both context orderings have state files, pass `--state-file` explicitly.
+
 > **Note:** Requires original switchover used `--old-hub-action secondary` to enable passive sync.
 
 ### Decommission Old Hub
