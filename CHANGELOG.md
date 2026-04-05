@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-04-05
+
+### Fixed
+
+- Dry-run no longer marks `reset_auto_import_strategy` step as completed, preventing broken resume
+- Secondary MCO preflight check no longer uses incorrect namespace flag for cluster-scoped resource
+- ArgoCD CRD probe distinguishes indeterminate errors (403/timeout) from "not found", returning `unknown` install type
+- `argocd-manage.sh` CRD probe uses `run_json_query` to properly handle auth/network errors
+- Backup integrity verification uses `_list_acm_owned_velero_backups()` helper for consistent error handling
+
+### Changed
+
+- `setup-rbac.sh` hash function falls back to `shasum` when `sha256sum` is unavailable
+- Install docs now include namespace creation before service account setup
+- CHANGELOG compare links added for v1.5.14–v1.6.0
+
 ## [1.6.0] - 2026-04-04
 
 ### Changed
@@ -958,7 +974,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.16...v1.6.0
 [1.5.16]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.15...v1.5.16
 [1.5.15]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.14...v1.5.15
