@@ -274,6 +274,9 @@ subjects:
 For automated execution:
 
 ```bash
+# Create namespace (if not already present)
+kubectl create namespace acm-switchover --dry-run=client -o yaml | kubectl apply -f -
+
 # Create service account
 kubectl create serviceaccount acm-switchover-operator -n acm-switchover
 

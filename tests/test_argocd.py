@@ -411,7 +411,7 @@ class TestDetectArgocdInstallation:
 
         assert result.has_applications_crd is True
         assert result.has_argocds_crd is False
-        assert result.install_type == "vanilla"
+        assert result.install_type == "unknown"
 
     def test_application_crd_lookup_failure_raises(self):
         client = MagicMock()

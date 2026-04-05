@@ -47,7 +47,8 @@ cmd="$*"
 
 if [[ "$scenario" == "pause_partial_failure" ]]; then
     case "$cmd" in
-        "--context=test-hub get crd applications.argoproj.io")
+        "--context=test-hub get crd applications.argoproj.io -o json")
+            echo '{"metadata":{"name":"applications.argoproj.io"}}'
             exit 0
             ;;
         "--context=test-hub get applications.argoproj.io -A -o json")
@@ -84,7 +85,8 @@ fi
 if [[ "$scenario" == "pause_retry_merge" ]]; then
     retry_step="${MOCK_RETRY_STEP:-1}"
     case "$cmd" in
-        "--context=test-hub get crd applications.argoproj.io")
+        "--context=test-hub get crd applications.argoproj.io -o json")
+            echo '{"metadata":{"name":"applications.argoproj.io"}}'
             exit 0
             ;;
         "--context=test-hub get applications.argoproj.io -A -o json")
@@ -156,8 +158,9 @@ fi
 
 if [[ "$scenario" == "pause_operator_watched_namespace" ]]; then
     case "$cmd" in
-        "--context=ctx-a get crd applications.argoproj.io"|\
-        "--context=ctx-b get crd applications.argoproj.io")
+        "--context=ctx-a get crd applications.argoproj.io -o json"|\
+        "--context=ctx-b get crd applications.argoproj.io -o json")
+            echo '{"metadata":{"name":"applications.argoproj.io"}}'
             exit 0
             ;;
         "--context=ctx-a get applications.argoproj.io -A -o json")
@@ -188,7 +191,8 @@ JSON
 JSON
             exit 0
             ;;
-        "--context=test-hub get crd applications.argoproj.io")
+        "--context=test-hub get crd applications.argoproj.io -o json")
+            echo '{"metadata":{"name":"applications.argoproj.io"}}'
             exit 0
             ;;
         "--context=test-hub get applications.argoproj.io -A -o json")
@@ -220,7 +224,8 @@ fi
 
 if [[ "$scenario" == "list_error" ]]; then
     case "$cmd" in
-        "--context=test-hub get crd applications.argoproj.io")
+        "--context=test-hub get crd applications.argoproj.io -o json")
+            echo '{"metadata":{"name":"applications.argoproj.io"}}'
             exit 0
             ;;
         "--context=test-hub get applications.argoproj.io -A -o json")
@@ -232,7 +237,8 @@ fi
 
 if [[ "$scenario" == "list_warning_success" ]]; then
     case "$cmd" in
-        "--context=test-hub get crd applications.argoproj.io")
+        "--context=test-hub get crd applications.argoproj.io -o json")
+            echo '{"metadata":{"name":"applications.argoproj.io"}}'
             exit 0
             ;;
         "--context=test-hub get applications.argoproj.io -A -o json")
@@ -259,7 +265,8 @@ fi
 
 if [[ "$scenario" == "get_error" ]]; then
     case "$cmd" in
-        "--context=test-hub get crd applications.argoproj.io")
+        "--context=test-hub get crd applications.argoproj.io -o json")
+            echo '{"metadata":{"name":"applications.argoproj.io"}}'
             exit 0
             ;;
         "--context=test-hub get applications.argoproj.io -A -o json")

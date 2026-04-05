@@ -209,7 +209,14 @@ sanitize_context() {
     local clean
     clean=$(echo "$1" | sed 's/[^A-Za-z0-9._-]/_/g')
     local hash
-    hash=$(printf '%s' "$1" | sha256sum | cut -c1-8)
+    if command -v sha256sum &>/dev/null; then
+        hash=$(printf '%s' "$1" | sha256sum | cut -c1-8)
+    elif command -v shasum &>/dev/null; then
+        hash=$(printf '%s' "$1" | shasum -a 256 | cut -c1-8)
+    else
+        echo "Error: Neither sha256sum nor shasum found. Cannot sanitize context names." >&2
+        exit 1
+    fi
     echo "${clean}_${hash}"
 }
 SANITIZED_CONTEXT=$(sanitize_context "$CONTEXT")

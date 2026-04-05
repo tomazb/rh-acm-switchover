@@ -82,7 +82,7 @@ class ArgocdDiscoveryResult:
     has_applications_crd: bool
     has_argocds_crd: bool
     argocd_instances: List[Dict[str, str]] = field(default_factory=list)
-    install_type: str = "none"  # "operator" | "vanilla" | "none"
+    install_type: str = "none"  # "operator" | "vanilla" | "unknown" | "none"
 
 
 @dataclass
@@ -205,6 +205,12 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     has_app = _get_crd_presence(client, "applications.argoproj.io", required=True)
     has_argocds_present = _get_crd_presence(client, "argocds.argoproj.io", required=False)
     has_argocds = bool(has_argocds_present)
+    install_type_override = None
+    if has_argocds_present is None:
+        logger.warning(
+            "Could not determine ArgoCD CRDs presence; install type will be 'unknown'"
+        )
+        install_type_override = "unknown"
     instances: List[Dict[str, str]] = []
     if not has_app:
         return ArgocdDiscoveryResult(
@@ -238,7 +244,7 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
             logger.warning("Failed to list ArgoCD instances: %s; instance list may be incomplete", e)
         install_type = "operator"
     else:
-        install_type = "vanilla"
+        install_type = install_type_override or "vanilla"
 
     return ArgocdDiscoveryResult(
         has_applications_crd=True,

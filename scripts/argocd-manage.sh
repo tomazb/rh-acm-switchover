@@ -272,7 +272,12 @@ read_pause_state_entry() {
 }
 
 run_pause() {
-    if ! "$CLUSTER_CLI_BIN" --context="$CONTEXT" get crd applications.argoproj.io &>/dev/null; then
+    local crd_json
+    crd_json=$(run_json_query "" "$CLUSTER_CLI_BIN" --context="$CONTEXT" get crd applications.argoproj.io -o json 2>/dev/null) || {
+        echo "Error: Failed to check Applications CRD (possible auth/permission issue)." >&2
+        return 1
+    }
+    if [[ -z "$crd_json" ]]; then
         echo "Applications CRD not found; nothing to pause." >&2
         return 0
     fi

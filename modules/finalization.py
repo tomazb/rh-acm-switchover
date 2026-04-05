@@ -728,13 +728,12 @@ class Finalization:
         if not post_switchover_backup_name:
             if not self.state.get_config("post_switchover_backup_name"):
                 logger.warning("No post-switchover backup name recorded; falling back to latest backup in namespace")
-            backups = self.secondary.list_custom_resources(
-                group="velero.io",
-                version="v1",
-                plural="backups",
-                namespace=BACKUP_NAMESPACE,
-            )
-            backups = self._filter_acm_owned_backups(backups)
+            try:
+                backups = self._list_acm_owned_velero_backups()
+            except TransientError as exc:
+                raise SwitchoverError(
+                    "Failed to list Velero backups for integrity verification: " f"{exc}"
+                ) from exc
             if not backups:
                 raise SwitchoverError("No ACM-owned Velero backups found for integrity verification")
 
@@ -1556,7 +1555,7 @@ class Finalization:
             logger.info("Step already completed: %s", step_name)
             return
 
-        if self._ensure_auto_import_default():
+        if self._ensure_auto_import_default() and not self.dry_run:
             self.state.mark_step_completed(step_name)
 
     @dry_run_skip(message="Would reset autoImportStrategy to default ImportOnly", return_value=True)
