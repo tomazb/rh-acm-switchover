@@ -126,6 +126,7 @@ class StateManager:
         self._previous_signal_handlers: Dict[int, Any] = {}
         self._run_lock_path = os.path.realpath(self.state_file) + ".run.lock"
         self._run_lock_handle: Optional[Any] = None
+        self._retry_error_baseline: Optional[Dict[str, Any]] = None
         # Register atexit handlers to flush pending state, clean up temp files,
         # and release the lifetime run lock on process exit.
         atexit.register(self._release_run_lock)
