@@ -98,7 +98,7 @@ Manual ACM hub switchover is operationally expensive:
 **Success criteria**:
 
 - GitOps ownership markers are reported before execution
-- ACM-touching Argo CD Applications can be identified with `--argocd-check`
+- ACM-touching Argo CD Applications are auto-detected when ArgoCD CRD is present
 - Auto-sync can be paused with `--argocd-manage`
 - Auto-sync can be resumed later with `--argocd-resume-after-switchover` or `--argocd-resume-only`
 
@@ -139,7 +139,7 @@ The product must validate both hubs before mutation begins.
 - Optional components such as Observability must be detected automatically
 - RBAC permissions must be validated unless explicitly skipped
 - GitOps ownership markers must be collected unless `--skip-gitops-check` is set
-- Optional Argo CD discovery and ACM-impact reporting must run when `--argocd-check` is set
+- Argo CD discovery and ACM-impact reporting runs automatically when ArgoCD CRD is detected
 
 ### FR-2: Primary hub preparation
 
@@ -260,7 +260,6 @@ The PRD must stay aligned with the current user-facing CLI, especially:
 - `--manage-auto-import-strategy`
 - `--min-managed-clusters`
 - `--skip-gitops-check`
-- `--argocd-check`
 - `--argocd-manage`
 - `--argocd-resume-after-switchover`
 - `--argocd-resume-only`
