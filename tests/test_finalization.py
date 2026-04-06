@@ -665,27 +665,75 @@ class TestFinalization:
         with pytest.raises(SwitchoverError, match="Failed to reset autoImportStrategy to default"):
             fin._ensure_auto_import_default()
 
-    def test_ensure_auto_import_default_handles_404_on_delete(
-        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    def test_auto_import_reset_missing_configmap_clears_state(
+        self, mock_secondary_client, mock_backup_manager, tmp_path
     ):
-        """Deleting an already-absent configmap should succeed idempotently."""
+        """A missing configmap means reset already completed and state should clear."""
+        from lib.utils import StateManager
+
+        state = StateManager(str(tmp_path / "state.json"))
         fin = Finalization(
             secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
+            state_manager=state,
             acm_version="2.14.0",
         )
+        state.set_config("auto_import_strategy_set", True)
+        mock_secondary_client.get_configmap.return_value = None
+
+        assert fin._ensure_auto_import_default() is True
+
+        assert state.get_config("auto_import_strategy_set", False) is False
+        mock_secondary_client.delete_configmap.assert_not_called()
+
+    def test_auto_import_reset_non_sync_strategy_clears_state_without_delete(
+        self, mock_secondary_client, mock_backup_manager, tmp_path
+    ):
+        """A non-Sync strategy is already safe and must not trigger a delete."""
+        from lib.utils import StateManager
+
+        state = StateManager(str(tmp_path / "state.json"))
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=state,
+            acm_version="2.14.0",
+        )
+        state.set_config("auto_import_strategy_set", True)
+        mock_secondary_client.get_configmap.return_value = {
+            "data": {
+                finalization_module.AUTO_IMPORT_STRATEGY_KEY: finalization_module.AUTO_IMPORT_STRATEGY_DEFAULT
+            }
+        }
+
+        assert fin._ensure_auto_import_default() is True
+
+        assert state.get_config("auto_import_strategy_set", False) is False
+        mock_secondary_client.delete_configmap.assert_not_called()
+
+    def test_auto_import_reset_delete_404_is_treated_as_complete(
+        self, mock_secondary_client, mock_backup_manager, tmp_path
+    ):
+        """Deleting an already-absent configmap should succeed idempotently."""
+        from lib.utils import StateManager
+
+        state = StateManager(str(tmp_path / "state.json"))
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=state,
+            acm_version="2.14.0",
+        )
+        state.set_config("auto_import_strategy_set", True)
         mock_secondary_client.get_configmap.return_value = {
             "data": {finalization_module.AUTO_IMPORT_STRATEGY_KEY: finalization_module.AUTO_IMPORT_STRATEGY_SYNC}
         }
         mock_secondary_client.delete_configmap.side_effect = ApiException(status=404, reason="Not Found")
-        mock_state_manager.get_config.side_effect = lambda key, default=None: (
-            True if key == "auto_import_strategy_set" else default
-        )
 
-        # Should NOT raise — 404 is a successful no-op
         assert fin._ensure_auto_import_default() is True
-        mock_state_manager.set_config.assert_any_call("auto_import_strategy_set", False)
-        mock_state_manager.mark_step_completed.assert_not_called()
+
+        assert state.get_config("auto_import_strategy_set", False) is False
+        mock_secondary_client.delete_configmap.assert_called_once_with(
+            finalization_module.MCE_NAMESPACE,
+            finalization_module.IMPORT_CONTROLLER_CONFIG_CM,
+        )
 
     def test_ensure_auto_import_default_skips_state_updates_in_dry_run(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
