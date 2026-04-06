@@ -3,6 +3,7 @@
 Tests cover PrimaryPreparation class for preparing the primary hub.
 """
 
+import copy
 import logging
 import sys
 from contextlib import contextmanager
@@ -16,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.primary_prep as primary_prep_module
 from lib import argocd as argocd_lib
-from lib.constants import OBSERVABILITY_NAMESPACE, THANOS_SCALE_DOWN_WAIT
+from lib.constants import DISABLE_AUTO_IMPORT_ANNOTATION, OBSERVABILITY_NAMESPACE, THANOS_SCALE_DOWN_WAIT
 from lib.exceptions import SwitchoverError
 
 PrimaryPreparation = primary_prep_module.PrimaryPreparation
@@ -426,6 +427,65 @@ class TestPrimaryPreparation:
         ]
         assert paused_calls[-1].args == ("argocd_paused_apps", [])
 
+    def test_pause_argocd_failure_removes_stale_pause_entry(self, mock_primary_client, mock_state_manager):
+        """A failed retry must clear any stale resumable pause entry for that app."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=False,
+            argocd_manage=True,
+        )
+        state_config = {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [
+                {
+                    "hub": "primary",
+                    "namespace": "openshift-gitops",
+                    "name": "acm-app",
+                    "original_sync_policy": {"automated": {}},
+                    "pause_applied": False,
+                }
+            ],
+        }
+        mock_state_manager.get_config.side_effect = lambda key, default=None: copy.deepcopy(
+            state_config.get(key, default)
+        )
+        mock_state_manager.set_config.side_effect = lambda key, value: state_config.__setitem__(key, copy.deepcopy(value))
+
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        app = {
+            "metadata": {"namespace": "openshift-gitops", "name": "acm-app"},
+            "spec": {"syncPolicy": {"automated": {}}},
+            "status": {"resources": [{"kind": "Restore", "namespace": "open-cluster-management-backup"}]},
+        }
+        impacts = [argocd_lib.AppImpact(namespace="openshift-gitops", name="acm-app", resource_count=1, app=app)]
+
+        with (
+            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch(
+                "modules.primary_prep.argocd_lib.pause_autosync",
+                return_value=argocd_lib.PauseResult(
+                    namespace="openshift-gitops",
+                    name="acm-app",
+                    original_sync_policy={"automated": {}},
+                    patched=False,
+                    error="patch failed",
+                ),
+            ),
+        ):
+            with pytest.raises(SwitchoverError, match="pause failed for 1"):
+                prep._pause_argocd_acm_apps()
+
+        assert mock_state_manager.get_config("argocd_paused_apps") == []
+
     def test_pause_argocd_acm_apps_recovers_pending_entry_when_app_already_paused(
         self, mock_primary_client, mock_state_manager
     ):
@@ -565,6 +625,22 @@ class TestPrimaryPreparation:
 
         # Should patch all clusters except local-cluster
         assert mock_primary_client.patch_managed_cluster.call_count == 2
+
+    def test_disable_auto_import_skips_already_annotated_clusters(self, primary_prep_with_obs, mock_primary_client):
+        """Already-annotated clusters should be skipped so reruns only patch remaining clusters."""
+        managed_clusters = [
+            {"metadata": {"name": "cluster-a", "annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: ""}}},
+            {"metadata": {"name": "cluster-b", "annotations": {}}},
+        ]
+        mock_primary_client.list_custom_resources.return_value = managed_clusters
+        mock_primary_client.list_managed_clusters.return_value = managed_clusters
+
+        primary_prep_with_obs._disable_auto_import()
+
+        mock_primary_client.patch_managed_cluster.assert_called_once_with(
+            name="cluster-b",
+            patch={"metadata": {"annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: ""}}},
+        )
 
     def test_disable_auto_import_no_clusters(self, primary_prep_with_obs, mock_primary_client):
         """Test when no managed clusters exist."""
