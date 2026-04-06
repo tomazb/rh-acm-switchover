@@ -1390,6 +1390,117 @@ class TestFinalization:
         assert primary.get_pods.call_count == 2
 
     @patch("modules.finalization.time")
+    def test_old_hub_observability_reports_success_when_all_pods_gone(
+        self, mock_time, finalization_with_primary
+    ):
+        """Observability shutdown should report success when old-hub pods terminate."""
+        fin, primary = finalization_with_primary
+        compactor_pods = [{"metadata": {"name": "compact-0"}}]
+        api_pods = [{"metadata": {"name": "api-0"}}]
+        primary.get_pods.side_effect = [[], []]
+        mock_time.time.side_effect = [0, 0]
+
+        with patch.object(finalization_module, "logger") as logger:
+            compactor_pods_after, api_pods_after = fin._wait_for_observability_scale_down(
+                compactor_pods=compactor_pods,
+                api_pods=api_pods,
+            )
+            fin._report_observability_scale_down_status(
+                compactor_pods=compactor_pods,
+                api_pods=api_pods,
+                compactor_pods_after=compactor_pods_after,
+                api_pods_after=api_pods_after,
+            )
+
+        assert compactor_pods_after == []
+        assert api_pods_after == []
+        assert primary.get_pods.call_args_list == [
+            call(
+                namespace=finalization_module.OBSERVABILITY_NAMESPACE,
+                label_selector="app.kubernetes.io/name=thanos-compact",
+            ),
+            call(
+                namespace=finalization_module.OBSERVABILITY_NAMESPACE,
+                label_selector="app.kubernetes.io/name=observatorium-api",
+            ),
+        ]
+        mock_time.sleep.assert_not_called()
+        logger.info.assert_any_call("%s is scaled down on old hub", "Thanos compactor")
+        logger.info.assert_any_call("%s is scaled down on old hub", "Observatorium API")
+        logger.info.assert_any_call("All observability components scaled down on old hub")
+        logger.warning.assert_not_called()
+
+    @patch("modules.finalization.time")
+    def test_old_hub_observability_warns_when_pods_remain(
+        self, mock_time, finalization_with_primary
+    ):
+        """Observability shutdown should warn when old-hub pods remain after waiting."""
+        fin, primary = finalization_with_primary
+        compactor_pods = [{"metadata": {"name": "compact-0"}}]
+        primary.get_pods.side_effect = [[{"metadata": {"name": "compact-0"}}]]
+        mock_time.time.side_effect = [0, 0, finalization_module.OBSERVABILITY_TERMINATE_TIMEOUT + 1]
+        mock_time.sleep.return_value = None
+
+        with patch.object(finalization_module, "logger") as logger:
+            compactor_pods_after, api_pods_after = fin._wait_for_observability_scale_down(
+                compactor_pods=compactor_pods,
+                api_pods=[],
+            )
+            fin._report_observability_scale_down_status(
+                compactor_pods=compactor_pods,
+                api_pods=[],
+                compactor_pods_after=compactor_pods_after,
+                api_pods_after=api_pods_after,
+            )
+
+        assert compactor_pods_after == [{"metadata": {"name": "compact-0"}}]
+        assert api_pods_after == []
+        primary.get_pods.assert_called_once_with(
+            namespace=finalization_module.OBSERVABILITY_NAMESPACE,
+            label_selector="app.kubernetes.io/name=thanos-compact",
+        )
+        mock_time.sleep.assert_called_once_with(finalization_module.OBSERVABILITY_TERMINATE_INTERVAL)
+        logger.warning.assert_any_call(
+            "%s still running on old hub (%s pod(s)) after waiting",
+            "Thanos compactor",
+            1,
+        )
+        logger.warning.assert_any_call(
+            "Old hub: MultiClusterObservability is still active (%s). Scale both to 0 or remove MCO.",
+            "thanos-compact=1, observatorium-api=0",
+        )
+        assert call("All observability components scaled down on old hub") not in logger.info.call_args_list
+
+    def test_old_hub_observability_dry_run_only_reports_intent(self, finalization_with_primary):
+        """Dry-run observability shutdown should only log what would be scaled down."""
+        fin, primary = finalization_with_primary
+        fin.dry_run = True
+        compactor_pods = [{"metadata": {"name": "compact-0"}}]
+        api_pods = [{"metadata": {"name": "api-0"}}]
+
+        with patch.object(finalization_module, "logger") as logger:
+            compactor_pods_after, api_pods_after = fin._wait_for_observability_scale_down(
+                compactor_pods=compactor_pods,
+                api_pods=api_pods,
+            )
+            fin._report_observability_scale_down_status(
+                compactor_pods=compactor_pods,
+                api_pods=api_pods,
+                compactor_pods_after=compactor_pods_after,
+                api_pods_after=api_pods_after,
+            )
+
+        primary.get_pods.assert_not_called()
+        assert compactor_pods_after == []
+        assert api_pods_after == []
+        assert logger.info.call_args_list == [
+            call("[DRY-RUN] Would scale down thanos-compact on old hub"),
+            call("[DRY-RUN] Would scale down observatorium-api on old hub"),
+        ]
+        logger.warning.assert_not_called()
+        assert call("All observability components scaled down on old hub") not in logger.info.call_args_list
+
+    @patch("modules.finalization.time")
     def test_finalize_skips_verify_old_hub_state_when_action_none(
         self, mock_time, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
