@@ -35,86 +35,40 @@ class TestRBACPermissionCoverage:
             "decommission": RBACValidator.DECOMMISSION_PERMISSIONS,
         }
 
-    def test_namespace_permissions_include_pods_for_backup(self, validator_permissions):
-        """Test that backup namespace has pods permission for Velero health checks."""
-        backup_perms = validator_permissions["namespace"].get("open-cluster-management-backup", [])
-        pods_perm = [p for p in backup_perms if p[1] == "pods"]
-
-        assert len(pods_perm) == 1, "Expected pods permission in backup namespace"
-        assert "get" in pods_perm[0][2], "Expected 'get' verb for pods"
-        assert "list" in pods_perm[0][2], "Expected 'list' verb for pods"
-
-    def test_namespace_permissions_include_backupstoragelocations(self, validator_permissions):
-        """Test that backup namespace has backupstoragelocations permission for storage health."""
-        backup_perms = validator_permissions["namespace"].get("open-cluster-management-backup", [])
-        bsl_perm = [p for p in backup_perms if p[1] == "backupstoragelocations"]
-
-        assert len(bsl_perm) == 1, "Expected backupstoragelocations permission in backup namespace"
-        assert bsl_perm[0][0] == "velero.io", "BackupStorageLocations should use velero.io API group"
-        assert "get" in bsl_perm[0][2], "Expected 'get' verb for backupstoragelocations"
-        assert "list" in bsl_perm[0][2], "Expected 'list' verb for backupstoragelocations"
-
-    def test_namespace_permissions_include_secrets_for_observability(self, validator_permissions):
-        """Test that observability namespace has secrets permission for Thanos config."""
-        obs_perms = validator_permissions["namespace"].get("open-cluster-management-observability", [])
-        secrets_perm = [p for p in obs_perms if p[1] == "secrets"]
-
-        assert len(secrets_perm) == 1, "Expected secrets permission in observability namespace"
-        assert "get" in secrets_perm[0][2], "Expected 'get' verb for secrets"
-
-    def test_namespace_permissions_include_routes_for_observability(self, validator_permissions):
-        """Test that observability namespace has routes permission for Grafana access."""
-        obs_perms = validator_permissions["namespace"].get("open-cluster-management-observability", [])
-        routes_perm = [p for p in obs_perms if p[1] == "routes"]
-
-        assert len(routes_perm) == 1, "Expected routes permission in observability namespace"
-        assert routes_perm[0][0] == "route.openshift.io", "Routes should use route.openshift.io API group"
-        assert "get" in routes_perm[0][2], "Expected 'get' verb for routes"
-
-    def test_namespace_permissions_include_acm_namespace(self, validator_permissions):
-        """Test that open-cluster-management namespace is covered for ACM health checks."""
-        assert (
-            "open-cluster-management" in validator_permissions["namespace"]
-        ), "Expected open-cluster-management namespace in NAMESPACE_PERMISSIONS"
-
-        acm_perms = validator_permissions["namespace"]["open-cluster-management"]
-        pods_perm = [p for p in acm_perms if p[1] == "pods"]
-
-        assert len(pods_perm) == 1, "Expected pods permission in ACM namespace"
-        assert "get" in pods_perm[0][2], "Expected 'get' verb for pods"
-        assert "list" in pods_perm[0][2], "Expected 'list' verb for pods"
-
-    def test_namespace_permissions_include_agent_namespace(self, validator_permissions):
-        """Test that open-cluster-management-agent namespace is covered for klusterlet operations.
-
-        Note: Agent namespace is in MANAGED_CLUSTER_NAMESPACE_PERMISSIONS since it exists
-        on managed clusters, not on hub clusters.
-        """
-        assert (
-            "open-cluster-management-agent" in validator_permissions["managed_cluster_namespace"]
-        ), "Expected open-cluster-management-agent namespace in MANAGED_CLUSTER_NAMESPACE_PERMISSIONS"
-
-        agent_perms = validator_permissions["managed_cluster_namespace"]["open-cluster-management-agent"]
-
-        # Check secrets permission for klusterlet reconnection
-        secrets_perm = [p for p in agent_perms if p[1] == "secrets"]
-        assert len(secrets_perm) == 1, "Expected secrets permission in agent namespace"
-        assert "create" in secrets_perm[0][2], "Expected 'create' verb for secrets"
-        assert "delete" in secrets_perm[0][2], "Expected 'delete' verb for secrets"
-
-        # Check deployments permission for klusterlet restart
-        deployments_perm = [p for p in agent_perms if p[1] == "deployments"]
-        assert len(deployments_perm) == 1, "Expected deployments permission in agent namespace"
-        assert deployments_perm[0][0] == "apps", "Deployments should use apps API group"
-        assert "patch" in deployments_perm[0][2], "Expected 'patch' verb for deployments"
-
-    def test_backup_namespace_includes_delete_for_backupschedules(self, validator_permissions):
-        """Test that backup namespace has delete permission for backupschedules (used in primary_prep.py)."""
-        backup_perms = validator_permissions["namespace"].get("open-cluster-management-backup", [])
-        bs_perm = [p for p in backup_perms if p[1] == "backupschedules"]
-
-        assert len(bs_perm) == 1, "Expected backupschedules permission in backup namespace"
-        assert "delete" in bs_perm[0][2], "Expected 'delete' verb for backupschedules (used in primary_prep.py)"
+    @pytest.mark.parametrize(
+        "perm_source, namespace, resource, expected_api_group, expected_verbs",
+        [
+            ("namespace", "open-cluster-management-backup", "pods", None, ["get", "list"]),
+            ("namespace", "open-cluster-management-backup", "backupstoragelocations", "velero.io", ["get", "list"]),
+            ("namespace", "open-cluster-management-observability", "secrets", None, ["get"]),
+            ("namespace", "open-cluster-management-observability", "routes", "route.openshift.io", ["get"]),
+            ("namespace", "open-cluster-management", "pods", None, ["get", "list"]),
+            ("namespace", "open-cluster-management-backup", "backupschedules", None, ["delete"]),
+            ("managed_cluster_namespace", "open-cluster-management-agent", "secrets", None, ["create", "delete"]),
+            ("managed_cluster_namespace", "open-cluster-management-agent", "deployments", "apps", ["patch"]),
+        ],
+        ids=[
+            "backup-pods-for-velero-health",
+            "backup-backupstoragelocations-for-storage-health",
+            "observability-secrets-for-thanos-config",
+            "observability-routes-for-grafana-access",
+            "acm-pods-for-health-checks",
+            "backup-backupschedules-delete-for-primary-prep",
+            "agent-secrets-for-klusterlet-reconnection",
+            "agent-deployments-for-klusterlet-restart",
+        ],
+    )
+    def test_namespace_permission_exists(
+        self, validator_permissions, perm_source, namespace, resource, expected_api_group, expected_verbs
+    ):
+        """Verify that a required namespaced permission is defined with the correct API group and verbs."""
+        perms = validator_permissions[perm_source].get(namespace, [])
+        matched = [p for p in perms if p[1] == resource]
+        assert len(matched) == 1, f"Expected exactly one {resource} permission in {namespace}"
+        if expected_api_group is not None:
+            assert matched[0][0] == expected_api_group, f"Expected API group '{expected_api_group}' for {resource}"
+        for verb in expected_verbs:
+            assert verb in matched[0][2], f"Expected '{verb}' verb for {resource} in {namespace}"
 
     def test_all_expected_namespaces_covered(self, validator_permissions):
         """Test that all expected namespaces are covered in hub and managed cluster permissions."""
@@ -137,41 +91,29 @@ class TestRBACPermissionCoverage:
         missing_managed = expected_managed_namespaces - actual_managed_namespaces
         assert not missing_managed, f"Missing namespaces in MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: {missing_managed}"
 
-    def test_cluster_permissions_include_managed_clusters(self, validator_permissions):
-        """Test that cluster permissions include managedclusters for core functionality."""
-        mc_perm = [p for p in validator_permissions["cluster"] if p[1] == "managedclusters"]
-
-        assert len(mc_perm) == 1, "Expected managedclusters permission"
-        assert "get" in mc_perm[0][2], "Expected 'get' verb for managedclusters"
-        assert "list" in mc_perm[0][2], "Expected 'list' verb for managedclusters"
-        assert "patch" in mc_perm[0][2], "Expected 'patch' verb for managedclusters"
-
-    def test_cluster_permissions_include_nodes(self, validator_permissions):
-        """Test that cluster permissions include nodes for cluster health validation per runbook."""
-        nodes_perm = [p for p in validator_permissions["cluster"] if p[1] == "nodes"]
-
-        assert len(nodes_perm) == 1, "Expected nodes permission for cluster health check"
-        assert nodes_perm[0][0] == "", "Nodes should use core API group"
-        assert "get" in nodes_perm[0][2], "Expected 'get' verb for nodes"
-        assert "list" in nodes_perm[0][2], "Expected 'list' verb for nodes"
-
-    def test_cluster_permissions_include_clusteroperators(self, validator_permissions):
-        """Test that cluster permissions include clusteroperators for OpenShift health validation."""
-        co_perm = [p for p in validator_permissions["cluster"] if p[1] == "clusteroperators"]
-
-        assert len(co_perm) == 1, "Expected clusteroperators permission for OpenShift health check"
-        assert co_perm[0][0] == "config.openshift.io", "ClusterOperators should use config.openshift.io API group"
-        assert "get" in co_perm[0][2], "Expected 'get' verb for clusteroperators"
-        assert "list" in co_perm[0][2], "Expected 'list' verb for clusteroperators"
-
-    def test_cluster_permissions_include_clusterversions(self, validator_permissions):
-        """Test that cluster permissions include clusterversions for upgrade status validation."""
-        cv_perm = [p for p in validator_permissions["cluster"] if p[1] == "clusterversions"]
-
-        assert len(cv_perm) == 1, "Expected clusterversions permission for upgrade status check"
-        assert cv_perm[0][0] == "config.openshift.io", "ClusterVersions should use config.openshift.io API group"
-        assert "get" in cv_perm[0][2], "Expected 'get' verb for clusterversions"
-        assert "list" in cv_perm[0][2], "Expected 'list' verb for clusterversions"
+    @pytest.mark.parametrize(
+        "resource, expected_api_group, expected_verbs",
+        [
+            ("managedclusters", None, ["get", "list", "patch"]),
+            ("nodes", "", ["get", "list"]),
+            ("clusteroperators", "config.openshift.io", ["get", "list"]),
+            ("clusterversions", "config.openshift.io", ["get", "list"]),
+        ],
+        ids=[
+            "managedclusters-core-functionality",
+            "nodes-cluster-health-validation",
+            "clusteroperators-openshift-health",
+            "clusterversions-upgrade-status",
+        ],
+    )
+    def test_cluster_permission_exists(self, validator_permissions, resource, expected_api_group, expected_verbs):
+        """Verify that a required cluster-scoped permission is defined with the correct API group and verbs."""
+        matched = [p for p in validator_permissions["cluster"] if p[1] == resource]
+        assert len(matched) == 1, f"Expected exactly one {resource} cluster permission"
+        if expected_api_group is not None:
+            assert matched[0][0] == expected_api_group, f"Expected API group '{expected_api_group}' for {resource}"
+        for verb in expected_verbs:
+            assert verb in matched[0][2], f"Expected '{verb}' verb for {resource}"
 
 
 class TestRBACManifestConsistency:
@@ -188,30 +130,14 @@ class TestRBACManifestConsistency:
         return Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "role.yaml"
 
     @pytest.fixture
-    def kustomize_clusterrole_path(self) -> Path:
-        """Get the Kustomize clusterrole.yaml path."""
-        return Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrole.yaml"
-
-    @pytest.fixture
-    def helm_clusterrole_path(self) -> Path:
-        """Get the Helm clusterrole.yaml path."""
-        return (
+    def helm_clusterrole_content(self) -> str:
+        """Read Helm clusterrole template as text."""
+        path = (
             Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "clusterrole.yaml"
         )
-
-    @pytest.fixture
-    def kustomize_clusterrole_content(self, kustomize_clusterrole_path) -> str:
-        """Read Kustomize clusterrole manifest as text."""
-        if not kustomize_clusterrole_path.exists():
-            pytest.skip("Kustomize clusterrole.yaml not found")
-        return kustomize_clusterrole_path.read_text(encoding="utf-8")
-
-    @pytest.fixture
-    def helm_clusterrole_content(self, helm_clusterrole_path) -> str:
-        """Read Helm clusterrole template as text."""
-        if not helm_clusterrole_path.exists():
+        if not path.exists():
             pytest.skip("Helm clusterrole.yaml not found")
-        return helm_clusterrole_path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
 
     @pytest.fixture
     def decommission_clusterrole_path(self) -> Path:
@@ -346,61 +272,43 @@ class TestRBACManifestConsistency:
 
         assert secrets_rule is not None, "Expected secrets rule in observability operator role"
 
-    def test_kustomize_clusterrole_has_argocd_rules(self, kustomize_clusterrole_content):
-        """Test that static clusterrole includes Argo CD read/manage permissions."""
-        expected_snippets = [
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
-            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
-        ]
-        for snippet in expected_snippets:
-            assert snippet in kustomize_clusterrole_content, f"Missing Argo CD snippet in static clusterrole: {snippet}"
+    ARGOCD_SNIPPETS = [
+        '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
+        '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
+        '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
+        '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
+    ]
 
-    def test_helm_clusterrole_has_argocd_rules(self, helm_clusterrole_content):
-        """Test that Helm clusterrole includes Argo CD read/manage permissions."""
-        expected_snippets = [
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
-            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
-        ]
-        for snippet in expected_snippets:
-            assert snippet in helm_clusterrole_content, f"Missing Argo CD snippet in Helm clusterrole: {snippet}"
+    DECOMMISSION_FORBIDDEN_SNIPPETS = [
+        '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
+        '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
+        '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
+    ]
 
-    def test_clusterrole_argocd_snippets_match_between_static_and_helm(
-        self, kustomize_clusterrole_content, helm_clusterrole_content
-    ):
-        """Test that static and Helm clusterroles both include the same Argo CD rule snippets."""
-        snippets = [
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list", "patch"]',
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["applications"]\n    verbs: ["get", "list"]',
-            '  - apiGroups: ["argoproj.io"]\n    resources: ["argocds"]\n    verbs: ["get", "list"]',
-            '  - apiGroups: ["apiextensions.k8s.io"]\n    resources: ["customresourcedefinitions"]\n    verbs: ["get"]',
-        ]
-        for snippet in snippets:
-            assert snippet in kustomize_clusterrole_content
-            assert snippet in helm_clusterrole_content
+    CLUSTERROLE_PATHS = {
+        "kustomize": Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrole.yaml",
+        "helm": Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "clusterrole.yaml",
+    }
 
-    def test_operator_clusterrole_omits_decommission_delete_verbs(self, kustomize_clusterrole_content):
+    def _read_clusterrole(self, variant: str) -> str:
+        path = self.CLUSTERROLE_PATHS[variant]
+        if not path.exists():
+            pytest.skip(f"{variant} clusterrole.yaml not found")
+        return path.read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("variant", ["kustomize", "helm"])
+    def test_clusterrole_has_argocd_rules(self, variant):
+        """Test that clusterrole includes Argo CD read/manage permissions."""
+        content = self._read_clusterrole(variant)
+        for snippet in self.ARGOCD_SNIPPETS:
+            assert snippet in content, f"Missing Argo CD snippet in {variant} clusterrole: {snippet}"
+
+    @pytest.mark.parametrize("variant", ["kustomize", "helm"])
+    def test_operator_clusterrole_omits_decommission_delete_verbs(self, variant):
         """Test that baseline operator ClusterRole excludes cluster-wide delete verbs."""
-        forbidden_snippets = [
-            '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
-            '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
-            '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
-        ]
-        for snippet in forbidden_snippets:
-            assert snippet not in kustomize_clusterrole_content
-
-    def test_helm_operator_clusterrole_omits_decommission_delete_verbs(self, helm_clusterrole_content):
-        """Test that Helm baseline operator ClusterRole excludes cluster-wide delete verbs."""
-        forbidden_snippets = [
-            '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
-            '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
-            '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
-        ]
-        for snippet in forbidden_snippets:
-            assert snippet not in helm_clusterrole_content
+        content = self._read_clusterrole(variant)
+        for snippet in self.DECOMMISSION_FORBIDDEN_SNIPPETS:
+            assert snippet not in content, f"Forbidden decommission snippet found in {variant} clusterrole"
 
     def test_static_decommission_clusterrole_exists_with_delete_verbs(self, decommission_clusterrole_path):
         """Test that delete verbs live in a dedicated static decommission ClusterRole."""
