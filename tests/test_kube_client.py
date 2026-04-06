@@ -831,3 +831,329 @@ class TestIsRetryableError:
         assert is_retryable_error(OSError(errno.ENOENT, "No such file")) is False
         assert is_retryable_error(OSError(errno.EACCES, "Permission denied")) is False
         assert is_retryable_error(OSError(errno.EEXIST, "File exists")) is False
+
+
+@pytest.mark.unit
+class TestDeleteOperationsNormalMode:
+    """Tests for delete operations in normal (non-dry-run) mode."""
+
+    def test_delete_custom_resource_namespaced_success(self, kube_client, mock_k8s_apis):
+        """Test successful deletion of a namespaced custom resource."""
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.return_value = {}
+
+        result = kube_client.delete_custom_resource(
+            "cluster.open-cluster-management.io",
+            "v1",
+            "managedclusters",
+            name="test-cluster",
+            namespace="test-ns",
+        )
+
+        assert result is True
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            namespace="test-ns",
+            plural="managedclusters",
+            name="test-cluster",
+        )
+
+    def test_delete_custom_resource_cluster_scoped_success(self, kube_client, mock_k8s_apis):
+        """Test successful deletion of a cluster-scoped custom resource."""
+        mock_k8s_apis["custom_api"].delete_cluster_custom_object.return_value = {}
+
+        result = kube_client.delete_custom_resource(
+            "cluster.open-cluster-management.io",
+            "v1",
+            "managedclusters",
+            name="test-cluster",
+        )
+
+        assert result is True
+        mock_k8s_apis["custom_api"].delete_cluster_custom_object.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+            name="test-cluster",
+        )
+
+    def test_delete_custom_resource_with_timeout(self, kube_client, mock_k8s_apis):
+        """Test deletion passes timeout_seconds as _request_timeout."""
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.return_value = {}
+
+        result = kube_client.delete_custom_resource(
+            "cluster.open-cluster-management.io",
+            "v1",
+            "managedclusters",
+            name="test-cluster",
+            namespace="test-ns",
+            timeout_seconds=60,
+        )
+
+        assert result is True
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            namespace="test-ns",
+            plural="managedclusters",
+            name="test-cluster",
+            _request_timeout=60,
+        )
+
+    def test_delete_custom_resource_404_returns_true(self, kube_client, mock_k8s_apis):
+        """Test 404 on delete returns True (already absent, idempotent)."""
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.side_effect = ApiException(status=404)
+
+        result = kube_client.delete_custom_resource(
+            "cluster.open-cluster-management.io",
+            "v1",
+            "managedclusters",
+            name="test-cluster",
+            namespace="test-ns",
+        )
+
+        assert result is True
+
+    def test_delete_custom_resource_other_error_reraises(self, kube_client, mock_k8s_apis):
+        """Test non-404 ApiException is re-raised."""
+        mock_k8s_apis["custom_api"].delete_namespaced_custom_object.side_effect = ApiException(status=403)
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.delete_custom_resource(
+                "cluster.open-cluster-management.io",
+                "v1",
+                "managedclusters",
+                name="test-cluster",
+                namespace="test-ns",
+            )
+
+        assert exc_info.value.status == 403
+
+    def test_delete_pod_success(self, kube_client, mock_k8s_apis):
+        """Test successful pod deletion."""
+        mock_k8s_apis["core_api"].delete_namespaced_pod.return_value = {}
+
+        result = kube_client.delete_pod("test-ns", "test-pod")
+
+        assert result is True
+        mock_k8s_apis["core_api"].delete_namespaced_pod.assert_called_once_with(
+            name="test-pod", namespace="test-ns"
+        )
+
+    def test_delete_pod_404_returns_true(self, kube_client, mock_k8s_apis):
+        """Test 404 on pod delete returns True (already absent)."""
+        mock_k8s_apis["core_api"].delete_namespaced_pod.side_effect = ApiException(status=404)
+
+        result = kube_client.delete_pod("test-ns", "test-pod")
+
+        assert result is True
+
+    def test_delete_pod_other_error_reraises(self, kube_client, mock_k8s_apis):
+        """Test non-404 ApiException on pod delete is re-raised."""
+        mock_k8s_apis["core_api"].delete_namespaced_pod.side_effect = ApiException(status=403)
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.delete_pod("test-ns", "test-pod")
+
+        assert exc_info.value.status == 403
+
+    def test_delete_configmap_success(self, kube_client, mock_k8s_apis):
+        """Test successful configmap deletion."""
+        mock_k8s_apis["core_api"].delete_namespaced_config_map.return_value = {}
+
+        result = kube_client.delete_configmap("test-ns", "test-cm")
+
+        assert result is True
+        mock_k8s_apis["core_api"].delete_namespaced_config_map.assert_called_once_with(
+            name="test-cm", namespace="test-ns"
+        )
+
+    def test_delete_configmap_404_returns_true(self, kube_client, mock_k8s_apis):
+        """Test 404 on configmap delete returns True (already absent)."""
+        mock_k8s_apis["core_api"].delete_namespaced_config_map.side_effect = ApiException(status=404)
+
+        result = kube_client.delete_configmap("test-ns", "test-cm")
+
+        assert result is True
+
+    def test_delete_configmap_other_error_reraises(self, kube_client, mock_k8s_apis):
+        """Test non-404 ApiException on configmap delete is re-raised."""
+        mock_k8s_apis["core_api"].delete_namespaced_config_map.side_effect = ApiException(status=403)
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.delete_configmap("test-ns", "test-cm")
+
+        assert exc_info.value.status == 403
+
+
+@pytest.mark.unit
+class TestGetDeployment:
+    """Tests for get_deployment method."""
+
+    def test_get_deployment_success(self, kube_client, mock_k8s_apis):
+        """Test successful deployment retrieval."""
+        mock_deployment = MagicMock()
+        mock_deployment.to_dict.return_value = {
+            "metadata": {"name": "test-deploy", "namespace": "test-ns"},
+            "spec": {"replicas": 3},
+        }
+        mock_k8s_apis["apps_api"].read_namespaced_deployment.return_value = mock_deployment
+
+        result = kube_client.get_deployment("test-deploy", "test-ns")
+
+        assert result is not None
+        assert result["metadata"]["name"] == "test-deploy"
+        assert result["spec"]["replicas"] == 3
+        mock_k8s_apis["apps_api"].read_namespaced_deployment.assert_called_once_with(
+            name="test-deploy", namespace="test-ns"
+        )
+
+    def test_get_deployment_not_found(self, kube_client, mock_k8s_apis):
+        """Test 404 returns None for missing deployment."""
+        mock_k8s_apis["apps_api"].read_namespaced_deployment.side_effect = ApiException(status=404)
+
+        result = kube_client.get_deployment("nonexistent", "test-ns")
+
+        assert result is None
+
+    def test_get_deployment_other_error_reraises(self, kube_client, mock_k8s_apis):
+        """Test non-404 ApiException is re-raised."""
+        mock_k8s_apis["apps_api"].read_namespaced_deployment.side_effect = ApiException(status=403)
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.get_deployment("test-deploy", "test-ns")
+
+        assert exc_info.value.status == 403
+
+
+@pytest.mark.unit
+class TestGetStatefulSet:
+    """Tests for get_statefulset method."""
+
+    def test_get_statefulset_success(self, kube_client, mock_k8s_apis):
+        """Test successful statefulset retrieval."""
+        mock_sts = MagicMock()
+        mock_sts.to_dict.return_value = {
+            "metadata": {"name": "test-sts", "namespace": "test-ns"},
+            "spec": {"replicas": 1},
+        }
+        mock_k8s_apis["apps_api"].read_namespaced_stateful_set.return_value = mock_sts
+
+        result = kube_client.get_statefulset("test-sts", "test-ns")
+
+        assert result is not None
+        assert result["metadata"]["name"] == "test-sts"
+        assert result["spec"]["replicas"] == 1
+        mock_k8s_apis["apps_api"].read_namespaced_stateful_set.assert_called_once_with(
+            name="test-sts", namespace="test-ns"
+        )
+
+    def test_get_statefulset_not_found(self, kube_client, mock_k8s_apis):
+        """Test 404 returns None for missing statefulset."""
+        mock_k8s_apis["apps_api"].read_namespaced_stateful_set.side_effect = ApiException(status=404)
+
+        result = kube_client.get_statefulset("nonexistent", "test-ns")
+
+        assert result is None
+
+    def test_get_statefulset_other_error_reraises(self, kube_client, mock_k8s_apis):
+        """Test non-404 ApiException is re-raised."""
+        mock_k8s_apis["apps_api"].read_namespaced_stateful_set.side_effect = ApiException(status=403)
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.get_statefulset("test-sts", "test-ns")
+
+        assert exc_info.value.status == 403
+
+
+@pytest.mark.unit
+class TestGetPodLogs:
+    """Tests for get_pod_logs method."""
+
+    def test_get_pod_logs_success(self, kube_client, mock_k8s_apis):
+        """Test successful log retrieval."""
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.return_value = "line1\nline2\nline3"
+
+        result = kube_client.get_pod_logs("test-pod", "test-ns")
+
+        assert result == "line1\nline2\nline3"
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_called_once_with(
+            name="test-pod", namespace="test-ns"
+        )
+
+    def test_get_pod_logs_with_container(self, kube_client, mock_k8s_apis):
+        """Test log retrieval with specific container."""
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.return_value = "container logs"
+
+        result = kube_client.get_pod_logs("test-pod", "test-ns", container="sidecar")
+
+        assert result == "container logs"
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_called_once_with(
+            name="test-pod", namespace="test-ns", container="sidecar"
+        )
+
+    def test_get_pod_logs_with_tail_lines(self, kube_client, mock_k8s_apis):
+        """Test log retrieval with tail_lines parameter."""
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.return_value = "last line"
+
+        result = kube_client.get_pod_logs("test-pod", "test-ns", tail_lines=10)
+
+        assert result == "last line"
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_called_once_with(
+            name="test-pod", namespace="test-ns", tail_lines=10
+        )
+
+    def test_get_pod_logs_with_container_and_tail_lines(self, kube_client, mock_k8s_apis):
+        """Test log retrieval with both container and tail_lines."""
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.return_value = "filtered logs"
+
+        result = kube_client.get_pod_logs("test-pod", "test-ns", container="app", tail_lines=50)
+
+        assert result == "filtered logs"
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_called_once_with(
+            name="test-pod", namespace="test-ns", container="app", tail_lines=50
+        )
+
+    def test_get_pod_logs_404_returns_empty_string(self, kube_client, mock_k8s_apis):
+        """Test 404 returns empty string (pod not found)."""
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.side_effect = ApiException(status=404)
+
+        result = kube_client.get_pod_logs("nonexistent", "test-ns")
+
+        assert result == ""
+
+    def test_get_pod_logs_api_returns_none_coerced_to_empty(self, kube_client, mock_k8s_apis):
+        """Test that None return from API is coerced to empty string."""
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.return_value = None
+
+        result = kube_client.get_pod_logs("test-pod", "test-ns")
+
+        assert result == ""
+
+    def test_get_pod_logs_invalid_name_raises(self, kube_client, mock_k8s_apis):
+        """Test that empty pod name raises ValidationError."""
+        from lib.validation import ValidationError
+
+        with pytest.raises(ValidationError):
+            kube_client.get_pod_logs("", "test-ns")
+
+    def test_get_pod_logs_invalid_namespace_raises(self, kube_client, mock_k8s_apis):
+        """Test that empty namespace raises ValidationError."""
+        from lib.validation import ValidationError
+
+        with pytest.raises(ValidationError):
+            kube_client.get_pod_logs("test-pod", "")
+
+    def test_get_pod_logs_negative_tail_lines_raises(self, kube_client, mock_k8s_apis):
+        """Test that negative tail_lines raises ValidationError."""
+        from lib.validation import ValidationError
+
+        with pytest.raises(ValidationError):
+            kube_client.get_pod_logs("test-pod", "test-ns", tail_lines=-1)
+
+    def test_get_pod_logs_dry_run_returns_empty(self, dry_run_client, mock_k8s_apis):
+        """Test dry-run mode returns empty string without API call."""
+        result = dry_run_client.get_pod_logs("test-pod", "test-ns")
+
+        assert result == ""
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_not_called()
