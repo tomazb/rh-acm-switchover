@@ -3,6 +3,7 @@
 Tests cover PrimaryPreparation class for preparing the primary hub.
 """
 
+import logging
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -588,6 +589,82 @@ class TestPrimaryPreparation:
             replicas=0,
         )
         mock_sleep.assert_called_once_with(THANOS_SCALE_DOWN_WAIT)
+
+    def test_prepare_with_thanos_404_warns_and_continues(
+        self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog
+    ):
+        """Missing Thanos compactor should stay optional for the full prep flow."""
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = []
+        mock_primary_client.scale_statefulset.side_effect = primary_prep_module.ApiException(
+            status=404,
+            reason="Not Found",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            result = primary_prep_with_obs.prepare()
+
+        assert result is True
+        mock_state_manager.add_error.assert_not_called()
+        assert any(
+            call.args == ("scale_down_thanos",) for call in mock_state_manager.mark_step_completed.call_args_list
+        )
+        assert "Thanos compactor StatefulSet not found" in caplog.text
+        mock_primary_client.get_pods.assert_not_called()
+
+    def test_prepare_with_thanos_api_exception_fails_as_real_error(
+        self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog
+    ):
+        """Non-404 Thanos API errors should fail primary prep and be recorded."""
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = []
+        mock_primary_client.scale_statefulset.side_effect = primary_prep_module.ApiException(
+            status=500,
+            reason="Internal Server Error",
+        )
+
+        with caplog.at_level(logging.ERROR, logger="acm_switchover"):
+            result = primary_prep_with_obs.prepare()
+
+        assert result is False
+        mock_state_manager.add_error.assert_called_once()
+        error_message, phase = mock_state_manager.add_error.call_args.args
+        assert phase == "primary_preparation"
+        assert error_message.startswith("Unexpected:")
+        assert "500" in error_message
+        assert "Failed to scale down Thanos compactor" in caplog.text
+        assert not any(
+            call.args == ("scale_down_thanos",) for call in mock_state_manager.mark_step_completed.call_args_list
+        )
+        mock_primary_client.get_pods.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            RuntimeError("compactor shutdown timed out"),
+            ValueError("invalid replica count"),
+        ],
+        ids=["runtime_error", "value_error"],
+    )
+    def test_scale_down_thanos_runtime_and_value_errors_propagate(
+        self, primary_prep_with_obs, mock_primary_client, caplog, error
+    ):
+        """Runtime and value failures should bubble up unchanged for callers."""
+        mock_primary_client.scale_statefulset.side_effect = error
+
+        with (
+            caplog.at_level(logging.ERROR, logger="acm_switchover"),
+            pytest.raises(type(error)) as exc_info,
+        ):
+            primary_prep_with_obs._scale_down_thanos_compactor()
+
+        assert exc_info.value is error
+        assert f"Failed to scale down Thanos compactor: {error}" in caplog.text
+        mock_primary_client.get_pods.assert_not_called()
 
     def test_prepare_error_handling(self, primary_prep_with_obs, mock_primary_client, mock_state_manager):
         """Test error handling during preparation."""
