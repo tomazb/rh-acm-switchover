@@ -539,6 +539,58 @@ class TestPrimaryPreparation:
         assert paused_apps[0]["pause_applied"] is True
         assert paused_apps[0]["original_sync_policy"] == {"automated": {"prune": True}}
 
+    def test_pause_argocd_acm_apps_keeps_recorded_entry_when_app_already_paused(
+        self, mock_primary_client, mock_state_manager
+    ):
+        """Steady-state reruns should keep an already recorded pause entry unchanged."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=False,
+            argocd_manage=True,
+        )
+        recorded_entry = {
+            "hub": "primary",
+            "namespace": "argocd",
+            "name": "app-1",
+            "original_sync_policy": {"automated": {"prune": True}},
+            "pause_applied": True,
+        }
+        state_config = {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": [recorded_entry],
+        }
+        mock_state_manager.get_config.side_effect = lambda key, default=None: copy.deepcopy(
+            state_config.get(key, default)
+        )
+        mock_state_manager.set_config.side_effect = lambda key, value: state_config.__setitem__(key, copy.deepcopy(value))
+
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app-1"},
+            "spec": {"syncPolicy": {"syncOptions": ["CreateNamespace=true"]}},
+            "status": {"resources": [{"kind": "Restore", "namespace": "open-cluster-management-backup"}]},
+        }
+        impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
+
+        with (
+            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+        ):
+            prep._pause_argocd_acm_apps()
+
+        pause_autosync.assert_not_called()
+        assert not any(call.args[0] == "argocd_paused_apps" for call in mock_state_manager.set_config.call_args_list)
+        assert state_config["argocd_paused_apps"] == [recorded_entry]
+
     def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client):
         """Test pausing backup schedule for ACM 2.12+."""
         mock_primary_client.list_custom_resources.return_value = [
