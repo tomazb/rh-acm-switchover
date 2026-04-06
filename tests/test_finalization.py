@@ -735,6 +735,32 @@ class TestFinalization:
             finalization_module.IMPORT_CONTROLLER_CONFIG_CM,
         )
 
+    def test_auto_import_reset_delete_success_clears_persisted_state(
+        self, mock_secondary_client, mock_backup_manager, tmp_path
+    ):
+        """Deleting the Sync override should restore default state persistently."""
+        from lib.utils import StateManager
+
+        state_path = tmp_path / "state.json"
+        state = StateManager(str(state_path))
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=state,
+            acm_version="2.14.0",
+        )
+        state.set_config("auto_import_strategy_set", True)
+        mock_secondary_client.get_configmap.return_value = {
+            "data": {finalization_module.AUTO_IMPORT_STRATEGY_KEY: finalization_module.AUTO_IMPORT_STRATEGY_SYNC}
+        }
+
+        assert fin._ensure_auto_import_default() is True
+
+        assert StateManager(str(state_path)).get_config("auto_import_strategy_set", True) is False
+        mock_secondary_client.delete_configmap.assert_called_once_with(
+            finalization_module.MCE_NAMESPACE,
+            finalization_module.IMPORT_CONTROLLER_CONFIG_CM,
+        )
+
     def test_ensure_auto_import_default_skips_state_updates_in_dry_run(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
