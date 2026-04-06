@@ -358,12 +358,6 @@ def run_bash_command(command: str, env=None):
     return proc.returncode, strip_ansi(proc.stdout)
 
 
-def test_lib_common_exists():
-    """Test that lib-common.sh exists in scripts directory."""
-    lib_common = SCRIPTS_DIR / "lib-common.sh"
-    assert lib_common.exists(), "lib-common.sh should exist in scripts/"
-
-
 def test_lib_common_sources_successfully():
     """Test that lib-common.sh can be sourced without errors."""
     constants = SCRIPTS_DIR / "constants.sh"

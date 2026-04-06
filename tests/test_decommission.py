@@ -43,13 +43,6 @@ def decommission_no_obs(mock_primary_client):
 class TestDecommission:
     """Tests for Decommission class."""
 
-    def test_initialization(self, mock_primary_client):
-        """Test Decommission initialization."""
-        decomm = Decommission(primary_client=mock_primary_client, has_observability=True)
-
-        assert decomm.primary == mock_primary_client
-        assert decomm.has_observability is True
-
     @patch("modules.decommission.wait_for_condition")
     def test_decommission_non_interactive_with_observability(
         self, mock_wait, decommission_with_obs, mock_primary_client

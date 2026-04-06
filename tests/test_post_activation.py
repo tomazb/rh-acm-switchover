@@ -93,18 +93,6 @@ def post_verify_no_obs(mock_secondary_client, mock_state_manager):
 class TestPostActivationVerification:
     """Tests for PostActivationVerification class."""
 
-    def test_initialization(self, mock_secondary_client, mock_state_manager):
-        """Test PostActivationVerification initialization."""
-        verify = PostActivationVerification(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            has_observability=True,
-        )
-
-        assert verify.secondary == mock_secondary_client
-        assert verify.state == mock_state_manager
-        assert verify.has_observability is True
-
     def test_build_managed_cluster_clients_disables_kubeconfig_persistence(
         self, mock_secondary_client, mock_state_manager
     ):

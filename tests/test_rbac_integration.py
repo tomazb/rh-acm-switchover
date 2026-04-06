@@ -341,66 +341,6 @@ class TestRBACManifestConsistency:
         for snippet in required_snippets:
             assert snippet in helm_clusterrole_content
 
-
-class TestCheckRBACArgumentParsing:
-    """Test check_rbac.py argument parsing handles all context combinations."""
-
-    def test_secondary_context_alone_is_used(self):
-        """Test that --secondary-context alone is used when no other context specified."""
-
-        # Simulate the argument parsing logic
-        class Args:
-            context = None
-            primary_context = None
-            secondary_context = "secondary-hub"
-
-        args = Args()
-
-        # This is the fixed logic from check_rbac.py
-        context = args.context or args.primary_context or args.secondary_context
-
-        assert context == "secondary-hub", "Expected secondary_context to be used when no other context specified"
-
-    def test_primary_context_takes_precedence(self):
-        """Test that --primary-context takes precedence over --secondary-context."""
-
-        class Args:
-            context = None
-            primary_context = "primary-hub"
-            secondary_context = "secondary-hub"
-
-        args = Args()
-        context = args.context or args.primary_context or args.secondary_context
-
-        assert context == "primary-hub", "Expected primary_context to take precedence"
-
-    def test_context_takes_highest_precedence(self):
-        """Test that --context takes highest precedence."""
-
-        class Args:
-            context = "main-hub"
-            primary_context = "primary-hub"
-            secondary_context = "secondary-hub"
-
-        args = Args()
-        context = args.context or args.primary_context or args.secondary_context
-
-        assert context == "main-hub", "Expected --context to take highest precedence"
-
-    def test_no_context_specified_returns_none(self):
-        """Test that no context specified returns None (uses current context)."""
-
-        class Args:
-            context = None
-            primary_context = None
-            secondary_context = None
-
-        args = Args()
-        context = args.context or args.primary_context or args.secondary_context
-
-        assert context is None, "Expected None when no context specified (uses current context)"
-
-
 class TestRBACValidatorPermissionStructure:
     """Test the structure and format of RBAC permissions."""
 

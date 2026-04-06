@@ -95,18 +95,6 @@ def activation_full(mock_secondary_client, mock_state_manager):
 class TestSecondaryActivation:
     """Tests for SecondaryActivation class."""
 
-    def test_initialization(self, mock_secondary_client, mock_state_manager):
-        """Test SecondaryActivation initialization."""
-        act = SecondaryActivation(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            method="passive",
-        )
-
-        assert act.secondary == mock_secondary_client
-        assert act.state == mock_state_manager
-        assert act.method == "passive"
-
     @patch("modules.activation.time.sleep")
     @patch("modules.activation.wait_for_condition")
     def test_activate_passive_success(

@@ -1,379 +1,223 @@
-"""Integration tests for cross-module state handoff.
+"""Cross-module contract tests for switchover state handoff."""
 
-Verifies that state keys set by one workflow module (e.g. activation,
-primary_prep) are correctly consumed by downstream modules (e.g.
-finalization, backup_schedule).
-
-Cross-module state contract:
-  primary_prep  → finalization:  argocd_paused_apps, argocd_run_id, argocd_pause_dry_run
-  primary_prep  → backup_schedule: saved_backup_schedule
-  activation    → finalization:  auto_import_strategy_set
-"""
-
-import copy
-from unittest.mock import MagicMock, patch
+import sys
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 
-from lib.utils import Phase, StateManager
+# Add parent to path to import modules directly
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+from lib import argocd as argocd_lib
+from lib.constants import (
+    AUTO_IMPORT_STRATEGY_KEY,
+    AUTO_IMPORT_STRATEGY_SYNC,
+    BACKUP_NAMESPACE,
+    IMPORT_CONTROLLER_CONFIG_CM,
+    MCE_NAMESPACE,
+)
+from lib.utils import StateManager
+from modules.activation import SecondaryActivation
+from modules.backup_schedule import BackupScheduleManager
+from modules.finalization import Finalization
+from modules.primary_prep import PrimaryPreparation
 
 
 @pytest.fixture
-def state(tmp_path):
-    """Real StateManager backed by a temp file."""
-    return StateManager(str(tmp_path / "handoff-state.json"))
+def state_file(tmp_path):
+    """Path for a real StateManager state file."""
+    return str(tmp_path / "state-handoff.json")
 
 
-def _mock_kube_client():
-    """Return a lightweight mock KubeClient."""
-    client = MagicMock()
-    client.get_configmap.return_value = None
-    client.list_custom_resources.return_value = []
-    client.get_custom_resource.return_value = None
-    client.create_custom_resource.return_value = None
-    client.delete_configmap.return_value = None
-    return client
+@pytest.fixture
+def primary_client():
+    """Create a mock primary hub client."""
+    return Mock(name="primary-client")
 
 
-# ---------------------------------------------------------------------------
-# Argo CD pause/resume handoff: primary_prep → finalization
-# ---------------------------------------------------------------------------
+@pytest.fixture
+def secondary_client():
+    """Create a mock secondary hub client."""
+    return Mock(name="secondary-client")
 
 
-class TestArgoCDStateHandoff:
-    """Verify argocd_paused_apps / argocd_run_id / argocd_pause_dry_run flow."""
+@pytest.mark.integration
+class TestStateHandoffContracts:
+    """Verify real producers and consumers share state through StateManager."""
 
-    def test_finalization_reads_argocd_state_set_by_primary_prep(self, state):
-        """Keys set during primary_prep are available for finalization."""
-        apps = [
+    def test_primary_prep_records_pause_state_consumed_by_finalization(
+        self, state_file, primary_client, secondary_client
+    ):
+        """Primary prep pause state should be replayed by finalization resume."""
+        producer_state = StateManager(state_file)
+        prep = PrimaryPreparation(
+            primary_client=primary_client,
+            state_manager=producer_state,
+            acm_version="2.12.0",
+            has_observability=False,
+            argocd_manage=True,
+        )
+
+        app = {
+            "metadata": {"namespace": "openshift-gitops", "name": "acm-restore"},
+            "spec": {"syncPolicy": {"automated": {"prune": True}}},
+            "status": {"resources": [{"kind": "Restore", "namespace": BACKUP_NAMESPACE}]},
+        }
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        impacts = [
+            argocd_lib.AppImpact(
+                namespace="openshift-gitops",
+                name="acm-restore",
+                resource_count=1,
+                app=app,
+            )
+        ]
+
+        with (
+            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("modules.primary_prep.argocd_lib.run_id_or_new", return_value="run-123"),
+            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+        ):
+            pause_autosync.return_value = argocd_lib.PauseResult(
+                namespace="openshift-gitops",
+                name="acm-restore",
+                original_sync_policy={"automated": {"prune": True}},
+                patched=True,
+            )
+
+            prep._pause_argocd_acm_apps()
+
+        consumer_state = StateManager(state_file)
+        finalization = Finalization(
+            secondary_client=secondary_client,
+            state_manager=consumer_state,
+            acm_version="2.12.0",
+            primary_client=primary_client,
+        )
+
+        with patch("modules.finalization.argocd_lib.resume_recorded_applications") as resume_recorded:
+            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+
+            finalization._resume_argocd_apps()
+
+        paused_apps = consumer_state.get_config("argocd_paused_apps")
+        assert consumer_state.get_config("argocd_run_id") == "run-123"
+        assert paused_apps == [
             {
                 "hub": "primary",
                 "namespace": "openshift-gitops",
-                "name": "my-app",
+                "name": "acm-restore",
                 "original_sync_policy": {"automated": {"prune": True}},
                 "pause_applied": True,
-                "dry_run": False,
             }
         ]
-        state.set_config("argocd_paused_apps", copy.deepcopy(apps))
-        state.set_config("argocd_run_id", "run-abc-123")
-        state.set_config("argocd_pause_dry_run", False)
 
-        assert state.get_config("argocd_run_id") == "run-abc-123"
-        assert state.get_config("argocd_pause_dry_run", False) is False
-        retrieved = state.get_config("argocd_paused_apps")
-        assert len(retrieved) == 1
-        assert retrieved[0]["name"] == "my-app"
+        resume_recorded.assert_called_once()
+        recorded_apps, run_id, recorded_primary, recorded_secondary, _ = resume_recorded.call_args.args
+        assert recorded_apps == paused_apps
+        assert run_id == "run-123"
+        assert recorded_primary is primary_client
+        assert recorded_secondary is secondary_client
 
-    def test_finalization_reads_empty_argocd_state(self, state):
-        """When no Argo CD CRD was found, primary_prep stores empty values."""
-        state.set_config("argocd_paused_apps", [])
-        state.set_config("argocd_run_id", None)
-        state.set_config("argocd_pause_dry_run", False)
-
-        assert state.get_config("argocd_paused_apps") == []
-        assert state.get_config("argocd_run_id") is None
-        assert state.get_config("argocd_pause_dry_run", False) is False
-
-    def test_argocd_dry_run_flag_propagates(self, state):
-        """Finalization raises when argocd_pause_dry_run is True."""
-        state.set_config("argocd_pause_dry_run", True)
-        state.set_config("argocd_run_id", "run-dry")
-        state.set_config(
-            "argocd_paused_apps",
-            [{"hub": "primary", "namespace": "ns", "name": "a", "dry_run": True}],
+    def test_activation_flag_causes_finalization_to_delete_import_configmap(self, state_file, secondary_client):
+        """Activation-owned auto-import state should trigger the finalization cleanup."""
+        producer_state = StateManager(state_file)
+        producer_state.set_config("secondary_version", "2.14.1")
+        activation = SecondaryActivation(
+            secondary_client=secondary_client,
+            state_manager=producer_state,
+            method="passive",
+            manage_auto_import_strategy=True,
         )
 
-        assert state.get_config("argocd_pause_dry_run", False) is True
-
-    def test_argocd_state_survives_save_reload(self, tmp_path):
-        """State persists across StateManager instances (save → reload)."""
-        path = str(tmp_path / "persist.json")
-        s1 = StateManager(path)
-        apps = [{"hub": "primary", "namespace": "ns", "name": "app1", "pause_applied": True}]
-        s1.set_config("argocd_paused_apps", copy.deepcopy(apps))
-        s1.set_config("argocd_run_id", "run-persist")
-        s1.set_config("argocd_pause_dry_run", False)
-        s1.flush_state()
-
-        s2 = StateManager(path)
-        assert s2.get_config("argocd_run_id") == "run-persist"
-        assert s2.get_config("argocd_pause_dry_run", False) is False
-        assert len(s2.get_config("argocd_paused_apps")) == 1
-        assert s2.get_config("argocd_paused_apps")[0]["name"] == "app1"
-
-    def test_multiple_paused_apps_preserved(self, state):
-        """All paused apps survive deep-copy roundtrip through state."""
-        apps = [
-            {"hub": "primary", "namespace": "ns1", "name": "app-a", "pause_applied": True},
-            {"hub": "secondary", "namespace": "ns2", "name": "app-b", "pause_applied": True},
-            {"hub": "primary", "namespace": "ns3", "name": "app-c", "pause_applied": False},
+        secondary_client.list_custom_resources.return_value = [{"metadata": {"name": "cluster-a"}}]
+        secondary_client.get_configmap.side_effect = [
+            None,
+            {"data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}},
         ]
-        state.set_config("argocd_paused_apps", copy.deepcopy(apps))
 
-        retrieved = state.get_config("argocd_paused_apps")
-        assert len(retrieved) == 3
-        names = [a["name"] for a in retrieved]
-        assert names == ["app-a", "app-b", "app-c"]
+        activation._maybe_set_auto_import_strategy()
 
-    def test_finalization_resume_skips_when_no_run_id(self, state):
-        """Finalization skips resume when argocd_run_id is absent."""
-        assert state.get_config("argocd_run_id") is None
-        paused = state.get_config("argocd_paused_apps") or []
-        assert not paused
-
-
-# ---------------------------------------------------------------------------
-# auto_import_strategy_set handoff: activation → finalization
-# ---------------------------------------------------------------------------
-
-
-class TestAutoImportStrategyHandoff:
-    """Verify auto_import_strategy_set flows from activation to finalization."""
-
-    def test_activation_sets_flag_finalization_reads_it(self, state):
-        """activation sets auto_import_strategy_set=True, finalization reads it."""
-        state.set_config("auto_import_strategy_set", True)
-
-        assert state.get_config("auto_import_strategy_set", False) is True
-
-    def test_finalization_default_when_flag_not_set(self, state):
-        """Without activation setting the flag, finalization defaults to False."""
-        assert state.get_config("auto_import_strategy_set", False) is False
-
-    def test_finalization_resets_flag_after_restore(self, state):
-        """Finalization clears auto_import_strategy_set after resetting strategy."""
-        state.set_config("auto_import_strategy_set", True)
-        assert state.get_config("auto_import_strategy_set", False) is True
-
-        # Simulate finalization reset
-        state.set_config("auto_import_strategy_set", False)
-        assert state.get_config("auto_import_strategy_set", False) is False
-
-    def test_auto_import_flag_survives_save_reload(self, tmp_path):
-        """Flag persists across StateManager instances."""
-        path = str(tmp_path / "ais.json")
-        s1 = StateManager(path)
-        s1.set_config("auto_import_strategy_set", True)
-        s1.flush_state()
-
-        s2 = StateManager(path)
-        assert s2.get_config("auto_import_strategy_set", False) is True
-
-
-# ---------------------------------------------------------------------------
-# saved_backup_schedule handoff: primary_prep → backup_schedule
-# ---------------------------------------------------------------------------
-
-
-class TestBackupScheduleStateHandoff:
-    """Verify saved_backup_schedule flows from primary_prep to BackupScheduleManager."""
-
-    SAMPLE_BACKUP_SCHEDULE = {
-        "apiVersion": "cluster.open-cluster-management.io/v1beta1",
-        "kind": "BackupSchedule",
-        "metadata": {
-            "name": "schedule-acm",
-            "namespace": "open-cluster-management-backup",
-            "resourceVersion": "12345",
-            "uid": "abc-uid",
-        },
-        "spec": {
-            "veleroSchedule": "0 */6 * * *",
-            "veleroTtl": "120h",
-            "paused": False,
-        },
-    }
-
-    def test_primary_prep_saves_backup_schedule_for_finalization(self, state):
-        """primary_prep stores BackupSchedule; backup_schedule module reads it."""
-        state.set_config("saved_backup_schedule", copy.deepcopy(self.SAMPLE_BACKUP_SCHEDULE))
-
-        saved = state.get_config("saved_backup_schedule")
-        assert saved is not None
-        assert saved["metadata"]["name"] == "schedule-acm"
-        assert saved["spec"]["veleroSchedule"] == "0 */6 * * *"
-
-    def test_backup_schedule_absent_returns_none(self, state):
-        """When primary had no BackupSchedule, get_config returns None."""
-        assert state.get_config("saved_backup_schedule") is None
-
-    def test_saved_schedule_survives_save_reload(self, tmp_path):
-        """BackupSchedule dict persists across save/reload."""
-        path = str(tmp_path / "bs.json")
-        s1 = StateManager(path)
-        s1.set_config("saved_backup_schedule", copy.deepcopy(self.SAMPLE_BACKUP_SCHEDULE))
-        s1.flush_state()
-
-        s2 = StateManager(path)
-        saved = s2.get_config("saved_backup_schedule")
-        assert saved["spec"]["veleroSchedule"] == "0 */6 * * *"
-        assert saved["metadata"]["name"] == "schedule-acm"
-
-    def test_paused_schedule_preserved_in_state(self, state):
-        """A paused schedule is stored with paused=True intact."""
-        bs = copy.deepcopy(self.SAMPLE_BACKUP_SCHEDULE)
-        bs["spec"]["paused"] = True
-        state.set_config("saved_backup_schedule", bs)
-
-        saved = state.get_config("saved_backup_schedule")
-        assert saved["spec"]["paused"] is True
-
-
-# ---------------------------------------------------------------------------
-# Finalization internal state keys (written + read within finalization)
-# ---------------------------------------------------------------------------
-
-
-class TestFinalizationInternalState:
-    """Verify finalization's own state keys for backup tracking."""
-
-    def test_backup_schedule_enabled_at_roundtrip(self, state):
-        """backup_schedule_enabled_at timestamp persists and is readable."""
-        state.set_config("backup_schedule_enabled_at", "2025-01-15T10:30:00+00:00")
-
-        assert state.get_config("backup_schedule_enabled_at") == "2025-01-15T10:30:00+00:00"
-
-    def test_post_switchover_backup_name_roundtrip(self, state):
-        """post_switchover_backup_name survives state round-trip for resume."""
-        state.set_config("new_backup_detected", True)
-        state.set_config("post_switchover_backup_name", "acm-managed-clusters-schedule-20250115103000")
-
-        assert state.get_config("new_backup_detected") is True
-        assert state.get_config("post_switchover_backup_name") == "acm-managed-clusters-schedule-20250115103000"
-
-    def test_archived_restores_roundtrip(self, state):
-        """archived_restores audit trail is retrievable after save."""
-        restores = [
-            {"name": "restore-passive-sync", "deleted_at": "2025-01-15T10:31:00+00:00"},
-            {"name": "restore-acm-full", "deleted_at": "2025-01-15T10:31:01+00:00"},
-        ]
-        state.set_config("archived_restores", restores)
-
-        saved = state.get_config("archived_restores")
-        assert len(saved) == 2
-        assert saved[0]["name"] == "restore-passive-sync"
-
-
-# ---------------------------------------------------------------------------
-# End-to-end phase progression with cross-module state
-# ---------------------------------------------------------------------------
-
-
-class TestFullPhaseStateProgression:
-    """Simulate a complete switchover's state evolution across phases."""
-
-    def test_complete_state_handoff_chain(self, tmp_path):
-        """Walk through PRIMARY_PREP → ACTIVATION → FINALIZATION state flow."""
-        path = str(tmp_path / "full-flow.json")
-        state = StateManager(path)
-
-        # Phase 1: PRIMARY_PREP sets Argo CD + backup state
-        state.set_phase(Phase.PRIMARY_PREP)
-        state.set_config("argocd_paused_apps", [{"hub": "primary", "name": "app1", "pause_applied": True}])
-        state.set_config("argocd_run_id", "run-full-test")
-        state.set_config("argocd_pause_dry_run", False)
-        state.set_config(
-            "saved_backup_schedule",
-            {"metadata": {"name": "schedule-acm"}, "spec": {"veleroSchedule": "0 */6 * * *"}},
+        consumer_state = StateManager(state_file)
+        finalization = Finalization(
+            secondary_client=secondary_client,
+            state_manager=consumer_state,
+            acm_version="2.14.0",
         )
-        state.mark_step_completed("pause_backup_schedule")
-        state.flush_state()
 
-        # Phase 2: ACTIVATION sets auto-import strategy
-        state.set_phase(Phase.ACTIVATION)
-        state.set_config("auto_import_strategy_set", True)
-        state.set_config("secondary_version", "2.14.1")
-        state.flush_state()
+        assert finalization._ensure_auto_import_default() is True
 
-        # Phase 3: FINALIZATION reads all upstream state
-        state.set_phase(Phase.FINALIZATION)
+        secondary_client.create_or_patch_configmap.assert_called_once_with(
+            namespace=MCE_NAMESPACE,
+            name=IMPORT_CONTROLLER_CONFIG_CM,
+            data={AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC},
+        )
+        secondary_client.delete_configmap.assert_called_once_with(MCE_NAMESPACE, IMPORT_CONTROLLER_CONFIG_CM)
+        assert consumer_state.get_config("auto_import_strategy_set", False) is False
 
-        # Reload from disk to simulate process restart between phases
-        state2 = StateManager(path)
-        assert state2.get_current_phase() == Phase.FINALIZATION
+    def test_saved_backup_schedule_is_restored_from_state(self, state_file, primary_client, secondary_client):
+        """BackupScheduleManager should recreate the saved primary schedule from state."""
+        schedule = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "BackupSchedule",
+            "metadata": {
+                "name": "schedule-acm",
+                "namespace": BACKUP_NAMESPACE,
+                "resourceVersion": "12345",
+                "uid": "backup-schedule-uid",
+            },
+            "spec": {
+                "veleroSchedule": "0 */6 * * *",
+                "veleroTtl": "120h",
+                "paused": False,
+            },
+            "status": {"phase": "Enabled"},
+        }
 
-        # Verify all cross-module keys are present
-        assert state2.get_config("argocd_run_id") == "run-full-test"
-        assert state2.get_config("argocd_pause_dry_run", False) is False
-        assert len(state2.get_config("argocd_paused_apps")) == 1
-        assert state2.get_config("auto_import_strategy_set", False) is True
-        assert state2.get_config("saved_backup_schedule")["metadata"]["name"] == "schedule-acm"
-        assert state2.is_step_completed("pause_backup_schedule")
+        producer_state = StateManager(state_file)
+        prep = PrimaryPreparation(
+            primary_client=primary_client,
+            state_manager=producer_state,
+            acm_version="2.12.0",
+            has_observability=False,
+        )
+        primary_client.list_custom_resources.return_value = [schedule]
 
-    def test_state_handoff_with_no_argocd(self, tmp_path):
-        """When Argo CD is not present, finalization gets empty state."""
-        path = str(tmp_path / "no-argocd.json")
-        state = StateManager(path)
+        prep._pause_backup_schedule()
 
-        # PRIMARY_PREP: no Argo CD found
-        state.set_phase(Phase.PRIMARY_PREP)
-        state.set_config("argocd_paused_apps", [])
-        state.set_config("argocd_run_id", None)
-        state.set_config("argocd_pause_dry_run", False)
-        state.flush_state()
+        consumer_state = StateManager(state_file)
+        manager = BackupScheduleManager(
+            kube_client=secondary_client,
+            state_manager=consumer_state,
+            hub_label="secondary",
+        )
 
-        # ACTIVATION: no auto-import (ACM < 2.14)
-        state.set_phase(Phase.ACTIVATION)
-        state.flush_state()
+        manager._restore_saved_schedule()
 
-        # FINALIZATION reads
-        state.set_phase(Phase.FINALIZATION)
-        s2 = StateManager(path)
-        assert s2.get_config("argocd_paused_apps") == []
-        assert s2.get_config("argocd_run_id") is None
-        # auto_import_strategy_set was never set → default False
-        assert s2.get_config("auto_import_strategy_set", False) is False
-
-    def test_resume_preserves_cross_module_state(self, tmp_path):
-        """Failing mid-finalization and resuming keeps upstream state intact."""
-        path = str(tmp_path / "resume.json")
-        state = StateManager(path)
-
-        # Set up state as if PRIMARY_PREP and ACTIVATION completed
-        state.set_phase(Phase.PRIMARY_PREP)
-        state.set_config("argocd_paused_apps", [{"name": "app1"}])
-        state.set_config("argocd_run_id", "run-resume")
-        state.set_config("argocd_pause_dry_run", False)
-        state.set_config("auto_import_strategy_set", True)
-        state.mark_step_completed("pause_backup_schedule")
-        state.set_phase(Phase.ACTIVATION)
-        state.mark_step_completed("activate_clusters")
-
-        # Simulate failure in finalization
-        state.set_phase(Phase.FINALIZATION)
-        state.add_error("backup verification timed out", Phase.FINALIZATION.value)
-        state.set_phase(Phase.FAILED)
-        state.flush_state()
-
-        # Resume: reload state
-        resumed = StateManager(path)
-        assert resumed.get_current_phase() == Phase.FAILED
-        assert resumed.get_last_error_phase() == Phase.FINALIZATION
-
-        # All cross-module keys intact
-        assert resumed.get_config("argocd_run_id") == "run-resume"
-        assert resumed.get_config("auto_import_strategy_set", False) is True
-        assert resumed.is_step_completed("pause_backup_schedule")
-        assert resumed.is_step_completed("activate_clusters")
-
-    def test_config_mutation_does_not_corrupt_state(self, state):
-        """Mutating a retrieved config value must not affect stored state."""
-        original = [{"name": "app1", "pause_applied": True}]
-        state.set_config("argocd_paused_apps", copy.deepcopy(original))
-
-        # Mutate the retrieved value
-        retrieved = state.get_config("argocd_paused_apps")
-        retrieved.append({"name": "injected"})
-
-        # Original state must be unchanged
-        fresh = state.get_config("argocd_paused_apps")
-        # StateManager returns references, so deep-copy on set is the contract.
-        # This test documents current behavior (reference semantics).
-        # The primary_prep module uses copy.deepcopy() before set_config to avoid this.
-        assert isinstance(fresh, list)
+        primary_client.patch_custom_resource.assert_called_once()
+        secondary_client.create_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            body={
+                "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+                "kind": "BackupSchedule",
+                "metadata": {
+                    "name": "schedule-acm",
+                    "namespace": BACKUP_NAMESPACE,
+                },
+                "spec": {
+                    "veleroSchedule": "0 */6 * * *",
+                    "veleroTtl": "120h",
+                    "paused": False,
+                },
+            },
+            namespace=BACKUP_NAMESPACE,
+        )

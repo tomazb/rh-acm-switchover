@@ -97,18 +97,6 @@ def finalization_with_primary(mock_secondary_client, mock_state_manager, mock_ba
 class TestFinalization:
     """Tests for Finalization class."""
 
-    def test_initialization(self, mock_secondary_client, mock_state_manager):
-        """Test Finalization initialization."""
-        fin = Finalization(
-            secondary_client=mock_secondary_client,
-            state_manager=mock_state_manager,
-            acm_version="2.12.0",
-        )
-
-        assert fin.secondary == mock_secondary_client
-        assert fin.state == mock_state_manager
-        assert fin.backup_manager is not None
-
     @patch("modules.finalization.time")
     def test_finalize_success(
         self,

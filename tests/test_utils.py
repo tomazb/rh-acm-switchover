@@ -18,7 +18,6 @@ from lib.exceptions import StateLoadError, StateLockError
 from lib.utils import (
     Phase,
     StateManager,
-    StepContext,
     dry_run_skip,
     is_acm_version_ge,
     setup_logging,
@@ -732,15 +731,6 @@ class TestSetupLogging:
 
         root_logger.setLevel.assert_called_once_with(mock_logging.DEBUG)
 
-    @patch("lib.utils.logging")
-    def test_setup_logging_info(self, mock_logging):
-        """Test logging setup with info level."""
-        root_logger, _ = self._mock_logging_env(mock_logging)
-
-        setup_logging(verbose=False)
-
-        root_logger.setLevel.assert_called_once_with(mock_logging.INFO)
-
 
 @pytest.mark.unit
 class TestDryRunSkipDecorator:
@@ -1133,11 +1123,6 @@ class TestStepContext:
         assert results == ["a", "b"]
         assert state_manager.is_step_completed("step_a") is True
         assert state_manager.is_step_completed("step_b") is True
-
-    def test_step_context_returns_step_context_instance(self, state_manager):
-        """Test that step() returns a StepContext instance."""
-        ctx = state_manager.step("test_step")
-        assert isinstance(ctx, StepContext)
 
 
 @pytest.mark.unit

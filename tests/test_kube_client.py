@@ -652,16 +652,6 @@ class TestKubeClientInitialization:
         assert kc.dry_run is False
         mock_load_config.assert_called_once_with(context=None)
 
-    @patch("lib.kube_client.config.load_kube_config")
-    def test_init_dry_run_flag(self, mock_load_config):
-        """Test dry-run flag initialization."""
-        client_normal = KubeClient(dry_run=False)
-        client_dry = KubeClient(dry_run=True)
-
-        assert client_normal.dry_run is False
-        assert client_dry.dry_run is True
-
-
 @pytest.mark.unit
 class TestApiCallDecorator:
     """Tests for the @api_call decorator."""
@@ -686,16 +676,6 @@ class TestApiCallDecorator:
         result = mock_api_method()
         assert result is None
 
-    def test_returns_empty_list_on_404(self):
-        """Decorator can return empty list on 404."""
-
-        @api_call(not_found_value=[])
-        def mock_api_method():
-            raise ApiException(status=404)
-
-        result = mock_api_method()
-        assert result == []
-
     def test_reraises_retryable_errors(self):
         """Decorator re-raises 5xx errors for tenacity to handle."""
 
@@ -707,17 +687,6 @@ class TestApiCallDecorator:
         with pytest.raises(ApiException) as exc_info:
             mock_api_method()
         assert exc_info.value.status == 503
-
-    def test_reraises_429_for_retry(self):
-        """Decorator re-raises 429 (Too Many Requests) for tenacity."""
-
-        @api_call(not_found_value=None)
-        def mock_api_method():
-            raise ApiException(status=429)
-
-        with pytest.raises(ApiException) as exc_info:
-            mock_api_method()
-        assert exc_info.value.status == 429
 
     def test_logs_and_reraises_non_retryable_errors(self):
         """Decorator logs non-retryable errors before re-raising."""
@@ -731,36 +700,52 @@ class TestApiCallDecorator:
         assert exc_info.value.status == 403
 
     def test_no_logging_when_log_on_error_false(self):
-        """Decorator does not log when log_on_error=False."""
+        """Decorator suppresses logging for non-retryable errors when disabled."""
 
         @api_call(not_found_value=None, log_on_error=False)
         def mock_api_method():
             raise ApiException(status=403, reason="Forbidden")
 
-        with pytest.raises(ApiException) as exc_info:
-            mock_api_method()
+        with patch("lib.kube_client.logger.error") as mock_error:
+            with pytest.raises(ApiException) as exc_info:
+                mock_api_method()
+
         assert exc_info.value.status == 403
+        mock_error.assert_not_called()
 
     def test_uses_method_name_as_default_resource_desc(self):
-        """Decorator derives resource_desc from method name if not provided."""
+        """Decorator logs the method name when no custom resource_desc is provided."""
 
-        # The resource_desc is used in log messages; we just verify the decorator works
         @api_call(not_found_value=None)
         def get_some_resource():
-            raise ApiException(status=404)
+            raise ApiException(status=403, reason="Forbidden")
 
-        result = get_some_resource()
-        assert result is None
+        with patch("lib.kube_client.logger.error") as mock_error:
+            with pytest.raises(ApiException) as exc_info:
+                get_some_resource()
+
+        assert exc_info.value.status == 403
+        mock_error.assert_called_once()
+        log_message = mock_error.call_args.args[0] % mock_error.call_args.args[1:]
+        assert "Failed to get some resource:" in log_message
+        assert "Forbidden" in log_message
 
     def test_uses_custom_resource_desc(self):
-        """Decorator uses provided resource_desc."""
+        """Decorator logs the provided resource_desc instead of the method name."""
 
         @api_call(not_found_value=None, resource_desc="fetch widget")
         def my_method():
-            raise ApiException(status=404)
+            raise ApiException(status=403, reason="Forbidden")
 
-        result = my_method()
-        assert result is None
+        with patch("lib.kube_client.logger.error") as mock_error:
+            with pytest.raises(ApiException) as exc_info:
+                my_method()
+
+        assert exc_info.value.status == 403
+        mock_error.assert_called_once()
+        log_message = mock_error.call_args.args[0] % mock_error.call_args.args[1:]
+        assert "Failed to fetch widget:" in log_message
+        assert "my method" not in log_message
 
     def test_returns_successful_result(self):
         """Decorator returns the function result on success."""

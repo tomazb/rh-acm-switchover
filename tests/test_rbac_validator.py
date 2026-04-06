@@ -27,11 +27,6 @@ class TestRBACValidator:
         """Create an RBACValidator instance."""
         return RBACValidator(mock_client)
 
-    def test_init(self, mock_client):
-        """Test RBACValidator initialization."""
-        validator = RBACValidator(mock_client)
-        assert validator.client == mock_client
-
     @patch("kubernetes.client")
     def test_check_permission_allowed(self, mock_k8s_client, validator):
         """Test check_permission when permission is allowed."""

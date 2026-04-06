@@ -36,15 +36,6 @@ class TestValidationReporter:
         assert len(failures) == 1
         assert failures[0]["check"] == "bad"
 
-    def test_multiple_results(self, reporter):
-        """Test adding multiple results."""
-        reporter.add_result("check1", True, "pass")
-        reporter.add_result("check2", False, "fail", critical=True)
-        reporter.add_result("check3", True, "pass")
-
-        assert len(reporter.results) == 3
-        assert len(reporter.critical_failures()) == 1
-
     @patch("modules.preflight.reporter.logger")
     def test_print_summary_all_passed(self, mock_logger, reporter):
         """Test summary when all checks pass."""
@@ -127,5 +118,4 @@ class TestObservabilityDetector:
 
         assert result == (primary_has, secondary_has)
         assert reporter.results[-1]["message"] == expected_message
-
 

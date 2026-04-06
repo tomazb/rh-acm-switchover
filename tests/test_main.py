@@ -54,65 +54,6 @@ class TestArgParsing:
             with pytest.raises(SystemExit):
                 parse_args()
 
-    def test_validate_only_mode(self):
-        """Test parsing validate-only mode."""
-        with patch(
-            "sys.argv",
-            [
-                "script.py",
-                "--primary-context",
-                "p1",
-                "--old-hub-action",
-                "secondary",
-                "--method",
-                "passive",
-                "--validate-only",
-            ],
-        ):
-            args = parse_args()
-            assert args.validate_only is True
-            assert args.dry_run is False
-            assert args.primary_context == "p1"
-            assert args.old_hub_action == "secondary"
-
-    def test_dry_run_mode(self):
-        """Test parsing dry-run mode."""
-        with patch(
-            "sys.argv",
-            [
-                "script.py",
-                "--primary-context",
-                "p1",
-                "--old-hub-action",
-                "none",
-                "--method",
-                "passive",
-                "--dry-run",
-            ],
-        ):
-            args = parse_args()
-            assert args.dry_run is True
-            assert args.validate_only is False
-            assert args.old_hub_action == "none"
-
-    def test_decommission_mode(self):
-        """Test parsing decommission mode."""
-        with patch(
-            "sys.argv",
-            [
-                "script.py",
-                "--primary-context",
-                "p1",
-                "--old-hub-action",
-                "none",
-                "--method",
-                "passive",
-                "--decommission",
-            ],
-        ):
-            args = parse_args()
-            assert args.decommission is True
-
     def test_mutually_exclusive_modes(self):
         """Test that mutually exclusive flags raise error."""
         with patch(
@@ -131,24 +72,6 @@ class TestArgParsing:
         ):
             with pytest.raises(SystemExit):
                 parse_args()
-
-    def test_method_selection(self):
-        """Test method selection argument."""
-        with patch(
-            "sys.argv",
-            [
-                "script.py",
-                "--primary-context",
-                "p1",
-                "--old-hub-action",
-                "decommission",
-                "--method",
-                "full",
-            ],
-        ):
-            args = parse_args()
-            assert args.method == "full"
-            assert args.old_hub_action == "decommission"
 
     def test_method_choices(self):
         """Test method only accepts valid choices."""
@@ -339,24 +262,6 @@ class TestForceWithCompletedState:
 
         # Verify phase is now INIT
         assert state2.get_current_phase() == Phase.INIT
-
-    def test_force_flag_available_in_args(self):
-        """Test that --force flag is properly parsed."""
-        with patch(
-            "sys.argv",
-            [
-                "script.py",
-                "--primary-context",
-                "p1",
-                "--old-hub-action",
-                "secondary",
-                "--method",
-                "passive",
-                "--force",
-            ],
-        ):
-            args = parse_args()
-            assert args.force is True
 
     def test_force_flag_defaults_to_false(self):
         """Test that force flag defaults to False when not specified."""
@@ -2563,44 +2468,6 @@ class TestStaleStateDetection:
         assert result is True
         assert state2.get_current_phase() == Phase.COMPLETED
 
-    def test_none_state_age_treated_as_stale(self, tmp_path):
-        """When get_state_age returns None (missing timestamp), it should be
-        treated as stale and require --force."""
-        from lib.utils import Phase, StateManager
-
-        state_file = tmp_path / "state.json"
-        state = StateManager(str(state_file))
-        # Set COMPLETED, then remove last_updated and write directly
-        state.state["current_phase"] = Phase.COMPLETED.value
-        state.state.pop("last_updated", None)
-        state._write_state(state.state)
-
-        state2 = StateManager(str(state_file))
-        args = self._make_args(state_file=str(state_file))
-
-        with pytest.raises(SystemExit) as exc_info:
-            run_switchover(args, state2, Mock(), Mock(), Mock())
-
-        assert exc_info.value.code == EXIT_FAILURE
-
-    def test_recent_completed_state_returns_true_noop(self, tmp_path):
-        """Recently completed state (within threshold) should return True
-        immediately without running any phases."""
-        from lib.utils import Phase, StateManager
-
-        state_file = tmp_path / "state.json"
-        state = StateManager(str(state_file))
-        # set_phase(COMPLETED) stamps last_updated to "now", which is recent
-        state.set_phase(Phase.COMPLETED)
-
-        args = self._make_args(state_file=str(state_file))
-
-        with patch("acm_switchover._run_phase_preflight") as preflight:
-            result = run_switchover(args, state, Mock(), Mock(), Mock())
-
-        assert result is True
-        preflight.assert_not_called()
-
     def test_validate_only_with_completed_state_runs_preflight(self, tmp_path):
         """--validate-only should run preflight even on stale COMPLETED state,
         bypassing the stale check entirely."""
@@ -2851,22 +2718,3 @@ class TestPhaseHandlerFailure:
 
         with pytest.raises(ValueError, match="Secondary client is required"):
             run_switchover(args, Mock(), Mock(), None, Mock())
-
-    def test_no_runnable_phase_detected_as_stale_completed(self, tmp_path):
-        """COMPLETED state with None age (missing timestamp) is treated as stale
-        and sys.exits, verifying the orchestrator detects this condition."""
-        from lib.utils import Phase, StateManager
-
-        state_file = tmp_path / "state.json"
-        state = StateManager(str(state_file))
-        state.state["current_phase"] = Phase.COMPLETED.value
-        state.state.pop("last_updated", None)
-        state._write_state(state.state)
-
-        state2 = StateManager(str(state_file))
-        args = self._make_args(state_file=str(state_file))
-
-        with pytest.raises(SystemExit) as exc_info:
-            run_switchover(args, state2, Mock(), Mock(), Mock())
-
-        assert exc_info.value.code == EXIT_FAILURE

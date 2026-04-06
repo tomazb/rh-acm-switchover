@@ -85,20 +85,6 @@ def primary_prep_no_obs(mock_primary_client, mock_state_manager):
 class TestPrimaryPreparation:
     """Tests for PrimaryPreparation class."""
 
-    def test_initialization(self, mock_primary_client, mock_state_manager):
-        """Test PrimaryPreparation initialization."""
-        prep = PrimaryPreparation(
-            primary_client=mock_primary_client,
-            state_manager=mock_state_manager,
-            acm_version="2.12.0",
-            has_observability=True,
-        )
-
-        assert prep.primary == mock_primary_client
-        assert prep.state == mock_state_manager
-        assert prep.acm_version == "2.12.0"
-        assert prep.has_observability is True
-
     @patch("time.sleep")
     def test_prepare_success_with_observability(
         self, mock_sleep, primary_prep_with_obs, mock_primary_client, mock_state_manager

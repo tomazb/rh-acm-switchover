@@ -361,14 +361,6 @@ class TestGitOpsCollector:
         assert collector.is_enabled()
         assert not collector.has_detections()
 
-    def test_reset_reinitializes_clean_singleton(self):
-        """Test that reset() recreates a clean enabled collector."""
-        GitOpsCollector.reset()
-        collector = GitOpsCollector.get_instance()
-
-        assert collector.is_enabled()
-        assert hasattr(collector, "_records")
-
     def test_reset_clears_existing_stale_reference_state(self):
         """Old collector references should not retain detections after reset()."""
         collector = GitOpsCollector.get_instance()

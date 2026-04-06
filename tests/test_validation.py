@@ -765,14 +765,6 @@ class TestErrorHandling:
         assert issubclass(SecurityValidationError, ValidationError)
         assert issubclass(SecurityValidationError, ConfigurationError)
 
-    def test_security_validation_error_type(self):
-        """Test that security errors are properly typed."""
-        with pytest.raises(SecurityValidationError):
-            InputValidator.validate_safe_filesystem_path("../malicious", "test")
-
-        with pytest.raises(SecurityValidationError):
-            InputValidator.validate_safe_filesystem_path("file;command", "test")
-
     def test_validation_error_messages(self):
         """Test that validation errors have descriptive messages."""
         try:

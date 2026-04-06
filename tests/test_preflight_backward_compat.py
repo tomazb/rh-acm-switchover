@@ -61,20 +61,6 @@ def test_backward_compatibility_classes_work():
     assert hasattr(version_validator, "run")
 
 
-def test_backward_compatibility_same_classes():
-    """Test that classes from old and new imports are identical."""
-    # Import from old location
-    # Import from new location
-    from modules.preflight import ValidationReporter as NewValidationReporter
-    from modules.preflight.backup_validators import BackupValidator as NewBackupValidator
-    from modules.preflight_validators import BackupValidator as OldBackupValidator
-    from modules.preflight_validators import ValidationReporter as OldValidationReporter
-
-    # They should be the same classes
-    assert OldValidationReporter is NewValidationReporter
-    assert OldBackupValidator is NewBackupValidator
-
-
 def test_all_validators_importable():
     """Test that all validators can be imported from backward compat layer."""
     # Dynamically verify all expected symbols are re-exported

@@ -1,7 +1,7 @@
 """Tests for check_rbac.py CLI tool."""
 
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -21,42 +21,6 @@ class TestParseArgs:
             assert args.include_decommission is False
             assert args.skip_observability is False
             assert args.managed_cluster is False
-
-    def test_context_flag(self):
-        """Test --context flag."""
-        with patch("sys.argv", ["check_rbac.py", "--context", "my-hub"]):
-            from check_rbac import parse_args
-
-            args = parse_args()
-            assert args.context == "my-hub"
-
-    def test_role_validator(self):
-        """Test --role validator flag."""
-        with patch("sys.argv", ["check_rbac.py", "--role", "validator"]):
-            from check_rbac import parse_args
-
-            args = parse_args()
-            assert args.role == "validator"
-
-    def test_verbose_short_flag(self):
-        """Test -v verbose flag."""
-        with patch("sys.argv", ["check_rbac.py", "-v"]):
-            from check_rbac import parse_args
-
-            args = parse_args()
-            assert args.verbose is True
-
-    def test_dual_hub_contexts(self):
-        """Test --primary-context and --secondary-context flags together."""
-        with patch(
-            "sys.argv",
-            ["check_rbac.py", "--primary-context", "hub1", "--secondary-context", "hub2"],
-        ):
-            from check_rbac import parse_args
-
-            args = parse_args()
-            assert args.primary_context == "hub1"
-            assert args.secondary_context == "hub2"
 
 
 class TestMain:
@@ -95,6 +59,56 @@ class TestMain:
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 1
+
+    @patch("check_rbac.KubeClient")
+    @patch("check_rbac.RBACValidator")
+    @patch("check_rbac.setup_logging")
+    def test_dual_hub_success(self, mock_logging, mock_rbac_cls, mock_kube_cls):
+        """Test dual-hub mode validates both contexts with role-aware options."""
+        primary_client = MagicMock()
+        secondary_client = MagicMock()
+        mock_kube_cls.side_effect = [primary_client, secondary_client]
+
+        primary_validator = MagicMock()
+        primary_validator.validate_all_permissions.return_value = (True, [])
+        primary_validator.generate_permission_report.return_value = "PRIMARY OK"
+
+        secondary_validator = MagicMock()
+        secondary_validator.validate_all_permissions.return_value = (True, [])
+        secondary_validator.generate_permission_report.return_value = "SECONDARY OK"
+
+        mock_rbac_cls.side_effect = [primary_validator, secondary_validator]
+
+        with patch(
+            "sys.argv",
+            [
+                "check_rbac.py",
+                "--primary-context",
+                "hub1",
+                "--secondary-context",
+                "hub2",
+                "--include-decommission",
+            ],
+        ):
+            from check_rbac import main
+
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        assert mock_kube_cls.call_args_list == [call(context="hub1"), call(context="hub2")]
+        assert mock_rbac_cls.call_args_list == [
+            call(primary_client, role="operator"),
+            call(secondary_client, role="operator"),
+        ]
+        primary_validator.validate_all_permissions.assert_called_once_with(
+            include_decommission=True,
+            skip_observability=False,
+        )
+        secondary_validator.validate_all_permissions.assert_called_once_with(
+            include_decommission=False,
+            skip_observability=False,
+        )
 
     @patch("check_rbac.KubeClient")
     @patch("check_rbac.RBACValidator")
