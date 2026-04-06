@@ -2172,3 +2172,701 @@ class TestArgocdResumeOnly:
 
         assert "unexpected format" in caplog.text
         assert "missing required fields" in caplog.text
+
+
+@pytest.mark.unit
+class TestPhaseFlowIntegration:
+    """Integration tests that verify orchestrator phase-flow decisions using
+    lightweight stubs (not full mocks) that track call order.
+
+    Each stub advances the state phase (like the real handler does) so the
+    orchestrator's phase-routing loop sees the correct state transitions.
+    """
+
+    # Map handler names to the phase they set at the start of execution.
+    _PHASE_MAP = {
+        "preflight": "PREFLIGHT",
+        "primary_prep": "PRIMARY_PREP",
+        "activation": "ACTIVATION",
+        "post_activation": "POST_ACTIVATION",
+        "finalization": "FINALIZATION",
+    }
+
+    @staticmethod
+    def _make_args(**overrides):
+        defaults = dict(
+            force=False,
+            validate_only=False,
+            state_file="state.json",
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    @classmethod
+    def _make_stub(cls, name, call_order, succeeds=True):
+        """Return a stub that advances state phase and tracks call order."""
+        from lib.utils import Phase
+
+        target_phase = Phase[cls._PHASE_MAP[name]]
+
+        def stub(args, state, *rest, **kwargs):
+            call_order.append(name)
+            state.set_phase(target_phase)
+            return succeeds
+
+        return stub
+
+    def test_full_phase_flow_call_order(self, tmp_path):
+        """Stubs track that all five phase handlers fire in order for a fresh run."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.INIT)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
+            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
+        ), patch(
+            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        assert call_order == [
+            "preflight",
+            "primary_prep",
+            "activation",
+            "post_activation",
+            "finalization",
+        ]
+
+    def test_mid_flow_failure_stops_subsequent_phases(self, tmp_path):
+        """When activation fails (returns False), post_activation and finalization must NOT run."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.INIT)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
+            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=self._make_stub("activation", call_order, succeeds=False),
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is False
+        assert call_order == ["preflight", "primary_prep", "activation"]
+
+    def test_resume_from_primary_prep_skips_preflight(self, tmp_path):
+        """When state is PRIMARY_PREP, the flow should skip preflight and start
+        from primary_prep onwards."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.PRIMARY_PREP)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
+            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
+        ), patch(
+            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        assert "preflight" not in call_order
+        assert call_order[0] == "primary_prep"
+
+    def test_resume_from_activation_skips_earlier_phases(self, tmp_path):
+        """When state is ACTIVATION, only activation onward should execute."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.ACTIVATION)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
+            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
+        ), patch(
+            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert "preflight" not in call_order
+        assert "primary_prep" not in call_order
+        assert call_order == ["activation", "post_activation", "finalization"]
+
+
+@pytest.mark.unit
+class TestResumeFromFailedState:
+    """Tests that verify orchestrator resume-from-FAILED decisions."""
+
+    # Map handler names to the phase they set at the start of execution.
+    _PHASE_MAP = {
+        "preflight": "PREFLIGHT",
+        "primary_prep": "PRIMARY_PREP",
+        "activation": "ACTIVATION",
+        "post_activation": "POST_ACTIVATION",
+        "finalization": "FINALIZATION",
+    }
+
+    @staticmethod
+    def _make_args(**overrides):
+        defaults = dict(
+            force=False,
+            validate_only=False,
+            state_file="state.json",
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    @classmethod
+    def _make_stub(cls, name, call_order):
+        from lib.utils import Phase
+
+        target_phase = Phase[cls._PHASE_MAP[name]]
+
+        def stub(args, state, *rest, **kwargs):
+            call_order.append(name)
+            state.set_phase(target_phase)
+            return True
+
+        return stub
+
+    def test_resume_from_failed_preflight_reruns_from_preflight(self, tmp_path):
+        """FAILED with last_error_phase=PREFLIGHT should resume from PREFLIGHT,
+        running all phases from the beginning."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.PREFLIGHT)
+        state.add_error("preflight check failed", Phase.PREFLIGHT.value)
+        state.set_phase(Phase.FAILED)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
+            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
+        ), patch(
+            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        assert call_order[0] == "preflight"
+
+    def test_resume_from_failed_activation_skips_preflight_and_prep(self, tmp_path):
+        """FAILED with last_error_phase=ACTIVATION should resume from ACTIVATION,
+        skipping preflight and primary_prep."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.ACTIVATION)
+        state.add_error("activation failed", Phase.ACTIVATION.value)
+        state.set_phase(Phase.FAILED)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
+            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
+        ), patch(
+            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        assert "preflight" not in call_order
+        assert "primary_prep" not in call_order
+        assert call_order[0] == "activation"
+
+    def test_resume_from_failed_finalization_only_reruns_finalization(self, tmp_path):
+        """FAILED with last_error_phase=FINALIZATION should only rerun finalization."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.FINALIZATION)
+        state.add_error("finalization failed", Phase.FINALIZATION.value)
+        state.set_phase(Phase.FAILED)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
+            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
+        ), patch(
+            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state.get_current_phase() == Phase.COMPLETED
+        assert call_order == ["finalization"]
+
+    def test_failed_state_records_retry_error_baseline(self, tmp_path):
+        """Resuming from FAILED should set _retry_error_baseline on the state,
+        so that _fail_phase can detect duplicate errors vs new ones."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.POST_ACTIVATION)
+        state.add_error("post-act error", Phase.POST_ACTIVATION.value)
+        state.set_phase(Phase.FAILED)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
+        ):
+            run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert hasattr(state, "_retry_error_baseline")
+        assert state._retry_error_baseline["phase"] == Phase.POST_ACTIVATION.value
+        assert state._retry_error_baseline["count"] == 1
+
+
+@pytest.mark.unit
+class TestStaleStateDetection:
+    """Tests for stale completed state detection and --force override."""
+
+    @staticmethod
+    def _make_args(**overrides):
+        defaults = dict(
+            force=False,
+            validate_only=False,
+            state_file="state.json",
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    def test_stale_completed_state_exits_without_force(self, tmp_path):
+        """State older than STALE_STATE_THRESHOLD with COMPLETED phase should
+        exit with EXIT_FAILURE when --force is not set."""
+        from lib.constants import STALE_STATE_THRESHOLD
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        # Set COMPLETED with stale timestamp using _write_state to preserve it
+        state.state["current_phase"] = Phase.COMPLETED.value
+        stale_time = datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+        state.state["last_updated"] = stale_time.isoformat()
+        state._write_state(state.state)
+
+        # Reload to simulate fresh run
+        state2 = StateManager(str(state_file))
+        args = self._make_args(state_file=str(state_file))
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_switchover(args, state2, Mock(), Mock(), Mock())
+
+        assert exc_info.value.code == EXIT_FAILURE
+
+    def test_stale_completed_state_force_resets_and_proceeds(self, tmp_path):
+        """With --force on stale COMPLETED state, orchestrator should reset
+        state and run from the beginning."""
+        from lib.constants import STALE_STATE_THRESHOLD
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        stale_time = datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+        state.state["last_updated"] = stale_time.isoformat()
+        state._write_state(state.state)
+
+        state2 = StateManager(str(state_file))
+        args = self._make_args(state_file=str(state_file), force=True)
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True), patch(
+            "acm_switchover._run_phase_primary_prep", return_value=True
+        ), patch("acm_switchover._run_phase_activation", return_value=True), patch(
+            "acm_switchover._run_phase_post_activation", return_value=True
+        ), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ):
+            result = run_switchover(args, state2, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert state2.get_current_phase() == Phase.COMPLETED
+
+    def test_none_state_age_treated_as_stale(self, tmp_path):
+        """When get_state_age returns None (missing timestamp), it should be
+        treated as stale and require --force."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        # Set COMPLETED, then remove last_updated and write directly
+        state.state["current_phase"] = Phase.COMPLETED.value
+        state.state.pop("last_updated", None)
+        state._write_state(state.state)
+
+        state2 = StateManager(str(state_file))
+        args = self._make_args(state_file=str(state_file))
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_switchover(args, state2, Mock(), Mock(), Mock())
+
+        assert exc_info.value.code == EXIT_FAILURE
+
+    def test_recent_completed_state_returns_true_noop(self, tmp_path):
+        """Recently completed state (within threshold) should return True
+        immediately without running any phases."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        # set_phase(COMPLETED) stamps last_updated to "now", which is recent
+        state.set_phase(Phase.COMPLETED)
+
+        args = self._make_args(state_file=str(state_file))
+
+        with patch("acm_switchover._run_phase_preflight") as preflight:
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        preflight.assert_not_called()
+
+    def test_validate_only_with_completed_state_runs_preflight(self, tmp_path):
+        """--validate-only should run preflight even on stale COMPLETED state,
+        bypassing the stale check entirely."""
+        from lib.constants import STALE_STATE_THRESHOLD
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        stale_time = datetime.now(timezone.utc) - timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+        state.state["last_updated"] = stale_time.isoformat()
+        state._write_state(state.state)
+
+        state2 = StateManager(str(state_file))
+        args = self._make_args(
+            state_file=str(state_file),
+            validate_only=True,
+            old_hub_action="secondary",
+            argocd_manage=False,
+        )
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = run_switchover(args, state2, Mock(), Mock(), Mock())
+
+        assert result is True
+        # Phase should be preserved (checkpoint mechanism)
+        assert state2.get_current_phase() == Phase.COMPLETED
+
+
+@pytest.mark.unit
+class TestMainExceptionHandlers:
+    """Tests for exception handling in main() entry point."""
+
+    def test_state_load_error_exits_with_recovery_hint(self, tmp_path, monkeypatch):
+        """StateLoadError during StateManager init should exit with EXIT_FAILURE
+        and suggest --reset-state."""
+        from lib.exceptions import StateLoadError
+
+        state_file = tmp_path / "state.json"
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+
+        with patch("sys.argv", [
+            "script.py",
+            "--primary-context", "p1",
+            "--secondary-context", "s1",
+            "--method", "passive",
+            "--old-hub-action", "secondary",
+            "--state-file", str(state_file),
+        ]), patch(
+            "acm_switchover.StateManager",
+            side_effect=StateLoadError("corrupt state file"),
+        ), pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+
+    def test_state_lock_error_exits_with_failure(self, tmp_path, monkeypatch):
+        """StateLockError during StateManager init should exit with EXIT_FAILURE."""
+        from lib.exceptions import StateLockError
+
+        state_file = tmp_path / "state.json"
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+
+        with patch("sys.argv", [
+            "script.py",
+            "--primary-context", "p1",
+            "--secondary-context", "s1",
+            "--method", "passive",
+            "--old-hub-action", "secondary",
+            "--state-file", str(state_file),
+        ]), patch(
+            "acm_switchover.StateManager",
+            side_effect=StateLockError("lock held by PID 12345"),
+        ), pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+
+    def test_resolve_state_file_value_error_exits(self, tmp_path, monkeypatch):
+        """ValueError from _resolve_state_file should exit with EXIT_FAILURE."""
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+
+        with patch("sys.argv", [
+            "script.py",
+            "--primary-context", "p1",
+            "--secondary-context", "s1",
+            "--method", "passive",
+            "--old-hub-action", "secondary",
+        ]), patch(
+            "acm_switchover._resolve_state_file",
+            side_effect=ValueError("Multiple candidate state files found"),
+        ), pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+
+
+@pytest.mark.unit
+class TestPhaseHandlerFailure:
+    """Tests that verify error recording when a phase handler fails."""
+
+    # Map handler names to the phase they set at the start of execution.
+    _PHASE_MAP = {
+        "preflight": "PREFLIGHT",
+        "primary_prep": "PRIMARY_PREP",
+        "activation": "ACTIVATION",
+        "post_activation": "POST_ACTIVATION",
+        "finalization": "FINALIZATION",
+    }
+
+    @staticmethod
+    def _make_args(**overrides):
+        defaults = dict(
+            force=False,
+            validate_only=False,
+            state_file="state.json",
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    @classmethod
+    def _make_failing_stub(cls, name, call_order):
+        """Stub that advances state phase, calls _fail_phase, and returns False
+        (mimicking what a real handler does on failure)."""
+        from lib.utils import Phase
+
+        target_phase = Phase[cls._PHASE_MAP[name]]
+
+        def stub(args, state, *rest, **kwargs):
+            call_order.append(name)
+            state.set_phase(target_phase)
+            return _fail_phase(state, f"{name} failed!", Mock())
+
+        return stub
+
+    @classmethod
+    def _make_stub(cls, name, call_order):
+        from lib.utils import Phase
+
+        target_phase = Phase[cls._PHASE_MAP[name]]
+
+        def stub(args, state, *rest, **kwargs):
+            call_order.append(name)
+            state.set_phase(target_phase)
+            return True
+
+        return stub
+
+    def test_phase_failure_sets_failed_state_and_records_error(self, tmp_path):
+        """When a phase handler returns False (via _fail_phase), the orchestrator
+        should end with Phase.FAILED and recorded errors."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.INIT)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_failing_stub("preflight", call_order),
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is False
+        assert state.get_current_phase() == Phase.FAILED
+        errors = state.get_errors()
+        assert len(errors) >= 1
+        assert any("preflight failed" in e.get("error", "") for e in errors)
+
+    def test_phase_handler_exception_propagates(self, tmp_path):
+        """When a phase handler raises an unexpected exception, it should
+        propagate (the caller main() catches and records it)."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.INIT)
+
+        args = self._make_args(state_file=str(state_file))
+
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=RuntimeError("unexpected cluster error"),
+        ), pytest.raises(RuntimeError, match="unexpected cluster error"):
+            run_switchover(args, state, Mock(), Mock(), Mock())
+
+    def test_primary_prep_failure_prevents_activation(self, tmp_path):
+        """When primary_prep fails, later phases should NOT execute and state
+        should reflect the failure with recorded error metadata."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.INIT)
+
+        call_order = []
+        args = self._make_args(state_file=str(state_file))
+
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=self._make_failing_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=self._make_stub("activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=self._make_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is False
+        assert state.get_current_phase() == Phase.FAILED
+        assert "activation" not in call_order
+        assert "post_activation" not in call_order
+        assert "finalization" not in call_order
+        errors = state.get_errors()
+        assert any("primary_prep failed" in e.get("error", "") for e in errors)
+
+    def test_secondary_none_raises_value_error(self):
+        """run_switchover should raise ValueError when secondary client is None."""
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            state_file="state.json",
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+        )
+
+        with pytest.raises(ValueError, match="Secondary client is required"):
+            run_switchover(args, Mock(), Mock(), None, Mock())
+
+    def test_no_runnable_phase_detected_as_stale_completed(self, tmp_path):
+        """COMPLETED state with None age (missing timestamp) is treated as stale
+        and sys.exits, verifying the orchestrator detects this condition."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        state.state.pop("last_updated", None)
+        state._write_state(state.state)
+
+        state2 = StateManager(str(state_file))
+        args = self._make_args(state_file=str(state_file))
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_switchover(args, state2, Mock(), Mock(), Mock())
+
+        assert exc_info.value.code == EXIT_FAILURE
