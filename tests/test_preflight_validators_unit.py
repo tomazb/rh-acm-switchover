@@ -93,6 +93,54 @@ class TestBackupValidator:
         assert "backup(s) in progress" in results[0]["message"]
         assert "backup-in-progress" in results[0]["message"]
 
+    def test_backup_status_fails_when_backups_still_in_progress_after_wait(self, reporter, mock_kube_client):
+        """Test critical failure when backups are still in progress after waiting."""
+        validator = BackupValidator(reporter)
+        validator._wait_for_backups_complete = Mock(return_value=["backup-a"])
+
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "backup-a", "creationTimestamp": "2025-12-31T10:00:00Z"},
+                "status": {"phase": "InProgress"},
+            },
+            {
+                "metadata": {"name": "backup-b", "creationTimestamp": "2025-12-30T10:00:00Z"},
+                "status": {"phase": "Completed", "completionTimestamp": "2025-12-30T10:05:00Z"},
+            },
+        ]
+
+        validator.run(mock_kube_client)
+
+        critical_failures = reporter.critical_failures()
+        assert len(critical_failures) == 1
+        assert critical_failures[0]["check"] == "Backup status"
+        assert "backup(s) in progress after waiting" in critical_failures[0]["message"]
+        assert "backup-a" in critical_failures[0]["message"]
+        validator._wait_for_backups_complete.assert_called_once_with(mock_kube_client, ["backup-a"])
+
+    def test_backup_status_fails_when_backups_disappear_after_wait(self, reporter, mock_kube_client):
+        """Test critical failure when refresh finds no backups after waiting for completion."""
+        validator = BackupValidator(reporter)
+        validator._wait_for_backups_complete = Mock(return_value=[])
+
+        mock_kube_client.list_custom_resources.side_effect = [
+            [
+                {
+                    "metadata": {"name": "backup-a", "creationTimestamp": "2025-12-31T10:00:00Z"},
+                    "status": {"phase": "InProgress"},
+                }
+            ],
+            [],
+        ]
+
+        validator.run(mock_kube_client)
+
+        critical_failures = reporter.critical_failures()
+        assert len(critical_failures) == 1
+        assert critical_failures[0]["check"] == "Backup status"
+        assert "no backups found after waiting" in reporter.results[-1]["message"]
+        validator._wait_for_backups_complete.assert_called_once_with(mock_kube_client, ["backup-a"])
+
     def test_latest_backup_failed(self, reporter, mock_kube_client):
         """Test critical failure when latest backup failed."""
         validator = BackupValidator(reporter)
