@@ -1037,6 +1037,7 @@ class TestPassiveSyncValidator:
             "metadata": {"name": "restore-acm-passive-sync"},
             "status": {
                 "phase": "FinishedWithErrors",
+                "lastMessage": "PVC restore failed",
                 "messages": ["PVC restore failed"],
             },
         }
@@ -1046,10 +1047,14 @@ class TestPassiveSyncValidator:
         results = reporter.results
         assert len(results) == 1
         assert results[0]["check"] == "Passive sync restore"
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "PVC restore failed" in results[0]["message"]
+        assert "FinishedWithErrors" in results[0]["message"]
         critical_failures = reporter.critical_failures()
         assert len(critical_failures) == 1
         assert critical_failures[0]["check"] == "Passive sync restore"
-        assert "FinishedWithErrors" in critical_failures[0]["message"]
+        assert critical_failures[0]["message"] == results[0]["message"]
 
     def test_passive_sync_not_found(self, reporter, mock_kube_client):
         """Test critical failure when passive sync restore not found."""
