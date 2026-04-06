@@ -1009,6 +1009,48 @@ class TestPassiveSyncValidator:
         assert results[0]["passed"] is True
         assert "Unknown" in results[0]["message"]
 
+    def test_passive_restore_finished_with_errors_already_available_is_benign(self, reporter, mock_kube_client):
+        """Test benign FinishedWithErrors restore messages are treated as ready."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
+        mock_kube_client.get_custom_resource.return_value = {
+            "metadata": {"name": "restore-acm-passive-sync"},
+            "status": {
+                "phase": "FinishedWithErrors",
+                "messages": ["cluster already available"],
+            },
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "Passive sync restore"
+        assert results[0]["passed"] is True
+        assert "clusters already available" in results[0]["message"]
+
+    def test_passive_restore_finished_with_errors_real_failure_is_critical(self, reporter, mock_kube_client):
+        """Test real FinishedWithErrors restore messages remain critical failures."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = []
+        mock_kube_client.get_custom_resource.return_value = {
+            "metadata": {"name": "restore-acm-passive-sync"},
+            "status": {
+                "phase": "FinishedWithErrors",
+                "messages": ["PVC restore failed"],
+            },
+        }
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "Passive sync restore"
+        critical_failures = reporter.critical_failures()
+        assert len(critical_failures) == 1
+        assert critical_failures[0]["check"] == "Passive sync restore"
+        assert "FinishedWithErrors" in critical_failures[0]["message"]
+
     def test_passive_sync_not_found(self, reporter, mock_kube_client):
         """Test critical failure when passive sync restore not found."""
         validator = PassiveSyncValidator(reporter)
