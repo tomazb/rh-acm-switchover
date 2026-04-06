@@ -1138,3 +1138,67 @@ class TestStepContext:
         """Test that step() returns a StepContext instance."""
         ctx = state_manager.step("test_step")
         assert isinstance(ctx, StepContext)
+
+
+@pytest.mark.unit
+class TestSignalAndAtexitHandlers:
+    """Tests for signal handler registration and flush-on-exit logic."""
+
+    def test_signal_handlers_registered_for_sigterm_and_sigint(self, tmp_path):
+        """Test that StateManager registers signal handlers for SIGTERM and SIGINT."""
+        import signal
+
+        with patch("lib.utils.signal.signal") as mock_signal, patch("lib.utils.signal.getsignal") as mock_get:
+            mock_get.return_value = signal.SIG_DFL
+            sm = StateManager(str(tmp_path / "state.json"))
+
+        # signal.signal should be called for both SIGTERM and SIGINT
+        registered_signals = [call.args[0] for call in mock_signal.call_args_list]
+        assert signal.SIGTERM in registered_signals
+        assert signal.SIGINT in registered_signals
+
+    def test_atexit_flush_calls_do_flush_when_dirty(self, tmp_path):
+        """Test that the atexit handler flushes state when dirty."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm._dirty = True
+
+        with patch.object(sm, "_write_state") as mock_write:
+            sm._flush_on_exit()
+
+        mock_write.assert_called_once()
+        assert sm._dirty is False
+
+    def test_atexit_flush_skips_when_clean(self, tmp_path):
+        """Test that the atexit handler does nothing when state is clean."""
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm._dirty = False
+
+        with patch.object(sm, "_write_state") as mock_write:
+            sm._flush_on_exit()
+
+        mock_write.assert_not_called()
+
+    def test_flush_on_signal_flushes_dirty_state_and_forwards(self, tmp_path):
+        """Test that the signal handler flushes dirty state and forwards the signal."""
+        import signal
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        sm._dirty = True
+
+        with patch.object(sm, "_write_state"), patch.object(sm, "_forward_signal") as mock_fwd:
+            sm._flush_on_signal(signal.SIGTERM, None)
+
+        mock_fwd.assert_called_once_with(signal.SIGTERM, None)
+        assert sm._dirty is False
+
+    def test_forward_signal_calls_previous_handler(self, tmp_path):
+        """Test that _forward_signal invokes a previously registered handler."""
+        import signal
+
+        sm = StateManager(str(tmp_path / "state.json"))
+        prev_handler = MagicMock()
+        sm._previous_signal_handlers[signal.SIGTERM] = prev_handler
+
+        sm._forward_signal(signal.SIGTERM, None)
+
+        prev_handler.assert_called_once_with(signal.SIGTERM, None)
