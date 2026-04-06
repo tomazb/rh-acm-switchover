@@ -81,8 +81,8 @@
 | ID | Test | Command | Expected | Result | Notes |
 |----|------|---------|----------|--------|-------|
 | B1 | Preflight full run | `./scripts/preflight-check.sh --primary-context mgmt1 --secondary-context mgmt2 --method passive` | Full method checks pass | ✅ PASS | 34/41 passed, 0 failures, 6 warnings |
-| B2 | Preflight with argocd-check | `./scripts/preflight-check.sh --primary-context mgmt1 --secondary-context mgmt2 --method passive --argocd-check` | ArgoCD instances and ACM apps listed | ✅ PASS | Detected ArgoCD instances + ACM apps |
-| B3 | Postflight with argocd-check | `./scripts/postflight-check.sh --new-hub-context mgmt1 --old-hub-context mgmt2 --argocd-check` | ArgoCD state in postflight report | ✅ PASS | ArgoCD sync status checked |
+| B2 | Preflight with ArgoCD auto-detection | `./scripts/preflight-check.sh --primary-context mgmt1 --secondary-context mgmt2 --method passive` | ArgoCD auto-detected, instances and ACM apps listed | ✅ PASS | ArgoCD CRD detected, instances + ACM apps reported |
+| B3 | Postflight with ArgoCD auto-detection | `./scripts/postflight-check.sh --new-hub-context mgmt1 --old-hub-context mgmt2` | ArgoCD auto-detected, state in postflight report | ✅ PASS | ArgoCD sync status checked |
 | B4 | Discover-hub explicit contexts | `./scripts/discover-hub.sh --contexts mgmt1,mgmt2` | Both hubs discovered with roles | ✅ PASS | Correct primary/secondary detection |
 
 ### Category 6: Real Switchovers (R1–R3 + reverses)
