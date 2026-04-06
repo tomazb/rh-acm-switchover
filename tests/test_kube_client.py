@@ -59,7 +59,8 @@ class TestKubeClient:
             namespace="test-ns",
         )
 
-        assert result is not None
+        assert result == {"metadata": {"name": "test"}}
+        assert result["metadata"]["name"] == "test"
         mock_k8s_apis["custom_api"].get_namespaced_custom_object.assert_called_once_with(
             group="operator.open-cluster-management.io",
             version="v1",
@@ -99,6 +100,8 @@ class TestKubeClient:
         )
 
         assert len(result) == 2
+        assert result[0]["metadata"]["name"] == "cluster1"
+        assert result[1]["metadata"]["name"] == "cluster2"
         mock_k8s_apis["custom_api"].list_namespaced_custom_object.assert_called_once()
 
     def test_patch_custom_resource_dry_run(self, dry_run_client, mock_k8s_apis):
@@ -128,7 +131,7 @@ class TestKubeClient:
             namespace="test-ns",
         )
 
-        assert result
+        assert result == {"result": True}
         mock_k8s_apis["custom_api"].patch_namespaced_custom_object.assert_called_once()
 
     def test_create_custom_resource_dry_run(self, dry_run_client, mock_k8s_apis):
@@ -227,21 +230,21 @@ class TestKubeClient:
         mock_k8s_apis["apps_api"].patch_namespaced_stateful_set_scale.assert_called_once()
 
     def test_namespace_exists(self, kube_client, mock_k8s_apis):
-        """Test checking if namespace exists."""
+        """Test checking if namespace exists returns True for existing namespace."""
         mock_k8s_apis["core_api"].read_namespace.return_value = MagicMock()
 
-        result = kube_client.namespace_exists("test-ns")
-
-        assert result is True
-        mock_k8s_apis["core_api"].read_namespace.assert_called_once_with("test-ns")
+        assert kube_client.namespace_exists("test-ns") is True
+        assert kube_client.namespace_exists("test-ns") is not None
+        mock_k8s_apis["core_api"].read_namespace.assert_called_with("test-ns")
 
     def test_namespace_not_exists(self, kube_client, mock_k8s_apis):
-        """Test checking if namespace doesn't exist."""
+        """Test checking if namespace doesn't exist returns False (not raises)."""
         mock_k8s_apis["core_api"].read_namespace.side_effect = ApiException(status=404)
 
         result = kube_client.namespace_exists("test-ns")
 
         assert result is False
+        assert result is not None
 
     def test_get_secret(self, kube_client, mock_k8s_apis):
         """Test getting a secret successfully."""
@@ -304,6 +307,8 @@ class TestKubeClient:
         result = kube_client.get_pods("test-ns", label_selector="app=test")
 
         assert len(result) == 2
+        assert result[0] == {"metadata": {"name": "pod1"}}
+        assert result[1] == {"metadata": {"name": "pod2"}}
         mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once_with(
             namespace="test-ns",
             label_selector="app=test",
@@ -333,6 +338,7 @@ class TestKubeClient:
             result = kube_client.get_pods("test-ns", label_selector=selector)
 
             assert len(result) == 1
+            assert result[0] == {"metadata": {"name": "pod1"}}
             mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once_with(
                 namespace="test-ns",
                 label_selector=selector,
@@ -633,13 +639,17 @@ class TestKubeClientInitialization:
     @patch("lib.kube_client.config.load_kube_config")
     def test_init_with_context(self, mock_load_config):
         """Test initializing with a specific context."""
-        KubeClient(context="test-context")
+        kc = KubeClient(context="test-context")
+        assert kc.context == "test-context"
+        assert kc.dry_run is False
         mock_load_config.assert_called_once_with(context="test-context")
 
     @patch("lib.kube_client.config.load_kube_config")
     def test_init_without_context(self, mock_load_config):
         """Test initializing without a context."""
-        KubeClient()
+        kc = KubeClient()
+        assert kc.context is None
+        assert kc.dry_run is False
         mock_load_config.assert_called_once_with(context=None)
 
     @patch("lib.kube_client.config.load_kube_config")
