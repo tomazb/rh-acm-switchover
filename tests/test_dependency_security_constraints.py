@@ -32,9 +32,9 @@ def test_runtime_requirements_exclude_known_vulnerable_versions():
 
     for name, fixed_version in expected_minimums.items():
         assert name in requirements, f"{name} must be pinned in requirements.txt"
-        assert fixed_version in requirements[name].specifier, (
-            f"{name} constraint {requirements[name].specifier} does not allow fixed version {fixed_version}"
-        )
+        assert (
+            fixed_version in requirements[name].specifier
+        ), f"{name} constraint {requirements[name].specifier} does not allow fixed version {fixed_version}"
 
 
 def test_dev_requirements_exclude_known_vulnerable_versions():
@@ -46,6 +46,6 @@ def test_dev_requirements_exclude_known_vulnerable_versions():
 
     for name, fixed_version in expected_minimums.items():
         assert name in requirements, f"{name} must be pinned in requirements-dev.txt"
-        assert fixed_version in requirements[name].specifier, (
-            f"{name} constraint {requirements[name].specifier} does not allow fixed version {fixed_version}"
-        )
+        assert (
+            fixed_version in requirements[name].specifier
+        ), f"{name} constraint {requirements[name].specifier} does not allow fixed version {fixed_version}"
