@@ -67,8 +67,10 @@ class TestBackupValidator:
         """Test critical failure when backup is in progress."""
         # Mock time functions to simulate timeout immediately
         # First call returns 0, second call returns timeout+1 to exit loop immediately
+        mocker.patch("modules.preflight.backup_validators.logger")
+        mocker.patch("modules.preflight.reporter.logger")
         mocker.patch("modules.preflight.backup_validators.time.sleep")
-        mocker.patch("modules.preflight.backup_validators.time.time", side_effect=[0, 601, 602, 603])
+        mocker.patch("modules.preflight.backup_validators.time.time", side_effect=[0, 601])
 
         validator = BackupValidator(reporter)
         # Mock backups with one in progress - stays in progress through all polls
@@ -514,9 +516,7 @@ class TestKubeconfigValidator:
         mock_kube_client.list_namespaces.return_value = {"items": []}
         mock_kube_client.context = "test-ctx"
 
-        with patch.object(validator, "_check_duplicate_users"), patch.object(
-            validator, "_check_token_expiration"
-        ):
+        with patch.object(validator, "_check_duplicate_users"), patch.object(validator, "_check_token_expiration"):
             validator.run(mock_kube_client, mock_kube_client, method="passive")
 
         assert validator.method == "passive"
@@ -1477,9 +1477,7 @@ class TestAutoImportStrategyValidatorExtended:
     def test_primary_acm_214_non_default_strategy(self, reporter, mock_kube_client):
         """Test primary hub on ACM 2.14+ with non-default strategy."""
         validator = AutoImportStrategyValidator(reporter)
-        mock_kube_client.get_configmap.return_value = {
-            "data": {"autoImportStrategy": "CustomStrategy"}
-        }
+        mock_kube_client.get_configmap.return_value = {"data": {"autoImportStrategy": "CustomStrategy"}}
 
         validator.run(mock_kube_client, mock_kube_client, "2.14.0", "2.11.0")
 
@@ -1506,9 +1504,7 @@ class TestAutoImportStrategyValidatorExtended:
         primary_client = Mock()
         secondary_client = Mock()
         primary_client.get_configmap.return_value = None
-        secondary_client.get_configmap.return_value = {
-            "data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}
-        }
+        secondary_client.get_configmap.return_value = {"data": {AUTO_IMPORT_STRATEGY_KEY: AUTO_IMPORT_STRATEGY_SYNC}}
         secondary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "cluster1"}},
         ]
