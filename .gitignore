@@ -30,6 +30,7 @@ coverage.xml
 .remember
 .planning/
 .validation/
+.worktrees/
 kubeconfigs/
 e2e-soak-24h/
 
