@@ -541,6 +541,32 @@ class TestSecondaryActivation:
             with pytest.raises(FatalError, match="Restore failed: FinishedWithErrors"):
                 activation_passive._wait_for_restore_completion()
 
+    def test_poll_restore_error_phase_raises(self, activation_full, mock_secondary_client):
+        """Restore phase Error must fail immediately instead of timing out."""
+
+        def get_custom_resource_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
+                return {
+                    "metadata": {"name": "restore-acm-full", "resourceVersion": "400"},
+                    "status": {
+                        "phase": "Error",
+                        "lastMessage": "Velero restore restore-acm-full-acm-managed-clusters-schedule-123 failed validation",
+                    },
+                }
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+
+            def side_effect(desc, callback, **kwargs):
+                return callback()[0]
+
+            mock_wait.side_effect = side_effect
+
+            with pytest.raises(FatalError, match="Restore failed: Error"):
+                activation_full._wait_for_restore_completion()
+
     @patch("modules.activation.wait_for_condition")
     def test_activate_passive_restore_method(self, mock_wait, mock_secondary_client, mock_state_manager):
         """Test passive activation using restore-acm-activate (Option B)."""

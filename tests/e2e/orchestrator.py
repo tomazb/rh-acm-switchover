@@ -18,6 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from lib import KubeClient, Phase, StateManager
+from lib.constants import (
+    ACM_BACKUP_NAME_RE,
+    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+    ACM_BACKUP_SCHEDULE_TYPES,
+    BACKUP_NAMESPACE,
+    BACKUP_POLL_INTERVAL,
+    BACKUP_VERIFY_TIMEOUT,
+)
 
 from .failure_injection import FailureInjector, InjectionResult
 from .phase_handlers import CycleResult, PhaseHandlers, PhaseResult
@@ -479,6 +487,127 @@ class E2EOrchestrator:
                 return True
         return False
 
+    @staticmethod
+    def _get_acm_backup_schedule_type(backup: Dict[str, Any]) -> Optional[str]:
+        """Return the ACM backup schedule type for a Velero backup, when recognized."""
+        labels = backup.get("metadata", {}).get("labels", {}) or {}
+        schedule_type = labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL)
+        if schedule_type in ACM_BACKUP_SCHEDULE_TYPES:
+            return schedule_type
+
+        backup_name = backup.get("metadata", {}).get("name", "")
+        if not ACM_BACKUP_NAME_RE.match(backup_name):
+            return None
+        if backup_name.startswith("acm-managed-clusters-"):
+            return "managedClusters"
+        if backup_name.startswith("acm-credentials-"):
+            return "credentials"
+        if backup_name.startswith("acm-resources-"):
+            return "resources"
+        return None
+
+    @classmethod
+    def _filter_acm_owned_backups(cls, backups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Return only ACM-owned Velero backups."""
+        return [backup for backup in backups if cls._get_acm_backup_schedule_type(backup)]
+
+    @staticmethod
+    def _backup_sort_key(backup: Dict[str, Any]) -> str:
+        """Return the best timestamp available for ordering backup generations."""
+        status = backup.get("status", {}) or {}
+        metadata = backup.get("metadata", {}) or {}
+        return (
+            status.get("completionTimestamp")
+            or status.get("startTimestamp")
+            or metadata.get("creationTimestamp")
+            or ""
+        )
+
+    def _wait_for_full_backup_stability(
+        self,
+        primary_context: str,
+        timeout: int = BACKUP_VERIFY_TIMEOUT,
+    ) -> None:
+        """Wait until the new primary's ACM backup set has stopped changing."""
+        self.logger.info("Waiting for ACM backup stability on new primary: %s", primary_context)
+        primary_client = KubeClient(context=primary_context, dry_run=False)
+        stable_signature = None
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            backups = primary_client.list_custom_resources(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                namespace=BACKUP_NAMESPACE,
+            )
+            acm_backups = self._filter_acm_owned_backups(backups)
+
+            if not acm_backups:
+                self.logger.info("No ACM-owned Velero backups found yet on %s", primary_context)
+                time.sleep(BACKUP_POLL_INTERVAL)
+                continue
+
+            in_progress = []
+            latest_completed = {}
+            for backup in acm_backups:
+                schedule_type = self._get_acm_backup_schedule_type(backup)
+                if not schedule_type:
+                    continue
+
+                phase = backup.get("status", {}).get("phase", "unknown")
+                if phase in ("New", "InProgress", "Finalizing"):
+                    in_progress.append(f"{backup.get('metadata', {}).get('name', 'unknown')}:{phase}")
+                    continue
+                if phase != "Completed":
+                    continue
+
+                existing = latest_completed.get(schedule_type)
+                if existing is None or self._backup_sort_key(backup) > self._backup_sort_key(existing):
+                    latest_completed[schedule_type] = backup
+
+            missing_types = sorted(set(ACM_BACKUP_SCHEDULE_TYPES) - set(latest_completed))
+            if in_progress or missing_types:
+                if in_progress:
+                    self.logger.info(
+                        "ACM backups still in progress on %s: %s",
+                        primary_context,
+                        ", ".join(in_progress),
+                    )
+                if missing_types:
+                    self.logger.info(
+                        "Waiting for completed ACM backup types on %s: %s",
+                        primary_context,
+                        ", ".join(missing_types),
+                    )
+                stable_signature = None
+                time.sleep(BACKUP_POLL_INTERVAL)
+                continue
+
+            signature = tuple(
+                (
+                    schedule_type,
+                    latest_completed[schedule_type].get("metadata", {}).get("name", ""),
+                    self._backup_sort_key(latest_completed[schedule_type]),
+                )
+                for schedule_type in sorted(ACM_BACKUP_SCHEDULE_TYPES)
+            )
+
+            if signature == stable_signature:
+                self.logger.info("ACM backup set is stable on new primary: %s", primary_context)
+                return
+
+            stable_signature = signature
+            self.logger.info(
+                "Observed complete ACM backup set on %s; verifying it remains stable before next cycle",
+                primary_context,
+            )
+            time.sleep(BACKUP_POLL_INTERVAL)
+
+        raise RuntimeError(
+            f"Timed out waiting for ACM backup stability on new primary {primary_context} after {timeout}s"
+        )
+
     def _run_cycle(
         self,
         cycle_num: int,
@@ -797,6 +926,9 @@ class E2EOrchestrator:
 
             # Apply context swap for next cycle
             if cycle_num < self.config.cycles:
+                if self.config.method == "full" and cycle_result.success and hubs_changed and not self.config.dry_run:
+                    self._wait_for_full_backup_stability(next_primary)
+
                 current_primary, current_secondary = next_primary, next_secondary
                 if hubs_changed:
                     self.logger.info(
