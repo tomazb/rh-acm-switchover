@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Container release workflow now skips Quay publishing cleanly when `QUAY_USERNAME` / `QUAY_PASSWORD` secrets are absent and continues with GHCR-only publishing.
+
 ## [1.6.3] - 2026-04-07
 
 ### Changed
