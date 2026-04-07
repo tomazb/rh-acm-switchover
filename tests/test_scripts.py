@@ -47,6 +47,20 @@ def run_script(script_name: str, *args: str, env=None):
     return proc.returncode, output
 
 
+def run_lib_common(command: str):
+    """Run a bash snippet after sourcing constants.sh and lib-common.sh."""
+    constants = SCRIPTS_DIR / "constants.sh"
+    lib_common = SCRIPTS_DIR / "lib-common.sh"
+    proc = subprocess.run(
+        ["bash", "-lc", f"source '{constants}' && source '{lib_common}' && {command}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=30,
+    )
+    return proc.returncode, strip_ansi(proc.stdout)
+
+
 # ============================================================================
 # Argument Validation Tests
 # ============================================================================
@@ -57,9 +71,12 @@ def run_script(script_name: str, *args: str, env=None):
     [
         (
             "preflight-check.sh",
-            ["--primary-context", "--secondary-context", "--method"],
+            ["--primary-context", "--secondary-context", "--method", "--skip-gitops-check"],
         ),
-        ("postflight-check.sh", ["--new-hub-context", "--old-hub-context"]),
+        (
+            "postflight-check.sh",
+            ["--new-hub-context", "--old-hub-context", "--skip-gitops-check"],
+        ),
     ],
 )
 def test_help_output(script, expected_args):
@@ -127,6 +144,21 @@ def test_preflight_invalid_method():
         assert "Primary Hub:" in out or "Secondary Hub:" in out
 
 
+def test_preflight_rejects_unknown_argocd_check_flag():
+    """--argocd-check was removed; scripts should reject it as unknown."""
+    code, out = run_script(
+        "preflight-check.sh",
+        "--primary-context",
+        "fake-primary",
+        "--secondary-context",
+        "fake-secondary",
+        "--method",
+        "passive",
+        "--argocd-check",
+    )
+    assert code == 2, f"Expected exit code 2 for unknown flag, got {code}"
+
+
 def test_postflight_with_optional_old_hub():
     """Test postflight with optional old-hub-context (will fail on cluster access but args parse)."""
     code, out = run_script(
@@ -141,6 +173,17 @@ def test_postflight_with_optional_old_hub():
     # If script started, should show header
     if code in (0, 1):
         assert "New Hub:" in out
+
+
+def test_postflight_rejects_unknown_argocd_check_flag():
+    """--argocd-check was removed; scripts should reject it as unknown."""
+    code, out = run_script(
+        "postflight-check.sh",
+        "--new-hub-context",
+        "fake-new",
+        "--argocd-check",
+    )
+    assert code == 2, f"Expected exit code 2 for unknown flag, got {code}"
 
 
 def test_preflight_output_format():
@@ -173,6 +216,108 @@ def test_postflight_output_format():
     assert "ACM Switchover Post-flight Verification" in out or "New Hub:" in out
     # Should attempt to show sections
     assert "1." in out or "Checking" in out or "Restore" in out
+
+
+@pytest.mark.parametrize(
+    ("resource_json", "expected"),
+    [
+        (
+            '{"metadata":{"annotations":{"argocd.argoproj.io/sync-wave":"5"}}}',
+            "annotation:argocd.argoproj.io/sync-wave",
+        ),
+        (
+            '{"metadata":{"labels":{"kustomize.toolkit.fluxcd.io/name":"app"}}}',
+            "label:kustomize.toolkit.fluxcd.io/name",
+        ),
+    ],
+)
+def test_detect_gitops_markers_matches_valid_gitops_keys(resource_json, expected):
+    """Shell detector should still report canonical Argo CD and Flux keys."""
+    code, out = run_lib_common(f"detect_gitops_markers '{resource_json}'")
+    assert code == 0
+    assert expected in out.strip()
+
+
+@pytest.mark.parametrize(
+    "resource_json",
+    [
+        '{"metadata":{"annotations":{"description":"managed by myargocdtool"}}}',
+        '{"metadata":{"annotations":{"note":"https://example/fluxcd.io/docs"}}}',
+        '{"metadata":{"annotations":{"rollouts.argoproj.io/revision":"3"}}}',
+    ],
+)
+def test_detect_gitops_markers_ignores_non_gitops_values_and_domains(resource_json):
+    """Shell detector must ignore value-only mentions and non-Argo argoproj.io domains."""
+    code, out = run_lib_common(f"detect_gitops_markers '{resource_json}'")
+    assert code == 0
+    assert out.strip() == ""
+
+
+def test_generate_sa_kubeconfig_accepts_explicit_kubeconfig(tmp_path):
+    """Generator should use the explicit kubeconfig for cluster metadata and token calls."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    log_file = tmp_path / "kubectl.log"
+    expected_kubeconfig = tmp_path / "admin.kubeconfig"
+    expected_kubeconfig.write_text("apiVersion: v1\nkind: Config\n", encoding="utf-8")
+
+    kubectl_script = mock_bin / "kubectl"
+    kubectl_script.write_text(
+        """#!/bin/bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${MOCK_LOG}"
+if [[ "$*" == *" get serviceaccount "* ]]; then
+    exit 0
+fi
+if [[ "$*" == *" create token "* ]]; then
+    printf 'token-123\\n'
+    exit 0
+fi
+if [[ "$*" == *" config view "* ]]; then
+    if [[ "$*" != *"--kubeconfig=${EXPECTED_KUBECONFIG}"* ]]; then
+        exit 0
+    fi
+    case "$*" in
+        *".contexts["*)
+            printf 'cluster-explicit'
+            ;;
+        *".cluster.server"*)
+            printf 'https://explicit.example:6443'
+            ;;
+        *".certificate-authority-data"*)
+            printf 'Q0EtREFUQQ=='
+            ;;
+    esac
+    exit 0
+fi
+echo "unexpected kubectl args: $*" >&2
+exit 1
+""",
+        encoding="utf-8",
+    )
+    kubectl_script.chmod(0o755)
+
+    code, out = run_script(
+        "generate-sa-kubeconfig.sh",
+        "--kubeconfig",
+        str(expected_kubeconfig),
+        "--context",
+        "prod-hub",
+        "--user",
+        "prod-operator",
+        "acm-switchover",
+        "acm-switchover-operator",
+        env={
+            "PATH": f"{mock_bin}:{os.environ.get('PATH', '')}",
+            "MOCK_LOG": str(log_file),
+            "EXPECTED_KUBECONFIG": str(expected_kubeconfig),
+        },
+    )
+
+    assert code == 0, out
+    assert "https://explicit.example:6443" in out
+    assert "cluster-explicit" in out
+    assert f"--kubeconfig={expected_kubeconfig}" in log_file.read_text(encoding="utf-8")
 
 
 # ============================================================================
@@ -217,12 +362,6 @@ def run_bash_command(command: str, env=None):
         timeout=10,
     )
     return proc.returncode, strip_ansi(proc.stdout)
-
-
-def test_lib_common_exists():
-    """Test that lib-common.sh exists in scripts directory."""
-    lib_common = SCRIPTS_DIR / "lib-common.sh"
-    assert lib_common.exists(), "lib-common.sh should exist in scripts/"
 
 
 def test_lib_common_sources_successfully():

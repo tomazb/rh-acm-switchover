@@ -1,20 +1,15 @@
-"""
-Pre-flight validation module for ACM switchover.
-
-TODO: This module has very low test coverage (17%). Given its role as the
-orchestrator for pre-flight validation, add integration tests that verify:
-- Correct coordination of all validators
-- Proper handling of validation failures
-- PreflightConfig generation accuracy
-See TEST_REPORT.md for coverage details.
-"""
+"""Pre-flight validation module for ACM switchover."""
 
 # Runbook: Step 0 (pre-flight validation)
 
 import logging
 from typing import Tuple, TypedDict
 
+from kubernetes.client.rest import ApiException
+
+from lib import argocd as argocd_lib
 from lib.constants import OBSERVABILITY_NAMESPACE
+from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
 
@@ -56,11 +51,17 @@ class PreflightValidator:
         secondary_client: KubeClient,
         method: str = "passive",
         skip_rbac_validation: bool = False,
+        include_decommission: bool = False,
+        argocd_manage: bool = False,
+        skip_gitops_check: bool = False,
     ) -> None:
         self.primary = primary_client
         self.secondary = secondary_client
         self.method = method
         self.skip_rbac_validation = skip_rbac_validation
+        self.include_decommission = include_decommission
+        self.argocd_manage = argocd_manage
+        self.skip_gitops_check = skip_gitops_check
 
         self.reporter = ValidationReporter()
         self.kubeconfig_validator = KubeconfigValidator(self.reporter)
@@ -77,6 +78,60 @@ class PreflightValidator:
         self.observability_prereq_validator = ObservabilityPrereqValidator(self.reporter)
         self.tooling_validator = ToolingValidator(self.reporter)
 
+    def _get_argocd_rbac_mode(self) -> str:
+        """Get Argo CD RBAC validation mode. Auto-enables 'check' when not skipped.
+
+        Priority: skip_gitops_check ('none') > argocd_manage ('manage') > default ('check').
+        """
+        if self.skip_gitops_check:
+            return "none"
+        if self.argocd_manage:
+            return "manage"
+        return "check"
+
+    def _get_effective_argocd_rbac_mode(self) -> Tuple[str, str, str]:
+        """Determine Argo CD RBAC mode and per-hub install types."""
+        requested_mode = self._get_argocd_rbac_mode()
+        if requested_mode == "none":
+            return "none", "unknown", "unknown"
+
+        install_types = {"primary": "unknown", "secondary": "unknown"}
+        applications_present = False
+        discovery_unknown = False
+
+        for client, hub_label in (
+            (self.primary, "primary"),
+            (self.secondary, "secondary"),
+        ):
+            if client is None:
+                continue
+            try:
+                discovery = argocd_lib.detect_argocd_installation(client)
+            except ApiException as exc:
+                if exc.status in (401, 403):
+                    logger.info(
+                        "Unable to inspect Argo CD CRDs on %s hub (%s %s); deferring to RBAC validation.",
+                        hub_label,
+                        exc.status,
+                        exc.reason,
+                    )
+                    discovery_unknown = True
+                    install_types[hub_label] = "unknown"
+                    continue
+                raise
+            if discovery.has_applications_crd:
+                applications_present = True
+                install_types[hub_label] = discovery.install_type
+            else:
+                install_types[hub_label] = "none"
+                logger.info("Argo CD Applications CRD not found on %s hub", hub_label)
+
+        if applications_present or discovery_unknown:
+            return requested_mode, install_types["primary"], install_types["secondary"]
+
+        logger.info("Argo CD Applications CRD not found on either hub, skipping Argo CD RBAC permission checks")
+        return "none", "unknown", "unknown"
+
     def validate_all(self) -> Tuple[bool, PreflightConfig]:
         """Run all validation checks and return pass/fail with detected config."""
 
@@ -84,8 +139,12 @@ class PreflightValidator:
 
         # RBAC validation (unless explicitly skipped)
         if not self.skip_rbac_validation:
+            logger.info("Validating RBAC permissions...")
             try:
-                logger.info("Validating RBAC permissions...")
+                # F6 fix: Wrap the entire RBAC block so routine API failures
+                # (from namespace_exists, Argo CD discovery, or RBAC checks)
+                # are converted into structured validation results instead of
+                # escaping as uncaught exceptions.
                 # Check if observability namespace exists on either hub
                 # If not installed, skip observability permission checks
                 primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
@@ -98,19 +157,21 @@ class PreflightValidator:
                         "Observability namespace not found on either hub, " "skipping observability permission checks"
                     )
 
+                (
+                    effective_argocd_mode,
+                    primary_argocd_install_type,
+                    secondary_argocd_install_type,
+                ) = self._get_effective_argocd_rbac_mode()
                 validate_rbac_permissions(
                     primary_client=self.primary,
                     secondary_client=self.secondary,
-                    include_decommission=False,  # Checked separately if needed
+                    include_decommission=self.include_decommission,
                     skip_observability=skip_obs,
+                    argocd_mode=effective_argocd_mode,
+                    argocd_install_type=primary_argocd_install_type,
+                    secondary_argocd_install_type=secondary_argocd_install_type,
                 )
-                self.reporter.add_result(
-                    "RBAC Permissions",
-                    True,
-                    "All required RBAC permissions validated",
-                    critical=True,
-                )
-            except Exception as e:
+            except ValidationError as e:
                 self.reporter.add_result(
                     "RBAC Permissions",
                     False,
@@ -120,6 +181,26 @@ class PreflightValidator:
                 logger.warning(
                     "RBAC validation failed. You can skip this check with --skip-rbac-validation "
                     "if you're confident you have the required permissions."
+                )
+            except ApiException as e:
+                self.reporter.add_result(
+                    "RBAC Permissions",
+                    False,
+                    f"RBAC validation failed due to API error: {e.status} {e.reason}",
+                    critical=True,
+                )
+                logger.warning(
+                    "RBAC validation could not complete due to an API error (%s %s). "
+                    "You can skip this check with --skip-rbac-validation.",
+                    e.status,
+                    e.reason,
+                )
+            else:
+                self.reporter.add_result(
+                    "RBAC Permissions",
+                    True,
+                    "All required RBAC permissions validated",
+                    critical=True,
                 )
         else:
             logger.info("RBAC validation skipped (--skip-rbac-validation specified)")

@@ -18,6 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from lib import KubeClient, Phase, StateManager
+from lib.constants import (
+    ACM_BACKUP_NAME_RE,
+    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
+    ACM_BACKUP_SCHEDULE_TYPES,
+    BACKUP_NAMESPACE,
+    BACKUP_POLL_INTERVAL,
+    BACKUP_VERIFY_TIMEOUT,
+)
 
 from .failure_injection import FailureInjector, InjectionResult
 from .phase_handlers import CycleResult, PhaseHandlers, PhaseResult
@@ -43,6 +51,9 @@ class RunConfig:
     skip_observability_checks: bool = False
     skip_rbac_validation: bool = False
     manage_auto_import_strategy: bool = False
+    disable_observability_on_secondary: bool = False
+    argocd_manage: bool = False
+    argocd_resume_after_switchover: bool = False
     # Soak testing controls
     run_hours: Optional[float] = None
     max_failures: Optional[int] = None
@@ -339,7 +350,9 @@ class E2EOrchestrator:
         error_lower = error_msg.lower()
         return any(pattern.lower() in error_lower for pattern in transient_patterns)
 
-    def _create_clients(self, primary_context: str, secondary_context: str) -> tuple[KubeClient, KubeClient]:
+    def _create_clients(
+        self, primary_context: str, secondary_context: str
+    ) -> tuple[KubeClient, KubeClient]:
         """
         Create KubeClient instances for both hubs.
 
@@ -360,7 +373,9 @@ class E2EOrchestrator:
         )
         return primary, secondary
 
-    def _create_state_manager(self, cycle_id: str, primary_context: str, secondary_context: str) -> StateManager:
+    def _create_state_manager(
+        self, cycle_id: str, primary_context: str, secondary_context: str
+    ) -> StateManager:
         """
         Create a fresh StateManager for a cycle.
 
@@ -405,7 +420,9 @@ class E2EOrchestrator:
             ],
         }
 
-        metrics_file = self.run_output_dir / "metrics" / f"metrics_{cycle_result.cycle_id}.json"
+        metrics_file = (
+            self.run_output_dir / "metrics" / f"metrics_{cycle_result.cycle_id}.json"
+        )
         with open(metrics_file, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
 
@@ -444,7 +461,9 @@ class E2EOrchestrator:
         # Also write CSV for compatibility with bash analyzer
         csv_file = self.run_output_dir / "cycle_results.csv"
         with open(csv_file, "w", encoding="utf-8") as f:
-            f.write("cycle,phase,status,start_time,end_time,duration_seconds,exit_code\n")
+            f.write(
+                "cycle,phase,status,start_time,end_time,duration_seconds,exit_code\n"
+            )
             for cycle in result.cycles:
                 for phase in cycle.phase_results:
                     status = "0" if phase.success else "1"
@@ -456,6 +475,162 @@ class E2EOrchestrator:
                     )
 
         self.logger.info("Summary written to: %s", summary_file)
+
+    @staticmethod
+    def _cycle_changed_hubs(cycle_result: "CycleResult") -> bool:
+        """Check if a cycle actually performed a switchover (hubs changed roles).
+
+        A switchover changes hub roles only if the activation phase completed
+        successfully (or a later phase ran). If the cycle failed before or during
+        activation, the hubs are still in their original roles.
+        """
+        if cycle_result.success:
+            return True
+        # Phases that run after activation indicates hubs changed
+        post_activation_phases = {"post_activation", "finalization"}
+        for pr in cycle_result.phase_results:
+            if pr.phase_name == "activation" and pr.success:
+                return True
+            if pr.phase_name in post_activation_phases:
+                return True
+        return False
+
+    @staticmethod
+    def _get_acm_backup_schedule_type(backup: Dict[str, Any]) -> Optional[str]:
+        """Return the ACM backup schedule type for a Velero backup, when recognized."""
+        labels = backup.get("metadata", {}).get("labels", {}) or {}
+        schedule_type = labels.get(ACM_BACKUP_SCHEDULE_TYPE_LABEL)
+        if schedule_type in ACM_BACKUP_SCHEDULE_TYPES:
+            return schedule_type
+
+        backup_name = backup.get("metadata", {}).get("name", "")
+        if not ACM_BACKUP_NAME_RE.match(backup_name):
+            return None
+        if backup_name.startswith("acm-managed-clusters-"):
+            return "managedClusters"
+        if backup_name.startswith("acm-credentials-"):
+            return "credentials"
+        if backup_name.startswith("acm-resources-"):
+            return "resources"
+        return None
+
+    @classmethod
+    def _filter_acm_owned_backups(
+        cls, backups: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Return only ACM-owned Velero backups."""
+        return [
+            backup for backup in backups if cls._get_acm_backup_schedule_type(backup)
+        ]
+
+    @staticmethod
+    def _backup_sort_key(backup: Dict[str, Any]) -> str:
+        """Return the best timestamp available for ordering backup generations."""
+        status = backup.get("status", {}) or {}
+        metadata = backup.get("metadata", {}) or {}
+        return (
+            status.get("completionTimestamp")
+            or status.get("startTimestamp")
+            or metadata.get("creationTimestamp")
+            or ""
+        )
+
+    def _wait_for_full_backup_stability(
+        self,
+        primary_context: str,
+        timeout: int = BACKUP_VERIFY_TIMEOUT,
+    ) -> None:
+        """Wait until the new primary's ACM backup set has stopped changing."""
+        self.logger.info(
+            "Waiting for ACM backup stability on new primary: %s", primary_context
+        )
+        primary_client = KubeClient(context=primary_context, dry_run=False)
+        stable_signature = None
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            backups = primary_client.list_custom_resources(
+                group="velero.io",
+                version="v1",
+                plural="backups",
+                namespace=BACKUP_NAMESPACE,
+            )
+            acm_backups = self._filter_acm_owned_backups(backups)
+
+            if not acm_backups:
+                self.logger.info(
+                    "No ACM-owned Velero backups found yet on %s", primary_context
+                )
+                time.sleep(BACKUP_POLL_INTERVAL)
+                continue
+
+            in_progress = []
+            latest_completed = {}
+            for backup in acm_backups:
+                schedule_type = self._get_acm_backup_schedule_type(backup)
+                if not schedule_type:
+                    continue
+
+                phase = backup.get("status", {}).get("phase", "unknown")
+                if phase in ("New", "InProgress", "Finalizing"):
+                    in_progress.append(
+                        f"{backup.get('metadata', {}).get('name', 'unknown')}:{phase}"
+                    )
+                    continue
+                if phase != "Completed":
+                    continue
+
+                existing = latest_completed.get(schedule_type)
+                if existing is None or self._backup_sort_key(
+                    backup
+                ) > self._backup_sort_key(existing):
+                    latest_completed[schedule_type] = backup
+
+            missing_types = sorted(
+                set(ACM_BACKUP_SCHEDULE_TYPES) - set(latest_completed)
+            )
+            if in_progress or missing_types:
+                if in_progress:
+                    self.logger.info(
+                        "ACM backups still in progress on %s: %s",
+                        primary_context,
+                        ", ".join(in_progress),
+                    )
+                if missing_types:
+                    self.logger.info(
+                        "Waiting for completed ACM backup types on %s: %s",
+                        primary_context,
+                        ", ".join(missing_types),
+                    )
+                stable_signature = None
+                time.sleep(BACKUP_POLL_INTERVAL)
+                continue
+
+            signature = tuple(
+                (
+                    schedule_type,
+                    latest_completed[schedule_type].get("metadata", {}).get("name", ""),
+                    self._backup_sort_key(latest_completed[schedule_type]),
+                )
+                for schedule_type in sorted(ACM_BACKUP_SCHEDULE_TYPES)
+            )
+
+            if signature == stable_signature:
+                self.logger.info(
+                    "ACM backup set is stable on new primary: %s", primary_context
+                )
+                return
+
+            stable_signature = signature
+            self.logger.info(
+                "Observed complete ACM backup set on %s; verifying it remains stable before next cycle",
+                primary_context,
+            )
+            time.sleep(BACKUP_POLL_INTERVAL)
+
+        raise RuntimeError(
+            f"Timed out waiting for ACM backup stability on new primary {primary_context} after {timeout}s"
+        )
 
     def _run_cycle(
         self,
@@ -477,8 +652,12 @@ class E2EOrchestrator:
         cycle_id = f"cycle_{cycle_num:03d}"
         self.logger.info("")
         self.logger.info("=" * 60)
-        self.logger.info("STARTING CYCLE %d/%d (ID: %s)", cycle_num, self.config.cycles, cycle_id)
-        self.logger.info("Primary: %s, Secondary: %s", primary_context, secondary_context)
+        self.logger.info(
+            "STARTING CYCLE %d/%d (ID: %s)", cycle_num, self.config.cycles, cycle_id
+        )
+        self.logger.info(
+            "Primary: %s, Secondary: %s", primary_context, secondary_context
+        )
         self.logger.info("=" * 60)
 
         start_time = datetime.now(timezone.utc)
@@ -486,12 +665,18 @@ class E2EOrchestrator:
 
         # Log cycle start to JSONL
         if self._metrics_logger:
-            self._metrics_logger.log_cycle_start(cycle_id, cycle_num, primary_context, secondary_context)
+            self._metrics_logger.log_cycle_start(
+                cycle_id, cycle_num, primary_context, secondary_context
+            )
 
         # Create fresh clients and state for this cycle
         try:
-            primary_client, secondary_client = self._create_clients(primary_context, secondary_context)
-            state_manager = self._create_state_manager(cycle_id, primary_context, secondary_context)
+            primary_client, secondary_client = self._create_clients(
+                primary_context, secondary_context
+            )
+            state_manager = self._create_state_manager(
+                cycle_id, primary_context, secondary_context
+            )
         except Exception as e:
             self.logger.error("Failed to initialize cycle %d: %s", cycle_num, e)
             end_time = datetime.now(timezone.utc)
@@ -525,7 +710,11 @@ class E2EOrchestrator:
                 if timing == "before" and failure_injector.should_inject_at(phase_name):
                     result = failure_injector.inject()
                     if result.success:
-                        self.logger.warning("Failure injected at phase %s: %s", phase_name, result.message)
+                        self.logger.warning(
+                            "Failure injected at phase %s: %s",
+                            phase_name,
+                            result.message,
+                        )
                         if self._metrics_logger:
                             self._metrics_logger.log_metric(
                                 {
@@ -552,6 +741,9 @@ class E2EOrchestrator:
                 skip_observability_checks=self.config.skip_observability_checks,
                 skip_rbac_validation=self.config.skip_rbac_validation,
                 manage_auto_import_strategy=self.config.manage_auto_import_strategy,
+                disable_observability_on_secondary=self.config.disable_observability_on_secondary,
+                argocd_manage=self.config.argocd_manage,
+                argocd_resume_after_switchover=self.config.argocd_resume_after_switchover,
                 phase_callback=phase_callback,
             )
 
@@ -587,9 +779,13 @@ class E2EOrchestrator:
             if failure_injector:
                 cleanup_result = failure_injector.cleanup()
                 if cleanup_result.success:
-                    self.logger.info("Failure injection cleaned up: %s", cleanup_result.message)
+                    self.logger.info(
+                        "Failure injection cleaned up: %s", cleanup_result.message
+                    )
                 else:
-                    self.logger.warning("Failure injection cleanup failed: %s", cleanup_result.message)
+                    self.logger.warning(
+                        "Failure injection cleanup failed: %s", cleanup_result.message
+                    )
 
         end_time = datetime.now(timezone.utc)
 
@@ -620,14 +816,22 @@ class E2EOrchestrator:
                 self._metrics_logger.log_phase_result(
                     cycle_id, pr.phase_name, pr.success, pr.duration_seconds, pr.error
                 )
-            self._metrics_logger.log_cycle_end(cycle_id, cycle_success, result.total_duration_seconds)
+            self._metrics_logger.log_cycle_end(
+                cycle_id, cycle_success, result.total_duration_seconds
+            )
 
         if cycle_success:
             self.logger.info(
-                "✅ Cycle %d completed successfully in %.1f seconds", cycle_num, result.total_duration_seconds
+                "✅ Cycle %d completed successfully in %.1f seconds",
+                cycle_num,
+                result.total_duration_seconds,
             )
         else:
-            self.logger.error("❌ Cycle %d failed after %.1f seconds", cycle_num, result.total_duration_seconds)
+            self.logger.error(
+                "❌ Cycle %d failed after %.1f seconds",
+                cycle_num,
+                result.total_duration_seconds,
+            )
 
         return result
 
@@ -686,14 +890,18 @@ class E2EOrchestrator:
             if resume_state:
                 start_cycle = resume_state.get("last_completed_cycle", 0) + 1
                 current_primary = resume_state.get("current_primary", current_primary)
-                current_secondary = resume_state.get("current_secondary", current_secondary)
+                current_secondary = resume_state.get(
+                    "current_secondary", current_secondary
+                )
                 success_count = resume_state.get("success_count", 0)
                 failure_count = resume_state.get("failure_count", 0)
 
                 # Restore original start_time for accurate time limit enforcement
                 if "start_time" in resume_state:
                     start_time = datetime.fromisoformat(resume_state["start_time"])
-                    elapsed = (datetime.now(timezone.utc) - start_time).total_seconds() / 3600
+                    elapsed = (
+                        datetime.now(timezone.utc) - start_time
+                    ).total_seconds() / 3600
                     self.logger.info(
                         "Resuming from cycle %d (previous: %d success, %d failures, elapsed: %.1fh)",
                         start_cycle,
@@ -720,7 +928,9 @@ class E2EOrchestrator:
                 )
                 break
 
-            cycle_result = self._run_cycle(cycle_num, current_primary, current_secondary)
+            cycle_result = self._run_cycle(
+                cycle_num, current_primary, current_secondary
+            )
             cycles.append(cycle_result)
             self._cycle_results.append(cycle_result)  # Also store in property
 
@@ -729,8 +939,20 @@ class E2EOrchestrator:
             else:
                 failure_count += 1
 
-            # Calculate next cycle's contexts (swap for bi-directional switchover)
-            next_primary, next_secondary = current_secondary, current_primary
+            # Only swap contexts if the cycle actually changed hub roles.
+            # If the cycle failed before activation completed, the hubs are
+            # still in the same roles and retrying the same direction is correct.
+            hubs_changed = self._cycle_changed_hubs(cycle_result)
+            if hubs_changed:
+                next_primary, next_secondary = current_secondary, current_primary
+            else:
+                next_primary, next_secondary = current_primary, current_secondary
+                if not cycle_result.success:
+                    self.logger.info(
+                        "Keeping same context order (switchover did not complete): Primary=%s, Secondary=%s",
+                        current_primary,
+                        current_secondary,
+                    )
 
             # Save resume state after each cycle (before any early exit checks)
             # This ensures resume works correctly even when stopping early
@@ -746,7 +968,9 @@ class E2EOrchestrator:
             # Check for early stop conditions
             if not cycle_result.success and self.config.stop_on_failure:
                 stop_reason = "stop_on_failure"
-                self.logger.warning("Stopping after cycle %d failure (stop_on_failure=True)", cycle_num)
+                self.logger.warning(
+                    "Stopping after cycle %d failure (stop_on_failure=True)", cycle_num
+                )
                 break
 
             # Check max failures limit
@@ -758,16 +982,30 @@ class E2EOrchestrator:
                 )
                 break
 
-            # Swap contexts for next cycle
+            # Apply context swap for next cycle
             if cycle_num < self.config.cycles:
+                if (
+                    self.config.method == "full"
+                    and cycle_result.success
+                    and hubs_changed
+                    and not self.config.dry_run
+                ):
+                    self._wait_for_full_backup_stability(next_primary)
+
                 current_primary, current_secondary = next_primary, next_secondary
-                self.logger.info(
-                    "Swapped contexts for next cycle: Primary=%s, Secondary=%s", current_primary, current_secondary
-                )
+                if hubs_changed:
+                    self.logger.info(
+                        "Swapped contexts for next cycle: Primary=%s, Secondary=%s",
+                        current_primary,
+                        current_secondary,
+                    )
 
                 # Cooldown between cycles
                 if self.config.cooldown_seconds > 0:
-                    self.logger.info("Cooldown for %d seconds before next cycle...", self.config.cooldown_seconds)
+                    self.logger.info(
+                        "Cooldown for %d seconds before next cycle...",
+                        self.config.cooldown_seconds,
+                    )
                     time.sleep(self.config.cooldown_seconds)
 
         end_time = datetime.now(timezone.utc)

@@ -223,7 +223,7 @@ mypy acm_switchover.py lib/ modules/ --ignore-missing-imports
 ### Bandit (Static Security Analysis)
 
 ```bash
-bandit -r . -ll
+bandit --ini .bandit -ll
 ```
 
 ### Safety (Dependency Vulnerabilities)
@@ -245,7 +245,7 @@ pip-audit --desc
 #### CI/CD Pipeline (`.github/workflows/ci-cd.yml`)
 
 Runs on every push and pull request:
-- ✅ Unit tests (Python 3.9-3.12)
+- ✅ Unit tests (Python 3.10-3.12)
 - ✅ Code quality checks
 - ✅ Security scanning
 - ✅ Syntax validation

@@ -20,7 +20,7 @@ docker build -t acm-switchover:latest -f container-bootstrap/Containerfile .
 
 The container image includes:
 
-- **Python 3.9** - Runtime environment
+- **Python 3.12** - Runtime environment
 - **OpenShift CLI (oc)** - Kubernetes API client (stable-4.14+)
 - **kubectl** - Kubernetes command-line tool (via oc)
 - **jq** - JSON processor for debugging

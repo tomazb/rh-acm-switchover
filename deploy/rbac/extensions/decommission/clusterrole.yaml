@@ -1,0 +1,21 @@
+---
+# ClusterRole for ACM Switchover Decommission
+# Grants only the extra cluster-scoped delete permissions needed for hub teardown
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: acm-switchover-decommission
+  labels:
+    app.kubernetes.io/name: acm-switchover
+    app.kubernetes.io/component: decommission
+    app.kubernetes.io/role: operator
+rules:
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["delete"]
+  - apiGroups: ["operator.open-cluster-management.io"]
+    resources: ["multiclusterhubs"]
+    verbs: ["delete"]
+  - apiGroups: ["observability.open-cluster-management.io"]
+    resources: ["multiclusterobservabilities"]
+    verbs: ["delete"]

@@ -14,6 +14,15 @@ import pytest
 from tests.e2e.orchestrator import E2EOrchestrator, RunConfig
 
 
+@pytest.fixture(scope="class", autouse=True)
+def _reset_phase_tracker():
+    """Reset PhaseTracker between test classes to prevent cross-class leakage."""
+    from tests.e2e.full_validation_helpers import PhaseTracker
+
+    PhaseTracker.reset()
+    yield
+
+
 def pytest_addoption(parser):
     """Add E2E-specific command line options."""
     group = parser.getgroup("e2e", "E2E Testing Options")
@@ -120,8 +129,43 @@ def pytest_addoption(parser):
         "--e2e-inject-at-phase",
         action="store",
         default=os.environ.get("E2E_INJECT_AT_PHASE", "activation"),
-        choices=["preflight", "primary_prep", "activation", "post_activation", "finalization"],
+        choices=[
+            "preflight",
+            "primary_prep",
+            "activation",
+            "post_activation",
+            "finalization",
+        ],
         help="Phase at which to inject failure (env: E2E_INJECT_AT_PHASE, default: activation)",
+    )
+
+    group.addoption(
+        "--e2e-argocd-mode",
+        action="store",
+        default=os.environ.get("E2E_ARGOCD_MODE", "rotate"),
+        choices=["none", "pause", "pause-resume", "rotate"],
+        help="Argo CD mode for full validation soak (env: E2E_ARGOCD_MODE, default: rotate)",
+    )
+
+    group.addoption(
+        "--e2e-disable-observability-on-secondary",
+        action="store_true",
+        default=os.environ.get("E2E_DISABLE_OBSERVABILITY_ON_SECONDARY", "").lower() in ("1", "true", "yes"),
+        help="Delete MCO on old hub instead of just scaling down (env: E2E_DISABLE_OBSERVABILITY_ON_SECONDARY)",
+    )
+
+    group.addoption(
+        "--e2e-argocd-manage",
+        action="store_true",
+        default=os.environ.get("E2E_ARGOCD_MANAGE", "").lower() in ("1", "true", "yes"),
+        help="Pause ArgoCD auto-sync for ACM-touching apps during switchover (env: E2E_ARGOCD_MANAGE)",
+    )
+
+    group.addoption(
+        "--e2e-argocd-resume-after-switchover",
+        action="store_true",
+        default=os.environ.get("E2E_ARGOCD_RESUME_AFTER_SWITCHOVER", "").lower() in ("1", "true", "yes"),
+        help="Resume ArgoCD auto-sync after switchover completes (env: E2E_ARGOCD_RESUME_AFTER_SWITCHOVER)",
     )
 
 
@@ -129,6 +173,11 @@ def pytest_configure(config):
     """Register E2E and resilience markers."""
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring real clusters")
     config.addinivalue_line("markers", "resilience: Resilience tests with failure injection")
+    config.addinivalue_line(
+        "markers",
+        "e2e_full_validation: Full validation E2E suite against real clusters",
+    )
+    config.addinivalue_line("markers", "e2e_soak: Soak testing subset (long-running)")
 
 
 @pytest.fixture(scope="session")
@@ -169,6 +218,9 @@ def e2e_config(request, tmp_path_factory) -> RunConfig:
         resume=request.config.getoption("--e2e-resume"),
         inject_failure=request.config.getoption("--e2e-inject-failure"),
         inject_at_phase=request.config.getoption("--e2e-inject-at-phase"),
+        disable_observability_on_secondary=request.config.getoption("--e2e-disable-observability-on-secondary"),
+        argocd_manage=request.config.getoption("--e2e-argocd-manage"),
+        argocd_resume_after_switchover=request.config.getoption("--e2e-argocd-resume-after-switchover"),
     )
 
 

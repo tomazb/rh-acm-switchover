@@ -165,6 +165,43 @@ class TestE2EDryRun:
         assert captured_contexts[1] == ("hub-b", "hub-a")  # Swapped
         assert captured_contexts[2] == ("hub-a", "hub-b")  # Swapped back
 
+    def test_full_method_waits_for_backup_stability_between_cycles(self, tmp_path):
+        """Full multi-cycle runs should wait for the new primary's backups to settle."""
+        config = RunConfig(
+            primary_context="hub-a",
+            secondary_context="hub-b",
+            method="full",
+            dry_run=False,
+            cycles=2,
+            output_dir=tmp_path,
+            cooldown_seconds=0,
+        )
+
+        orchestrator = E2EOrchestrator(config)
+
+        first_cycle = make_cycle_result(
+            cycle_id="cycle_001",
+            cycle_num=1,
+            success=True,
+            primary_context="hub-a",
+            secondary_context="hub-b",
+        )
+        second_cycle = make_cycle_result(
+            cycle_id="cycle_002",
+            cycle_num=2,
+            success=True,
+            primary_context="hub-b",
+            secondary_context="hub-a",
+        )
+
+        with (
+            patch.object(orchestrator, "_run_cycle", side_effect=[first_cycle, second_cycle]),
+            patch.object(orchestrator, "_wait_for_full_backup_stability") as mock_wait_for_backups,
+        ):
+            orchestrator.run_all_cycles()
+
+        mock_wait_for_backups.assert_called_once_with("hub-b")
+
     def test_stop_on_failure(self, tmp_path):
         """Test that stop_on_failure halts execution after first failure."""
         config = RunConfig(

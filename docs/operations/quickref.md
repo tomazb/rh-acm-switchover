@@ -51,6 +51,8 @@ python acm_switchover.py \
 
 ```
 
+Argo CD detection runs automatically during preflight when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable all GitOps detection including Argo CD deep dive.
+
 ### Switchover Execution
 
 ```bash
@@ -197,6 +199,25 @@ oc --context <secondary> get backup -n open-cluster-management-backup \
 oc --context <secondary> get pods -n open-cluster-management-observability
 ```
 
+## Argo CD / GitOps
+
+```bash
+# Detection only (preflight)
+python acm_switchover.py --validate-only --primary-context <p> --secondary-context <s>
+
+# Pause ACM-touching Applications during switchover
+python acm_switchover.py ... --argocd-manage
+
+# Resume after updating Git for new hub (during run or standalone)
+python acm_switchover.py ... --argocd-resume-after-switchover
+# Or later:
+python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>
+```
+
+Bash: `./scripts/preflight-check.sh` (Argo CD detection is automatic), `./scripts/argocd-manage.sh --mode pause|resume`. See [scripts/README.md](../scripts/README.md).
+
+Note: Resume treats already-resumed apps as idempotent no-ops and fails only when an Application cannot be restored for actionable reasons. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
+
 ## Troubleshooting Commands
 
 ```bash
@@ -227,16 +248,25 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--method {passive,full}` | Switchover method: `passive` or `full` (required) |
 | `--old-hub-action {secondary,decommission,none}` | Action for old hub after switchover (required) |
 | `--activation-method {patch,restore}` | Activation method for passive restores (default: patch) |
+| `--min-managed-clusters N` | Require at least `N` non-local `ManagedCluster` resources after restore; `N` must be non-negative and `0` keeps the check informational |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--decommission` | Decommission old hub (interactive) |
+| `--setup` | Deploy RBAC resources and optionally generate kubeconfigs |
+| `--include-decommission` | With `--setup`, also deploy the opt-in decommission RBAC extension |
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
 | `--reset-state` | Reset state file and start fresh |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Skip Observability steps even if detected |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
+| `--skip-gitops-check` | Disable all GitOps detection including Argo CD deep dive |
+| `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; with `--validate-only` it is ignored with a warning; not valid with `--argocd-resume-only`) |
+| `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only`, `--argocd-resume-only`, or `--old-hub-action decommission`) |
+| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; auto-discovers a swapped-context state file when unambiguous; not valid with `--validate-only`, `--argocd-manage`, `--argocd-resume-after-switchover`, `--decommission`, or `--setup`) |
 | `--verbose, -v` | Enable verbose logging |
+
+For `--setup`, `--include-decommission` requires `--role operator` or `--role both`.
 
 > **Note:** When using `--activation-method restore`, ensure the passive restore is fully deleted
 > before creating `restore-acm-activate`. The tool now waits for deletion to propagate; if done
@@ -395,6 +425,7 @@ podman run -it --rm \
 | `--method passive` | Use passive sync method (required) |
 | `--method full` | Use full restore method (required) |
 | `--activation-method {patch,restore}` | Activation option for passive method |
+| `--min-managed-clusters N` | Enforce a non-negative minimum restored non-local `ManagedCluster` count (`0` = informational only) |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--verbose` | Enable debug logging |

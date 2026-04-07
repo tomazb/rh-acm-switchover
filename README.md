@@ -1,6 +1,6 @@
 # ACM Hub Switchover Automation
 
-**Version 1.5.3** (2026-01-29)
+**Version 1.6.3** (2026-04-07)
 
 Automated, idempotent script for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster.
 
@@ -95,7 +95,7 @@ See [docs/README.md](docs/README.md) for complete documentation index.
 
 ## Prerequisites
 
-- Python 3.9+
+- Python 3.10+
 - `kubectl` or `oc` CLI configured for both primary and secondary hubs
 - ACM Backup configured on both hubs
 - OADP operator installed on both hubs
@@ -176,6 +176,8 @@ python acm_switchover.py \
   --old-hub-action secondary
 ```
 
+If you later use `--argocd-resume-only` after a reverse switchover, the CLI will reuse the original state file automatically when the swapped-context match is unambiguous. If both context orderings have state files, pass `--state-file` explicitly.
+
 > **Note:** Requires original switchover used `--old-hub-action secondary` to enable passive sync.
 
 ### Decommission Old Hub
@@ -193,6 +195,7 @@ python acm_switchover.py --decommission \
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method` | Switchover method: `passive` or `full` (required) |
 | `--activation-method` | Activation option for passive method: `patch` (default) or `restore` |
+| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; must be non-negative (`0` = informational only) |
 | `--old-hub-action` | Action for old hub: `secondary` (**recommended** - enables reverse switchover), `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
@@ -343,7 +346,7 @@ See [docs/development/testing.md](docs/development/testing.md) for detailed test
 **Main Pipeline** (`.github/workflows/ci-cd.yml`):
 
 - Runs on every push and pull request
-- Tests across Python 3.9-3.12
+- Tests across Python 3.10-3.12
 - Code quality and security checks
 - Syntax validation
 - Documentation verification

@@ -2,13 +2,13 @@
 
 This guide explains how to configure GitHub repository secrets for automated container image builds and publishing.
 
-## Required Secrets
+## Registry Secrets
 
-To enable the full CI/CD pipeline for container image building, you need to configure the following secrets in your GitHub repository.
+GitHub Actions can always publish the container image to GitHub Container Registry (GHCR) using the built-in `GITHUB_TOKEN`. Quay.io publishing is optional and requires repository secrets.
 
-### 1. Quay.io Credentials
+### 1. Quay.io Credentials (Optional)
 
-The container images are published to Quay.io registry.
+When `QUAY_USERNAME` and `QUAY_PASSWORD` are configured, tag and `main` builds publish to both GHCR and Quay.io. If those secrets are absent, the workflow skips Quay.io and continues with GHCR only.
 
 #### Create Quay.io Account and Repository
 
@@ -56,7 +56,7 @@ Value: <your-quay-token>
 # Example: ABC123XYZ... (the encrypted password or robot token)
 ```
 
-### 2. GitHub Token (Optional)
+### 2. GitHub Token (Built In)
 
 GitHub automatically provides `GITHUB_TOKEN` for workflows. No additional configuration needed for:
 - Creating releases
@@ -95,7 +95,9 @@ This will trigger the workflow without publishing (PR builds don't push images).
    git push origin main
    ```
    
-   This will build and push to `quay.io/tomazborstnar/acm-switchover:latest`
+   This will build and push to `ghcr.io/tomazb/acm-switchover:latest`
+
+   If Quay secrets are configured, it will also push to `quay.io/tomazborstnar/acm-switchover:latest`.
 
 2. **Create a version tag**:
    ```bash
@@ -103,13 +105,16 @@ This will trigger the workflow without publishing (PR builds don't push images).
    git push origin v1.0.0
    ```
    
-   This will build and push:
-   - `quay.io/tomazborstnar/acm-switchover:v1.0.0`
-   - `quay.io/tomazborstnar/acm-switchover:1.0.0`
-   - `quay.io/tomazborstnar/acm-switchover:1.0`
-   - `quay.io/tomazborstnar/acm-switchover:1`
-   - `quay.io/tomazborstnar/acm-switchover:latest`
-   
+   This will always build and push:
+   - `ghcr.io/tomazb/acm-switchover:v1.0.0`
+   - `ghcr.io/tomazb/acm-switchover:1.0.0`
+   - `ghcr.io/tomazb/acm-switchover:1.0`
+   - `ghcr.io/tomazb/acm-switchover:1`
+
+   If Quay secrets are configured, it will also push the matching `quay.io/tomazborstnar/acm-switchover:*` tags.
+
+   The `latest` tag is updated by `main` branch builds, not by version-tag builds.
+
    And create a GitHub Release with SBOM attached.
 
 ## Verify Successful Build
@@ -123,7 +128,13 @@ This will trigger the workflow without publishing (PR builds don't push images).
    - ✅ test-container
    - ✅ publish-release (for tags only)
 
-### Verify Quay.io
+### Verify GHCR
+
+1. Go to your package page on GitHub
+2. Verify new image tags are listed
+3. Confirm the package digest matches the workflow output
+
+### Verify Quay.io (Optional)
 
 1. Go to [quay.io/repository/tomazborstnar/acm-switchover](https://quay.io/repository/tomazborstnar/acm-switchover)
 2. Check "Tags" tab
@@ -134,13 +145,13 @@ This will trigger the workflow without publishing (PR builds don't push images).
 
 ```bash
 # Pull the image
-podman pull quay.io/tomazborstnar/acm-switchover:latest
+podman pull ghcr.io/tomazb/acm-switchover:latest
 
 # Run basic test
-podman run --rm quay.io/tomazborstnar/acm-switchover:latest --help
+podman run --rm ghcr.io/tomazb/acm-switchover:latest --help
 
 # Verify prerequisites
-podman run --rm quay.io/tomazborstnar/acm-switchover:latest sh -c "oc version --client && jq --version"
+podman run --rm ghcr.io/tomazb/acm-switchover:latest sh -c "oc version --client && jq --version"
 ```
 
 ## Security Configuration
@@ -167,6 +178,18 @@ podman run --rm quay.io/tomazborstnar/acm-switchover:latest sh -c "oc version --
 1. Verify `QUAY_USERNAME` and `QUAY_PASSWORD` are correct
 2. Check robot account has "Write" permissions
 3. Ensure repository name matches: `tomazborstnar/acm-switchover`
+
+### Quay Push Is Skipped
+
+**Issue**: Workflow warns that Quay secrets are not configured
+
+**Behavior**:
+1. GHCR publishing continues successfully
+2. Quay login, publish, and Quay-specific release references are skipped
+
+**Solution**:
+1. Add `QUAY_USERNAME` and `QUAY_PASSWORD` if dual publishing is required
+2. Otherwise no action is needed
 
 ### Build Fails: "manifest unknown"
 

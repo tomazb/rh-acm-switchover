@@ -27,6 +27,11 @@ coverage.xml
 # Local environment files
 .env
 .cursor/
+.remember
+.planning/
 .validation/
+.worktrees/
 kubeconfigs/
+e2e-soak-24h/
 
+e2e-15-switchover/

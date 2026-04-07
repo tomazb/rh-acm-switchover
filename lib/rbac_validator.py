@@ -12,6 +12,8 @@ The module supports two roles:
 import logging
 from typing import Dict, List, Optional, Tuple
 
+from kubernetes.client.rest import ApiException
+
 from lib import KubeClient
 from lib.exceptions import ValidationError
 
@@ -19,6 +21,14 @@ logger = logging.getLogger("acm_switchover")
 
 # Valid roles for RBAC validation
 VALID_ROLES = ("operator", "validator")
+# Valid Argo CD RBAC validation modes
+VALID_ARGOCD_MODES = ("none", "check", "manage")
+
+
+def _validate_argocd_mode(argocd_mode: str) -> None:
+    """Validate Argo CD RBAC mode."""
+    if argocd_mode not in VALID_ARGOCD_MODES:
+        raise ValueError(f"Invalid argocd_mode '{argocd_mode}'. Must be one of: {VALID_ARGOCD_MODES}")
 
 
 class RBACValidator:
@@ -28,12 +38,28 @@ class RBACValidator:
     OPERATOR_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
         ("", "nodes", ["get", "list"]),  # For cluster health validation per runbook
-        ("config.openshift.io", "clusteroperators", ["get", "list"]),  # For OpenShift health
-        ("config.openshift.io", "clusterversions", ["get", "list"]),  # For upgrade status check
-        ("cluster.open-cluster-management.io", "managedclusters", ["get", "list", "patch"]),
+        (
+            "config.openshift.io",
+            "clusteroperators",
+            ["get", "list"],
+        ),  # For OpenShift health
+        (
+            "config.openshift.io",
+            "clusterversions",
+            ["get", "list"],
+        ),  # For upgrade status check
+        (
+            "cluster.open-cluster-management.io",
+            "managedclusters",
+            ["get", "list", "patch"],
+        ),
         ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["get", "list"],
+        ),
     ]
 
     # Required cluster-scoped permissions for VALIDATOR role (read-only)
@@ -42,10 +68,18 @@ class RBACValidator:
         ("", "nodes", ["get", "list"]),
         ("config.openshift.io", "clusteroperators", ["get", "list"]),
         ("config.openshift.io", "clusterversions", ["get", "list"]),
-        ("cluster.open-cluster-management.io", "managedclusters", ["get", "list"]),  # No patch
+        (
+            "cluster.open-cluster-management.io",
+            "managedclusters",
+            ["get", "list"],
+        ),  # No patch
         ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["get", "list"],
+        ),
     ]
 
     # Alias for backwards compatibility
@@ -57,11 +91,23 @@ class RBACValidator:
             ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
             ("", "secrets", ["get"]),
             ("", "pods", ["get", "list"]),  # For Velero pod health checks
-            ("cluster.open-cluster-management.io", "backupschedules", ["get", "list", "create", "patch", "delete"]),
-            ("cluster.open-cluster-management.io", "restores", ["get", "list", "create", "patch", "delete"]),
+            (
+                "cluster.open-cluster-management.io",
+                "backupschedules",
+                ["get", "list", "create", "patch", "delete"],
+            ),
+            (
+                "cluster.open-cluster-management.io",
+                "restores",
+                ["get", "list", "create", "patch", "delete"],
+            ),
             ("velero.io", "backups", ["get", "list"]),
             ("velero.io", "restores", ["get", "list"]),  # For monitoring restore status
-            ("velero.io", "backupstoragelocations", ["get", "list"]),  # For storage health check
+            (
+                "velero.io",
+                "backupstoragelocations",
+                ["get", "list"],
+            ),  # For storage health check
             ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
         ],
         "open-cluster-management": [
@@ -72,7 +118,11 @@ class RBACValidator:
             ("", "secrets", ["get"]),  # For Thanos object storage config
             ("apps", "deployments", ["get", "patch"]),
             ("apps", "statefulsets", ["get", "patch"]),
-            ("apps", "statefulsets/scale", ["get", "patch"]),  # For Thanos compactor scaling
+            (
+                "apps",
+                "statefulsets/scale",
+                ["get", "patch"],
+            ),  # For Thanos compactor scaling
             ("route.openshift.io", "routes", ["get"]),  # For Grafana route access
         ],
         "multicluster-engine": [
@@ -133,7 +183,32 @@ class RBACValidator:
     DECOMMISSION_PERMISSIONS = [
         ("cluster.open-cluster-management.io", "managedclusters", ["delete"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["delete"]),
-        ("observability.open-cluster-management.io", "multiclusterobservabilities", ["delete"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["delete"],
+        ),
+    ]
+
+    # F9 fix: Argo CD RBAC is split into base permissions (always needed)
+    # and operator-install-only permissions (argocds get/list).
+    # Base permissions needed for any Argo CD install type (vanilla or operator)
+    ARGOCD_BASE_CLUSTER_PERMISSIONS = [
+        ("argoproj.io", "applications", ["get", "list"]),
+        ("apiextensions.k8s.io", "customresourcedefinitions", ["get"]),
+    ]
+
+    # Additional permissions only required for operator-installed Argo CD
+    ARGOCD_OPERATOR_CLUSTER_PERMISSIONS = [
+        ("argoproj.io", "argocds", ["get", "list"]),
+    ]
+
+    # Backwards-compatible alias (includes all permissions)
+    ARGOCD_CHECK_CLUSTER_PERMISSIONS = ARGOCD_BASE_CLUSTER_PERMISSIONS + ARGOCD_OPERATOR_CLUSTER_PERMISSIONS
+
+    # Additional Argo CD write permissions required for --argocd-manage (operator role)
+    ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS = [
+        ("argoproj.io", "applications", ["patch"]),
     ]
 
     def __init__(self, client: KubeClient, role: str = "operator"):
@@ -155,13 +230,17 @@ class RBACValidator:
             return self.VALIDATOR_CLUSTER_PERMISSIONS
         return self.OPERATOR_CLUSTER_PERMISSIONS
 
-    def _get_hub_namespace_permissions(self) -> Dict[str, List[Tuple[str, str, List[str]]]]:
+    def _get_hub_namespace_permissions(
+        self,
+    ) -> Dict[str, List[Tuple[str, str, List[str]]]]:
         """Get hub namespace permissions based on role."""
         if self.role == "validator":
             return self.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
         return self.OPERATOR_HUB_NAMESPACE_PERMISSIONS
 
-    def _get_managed_cluster_namespace_permissions(self) -> Dict[str, List[Tuple[str, str, List[str]]]]:
+    def _get_managed_cluster_namespace_permissions(
+        self,
+    ) -> Dict[str, List[Tuple[str, str, List[str]]]]:
         """Get managed cluster namespace permissions based on role."""
         if self.role == "validator":
             return self.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
@@ -170,6 +249,34 @@ class RBACValidator:
     def _is_write_verb(self, verb: str) -> bool:
         """Check if a verb is a write operation."""
         return verb in ("create", "patch", "delete", "update")
+
+    def _get_argocd_cluster_permissions(
+        self, argocd_mode: str, argocd_install_type: str = "unknown"
+    ) -> List[Tuple[str, str, List[str]]]:
+        """Get Argo CD cluster permissions based on mode, role, and install type.
+
+        Args:
+            argocd_mode: 'none', 'check', or 'manage'
+            argocd_install_type: 'vanilla', 'operator', or 'unknown'. When 'vanilla',
+                argocds permissions are omitted since the CRD does not exist.
+        """
+        _validate_argocd_mode(argocd_mode)
+
+        if argocd_mode == "none":
+            return []
+        if argocd_install_type == "none":
+            return []
+        if argocd_mode == "manage" and self.role == "validator":
+            raise ValueError("validator role cannot use argocd_mode='manage'")
+
+        permissions = list(self.ARGOCD_BASE_CLUSTER_PERMISSIONS)
+        # F9: Only require argocds permissions when operator-installed Argo CD
+        # is present. Vanilla installs have no argocds CRD.
+        if argocd_install_type != "vanilla":
+            permissions.extend(self.ARGOCD_OPERATOR_CLUSTER_PERMISSIONS)
+        if argocd_mode == "manage" and self.role == "operator":
+            permissions.extend(self.ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS)
+        return permissions
 
     def check_permission(
         self, api_group: str, resource: str, verb: str, namespace: Optional[str] = None
@@ -185,7 +292,12 @@ class RBACValidator:
 
         Returns:
             Tuple of (has_permission, error_message)
+
+        Raises:
+            ValidationError: If the permission self-check itself cannot be completed
         """
+        group_name = api_group if api_group else "core"
+        scope = f"namespace '{namespace}'" if namespace else "cluster scope"
         try:
             # Use kubectl auth can-i equivalent via Kubernetes API
             # SelfSubjectAccessReview to check permissions
@@ -215,12 +327,19 @@ class RBACValidator:
                 reason = response.status.reason or "Permission denied"
                 return False, reason
 
+        except ApiException as e:
+            raise ValidationError(
+                f"Unable to check permission {verb} {group_name}/{resource} on {scope}: " f"{e.status} {e.reason}"
+            ) from e
         except Exception as e:
-            logger.warning("Failed to check permission %s/%s: %s", resource, verb, e)
-            return False, f"Error checking permission: {str(e)}"
+            raise ValidationError(f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e}") from e
 
     def validate_cluster_permissions(
-        self, include_decommission: bool = False, skip_observability: bool = False
+        self,
+        include_decommission: bool = False,
+        skip_observability: bool = False,
+        argocd_mode: str = "none",
+        argocd_install_type: str = "unknown",
     ) -> Tuple[bool, List[str]]:
         """
         Validate cluster-scoped permissions based on role.
@@ -228,9 +347,14 @@ class RBACValidator:
         Args:
             include_decommission: Whether to check decommission permissions (operator only)
             skip_observability: Whether to skip observability permission checks
+            argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
+            argocd_install_type: 'vanilla', 'operator', or 'unknown'
 
         Returns:
             Tuple of (all_valid, list of error messages)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         errors = []
         all_valid = True
@@ -258,6 +382,22 @@ class RBACValidator:
                     errors.append(error_msg)
                     logger.error(error_msg)
 
+        # Check Argo CD permissions if requested
+        argocd_permissions = self._get_argocd_cluster_permissions(argocd_mode, argocd_install_type)
+        if argocd_permissions:
+            logger.info("Including Argo CD RBAC checks (mode: %s)", argocd_mode)
+            for api_group, resource, verbs in argocd_permissions:
+                for verb in verbs:
+                    has_perm, error = self.check_permission(api_group, resource, verb)
+                    if not has_perm:
+                        all_valid = False
+                        group_name = api_group if api_group else "core"
+                        error_msg = f"Missing Argo CD permission: {verb} {group_name}/{resource}"
+                        if error:
+                            error_msg += f" - {error}"
+                        errors.append(error_msg)
+                        logger.error(error_msg)
+
         # Check decommission permissions if requested (operator role only)
         if include_decommission and self.role == "operator":
             for api_group, resource, verbs in self.DECOMMISSION_PERMISSIONS:
@@ -272,7 +412,11 @@ class RBACValidator:
                         errors.append(error_msg)
                         logger.error(error_msg)
         elif include_decommission and self.role == "validator":
-            logger.info("Skipping decommission permission checks (validator role is read-only)")
+            # F7 fix: Reject this combination explicitly instead of silently skipping.
+            raise ValueError(
+                "include_decommission=True is not valid for the validator role. "
+                "Decommission permissions are only applicable to the operator role."
+            )
 
         if all_valid:
             logger.info("✓ All cluster-scoped permissions validated for role: %s", self.role)
@@ -294,6 +438,9 @@ class RBACValidator:
 
         Returns:
             Tuple of (all_valid, list of error messages)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         errors = []
         all_valid = True
@@ -311,7 +458,10 @@ class RBACValidator:
 
             # Skip agent namespace on hubs (it exists on managed clusters)
             if skip_agent_namespace and namespace == "open-cluster-management-agent":
-                logger.info("Skipping agent namespace: %s (exists on managed clusters only)", namespace)
+                logger.info(
+                    "Skipping agent namespace: %s (exists on managed clusters only)",
+                    namespace,
+                )
                 continue
 
             # Check if namespace exists first
@@ -393,7 +543,11 @@ class RBACValidator:
         return all_valid, errors
 
     def validate_all_permissions(
-        self, include_decommission: bool = False, skip_observability: bool = False
+        self,
+        include_decommission: bool = False,
+        skip_observability: bool = False,
+        argocd_mode: str = "none",
+        argocd_install_type: str = "unknown",
     ) -> Tuple[bool, Dict[str, List[str]]]:
         """
         Validate all required RBAC permissions.
@@ -401,14 +555,24 @@ class RBACValidator:
         Args:
             include_decommission: Whether to check decommission permissions
             skip_observability: Whether to skip observability checks
+            argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
+            argocd_install_type: 'vanilla', 'operator', or 'unknown'
 
         Returns:
             Tuple of (all_valid, dict of errors by category)
+
+        Raises:
+            ValidationError: If permission checks cannot be completed due to API or client errors
         """
         all_errors: Dict[str, List[str]] = {}
 
         # Validate cluster permissions
-        cluster_valid, cluster_errors = self.validate_cluster_permissions(include_decommission, skip_observability)
+        cluster_valid, cluster_errors = self.validate_cluster_permissions(
+            include_decommission=include_decommission,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
+        )
         if cluster_errors:
             all_errors["cluster"] = cluster_errors
 
@@ -429,18 +593,31 @@ class RBACValidator:
 
         return all_valid, all_errors
 
-    def generate_permission_report(self, include_decommission: bool = False, skip_observability: bool = False) -> str:
+    def generate_permission_report(
+        self,
+        include_decommission: bool = False,
+        skip_observability: bool = False,
+        argocd_mode: str = "none",
+        argocd_install_type: str = "unknown",
+    ) -> str:
         """
         Generate a detailed permission validation report.
 
         Args:
             include_decommission: Whether to check decommission permissions
             skip_observability: Whether to skip observability checks
+            argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
+            argocd_install_type: 'vanilla', 'operator', or 'unknown'
 
         Returns:
             Formatted report string
         """
-        all_valid, all_errors = self.validate_all_permissions(include_decommission, skip_observability)
+        all_valid, all_errors = self.validate_all_permissions(
+            include_decommission=include_decommission,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
+        )
 
         report = ["=" * 80]
         report.append("RBAC PERMISSION VALIDATION REPORT")
@@ -467,9 +644,16 @@ class RBACValidator:
             report.append("REMEDIATION:")
             report.append("")
             report.append("To fix these issues:")
-            report.append("  1. Apply RBAC manifests from deploy/rbac/ directory")
-            report.append("  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/")
-            report.append("  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/")
+            report.append("  1. Apply the baseline RBAC manifests under deploy/rbac/")
+            if include_decommission:
+                report.append("  2. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/")
+                report.append(
+                    "  3. Or use Helm with --set rbac.includeDecommissionClusterRole=true for operator teardown access"
+                )
+                report.append("  4. Or use Kustomize for the baseline and add the decommission manifests separately")
+            else:
+                report.append("  2. Use Kustomize: kubectl apply -k deploy/kustomize/base/")
+                report.append("  3. Use Helm: helm install acm-switchover-rbac deploy/helm/acm-switchover-rbac/")
             report.append("")
             report.append("For more information, see docs/deployment/rbac-requirements.md")
 
@@ -482,6 +666,9 @@ def validate_rbac_permissions(
     secondary_client: Optional[KubeClient] = None,
     include_decommission: bool = False,
     skip_observability: bool = False,
+    argocd_mode: str = "none",
+    argocd_install_type: str = "unknown",
+    secondary_argocd_install_type: Optional[str] = None,
 ) -> None:
     """
     Validate RBAC permissions on primary and optionally secondary hub.
@@ -491,21 +678,37 @@ def validate_rbac_permissions(
         secondary_client: Optional KubeClient for secondary hub
         include_decommission: Whether to check decommission permissions
         skip_observability: Whether to skip observability checks
+        argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
+        argocd_install_type: 'vanilla', 'operator', or 'unknown'
+        secondary_argocd_install_type: Secondary hub install type override.
+            Falls back to argocd_install_type when not provided.
 
     Raises:
         ValidationError: If RBAC validation fails
     """
     logger.info("Starting RBAC permission validation...")
+    _validate_argocd_mode(argocd_mode)
 
     # Validate primary hub
     logger.info("Validating RBAC permissions on primary hub...")
     primary_validator = RBACValidator(primary_client)
-    primary_valid, primary_errors = primary_validator.validate_all_permissions(
-        include_decommission=include_decommission, skip_observability=skip_observability
-    )
+    try:
+        primary_valid, primary_errors = primary_validator.validate_all_permissions(
+            include_decommission=include_decommission,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
+        )
+    except ValidationError as exc:
+        raise ValidationError(f"RBAC permission validation could not be completed on primary hub: {exc}") from exc
 
     if not primary_valid:
-        report = primary_validator.generate_permission_report(include_decommission, skip_observability)
+        report = primary_validator.generate_permission_report(
+            include_decommission=include_decommission,
+            skip_observability=skip_observability,
+            argocd_mode=argocd_mode,
+            argocd_install_type=argocd_install_type,
+        )
         logger.error("\n%s", report)
         raise ValidationError("RBAC permission validation failed on primary hub. " "See report above for details.")
 
@@ -513,14 +716,23 @@ def validate_rbac_permissions(
     if secondary_client:
         logger.info("Validating RBAC permissions on secondary hub...")
         secondary_validator = RBACValidator(secondary_client)
-        secondary_valid, secondary_errors = secondary_validator.validate_all_permissions(
-            include_decommission=False,  # Decommission only on primary
-            skip_observability=skip_observability,
-        )
+        secondary_install_type = secondary_argocd_install_type or argocd_install_type
+        try:
+            secondary_valid, secondary_errors = secondary_validator.validate_all_permissions(
+                include_decommission=False,  # Decommission only on primary
+                skip_observability=skip_observability,
+                argocd_mode=argocd_mode,
+                argocd_install_type=secondary_install_type,
+            )
+        except ValidationError as exc:
+            raise ValidationError(f"RBAC permission validation could not be completed on secondary hub: {exc}") from exc
 
         if not secondary_valid:
             report = secondary_validator.generate_permission_report(
-                include_decommission=False, skip_observability=skip_observability
+                include_decommission=False,
+                skip_observability=skip_observability,
+                argocd_mode=argocd_mode,
+                argocd_install_type=secondary_install_type,
             )
             logger.error("\n%s", report)
             # Include error count in exception message for debugging
@@ -531,3 +743,52 @@ def validate_rbac_permissions(
             )
 
     logger.info("✓ RBAC permission validation completed successfully")
+
+
+def validate_decommission_permissions(
+    primary_client: KubeClient,
+    skip_observability: bool = False,
+) -> None:
+    """Validate only the RBAC permissions used by standalone decommission."""
+    logger.info("Starting decommission RBAC permission validation...")
+
+    validator = RBACValidator(primary_client)
+    try:
+        cluster_valid, cluster_errors = validator.validate_cluster_permissions(
+            include_decommission=True,
+            skip_observability=skip_observability,
+            argocd_mode="none",
+            argocd_install_type="unknown",
+        )
+    except ValidationError as exc:
+        raise ValidationError(f"Decommission RBAC validation could not be completed on primary hub: {exc}") from exc
+
+    if not cluster_valid:
+        report = ["=" * 80]
+        report.append("DECOMMISSION RBAC PERMISSION VALIDATION REPORT")
+        report.append("=" * 80)
+        report.append("")
+        report.append("✗ STATUS: PERMISSION VALIDATION FAILED")
+        report.append("")
+        report.append("The following decommission permissions are missing:")
+        report.append("")
+        for error in cluster_errors:
+            report.append(f"  - {error}")
+        report.append("")
+        report.append("REMEDIATION:")
+        report.append("")
+        report.append("  1. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/")
+        report.append(
+            "  2. Or use Helm with --set rbac.includeDecommissionClusterRole=true for operator teardown access"
+        )
+        report.append("  3. Or use Kustomize for the baseline and add the decommission manifests separately")
+        report.append("")
+        report.append("For more information, see docs/deployment/rbac-requirements.md")
+        report.append("=" * 80)
+
+        logger.error("\n%s", "\n".join(report))
+        raise ValidationError(
+            "Decommission RBAC permission validation failed on primary hub. See report above for details."
+        )
+
+    logger.info("✓ Decommission RBAC permission validation completed successfully")

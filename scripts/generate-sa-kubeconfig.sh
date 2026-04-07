@@ -10,6 +10,7 @@
 #   ./generate-sa-kubeconfig.sh [OPTIONS] <namespace> <service-account-name>
 #
 # Options:
+#   --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from
 #   --context <context>       - Kubernetes context to use (default: current context)
 #   --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)
 #   --token-duration <dur>    - Token validity duration (default: 48h)
@@ -21,17 +22,17 @@
 #
 # Examples:
 #   # Generate kubeconfig for operator service account (current context)
-#   ./generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh acm-switchover acm-switchover-operator > operator-kubeconfig.yaml
 #
 #   # Generate kubeconfig with custom token duration
-#   ./generate-sa-kubeconfig.sh --token-duration 8h acm-switchover acm-switchover-operator > kubeconfig.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh --token-duration 8h acm-switchover acm-switchover-operator > kubeconfig.yaml
 #
 #   # Generate kubeconfig using a specific context with custom user name
-#   ./generate-sa-kubeconfig.sh --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml
 #
 #   # Generate unique user names for merging kubeconfigs from multiple clusters
-#   ./generate-sa-kubeconfig.sh --context hub1 --user hub1-operator acm-switchover acm-switchover-operator > hub1.yaml
-#   ./generate-sa-kubeconfig.sh --context hub2 --user hub2-operator acm-switchover acm-switchover-operator > hub2.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh --context hub1 --user hub1-operator acm-switchover acm-switchover-operator > hub1.yaml
+#   umask 077 && ./generate-sa-kubeconfig.sh --context hub2 --user hub2-operator acm-switchover acm-switchover-operator > hub2.yaml
 #
 # Prerequisites:
 #   - kubectl configured with cluster access
@@ -47,12 +48,24 @@
 set -euo pipefail
 
 # Parse optional flags first
+KUBECONFIG_PATH=""
 CONTEXT=""
 USER_NAME=""
 DURATION="48h"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --kubeconfig)
+            if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+                KUBECONFIG_PATH="${2}"
+                shift 2
+            else
+                echo "Error: --kubeconfig requires a value (path to kubeconfig)" >&2
+                echo "" >&2
+                echo "Usage: $0 [OPTIONS] <namespace> <service-account-name>" >&2
+                exit 1
+            fi
+            ;;
         --context)
             # Validate that a context value is provided and doesn't look like a flag
             if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
@@ -93,6 +106,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS] <namespace> <service-account-name>"
             echo ""
             echo "Options:"
+            echo "  --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from"
             echo "  --context <context>       - Kubernetes context to use (default: current context)"
             echo "  --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)"
             echo "  --token-duration <dur>    - Token validity duration (default: 48h)"
@@ -103,11 +117,12 @@ while [[ $# -gt 0 ]]; do
             echo "  service-account           - Name of the service account"
             echo ""
             echo "Examples:"
-            echo "  $0 acm-switchover acm-switchover-operator > kubeconfig.yaml"
-            echo "  $0 --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml"
-            echo "  $0 --token-duration 8h acm-switchover acm-switchover-operator > kubeconfig.yaml"
+            echo "  umask 077 && $0 acm-switchover acm-switchover-operator > kubeconfig.yaml"
+            echo "  umask 077 && $0 --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml"
+            echo "  umask 077 && $0 --token-duration 8h acm-switchover acm-switchover-operator > kubeconfig.yaml"
             echo ""
             echo "Note:"
+            echo "  Redirect stdout to a secure file with umask 077."
             echo "  When merging kubeconfigs from multiple clusters, use unique --user names"
             echo "  to prevent credential collisions."
             exit 0
@@ -128,9 +143,15 @@ NAMESPACE="${1:-}"
 SA_NAME="${2:-}"
 
 # Build kubectl context args
-KUBECTL_CONTEXT_ARGS=""
+KUBECTL_ARGS=()
+if [[ -n "$KUBECONFIG_PATH" ]]; then
+    KUBECTL_ARGS+=(--kubeconfig="$KUBECONFIG_PATH")
+fi
+
+KUBECTL_CONTEXT_ARGS=()
+KUBECTL_CONTEXT_ARGS=("${KUBECTL_ARGS[@]}")
 if [[ -n "$CONTEXT" ]]; then
-    KUBECTL_CONTEXT_ARGS="--context=$CONTEXT"
+    KUBECTL_CONTEXT_ARGS+=(--context="$CONTEXT")
 fi
 
 # Validate required arguments
@@ -138,6 +159,7 @@ if [[ -z "$NAMESPACE" || -z "$SA_NAME" ]]; then
     echo "Usage: $0 [OPTIONS] <namespace> <service-account-name>" >&2
     echo "" >&2
     echo "Options:" >&2
+    echo "  --kubeconfig <path>    - Kubeconfig to read cluster metadata and tokens from" >&2
     echo "  --context <context>       - Kubernetes context to use (default: current context)" >&2
     echo "  --user <name>             - Custom user name in kubeconfig (default: <context>-<sa-name>)" >&2
     echo "  --token-duration <dur>    - Token validity duration (default: 48h)" >&2
@@ -147,27 +169,30 @@ if [[ -z "$NAMESPACE" || -z "$SA_NAME" ]]; then
     echo "  service-account           - Name of the service account" >&2
     echo "" >&2
     echo "Examples:" >&2
-    echo "  $0 acm-switchover acm-switchover-operator > kubeconfig.yaml" >&2
-    echo "  $0 --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml" >&2
+    echo "  umask 077 && $0 acm-switchover acm-switchover-operator > kubeconfig.yaml" >&2
+    echo "  umask 077 && $0 --context prod-hub --user prod-operator acm-switchover acm-switchover-operator > kubeconfig.yaml" >&2
+    echo "" >&2
+    echo "Security:" >&2
+    echo "  Because kubeconfig is written to stdout, redirect it to a secure file with umask 077." >&2
+    echo "  Keep file permissions at 600 if you later move or copy it." >&2
     exit 1
 fi
 
 # Check if service account exists
-# shellcheck disable=SC2086
-if ! kubectl $KUBECTL_CONTEXT_ARGS get serviceaccount "$SA_NAME" -n "$NAMESPACE" &>/dev/null; then
+if ! kubectl "${KUBECTL_CONTEXT_ARGS[@]}" get serviceaccount "$SA_NAME" -n "$NAMESPACE" &>/dev/null; then
     echo "Error: Service account '$SA_NAME' not found in namespace '$NAMESPACE'" >&2
     exit 1
 fi
 
 # Get cluster info from specified or current context
 if [[ -n "$CONTEXT" ]]; then
-    CLUSTER_NAME=$(kubectl config view -o jsonpath="{.contexts[?(@.name=='$CONTEXT')].context.cluster}")
-    SERVER=$(kubectl config view -o jsonpath="{.clusters[?(@.name=='$CLUSTER_NAME')].cluster.server}")
-    CA_DATA=$(kubectl config view --raw -o jsonpath="{.clusters[?(@.name=='$CLUSTER_NAME')].cluster.certificate-authority-data}")
+    CLUSTER_NAME=$(kubectl "${KUBECTL_ARGS[@]}" config view -o jsonpath="{.contexts[?(@.name=='$CONTEXT')].context.cluster}")
+    SERVER=$(kubectl "${KUBECTL_ARGS[@]}" config view -o jsonpath="{.clusters[?(@.name=='$CLUSTER_NAME')].cluster.server}")
+    CA_DATA=$(kubectl "${KUBECTL_ARGS[@]}" config view --raw -o jsonpath="{.clusters[?(@.name=='$CLUSTER_NAME')].cluster.certificate-authority-data}")
 else
-    CLUSTER_NAME=$(kubectl config view --minify -o jsonpath='{.clusters[0].name}')
-    SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-    CA_DATA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+    CLUSTER_NAME=$(kubectl "${KUBECTL_ARGS[@]}" config view --minify -o jsonpath='{.clusters[0].name}')
+    SERVER=$(kubectl "${KUBECTL_ARGS[@]}" config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    CA_DATA=$(kubectl "${KUBECTL_ARGS[@]}" config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
 fi
 
 # Validate cluster info
@@ -191,8 +216,7 @@ fi
 CONTEXT_NAME="${USER_NAME}@${CLUSTER_NAME}"
 
 # Generate token
-# shellcheck disable=SC2086
-TOKEN=$(kubectl $KUBECTL_CONTEXT_ARGS create token "$SA_NAME" -n "$NAMESPACE" --duration="$DURATION")
+TOKEN=$(kubectl "${KUBECTL_CONTEXT_ARGS[@]}" create token "$SA_NAME" -n "$NAMESPACE" --duration="$DURATION")
 
 if [[ -z "$TOKEN" ]]; then
     echo "Error: Failed to generate token for service account" >&2

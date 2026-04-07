@@ -34,7 +34,7 @@ K8S_NAME_MAX_LENGTH = 253
 
 # Kubernetes namespace validation pattern
 # RFC 1123 label format: contains only lowercase alphanumeric characters or '-',
-# starts with an alphabetic character (Kubernetes requires this), ends with an alphanumeric character
+# this project intentionally requires a leading letter even though Kubernetes also allows digits
 K8S_NAMESPACE_PATTERN: Pattern[str] = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?$")
 K8S_NAMESPACE_MAX_LENGTH = 63
 
@@ -51,7 +51,7 @@ K8S_LABEL_MAX_LENGTH = 63
 # Context name validation pattern (more permissive than K8s names)
 # Allows alphanumeric, hyphens, underscores, dots, forward slashes, and colons
 # This accommodates default oc login contexts like 'admin/api-ci-aws' or 'default/api.example.com:6443/admin'
-CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
+CONTEXT_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/@]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
 CONTEXT_NAME_MAX_LENGTH = 128
 
 
@@ -108,7 +108,7 @@ class InputValidator:
             raise ValidationError(
                 f"Invalid namespace '{namespace}'. "
                 f"Must consist of lower case alphanumeric characters or '-', "
-                f"and must start and end with an alphanumeric character"
+                f"must start with a lowercase letter, and end with an alphanumeric character"
             )
 
     @staticmethod
@@ -182,7 +182,7 @@ class InputValidator:
         if not CONTEXT_NAME_PATTERN.match(context):
             raise ValidationError(
                 f"Invalid context name '{context}'. "
-                f"Must consist of alphanumeric characters, '-', '_', '.', ':', or '/', "
+                f"Must consist of alphanumeric characters, '-', '_', '.', ':', '/', or '@', "
                 f"and must start and end with an alphanumeric character"
             )
 
@@ -288,7 +288,12 @@ class InputValidator:
                         f"Create the parent directory in an allowed location (/tmp, /var, workspace root, or home directory) before using this path."
                     )
 
-            safe_prefixes = ["/tmp/", "/var/"]  # nosec B108 - path validation, not temp file usage
+            # B108 is skipped in .bandit because these are allowed path prefixes
+            # used for validation, not hardcoded temp file creation paths.
+            safe_prefixes = [
+                "/tmp/",
+                "/var/",
+            ]
             # Allow paths under current working directory
             cwd = os.getcwd()
             if cwd:
@@ -322,7 +327,7 @@ class InputValidator:
         return re.sub(r"[^A-Za-z0-9._-]", "_", value)
 
     @staticmethod
-    def validate_all_cli_args(args: object) -> None:
+    def validate_all_cli_args(args: object) -> None:  # noqa: C901
         """
         Validate all CLI arguments comprehensively.
 
@@ -333,7 +338,7 @@ class InputValidator:
             ValidationError: If any argument validation fails
 
         Note:
-            TODO: This function has high cyclomatic complexity (C901: 18).
+            TODO: This function still has high cyclomatic complexity.
             Consider refactoring into smaller validation functions grouped by
             argument type (contexts, methods, file paths, etc.) in a future PR
             focused on maintainability improvements.
@@ -367,10 +372,24 @@ class InputValidator:
         if hasattr(args, "state_file") and args.state_file:
             InputValidator.validate_safe_filesystem_path(args.state_file, "state-file")
 
-        # Validate that secondary context is provided when not in decommission or setup mode
+        # Validate minimum managed cluster threshold
+        if hasattr(args, "min_managed_clusters") and args.min_managed_clusters is not None:
+            if not isinstance(args.min_managed_clusters, int):
+                raise ValidationError("--min-managed-clusters must be an integer")
+            if args.min_managed_clusters < 0:
+                raise ValidationError("--min-managed-clusters must be a non-negative integer")
+
         is_decommission = hasattr(args, "decommission") and args.decommission
         is_setup = hasattr(args, "setup") and args.setup
-        if not is_decommission and not is_setup:
+        has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
+        has_argocd_resume_after = (
+            hasattr(args, "argocd_resume_after_switchover") and args.argocd_resume_after_switchover
+        )
+        has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
+        has_validate_only = hasattr(args, "validate_only") and args.validate_only
+
+        # Validate that secondary context is provided when not in decommission or setup mode
+        if not is_decommission and not is_setup and not has_argocd_resume_only:
             if hasattr(args, "secondary_context") and not args.secondary_context:
                 raise ValidationError("secondary-context is required for switchover operations")
 
@@ -393,7 +412,39 @@ class InputValidator:
             if hasattr(args, "old_hub_action") and args.old_hub_action != "secondary":
                 raise ValidationError("--disable-observability-on-secondary requires --old-hub-action secondary")
 
+        # Validate Argo CD argument combinations
+
+        if has_argocd_resume_after:
+            if has_argocd_resume_only:
+                raise ValidationError("--argocd-resume-after-switchover cannot be used with --argocd-resume-only")
+            if has_validate_only:
+                raise ValidationError("--argocd-resume-after-switchover cannot be used with --validate-only")
+            if not has_argocd_manage:
+                raise ValidationError("--argocd-resume-after-switchover requires --argocd-manage")
+            if getattr(args, "old_hub_action", None) == "decommission":
+                raise ValidationError(
+                    "--argocd-resume-after-switchover cannot be used with --old-hub-action decommission"
+                )
+
+        if has_argocd_manage:
+            if has_argocd_resume_only:
+                raise ValidationError("--argocd-manage cannot be used with --argocd-resume-only")
+
+        # --argocd-resume-only needs state file (primary + secondary context) to restore from
+        if has_argocd_resume_only:
+            if has_validate_only:
+                raise ValidationError("--argocd-resume-only cannot be used with --validate-only")
+            if is_decommission:
+                raise ValidationError("--argocd-resume-only cannot be used with --decommission")
+            if is_setup:
+                raise ValidationError("--argocd-resume-only cannot be used with --setup")
+            if not (hasattr(args, "secondary_context") and args.secondary_context):
+                raise ValidationError("--argocd-resume-only requires --secondary-context to resolve state file")
+
         # Validate setup-specific arguments
+        if getattr(args, "include_decommission", False) and not is_setup:
+            raise ValidationError("--include-decommission can only be used with --setup")
+
         if is_setup:
             # --admin-kubeconfig is required for setup
             if not (hasattr(args, "admin_kubeconfig") and args.admin_kubeconfig):
@@ -404,6 +455,8 @@ class InputValidator:
             if hasattr(args, "role") and args.role:
                 if args.role not in ("operator", "validator", "both"):
                     raise ValidationError("--role must be one of: operator, validator, both")
+            if getattr(args, "include_decommission", False) and getattr(args, "role", "operator") == "validator":
+                raise ValidationError("--include-decommission requires --role operator or --role both")
             # Validate token-duration format (basic check for number + unit)
             if hasattr(args, "token_duration") and args.token_duration:
                 if not re.match(r"^\d+[hms]$", args.token_duration):

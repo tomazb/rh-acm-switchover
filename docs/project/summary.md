@@ -326,7 +326,7 @@ except Exception as e:
 - `rich>=13.0.0` - Rich text formatting (future use)
 
 **System requirements:**
-- Python 3.9+
+- Python 3.10+
 - `kubectl` or `oc` CLI
 - Kubernetes contexts configured
 - RBAC permissions for ACM resources

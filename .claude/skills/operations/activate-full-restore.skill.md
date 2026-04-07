@@ -46,6 +46,14 @@ oc scale statefulset observability-thanos-compact \
   -n open-cluster-management-observability --context <primary> --replicas=0
 ```
 
+**Optional: Pause Observatorium API too (to avoid write contention):**
+```bash
+oc scale deployment observability-observatorium-api \
+  -n open-cluster-management-observability --context <primary> --replicas=0
+```
+
+> **⚠️ Scaling is temporary:** The MCO operator will re-scale these components back to defaults within minutes. If the old hub will remain as a long-lived secondary, you must delete the MCO object after switchover — see [verify-switchover.skill.md](verify-switchover.skill.md) "Optional: Disable Observability on Old Hub".
+
 ### F4a (ACM 2.14+ ImportOnly): Apply immediate-import on Secondary
 
 > Prefer this when the destination hub uses the default `ImportOnly` strategy

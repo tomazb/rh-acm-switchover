@@ -12,6 +12,12 @@ docs/
 # CI/CD
 .github/
 
+# Tests (not needed in container)
+tests/
+
+# Container build helpers
+container-bootstrap/
+
 # Python artifacts
 __pycache__/
 *.py[cod]
@@ -69,6 +75,9 @@ setup.cfg
 .flake8
 mypy.ini
 .pylintrc
+
+# Plans and session artifacts
+docs/plans/
 
 # Logs
 *.log

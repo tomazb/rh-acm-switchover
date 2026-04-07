@@ -135,8 +135,17 @@ Users can choose from multiple deployment methods based on their requirements:
 
 ### Quick Start
 ```bash
-# Deploy with kubectl
-kubectl apply -f deploy/rbac/
+# Deploy baseline RBAC with kubectl
+kubectl apply -f deploy/rbac/namespace.yaml
+kubectl apply -f deploy/rbac/serviceaccount.yaml
+kubectl apply -f deploy/rbac/clusterrole.yaml
+kubectl apply -f deploy/rbac/clusterrolebinding.yaml
+kubectl apply -f deploy/rbac/role.yaml
+kubectl apply -f deploy/rbac/rolebinding.yaml
+
+# Optional: add decommission delete permissions only when needed
+kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
+kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 
 # Validate permissions
 python check_rbac.py --primary-context primary-hub --secondary-context secondary-hub

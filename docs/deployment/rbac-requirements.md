@@ -25,7 +25,7 @@ The RBAC model is designed following the principle of least privilege:
 - Container-based deployments running as pods
 - Service accounts in production environments
 
-**Permission Level**: Full operational permissions (read, create, patch, delete)
+**Permission Level**: Baseline switchover permissions (read, create, patch) without cluster-scoped decommission deletes
 
 ### 2. ACM Switchover Validator
 **Purpose**: Read-only service account for validation and dry-run operations
@@ -94,13 +94,12 @@ The RBAC model is designed following the principle of least privilege:
 
 #### ManagedClusters
 - **Resources**: `managedclusters`
-- **Verbs**: `get`, `list`, `patch`, `delete`
+- **Verbs**: `get`, `list`, `patch`
 - **Scope**: Cluster-wide
 - **Purpose**: 
   - List and monitor managed cluster status
   - Add disable-auto-import annotations during preparation
   - Verify cluster connection post-activation
-  - Clean up during decommission
 
 #### BackupSchedules
 - **Resources**: `backupschedules`
@@ -156,22 +155,20 @@ The RBAC model is designed following the principle of least privilege:
 
 #### MultiClusterHubs
 - **Resources**: `multiclusterhubs`
-- **Verbs**: `get`, `list`, `delete`
+- **Verbs**: `get`, `list`
 - **Scope**: Cluster-wide
 - **Purpose**: 
   - Detect ACM version
   - Verify ACM operator installation
-  - Decommission old hub (delete during cleanup)
 
 ### Observability API Group (observability.open-cluster-management.io)
 
 #### MultiClusterObservabilities
 - **Resources**: `multiclusterobservabilities`
-- **Verbs**: `get`, `list`, `delete`
+- **Verbs**: `get`, `list`
 - **Scope**: Cluster-wide
 - **Purpose**: 
   - Auto-detect observability component presence
-  - Clean up during decommission
 
 ### Route API Group (route.openshift.io/v1) - OpenShift Only
 
@@ -181,15 +178,49 @@ The RBAC model is designed following the principle of least privilege:
 - **Scope**: Namespace-scoped (various)
 - **Purpose**: Retrieve route hostnames for connectivity verification
 
+### Argo CD API Groups (validated automatically when ArgoCD CRD is detected; additional write permissions required with `--argocd-manage`)
+
+These permissions are validated during preflight only when Argo CD detection is requested. The exact permissions required depend on the Argo CD install type detected on the cluster:
+
+#### All Argo CD installs (vanilla and operator)
+- **Resources**: `applications.argoproj.io` (get, list)
+- **Resources**: `customresourcedefinitions.apiextensions.k8s.io` (get) — to detect install type
+- **Scope**: Cluster-wide
+
+#### Operator-installed Argo CD only (argocds CRD is present)
+- **Resources**: `argocds.argoproj.io` (get, list)
+- **Scope**: Cluster-wide
+- **Purpose**: List Argo CD instances for informational display
+
+#### Additionally required for `--argocd-manage` (operator role only)
+- **Resources**: `applications.argoproj.io` (patch)
+- **Scope**: Cluster-wide
+- **Purpose**: Remove auto-sync from ACM-touching Applications
+
+> **Note**: On vanilla Argo CD installs (no `argocds` CRD), `argocds` permissions are **not** required. The preflight RBAC validator automatically detects the install type and skips the `argocds` check when appropriate.
+
 ## Namespace-Scoped vs Cluster-Scoped Permissions
 
 ### Cluster-Scoped Resources
 These resources require ClusterRole and ClusterRoleBinding:
 - `namespaces` (validation only)
 - `managedclusters` (ACM-wide operations)
-- `multiclusterhubs` (ACM version detection and decommission)
-- `multiclusterobservabilities` (auto-detection and decommission)
+- `multiclusterhubs` (ACM version detection)
+- `multiclusterobservabilities` (auto-detection)
 - `clusterdeployments` (safety validation)
+
+### Optional Decommission Extension
+
+Delete permissions for old-hub teardown are intentionally separated from the default operator role.
+
+- **ClusterRole**: `acm-switchover-decommission`
+- **ClusterRoleBinding**: `acm-switchover-decommission`
+- **Additional verbs**:
+  - `delete` on `managedclusters`
+  - `delete` on `multiclusterhubs`
+  - `delete` on `multiclusterobservabilities`
+
+Grant this extension only to service accounts that are allowed to run `--decommission`. The baseline operator role is sufficient for validation, switchover, and post-activation/finalization work.
 
 ### Namespace-Scoped Resources
 These resources use Role and RoleBinding for specific namespaces:
@@ -238,7 +269,7 @@ These resources use Role and RoleBinding for specific namespaces:
 3. **Data Deletion**
    - **Risk**: Accidental or malicious deletion of critical resources
    - **Mitigation**: 
-     - Delete permissions only granted where operationally required
+     - Cluster-scoped delete permissions are isolated in an opt-in decommission-only role
      - Pre-flight checks verify `preserveOnDelete=true` on ClusterDeployments
      - State tracking prevents repeat destructive operations
      - Dry-run mode available for validation

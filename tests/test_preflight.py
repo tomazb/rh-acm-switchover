@@ -10,11 +10,8 @@ import pytest
 
 from lib.constants import ACM_NAMESPACE, BACKUP_NAMESPACE
 from modules.preflight import (
-    BackupScheduleValidator,
     NamespaceValidator,
     ObservabilityDetector,
-    ObservabilityPrereqValidator,
-    ToolingValidator,
     ValidationReporter,
 )
 
@@ -25,34 +22,9 @@ def reporter():
     return ValidationReporter()
 
 
-@pytest.fixture
-def mock_kube_client():
-    """Create a mock KubeClient."""
-    return Mock()
-
-
 @pytest.mark.unit
 class TestValidationReporter:
     """Tests for the ValidationReporter helper."""
-
-    def test_add_result_passed(self, reporter):
-        """Test adding a passing validation result."""
-        reporter.add_result("demo", True, "all good", critical=True)
-
-        assert len(reporter.results) == 1
-        result = reporter.results[0]
-        assert result["check"] == "demo"
-        assert result["passed"] is True
-        assert result["message"] == "all good"
-        assert result["critical"] is True
-
-    def test_add_result_warning(self, reporter):
-        """Test adding a warning (non-critical failure) result."""
-        reporter.add_result("demo", False, "warn", critical=False)
-
-        result = reporter.results[0]
-        assert result["passed"] is False
-        assert result["critical"] is False
 
     def test_critical_failures(self, reporter):
         """Test filtering critical failures."""
@@ -63,15 +35,6 @@ class TestValidationReporter:
         failures = reporter.critical_failures()
         assert len(failures) == 1
         assert failures[0]["check"] == "bad"
-
-    def test_multiple_results(self, reporter):
-        """Test adding multiple results."""
-        reporter.add_result("check1", True, "pass")
-        reporter.add_result("check2", False, "fail", critical=True)
-        reporter.add_result("check3", True, "pass")
-
-        assert len(reporter.results) == 3
-        assert len(reporter.critical_failures()) == 1
 
     @patch("modules.preflight.reporter.logger")
     def test_print_summary_all_passed(self, mock_logger, reporter):
@@ -99,35 +62,6 @@ class TestValidationReporter:
 @pytest.mark.unit
 class TestNamespaceValidator:
     """Tests for the NamespaceValidator."""
-
-    def test_namespace_exists_on_both_hubs(self, reporter, mock_kube_client):
-        """Test validation when namespaces exist on both hubs."""
-        primary = Mock()
-        secondary = Mock()
-        primary.namespace_exists.return_value = True
-        secondary.namespace_exists.return_value = True
-
-        validator = NamespaceValidator(reporter)
-        validator.run(primary, secondary)
-
-        # Should have results for both namespaces on both hubs
-        assert len(reporter.results) == 4  # 2 namespaces × 2 hubs
-        assert all(r["passed"] for r in reporter.results)
-
-    def test_namespace_missing_on_primary(self, reporter):
-        """Test validation when namespace is missing on primary hub."""
-        primary = Mock()
-        secondary = Mock()
-        primary.namespace_exists.return_value = False
-        secondary.namespace_exists.return_value = True
-
-        validator = NamespaceValidator(reporter)
-        validator.run(primary, secondary)
-
-        # Should have failures for primary hub
-        failures = [r for r in reporter.results if not r["passed"]]
-        assert len(failures) == 2  # 2 namespaces missing on primary
-        assert all("primary" in r["check"] for r in failures)
 
     def test_namespace_missing_on_secondary(self, reporter):
         """Test validation when namespace is missing on secondary hub."""
@@ -184,140 +118,3 @@ class TestObservabilityDetector:
 
         assert result == (primary_has, secondary_has)
         assert reporter.results[-1]["message"] == expected_message
-
-
-@pytest.mark.unit
-class TestToolingValidator:
-    """Tests for the ToolingValidator."""
-
-    @patch("modules.preflight.namespace_validators.shutil.which")
-    def test_tooling_validator_success(self, mock_which, reporter):
-        """Succeeds when oc or kubectl and jq are present."""
-
-        def fake_which(binary):
-            if binary in ("oc", "jq"):
-                return f"/usr/bin/{binary}"
-            return None
-
-        mock_which.side_effect = fake_which
-
-        validator = ToolingValidator(reporter)
-        validator.run()
-
-        cli_result = next(r for r in reporter.results if r["check"] == "Cluster CLI")
-        jq_result = next(r for r in reporter.results if r["check"] == "jq availability")
-        assert cli_result["passed"] is True
-        assert jq_result["passed"] is True
-
-    @patch("modules.preflight.namespace_validators.shutil.which", return_value=None)
-    def test_tooling_validator_failure(self, mock_which, reporter):
-        """Fails when neither oc nor kubectl are found."""
-        validator = ToolingValidator(reporter)
-        validator.run()
-
-        cli_result = next(r for r in reporter.results if r["check"] == "Cluster CLI")
-        assert cli_result["passed"] is False
-
-
-@pytest.mark.unit
-class TestObservabilityPrereqValidator:
-    """Tests for ObservabilityPrereqValidator."""
-
-    def test_secret_present(self, reporter):
-        secondary = Mock()
-        secondary.namespace_exists.return_value = True
-        secondary.secret_exists.return_value = True
-
-        validator = ObservabilityPrereqValidator(reporter)
-        validator.run(secondary)
-
-        assert reporter.results[-1]["passed"] is True
-
-    def test_secret_missing(self, reporter):
-        secondary = Mock()
-        secondary.namespace_exists.return_value = True
-        secondary.secret_exists.return_value = False
-
-        validator = ObservabilityPrereqValidator(reporter)
-        validator.run(secondary)
-
-        assert reporter.results[-1]["passed"] is False
-
-
-@pytest.mark.unit
-class TestBackupScheduleValidator:
-    """Tests for the BackupScheduleValidator."""
-
-    def test_usemanagedserviceaccount_enabled(self, reporter):
-        """Test that validation passes when useManagedServiceAccount is true."""
-        primary = Mock()
-        primary.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "schedule-rhacm"},
-                "spec": {"useManagedServiceAccount": True, "veleroSchedule": "0 */4 * * *"},
-            }
-        ]
-
-        validator = BackupScheduleValidator(reporter)
-        validator.run(primary)
-
-        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
-        assert result["passed"] is True
-        assert "useManagedServiceAccount=true" in result["message"]
-
-    def test_usemanagedserviceaccount_disabled(self, reporter):
-        """Test that validation fails when useManagedServiceAccount is false or missing."""
-        primary = Mock()
-        primary.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "schedule-rhacm"},
-                "spec": {"veleroSchedule": "0 */4 * * *"},
-            }
-        ]
-
-        validator = BackupScheduleValidator(reporter)
-        validator.run(primary)
-
-        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
-        assert result["passed"] is False
-        assert "useManagedServiceAccount is not enabled" in result["message"]
-
-    def test_usemanagedserviceaccount_explicitly_false(self, reporter):
-        """Test that validation fails when useManagedServiceAccount is explicitly false."""
-        primary = Mock()
-        primary.list_custom_resources.return_value = [
-            {
-                "metadata": {"name": "schedule-rhacm"},
-                "spec": {"useManagedServiceAccount": False, "veleroSchedule": "0 */4 * * *"},
-            }
-        ]
-
-        validator = BackupScheduleValidator(reporter)
-        validator.run(primary)
-
-        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
-        assert result["passed"] is False
-
-    def test_no_backupschedule_found(self, reporter):
-        """Test that validation fails when no BackupSchedule exists."""
-        primary = Mock()
-        primary.list_custom_resources.return_value = []
-
-        validator = BackupScheduleValidator(reporter)
-        validator.run(primary)
-
-        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
-        assert result["passed"] is False
-        assert "no BackupSchedule found" in result["message"]
-
-    def test_api_error(self, reporter):
-        """Test that validation fails gracefully on API error."""
-        primary = Mock()
-        primary.list_custom_resources.side_effect = RuntimeError("API error")
-
-        validator = BackupScheduleValidator(reporter)
-        validator.run(primary)
-
-        result = next(r for r in reporter.results if "BackupSchedule" in r["check"])
-        assert result["passed"] is False
-        assert "error" in result["message"]

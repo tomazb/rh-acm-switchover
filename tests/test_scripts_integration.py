@@ -49,11 +49,62 @@ def run_script(script_name: str, *args: str, env=None):
     return proc.returncode, output
 
 
+def run_setup_rbac_sanitize(context: str):
+    """Execute the real sanitize_context() function from setup-rbac.sh."""
+    content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+    match = re.search(r"sanitize_context\(\)\s*\{.*?^\}", content, re.MULTILINE | re.DOTALL)
+    assert match, "sanitize_context() definition not found in setup-rbac.sh"
+
+    proc = subprocess.run(
+        ["bash", "-lc", f"{match.group(0)}; sanitize_context {subprocess.list2cmdline([context])}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return proc
+
+
+class TestScriptArgumentSafety:
+    """Regression tests for shell argument handling hardening."""
+
+    def test_setup_rbac_uses_array_based_kubectl_args(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert 'KUBECTL_ARGS=(--kubeconfig="$ADMIN_KUBECONFIG" --context="$CONTEXT")' in content
+        assert 'kubectl "${KUBECTL_ARGS[@]}"' in content
+
+    def test_setup_rbac_supports_opt_in_decommission_extension(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert "--include-decommission" in content
+        assert "extensions/decommission/clusterrole.yaml" in content
+        assert "extensions/decommission/clusterrolebinding.yaml" in content
+
+    def test_generate_sa_kubeconfig_uses_array_based_context_args(self):
+        content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
+
+        assert "KUBECTL_CONTEXT_ARGS=()" in content
+        assert 'KUBECTL_CONTEXT_ARGS+=(--context="$CONTEXT")' in content
+        assert 'kubectl "${KUBECTL_CONTEXT_ARGS[@]}"' in content
+
+    def test_generate_sa_kubeconfig_supports_explicit_kubeconfig_args(self):
+        content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
+
+        assert "--kubeconfig" in content
+        assert 'KUBECTL_ARGS+=(--kubeconfig="$KUBECONFIG_PATH")' in content
+        assert 'kubectl "${KUBECTL_ARGS[@]}" config view' in content
+
+    def test_setup_rbac_forwards_admin_kubeconfig_to_generator(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert '--kubeconfig "$ADMIN_KUBECONFIG"' in content
+
+
 def write_shared_jq_mock(mock_bin: Path) -> None:
     """Create a mock jq that handles minimal cases and delegates to real jq."""
     jq_script = mock_bin / "jq"
     jq_script.write_text(
-        """#!/bin/bash
+        r"""#!/bin/bash
 # Mock jq that handles minimal cases and delegates to real jq when available
 
 ALL_ARGS=("$@")
@@ -85,19 +136,110 @@ INPUT=$(cat)
 
 # Handle common expressions; otherwise delegate to real jq
 case "$EXPR" in
+    ".items[0]")
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" "$EXPR" 2>/dev/null || echo "null"
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(json.dumps(i[0]) if isinstance(i, list) and i else "null")' 2>/dev/null || echo "null"
+        fi
+        exit 0
+        ;;
     ".items | length")
         # Prefer real jq if available; otherwise return 0 for stability
         if [[ -n "${REAL_JQ:-}" ]]; then
             printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "0"
         else
-            echo "0"
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(len(i) if isinstance(i, list) else 0)' 2>/dev/null || echo "0"
+        fi
+        ;;
+    ".items[0].metadata.name")
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(i[0].get("metadata", {}).get("name","") if isinstance(i, list) and i else "")' 2>/dev/null || echo ""
+        fi
+        ;;
+    ".items[0].spec.useManagedServiceAccount // false")
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "false"
+        else
+            if echo "$INPUT" | grep -q '"useManagedServiceAccount"[[:space:]]*:[[:space:]]*true'; then
+                echo "true"
+            else
+                echo "false"
+            fi
+        fi
+        ;;
+    *"syncRestoreWithNewBackups"*".metadata.name"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); out=""; 
+items=[item for item in d.get("items", []) if item.get("spec", {}).get("syncRestoreWithNewBackups") is True]
+items.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""), reverse=True)
+if items:
+    out=items[0].get("metadata", {}).get("name", "")
+print(out)' 2>/dev/null || echo ""
+        fi
+        ;;
+    *".status.phase"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "unknown"
+        else
+            PHASE=$(echo "$INPUT" | sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+            echo "${PHASE:-unknown}"
+        fi
+        ;;
+    *".status.lastMessage"*)
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo ""
+        else
+            echo "$INPUT" | sed -n 's/.*"lastMessage"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+        fi
+        ;;
+    *".type==\"Ready\""*".status==\"True\""* )
+        if [[ -n "${REAL_JQ:-}" ]]; then
+            printf "%s" "$INPUT" | "$REAL_JQ" -r "$EXPR" 2>/dev/null || echo "0"
+        else
+            printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); c=0
+for item in d.get("items", []):
+    for cond in item.get("status", {}).get("conditions", []):
+        if cond.get("type")=="Ready" and cond.get("status")=="True":
+            c+=1; break
+print(c)' 2>/dev/null || echo "0"
         fi
         ;;
     *)
         if [[ -n "${REAL_JQ:-}" ]]; then
             printf "%s" "$INPUT" | "$REAL_JQ" "${ALL_ARGS[@]}" 2>/dev/null || echo ""
         else
-            echo ""
+            if [[ "$EXPR" == *".status.phase"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); print(d.get("status", {}).get("phase", "unknown"))' 2>/dev/null || echo "unknown"
+            elif [[ "$EXPR" == *".status.lastMessage"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); print(d.get("status", {}).get("lastMessage", ""))' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == *"syncRestoreWithNewBackups"* && "$EXPR" == *".metadata.name"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); out=""; 
+items=[item for item in d.get("items", []) if item.get("spec", {}).get("syncRestoreWithNewBackups") is True]
+items.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""), reverse=True)
+if items:
+    out=items[0].get("metadata", {}).get("name", "")
+print(out)' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == *".type==\"Ready\""* && "$EXPR" == *".status==\"True\""* && "$EXPR" == *"| length"* ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); c=0
+for item in d.get("items", []):
+    for cond in item.get("status", {}).get("conditions", []):
+        if cond.get("type")=="Ready" and cond.get("status")=="True":
+            c+=1; break
+print(c)' 2>/dev/null || echo "0"
+            elif [[ "$EXPR" == ".items | length" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(len(i) if isinstance(i, list) else 0)' 2>/dev/null || echo "0"
+            elif [[ "$EXPR" == ".items[0].metadata.name" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print(i[0].get("metadata", {}).get("name","") if isinstance(i, list) and i else "")' 2>/dev/null || echo ""
+            elif [[ "$EXPR" == ".items[0].spec.useManagedServiceAccount // false" ]]; then
+                printf "%s" "$INPUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); i=d.get("items", []); print("true" if isinstance(i, list) and i and i[0].get("spec", {}).get("useManagedServiceAccount") is True else "false")' 2>/dev/null || echo "false"
+            else
+                echo ""
+            fi
         fi
         ;;
 esac
@@ -105,6 +247,52 @@ esac
         encoding="utf-8",
     )
     jq_script.chmod(jq_script.stat().st_mode | stat.S_IEXEC)
+
+
+class TestSharedJqMock:
+    """Regression tests for the lightweight jq shim used by script integration tests."""
+
+    def test_items_zero_returns_first_element_without_real_jq(self, tmp_path):
+        mock_bin = tmp_path / "bin"
+        mock_bin.mkdir()
+        write_shared_jq_mock(mock_bin)
+
+        env = os.environ.copy()
+        env.pop("REAL_JQ", None)
+
+        proc = subprocess.run(
+            [str(mock_bin / "jq"), ".items[0]"],
+            input='{"items":[{"metadata":{"name":"cluster1"}}]}',
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == '{"metadata": {"name": "cluster1"}}'
+
+    def test_items_zero_returns_null_and_success_when_items_missing(self, tmp_path):
+        mock_bin = tmp_path / "bin"
+        mock_bin.mkdir()
+        write_shared_jq_mock(mock_bin)
+
+        env = os.environ.copy()
+        env.pop("REAL_JQ", None)
+
+        proc = subprocess.run(
+            [str(mock_bin / "jq"), ".items[0]"],
+            input='{"kind":"List"}',
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == "null"
 
 
 @pytest.fixture
@@ -350,6 +538,14 @@ BACKUPSCHEDULE_JSON
         echo "Enabled"
         exit 0
         ;;
+    # Single restore GET with -o json (for detailed status check)
+    *"--context=secondary-ok"*"get "*"restore"*"restore-acm-passive-sync"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'SINGLE_RESTORE_JSON'
+{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}
+SINGLE_RESTORE_JSON
+        exit 0
+        ;;
+    # List all restores
     *"--context=secondary-ok"*"get "*"restore"*"-n open-cluster-management-backup"*"-o json"*)
         cat << 'RESTORE_JSON'
 {"items":[{"metadata":{"name":"restore-acm-passive-sync"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Enabled"}}]}
@@ -397,9 +593,14 @@ RESTORE_JSON
         exit 0
         ;;
     
-    # Postflight checks
-    "--context=new-hub get restore -n open-cluster-management-backup --sort-by=.metadata.creationTimestamp -o jsonpath="*"")
-        echo "restore-final Finished 2024-11-24T10:00:00Z"
+    # Postflight checks - Restore: empty (BackupSchedule enabled and OADP has cleaned up)
+    # jsonpath pattern MUST come before -o json (jsonpath contains "json" so would match both)
+    *"--context=new-hub"*"get "*"restore"*"-n open-cluster-management-backup"*"jsonpath"*)
+        # Fallback jsonpath query - return empty so RESTORE_NAME is empty
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"restore"*"-n open-cluster-management-backup"*"-o json"*)
+        echo '{"items":[]}'
         exit 0
         ;;
     # ManagedCluster checks - match both short and full API group names
@@ -456,8 +657,14 @@ EOF
     "--context=new-hub get namespace open-cluster-management-observability")
         exit 0
         ;;
-    *"--context=new-hub"*"get "*"multiclusterobservability"*"observability"*"-n open-cluster-management-observability"*)
+    *"--context=new-hub"*"get "*"multiclusterobservability.observability.open-cluster-management.io"*"observability"*"jsonpath"*)
         echo "True"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"multiclusterobservability.observability.open-cluster-management.io"*"observability"*" -o json"*)
+        cat << 'MCO_JSON'
+{"metadata":{"name":"observability"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
+MCO_JSON
         exit 0
         ;;
     "--context=new-hub get pods -n open-cluster-management-observability -l "*"app=observability-grafana"*" --no-headers")
@@ -491,6 +698,20 @@ EOF
         ;;
     *"--context=new-hub"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"--no-headers"*)
         echo "schedule-acm"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupschedule"*"jsonpath"*"spec.paused"*)
+        echo "false"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupschedule"*"schedule-acm"*"jsonpath"*"status.phase"*)
+        echo "Enabled"
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'NEWHUB_BS_JSON'
+{"items":[{"metadata":{"name":"schedule-acm"},"spec":{"paused":false,"veleroSchedule":"0 */4 * * *"}}]}
+NEWHUB_BS_JSON
         exit 0
         ;;
     *"--context=new-hub"*"get "*"backupschedule"*"-n open-cluster-management-backup"*"items[0].metadata.name"*)
@@ -765,6 +986,57 @@ esac
     return env
 
 
+@pytest.fixture
+def mock_oc_postflight_newest_restore(tmp_path):
+    """Create mocked oc/jq binaries that expose multiple passive restores out of order."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    oc_script = mock_bin / "oc"
+    oc_script.write_text(
+        """#!/bin/bash
+case "$*" in
+    "config get-contexts new-hub")
+        exit 0
+        ;;
+    *"--context=new-hub"*"get "*"restore"*"-n open-cluster-management-backup"*"-o json"*)
+        cat << 'RESTORE_JSON'
+{"items":[
+  {"metadata":{"name":"older-passive-sync","creationTimestamp":"2026-03-29T09:00:00Z"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Finished"}},
+  {"metadata":{"name":"newer-passive-sync","creationTimestamp":"2026-03-30T09:00:00Z"},"spec":{"syncRestoreWithNewBackups":true},"status":{"phase":"Finished"}}
+]}
+RESTORE_JSON
+        exit 0
+        ;;
+    *"get "*"backupschedule"*"paused"*)
+        echo "false"
+        exit 0
+        ;;
+    *"get "*"managedcluster"*"--no-headers"*)
+        echo "cluster1   True   True"
+        exit 0
+        ;;
+    *"get "*"managedcluster"*"-o json"*)
+        cat << 'MC_JSON'
+{"items":[{"metadata":{"name":"cluster1"},"status":{"conditions":[{"type":"ManagedClusterConditionAvailable","status":"True"},{"type":"ManagedClusterJoined","status":"True"}]}}]}
+MC_JSON
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
+
+    write_shared_jq_mock(mock_bin)
+
+    env = os.environ.copy()
+    env["REAL_JQ"] = shutil.which("jq") or ""
+    env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
+    return env
+
+
 # ============================================================================
 # Integration Tests - Success Paths
 # ============================================================================
@@ -848,6 +1120,21 @@ def test_postflight_success(mock_oc_success):
         assert "Warnings:" in out
 
 
+@pytest.mark.integration
+def test_postflight_prefers_newest_passive_restore(mock_oc_postflight_newest_restore):
+    """Postflight should report the newest passive restore when several candidates exist."""
+    code, out = run_script(
+        "postflight-check.sh",
+        "--new-hub-context",
+        "new-hub",
+        env=mock_oc_postflight_newest_restore,
+    )
+
+    assert code in (0, 1), f"Expected script execution, got {code}. Output:\n{out}"
+    assert "Latest restore 'newer-passive-sync' completed successfully" in out
+    assert "older-passive-sync" not in out
+
+
 # ============================================================================
 # Integration Tests - Failure Scenarios
 # ============================================================================
@@ -908,8 +1195,8 @@ def test_preflight_missing_namespace_fails():
     )
 
     # Will fail - either from missing oc (127) or validation (1)
-    assert code != 0, f"Expected failure, got success (exit 0)"
-    assert code != 2, f"Expected validation/runtime failure, not arg error (exit 2)"
+    assert code != 0, "Expected failure, got success (exit 0)"
+    assert code != 2, "Expected validation/runtime failure, not arg error (exit 2)"
 
 
 @pytest.mark.integration
@@ -923,5 +1210,290 @@ def test_postflight_missing_restore_fails():
     )
 
     # Will fail - either from validation (1) or command not found (127)
-    assert code != 0, f"Expected failure, got success (exit 0)"
-    assert code != 2, f"Expected validation/runtime failure, not arg error (exit 2)"
+    assert code != 0, "Expected failure, got success (exit 0)"
+    assert code != 2, "Expected validation/runtime failure, not arg error (exit 2)"
+
+
+# ============================================================================
+# F2/F3: Argo CD Detection Shell Tests
+# ============================================================================
+
+
+def _write_argocd_test_harness(mock_bin: Path, oc_body: str) -> dict:
+    """Create a test harness that sources lib-common.sh and calls check_argocd_acm_resources.
+
+    Returns env dict with mock_bin in PATH.
+    """
+    oc_script = mock_bin / "oc"
+    oc_script.write_text(f"#!/bin/bash\n{oc_body}\n", encoding="utf-8")
+    oc_script.chmod(oc_script.stat().st_mode | stat.S_IEXEC)
+
+    write_shared_jq_mock(mock_bin)
+
+    # Create a test runner that sources the libs and calls the function
+    runner = mock_bin / "run_argocd_check.sh"
+    runner.write_text(
+        f"""#!/bin/bash
+set -uo pipefail
+export SCRIPT_DIR="{SCRIPTS_DIR}"
+source "$SCRIPT_DIR/constants.sh"
+source "$SCRIPT_DIR/lib-common.sh"
+CLUSTER_CLI_BIN="oc"
+GITOPS_DETECTION_ENABLED=1
+check_argocd_acm_resources "$1" "$2"
+exit $?
+""",
+        encoding="utf-8",
+    )
+    runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+
+    env = os.environ.copy()
+    env["REAL_JQ"] = shutil.which("jq") or ""
+    env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
+    return env
+
+
+def _run_argocd_check(mock_bin: Path, env: dict, context: str = "test-ctx", label: str = "Test hub") -> tuple:
+    """Run the argocd check harness and return (exit_code, stripped_output)."""
+    proc = subprocess.run(
+        [str(mock_bin / "run_argocd_check.sh"), context, label],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+        timeout=10,
+    )
+    return proc.returncode, strip_ansi(proc.stdout)
+
+
+@pytest.mark.integration
+def test_argocd_f3_forbidden_crd_access_not_reported_as_crd_not_found(tmp_path):
+    """F3: Forbidden CRD access must produce an auth/RBAC warning, not 'CRD not found'."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    env = _write_argocd_test_harness(
+        mock_bin,
+        """case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "Error from server (Forbidden): clusterroles.rbac.authorization.k8s.io is forbidden" >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "auth/RBAC denied" in out
+    assert "CRD not found" not in out
+
+
+@pytest.mark.integration
+def test_argocd_f3_transient_api_failure_not_reported_as_crd_not_found(tmp_path):
+    """F3: Transient API failure must produce an API error warning, not 'CRD not found'."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    env = _write_argocd_test_harness(
+        mock_bin,
+        """case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "Error from server: etcdserver: request timed out" >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "API error" in out
+    assert "CRD not found" not in out
+
+
+@pytest.mark.integration
+def test_argocd_f3_real_crd_absence_still_says_not_found(tmp_path):
+    """F3: Genuine CRD absence must still produce the 'CRD not found' pass message."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    env = _write_argocd_test_harness(
+        mock_bin,
+        """case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo 'Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "applications.argoproj.io" not found' >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "CRD not found" in out
+
+
+@pytest.mark.integration
+def test_argocd_f2_operator_install_detects_apps_outside_instance_namespace(tmp_path):
+    """F2: Operator-installed Argo CD must detect Applications living outside the instance namespace."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    # The Application lives in 'team-a' namespace, not in 'openshift-gitops' (the instance namespace)
+    env = _write_argocd_test_harness(
+        mock_bin,
+        r"""case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "NAME  CREATED AT"
+        echo "applications.argoproj.io  2024-01-01"
+        exit 0
+        ;;
+    *"get crd argocds.argoproj.io"*)
+        echo "NAME  CREATED AT"
+        echo "argocds.argoproj.io  2024-01-01"
+        exit 0
+        ;;
+    *"get argocds.argoproj.io -A -o json"*)
+        echo '{"items":[{"metadata":{"namespace":"openshift-gitops","name":"openshift-gitops"}}]}'
+        exit 0
+        ;;
+    *"get applications.argoproj.io -A -o json"*)
+        cat << 'EOF'
+{"items":[{"metadata":{"namespace":"team-a","name":"acm-policies"},"spec":{},"status":{"resources":[{"kind":"Policy","namespace":"open-cluster-management","name":"enforce-labels"}]}}]}
+EOF
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "ACM resources" in out
+    assert "acm-policies" in out.lower() or "team-a" in out
+
+
+@pytest.mark.integration
+def test_argocd_app_list_forbidden_warns_not_false_clean(tmp_path):
+    """CRD exists but Application list is Forbidden must warn, not report 'No Applications found'."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    # CRD check succeeds, but listing Applications is denied
+    env = _write_argocd_test_harness(
+        mock_bin,
+        r"""case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "NAME  CREATED AT"
+        echo "applications.argoproj.io  2024-01-01"
+        exit 0
+        ;;
+    *"get crd argocds.argoproj.io"*)
+        exit 1
+        ;;
+    *"get applications.argoproj.io -A -o json"*)
+        echo "Error from server (Forbidden): applications.argoproj.io is forbidden: User cannot list resource" >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "Unable to list Argo CD Applications" in out
+    assert "cannot determine GitOps risk" in out
+    assert "No Argo CD Applications found" not in out
+
+
+@pytest.mark.integration
+def test_argocd_app_list_api_error_warns_not_false_clean(tmp_path):
+    """CRD exists but Application list hits API error must warn, not report 'No Applications found'."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+
+    # CRD check succeeds, but listing Applications gets a transient error
+    env = _write_argocd_test_harness(
+        mock_bin,
+        r"""case "$*" in
+    *"get crd applications.argoproj.io"*)
+        echo "NAME  CREATED AT"
+        echo "applications.argoproj.io  2024-01-01"
+        exit 0
+        ;;
+    *"get crd argocds.argoproj.io"*)
+        exit 1
+        ;;
+    *"get applications.argoproj.io -A -o json"*)
+        echo "Error from server: etcdserver: leader changed" >&2
+        exit 1
+        ;;
+    *) exit 0 ;;
+esac""",
+    )
+
+    rc, out = _run_argocd_check(mock_bin, env)
+    assert rc == 0
+    assert "Unable to list Argo CD Applications" in out
+    assert "cannot determine GitOps risk" in out
+    assert "No Argo CD Applications found" not in out
+
+
+# ============================================================================
+# F4: Setup Filename Sanitization Tests
+# ============================================================================
+
+
+@pytest.mark.integration
+class TestSetupRbacSanitization:
+    """Tests for F4: sanitize_context() in setup-rbac.sh."""
+
+    def test_sanitize_context_function_exists(self):
+        """setup-rbac.sh must define sanitize_context."""
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+        assert "sanitize_context()" in content
+
+    def test_sanitize_context_replaces_slashes(self, tmp_path):
+        """Context names with '/' must be sanitized to '_' in filenames."""
+        result = run_setup_rbac_sanitize("admin/api-ci-aws")
+        assert result.returncode == 0
+        assert re.fullmatch(r"admin_api-ci-aws_[0-9a-f]{8}", result.stdout.strip())
+
+    def test_sanitize_context_replaces_colons(self, tmp_path):
+        """Context names with ':' must be sanitized to '_' in filenames."""
+        result = run_setup_rbac_sanitize("default/api.example.com:6443/admin")
+        assert result.returncode == 0
+        assert re.fullmatch(r"default_api\.example\.com_6443_admin_[0-9a-f]{8}", result.stdout.strip())
+
+    def test_sanitize_context_preserves_safe_chars(self, tmp_path):
+        """Safe characters (alphanumeric, dot, underscore, dash) must remain unchanged."""
+        result = run_setup_rbac_sanitize("prod-hub.example_01")
+        assert result.returncode == 0
+        assert re.fullmatch(r"prod-hub\.example_01_[0-9a-f]{8}", result.stdout.strip())
+
+    def test_sanitize_context_appends_unique_hash_for_colliding_slugs(self):
+        """Distinct contexts with the same sanitized slug must still produce unique outputs."""
+        slash_result = run_setup_rbac_sanitize("admin/api-ci-aws")
+        colon_result = run_setup_rbac_sanitize("admin:api-ci-aws")
+
+        assert slash_result.returncode == 0
+        assert colon_result.returncode == 0
+        assert slash_result.stdout.strip().startswith("admin_api-ci-aws_")
+        assert colon_result.stdout.strip().startswith("admin_api-ci-aws_")
+        assert slash_result.stdout.strip() != colon_result.stdout.strip()
+
+    def test_setup_script_uses_sanitized_context_in_filenames(self):
+        """setup-rbac.sh must use SANITIZED_CONTEXT, not raw CONTEXT, in output filenames."""
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+        # Kubeconfig generation should use sanitized context
+        assert "${SANITIZED_CONTEXT}-operator" in content
+        assert "${SANITIZED_CONTEXT}-validator" in content
+        # Raw CONTEXT should NOT appear in filename-building patterns
+        assert "${CONTEXT}-operator.yaml" not in content
+        assert "${CONTEXT}-validator.yaml" not in content
+
+    def test_setup_script_still_uses_raw_context_for_cluster_operations(self):
+        """setup-rbac.sh must still use raw CONTEXT for kubectl --context."""
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+        assert '--context="$CONTEXT"' in content or "--context=$CONTEXT" in content
