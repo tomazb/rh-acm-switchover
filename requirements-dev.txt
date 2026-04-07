@@ -20,14 +20,9 @@ pip-audit>=2.6.0
 # Patched transitive dependencies (pip-audit output)
 authlib>=1.6.7
 setuptools>=78.1.1
-filelock>=3.20.3; python_version >= "3.10"
-filelock>=3.0.0; python_version < "3.10"
-cryptography>=46.0.6; python_version >= "3.10"
-cryptography>=42.0.0; python_version < "3.10"
-# Keep the highest available Pillow on each supported Python line.
-# Pillow 12.x drops Python 3.9 wheels, so CI needs a compatible floor there.
-pillow>=12.1.1; python_version >= "3.10"
-pillow>=11.3.0; python_version < "3.10"
+filelock>=3.20.3
+cryptography>=46.0.6
+pillow>=12.1.1
 
 # Additional testing utilities
 coverage>=7.3.0
