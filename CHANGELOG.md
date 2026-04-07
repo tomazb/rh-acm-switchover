@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Container runtime image now installs `curl-minimal` instead of `curl`, avoiding the `curl` vs `curl-minimal` package conflict on `ubi-minimal`
+
 ## [1.6.2] - 2026-04-07
 
 ### Fixed
