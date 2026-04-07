@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-04-07
+
 ### Changed
 
 - Dropped Python 3.9 support; Python 3.10 is now the minimum supported version.
 - Removed the Python 3.9 CI lane and updated support/install documentation to reflect Python 3.10+ and the current Python 3.12 container runtime.
-
-## [1.6.3] - 2026-04-07
 
 ### Fixed
 
