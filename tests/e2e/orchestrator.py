@@ -350,7 +350,9 @@ class E2EOrchestrator:
         error_lower = error_msg.lower()
         return any(pattern.lower() in error_lower for pattern in transient_patterns)
 
-    def _create_clients(self, primary_context: str, secondary_context: str) -> tuple[KubeClient, KubeClient]:
+    def _create_clients(
+        self, primary_context: str, secondary_context: str
+    ) -> tuple[KubeClient, KubeClient]:
         """
         Create KubeClient instances for both hubs.
 
@@ -371,7 +373,9 @@ class E2EOrchestrator:
         )
         return primary, secondary
 
-    def _create_state_manager(self, cycle_id: str, primary_context: str, secondary_context: str) -> StateManager:
+    def _create_state_manager(
+        self, cycle_id: str, primary_context: str, secondary_context: str
+    ) -> StateManager:
         """
         Create a fresh StateManager for a cycle.
 
@@ -416,7 +420,9 @@ class E2EOrchestrator:
             ],
         }
 
-        metrics_file = self.run_output_dir / "metrics" / f"metrics_{cycle_result.cycle_id}.json"
+        metrics_file = (
+            self.run_output_dir / "metrics" / f"metrics_{cycle_result.cycle_id}.json"
+        )
         with open(metrics_file, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
 
@@ -455,7 +461,9 @@ class E2EOrchestrator:
         # Also write CSV for compatibility with bash analyzer
         csv_file = self.run_output_dir / "cycle_results.csv"
         with open(csv_file, "w", encoding="utf-8") as f:
-            f.write("cycle,phase,status,start_time,end_time,duration_seconds,exit_code\n")
+            f.write(
+                "cycle,phase,status,start_time,end_time,duration_seconds,exit_code\n"
+            )
             for cycle in result.cycles:
                 for phase in cycle.phase_results:
                     status = "0" if phase.success else "1"
@@ -507,9 +515,13 @@ class E2EOrchestrator:
         return None
 
     @classmethod
-    def _filter_acm_owned_backups(cls, backups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _filter_acm_owned_backups(
+        cls, backups: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """Return only ACM-owned Velero backups."""
-        return [backup for backup in backups if cls._get_acm_backup_schedule_type(backup)]
+        return [
+            backup for backup in backups if cls._get_acm_backup_schedule_type(backup)
+        ]
 
     @staticmethod
     def _backup_sort_key(backup: Dict[str, Any]) -> str:
@@ -529,7 +541,9 @@ class E2EOrchestrator:
         timeout: int = BACKUP_VERIFY_TIMEOUT,
     ) -> None:
         """Wait until the new primary's ACM backup set has stopped changing."""
-        self.logger.info("Waiting for ACM backup stability on new primary: %s", primary_context)
+        self.logger.info(
+            "Waiting for ACM backup stability on new primary: %s", primary_context
+        )
         primary_client = KubeClient(context=primary_context, dry_run=False)
         stable_signature = None
         deadline = time.time() + timeout
@@ -544,7 +558,9 @@ class E2EOrchestrator:
             acm_backups = self._filter_acm_owned_backups(backups)
 
             if not acm_backups:
-                self.logger.info("No ACM-owned Velero backups found yet on %s", primary_context)
+                self.logger.info(
+                    "No ACM-owned Velero backups found yet on %s", primary_context
+                )
                 time.sleep(BACKUP_POLL_INTERVAL)
                 continue
 
@@ -557,16 +573,22 @@ class E2EOrchestrator:
 
                 phase = backup.get("status", {}).get("phase", "unknown")
                 if phase in ("New", "InProgress", "Finalizing"):
-                    in_progress.append(f"{backup.get('metadata', {}).get('name', 'unknown')}:{phase}")
+                    in_progress.append(
+                        f"{backup.get('metadata', {}).get('name', 'unknown')}:{phase}"
+                    )
                     continue
                 if phase != "Completed":
                     continue
 
                 existing = latest_completed.get(schedule_type)
-                if existing is None or self._backup_sort_key(backup) > self._backup_sort_key(existing):
+                if existing is None or self._backup_sort_key(
+                    backup
+                ) > self._backup_sort_key(existing):
                     latest_completed[schedule_type] = backup
 
-            missing_types = sorted(set(ACM_BACKUP_SCHEDULE_TYPES) - set(latest_completed))
+            missing_types = sorted(
+                set(ACM_BACKUP_SCHEDULE_TYPES) - set(latest_completed)
+            )
             if in_progress or missing_types:
                 if in_progress:
                     self.logger.info(
@@ -594,7 +616,9 @@ class E2EOrchestrator:
             )
 
             if signature == stable_signature:
-                self.logger.info("ACM backup set is stable on new primary: %s", primary_context)
+                self.logger.info(
+                    "ACM backup set is stable on new primary: %s", primary_context
+                )
                 return
 
             stable_signature = signature
@@ -628,8 +652,12 @@ class E2EOrchestrator:
         cycle_id = f"cycle_{cycle_num:03d}"
         self.logger.info("")
         self.logger.info("=" * 60)
-        self.logger.info("STARTING CYCLE %d/%d (ID: %s)", cycle_num, self.config.cycles, cycle_id)
-        self.logger.info("Primary: %s, Secondary: %s", primary_context, secondary_context)
+        self.logger.info(
+            "STARTING CYCLE %d/%d (ID: %s)", cycle_num, self.config.cycles, cycle_id
+        )
+        self.logger.info(
+            "Primary: %s, Secondary: %s", primary_context, secondary_context
+        )
         self.logger.info("=" * 60)
 
         start_time = datetime.now(timezone.utc)
@@ -637,12 +665,18 @@ class E2EOrchestrator:
 
         # Log cycle start to JSONL
         if self._metrics_logger:
-            self._metrics_logger.log_cycle_start(cycle_id, cycle_num, primary_context, secondary_context)
+            self._metrics_logger.log_cycle_start(
+                cycle_id, cycle_num, primary_context, secondary_context
+            )
 
         # Create fresh clients and state for this cycle
         try:
-            primary_client, secondary_client = self._create_clients(primary_context, secondary_context)
-            state_manager = self._create_state_manager(cycle_id, primary_context, secondary_context)
+            primary_client, secondary_client = self._create_clients(
+                primary_context, secondary_context
+            )
+            state_manager = self._create_state_manager(
+                cycle_id, primary_context, secondary_context
+            )
         except Exception as e:
             self.logger.error("Failed to initialize cycle %d: %s", cycle_num, e)
             end_time = datetime.now(timezone.utc)
@@ -676,7 +710,11 @@ class E2EOrchestrator:
                 if timing == "before" and failure_injector.should_inject_at(phase_name):
                     result = failure_injector.inject()
                     if result.success:
-                        self.logger.warning("Failure injected at phase %s: %s", phase_name, result.message)
+                        self.logger.warning(
+                            "Failure injected at phase %s: %s",
+                            phase_name,
+                            result.message,
+                        )
                         if self._metrics_logger:
                             self._metrics_logger.log_metric(
                                 {
@@ -741,9 +779,13 @@ class E2EOrchestrator:
             if failure_injector:
                 cleanup_result = failure_injector.cleanup()
                 if cleanup_result.success:
-                    self.logger.info("Failure injection cleaned up: %s", cleanup_result.message)
+                    self.logger.info(
+                        "Failure injection cleaned up: %s", cleanup_result.message
+                    )
                 else:
-                    self.logger.warning("Failure injection cleanup failed: %s", cleanup_result.message)
+                    self.logger.warning(
+                        "Failure injection cleanup failed: %s", cleanup_result.message
+                    )
 
         end_time = datetime.now(timezone.utc)
 
@@ -774,14 +816,22 @@ class E2EOrchestrator:
                 self._metrics_logger.log_phase_result(
                     cycle_id, pr.phase_name, pr.success, pr.duration_seconds, pr.error
                 )
-            self._metrics_logger.log_cycle_end(cycle_id, cycle_success, result.total_duration_seconds)
+            self._metrics_logger.log_cycle_end(
+                cycle_id, cycle_success, result.total_duration_seconds
+            )
 
         if cycle_success:
             self.logger.info(
-                "✅ Cycle %d completed successfully in %.1f seconds", cycle_num, result.total_duration_seconds
+                "✅ Cycle %d completed successfully in %.1f seconds",
+                cycle_num,
+                result.total_duration_seconds,
             )
         else:
-            self.logger.error("❌ Cycle %d failed after %.1f seconds", cycle_num, result.total_duration_seconds)
+            self.logger.error(
+                "❌ Cycle %d failed after %.1f seconds",
+                cycle_num,
+                result.total_duration_seconds,
+            )
 
         return result
 
@@ -840,14 +890,18 @@ class E2EOrchestrator:
             if resume_state:
                 start_cycle = resume_state.get("last_completed_cycle", 0) + 1
                 current_primary = resume_state.get("current_primary", current_primary)
-                current_secondary = resume_state.get("current_secondary", current_secondary)
+                current_secondary = resume_state.get(
+                    "current_secondary", current_secondary
+                )
                 success_count = resume_state.get("success_count", 0)
                 failure_count = resume_state.get("failure_count", 0)
 
                 # Restore original start_time for accurate time limit enforcement
                 if "start_time" in resume_state:
                     start_time = datetime.fromisoformat(resume_state["start_time"])
-                    elapsed = (datetime.now(timezone.utc) - start_time).total_seconds() / 3600
+                    elapsed = (
+                        datetime.now(timezone.utc) - start_time
+                    ).total_seconds() / 3600
                     self.logger.info(
                         "Resuming from cycle %d (previous: %d success, %d failures, elapsed: %.1fh)",
                         start_cycle,
@@ -874,7 +928,9 @@ class E2EOrchestrator:
                 )
                 break
 
-            cycle_result = self._run_cycle(cycle_num, current_primary, current_secondary)
+            cycle_result = self._run_cycle(
+                cycle_num, current_primary, current_secondary
+            )
             cycles.append(cycle_result)
             self._cycle_results.append(cycle_result)  # Also store in property
 
@@ -912,7 +968,9 @@ class E2EOrchestrator:
             # Check for early stop conditions
             if not cycle_result.success and self.config.stop_on_failure:
                 stop_reason = "stop_on_failure"
-                self.logger.warning("Stopping after cycle %d failure (stop_on_failure=True)", cycle_num)
+                self.logger.warning(
+                    "Stopping after cycle %d failure (stop_on_failure=True)", cycle_num
+                )
                 break
 
             # Check max failures limit
@@ -926,7 +984,12 @@ class E2EOrchestrator:
 
             # Apply context swap for next cycle
             if cycle_num < self.config.cycles:
-                if self.config.method == "full" and cycle_result.success and hubs_changed and not self.config.dry_run:
+                if (
+                    self.config.method == "full"
+                    and cycle_result.success
+                    and hubs_changed
+                    and not self.config.dry_run
+                ):
                     self._wait_for_full_backup_stability(next_primary)
 
                 current_primary, current_secondary = next_primary, next_secondary
@@ -939,7 +1002,10 @@ class E2EOrchestrator:
 
                 # Cooldown between cycles
                 if self.config.cooldown_seconds > 0:
-                    self.logger.info("Cooldown for %d seconds before next cycle...", self.config.cooldown_seconds)
+                    self.logger.info(
+                        "Cooldown for %d seconds before next cycle...",
+                        self.config.cooldown_seconds,
+                    )
                     time.sleep(self.config.cooldown_seconds)
 
         end_time = datetime.now(timezone.utc)
