@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-04-07
+
 ### Fixed
 
 - Container runtime image now installs `curl-minimal` instead of `curl`, avoiding the `curl` vs `curl-minimal` package conflict on `ubi-minimal`
+- Raised dependency floors for `black`, `pyasn1`, `pygments`, and `requests` to exclude versions flagged by `pip-audit`
 
 ## [1.6.2] - 2026-04-07
 
