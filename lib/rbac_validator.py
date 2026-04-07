@@ -264,6 +264,8 @@ class RBACValidator:
 
         if argocd_mode == "none":
             return []
+        if argocd_install_type == "none":
+            return []
         if argocd_mode == "manage" and self.role == "validator":
             raise ValueError("validator role cannot use argocd_mode='manage'")
 
@@ -666,6 +668,7 @@ def validate_rbac_permissions(
     skip_observability: bool = False,
     argocd_mode: str = "none",
     argocd_install_type: str = "unknown",
+    secondary_argocd_install_type: Optional[str] = None,
 ) -> None:
     """
     Validate RBAC permissions on primary and optionally secondary hub.
@@ -677,6 +680,8 @@ def validate_rbac_permissions(
         skip_observability: Whether to skip observability checks
         argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
         argocd_install_type: 'vanilla', 'operator', or 'unknown'
+        secondary_argocd_install_type: Secondary hub install type override.
+            Falls back to argocd_install_type when not provided.
 
     Raises:
         ValidationError: If RBAC validation fails
@@ -711,12 +716,13 @@ def validate_rbac_permissions(
     if secondary_client:
         logger.info("Validating RBAC permissions on secondary hub...")
         secondary_validator = RBACValidator(secondary_client)
+        secondary_install_type = secondary_argocd_install_type or argocd_install_type
         try:
             secondary_valid, secondary_errors = secondary_validator.validate_all_permissions(
                 include_decommission=False,  # Decommission only on primary
                 skip_observability=skip_observability,
                 argocd_mode=argocd_mode,
-                argocd_install_type=argocd_install_type,
+                argocd_install_type=secondary_install_type,
             )
         except ValidationError as exc:
             raise ValidationError(f"RBAC permission validation could not be completed on secondary hub: {exc}") from exc
@@ -726,7 +732,7 @@ def validate_rbac_permissions(
                 include_decommission=False,
                 skip_observability=skip_observability,
                 argocd_mode=argocd_mode,
-                argocd_install_type=argocd_install_type,
+                argocd_install_type=secondary_install_type,
             )
             logger.error("\n%s", report)
             # Include error count in exception message for debugging
@@ -737,3 +743,52 @@ def validate_rbac_permissions(
             )
 
     logger.info("✓ RBAC permission validation completed successfully")
+
+
+def validate_decommission_permissions(
+    primary_client: KubeClient,
+    skip_observability: bool = False,
+) -> None:
+    """Validate only the RBAC permissions used by standalone decommission."""
+    logger.info("Starting decommission RBAC permission validation...")
+
+    validator = RBACValidator(primary_client)
+    try:
+        cluster_valid, cluster_errors = validator.validate_cluster_permissions(
+            include_decommission=True,
+            skip_observability=skip_observability,
+            argocd_mode="none",
+            argocd_install_type="unknown",
+        )
+    except ValidationError as exc:
+        raise ValidationError(f"Decommission RBAC validation could not be completed on primary hub: {exc}") from exc
+
+    if not cluster_valid:
+        report = ["=" * 80]
+        report.append("DECOMMISSION RBAC PERMISSION VALIDATION REPORT")
+        report.append("=" * 80)
+        report.append("")
+        report.append("✗ STATUS: PERMISSION VALIDATION FAILED")
+        report.append("")
+        report.append("The following decommission permissions are missing:")
+        report.append("")
+        for error in cluster_errors:
+            report.append(f"  - {error}")
+        report.append("")
+        report.append("REMEDIATION:")
+        report.append("")
+        report.append("  1. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/")
+        report.append(
+            "  2. Or use Helm with --set rbac.includeDecommissionClusterRole=true for operator teardown access"
+        )
+        report.append("  3. Or use Kustomize for the baseline and add the decommission manifests separately")
+        report.append("")
+        report.append("For more information, see docs/deployment/rbac-requirements.md")
+        report.append("=" * 80)
+
+        logger.error("\n%s", "\n".join(report))
+        raise ValidationError(
+            "Decommission RBAC permission validation failed on primary hub. See report above for details."
+        )
+
+    logger.info("✓ Decommission RBAC permission validation completed successfully")

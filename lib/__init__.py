@@ -14,7 +14,7 @@ from .exceptions import (
     ValidationError,
 )
 from .kube_client import KubeClient
-from .rbac_validator import RBACValidator, validate_rbac_permissions
+from .rbac_validator import RBACValidator, validate_decommission_permissions, validate_rbac_permissions
 from .utils import (
     Phase,
     StateManager,
@@ -43,5 +43,6 @@ __all__ = [
     "format_duration",
     "confirm_action",
     "RBACValidator",
+    "validate_decommission_permissions",
     "validate_rbac_permissions",
 ]

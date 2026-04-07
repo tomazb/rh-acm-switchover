@@ -33,7 +33,7 @@ from lib import (
 from lib import argocd as argocd_lib
 from lib import (
     setup_logging,
-    validate_rbac_permissions,
+    validate_decommission_permissions,
 )
 from lib.constants import (
     EXIT_FAILURE,
@@ -754,9 +754,8 @@ def run_decommission(
 
     if not getattr(args, "skip_rbac_validation", False):
         try:
-            validate_rbac_permissions(
+            validate_decommission_permissions(
                 primary_client=primary,
-                include_decommission=True,
                 skip_observability=not has_observability,
             )
         except ValidationError as exc:
@@ -903,6 +902,14 @@ def main():  # noqa: C901
         else:
             logger.error("\n✗ Setup failed!")
             sys.exit(EXIT_FAILURE)
+
+    if getattr(args, "argocd_resume_only", False) and not os.path.exists(resolved_state_file):
+        logger.error(
+            "State file not found for --argocd-resume-only: %s. "
+            "Run a switchover with Argo CD management first or pass --state-file explicitly.",
+            resolved_state_file,
+        )
+        sys.exit(EXIT_FAILURE)
 
     if getattr(args, "reset_state", False):
         # --reset-state: delete existing state file before loading so StateManager

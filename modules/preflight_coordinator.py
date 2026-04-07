@@ -89,16 +89,15 @@ class PreflightValidator:
             return "manage"
         return "check"
 
-    def _get_effective_argocd_rbac_mode(self) -> Tuple[str, str]:
-        """Require Argo CD RBAC only when Applications CRD exists on at least one hub.
-
-        Returns:
-            Tuple of (argocd_mode, argocd_install_type). install_type is 'vanilla',
-            'operator', or 'unknown'.
-        """
+    def _get_effective_argocd_rbac_mode(self) -> Tuple[str, str, str]:
+        """Determine Argo CD RBAC mode and per-hub install types."""
         requested_mode = self._get_argocd_rbac_mode()
         if requested_mode == "none":
-            return "none", "unknown"
+            return "none", "unknown", "unknown"
+
+        install_types = {"primary": "unknown", "secondary": "unknown"}
+        applications_present = False
+        discovery_unknown = False
 
         for client, hub_label in (
             (self.primary, "primary"),
@@ -116,14 +115,22 @@ class PreflightValidator:
                         exc.status,
                         exc.reason,
                     )
-                    return requested_mode, "unknown"
+                    discovery_unknown = True
+                    install_types[hub_label] = "unknown"
+                    continue
                 raise
             if discovery.has_applications_crd:
-                return requested_mode, discovery.install_type
-            logger.info("Argo CD Applications CRD not found on %s hub", hub_label)
+                applications_present = True
+                install_types[hub_label] = discovery.install_type
+            else:
+                install_types[hub_label] = "none"
+                logger.info("Argo CD Applications CRD not found on %s hub", hub_label)
+
+        if applications_present or discovery_unknown:
+            return requested_mode, install_types["primary"], install_types["secondary"]
 
         logger.info("Argo CD Applications CRD not found on either hub, skipping Argo CD RBAC permission checks")
-        return "none", "unknown"
+        return "none", "unknown", "unknown"
 
     def validate_all(self) -> Tuple[bool, PreflightConfig]:
         """Run all validation checks and return pass/fail with detected config."""
@@ -150,14 +157,19 @@ class PreflightValidator:
                         "Observability namespace not found on either hub, " "skipping observability permission checks"
                     )
 
-                effective_argocd_mode, argocd_install_type = self._get_effective_argocd_rbac_mode()
+                (
+                    effective_argocd_mode,
+                    primary_argocd_install_type,
+                    secondary_argocd_install_type,
+                ) = self._get_effective_argocd_rbac_mode()
                 validate_rbac_permissions(
                     primary_client=self.primary,
                     secondary_client=self.secondary,
                     include_decommission=self.include_decommission,
                     skip_observability=skip_obs,
                     argocd_mode=effective_argocd_mode,
-                    argocd_install_type=argocd_install_type,
+                    argocd_install_type=primary_argocd_install_type,
+                    secondary_argocd_install_type=secondary_argocd_install_type,
                 )
             except ValidationError as e:
                 self.reporter.add_result(

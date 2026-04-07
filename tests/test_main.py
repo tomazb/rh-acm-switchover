@@ -1108,6 +1108,8 @@ class TestMainGitOpsReporting:
         ), patch("acm_switchover.validate_args"), patch(
             "acm_switchover._resolve_state_file", return_value="state.json"
         ), patch(
+            "acm_switchover.os.path.exists", return_value=True
+        ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
             "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
@@ -1133,6 +1135,8 @@ class TestMainGitOpsReporting:
             "acm_switchover.setup_logging", return_value=logger
         ), patch("acm_switchover.validate_args"), patch(
             "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.os.path.exists", return_value=True
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
@@ -1160,6 +1164,8 @@ class TestMainGitOpsReporting:
         ), patch("acm_switchover.validate_args"), patch(
             "acm_switchover._resolve_state_file", return_value="state.json"
         ), patch(
+            "acm_switchover.os.path.exists", return_value=True
+        ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
             "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
@@ -1185,6 +1191,8 @@ class TestMainGitOpsReporting:
             "acm_switchover.setup_logging", return_value=logger
         ), patch("acm_switchover.validate_args"), patch(
             "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.os.path.exists", return_value=True
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
@@ -1213,6 +1221,8 @@ class TestMainGitOpsReporting:
         ), patch("acm_switchover.validate_args"), patch(
             "acm_switchover._resolve_state_file", return_value="state.json"
         ), patch(
+            "acm_switchover.os.path.exists", return_value=True
+        ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
             "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
@@ -1240,6 +1250,8 @@ class TestMainGitOpsReporting:
         ), patch("acm_switchover.validate_args"), patch(
             "acm_switchover._resolve_state_file", return_value="state.json"
         ), patch(
+            "acm_switchover.os.path.exists", return_value=True
+        ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
             "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
@@ -1266,6 +1278,8 @@ class TestMainGitOpsReporting:
             "acm_switchover.setup_logging", return_value=logger
         ), patch("acm_switchover.validate_args"), patch(
             "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.os.path.exists", return_value=True
         ), patch(
             "acm_switchover.StateManager", return_value=state
         ), patch(
@@ -1311,6 +1325,33 @@ class TestMainGitOpsReporting:
         assert exc_info.value.code == EXIT_SUCCESS
         state_manager.assert_called_once_with(str(reversed_path))
         assert args.state_file == str(reversed_path)
+
+    def test_main_resume_only_missing_state_file_exits_before_state_manager(self, tmp_path):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        missing_state_file = tmp_path / "missing-state.json"
+        logger = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value=str(missing_state_file)
+        ), patch(
+            "acm_switchover.StateManager"
+        ) as state_manager, patch(
+            "acm_switchover._initialize_clients"
+        ) as initialize_clients, patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        state_manager.assert_not_called()
+        initialize_clients.assert_not_called()
+        assert not missing_state_file.exists()
+        collector.print_report.assert_not_called()
 
     def test_main_enforces_contexts_for_normal_operation(self):
         args = self._base_args()
@@ -1364,8 +1405,8 @@ class TestDecommissionAndSetupHelpers:
         logger = Mock()
 
         with patch("acm_switchover.Decommission") as Decom, patch(
-            "acm_switchover.validate_rbac_permissions"
-        ) as validate_rbac:
+            "acm_switchover.validate_decommission_permissions"
+        ) as validate_decommission:
             instance = Decom.return_value
             instance.decommission.return_value = True
 
@@ -1373,9 +1414,8 @@ class TestDecommissionAndSetupHelpers:
 
         assert result is True
         primary.namespace_exists.assert_called_once()
-        validate_rbac.assert_called_once_with(
+        validate_decommission.assert_called_once_with(
             primary_client=primary,
-            include_decommission=True,
             skip_observability=False,
         )
         instance.decommission.assert_called_once_with(interactive=True)
@@ -1390,17 +1430,16 @@ class TestDecommissionAndSetupHelpers:
         logger = Mock()
 
         with patch("acm_switchover.Decommission") as Decom, patch(
-            "acm_switchover.validate_rbac_permissions"
-        ) as validate_rbac:
+            "acm_switchover.validate_decommission_permissions"
+        ) as validate_decommission:
             instance = Decom.return_value
             instance.decommission.return_value = False
 
             result = run_decommission(args, primary, state, logger)
 
         assert result is False
-        validate_rbac.assert_called_once_with(
+        validate_decommission.assert_called_once_with(
             primary_client=primary,
-            include_decommission=True,
             skip_observability=True,
         )
         instance.decommission.assert_called_once_with(interactive=False)
@@ -1415,7 +1454,7 @@ class TestDecommissionAndSetupHelpers:
         logger = Mock()
 
         with patch("acm_switchover.Decommission") as Decom, patch(
-            "acm_switchover.validate_rbac_permissions",
+            "acm_switchover.validate_decommission_permissions",
             side_effect=ValidationError("missing decommission permissions"),
         ):
             result = run_decommission(args, primary, state, logger)
@@ -1433,15 +1472,15 @@ class TestDecommissionAndSetupHelpers:
         logger = Mock()
 
         with patch("acm_switchover.Decommission") as Decom, patch(
-            "acm_switchover.validate_rbac_permissions"
-        ) as validate_rbac:
+            "acm_switchover.validate_decommission_permissions"
+        ) as validate_decommission:
             instance = Decom.return_value
             instance.decommission.return_value = True
 
             result = run_decommission(args, primary, state, logger)
 
         assert result is True
-        validate_rbac.assert_not_called()
+        validate_decommission.assert_not_called()
         instance.decommission.assert_called_once_with(interactive=True)
 
     def test_run_setup_successful_execution(self, monkeypatch: pytest.MonkeyPatch, tmp_path):

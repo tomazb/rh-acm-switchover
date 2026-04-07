@@ -2,13 +2,14 @@
 Unit tests for RBAC validator module.
 """
 
+from types import MethodType
 from unittest.mock import MagicMock, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
 
 from lib.exceptions import ValidationError
-from lib.rbac_validator import RBACValidator, validate_rbac_permissions
+from lib.rbac_validator import RBACValidator, validate_decommission_permissions, validate_rbac_permissions
 
 
 class TestRBACValidator:
@@ -160,6 +161,41 @@ class TestRBACValidator:
         """Test validate_cluster_permissions rejects invalid argocd_mode values."""
         with pytest.raises(ValueError):
             validator.validate_cluster_permissions(argocd_mode="invalid")
+
+    def test_validate_cluster_permissions_argocd_check_skips_operator_crd_for_vanilla(self, validator):
+        """Vanilla Argo CD installs must not require argocds.argoproj.io permissions."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(
+            argocd_mode="check",
+            argocd_install_type="vanilla",
+        )
+
+        assert all_valid is True
+        assert len(errors) == 0
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
+        assert ("argoproj.io", "applications", "get") in checked
+        assert ("argoproj.io", "applications", "list") in checked
+        assert ("apiextensions.k8s.io", "customresourcedefinitions", "get") in checked
+        assert ("argoproj.io", "argocds", "get") not in checked
+        assert ("argoproj.io", "argocds", "list") not in checked
+
+    def test_validate_cluster_permissions_argocd_check_skips_all_checks_when_not_installed(self, validator):
+        """Clusters without Argo CD must not validate any Argo CD permissions."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(
+            argocd_mode="check",
+            argocd_install_type="none",
+        )
+
+        assert all_valid is True
+        assert len(errors) == 0
+        checked = {(call.args[0], call.args[1], call.args[2]) for call in validator.check_permission.call_args_list}
+        assert ("argoproj.io", "applications", "get") not in checked
+        assert ("argoproj.io", "applications", "list") not in checked
+        assert ("argoproj.io", "argocds", "get") not in checked
+        assert ("apiextensions.k8s.io", "customresourcedefinitions", "get") not in checked
 
     def test_validate_namespace_permissions_success(self, validator):
         """Test validate_namespace_permissions when all permissions exist."""
@@ -479,8 +515,75 @@ class TestValidateRBACPermissions:
         )
 
     @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_both_hubs_use_separate_argocd_install_types(
+        self, mock_validator_class, mock_primary_client, mock_secondary_client
+    ):
+        """Primary and secondary hubs may require different Argo CD RBAC surfaces."""
+        primary_validator = MagicMock()
+        primary_validator.validate_all_permissions.return_value = (True, {})
+        secondary_validator = MagicMock()
+        secondary_validator.validate_all_permissions.return_value = (True, {})
+        mock_validator_class.side_effect = [primary_validator, secondary_validator]
+
+        validate_rbac_permissions(
+            mock_primary_client,
+            mock_secondary_client,
+            argocd_mode="check",
+            argocd_install_type="operator",
+            secondary_argocd_install_type="vanilla",
+        )
+
+        primary_validator.validate_all_permissions.assert_called_once_with(
+            include_decommission=False,
+            skip_observability=False,
+            argocd_mode="check",
+            argocd_install_type="operator",
+        )
+        secondary_validator.validate_all_permissions.assert_called_once_with(
+            include_decommission=False,
+            skip_observability=False,
+            argocd_mode="check",
+            argocd_install_type="vanilla",
+        )
+
+    @patch("lib.rbac_validator.RBACValidator")
     def test_validate_invalid_argocd_mode_raises(self, mock_validator_class, mock_primary_client):
         """Test validate_rbac_permissions rejects invalid argocd_mode values."""
         with pytest.raises(ValueError):
             validate_rbac_permissions(mock_primary_client, argocd_mode="invalid")
         mock_validator_class.assert_not_called()
+
+
+class TestValidateDecommissionPermissions:
+    """Tests for standalone decommission RBAC validation."""
+
+    @pytest.fixture
+    def mock_primary_client(self):
+        client = MagicMock()
+        client.context = "primary-hub"
+        client.namespace_exists = MagicMock(return_value=True)
+        return client
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_decommission_permissions_skips_namespace_validation(
+        self, mock_validator_class, mock_primary_client
+    ):
+        """Standalone decommission must not require full switchover namespace access."""
+        validator = RBACValidator(mock_primary_client)
+        validator.validate_cluster_permissions = MagicMock(return_value=(True, {}))
+
+        def _unexpected_namespace_validation(self, skip_observability=False, skip_agent_namespace=True):
+            raise AssertionError("namespace validation should not run for standalone decommission")
+
+        validator.validate_namespace_permissions = MethodType(_unexpected_namespace_validation, validator)
+        validator.generate_permission_report = MagicMock(return_value="Error report")
+        mock_validator_class.return_value = validator
+
+        validate_decommission_permissions(mock_primary_client, skip_observability=True)
+
+        validator.validate_cluster_permissions.assert_called_once_with(
+            include_decommission=True,
+            skip_observability=True,
+            argocd_mode="none",
+            argocd_install_type="unknown",
+        )

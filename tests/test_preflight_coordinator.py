@@ -85,6 +85,7 @@ def test_validate_all_passes_expected_argocd_rbac_mode(argocd_manage, skip_gitop
         skip_observability=False,
         argocd_mode=expected_mode,
         argocd_install_type="vanilla" if expected_mode != "none" else "unknown",
+        secondary_argocd_install_type="vanilla" if expected_mode != "none" else "unknown",
     )
 
 
@@ -116,6 +117,7 @@ def test_validate_all_skips_argocd_rbac_when_applications_crd_missing():
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",
+        secondary_argocd_install_type="unknown",
     )
 
 
@@ -147,6 +149,7 @@ def test_validate_all_includes_decommission_permissions_when_requested():
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",
+        secondary_argocd_install_type="unknown",
     )
 
 
@@ -200,6 +203,7 @@ def test_validate_all_uses_requested_argocd_mode_when_discovery_is_forbidden():
         skip_observability=False,
         argocd_mode="check",
         argocd_install_type="unknown",
+        secondary_argocd_install_type="unknown",
     )
 
 
@@ -285,4 +289,44 @@ def test_validate_all_skips_argocd_when_skip_gitops_check_set():
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",
+        secondary_argocd_install_type="unknown",
+    )
+
+
+@pytest.mark.unit
+def test_validate_all_passes_per_hub_argocd_install_types():
+    """Mixed Argo CD installs must validate each hub with its own install type."""
+    validator = _build_validator(argocd_manage=False)
+
+    discoveries = [
+        argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=True,
+            install_type="operator",
+        ),
+        argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        ),
+    ]
+
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
+        "modules.preflight_coordinator.AutoImportStrategyValidator"
+    ) as auto_import_validator, patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        side_effect=discoveries,
+    ):
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is True
+    validate_rbac.assert_called_once_with(
+        primary_client=validator.primary,
+        secondary_client=validator.secondary,
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="check",
+        argocd_install_type="operator",
+        secondary_argocd_install_type="vanilla",
     )
