@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-04-07
+
 ### Fixed
 
 - `--argocd-resume-only` now reuses the reversed default state file when swapped contexts match exactly one existing state file
@@ -982,7 +984,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.16...v1.6.0
 [1.5.16]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.15...v1.5.16
