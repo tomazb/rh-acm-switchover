@@ -735,9 +735,7 @@ class Finalization:
             try:
                 backups = self._list_acm_owned_velero_backups()
             except TransientError as exc:
-                raise SwitchoverError(
-                    "Failed to list Velero backups for integrity verification: " f"{exc}"
-                ) from exc
+                raise SwitchoverError("Failed to list Velero backups for integrity verification: " f"{exc}") from exc
             if not backups:
                 raise SwitchoverError("No ACM-owned Velero backups found for integrity verification")
 

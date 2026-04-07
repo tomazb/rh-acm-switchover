@@ -287,7 +287,12 @@ class TestRBACManifestConsistency:
 
     CLUSTERROLE_PATHS = {
         "kustomize": Path(__file__).parent.parent / "deploy" / "rbac" / "clusterrole.yaml",
-        "helm": Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "clusterrole.yaml",
+        "helm": Path(__file__).parent.parent
+        / "deploy"
+        / "helm"
+        / "acm-switchover-rbac"
+        / "templates"
+        / "clusterrole.yaml",
     }
 
     def _read_clusterrole(self, variant: str) -> str:
@@ -340,6 +345,7 @@ class TestRBACManifestConsistency:
         ]
         for snippet in required_snippets:
             assert snippet in helm_clusterrole_content
+
 
 class TestRBACValidatorPermissionStructure:
     """Test the structure and format of RBAC permissions."""

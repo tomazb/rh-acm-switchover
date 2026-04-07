@@ -207,9 +207,7 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     has_argocds = bool(has_argocds_present)
     install_type_override = None
     if has_argocds_present is None:
-        logger.warning(
-            "Could not determine ArgoCD CRDs presence; install type will be 'unknown'"
-        )
+        logger.warning("Could not determine ArgoCD CRDs presence; install type will be 'unknown'")
         install_type_override = "unknown"
     instances: List[Dict[str, str]] = []
     if not has_app:
@@ -532,8 +530,7 @@ def resume_autosync(
         current_policy = (current.get("spec") or {}).get("syncPolicy") or {}
         if "automated" in current_policy:
             logger.info(
-                "Application %s/%s has stale marker %s (expected %s) "
-                "but auto-sync is already enabled; cleaning up",
+                "Application %s/%s has stale marker %s (expected %s) " "but auto-sync is already enabled; cleaning up",
                 namespace,
                 name,
                 marker,

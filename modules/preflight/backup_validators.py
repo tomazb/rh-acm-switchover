@@ -19,8 +19,8 @@ from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.validation import InputValidator, ValidationError
 
-from .base_validator import BaseValidator
 from ..restore_discovery import find_passive_sync_restore
+from .base_validator import BaseValidator
 
 logger = logging.getLogger("acm_switchover")
 
@@ -486,9 +486,7 @@ class PassiveSyncValidator(BaseValidator):
                 )
             elif phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
-                if messages and all(
-                    "already available" in m for m in messages
-                ):
+                if messages and all("already available" in m for m in messages):
                     self.add_result(
                         "Passive sync restore",
                         True,
@@ -497,13 +495,9 @@ class PassiveSyncValidator(BaseValidator):
                         critical=True,
                     )
                 else:
-                    self._report_restore_failure(
-                        restore_name, phase, message, context, secondary
-                    )
+                    self._report_restore_failure(restore_name, phase, message, context, secondary)
             else:
-                self._report_restore_failure(
-                    restore_name, phase, message, context, secondary
-                )
+                self._report_restore_failure(restore_name, phase, message, context, secondary)
         except Exception as exc:
             self.add_result(
                 "Passive sync restore",
@@ -526,8 +520,7 @@ class PassiveSyncValidator(BaseValidator):
         bsl_unavailable = _collect_bsl_unavailable_details(secondary)
         if bsl_unavailable:
             bsl_details = (
-                " BackupStorageLocation issue(s): "
-                f"{bsl_unavailable}. Restore cannot proceed until BSL is Available."
+                " BackupStorageLocation issue(s): " f"{bsl_unavailable}. Restore cannot proceed until BSL is Available."
             )
 
         velero_match = re.search(r"Velero restore\s+(\S+)", message)
@@ -547,7 +540,9 @@ class PassiveSyncValidator(BaseValidator):
                     validation_errors = velero_status.get("validationErrors") or []
                     if validation_errors:
                         joined = "; ".join(str(e) for e in validation_errors)
-                        velero_details = f" Velero restore {velero_restore_name} phase={velero_phase} validationErrors={joined}."
+                        velero_details = (
+                            f" Velero restore {velero_restore_name} phase={velero_phase} validationErrors={joined}."
+                        )
                     else:
                         velero_details = f" Velero restore {velero_restore_name} phase={velero_phase}."
             except Exception as exc:

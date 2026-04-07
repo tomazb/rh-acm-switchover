@@ -160,7 +160,9 @@ class TestPrimaryPreparation:
         result = prep.prepare()
 
         assert result is True
-        assert not any(call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list)
+        assert not any(
+            call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list
+        )
 
     def test_pause_argocd_acm_apps_records_paused(self, mock_primary_client, mock_state_manager):
         """Pause Argo CD auto-sync should record paused apps in state."""
@@ -452,7 +454,9 @@ class TestPrimaryPreparation:
         mock_state_manager.get_config.side_effect = lambda key, default=None: copy.deepcopy(
             state_config.get(key, default)
         )
-        mock_state_manager.set_config.side_effect = lambda key, value: state_config.__setitem__(key, copy.deepcopy(value))
+        mock_state_manager.set_config.side_effect = lambda key, value: state_config.__setitem__(
+            key, copy.deepcopy(value)
+        )
 
         discovery = argocd_lib.ArgocdDiscoveryResult(
             has_applications_crd=True,
@@ -565,7 +569,9 @@ class TestPrimaryPreparation:
         mock_state_manager.get_config.side_effect = lambda key, default=None: copy.deepcopy(
             state_config.get(key, default)
         )
-        mock_state_manager.set_config.side_effect = lambda key, value: state_config.__setitem__(key, copy.deepcopy(value))
+        mock_state_manager.set_config.side_effect = lambda key, value: state_config.__setitem__(
+            key, copy.deepcopy(value)
+        )
 
         discovery = argocd_lib.ArgocdDiscoveryResult(
             has_applications_crd=True,

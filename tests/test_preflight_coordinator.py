@@ -10,7 +10,9 @@ from lib.exceptions import ValidationError
 from modules.preflight_coordinator import PreflightValidator
 
 
-def _build_validator(argocd_manage: bool = False, include_decommission: bool = False, skip_gitops_check: bool = False) -> PreflightValidator:
+def _build_validator(
+    argocd_manage: bool = False, include_decommission: bool = False, skip_gitops_check: bool = False
+) -> PreflightValidator:
     """Create PreflightValidator with internal validators stubbed for focused RBAC tests."""
     primary = Mock()
     secondary = Mock()

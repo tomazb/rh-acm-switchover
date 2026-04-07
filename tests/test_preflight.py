@@ -118,4 +118,3 @@ class TestObservabilityDetector:
 
         assert result == (primary_has, secondary_has)
         assert reporter.results[-1]["message"] == expected_message
-

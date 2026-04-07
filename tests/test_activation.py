@@ -206,9 +206,7 @@ class TestSecondaryActivation:
         assert "restore-acm-full" in mock_wait.call_args[0][0]
 
     @patch("modules.activation.wait_for_condition")
-    def test_activate_full_deletes_existing_passive_sync(
-        self, mock_wait, activation_full, mock_secondary_client
-    ):
+    def test_activate_full_deletes_existing_passive_sync(self, mock_wait, activation_full, mock_secondary_client):
         """Test full activation deletes existing passive-sync restore first."""
         mock_wait.return_value = True
 
@@ -502,6 +500,7 @@ class TestSecondaryActivation:
         ]
 
         with patch("modules.activation.wait_for_condition") as mock_wait:
+
             def side_effect(desc, callback, **kwargs):
                 return callback()[0]
 
@@ -511,9 +510,7 @@ class TestSecondaryActivation:
             # Should NOT raise - FinishedWithErrors with "already available" is treated as success
             activation_passive._wait_for_restore_completion()
 
-    def test_poll_restore_finished_with_errors_real_errors_raises(
-        self, activation_passive, mock_secondary_client
-    ):
+    def test_poll_restore_finished_with_errors_real_errors_raises(self, activation_passive, mock_secondary_client):
         """FinishedWithErrors with non-'already available' messages should still raise."""
 
         def get_custom_resource_side_effect(**kwargs):
@@ -534,6 +531,7 @@ class TestSecondaryActivation:
         ]
 
         with patch("modules.activation.wait_for_condition") as mock_wait:
+
             def side_effect(desc, callback, **kwargs):
                 return callback()[0]
 
@@ -1031,9 +1029,7 @@ class TestPatchVerificationErrors:
 class TestPassiveSyncRestoreMissingName:
     """Tests for FatalError when restore is missing metadata.name."""
 
-    def test_get_passive_sync_restore_name_raises_when_name_missing(
-        self, activation_passive, mock_secondary_client
-    ):
+    def test_get_passive_sync_restore_name_raises_when_name_missing(self, activation_passive, mock_secondary_client):
         """_get_passive_sync_restore_name raises FatalError when discovered restore has no name."""
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -1057,9 +1053,7 @@ class TestPassiveSyncRestoreMissingName:
 class TestVerifyPassiveSyncFinishedWithErrors:
     """Tests for FinishedWithErrors handling in _verify_passive_sync."""
 
-    def test_finished_with_errors_real_errors_raises(
-        self, activation_passive, mock_secondary_client
-    ):
+    def test_finished_with_errors_real_errors_raises(self, activation_passive, mock_secondary_client):
         """FinishedWithErrors with non-'already available' messages raises FatalError."""
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -1079,9 +1073,7 @@ class TestVerifyPassiveSyncFinishedWithErrors:
         with pytest.raises(FatalError, match="Passive sync restore not ready: FinishedWithErrors"):
             activation_passive._verify_passive_sync()
 
-    def test_finished_with_errors_mixed_messages_raises(
-        self, activation_passive, mock_secondary_client
-    ):
+    def test_finished_with_errors_mixed_messages_raises(self, activation_passive, mock_secondary_client):
         """FinishedWithErrors with a mix of 'already available' and real errors raises."""
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -1169,9 +1161,7 @@ class TestActivateResumeAndEdgeCases:
         mock_sleep.return_value = None
 
         # verify_passive_sync is already completed, activate_managed_clusters is not
-        mock_state_manager.is_step_completed.side_effect = (
-            lambda step: step == "verify_passive_sync"
-        )
+        mock_state_manager.is_step_completed.side_effect = lambda step: step == "verify_passive_sync"
 
         activation = SecondaryActivation(
             secondary_client=mock_secondary_client,

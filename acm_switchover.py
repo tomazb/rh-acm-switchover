@@ -609,9 +609,7 @@ def _report_argocd_acm_impact(
 
     if not argocd_manage and all_acm_apps:
         autosync_count = sum(
-            1
-            for a in all_acm_apps
-            if (a.app.get("spec", {}) or {}).get("syncPolicy", {}).get("automated")
+            1 for a in all_acm_apps if (a.app.get("spec", {}) or {}).get("syncPolicy", {}).get("automated")
         )
         if autosync_count:
             logger.warning(

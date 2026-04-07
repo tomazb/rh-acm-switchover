@@ -40,6 +40,7 @@ from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
 from lib.waiter import wait_for_condition
+
 from .restore_discovery import find_passive_sync_restore
 
 logger = logging.getLogger("acm_switchover")
@@ -758,9 +759,7 @@ class SecondaryActivation:
                 if getattr(e, "status", None) == 404:
                     logger.info("Passive sync restore %s already deleted", passive_name)
                 else:
-                    raise FatalError(
-                        f"Failed to delete passive sync restore {passive_name}: {e}"
-                    ) from e
+                    raise FatalError(f"Failed to delete passive sync restore {passive_name}: {e}") from e
 
         # Check if full restore already exists (idempotent resume)
         existing_restore = self.secondary.get_custom_resource(
@@ -844,9 +843,7 @@ class SecondaryActivation:
                 return True, message or "restore completed"
             if phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
-                if messages and all(
-                    "already available" in m for m in messages
-                ):
+                if messages and all("already available" in m for m in messages):
                     logger.warning(
                         "Restore %s reported FinishedWithErrors but all errors are"
                         " 'already available' clusters (expected for consecutive"

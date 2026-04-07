@@ -82,8 +82,7 @@ def pytest_addoption(parser):
     group.addoption(
         "--e2e-stop-on-failure",
         action="store_true",
-        default=os.environ.get("E2E_STOP_ON_FAILURE", "").lower()
-        in ("1", "true", "yes"),
+        default=os.environ.get("E2E_STOP_ON_FAILURE", "").lower() in ("1", "true", "yes"),
         help="Stop on first cycle failure (env: E2E_STOP_ON_FAILURE)",
     )
 
@@ -151,24 +150,21 @@ def pytest_addoption(parser):
     group.addoption(
         "--e2e-disable-observability-on-secondary",
         action="store_true",
-        default=os.environ.get("E2E_DISABLE_OBSERVABILITY_ON_SECONDARY", "").lower()
-        in ("1", "true", "yes"),
+        default=os.environ.get("E2E_DISABLE_OBSERVABILITY_ON_SECONDARY", "").lower() in ("1", "true", "yes"),
         help="Delete MCO on old hub instead of just scaling down (env: E2E_DISABLE_OBSERVABILITY_ON_SECONDARY)",
     )
 
     group.addoption(
         "--e2e-argocd-manage",
         action="store_true",
-        default=os.environ.get("E2E_ARGOCD_MANAGE", "").lower()
-        in ("1", "true", "yes"),
+        default=os.environ.get("E2E_ARGOCD_MANAGE", "").lower() in ("1", "true", "yes"),
         help="Pause ArgoCD auto-sync for ACM-touching apps during switchover (env: E2E_ARGOCD_MANAGE)",
     )
 
     group.addoption(
         "--e2e-argocd-resume-after-switchover",
         action="store_true",
-        default=os.environ.get("E2E_ARGOCD_RESUME_AFTER_SWITCHOVER", "").lower()
-        in ("1", "true", "yes"),
+        default=os.environ.get("E2E_ARGOCD_RESUME_AFTER_SWITCHOVER", "").lower() in ("1", "true", "yes"),
         help="Resume ArgoCD auto-sync after switchover completes (env: E2E_ARGOCD_RESUME_AFTER_SWITCHOVER)",
     )
 
@@ -176,9 +172,7 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """Register E2E and resilience markers."""
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring real clusters")
-    config.addinivalue_line(
-        "markers", "resilience: Resilience tests with failure injection"
-    )
+    config.addinivalue_line("markers", "resilience: Resilience tests with failure injection")
     config.addinivalue_line(
         "markers",
         "e2e_full_validation: Full validation E2E suite against real clusters",
@@ -246,9 +240,7 @@ def require_cluster_contexts(e2e_config: RunConfig):
         pytest.skip("--primary-context not provided (required for real cluster tests)")
 
     if not e2e_config.secondary_context:
-        pytest.skip(
-            "--secondary-context not provided (required for real cluster tests)"
-        )
+        pytest.skip("--secondary-context not provided (required for real cluster tests)")
 
 
 @pytest.fixture(scope="session")

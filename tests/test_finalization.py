@@ -699,9 +699,7 @@ class TestFinalization:
         )
         state.set_config("auto_import_strategy_set", True)
         mock_secondary_client.get_configmap.return_value = {
-            "data": {
-                finalization_module.AUTO_IMPORT_STRATEGY_KEY: finalization_module.AUTO_IMPORT_STRATEGY_DEFAULT
-            }
+            "data": {finalization_module.AUTO_IMPORT_STRATEGY_KEY: finalization_module.AUTO_IMPORT_STRATEGY_DEFAULT}
         }
 
         assert fin._ensure_auto_import_default() is True
@@ -835,13 +833,17 @@ class TestFinalization:
             acm_version="2.14.0",
         )
 
-        with patch.object(fin, "_enable_backup_schedule"), patch.object(fin, "_verify_backup_schedule_enabled"), patch.object(
-            fin, "_fix_backup_schedule_collision"
-        ), patch.object(fin, "_verify_new_backups"), patch.object(fin, "_verify_backup_integrity"), patch.object(
+        with patch.object(fin, "_enable_backup_schedule"), patch.object(
+            fin, "_verify_backup_schedule_enabled"
+        ), patch.object(fin, "_fix_backup_schedule_collision"), patch.object(fin, "_verify_new_backups"), patch.object(
+            fin, "_verify_backup_integrity"
+        ), patch.object(
             fin, "_verify_multiclusterhub_health"
         ), patch.object(
             fin, "_ensure_auto_import_default", return_value=True
-        ) as reset_auto_import, patch.object(fin, "_handle_old_hub"), patch.object(
+        ) as reset_auto_import, patch.object(
+            fin, "_handle_old_hub"
+        ), patch.object(
             fin, "_get_backup_verify_timeout", return_value=600
         ):
             assert fin.finalize() is True
@@ -1464,9 +1466,7 @@ class TestFinalization:
         assert primary.get_pods.call_count == 2
 
     @patch("modules.finalization.time")
-    def test_old_hub_observability_reports_success_when_all_pods_gone(
-        self, mock_time, finalization_with_primary
-    ):
+    def test_old_hub_observability_reports_success_when_all_pods_gone(self, mock_time, finalization_with_primary):
         """Observability shutdown should report success when old-hub pods terminate."""
         fin, primary = finalization_with_primary
         compactor_pods = [{"metadata": {"name": "compact-0"}}]
@@ -1505,9 +1505,7 @@ class TestFinalization:
         logger.warning.assert_not_called()
 
     @patch("modules.finalization.time")
-    def test_old_hub_observability_warns_when_pods_remain(
-        self, mock_time, finalization_with_primary
-    ):
+    def test_old_hub_observability_warns_when_pods_remain(self, mock_time, finalization_with_primary):
         """Observability shutdown should warn when old-hub pods remain after waiting."""
         fin, primary = finalization_with_primary
         compactor_pods = [{"metadata": {"name": "compact-0"}}]
@@ -1746,9 +1744,11 @@ class TestFinalization:
 
         call_order = []
 
-        with patch.object(fin, "_enable_backup_schedule"), patch.object(fin, "_verify_backup_schedule_enabled"), patch.object(
-            fin, "_fix_backup_schedule_collision"
-        ), patch.object(fin, "_verify_new_backups"), patch.object(fin, "_verify_backup_integrity"), patch.object(
+        with patch.object(fin, "_enable_backup_schedule"), patch.object(
+            fin, "_verify_backup_schedule_enabled"
+        ), patch.object(fin, "_fix_backup_schedule_collision"), patch.object(fin, "_verify_new_backups"), patch.object(
+            fin, "_verify_backup_integrity"
+        ), patch.object(
             fin, "_verify_multiclusterhub_health"
         ), patch.object(
             fin, "_get_backup_verify_timeout", return_value=300
@@ -1788,9 +1788,11 @@ class TestFinalization:
             argocd_resume_after_switchover=True,
         )
 
-        with patch.object(fin, "_enable_backup_schedule"), patch.object(fin, "_verify_backup_schedule_enabled"), patch.object(
-            fin, "_fix_backup_schedule_collision"
-        ), patch.object(fin, "_verify_new_backups"), patch.object(fin, "_verify_backup_integrity"), patch.object(
+        with patch.object(fin, "_enable_backup_schedule"), patch.object(
+            fin, "_verify_backup_schedule_enabled"
+        ), patch.object(fin, "_fix_backup_schedule_collision"), patch.object(fin, "_verify_new_backups"), patch.object(
+            fin, "_verify_backup_integrity"
+        ), patch.object(
             fin, "_verify_multiclusterhub_health"
         ), patch.object(
             fin, "_get_backup_verify_timeout", return_value=300

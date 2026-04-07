@@ -9,7 +9,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import yaml
@@ -982,9 +982,7 @@ class TestKlusterletParallelVerification:
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(pav, "_find_context_by_api_url", return_value="ctx-c1"):
-                    with patch.object(
-                        pav, "_check_klusterlet_connection", side_effect=RuntimeError("boom")
-                    ):
+                    with patch.object(pav, "_check_klusterlet_connection", side_effect=RuntimeError("boom")):
                         # Should not raise; c1 lands in unreachable bucket
                         pav._verify_klusterlet_connections()
 
@@ -999,10 +997,12 @@ class TestKubeconfigLoading:
     def test_cache_hit_returns_cached_data(self, mock_secondary_client, mock_state_manager, tmp_path):
         """Second call should return cached data when mtime unchanged."""
         cfg = tmp_path / "config"
-        cfg.write_text(_kubeconfig_yaml(
-            clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-            contexts=[{"name": "ctx-c1", "context": {"cluster": "c1"}}],
-        ))
+        cfg.write_text(
+            _kubeconfig_yaml(
+                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
+                contexts=[{"name": "ctx-c1", "context": {"cluster": "c1"}}],
+            )
+        )
 
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
@@ -1015,9 +1015,11 @@ class TestKubeconfigLoading:
     def test_cache_invalidated_on_mtime_change(self, mock_secondary_client, mock_state_manager, tmp_path):
         """Cache should be invalidated when file mtime changes."""
         cfg = tmp_path / "config"
-        cfg.write_text(_kubeconfig_yaml(
-            clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-        ))
+        cfg.write_text(
+            _kubeconfig_yaml(
+                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
+            )
+        )
 
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
@@ -1025,12 +1027,14 @@ class TestKubeconfigLoading:
             first = pav._load_kubeconfig_data()
             # Simulate file modification
             time.sleep(0.05)
-            cfg.write_text(_kubeconfig_yaml(
-                clusters=[
-                    {"name": "c1", "cluster": {"server": "https://c1:6443"}},
-                    {"name": "c2", "cluster": {"server": "https://c2:6443"}},
-                ],
-            ))
+            cfg.write_text(
+                _kubeconfig_yaml(
+                    clusters=[
+                        {"name": "c1", "cluster": {"server": "https://c1:6443"}},
+                        {"name": "c2", "cluster": {"server": "https://c2:6443"}},
+                    ],
+                )
+            )
             second = pav._load_kubeconfig_data()
 
         assert len(second["clusters"]) == 2
@@ -1039,9 +1043,11 @@ class TestKubeconfigLoading:
     def test_cache_invalidated_on_file_deletion(self, mock_secondary_client, mock_state_manager, tmp_path):
         """Cache should be invalidated when a kubeconfig file is deleted."""
         cfg = tmp_path / "config"
-        cfg.write_text(_kubeconfig_yaml(
-            clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-        ))
+        cfg.write_text(
+            _kubeconfig_yaml(
+                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
+            )
+        )
 
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
@@ -1058,9 +1064,11 @@ class TestKubeconfigLoading:
     def test_force_reload_bypasses_cache(self, mock_secondary_client, mock_state_manager, tmp_path):
         """force_reload=True should bypass cache even when mtime unchanged."""
         cfg = tmp_path / "config"
-        cfg.write_text(_kubeconfig_yaml(
-            clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-        ))
+        cfg.write_text(
+            _kubeconfig_yaml(
+                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
+            )
+        )
 
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
@@ -1087,9 +1095,11 @@ class TestKubeconfigLoading:
     def test_size_bypass_with_zero(self, mock_secondary_client, mock_state_manager, tmp_path):
         """max_size=0 should bypass size check entirely."""
         cfg = tmp_path / "config"
-        cfg.write_text(_kubeconfig_yaml(
-            clusters=[{"name": "big", "cluster": {"server": "https://big:6443"}}],
-        ))
+        cfg.write_text(
+            _kubeconfig_yaml(
+                clusters=[{"name": "big", "cluster": {"server": "https://big:6443"}}],
+            )
+        )
 
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
@@ -1104,9 +1114,11 @@ class TestKubeconfigLoading:
         bad.write_text("{{{{invalid yaml")
 
         good = tmp_path / "good.yaml"
-        good.write_text(_kubeconfig_yaml(
-            clusters=[{"name": "ok", "cluster": {"server": "https://ok:6443"}}],
-        ))
+        good.write_text(
+            _kubeconfig_yaml(
+                clusters=[{"name": "ok", "cluster": {"server": "https://ok:6443"}}],
+            )
+        )
 
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
@@ -1119,9 +1131,11 @@ class TestKubeconfigLoading:
     def test_oserror_skips_file(self, mock_secondary_client, mock_state_manager, tmp_path):
         """OSError during open should be handled gracefully."""
         cfg = tmp_path / "config"
-        cfg.write_text(_kubeconfig_yaml(
-            clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
-        ))
+        cfg.write_text(
+            _kubeconfig_yaml(
+                clusters=[{"name": "c1", "cluster": {"server": "https://c1:6443"}}],
+            )
+        )
 
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
@@ -1275,9 +1289,11 @@ class TestCheckKlusterletConnection:
 
     def _make_secret(self, server_url):
         """Build a mock V1Secret with an embedded kubeconfig pointing to server_url."""
-        inner_kube = yaml.dump({
-            "clusters": [{"name": "hub", "cluster": {"server": server_url}}],
-        })
+        inner_kube = yaml.dump(
+            {
+                "clusters": [{"name": "hub", "cluster": {"server": server_url}}],
+            }
+        )
         encoded = base64.b64encode(inner_kube.encode()).decode()
         secret = Mock()
         secret.data = {"kubeconfig": encoded}
@@ -1545,9 +1561,7 @@ class TestVerifyObservabilityPods:
 
         with patch("modules.post_activation.logger") as mock_logger:
             pav._verify_observability_pods()
-            assert any(
-                any("OOMKilled" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
-            )
+            assert any(any("OOMKilled" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
 
     def test_failed_phase_detected(self, mock_secondary_client, mock_state_manager):
         """Pod in Failed phase should be flagged."""
@@ -1566,9 +1580,7 @@ class TestVerifyObservabilityPods:
 
         with patch("modules.post_activation.logger") as mock_logger:
             pav._verify_observability_pods()
-            assert any(
-                any("Failed" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
-            )
+            assert any(any("Failed" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
 
     def test_unknown_phase_detected(self, mock_secondary_client, mock_state_manager):
         """Pod in Unknown phase should be flagged."""
@@ -1587,9 +1599,7 @@ class TestVerifyObservabilityPods:
 
         with patch("modules.post_activation.logger") as mock_logger:
             pav._verify_observability_pods()
-            assert any(
-                any("Unknown" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
-            )
+            assert any(any("Unknown" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
 
     def test_nonzero_exit_code_detected(self, mock_secondary_client, mock_state_manager):
         """Non-zero exit code with unknown reason should be flagged."""
@@ -1613,9 +1623,7 @@ class TestVerifyObservabilityPods:
 
         with patch("modules.post_activation.logger") as mock_logger:
             pav._verify_observability_pods()
-            assert any(
-                any("exit=1" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
-            )
+            assert any(any("exit=1" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
 
     def test_image_pull_backoff_detected(self, mock_secondary_client, mock_state_manager):
         """ImagePullBackOff should be reported."""
@@ -1651,14 +1659,16 @@ class TestVerifyObservabilityPods:
         pods = []
         for i in range(5):
             ready = "True" if i == 0 else "False"
-            pods.append({
-                "metadata": {"name": f"pod-{i}"},
-                "status": {
-                    "phase": "Running",
-                    "conditions": [{"type": "Ready", "status": ready}],
-                    "containerStatuses": [],
-                },
-            })
+            pods.append(
+                {
+                    "metadata": {"name": f"pod-{i}"},
+                    "status": {
+                        "phase": "Running",
+                        "conditions": [{"type": "Ready", "status": ready}],
+                        "containerStatuses": [],
+                    },
+                }
+            )
 
         mock_secondary_client.get_pods.return_value = pods
 

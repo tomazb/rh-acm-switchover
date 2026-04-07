@@ -221,8 +221,14 @@ def test_postflight_output_format():
 @pytest.mark.parametrize(
     ("resource_json", "expected"),
     [
-        ('{"metadata":{"annotations":{"argocd.argoproj.io/sync-wave":"5"}}}', "annotation:argocd.argoproj.io/sync-wave"),
-        ('{"metadata":{"labels":{"kustomize.toolkit.fluxcd.io/name":"app"}}}', "label:kustomize.toolkit.fluxcd.io/name"),
+        (
+            '{"metadata":{"annotations":{"argocd.argoproj.io/sync-wave":"5"}}}',
+            "annotation:argocd.argoproj.io/sync-wave",
+        ),
+        (
+            '{"metadata":{"labels":{"kustomize.toolkit.fluxcd.io/name":"app"}}}',
+            "label:kustomize.toolkit.fluxcd.io/name",
+        ),
     ],
 )
 def test_detect_gitops_markers_matches_valid_gitops_keys(resource_json, expected):

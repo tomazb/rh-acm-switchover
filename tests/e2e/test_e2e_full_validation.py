@@ -1193,11 +1193,7 @@ class TestFullValidation:
 
             # Wait for restore on secondary to settle (may still be Running
             # after the reverse switchover in phase 9 recreated it)
-            secondary_ctx = (
-                self._secondary
-                if current_primary == self._primary
-                else self._primary
-            )
+            secondary_ctx = self._secondary if current_primary == self._primary else self._primary
             wait_for_restore_settled(secondary_ctx)
 
             # discover-hub

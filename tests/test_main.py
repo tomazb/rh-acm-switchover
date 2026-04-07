@@ -217,7 +217,9 @@ class TestArgParsing:
 
         validate_args(args, logger)
 
-        logger.warning.assert_any_call("--argocd-manage has no effect with --validate-only; continuing without Argo CD management.")
+        logger.warning.assert_any_call(
+            "--argocd-manage has no effect with --validate-only; continuing without Argo CD management."
+        )
 
 
 @pytest.mark.unit
@@ -1575,9 +1577,7 @@ class TestPreflightPhase:
             argocd_manage=True,
             skip_gitops_check=False,
         )
-        report_argocd_impact.assert_called_once_with(
-            primary, secondary, logger, argocd_manage=True
-        )
+        report_argocd_impact.assert_called_once_with(primary, secondary, logger, argocd_manage=True)
 
     def test_run_phase_preflight_passes_decommission_intent_to_preflight_validator(
         self,
@@ -1701,9 +1701,7 @@ class TestPreflightPhase:
             validator_class.return_value.validate_all.return_value = (True, config)
             _run_phase_preflight(args, state, primary, secondary, logger)
 
-        report_argocd_impact.assert_called_once_with(
-            primary, secondary, logger, argocd_manage=False
-        )
+        report_argocd_impact.assert_called_once_with(primary, secondary, logger, argocd_manage=False)
 
     def test_argocd_detection_skipped_when_skip_gitops_check(self):
         """When skip_gitops_check=True, _report_argocd_acm_impact is NOT called."""
@@ -1750,13 +1748,7 @@ class TestPreflightPhase:
             namespace="openshift-gitops",
             name="acm-config",
             resource_count=3,
-            app={
-                "spec": {
-                    "syncPolicy": {
-                        "automated": {"prune": True, "selfHeal": True}
-                    }
-                }
-            },
+            app={"spec": {"syncPolicy": {"automated": {"prune": True, "selfHeal": True}}}},
         )
 
         with patch(
@@ -1775,9 +1767,9 @@ class TestPreflightPhase:
             call.args[0] % call.args[1:] if len(call.args) > 1 else call.args[0]
             for call in logger.warning.call_args_list
         ]
-        assert any("Consider --argocd-manage" in t for t in warning_texts), (
-            f"Expected advisory warning with 'Consider --argocd-manage', got: {warning_texts}"
-        )
+        assert any(
+            "Consider --argocd-manage" in t for t in warning_texts
+        ), f"Expected advisory warning with 'Consider --argocd-manage', got: {warning_texts}"
 
     def test_argocd_advisory_warning_hidden_with_argocd_manage(self):
         """No advisory warning when argocd_manage=True even with ACM-touching auto-sync apps."""
@@ -1793,13 +1785,7 @@ class TestPreflightPhase:
             namespace="openshift-gitops",
             name="acm-config",
             resource_count=3,
-            app={
-                "spec": {
-                    "syncPolicy": {
-                        "automated": {"prune": True, "selfHeal": True}
-                    }
-                }
-            },
+            app={"spec": {"syncPolicy": {"automated": {"prune": True, "selfHeal": True}}}},
         )
 
         with patch(
@@ -1818,9 +1804,9 @@ class TestPreflightPhase:
             call.args[0] % call.args[1:] if len(call.args) > 1 else call.args[0]
             for call in logger.warning.call_args_list
         ]
-        assert not any("Consider --argocd-manage" in t for t in warning_texts), (
-            f"Advisory warning should NOT appear when argocd_manage=True, got: {warning_texts}"
-        )
+        assert not any(
+            "Consider --argocd-manage" in t for t in warning_texts
+        ), f"Advisory warning should NOT appear when argocd_manage=True, got: {warning_texts}"
 
     def test_argocd_advisory_warning_only_for_autosync_apps(self):
         """No advisory warning when ACM-touching apps exist but none have auto-sync."""
@@ -1855,9 +1841,9 @@ class TestPreflightPhase:
             call.args[0] % call.args[1:] if len(call.args) > 1 else call.args[0]
             for call in logger.warning.call_args_list
         ]
-        assert not any("Consider --argocd-manage" in t for t in warning_texts), (
-            f"Advisory warning should NOT appear without auto-sync apps, got: {warning_texts}"
-        )
+        assert not any(
+            "Consider --argocd-manage" in t for t in warning_texts
+        ), f"Advisory warning should NOT appear without auto-sync apps, got: {warning_texts}"
 
 
 @pytest.mark.unit
@@ -2137,9 +2123,7 @@ class TestPhaseFlowIntegration:
 
         with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
             "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch(
-            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
-        ), patch(
+        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
@@ -2198,9 +2182,7 @@ class TestPhaseFlowIntegration:
 
         with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
             "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch(
-            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
-        ), patch(
+        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
@@ -2226,9 +2208,7 @@ class TestPhaseFlowIntegration:
 
         with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
             "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch(
-            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
-        ), patch(
+        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
@@ -2297,9 +2277,7 @@ class TestResumeFromFailedState:
 
         with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
             "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch(
-            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
-        ), patch(
+        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
@@ -2327,9 +2305,7 @@ class TestResumeFromFailedState:
 
         with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
             "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch(
-            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
-        ), patch(
+        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
@@ -2358,9 +2334,7 @@ class TestResumeFromFailedState:
 
         with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
             "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch(
-            "acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)
-        ), patch(
+        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
@@ -2516,17 +2490,27 @@ class TestMainExceptionHandlers:
         state_file = tmp_path / "state.json"
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
 
-        with patch("sys.argv", [
-            "script.py",
-            "--primary-context", "p1",
-            "--secondary-context", "s1",
-            "--method", "passive",
-            "--old-hub-action", "secondary",
-            "--state-file", str(state_file),
-        ]), patch(
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "s1",
+                "--method",
+                "passive",
+                "--old-hub-action",
+                "secondary",
+                "--state-file",
+                str(state_file),
+            ],
+        ), patch(
             "acm_switchover.StateManager",
             side_effect=StateLoadError("corrupt state file"),
-        ), pytest.raises(SystemExit) as exc_info:
+        ), pytest.raises(
+            SystemExit
+        ) as exc_info:
             main()
 
         assert exc_info.value.code == EXIT_FAILURE
@@ -2538,17 +2522,27 @@ class TestMainExceptionHandlers:
         state_file = tmp_path / "state.json"
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
 
-        with patch("sys.argv", [
-            "script.py",
-            "--primary-context", "p1",
-            "--secondary-context", "s1",
-            "--method", "passive",
-            "--old-hub-action", "secondary",
-            "--state-file", str(state_file),
-        ]), patch(
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "s1",
+                "--method",
+                "passive",
+                "--old-hub-action",
+                "secondary",
+                "--state-file",
+                str(state_file),
+            ],
+        ), patch(
             "acm_switchover.StateManager",
             side_effect=StateLockError("lock held by PID 12345"),
-        ), pytest.raises(SystemExit) as exc_info:
+        ), pytest.raises(
+            SystemExit
+        ) as exc_info:
             main()
 
         assert exc_info.value.code == EXIT_FAILURE
@@ -2557,16 +2551,25 @@ class TestMainExceptionHandlers:
         """ValueError from _resolve_state_file should exit with EXIT_FAILURE."""
         monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
 
-        with patch("sys.argv", [
-            "script.py",
-            "--primary-context", "p1",
-            "--secondary-context", "s1",
-            "--method", "passive",
-            "--old-hub-action", "secondary",
-        ]), patch(
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "s1",
+                "--method",
+                "passive",
+                "--old-hub-action",
+                "secondary",
+            ],
+        ), patch(
             "acm_switchover._resolve_state_file",
             side_effect=ValueError("Multiple candidate state files found"),
-        ), pytest.raises(SystemExit) as exc_info:
+        ), pytest.raises(
+            SystemExit
+        ) as exc_info:
             main()
 
         assert exc_info.value.code == EXIT_FAILURE

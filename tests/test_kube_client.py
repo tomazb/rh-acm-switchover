@@ -652,6 +652,7 @@ class TestKubeClientInitialization:
         assert kc.dry_run is False
         mock_load_config.assert_called_once_with(context=None)
 
+
 @pytest.mark.unit
 class TestApiCallDecorator:
     """Tests for the @api_call decorator."""
@@ -931,9 +932,7 @@ class TestDeleteOperationsNormalMode:
         result = kube_client.delete_pod("test-ns", "test-pod")
 
         assert result is True
-        mock_k8s_apis["core_api"].delete_namespaced_pod.assert_called_once_with(
-            name="test-pod", namespace="test-ns"
-        )
+        mock_k8s_apis["core_api"].delete_namespaced_pod.assert_called_once_with(name="test-pod", namespace="test-ns")
 
     def test_delete_pod_404_returns_true(self, kube_client, mock_k8s_apis):
         """Test 404 on pod delete returns True (already absent)."""
@@ -1072,9 +1071,7 @@ class TestGetPodLogs:
         result = kube_client.get_pod_logs("test-pod", "test-ns")
 
         assert result == "line1\nline2\nline3"
-        mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_called_once_with(
-            name="test-pod", namespace="test-ns"
-        )
+        mock_k8s_apis["core_api"].read_namespaced_pod_log.assert_called_once_with(name="test-pod", namespace="test-ns")
 
     def test_get_pod_logs_with_container(self, kube_client, mock_k8s_apis):
         """Test log retrieval with specific container."""
