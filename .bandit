@@ -1,0 +1,5 @@
+[bandit]
+targets = acm_switchover.py,check_rbac.py,show_state.py,lib,modules
+exclude = ./completions,./tests,./.venv,./.mypy_cache,./.pytest_cache,./__pycache__,./htmlcov
+skips = B101,B108,B601
+recursive = True

@@ -223,7 +223,7 @@ mypy acm_switchover.py lib/ modules/ --ignore-missing-imports
 ### Bandit (Static Security Analysis)
 
 ```bash
-bandit -r . -ll
+bandit --ini .bandit -ll
 ```
 
 ### Safety (Dependency Vulnerabilities)

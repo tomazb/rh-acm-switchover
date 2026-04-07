@@ -288,10 +288,12 @@ class InputValidator:
                         f"Create the parent directory in an allowed location (/tmp, /var, workspace root, or home directory) before using this path."
                     )
 
+            # B108 is skipped in .bandit because these are allowed path prefixes
+            # used for validation, not hardcoded temp file creation paths.
             safe_prefixes = [
                 "/tmp/",
                 "/var/",
-            ]  # nosec B108 - path validation, not temp file usage
+            ]
             # Allow paths under current working directory
             cwd = os.getcwd()
             if cwd:
