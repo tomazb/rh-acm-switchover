@@ -9,6 +9,7 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - ✅ **Idempotent execution** - Resume from last successful step
 - ✅ **Comprehensive validation** - Pre-flight and post-flight checks for safety
 - ✅ **RBAC enforcement** - Least privilege access control with validation
+- ✅ **ArgoCD support (production-ready)** - Pause/resume ACM-touching Applications with automatic CRD detection
 - ✅ **Data protection** - Verifies `preserveOnDelete` on ClusterDeployments
 - ✅ **Auto-detection** - Automatically detects ACM Observability and version
 - ✅ **Dry-run mode** - Preview actions without making changes
@@ -16,6 +17,19 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - ✅ **State tracking** - JSON state file for resume capability
 - ✅ **Two methods supported** - Continuous passive restore (Method 1) or one-time full restore (Method 2)
 - ✅ **Multi-deployment support** - RBAC via Kustomize, Helm, or ACM Policies
+
+---
+
+## ✅ ArgoCD Support Is Production-Ready
+
+ArgoCD integration is fully available and stable in the switchover workflow.
+
+- Automatic read-only ArgoCD discovery runs when the Applications CRD is present
+- Optional managed pause/resume is available through `--argocd-manage`
+- Optional automatic resume at the end of switchover is available through `--argocd-resume-after-switchover`
+- Resume-only mode is available through `--argocd-resume-only`
+
+For full ArgoCD behavior, constraints, and examples, see [Detailed Usage Guide](docs/operations/usage.md) and [Scripts README](scripts/README.md).
 
 ---
 
@@ -151,6 +165,22 @@ python acm_switchover.py \
   --method full
 ```
 
+### ArgoCD-Managed Switchover (Production)
+
+Use this when ArgoCD manages ACM resources and you want the tool to coordinate pause/resume safely.
+
+```bash
+python acm_switchover.py \
+  --primary-context primary-hub \
+  --secondary-context secondary-hub \
+  --old-hub-action secondary \
+  --method passive \
+  --argocd-manage \
+  --argocd-resume-after-switchover
+```
+
+For post-cutover-only resumption, use `--argocd-resume-only` with `--secondary-context`.
+
 ### Resume from Previous Run
 
 ```bash
@@ -205,6 +235,9 @@ python acm_switchover.py --decommission \
 | `--skip-observability-checks` | Skip Observability-related steps even if detected |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--skip-rbac-validation` | Skip RBAC permission validation during pre-flight checks |
+| `--argocd-manage` | Pause/resume ACM-touching ArgoCD Applications as part of switchover |
+| `--argocd-resume-after-switchover` | Resume ArgoCD Applications after successful switchover completion |
+| `--argocd-resume-only` | Only resume previously paused ArgoCD Applications (no switchover execution) |
 | `--verbose` | Enable verbose logging |
 
 ## How It Works

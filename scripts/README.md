@@ -934,27 +934,34 @@ graph TD
     B --> C{Pre-flight<br/>Passed?}
     C -->|No| D[Fix Issues]
     D --> B
-    C -->|Yes| E[Begin Switchover Procedure]
-    E --> F[Step 1-3: Prepare Primary Hub]
-    F --> G[Step 4-5: Activate Secondary Hub]
-    G --> H[Wait for Restore Complete]
-    H --> I[Run Post-flight Check]
-    I --> J{Post-flight<br/>Passed?}
-    J -->|No| K{Critical<br/>Failures?}
-    K -->|Yes| L[Consider Reverse Switchover]
-    K -->|No| M[Troubleshoot & Retry]
-    M --> I
-    J -->|Yes| N[Steps 6-10: Post-Activation Common Steps]
-    N --> O[Steps 11-12: Finalization]
-    O --> P[Step 13: Inform Stakeholders]
-    P --> Q[Verify Metrics in Grafana<br/>and Monitor for 24 Hours]
-    Q --> R[Step 14: Decommission Old Hub Optional]
-    R --> S[Switchover Complete]
+  C -->|Yes| E{Argo CD<br/>Managing ACM?}
+  E -->|Yes| F0[Optional: Pause ACM-touching<br/>Argo CD Applications]
+  E -->|No| F[Begin Switchover Procedure]
+  F0 --> F
+  F --> G[Step 1-3: Prepare Primary Hub]
+  G --> H[Step 4-5: Activate Secondary Hub]
+  H --> I[Wait for Restore Complete]
+  I --> J[Run Post-flight Check]
+  J --> K{Post-flight<br/>Passed?}
+  K -->|No| L{Critical<br/>Failures?}
+  L -->|Yes| M[Consider Reverse Switchover]
+  L -->|No| N[Troubleshoot & Retry]
+  N --> I
+  K -->|Yes| O[Steps 6-10: Post-Activation Common Steps]
+  O --> P[Steps 11-12: Finalization]
+  P --> Q{Argo CD<br/>Paused Earlier?}
+  Q -->|Yes| R[Optional: Resume ACM-touching<br/>Argo CD Applications]
+  Q -->|No| S[Step 13: Inform Stakeholders]
+  R --> S
+  S --> T[Verify Metrics in Grafana<br/>and Monitor for 24 Hours]
+  T --> U[Step 14: Decommission Old Hub Optional]
+  U --> V[Switchover Complete]
     
     style C fill:#ffd43b
-    style J fill:#ffd43b
-    style L fill:#ff6b6b
-    style S fill:#51cf66
+  style E fill:#ffd43b
+  style K fill:#ffd43b
+  style M fill:#ff6b6b
+  style V fill:#51cf66
 ```
 
 > **Note**: RBAC setup (`setup-rbac.sh`) and kubeconfig generation are **one-time prerequisites** 
