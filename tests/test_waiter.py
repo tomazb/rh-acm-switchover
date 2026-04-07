@@ -60,6 +60,24 @@ class TestWaitForCondition:
         mock_time.sleep.assert_called_once_with(5)
 
     @patch("lib.waiter.time")
+    def test_wait_progress_logging_omits_condition_detail(self, mock_time, mock_logger):
+        """Test progress logs do not include caller-provided detail text."""
+        mock_time.time.side_effect = [0, 10, 10, 60]
+
+        condition = Mock(return_value=(False, "token=super-secret"))
+
+        result = wait_for_condition(
+            description="test progress",
+            condition_fn=condition,
+            timeout=50,
+            interval=5,
+            logger=mock_logger,
+        )
+
+        assert result is False
+        mock_logger.debug.assert_called_once_with("%s in progress (elapsed: %ss)", "test progress", 10)
+
+    @patch("lib.waiter.time")
     def test_wait_timeout(self, mock_time, mock_logger):
         """Test condition times out."""
         # time.time() calls:
