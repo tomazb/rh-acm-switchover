@@ -1,7 +1,7 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.5.10  
-**Last Updated**: 2026-03-09
+**Version**: 1.6.3  
+**Last Updated**: 2026-04-10
 
 ## Overview
 
@@ -381,3 +381,17 @@ Important test themes include:
 - The runbook remains the authoritative manual/operational fallback
 - GitOps support is advisory plus targeted Argo CD coordination, not full drift reconciliation
 - `modules/preflight_validators.py` remains in the tree for compatibility and should not be treated as the main implementation
+
+## Future: Ansible Collection
+
+An Ansible Collection rewrite has been approved for planning. The collection will deliver the same core switchover and validation capabilities as a second form factor, targeting both `ansible-core` CLI and Ansible Automation Platform (AAP).
+
+The collection introduces a fundamentally different architecture:
+
+- **Roles** replace Python phase modules (`preflight`, `primary_prep`, `activation`, `post_activation`, `finalization`)
+- **Thin custom plugins** (`modules/`, `action/`, `module_utils/`) replace the monolithic `lib/kube_client.py` for operations that need retry semantics, structured polling, or checkpoint persistence beyond what stock `kubernetes.core` modules provide
+- **Playbooks** replace `acm_switchover.py` as operator entrypoints
+- **Grouped variables** replace CLI flags as the primary operator interface
+- **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs, while Ansible-native idempotency handles the default case
+
+During the coexistence period, this architecture document describes the authoritative production implementation. The collection architecture is fully detailed in the [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md).
