@@ -15,3 +15,30 @@
       tags: [post_activation, verify]
     - role: tomazb.acm_switchover.finalization
       tags: [finalization]
+
+  post_tasks:
+    - name: Build switchover report contract
+      ansible.builtin.set_fact:
+        acm_switchover_report:
+          schema_version: "1.0"
+          source: tomazb.acm_switchover
+          phases: >-
+            {{
+              {}
+              | combine({'primary_prep': acm_switchover_primary_prep_result} if acm_switchover_primary_prep_result is defined else {})
+              | combine({'activation': acm_switchover_activation_result} if acm_switchover_activation_result is defined else {})
+              | combine({'post_activation': acm_switchover_post_activation_result} if acm_switchover_post_activation_result is defined else {})
+              | combine({'finalization': acm_switchover_finalization_result} if acm_switchover_finalization_result is defined else {})
+            }}
+
+    - name: Ensure switchover report directory exists
+      ansible.builtin.file:
+        path: "{{ acm_switchover_execution.report_dir | default('./artifacts') }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write switchover report artifact
+      ansible.builtin.copy:
+        dest: "{{ (acm_switchover_execution.report_dir | default('./artifacts')) ~ '/switchover-report.json' }}"
+        content: "{{ acm_switchover_report | to_nice_json }}"
+        mode: "0644"

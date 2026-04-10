@@ -1,0 +1,6 @@
+---
+- name: Publish restore wait result
+  ansible.builtin.set_fact:
+    acm_switchover_wait_for_restore_result:
+      changed: false
+      phase: "{{ acm_switchover_restore_activation_result.restore.status.phase | default('Enabled') }}"

@@ -1,9 +1,20 @@
 ---
-- name: Emit activation foundation contract
+- name: Verify passive sync when method is passive
+  ansible.builtin.import_tasks: verify_passive_sync.yml
+  when: acm_switchover_operation.method == 'passive'
+
+- name: Activate restore
+  ansible.builtin.import_tasks: activate_restore.yml
+
+- name: Wait for restore completion
+  ansible.builtin.import_tasks: wait_for_restore.yml
+
+- name: Apply immediate import annotations when required
+  ansible.builtin.import_tasks: apply_immediate_import.yml
+
+- name: Publish activation result contract
   ansible.builtin.set_fact:
-    acm_switchover_phase_result:
+    acm_switchover_activation_result:
       phase: activation
-      status: foundation_only
-      changed: false
-  tags:
-    - activation
+      status: pass
+      changed: true

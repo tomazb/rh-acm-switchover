@@ -1,0 +1,20 @@
+---
+- name: Select passive sync restore
+  tomazb.acm_switchover.acm_restore_info:
+    restores: >-
+      {{
+        acm_secondary_restores_info.resources
+        | default(acm_secondary_restore_info.resources | default([]))
+      }}
+  register: acm_passive_restore_selection
+
+- name: Require passive sync restore on the secondary hub
+  ansible.builtin.assert:
+    that:
+      - acm_passive_restore_selection.restore is not none
+    fail_msg: Passive switchover requires a sync-enabled secondary Restore resource.
+
+- name: Publish passive restore selection
+  ansible.builtin.set_fact:
+    acm_switchover_restore_selection:
+      restore: "{{ acm_passive_restore_selection.restore }}"

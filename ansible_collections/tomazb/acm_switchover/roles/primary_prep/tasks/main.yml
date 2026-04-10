@@ -1,9 +1,22 @@
 ---
-- name: Emit primary prep foundation contract
+- name: Pause BackupSchedule on primary hub
+  ansible.builtin.import_tasks: pause_backups.yml
+
+- name: Manage import-controller strategy and disable-auto-import markers
+  ansible.builtin.import_tasks: manage_auto_import.yml
+
+- name: Scale observability components when enabled
+  ansible.builtin.import_tasks: scale_observability.yml
+  when: not (acm_switchover_features.skip_observability_checks | default(false))
+
+- name: Publish primary_prep result contract
   ansible.builtin.set_fact:
-    acm_switchover_phase_result:
+    acm_switchover_primary_prep_result:
       phase: primary_prep
-      status: foundation_only
-      changed: false
-  tags:
-    - primary_prep
+      status: pass
+      changed: >-
+        {{
+          (acm_switchover_pause_backups_result.changed | default(false))
+          or (acm_switchover_auto_import_result.changed | default(false))
+          or (acm_switchover_observability_scale_result.changed | default(false))
+        }}

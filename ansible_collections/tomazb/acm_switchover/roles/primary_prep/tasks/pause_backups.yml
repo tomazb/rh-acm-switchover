@@ -1,0 +1,13 @@
+---
+- name: Plan BackupSchedule pause operation
+  tomazb.acm_switchover.acm_backup_schedule:
+    acm_version: "{{ acm_primary_mch_info.resources[0].status.currentVersion | default('2.12.0') }}"
+    intent: pause
+    schedules: "{{ acm_primary_backup_schedules_info.resources | default([]) }}"
+  register: acm_backup_schedule_operation
+
+- name: Publish backup schedule result
+  ansible.builtin.set_fact:
+    acm_switchover_pause_backups_result:
+      changed: "{{ acm_backup_schedule_operation.changed }}"
+      operation: "{{ acm_backup_schedule_operation.operation }}"

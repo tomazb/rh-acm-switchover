@@ -1,0 +1,18 @@
+---
+- name: Build activation patch plan
+  tomazb.acm_switchover.acm_restore_info:
+    restores: >-
+      {{
+        [acm_switchover_restore_selection.restore]
+        if (acm_switchover_restore_selection is defined and acm_switchover_restore_selection.restore is not none)
+        else (acm_secondary_restores_info.resources | default(acm_secondary_restore_info.resources | default([])))
+      }}
+    backup_name: latest
+  register: acm_restore_activation_plan
+
+- name: Publish restore activation result
+  ansible.builtin.set_fact:
+    acm_switchover_restore_activation_result:
+      changed: true
+      restore: "{{ acm_restore_activation_plan.restore }}"
+      patch: "{{ acm_restore_activation_plan.patch }}"

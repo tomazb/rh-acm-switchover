@@ -1,0 +1,11 @@
+---
+- name: Record auto-import management result
+  ansible.builtin.set_fact:
+    acm_switchover_auto_import_result:
+      changed: "{{ acm_switchover_features.manage_auto_import_strategy | default(false) }}"
+      target_strategy: >-
+        {{
+          'ImportAndSync'
+          if acm_switchover_features.manage_auto_import_strategy | default(false)
+          else 'default'
+        }}
