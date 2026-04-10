@@ -5,7 +5,8 @@ Source: `acm_switchover.py`, `lib/validation.py`, `scripts/`
 
 ## Purpose
 
-This document records the current operator-facing behavior that the collection migration must account for.
+This document records the Phase 0 migration-control subset of current operator-facing behavior that the
+collection migration must account for first.
 
 ## Top-Level Variable Namespaces
 
@@ -33,6 +34,8 @@ This document records the current operator-facing behavior that the collection m
 | `--reset-state` | `acm_switchover_execution.checkpoint.reset` | yes | Schema and docs only |
 
 ## Deferred Inputs
+
+Deferred phase numbers refer to later Ansible Collection rewrite implementation phases.
 
 | Current CLI Flag | Collection Variable | Deferred Phase | Notes |
 | --- | --- | --- | --- |
