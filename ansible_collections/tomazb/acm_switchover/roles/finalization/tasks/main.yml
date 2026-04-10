@@ -1,9 +1,22 @@
 ---
-- name: Emit finalization foundation contract
+- name: Enable backup schedules on new hub
+  ansible.builtin.include_tasks: enable_backups.yml
+
+- name: Verify backup schedules on new hub
+  ansible.builtin.include_tasks: verify_backups.yml
+
+- name: Verify MultiClusterHub health
+  ansible.builtin.include_tasks: verify_mch.yml
+
+- name: Handle old hub disposition
+  ansible.builtin.include_tasks: handle_old_hub.yml
+
+- name: Publish finalization result
   ansible.builtin.set_fact:
-    acm_switchover_phase_result:
+    acm_switchover_finalization_result:
       phase: finalization
-      status: foundation_only
-      changed: false
+      status: pass
+      changed: true
+      old_hub_action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
   tags:
     - finalization

@@ -1,0 +1,13 @@
+---
+- name: Determine old hub disposition
+  ansible.builtin.set_fact:
+    acm_switchover_old_hub_disposition:
+      action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
+      message: >-
+        {{
+          'Old hub configured as secondary ACM hub'
+          if (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
+          else 'Old hub scheduled for decommission'
+          if (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
+          else 'No action taken on old hub'
+        }}

@@ -1,0 +1,6 @@
+---
+- name: Verify backup schedules are present on secondary hub
+  ansible.builtin.set_fact:
+    acm_switchover_verify_backups_result:
+      status: "{{ 'pass' if (acm_secondary_backup_schedules_info.resources | default([]) | length) > 0 else 'warn' }}"
+      backup_schedule_count: "{{ acm_secondary_backup_schedules_info.resources | default([]) | length }}"

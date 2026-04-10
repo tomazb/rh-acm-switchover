@@ -1,0 +1,11 @@
+---
+- name: Summarize managed cluster conditions
+  tomazb.acm_switchover.acm_managedcluster_status:
+    clusters: "{{ acm_secondary_managed_clusters_info.resources | default([]) }}"
+  register: cluster_status_result
+
+- name: Verify managed cluster group readiness
+  tomazb.acm_switchover.acm_cluster_verify:
+    cluster_status: "{{ cluster_status_result.cluster_status }}"
+    min_managed_clusters: "{{ acm_switchover_operation.min_managed_clusters | default(1) | int }}"
+  register: acm_cluster_verify_result

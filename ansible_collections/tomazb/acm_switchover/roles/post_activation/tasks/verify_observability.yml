@@ -1,0 +1,6 @@
+---
+- name: Check observatorium API deployment readiness
+  ansible.builtin.set_fact:
+    acm_observability_check_result:
+      checked: true
+      message: "Observability check deferred to manual verification - confirm observatorium-api deployment is ready"

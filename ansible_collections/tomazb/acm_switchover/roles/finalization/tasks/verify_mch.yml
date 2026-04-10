@@ -1,0 +1,11 @@
+---
+- name: Verify MultiClusterHub health on secondary hub
+  ansible.builtin.set_fact:
+    acm_switchover_verify_mch_result:
+      status: "{{ 'pass' if (acm_secondary_mch_info.resources | default([]) | length) > 0 else 'fail' }}"
+      version: >-
+        {{
+          acm_secondary_mch_info.resources[0].status.currentVersion | default('unknown')
+          if (acm_secondary_mch_info.resources | default([]) | length) > 0
+          else 'none'
+        }}

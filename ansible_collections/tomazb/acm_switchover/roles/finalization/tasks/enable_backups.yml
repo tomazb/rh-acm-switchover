@@ -1,0 +1,13 @@
+---
+- name: Plan backup schedule enable operation
+  tomazb.acm_switchover.acm_backup_schedule:
+    acm_version: "{{ acm_secondary_mch_info.resources[0].status.currentVersion | default('2.12.0') }}"
+    intent: enable
+    schedules: "{{ acm_secondary_backup_schedules_info.resources | default([]) }}"
+  register: acm_enable_backup_schedule_operation
+
+- name: Publish enable backups result
+  ansible.builtin.set_fact:
+    acm_switchover_enable_backups_result:
+      changed: "{{ acm_enable_backup_schedule_operation.changed }}"
+      operation: "{{ acm_enable_backup_schedule_operation.operation }}"

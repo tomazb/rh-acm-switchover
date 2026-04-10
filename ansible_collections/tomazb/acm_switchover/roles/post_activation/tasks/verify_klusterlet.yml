@@ -1,0 +1,6 @@
+---
+- name: Note klusterlet remediation candidates
+  ansible.builtin.set_fact:
+    acm_klusterlet_remediation_note:
+      warning: "Klusterlet verification requires manual review - check klusterlet pod logs on managed clusters if clusters fail to connect"
+      pending: "{{ acm_cluster_verify_result.pending | default([]) }}"

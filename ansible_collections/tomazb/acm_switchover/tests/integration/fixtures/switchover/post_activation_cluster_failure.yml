@@ -11,6 +11,7 @@ acm_switchover_operation:
   method: passive
   activation_method: patch
   old_hub_action: secondary
+  min_managed_clusters: 2
 
 acm_switchover_execution:
   mode: execute
@@ -56,11 +57,15 @@ acm_primary_cluster_deployments_info:
   resources:
     - metadata:
         name: cluster-a
+    - metadata:
+        name: cluster-b
 
 acm_primary_managed_cluster_backups_info:
   resources:
     - metadata:
         name: cluster-a-backup
+    - metadata:
+        name: cluster-b-backup
 
 acm_primary_backups_info:
   resources:
@@ -112,10 +117,11 @@ acm_secondary_managed_clusters_info:
             status: "True"
           - type: ManagedClusterConditionAvailable
             status: "True"
-
-acm_secondary_backup_schedules_info:
-  resources:
     - metadata:
-        name: acm-hub-backup
-      spec:
-        paused: true
+        name: cluster-b
+      status:
+        conditions:
+          - type: ManagedClusterJoined
+            status: "False"
+          - type: ManagedClusterConditionAvailable
+            status: "False"

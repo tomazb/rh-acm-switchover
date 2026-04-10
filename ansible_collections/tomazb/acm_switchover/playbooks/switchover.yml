@@ -4,41 +4,52 @@
   connection: local
   gather_facts: false
 
-  roles:
-    - role: tomazb.acm_switchover.preflight
-      tags: [preflight, validate]
-    - role: tomazb.acm_switchover.primary_prep
-      tags: [primary_prep]
-    - role: tomazb.acm_switchover.activation
-      tags: [activation]
-    - role: tomazb.acm_switchover.post_activation
-      tags: [post_activation, verify]
-    - role: tomazb.acm_switchover.finalization
-      tags: [finalization]
+  tasks:
+    - name: Run switchover phases
+      block:
+        - name: Run preflight validation
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.preflight
 
-  post_tasks:
-    - name: Build switchover report contract
-      ansible.builtin.set_fact:
-        acm_switchover_report:
-          schema_version: "1.0"
-          source: tomazb.acm_switchover
-          phases: >-
-            {{
-              {}
-              | combine({'primary_prep': acm_switchover_primary_prep_result} if acm_switchover_primary_prep_result is defined else {})
-              | combine({'activation': acm_switchover_activation_result} if acm_switchover_activation_result is defined else {})
-              | combine({'post_activation': acm_switchover_post_activation_result} if acm_switchover_post_activation_result is defined else {})
-              | combine({'finalization': acm_switchover_finalization_result} if acm_switchover_finalization_result is defined else {})
-            }}
+        - name: Run primary prep
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.primary_prep
 
-    - name: Ensure switchover report directory exists
-      ansible.builtin.file:
-        path: "{{ acm_switchover_execution.report_dir | default('./artifacts') }}"
-        state: directory
-        mode: "0755"
+        - name: Run activation
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.activation
 
-    - name: Write switchover report artifact
-      ansible.builtin.copy:
-        dest: "{{ (acm_switchover_execution.report_dir | default('./artifacts')) ~ '/switchover-report.json' }}"
-        content: "{{ acm_switchover_report | to_nice_json }}"
-        mode: "0644"
+        - name: Run post activation verification
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.post_activation
+
+        - name: Run finalization
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.finalization
+
+      always:
+        - name: Build switchover report contract
+          ansible.builtin.set_fact:
+            acm_switchover_report:
+              schema_version: "1.0"
+              source: tomazb.acm_switchover
+              phases: >-
+                {{
+                  {}
+                  | combine({'primary_prep': acm_switchover_primary_prep_result} if acm_switchover_primary_prep_result is defined else {})
+                  | combine({'activation': acm_switchover_activation_result} if acm_switchover_activation_result is defined else {})
+                  | combine({'post_activation': acm_switchover_post_activation_result} if acm_switchover_post_activation_result is defined else {})
+                  | combine({'finalization': acm_switchover_finalization_result} if acm_switchover_finalization_result is defined else {})
+                }}
+
+        - name: Ensure switchover report directory exists
+          ansible.builtin.file:
+            path: "{{ acm_switchover_execution.report_dir | default('./artifacts') }}"
+            state: directory
+            mode: "0755"
+
+        - name: Write switchover report artifact
+          ansible.builtin.copy:
+            dest: "{{ (acm_switchover_execution.report_dir | default('./artifacts')) ~ '/switchover-report.json' }}"
+            content: "{{ acm_switchover_report | to_nice_json }}"
+            mode: "0644"
