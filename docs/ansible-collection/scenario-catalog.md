@@ -44,3 +44,12 @@ Each scenario records:
 
 - expected mutations: none
 - expected artifact: report present
+
+## Collection Coverage (Phase 2)
+
+| Scenario ID | Python | Collection | Notes |
+|-------------|--------|------------|-------|
+| `preflight-passive-success` | yes | yes | Matching report contract required |
+| `preflight-input-failure` | yes | yes | Missing secondary context blocks execution |
+| `preflight-version-mismatch` | yes | yes | Minor version mismatch fails preflight |
+| `preflight-backup-failure` | yes | yes | Missing backup artifacts or BSL health fails preflight |

@@ -12,3 +12,13 @@
 | `--dry-run` | `acm_switchover_execution.mode=dry_run` |
 | `--state-file` | `acm_switchover_execution.checkpoint.path` |
 | `--reset-state` | `acm_switchover_execution.checkpoint.reset` |
+
+## Phase 2 Capability Status
+
+| Python / CLI Capability | Collection Phase 2 Status | Notes |
+|-------------------------|---------------------------|-------|
+| Input validation | dual-supported | `acm_input_validate` |
+| RBAC validation | dual-supported | `acm_rbac_validate` |
+| Version validation | dual-supported | `roles/preflight/tasks/validate_versions.yml` |
+| Backup / BSL validation | dual-supported | `roles/preflight/tasks/validate_backups.yml` |
+| Passive restore validation | dual-supported | `roles/preflight/tasks/validate_backups.yml` |
