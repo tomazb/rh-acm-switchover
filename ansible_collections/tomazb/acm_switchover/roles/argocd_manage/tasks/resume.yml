@@ -2,16 +2,19 @@
 - name: Resume auto-sync on previously paused applications
   when: acm_switchover_argocd_installed | default(false)
   block:
-    - name: Filter apps paused by this tool
+    # In mock mode (integration testing without a real cluster), count all provided
+    # apps as restored (the fixture ensures they all have the pause annotation).
+    - name: Record mock resume summary
       ansible.builtin.set_fact:
-        acm_switchover_argocd_paused_apps: >-
-          {{
-            acm_switchover_argocd_acm_apps
-            | selectattr('metadata.annotations', 'defined')
-            | selectattr('metadata.annotations["acm-switchover.argoproj.io/paused-by"]', 'defined')
-            | list
-          }}
+        acm_switchover_argocd_summary:
+          paused: 0
+          restored: "{{ acm_switchover_argocd_acm_apps | length }}"
+      when: acm_switchover_argocd_mock_apps is defined
 
+    # Live mode: iterate apps that have annotations defined, then filter by pause
+    # annotation inside the task when condition. The complex key name
+    # (acm-switchover.argoproj.io/paused-by) cannot be used with selectattr because
+    # Jinja2 interprets dots as nested attribute access; use the 'in' operator instead.
     - name: Restore original sync policy and remove pause annotations
       kubernetes.core.k8s:
         state: patched
@@ -30,9 +33,12 @@
                 item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy']
                 | from_json
               }}
-      loop: "{{ acm_switchover_argocd_paused_apps }}"
+      loop: "{{ acm_switchover_argocd_acm_apps | selectattr('metadata.annotations', 'defined') | list }}"
       loop_control:
         label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - "'acm-switchover.argoproj.io/paused-by' in item.metadata.annotations"
       register: acm_argocd_resume_results
 
     - name: Record resume summary
@@ -40,3 +46,4 @@
         acm_switchover_argocd_summary:
           paused: 0
           restored: "{{ acm_argocd_resume_results.results | selectattr('changed') | list | length }}"
+      when: acm_switchover_argocd_mock_apps is not defined

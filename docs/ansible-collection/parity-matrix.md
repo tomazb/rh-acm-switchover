@@ -15,7 +15,7 @@ Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecate
 | RBAC self-validation | dual-supported | dual-supported | core parity requirement |
 | machine-readable reports | dual-supported | dual-supported | schema defined in Phase 1 |
 | optional checkpoints | dual-supported | dual-supported | Phase 4 collection implementation complete |
-| Argo CD management | Python only | dual-supported | deferred to Phase 5 |
+| Argo CD management | dual-supported | dual-supported | Phase 5 collection implementation complete |
 | discovery | Python only | dual-supported | supported bridge during coexistence |
 | decommission | Python only | dual-supported | deferred to Phase 6 |
 | RBAC bootstrap | Python only | dual-supported | deferred to Phase 6 |

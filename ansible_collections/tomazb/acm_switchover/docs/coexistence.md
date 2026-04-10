@@ -38,3 +38,21 @@ When a collection checkpoint exists at `acm_switchover_execution.checkpoint.path
 `checkpoint_phase` action plugin skips any phase listed in `completed_phases` on resume.
 A fresh run (or `checkpoint.reset: true`) starts from the beginning regardless of any
 pre-existing checkpoint file.
+
+## GitOps Integration Boundary
+
+Generic GitOps marker detection in the collection is **read-only and warning-oriented**.
+The `roles/preflight/tasks/validate_gitops.yml` task records an informational result
+(`preflight-gitops-warning`) when `acm_switchover_features.skip_gitops_check` is not
+set, but does not fail the preflight or block the switchover.
+
+Argo CD auto-sync pause/resume is the **only supported mutating GitOps integration**
+in the collection. It is managed by the `argocd_manage` role:
+
+- Pause is triggered in `primary_prep` when `acm_switchover_features.argocd.manage: true`
+- Resume is triggered in `finalization` when `acm_switchover_features.argocd.resume_after_switchover: true`
+- A standalone resume entrypoint is available at `playbooks/argocd_resume.yml`
+
+The `app.kubernetes.io/instance` label is treated as `UNRELIABLE` by the marker detector
+and must not be used as a definitive GitOps signal. Use `argocd.argoproj.io/instance`
+or `app.kubernetes.io/managed-by: argocd` instead.

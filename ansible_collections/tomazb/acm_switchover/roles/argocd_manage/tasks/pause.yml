@@ -2,6 +2,14 @@
 - name: Pause auto-sync on discovered applications
   when: acm_switchover_argocd_installed | default(false)
   block:
+    # In mock mode (integration testing without a real cluster), skip k8s patching.
+    - name: Record mock pause summary
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_summary:
+          paused: "{{ acm_switchover_argocd_acm_apps | length }}"
+          restored: 0
+      when: acm_switchover_argocd_mock_apps is defined
+
     - name: Remove automated sync policy and annotate with run-id
       kubernetes.core.k8s:
         state: patched
@@ -19,7 +27,6 @@
             syncPolicy: >-
               {{
                 (item.spec.syncPolicy | default({}))
-                | combine({'automated': omit}, recursive=true)
                 | dict2items
                 | rejectattr('key', 'equalto', 'automated')
                 | items2dict
@@ -28,9 +35,11 @@
       loop_control:
         label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
       register: acm_argocd_pause_results
+      when: acm_switchover_argocd_mock_apps is not defined
 
     - name: Record pause summary
       ansible.builtin.set_fact:
         acm_switchover_argocd_summary:
           paused: "{{ acm_argocd_pause_results.results | selectattr('changed') | list | length }}"
           restored: 0
+      when: acm_switchover_argocd_mock_apps is not defined

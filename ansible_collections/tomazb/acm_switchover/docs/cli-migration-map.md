@@ -12,6 +12,8 @@
 | `--dry-run` | `acm_switchover_execution.mode=dry_run` |
 | `--state-file` | `acm_switchover_execution.checkpoint.path` |
 | `--reset-state` | `acm_switchover_execution.checkpoint.reset` |
+| `--argocd-manage` | `acm_switchover_features.argocd.manage` | dual-supported (Phase 5) |
+| `--argocd-resume-after-switchover` | `acm_switchover_features.argocd.resume_after_switchover` | dual-supported (Phase 5) |
 
 ## Phase 2 Capability Status
 
