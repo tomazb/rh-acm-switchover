@@ -1,0 +1,6 @@
+---
+acm_switchover_operation:
+  method: passive
+  old_hub_action: secondary
+  activation_method: patch
+  min_managed_clusters: 0

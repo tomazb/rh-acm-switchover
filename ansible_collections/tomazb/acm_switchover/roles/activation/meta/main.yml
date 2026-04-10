@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: activation
+  author: Tomaz B
+  description: Foundation stub for secondary activation behavior.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

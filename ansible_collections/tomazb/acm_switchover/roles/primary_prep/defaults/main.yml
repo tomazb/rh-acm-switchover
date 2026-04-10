@@ -1,0 +1,11 @@
+---
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_gitops_check: false
+  skip_observability_checks: false
+  argocd:
+    manage: false
+    resume_after_switchover: false
+
+acm_switchover_execution:
+  verbose: false

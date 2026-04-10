@@ -1,0 +1,10 @@
+---
+- name: Emit post activation foundation contract
+  ansible.builtin.set_fact:
+    acm_switchover_phase_result:
+      phase: post_activation
+      status: foundation_only
+      changed: false
+  tags:
+    - post_activation
+    - verify

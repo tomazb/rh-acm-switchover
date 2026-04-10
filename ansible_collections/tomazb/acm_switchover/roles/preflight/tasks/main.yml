@@ -1,0 +1,10 @@
+---
+- name: Emit preflight foundation contract
+  ansible.builtin.set_fact:
+    acm_switchover_phase_result:
+      phase: preflight
+      status: foundation_only
+      changed: false
+  tags:
+    - preflight
+    - validate

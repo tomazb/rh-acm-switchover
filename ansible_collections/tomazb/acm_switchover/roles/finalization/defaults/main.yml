@@ -1,0 +1,7 @@
+---
+acm_switchover_operation:
+  old_hub_action: secondary
+
+acm_switchover_features:
+  argocd:
+    resume_after_switchover: false

@@ -1,0 +1,9 @@
+---
+- name: Emit activation foundation contract
+  ansible.builtin.set_fact:
+    acm_switchover_phase_result:
+      phase: activation
+      status: foundation_only
+      changed: false
+  tags:
+    - activation

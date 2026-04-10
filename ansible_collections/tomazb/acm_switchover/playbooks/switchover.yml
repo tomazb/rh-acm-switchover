@@ -1,0 +1,17 @@
+---
+- name: ACM Hub Switchover
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  roles:
+    - role: tomazb.acm_switchover.preflight
+      tags: [preflight, validate]
+    - role: tomazb.acm_switchover.primary_prep
+      tags: [primary_prep]
+    - role: tomazb.acm_switchover.activation
+      tags: [activation]
+    - role: tomazb.acm_switchover.post_activation
+      tags: [post_activation, verify]
+    - role: tomazb.acm_switchover.finalization
+      tags: [finalization]

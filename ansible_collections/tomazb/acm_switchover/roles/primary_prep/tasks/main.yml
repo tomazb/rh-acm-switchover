@@ -1,0 +1,9 @@
+---
+- name: Emit primary prep foundation contract
+  ansible.builtin.set_fact:
+    acm_switchover_phase_result:
+      phase: primary_prep
+      status: foundation_only
+      changed: false
+  tags:
+    - primary_prep
