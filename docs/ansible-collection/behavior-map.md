@@ -44,4 +44,4 @@ Roles must not hard-code scattered version comparisons. Phase 1 should document 
 
 ## Explicit Deferral
 
-Phase 1 does not schedule checkpoint backends, action plugins, or custom module implementation.
+This behavior map intentionally does not schedule checkpoint backends, action plugins, or custom module implementation in Phase 1.
