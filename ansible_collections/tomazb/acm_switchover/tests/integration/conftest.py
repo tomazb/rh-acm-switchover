@@ -26,7 +26,13 @@ def run_preflight_fixture(tmp_path):
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
-        env = {**os.environ, "ANSIBLE_COLLECTIONS_PATH": str(repo_root)}
+        env = {
+            **os.environ,
+            "ANSIBLE_COLLECTIONS_PATH": ":".join([
+                str(repo_root),
+                os.path.expanduser("~/.ansible/collections"),
+            ]),
+        }
 
         completed = subprocess.run(
             [
