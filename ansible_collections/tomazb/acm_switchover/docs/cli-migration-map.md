@@ -15,6 +15,14 @@
 | `--argocd-manage` | `acm_switchover_features.argocd.manage` | dual-supported (Phase 5) |
 | `--argocd-resume-after-switchover` | `acm_switchover_features.argocd.resume_after_switchover` | dual-supported (Phase 5) |
 
+## Phase 6 Non-Core Capability Status
+
+| Python / CLI Capability | Collection Phase 6 Status | Playbook | Notes |
+|-------------------------|---------------------------|----------|-------|
+| Hub discovery | dual-supported | `playbooks/discovery.yml` | `scripts/discover-hub.sh` remains supported bridge for context enumeration |
+| Decommission old hub | dual-supported | `playbooks/decommission.yml` | Requires `acm_switchover_decommission.confirmed: true` or `mode: dry_run` |
+| RBAC bootstrap | dual-supported | `playbooks/rbac_bootstrap.yml` | Replaces `scripts/setup-rbac.sh` |
+
 ## Phase 2 Capability Status
 
 | Python / CLI Capability | Collection Phase 2 Status | Notes |

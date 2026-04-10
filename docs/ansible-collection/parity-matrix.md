@@ -1,6 +1,6 @@
 # Parity Matrix
 
-Date: 2026-04-10
+Date: 2026-04-10 (Phase 6 complete)
 Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`
 
 ## Current Migration Baseline
@@ -16,9 +16,9 @@ Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecate
 | machine-readable reports | dual-supported | dual-supported | schema defined in Phase 1 |
 | optional checkpoints | dual-supported | dual-supported | Phase 4 collection implementation complete |
 | Argo CD management | dual-supported | dual-supported | Phase 5 collection implementation complete |
-| discovery | Python only | dual-supported | supported bridge during coexistence |
-| decommission | Python only | dual-supported | deferred to Phase 6 |
-| RBAC bootstrap | Python only | dual-supported | deferred to Phase 6 |
+| discovery | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/discover-hub.sh remains supported bridge |
+| decommission | dual-supported | dual-supported | Phase 6 collection implementation complete |
+| RBAC bootstrap | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/setup-rbac.sh deprecated |
 
 ## Milestone Gates
 
