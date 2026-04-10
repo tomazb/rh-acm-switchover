@@ -21,3 +21,16 @@ def test_preflight_version_mismatch_fails(run_preflight_fixture):
     assert completed.returncode != 0
     assert report["status"] == "fail"
     assert any(item["id"] == "preflight-version-compatibility" and item["status"] == "fail" for item in report["results"])
+
+
+def test_preflight_backup_failure_is_reported(run_preflight_fixture):
+    completed, report = run_preflight_fixture("backup_failure.yml")
+    assert completed.returncode != 0
+    assert report["status"] == "fail"
+    result_ids = {item["id"] for item in report["results"]}
+    assert "preflight-backup-latest" in result_ids
+    assert "preflight-backup-schedule" in result_ids
+    assert "preflight-backup-storage-location-primary" in result_ids
+    assert "preflight-passive-restore-secondary" in result_ids
+    assert "preflight-clusterdeployments" in result_ids
+    assert "preflight-managed-cluster-backups" in result_ids

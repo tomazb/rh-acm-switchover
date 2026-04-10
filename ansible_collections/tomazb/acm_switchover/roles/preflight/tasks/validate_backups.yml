@@ -1,0 +1,181 @@
+---
+- name: Record latest backup existence
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-latest",
+            "severity": "critical",
+            "status": "pass" if (acm_primary_backups_info.resources | default([]) | length) > 0 else "fail",
+            "message": "primary hub has at least one backup artifact"
+              if (acm_primary_backups_info.resources | default([]) | length) > 0
+              else "primary hub has no Velero backup artifacts",
+            "details": {
+              "backup_count": acm_primary_backups_info.resources | default([]) | length
+            },
+            "recommended_action": "Run or repair ACM backup jobs on the primary hub"
+              if (acm_primary_backups_info.resources | default([]) | length) == 0
+              else None
+          }
+        ]
+      }}
+
+- name: Record BackupSchedule presence
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-schedule",
+            "severity": "critical",
+            "status": "pass" if (acm_primary_backup_schedules_info.resources | default([]) | length) > 0 else "fail",
+            "message": "primary hub BackupSchedule exists"
+              if (acm_primary_backup_schedules_info.resources | default([]) | length) > 0
+              else "primary hub BackupSchedule is missing",
+            "details": {
+              "schedule_count": acm_primary_backup_schedules_info.resources | default([]) | length
+            },
+            "recommended_action": "Recreate the ACM BackupSchedule before switchover"
+              if (acm_primary_backup_schedules_info.resources | default([]) | length) == 0
+              else None
+          }
+        ]
+      }}
+
+- name: Record primary hub BackupStorageLocation health
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-storage-location-primary",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                (acm_primary_bsl_info.resources | default([]) | length) > 0
+                and ((acm_primary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) == 0
+              )
+              else "fail",
+            "message": "primary hub BackupStorageLocations are available"
+              if (
+                (acm_primary_bsl_info.resources | default([]) | length) > 0
+                and ((acm_primary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) == 0
+              )
+              else "primary hub BackupStorageLocation is missing or unavailable",
+            "details": {
+              "phases": acm_primary_bsl_info.resources | default([]) | map(attribute='status.phase') | list
+            },
+            "recommended_action": "Repair object storage access before switchover"
+              if (
+                (acm_primary_bsl_info.resources | default([]) | length) == 0
+                or ((acm_primary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) > 0
+              )
+              else None
+          }
+        ]
+      }}
+
+- name: Record secondary hub BackupStorageLocation health
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-storage-location-secondary",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                (acm_secondary_bsl_info.resources | default([]) | length) > 0
+                and ((acm_secondary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) == 0
+              )
+              else "fail",
+            "message": "secondary hub BackupStorageLocations are available"
+              if (
+                (acm_secondary_bsl_info.resources | default([]) | length) > 0
+                and ((acm_secondary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) == 0
+              )
+              else "secondary hub BackupStorageLocation is missing or unavailable",
+            "details": {
+              "phases": acm_secondary_bsl_info.resources | default([]) | map(attribute='status.phase') | list
+            },
+            "recommended_action": "Repair object storage access on the secondary hub before switchover"
+              if (
+                (acm_secondary_bsl_info.resources | default([]) | length) == 0
+                or ((acm_secondary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) > 0
+              )
+              else None
+          }
+        ]
+      }}
+
+- name: Record passive restore availability on secondary hub
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-passive-restore-secondary",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                acm_switchover_operation.method == 'full'
+                or (acm_secondary_restore_info.resources | default([]) | length) > 0
+              )
+              else "fail",
+            "message": "secondary hub passive restore is present or not required"
+              if (
+                acm_switchover_operation.method == 'full'
+                or (acm_secondary_restore_info.resources | default([]) | length) > 0
+              )
+              else "secondary hub passive restore is missing",
+            "details": {
+              "method": acm_switchover_operation.method,
+              "restore_count": acm_secondary_restore_info.resources | default([]) | length
+            },
+            "recommended_action": "Seed or repair passive sync restore on the secondary hub"
+              if (
+                acm_switchover_operation.method != 'full'
+                and (acm_secondary_restore_info.resources | default([]) | length) == 0
+              )
+              else None
+          },
+          {
+            "id": "preflight-clusterdeployments",
+            "severity": "critical",
+            "status": "pass"
+              if (acm_primary_cluster_deployments_info.resources | default([]) | length) > 0
+              else "fail",
+            "message": "primary hub ClusterDeployments were discovered"
+              if (acm_primary_cluster_deployments_info.resources | default([]) | length) > 0
+              else "primary hub ClusterDeployments are missing",
+            "details": {
+              "clusterdeployment_count": acm_primary_cluster_deployments_info.resources | default([]) | length
+            },
+            "recommended_action": "Investigate missing Hive ClusterDeployment resources before switchover"
+              if (acm_primary_cluster_deployments_info.resources | default([]) | length) == 0
+              else None
+          },
+          {
+            "id": "preflight-managed-cluster-backups",
+            "severity": "critical",
+            "status": "pass"
+              if (acm_primary_managed_cluster_backups_info.resources | default([]) | length) > 0
+              else "fail",
+            "message": "primary hub ManagedClusterBackup resources were discovered"
+              if (acm_primary_managed_cluster_backups_info.resources | default([]) | length) > 0
+              else "primary hub ManagedClusterBackup resources are missing",
+            "details": {
+              "managed_cluster_backup_count": acm_primary_managed_cluster_backups_info.resources | default([]) | length
+            },
+            "recommended_action": "Repair managed cluster backup generation before switchover"
+              if (acm_primary_managed_cluster_backups_info.resources | default([]) | length) == 0
+              else None
+          }
+        ]
+      }}

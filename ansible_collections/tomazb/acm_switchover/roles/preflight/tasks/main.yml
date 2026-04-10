@@ -32,6 +32,10 @@
     - acm_switchover_preflight_summary.passed
     - not (acm_switchover_features.skip_rbac_validation | default(false))
 
+- name: Validate backup, restore, and cluster backup prerequisites
+  ansible.builtin.import_tasks: validate_backups.yml
+  when: acm_switchover_preflight_summary.passed
+
 - name: Recompute aggregate preflight summary from collected results
   ansible.builtin.set_fact:
     acm_switchover_preflight_summary:

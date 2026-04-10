@@ -26,17 +26,13 @@ acm_switchover_execution:
 
 acm_primary_mch_info:
   resources:
-    - metadata:
-        name: multiclusterhub
-      status:
+    - status:
         currentVersion: 2.14.3
 
 acm_secondary_mch_info:
   resources:
-    - metadata:
-        name: multiclusterhub
-      status:
-        currentVersion: 2.13.7
+    - status:
+        currentVersion: 2.14.2
 
 acm_primary_namespace_info:
   resources:
@@ -56,32 +52,18 @@ acm_secondary_namespace_info:
     - metadata:
         name: open-cluster-management-observability
 
-acm_primary_cluster_deployments_info:
-  resources:
-    - metadata:
-        name: cluster-a
-
-acm_primary_managed_cluster_backups_info:
-  resources:
-    - metadata:
-        name: cluster-a-backup
-
 acm_primary_backups_info:
-  resources:
-    - metadata:
-        name: acm-backup-20240101
+  resources: []
 
 acm_primary_backup_schedules_info:
-  resources:
-    - metadata:
-        name: schedule-acm
+  resources: []
 
 acm_primary_bsl_info:
   resources:
     - metadata:
         name: acm-bsl
       status:
-        phase: Available
+        phase: Unavailable
 
 acm_secondary_bsl_info:
   resources:
@@ -91,6 +73,10 @@ acm_secondary_bsl_info:
         phase: Available
 
 acm_secondary_restore_info:
-  resources:
-    - metadata:
-        name: restore-passive
+  resources: []
+
+acm_primary_cluster_deployments_info:
+  resources: []
+
+acm_primary_managed_cluster_backups_info:
+  resources: []

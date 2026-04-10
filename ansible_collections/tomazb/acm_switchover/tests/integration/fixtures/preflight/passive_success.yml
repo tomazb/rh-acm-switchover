@@ -65,3 +65,32 @@ acm_primary_managed_cluster_backups_info:
   resources:
     - metadata:
         name: cluster-a-backup
+
+acm_primary_backups_info:
+  resources:
+    - metadata:
+        name: acm-backup-20240101
+
+acm_primary_backup_schedules_info:
+  resources:
+    - metadata:
+        name: schedule-acm
+
+acm_primary_bsl_info:
+  resources:
+    - metadata:
+        name: acm-bsl
+      status:
+        phase: Available
+
+acm_secondary_bsl_info:
+  resources:
+    - metadata:
+        name: acm-bsl
+      status:
+        phase: Available
+
+acm_secondary_restore_info:
+  resources:
+    - metadata:
+        name: restore-passive
