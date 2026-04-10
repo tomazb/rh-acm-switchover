@@ -1,6 +1,59 @@
-"""RBAC self-validation module for collection preflight."""
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from __future__ import annotations
+
+DOCUMENTATION = r"""
+---
+module: acm_rbac_validate
+short_description: Validate RBAC permissions for switchover roles
+description:
+  - Expands the required RBAC permission matrix for a given role configuration and
+    summarizes denied permissions into a structured validation result. Does not make
+    Kubernetes API calls; callers supply the C(denied_permissions) list from
+    SelfSubjectAccessReview results.
+author:
+  - ACM Switchover Contributors (@tomazb)
+options:
+  hub:
+    description: Hub identifier label used in result IDs (e.g. C(primary)).
+    required: true
+    type: str
+  role:
+    description: Role profile to expand. C(operator) includes write permissions; C(validator) is read-only.
+    type: str
+    default: operator
+  include_decommission:
+    description: Whether to include delete permissions required for hub decommission.
+    type: bool
+    default: false
+  skip_observability:
+    description: Whether to omit observability-related permissions from the matrix.
+    type: bool
+    default: false
+  argocd_mode:
+    description: Argo CD integration mode affecting which Argo CD permissions are required.
+    type: str
+    default: none
+  argocd_install_type:
+    description: Argo CD installation type; affects operator-specific permissions.
+    type: str
+    default: unknown
+  denied_permissions:
+    description: List of permission dicts that were denied by SelfSubjectAccessReview.
+    type: list
+    elements: dict
+    default: []
+"""
+
+EXAMPLES = r"""
+- name: Validate operator RBAC on primary hub
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: primary
+    role: operator
+    denied_permissions: "{{ sar_denied_results }}"
+  register: rbac_result
+"""
 
 from ansible.module_utils.basic import AnsibleModule
 

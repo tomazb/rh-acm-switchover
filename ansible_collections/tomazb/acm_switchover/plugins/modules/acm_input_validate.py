@@ -1,6 +1,45 @@
-"""Controller-side input validation module for preflight."""
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from __future__ import annotations
+
+DOCUMENTATION = r"""
+---
+module: acm_input_validate
+short_description: Validate switchover input variables
+description:
+  - Validates hub contexts, kubeconfig paths, and operation consistency before
+    preflight or switchover execution. Returns a list of structured validation results.
+author:
+  - ACM Switchover Contributors (@tomazb)
+options:
+  hubs:
+    description: Hub connection configuration with C(primary) and C(secondary) sub-keys.
+    required: true
+    type: dict
+  operation:
+    description: Operation parameters including C(method) and C(activation_method).
+    required: true
+    type: dict
+  execution:
+    description: Execution mode and report directory configuration.
+    required: true
+    type: dict
+  features:
+    description: Feature flags including Argo CD mode and observability skip.
+    required: true
+    type: dict
+"""
+
+EXAMPLES = r"""
+- name: Validate switchover inputs
+  tomazb.acm_switchover.acm_input_validate:
+    hubs: "{{ acm_switchover_hubs }}"
+    operation: "{{ acm_switchover_operation }}"
+    execution: "{{ acm_switchover_execution }}"
+    features: "{{ acm_switchover_features }}"
+  register: validation_result
+"""
 
 from ansible.module_utils.basic import AnsibleModule
 

@@ -1,6 +1,46 @@
-"""Build and optionally persist preflight report artifacts."""
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from __future__ import annotations
+
+DOCUMENTATION = r"""
+---
+module: acm_preflight_report
+short_description: Build and write a preflight report artifact
+description:
+  - Aggregates preflight validation results into a structured JSON report and
+    optionally writes it to disk. Supports check mode (skips file write).
+author:
+  - ACM Switchover Contributors (@tomazb)
+options:
+  phase:
+    description: Phase label for the report (e.g. C(preflight)).
+    required: true
+    type: str
+  results:
+    description: List of structured validation result dicts.
+    required: true
+    type: list
+    elements: dict
+  hubs:
+    description: Hub connection info to embed in the report for traceability.
+    required: true
+    type: dict
+  path:
+    description: Destination path for the JSON report file. Skipped when not provided.
+    type: str
+    default: null
+"""
+
+EXAMPLES = r"""
+- name: Write preflight report
+  tomazb.acm_switchover.acm_preflight_report:
+    phase: preflight
+    results: "{{ acm_switchover_validation_results }}"
+    hubs: "{{ acm_switchover_hubs }}"
+    path: "{{ acm_switchover_execution.report_dir }}/preflight-report.json"
+  register: report_result
+"""
 
 import json
 from datetime import datetime, timezone
