@@ -1,1 +1,10 @@
 ---
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_observability_checks: false
+  skip_gitops_check: false
+  skip_rbac_validation: false
+  disable_observability_on_secondary: false
+  argocd:
+    manage: false
+    resume_after_switchover: false
