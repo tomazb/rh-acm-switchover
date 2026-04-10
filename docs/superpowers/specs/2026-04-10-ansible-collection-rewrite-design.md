@@ -119,6 +119,128 @@ If the project later moves under a different organizational publisher, the names
 - Prefer `kubernetes.core.k8s` and `kubernetes.core.k8s_info` where they are sufficient
 - Avoid large Jinja control flows or long `set_fact` chains that simulate application logic
 
+### 5.3 ACM version-conditional behavior pattern
+
+The current codebase has material ACM version gates, including:
+
+- ACM 2.11 BackupSchedule delete semantics
+- ACM 2.12+ `spec.paused` BackupSchedule semantics
+- ACM 2.14+ `autoImportStrategy` behavior and related activation logic
+
+The collection should not scatter raw version comparisons throughout many tasks.
+
+Recommended pattern:
+
+- keep simple phase branching in roles when the operator intent is different
+- centralize resource-specific version semantics in custom modules and `module_utils`
+- expose normalized facts such as `backup_schedule_pause_mode` and `supports_auto_import_strategy` to roles rather than repeating version expressions everywhere
+
+This keeps roles readable and prevents version behavior from turning into repetitive `when:` fragments across the collection.
+
+### 5.4 Discovery bridge during migration
+
+Although discovery is not part of phase-1 core parity, operators need a usable bridge from day one.
+
+Recommended interim approach:
+
+- keep `scripts/discover-hub.sh` supported during the coexistence period
+- document it as the supported discovery bridge until the collection-native discovery content is ready
+- ensure the script’s recommended output can feed directly into the collection variable model
+
+This avoids blocking early collection adoption on a full discovery rewrite.
+
+### 5.5 Coexistence and migration strategy
+
+The Python implementation and the Ansible collection will coexist for a meaningful period. The migration needs an explicit dual-maintenance model.
+
+#### 5.5.1 Shared behavior contract
+
+Define a machine-verifiable parity contract built around scenarios rather than implementation internals.
+
+For each supported scenario, record:
+
+- inputs
+- initial cluster state assumptions
+- expected phase outcomes
+- expected validation findings
+- expected mutated resources
+- expected report and checkpoint artifacts
+
+The same scenario catalog must be runnable against:
+
+- the current Python implementation
+- the new Ansible collection
+
+This shared scenario suite is the primary parity mechanism. Feature lists alone are not enough.
+
+#### 5.5.2 Parity matrix
+
+Maintain a parity matrix that tracks each major capability as one of:
+
+- Python only
+- dual-supported
+- collection only
+- deprecated
+
+At minimum, the matrix should track:
+
+- preflight validation domains
+- primary prep steps
+- activation modes
+- post-activation verification
+- finalization behaviors
+- RBAC validation
+- Argo CD support
+- discovery
+- decommission
+- report formats
+- checkpoint compatibility
+
+#### 5.5.3 Dual-bug-fix policy
+
+During coexistence:
+
+- safety and correctness defects in dual-supported features must be evaluated for both implementations
+- fixes must land in both implementations unless the parity matrix explicitly marks one side as deprecated for that feature
+- every such fix should update the shared scenario suite when behavior changes
+
+This prevents silent divergence on the most operationally sensitive paths.
+
+#### 5.5.4 Shared code policy
+
+Do not assume a shared runtime library by default.
+
+Recommended policy:
+
+- share behavior specifications, schemas, test fixtures, sample artifacts, and version-rule data where useful
+- avoid sharing live orchestration/runtime code between the Python CLI and Ansible collection unless it is extracted into a deliberately versioned, independently testable library with clear consumers
+- prefer disciplined duplication over accidental coupling when the execution models differ
+
+The goal is behavioral parity, not forcing both implementations through one internal code shape.
+
+#### 5.5.5 Artifact and report compatibility
+
+Operators must be able to compare or hand off between tools during migration.
+
+Recommended policy:
+
+- standardize a compatible machine-readable report schema early
+- document where collection artifacts intentionally differ from current Python artifacts
+- preserve checkpoint/report field compatibility where mid-incident handoff matters
+- if exact compatibility is not feasible, provide an explicit translation tool or schema mapping
+
+#### 5.5.6 Deprecation milestones
+
+Define explicit gates rather than vague intent.
+
+Recommended milestones:
+
+1. Collection preview: Python remains primary; collection is non-default and feature-limited
+2. Dual-supported: core parity reached and shared scenario tests pass for supported flows
+3. Collection-primary: new features land in the collection first; Python enters maintenance mode
+4. Python read-only: only critical fixes accepted; no feature work
+5. Python retirement: remove or archive once parity matrix marks required features collection-only and operators have a migration path
+
 ## 6. Execution Model
 
 The collection should be controller-driven in both CLI and AAP.
@@ -127,6 +249,13 @@ The collection should be controller-driven in both CLI and AAP.
 - Kubernetes API operations run from the control node against hub kubeconfigs or controller-managed credentials
 - The collection should use controller-side execution patterns such as `delegate_to: localhost`
 - AAP-specific concerns such as inventories, surveys, credentials, and artifacts must be supported without changing the core workflow contract
+
+Dry-run behavior must be explicit rather than assumed from generic Ansible mechanics.
+
+- all custom modules should implement `supports_check_mode = True`
+- custom modules should return realistic change predictions and diff-like data where possible
+- collection playbooks should support both ordinary Ansible check mode and a collection-level dry-run contract for Kubernetes custom resources where generic check mode is insufficient
+- dry-run output should remain operator-meaningful for high-risk actions such as restore activation, BackupSchedule mutation, and Argo CD pause or resume
 
 This matches the current tool’s real operating model: it orchestrates Kubernetes APIs from a control plane rather than configuring remote hosts.
 
@@ -161,6 +290,19 @@ Use a small plugin pair to read and write checkpoints with pluggable backends:
 - optional Kubernetes-native backend later only if real demand appears
 
 Do not over-persist. The collection should store only irreducible workflow facts rather than replaying an application-style state engine inside Ansible.
+
+### 7.4 Concurrency and locking
+
+The current Python tool uses process-level advisory locking around the state file to prevent concurrent switchovers against the same workflow state. The collection needs an equivalent safety control.
+
+Minimum requirements:
+
+- file-backed checkpoints must implement advisory locking for concurrent local access
+- controller or shared-backend executions must have an equivalent coordination mechanism, such as a lock record or Lease-style guard
+- lock acquisition failures must be explicit, operator-visible, and non-destructive
+- lock ownership metadata should identify the active process or job
+
+Two operators must not be able to run the same switchover flow concurrently against the same target pair without a clear hard stop.
 
 ## 8. Phase Model
 
@@ -227,6 +369,8 @@ Use custom plugins only where Ansible YAML is the wrong abstraction.
   - encapsulate ACM-version-specific BackupSchedule pause, resume, and delete behavior
 - `acm_managedcluster_status`
   - normalize cluster join and availability reporting plus threshold enforcement
+- `acm_cluster_verify`
+  - perform parallel managed-cluster verification, klusterlet hub resolution, kubeconfig extraction, and related aggregation work now done in `post_activation.py`
 - `acm_checkpoint`
   - read and write checkpoint records
 - `acm_argocd_autosync`
@@ -239,6 +383,7 @@ Use custom plugins only where Ansible YAML is the wrong abstraction.
 - Kubernetes client and auth normalization
 - ACM API group and version handling
 - retry and polling helpers
+- adaptive polling helpers matching the current fast-then-slow wait pattern
 - result normalization and common exceptions
 - checkpoint backend helpers
 
@@ -261,6 +406,19 @@ Recommended top-level variable namespaces:
 - `acm_switchover_features`
 - `acm_switchover_execution`
 - `acm_switchover_rbac`
+
+All externally supplied values must pass through an explicit validation layer before mutation starts.
+
+That validation layer should cover at minimum:
+
+- kubeconfig and artifact paths
+- context names
+- Kubernetes resource names and namespaces
+- enumerated operation modes
+- incompatible flag or variable combinations
+- survey and `extra_vars` values treated as untrusted input
+
+The current `InputValidator` semantics in `lib/validation.py` should be preserved conceptually, including path traversal and malformed-input protection, even if the implementation moves into a collection validation plugin or preflight validation role.
 
 Example shape:
 
@@ -344,6 +502,10 @@ Preserve the current layered model:
 - environment validation before mutation
 - phase-local validation before dangerous actions
 - post-activation verification as a first-class stage
+- RBAC self-validation during preflight for every supported run, not only in later bootstrap work
+
+The preflight role must include RBAC validation behavior equivalent in intent to the current `SelfSubjectAccessReview` checks in `lib/rbac_validator.py`.
+The `rbac_bootstrap` role remains a later-phase deployment helper, but RBAC verification itself is part of core parity.
 
 Each validation check should produce a stable result object with:
 
@@ -396,12 +558,15 @@ Goals:
 - classify logic into role-suitable versus plugin-suitable concerns
 - identify the minimum core-parity surface for phase 1
 - create a compatibility matrix for CLI features versus collection features
+- define the shared scenario suite used to validate Python-versus-collection parity
 
 Outputs:
 
 - feature inventory
 - behavior map from Python and Bash to collection targets
 - test migration catalog
+- parity matrix
+- initial shared scenario catalog
 
 ### Phase 1: Collection foundation
 
@@ -411,6 +576,8 @@ Goals:
 - define runtime metadata and supported version policy
 - establish CI with `ansible-test sanity` and unit test entrypoints
 - define the base variable model and artifact conventions
+- define the artifact schema and compatibility rules for coexistence with the Python tool
+- define the lock model for checkpoint backends
 
 Outputs:
 
@@ -418,6 +585,7 @@ Outputs:
 - docs skeleton
 - CI baseline
 - initial examples and operator contract
+- compatibility and coexistence notes
 
 ### Phase 2: Preflight and validation migration
 
@@ -425,6 +593,7 @@ Goals:
 
 - port core validation behavior into the `preflight` role
 - implement structured validation results and reports
+- implement explicit input sanitization and RBAC self-validation
 - translate or replace critical validation tests
 
 Focus areas from current repo:
@@ -433,10 +602,12 @@ Focus areas from current repo:
 - `modules/preflight/`
 - relevant parts of `lib/validation.py`
 - relevant parts of `lib/rbac_validator.py` needed for core parity
+- report and artifact compatibility requirements from coexistence planning
 
 Exit criteria:
 
 - collection preflight gates the same critical safety conditions as the current tool for supported scenarios
+- shared parity scenarios pass for supported preflight flows
 
 ### Phase 3: Switchover execution migration
 
@@ -444,6 +615,7 @@ Goals:
 
 - implement `primary_prep`, `activation`, `post_activation`, and `finalization`
 - introduce the thin custom modules required for restore, backup, cluster status, and reporting
+- implement explicit dry-run and check-mode behavior for custom modules
 - validate task idempotency and safe re-run semantics
 
 Focus areas from current repo:
@@ -454,10 +626,13 @@ Focus areas from current repo:
 - `modules/finalization.py`
 - `modules/backup_schedule.py`
 - `modules/restore_discovery.py`
+- parallel verification and kubeconfig-handling behavior from `modules/post_activation.py`
+- polling behavior from `lib/waiter.py`
 
 Exit criteria:
 
 - a full core switchover runs end to end in CLI and AAP-supported execution models
+- shared parity scenarios pass for supported core switchover flows
 
 ### Phase 4: Optional checkpoint backend
 
@@ -465,6 +640,7 @@ Goals:
 
 - implement the checkpoint backend and plugin APIs
 - define checkpoint schema and retention behavior
+- implement concurrent-access protection and lock ownership reporting
 - verify interrupted-run recovery against realistic scenarios
 
 Focus areas from current repo:
@@ -475,6 +651,7 @@ Focus areas from current repo:
 Exit criteria:
 
 - interrupted switchovers can resume with acceptable operational confidence
+- concurrency protection prevents duplicate active switchovers on the same workflow state
 
 ### Phase 5: Argo CD and GitOps behavior
 
@@ -498,6 +675,7 @@ Goals:
 
 - migrate or redesign discovery, decommission, and RBAC bootstrap content
 - decide which shell-script behaviors should remain external helpers versus collection entrypoints
+- reconcile collection distribution, execution-environment packaging, and existing deploy artifacts
 
 Focus areas from current repo:
 
@@ -510,7 +688,20 @@ Exit criteria:
 
 - phase-2 features have a clear home in the collection or are explicitly deferred
 
-## 16. Best-Practice Rules for the Rewrite
+## 16. Distribution and packaging strategy
+
+The collection needs a concrete distribution story alongside the current repository artifacts.
+
+Recommended targets:
+
+- publish the collection through `ansible-galaxy` or Automation Hub compatible packaging
+- define an execution-environment image for AAP that includes required collections and Python dependencies
+- keep container packaging for the legacy Python tool only during coexistence, then reassess
+- reconcile Helm chart and raw RBAC manifests with the eventual `rbac_bootstrap` role so operators do not get two conflicting deployment stories
+
+The plan should treat collection packaging, execution environments, and RBAC deployment assets as part of the migration, not as an afterthought.
+
+## 17. Best-Practice Rules for the Rewrite
 
 - Prefer stock Kubernetes modules before introducing custom modules
 - Keep custom plugins thin, stable, and heavily tested
@@ -521,8 +712,9 @@ Exit criteria:
 - Treat reporting and artifacts as first-class outputs
 - Standardize on collection-native docs, examples, and `ansible-test`
 - Do not broaden scope beyond core parity until the core collection contract is stable
+- Preserve the current GitOps marker caveat that `app.kubernetes.io/instance` is `UNRELIABLE` and not a definitive ownership signal
 
-## 17. Risks and Mitigations
+## 18. Risks and Mitigations
 
 ### Risk: Over-translating application logic into YAML
 
@@ -557,7 +749,7 @@ Mitigation:
 - keep phase 1 limited to core parity
 - explicitly defer discovery, RBAC bootstrap, and non-core helpers
 
-## 18. Success Criteria
+## 19. Success Criteria
 
 The rewrite is successful when:
 
@@ -569,7 +761,7 @@ The rewrite is successful when:
 - the custom plugin surface stays small and justified
 - the collection uses modern collection structure, testing, and documentation practices
 
-## 19. Official Ansible References Consulted
+## 20. Official Ansible References Consulted
 
 - Collection guide: https://docs.ansible.com/projects/ansible-core/devel/collections_guide/index.html
 - Developing collections: https://docs.ansible.com/projects/ansible-core/devel/dev_guide/developing_collections.html
@@ -578,6 +770,6 @@ The rewrite is successful when:
 - Sanity testing: https://docs.ansible.com/projects/ansible-core/devel/dev_guide/testing/sanity/index.html
 - Collection docs tooling: https://docs.ansible.com/projects/antsibull-docs/collection-docs/
 
-## 20. Recommended Next Step
+## 21. Recommended Next Step
 
 The next step is to create an implementation plan that decomposes this design into concrete delivery milestones, file layout, test strategy, and phased execution order for the collection rewrite.
