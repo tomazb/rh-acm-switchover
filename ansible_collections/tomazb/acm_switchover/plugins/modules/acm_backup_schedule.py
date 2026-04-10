@@ -44,6 +44,33 @@ EXAMPLES = r"""
   register: enable_op
 """
 
+RETURN = r"""
+changed:
+  description: Whether any BackupSchedule resource was modified.
+  returned: always
+  type: bool
+operation:
+  description: Planned operation derived from intent and current schedule state.
+  returned: always
+  type: dict
+  contains:
+    action:
+      description: >
+        Action to perform. C(patch) to update spec, C(delete) to remove the resource
+        (ACM <= 2.11 pause), C(none) when no change is required.
+      type: str
+      sample: patch
+    mode:
+      description: Pause mechanism determined by ACM version. Either C(pause) or C(delete).
+      type: str
+      sample: pause
+    patch:
+      description: Patch payload to apply. Present only when action is C(patch).
+      type: dict
+      returned: when action == 'patch'
+      sample: {"spec": {"paused": true}}
+"""
+
 from ansible.module_utils.basic import AnsibleModule
 
 
@@ -54,10 +81,19 @@ def backup_schedule_pause_mode(acm_version: str) -> str:
 
 def build_backup_schedule_operation(acm_version: str, intent: str, schedules: list[dict]) -> dict:
     mode = backup_schedule_pause_mode(acm_version)
-    if intent == "pause" and mode == "delete":
-        return {"action": "delete", "mode": mode}
+    if not schedules:
+        return {"action": "none", "mode": mode}
     if intent == "pause":
+        if mode == "delete":
+            return {"action": "delete", "mode": mode}
+        already_paused = all(s.get("spec", {}).get("paused", False) for s in schedules)
+        if already_paused:
+            return {"action": "none", "mode": mode}
         return {"action": "patch", "mode": mode, "patch": {"spec": {"paused": True}}}
+    # intent == "enable"
+    already_enabled = all(not s.get("spec", {}).get("paused", False) for s in schedules)
+    if already_enabled:
+        return {"action": "none", "mode": mode}
     return {"action": "patch", "mode": mode, "patch": {"spec": {"paused": False}}}
 
 
@@ -65,7 +101,7 @@ def main() -> None:
     module = AnsibleModule(
         argument_spec={
             "acm_version": {"type": "str", "required": True},
-            "intent": {"type": "str", "required": True},
+            "intent": {"type": "str", "required": True, "choices": ["pause", "enable"]},
             "schedules": {"type": "list", "elements": "dict", "default": []},
         },
         supports_check_mode=True,
