@@ -1,10 +1,31 @@
 ---
-- name: Emit preflight foundation contract
+- name: Initialize preflight result accumulator
   ansible.builtin.set_fact:
-    acm_switchover_phase_result:
-      phase: preflight
-      status: foundation_only
-      changed: false
-  tags:
-    - preflight
-    - validate
+    acm_switchover_validation_results: []
+    acm_switchover_preflight_summary:
+      passed: true
+      critical_failures: 0
+      warning_failures: 0
+
+- name: Validate controller-side inputs
+  ansible.builtin.import_tasks: validate_inputs.yml
+
+- name: Discover resources needed by later preflight checks
+  ansible.builtin.include_tasks: discover_resources.yml
+  when: acm_switchover_preflight_summary.passed
+
+- name: Validate RBAC permissions when enabled
+  ansible.builtin.import_tasks: validate_rbac.yml
+  when:
+    - acm_switchover_preflight_summary.passed
+    - not (acm_switchover_features.skip_rbac_validation | default(false))
+
+- name: Persist report and summary facts
+  ansible.builtin.import_tasks: write_report.yml
+
+- name: Stop on critical preflight failures
+  ansible.builtin.fail:
+    msg: >-
+      Preflight failed with {{ acm_switchover_preflight_summary.critical_failures }} critical finding(s).
+      See {{ acm_switchover_preflight_report.path }} for details.
+  when: not acm_switchover_preflight_summary.passed

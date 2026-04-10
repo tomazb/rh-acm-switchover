@@ -1,0 +1,20 @@
+---
+- name: Run collection-native input validation
+  tomazb.acm_switchover.acm_input_validate:
+    hubs: "{{ acm_switchover_hubs }}"
+    operation: "{{ acm_switchover_operation }}"
+    execution: "{{ acm_switchover_execution }}"
+    features: "{{ acm_switchover_features }}"
+  register: acm_input_validation
+
+- name: Merge input validation results into preflight accumulator
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        (acm_switchover_validation_results | default([]))
+        + acm_input_validation.results
+      }}
+    acm_switchover_preflight_summary:
+      passed: "{{ acm_input_validation.passed }}"
+      critical_failures: "{{ acm_input_validation.critical_failures }}"
+      warning_failures: 0

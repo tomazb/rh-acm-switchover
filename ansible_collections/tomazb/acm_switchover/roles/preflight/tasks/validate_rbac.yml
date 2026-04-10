@@ -1,0 +1,35 @@
+---
+- name: Validate primary-hub RBAC permissions
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: primary
+    role: "{{ acm_switchover_rbac.role | default('operator') }}"
+    include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
+    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    argocd_mode: >-
+      {{
+        'manage'
+        if acm_switchover_features.argocd.manage | default(false)
+        else 'none'
+      }}
+    argocd_install_type: unknown
+  register: acm_primary_rbac_validation
+
+- name: Merge RBAC results into preflight accumulator
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        (acm_switchover_validation_results | default([]))
+        + acm_primary_rbac_validation.results
+      }}
+    acm_switchover_preflight_summary:
+      passed: >-
+        {{
+          (acm_switchover_preflight_summary.passed | default(true))
+          and acm_primary_rbac_validation.passed
+        }}
+      critical_failures: >-
+        {{
+          (acm_switchover_preflight_summary.critical_failures | default(0))
+          + (0 if acm_primary_rbac_validation.passed else 1)
+        }}
+      warning_failures: "{{ acm_switchover_preflight_summary.warning_failures | default(0) }}"
