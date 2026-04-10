@@ -73,6 +73,7 @@ class ActionModule(ActionBase):
 
         transition = build_phase_transition(checkpoint_data, phase, status)
         checkpoint_data["completed_phases"] = transition["completed_phases"]
+        checkpoint_data["phase_status"] = transition["phase_status"]
         checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         if error:
