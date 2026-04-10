@@ -1,6 +1,6 @@
 """Tests for the acm_checkpoint collection module."""
 
-from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_checkpoint import (
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     build_checkpoint_record,
     should_resume_phase,
 )

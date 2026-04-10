@@ -73,7 +73,6 @@ checkpoint:
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     build_checkpoint_record,
-    should_resume_phase,
 )
 
 
