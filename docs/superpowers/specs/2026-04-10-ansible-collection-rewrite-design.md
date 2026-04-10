@@ -39,6 +39,10 @@ The core safety model today is explicit phases, validation gates, clear failure 
   - default to Ansible-native idempotency
   - support an optional persistent checkpoint backend for long-running or interrupted runs
 - Compatibility baseline: modern supported `ansible-core` and AAP releases
+- Initial minimum tooling baseline for planning:
+  - `ansible-core >= 2.15`
+  - `kubernetes.core >= 3.0.0`
+  - AAP version aligned to a release that supports the selected `ansible-core` baseline and execution-environment workflow
 - Migration style: collection-first with thin custom plugins
 
 ## 4. Recommended Migration Approach
@@ -539,6 +543,7 @@ Recommended layers:
 - unit tests for custom modules and `module_utils`
 - integration tests for plugin behavior against disposable or mocked Kubernetes targets
 - scenario tests for multi-phase switchover flows and checkpoint resume behavior
+- shared parity scenario suite that runs equivalent supported scenarios against both the Python implementation and the collection during coexistence
 - AAP smoke validation for job-template execution assumptions, surveys, and artifacts
 
 The current `tests/` directory remains valuable as a behavior catalog. Each existing test should be triaged into one of four buckets:
@@ -567,6 +572,11 @@ Outputs:
 - test migration catalog
 - parity matrix
 - initial shared scenario catalog
+
+Exit criteria:
+
+- parity matrix reviewed and accepted as the migration control document
+- initial shared scenario catalog reviewed and accepted for dual-implementation parity tracking
 
 ### Phase 1: Collection foundation
 
@@ -760,6 +770,8 @@ The rewrite is successful when:
 - optional checkpoint mode supports interrupted long-running operations
 - the custom plugin surface stays small and justified
 - the collection uses modern collection structure, testing, and documentation practices
+- the shared parity scenario suite passes for all dual-supported features
+- deprecation milestones are explicitly defined and tracked through the coexistence period
 
 ## 20. Official Ansible References Consulted
 
