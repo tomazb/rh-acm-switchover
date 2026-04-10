@@ -1,0 +1,11 @@
+---
+- name: Discover Argo CD Applications
+  ansible.builtin.import_tasks: discover.yml
+
+- name: Pause autosync
+  ansible.builtin.import_tasks: pause.yml
+  when: acm_switchover_argocd.mode == 'pause'
+
+- name: Resume autosync
+  ansible.builtin.import_tasks: resume.yml
+  when: acm_switchover_argocd.mode == 'resume'

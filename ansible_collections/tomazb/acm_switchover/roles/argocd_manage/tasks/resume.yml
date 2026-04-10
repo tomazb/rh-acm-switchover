@@ -1,0 +1,42 @@
+---
+- name: Resume auto-sync on previously paused applications
+  when: acm_switchover_argocd_installed | default(false)
+  block:
+    - name: Filter apps paused by this tool
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_paused_apps: >-
+          {{
+            acm_switchover_argocd_acm_apps
+            | selectattr('metadata.annotations', 'defined')
+            | selectattr('metadata.annotations["acm-switchover.argoproj.io/paused-by"]', 'defined')
+            | list
+          }}
+
+    - name: Restore original sync policy and remove pause annotations
+      kubernetes.core.k8s:
+        state: patched
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ item.metadata.namespace }}"
+        name: "{{ item.metadata.name }}"
+        definition:
+          metadata:
+            annotations:
+              acm-switchover.argoproj.io/paused-by: null
+              acm-switchover.argoproj.io/original-sync-policy: null
+          spec:
+            syncPolicy: >-
+              {{
+                item.metadata.annotations['acm-switchover.argoproj.io/original-sync-policy']
+                | from_json
+              }}
+      loop: "{{ acm_switchover_argocd_paused_apps }}"
+      loop_control:
+        label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      register: acm_argocd_resume_results
+
+    - name: Record resume summary
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_summary:
+          paused: 0
+          restored: "{{ acm_argocd_resume_results.results | selectattr('changed') | list | length }}"

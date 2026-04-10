@@ -1,0 +1,9 @@
+---
+acm_switchover_features:
+  argocd:
+    manage: false
+    resume_after_switchover: false
+
+acm_switchover_argocd:
+  mode: pause
+  run_id: ""

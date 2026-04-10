@@ -1,0 +1,9 @@
+---
+- name: Resume Argo CD auto-sync after switchover
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: tomazb.acm_switchover.argocd_manage
+      vars:
+        acm_switchover_argocd:
+          mode: resume

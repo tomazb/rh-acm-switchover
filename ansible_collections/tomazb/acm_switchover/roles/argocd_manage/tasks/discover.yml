@@ -1,0 +1,33 @@
+---
+# Use pre-supplied mock apps when provided (for testing without a live cluster).
+- name: Use pre-supplied application list
+  ansible.builtin.set_fact:
+    acm_switchover_argocd_installed: true
+    acm_switchover_argocd_acm_apps: "{{ acm_switchover_argocd_mock_apps }}"
+  when: acm_switchover_argocd_mock_apps is defined
+
+- name: Discover Argo CD Applications from cluster
+  when: acm_switchover_argocd_mock_apps is not defined
+  block:
+    - name: List Applications in Argo CD namespace
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ acm_switchover_argocd.namespace | default('argocd') }}"
+      register: acm_argocd_app_list
+
+    - name: Record discovered apps
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: true
+        acm_switchover_argocd_acm_apps: "{{ acm_argocd_app_list.resources | default([]) }}"
+
+  rescue:
+    - name: Mark Argo CD as not installed
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_installed: false
+        acm_switchover_argocd_acm_apps: []
+
+- name: Report when Argo CD is not installed
+  ansible.builtin.debug:
+    msg: "Argo CD not detected; skipping argocd_manage role actions."
+  when: not (acm_switchover_argocd_installed | default(false))
