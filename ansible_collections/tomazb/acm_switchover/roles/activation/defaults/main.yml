@@ -4,3 +4,6 @@ acm_switchover_operation:
   old_hub_action: secondary
   activation_method: patch
   min_managed_clusters: 0
+
+acm_switchover_features:
+  manage_auto_import_strategy: false

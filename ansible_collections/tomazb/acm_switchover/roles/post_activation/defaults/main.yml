@@ -1,4 +1,1 @@
 ---
-acm_switchover_features:
-  skip_observability_checks: false
-  disable_observability_on_secondary: false
