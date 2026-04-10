@@ -272,10 +272,10 @@ def main() -> None:
     module = AnsibleModule(
         argument_spec={
             "hub": {"type": "str", "required": True},
-            "role": {"type": "str", "default": "operator"},
+            "role": {"type": "str", "default": "operator", "choices": list(VALID_ROLES)},
             "include_decommission": {"type": "bool", "default": False},
             "skip_observability": {"type": "bool", "default": False},
-            "argocd_mode": {"type": "str", "default": "none"},
+            "argocd_mode": {"type": "str", "default": "none", "choices": list(VALID_ARGOCD_MODES)},
             "argocd_install_type": {"type": "str", "default": "unknown"},
             "denied_permissions": {"type": "list", "elements": "dict", "default": []},
         },
