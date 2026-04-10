@@ -66,17 +66,36 @@ Each result entry must support:
 
 ## Checkpoint Contract
 
-Phase 1 defines only the contract:
+Implemented in Phase 4. Path: controlled by `acm_switchover_execution.checkpoint.path`.
 
-- current phase
-- completed high-risk checkpoints
-- operational data needed for resume or reversal
-- Argo CD pause metadata
-- structured error history
-- report artifact references
-- lock ownership metadata
+Written by the `tomazb.acm_switchover.checkpoint_phase` action plugin after each phase.
 
-Runtime checkpoint implementation is deferred to a later plan.
+```json
+{
+  "schema_version": "1.0",
+  "completed_phases": ["preflight", "primary_prep", "activation"],
+  "phase_status": "pass",
+  "operational_data": {},
+  "errors": [],
+  "report_refs": [
+    {"phase": "preflight", "path": "/artifacts/preflight-report.json", "kind": "json-report"}
+  ],
+  "updated_at": "2026-01-01T00:00:00+00:00"
+}
+```
+
+Fields:
+
+- `schema_version` — always `"1.0"`
+- `completed_phases` — ordered list of phase names that have passed; used to skip phases on resume
+- `phase_status` — last recorded phase outcome (`"pass"` or `"fail"`)
+- `operational_data` — reserved for future runtime state (e.g., Argo CD pause metadata)
+- `errors` — list of `{phase, error}` objects recorded on failure
+- `report_refs` — list of `{phase, path, kind}` report artifact references (preflight only at present)
+- `updated_at` — ISO-8601 UTC timestamp of last write
+
+Enabling checkpoints requires `acm_switchover_execution.checkpoint.enabled: true` and
+a writable `acm_switchover_execution.checkpoint.path`.
 
 ## Compatibility Rule
 
