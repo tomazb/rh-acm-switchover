@@ -53,3 +53,11 @@ Each scenario records:
 | `preflight-input-failure` | yes | yes | Missing secondary context blocks execution |
 | `preflight-version-mismatch` | yes | yes | Minor version mismatch fails preflight |
 | `preflight-backup-failure` | yes | yes | Missing backup artifacts or BSL health fails preflight |
+
+## Collection Coverage (Phase 3)
+
+| Scenario ID | Python | Collection | Notes |
+|-------------|--------|------------|-------|
+| `switchover-passive-success` | yes | yes | All phases pass; all four phase reports present in report artifact |
+| `switchover-post-activation-cluster-failure` | yes | yes | Cluster not joined/available; post_activation status=fail, report written before play exits |
+| `switchover-finalization-backup-recovery` | yes | yes | Full end-to-end fixture; backup enable + MCH verify + old hub disposition emitted |

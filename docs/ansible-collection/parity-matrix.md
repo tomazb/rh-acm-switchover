@@ -8,10 +8,10 @@ Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecate
 | Capability | Status | Target Milestone | Notes |
 | --- | --- | --- | --- |
 | preflight validation | dual-supported | dual-supported | core parity requirement |
-| primary prep | Python only | dual-supported | core parity requirement |
-| activation | Python only | dual-supported | core parity requirement |
-| post-activation verification | Python only | dual-supported | core parity requirement |
-| finalization | Python only | dual-supported | core parity requirement |
+| primary prep | dual-supported | dual-supported | core parity requirement |
+| activation | dual-supported | dual-supported | core parity requirement |
+| post-activation verification | dual-supported | dual-supported | core parity requirement |
+| finalization | dual-supported | dual-supported | core parity requirement |
 | RBAC self-validation | dual-supported | dual-supported | core parity requirement |
 | machine-readable reports | dual-supported | dual-supported | schema defined in Phase 1 |
 | optional checkpoints | Python only | dual-supported | runtime work deferred to Phase 4 |

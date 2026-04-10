@@ -1,4 +1,4 @@
-"""Helpers for fixture-driven preflight integration tests."""
+"""Shared fixtures for switchover integration and scenario tests."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ import yaml
 
 
 @pytest.fixture
-def run_preflight_fixture(tmp_path):
+def run_switchover_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = Path.cwd()
         fixture_path = (
             repo_root
-            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight"
+            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover"
             / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text())
@@ -37,7 +37,7 @@ def run_preflight_fixture(tmp_path):
         completed = subprocess.run(
             [
                 "ansible-playbook",
-                "ansible_collections/tomazb/acm_switchover/playbooks/preflight.yml",
+                "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
                 "-i",
                 "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
                 "-e",
@@ -50,7 +50,7 @@ def run_preflight_fixture(tmp_path):
             env=env,
         )
 
-        report_path = tmp_path / "artifacts" / "preflight-report.json"
+        report_path = tmp_path / "artifacts" / "switchover-report.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
         return completed, report
 

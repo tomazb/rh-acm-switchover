@@ -22,3 +22,22 @@
 | `acm_switchover_preflight_summary.passed` | bool | False when any critical finding fails |
 | `acm_switchover_preflight_result.report` | dict | Structured preflight report payload |
 | `acm_switchover_preflight_result.path` | string | Path to the written JSON report |
+
+## Execution Phase Result Facts
+
+Each role publishes a typed result fact. All facts persist in play scope and are aggregated into `switchover-report.json`.
+
+| Variable | Phase | Key Fields |
+|----------|-------|------------|
+| `acm_switchover_primary_prep_result` | primary_prep | `status`, `changed`, `pause_backups`, `auto_import`, `observability` |
+| `acm_switchover_activation_result` | activation | `status`, `changed`, `method`, `restore`, `patch` |
+| `acm_switchover_post_activation_result` | post_activation | `status`, `changed`, `summary.passed`, `summary.total`, `summary.pending` |
+| `acm_switchover_finalization_result` | finalization | `status`, `changed`, `old_hub_action` |
+
+### post_activation summary fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `summary.passed` | bool | True when all clusters are joined and available |
+| `summary.total` | int | Total number of ManagedClusters evaluated |
+| `summary.pending` | list[str] | Names of clusters not yet joined or available |

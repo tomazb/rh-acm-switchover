@@ -14,6 +14,37 @@
   - `details`
   - `recommended_action`
 
+## Core Switchover Report Contract
+
+- Path: `{{ acm_switchover_execution.report_dir }}/switchover-report.json`
+- Written in an `always` block — present even when the play fails on post-activation
+- `schema_version: "1.0"`, `source: tomazb.acm_switchover`
+
+```json
+{
+  "schema_version": "1.0",
+  "source": "tomazb.acm_switchover",
+  "phases": {
+    "primary_prep": {"phase": "primary_prep", "status": "pass|fail", "changed": true},
+    "activation":   {"phase": "activation",   "status": "pass|fail", "changed": true},
+    "post_activation": {
+      "phase": "post_activation",
+      "status": "pass|fail",
+      "changed": false,
+      "summary": {"passed": true, "total": 2, "pending": []}
+    },
+    "finalization": {
+      "phase": "finalization",
+      "status": "pass",
+      "changed": true,
+      "old_hub_action": "secondary|decommission|none"
+    }
+  }
+}
+```
+
+Only phases that ran before any failure are included in `phases`.
+
 ## Report Artifact
 
 Required fields:
