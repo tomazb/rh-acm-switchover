@@ -80,6 +80,7 @@ Written by the `tomazb.acm_switchover.checkpoint_phase` action plugin after each
   "report_refs": [
     {"phase": "preflight", "path": "/artifacts/preflight-report.json", "kind": "json-report"}
   ],
+  "locked_by": "ansible-run-2026-01-01T00:00:00",
   "updated_at": "2026-01-01T00:00:00+00:00"
 }
 ```
@@ -92,6 +93,7 @@ Fields:
 - `operational_data` — reserved for future runtime state (e.g., Argo CD pause metadata)
 - `errors` — list of `{phase, error}` objects recorded on failure
 - `report_refs` — list of `{phase, path, kind}` report artifact references (preflight only at present)
+- `locked_by` — identifier of the active run holding the checkpoint lock; prevents concurrent switchover executions from corrupting state. Null or absent when no run is active
 - `updated_at` — ISO-8601 UTC timestamp of last write
 
 Enabling checkpoints requires `acm_switchover_execution.checkpoint.enabled: true` and
