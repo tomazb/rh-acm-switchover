@@ -1,20 +1,49 @@
 ---
-- name: Verify passive sync when method is passive
-  ansible.builtin.import_tasks: verify_passive_sync.yml
-  when: acm_switchover_operation.method == 'passive'
+- name: Enter checkpointed phase
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: activation
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: enter
+  when: acm_switchover_execution.checkpoint.enabled | default(false)
 
-- name: Activate restore
-  ansible.builtin.import_tasks: activate_restore.yml
+- name: Run activation phase
+  block:
+    - name: Verify passive sync when method is passive
+      ansible.builtin.include_tasks: verify_passive_sync.yml
+      when: acm_switchover_operation.method == 'passive'
 
-- name: Wait for restore completion
-  ansible.builtin.import_tasks: wait_for_restore.yml
+    - name: Activate restore
+      ansible.builtin.include_tasks: activate_restore.yml
 
-- name: Apply immediate import annotations when required
-  ansible.builtin.import_tasks: apply_immediate_import.yml
+    - name: Wait for restore completion
+      ansible.builtin.include_tasks: wait_for_restore.yml
 
-- name: Publish activation result contract
-  ansible.builtin.set_fact:
-    acm_switchover_activation_result:
-      phase: activation
-      status: pass
-      changed: true
+    - name: Apply immediate import annotations when required
+      ansible.builtin.include_tasks: apply_immediate_import.yml
+
+    - name: Publish activation result contract
+      ansible.builtin.set_fact:
+        acm_switchover_activation_result:
+          phase: activation
+          status: pass
+          changed: true
+  rescue:
+    - name: Mark checkpoint failure
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: activation
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: fail
+        error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+      when: acm_switchover_execution.checkpoint.enabled | default(false)
+
+    - name: Re-raise failure
+      ansible.builtin.fail:
+        msg: "{{ ansible_failed_result.msg | default('Phase activation failed') }}"
+
+- name: Mark checkpoint phase completion
+  # No file artifact for activation; report_ref not applicable
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: activation
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: pass
+  when: acm_switchover_execution.checkpoint.enabled | default(false)

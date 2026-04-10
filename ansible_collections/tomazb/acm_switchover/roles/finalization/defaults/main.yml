@@ -1,4 +1,15 @@
 ---
+acm_switchover_execution:
+  mode: execute
+  verbose: false
+  force: false
+  report_dir: ./artifacts
+  checkpoint:
+    enabled: false
+    backend: file
+    path: .state/switchover.json
+    reset: false
+
 acm_switchover_operation:
   method: passive
   old_hub_action: secondary

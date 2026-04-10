@@ -1,22 +1,51 @@
 ---
-- name: Enable backup schedules on new hub
-  ansible.builtin.include_tasks: enable_backups.yml
+- name: Enter checkpointed phase
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: finalization
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: enter
+  when: acm_switchover_execution.checkpoint.enabled | default(false)
 
-- name: Verify backup schedules on new hub
-  ansible.builtin.include_tasks: verify_backups.yml
+- name: Run finalization phase
+  block:
+    - name: Enable backup schedules on new hub
+      ansible.builtin.include_tasks: enable_backups.yml
 
-- name: Verify MultiClusterHub health
-  ansible.builtin.include_tasks: verify_mch.yml
+    - name: Verify backup schedules on new hub
+      ansible.builtin.include_tasks: verify_backups.yml
 
-- name: Handle old hub disposition
-  ansible.builtin.include_tasks: handle_old_hub.yml
+    - name: Verify MultiClusterHub health
+      ansible.builtin.include_tasks: verify_mch.yml
 
-- name: Publish finalization result
-  ansible.builtin.set_fact:
-    acm_switchover_finalization_result:
-      phase: finalization
-      status: pass
-      changed: true
-      old_hub_action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
-  tags:
-    - finalization
+    - name: Handle old hub disposition
+      ansible.builtin.include_tasks: handle_old_hub.yml
+
+    - name: Publish finalization result
+      ansible.builtin.set_fact:
+        acm_switchover_finalization_result:
+          phase: finalization
+          status: pass
+          changed: true
+          old_hub_action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
+      tags:
+        - finalization
+  rescue:
+    - name: Mark checkpoint failure
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: finalization
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: fail
+        error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+      when: acm_switchover_execution.checkpoint.enabled | default(false)
+
+    - name: Re-raise failure
+      ansible.builtin.fail:
+        msg: "{{ ansible_failed_result.msg | default('Phase finalization failed') }}"
+
+- name: Mark checkpoint phase completion
+  # No file artifact for finalization; report_ref not applicable
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: finalization
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: pass
+  when: acm_switchover_execution.checkpoint.enabled | default(false)

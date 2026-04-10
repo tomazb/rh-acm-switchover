@@ -1,22 +1,51 @@
 ---
-- name: Pause BackupSchedule on primary hub
-  ansible.builtin.import_tasks: pause_backups.yml
+- name: Enter checkpointed phase
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: primary_prep
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: enter
+  when: acm_switchover_execution.checkpoint.enabled | default(false)
 
-- name: Manage import-controller strategy and disable-auto-import markers
-  ansible.builtin.import_tasks: manage_auto_import.yml
+- name: Run primary_prep phase
+  block:
+    - name: Pause BackupSchedule on primary hub
+      ansible.builtin.include_tasks: pause_backups.yml
 
-- name: Scale observability components when enabled
-  ansible.builtin.import_tasks: scale_observability.yml
-  when: not (acm_switchover_features.skip_observability_checks | default(false))
+    - name: Manage import-controller strategy and disable-auto-import markers
+      ansible.builtin.include_tasks: manage_auto_import.yml
 
-- name: Publish primary_prep result contract
-  ansible.builtin.set_fact:
-    acm_switchover_primary_prep_result:
-      phase: primary_prep
-      status: pass
-      changed: >-
-        {{
-          (acm_switchover_pause_backups_result.changed | default(false))
-          or (acm_switchover_auto_import_result.changed | default(false))
-          or (acm_switchover_observability_scale_result.changed | default(false))
-        }}
+    - name: Scale observability components when enabled
+      ansible.builtin.include_tasks: scale_observability.yml
+      when: not (acm_switchover_features.skip_observability_checks | default(false))
+
+    - name: Publish primary_prep result contract
+      ansible.builtin.set_fact:
+        acm_switchover_primary_prep_result:
+          phase: primary_prep
+          status: pass
+          changed: >-
+            {{
+              (acm_switchover_pause_backups_result.changed | default(false))
+              or (acm_switchover_auto_import_result.changed | default(false))
+              or (acm_switchover_observability_scale_result.changed | default(false))
+            }}
+  rescue:
+    - name: Mark checkpoint failure
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: primary_prep
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: fail
+        error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+      when: acm_switchover_execution.checkpoint.enabled | default(false)
+
+    - name: Re-raise failure
+      ansible.builtin.fail:
+        msg: "{{ ansible_failed_result.msg | default('Phase primary_prep failed') }}"
+
+- name: Mark checkpoint phase completion
+  # No file artifact for primary_prep; report_ref not applicable
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: primary_prep
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: pass
+  when: acm_switchover_execution.checkpoint.enabled | default(false)
