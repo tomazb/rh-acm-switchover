@@ -1,0 +1,39 @@
+"""Tests for the acm_argocd_filter module."""
+
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
+    filter_acm_applications,
+    is_acm_touching_application,
+)
+
+
+def _app(name: str, resources: list[dict]) -> dict:
+    return {
+        "metadata": {"namespace": "argocd", "name": name},
+        "status": {"resources": resources},
+    }
+
+
+def test_filters_to_only_acm_touching_apps():
+    apps = [
+        _app("acm-app", [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}]),
+        _app("unrelated-app", [{"kind": "Deployment", "namespace": "my-namespace"}]),
+        _app("mce-app", [{"kind": "Deployment", "namespace": "multicluster-engine"}]),
+    ]
+    filtered = filter_acm_applications(apps)
+    names = [a["metadata"]["name"] for a in filtered]
+    assert names == ["acm-app", "mce-app"]
+
+
+def test_empty_list_returns_empty():
+    assert filter_acm_applications([]) == []
+
+
+def test_app_with_no_status_resources_is_excluded():
+    apps = [_app("no-status", [])]
+    assert filter_acm_applications(apps) == []
+
+
+def test_non_acm_app_is_excluded():
+    assert is_acm_touching_application(
+        {"metadata": {"name": "frontend"}, "status": {"resources": [{"kind": "Deployment", "namespace": "web"}]}}
+    ) is False

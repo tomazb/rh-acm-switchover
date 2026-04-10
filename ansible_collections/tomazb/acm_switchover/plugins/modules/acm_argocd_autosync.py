@@ -2,33 +2,11 @@ from __future__ import annotations
 
 from ansible.module_utils.basic import AnsibleModule
 
-
-ACM_NAMESPACES = {
-    "open-cluster-management",
-    "open-cluster-management-backup",
-    "open-cluster-management-observability",
-    "multicluster-engine",
-    "open-cluster-management-global-set",
-    "local-cluster",
-}
-
-ACM_KINDS = {
-    "MultiClusterHub",
-    "MultiClusterObservability",
-    "ManagedCluster",
-    "BackupSchedule",
-    "Restore",
-    "ClusterDeployment",
-}
-
-
-def is_acm_touching_application(app: dict) -> bool:
-    for resource in app.get("status", {}).get("resources", []):
-        if resource.get("namespace") in ACM_NAMESPACES:
-            return True
-        if resource.get("kind") in ACM_KINDS:
-            return True
-    return False
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
+    ACM_KINDS,
+    ACM_NAMESPACES,
+    is_acm_touching_application,
+)
 
 
 def build_pause_patch(sync_policy: dict, run_id: str) -> dict:
