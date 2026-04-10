@@ -51,32 +51,9 @@
     - name: Recompute aggregate preflight summary from collected results
       ansible.builtin.set_fact:
         acm_switchover_preflight_summary:
-          passed: >-
-            {{
-              (
-                acm_switchover_validation_results
-                | selectattr('severity', 'equalto', 'critical')
-                | selectattr('status', 'in', ['fail', 'error'])
-                | list
-                | length
-              ) == 0
-            }}
-          critical_failures: >-
-            {{
-              acm_switchover_validation_results
-              | selectattr('severity', 'equalto', 'critical')
-              | selectattr('status', 'in', ['fail', 'error'])
-              | list
-              | length
-            }}
-          warning_failures: >-
-            {{
-              acm_switchover_validation_results
-              | selectattr('severity', 'equalto', 'warning')
-              | selectattr('status', 'in', ['fail', 'error'])
-              | list
-              | length
-            }}
+          passed: "{{ ((acm_switchover_validation_results | selectattr('severity', 'equalto', 'critical') | selectattr('status', 'in', ['fail', 'error']) | list | length) == 0) | bool }}"
+          critical_failures: "{{ (acm_switchover_validation_results | selectattr('severity', 'equalto', 'critical') | selectattr('status', 'in', ['fail', 'error']) | list | length) | int }}"
+          warning_failures: "{{ (acm_switchover_validation_results | selectattr('severity', 'equalto', 'warning') | selectattr('status', 'in', ['fail', 'error']) | list | length) | int }}"
 
     - name: Persist report and summary facts
       ansible.builtin.include_tasks: write_report.yml
@@ -85,7 +62,7 @@
       ansible.builtin.fail:
         msg: >-
           Preflight failed with {{ acm_switchover_preflight_summary.critical_failures }} critical finding(s).
-          See {{ acm_switchover_preflight_report.path }} for details.
+          See {{ acm_switchover_preflight_result.path }} for details.
       when: not acm_switchover_preflight_summary.passed
   rescue:
     - name: Mark checkpoint failure
