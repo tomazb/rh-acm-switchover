@@ -2,8 +2,8 @@
 
 ## Targets
 
-- Ansible Galaxy compatible packaging
-- Automation Hub compatible packaging
+- Ansible Galaxy-compatible packaging
+- Automation Hub-compatible packaging
 - execution environment for AAP
 
 ## Collection Primary Distribution
