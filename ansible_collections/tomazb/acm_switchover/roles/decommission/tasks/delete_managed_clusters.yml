@@ -1,0 +1,31 @@
+---
+- name: Announce managed cluster deletion (dry_run)
+  ansible.builtin.debug:
+    msg: "[dry_run] Would delete all non-local ManagedCluster resources"
+  when: acm_switchover_execution.mode | default('') == 'dry_run'
+
+- name: List ManagedClusters
+  kubernetes.core.k8s_info:
+    kind: ManagedCluster
+    api_version: cluster.open-cluster-management.io/v1
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+  register: _managed_clusters
+  when: acm_switchover_execution.mode | default('') != 'dry_run'
+
+- name: Delete non-local ManagedClusters
+  kubernetes.core.k8s:
+    kind: ManagedCluster
+    api_version: cluster.open-cluster-management.io/v1
+    name: "{{ item.metadata.name }}"
+    state: absent
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+  loop: >-
+    {{
+      _managed_clusters.resources
+      | default([])
+      | selectattr('metadata.name', '!=', 'local-cluster')
+      | list
+    }}
+  when: acm_switchover_execution.mode | default('') != 'dry_run'

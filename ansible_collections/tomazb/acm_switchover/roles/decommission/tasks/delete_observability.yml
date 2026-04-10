@@ -1,0 +1,16 @@
+---
+- name: Announce observability deletion (dry_run)
+  ansible.builtin.debug:
+    msg: "[dry_run] Would delete MultiClusterObservability and observability namespace"
+  when: acm_switchover_execution.mode | default('') == 'dry_run'
+
+- name: Delete MultiClusterObservability
+  kubernetes.core.k8s:
+    kind: MultiClusterObservability
+    name: observability
+    api_version: observability.open-cluster-management.io/v1beta2
+    state: absent
+    wait: true
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+  when: acm_switchover_execution.mode | default('') != 'dry_run'

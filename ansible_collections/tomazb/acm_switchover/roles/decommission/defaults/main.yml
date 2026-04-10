@@ -1,0 +1,5 @@
+---
+acm_switchover_decommission:
+  confirmed: false
+  interactive: false
+  has_observability: false

@@ -1,0 +1,33 @@
+---
+- name: Require confirmation gate unless dry_run
+  ansible.builtin.fail:
+    msg: >-
+      Decommission requires explicit confirmation.
+      Set acm_switchover_decommission.confirmed: true to proceed.
+  when: >-
+    not (acm_switchover_decommission.confirmed | default(false) | bool)
+    and (acm_switchover_execution.mode | default('') != 'dry_run')
+
+- name: Delete Observability resources
+  ansible.builtin.include_tasks: delete_observability.yml
+  when: acm_switchover_decommission.has_observability | default(false) | bool
+
+- name: Delete non-local ManagedCluster resources
+  ansible.builtin.include_tasks: delete_managed_clusters.yml
+
+- name: Delete MultiClusterHub
+  ansible.builtin.include_tasks: delete_multiclusterhub.yml
+
+- name: Publish decommission result
+  ansible.builtin.set_fact:
+    acm_switchover_decommission_result:
+      phase: decommission
+      mode: "{{ acm_switchover_execution.mode | default('normal') }}"
+      status: pass
+
+- name: Write summary when requested
+  ansible.builtin.copy:
+    content: "{{ acm_switchover_decommission_result | to_json }}"
+    dest: "{{ summary_path }}"
+    mode: "0644"
+  when: summary_path is defined
