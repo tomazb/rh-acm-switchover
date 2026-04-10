@@ -1,0 +1,6 @@
+---
+- name: Bootstrap RBAC for ACM switchover service accounts
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: tomazb.acm_switchover.rbac_bootstrap

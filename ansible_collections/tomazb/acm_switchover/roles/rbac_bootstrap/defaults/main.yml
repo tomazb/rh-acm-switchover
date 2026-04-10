@@ -1,0 +1,6 @@
+---
+acm_switchover_rbac_bootstrap:
+  role: operator
+  include_decommission: false
+  generate_kubeconfigs: false
+  validate_permissions: false

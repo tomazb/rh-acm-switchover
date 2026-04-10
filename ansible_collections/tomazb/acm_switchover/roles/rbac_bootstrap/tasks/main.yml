@@ -1,0 +1,34 @@
+---
+- name: Plan RBAC manifest selection
+  tomazb.acm_switchover.acm_rbac_bootstrap:
+    role: "{{ acm_switchover_rbac_bootstrap.role }}"
+    include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
+    generate_kubeconfigs: "{{ acm_switchover_rbac_bootstrap.generate_kubeconfigs }}"
+  register: _rbac_plan
+
+- name: Apply RBAC manifests
+  ansible.builtin.include_tasks: deploy_manifests.yml
+
+- name: Generate kubeconfigs
+  ansible.builtin.include_tasks: generate_kubeconfigs.yml
+  when: acm_switchover_rbac_bootstrap.generate_kubeconfigs | bool
+
+- name: Validate permissions
+  ansible.builtin.include_tasks: validate_permissions.yml
+  when: acm_switchover_rbac_bootstrap.validate_permissions | bool
+
+- name: Publish rbac_bootstrap result
+  ansible.builtin.set_fact:
+    acm_switchover_rbac_bootstrap_result:
+      phase: rbac_bootstrap
+      mode: "{{ acm_switchover_execution.mode | default('normal') }}"
+      role: "{{ acm_switchover_rbac_bootstrap.role }}"
+      assets_applied: "{{ _rbac_plan.assets }}"
+      status: pass
+
+- name: Write summary when requested
+  ansible.builtin.copy:
+    content: "{{ acm_switchover_rbac_bootstrap_result | to_json }}"
+    dest: "{{ summary_path }}"
+    mode: "0644"
+  when: summary_path is defined

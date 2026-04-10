@@ -1,0 +1,14 @@
+---
+- name: Announce manifest deployment (dry_run)
+  ansible.builtin.debug:
+    msg: "[dry_run] Would apply: {{ _rbac_plan.assets | join(', ') }}"
+  when: acm_switchover_execution.mode | default('') == 'dry_run'
+
+- name: Apply RBAC manifests
+  kubernetes.core.k8s:
+    src: "{{ item }}"
+    state: present
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+  loop: "{{ _rbac_plan.assets }}"
+  when: acm_switchover_execution.mode | default('') != 'dry_run'
