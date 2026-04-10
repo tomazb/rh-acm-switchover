@@ -21,6 +21,8 @@ jobs:
         run: |
           PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py -q
       - name: Syntax check playbooks
+        env:
+          ANSIBLE_COLLECTIONS_PATH: "${{ github.workspace }}:${{ env.HOME }}/.ansible/collections"
         run: |
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/preflight.yml --syntax-check
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml --syntax-check
