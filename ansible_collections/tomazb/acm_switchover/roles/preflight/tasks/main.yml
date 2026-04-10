@@ -19,6 +19,9 @@
     - name: Validate controller-side inputs
       ansible.builtin.include_tasks: validate_inputs.yml
 
+    - name: Record GitOps drift warning (informational only)
+      ansible.builtin.include_tasks: validate_gitops.yml
+
     - name: Discover resources needed by later preflight checks
       ansible.builtin.include_tasks: discover_resources.yml
       when: acm_switchover_preflight_summary.passed
