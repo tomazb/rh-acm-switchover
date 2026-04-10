@@ -1,5 +1,10 @@
 # ACM Switchover RBAC Helm Chart
 
+> **Collection users:** This Helm chart is an implementation asset consumed internally by the
+> `tomazb.acm_switchover.rbac_bootstrap` role via `playbooks/rbac_bootstrap.yml`. Use the
+> collection playbook as your primary interface rather than running Helm directly. Direct Helm
+> usage remains supported for operators who prefer Helm as their manifest delivery mechanism.
+
 This Helm chart deploys RBAC resources for the ACM Switchover automation tool.
 
 ## TL;DR

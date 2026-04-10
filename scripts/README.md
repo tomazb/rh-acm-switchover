@@ -9,17 +9,17 @@ These scripts automate the validation process before and after switchover, ensur
 > ⚠️ **Safety note:** Some utilities mutate cluster state. Review usage and required credentials/state files before running in production.
 > **Shell requirement:** These scripts require Bash 4 or newer because shared helpers use associative arrays.
 
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
-| [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
-| [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
-| [`argocd-manage.sh`](argocd-manage.sh) | ⚠️ **Mutating / requires state file**: Pause or resume Argo CD auto-sync for ACM-touching Applications ([usage](#argo-cd-management-script)) | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume |
-| [`setup-rbac.sh`](setup-rbac.sh) | ⚠️ **Mutating (initial setup)**: Deploy RBAC and generate kubeconfigs ([usage](#rbac-bootstrap-script)) | Initial setup of switchover access |
-| [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
-| [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access |
-| [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
-| [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts |
+| Script | Purpose | When to Use | Collection Status |
+|--------|---------|-------------|-------------------|
+| [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary | **Supported bridge** — use until `playbooks/discovery.yml` covers all context-enumeration needs |
+| [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure | dual-supported |
+| [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes | dual-supported |
+| [`argocd-manage.sh`](argocd-manage.sh) | ⚠️ **Mutating / requires state file**: Pause or resume Argo CD auto-sync for ACM-touching Applications ([usage](#argo-cd-management-script)) | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume | **Deprecated** — prefer `playbooks/argocd_resume.yml` (Phase 5) |
+| [`setup-rbac.sh`](setup-rbac.sh) | ⚠️ **Mutating (initial setup)**: Deploy RBAC and generate kubeconfigs ([usage](#rbac-bootstrap-script)) | Initial setup of switchover access | **Deprecated** — prefer `playbooks/rbac_bootstrap.yml` (Phase 6) |
+| [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication | bridge (called by `rbac_bootstrap` role during transition) |
+| [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access | bridge |
+| [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts | internal |
+| [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts | internal |
 
 ## Version Tracking
 
