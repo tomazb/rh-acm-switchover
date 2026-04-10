@@ -1,0 +1,30 @@
+name: ansible-collection-foundation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install foundation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core==2.15.* pytest PyYAML ansible-builder
+      - name: Validate collection metadata tests
+        run: |
+          PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py -q
+      - name: Syntax check playbooks
+        run: |
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/preflight.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml --syntax-check
+      - name: Build collection archive
+        run: |
+          cd ansible_collections/tomazb/acm_switchover
+          ansible-galaxy collection build --output-path /tmp/dist
