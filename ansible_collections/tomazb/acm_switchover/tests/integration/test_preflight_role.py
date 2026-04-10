@@ -31,6 +31,7 @@ def test_preflight_backup_failure_is_reported(run_preflight_fixture):
     assert "preflight-backup-latest" in result_ids
     assert "preflight-backup-schedule" in result_ids
     assert "preflight-backup-storage-location-primary" in result_ids
+    assert "preflight-backup-storage-location-secondary" in result_ids
     assert "preflight-passive-restore-secondary" in result_ids
     assert "preflight-clusterdeployments" in result_ids
     assert "preflight-managed-cluster-backups" in result_ids
