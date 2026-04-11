@@ -1,5 +1,5 @@
 ---
-- name: Validate primary-hub RBAC permissions
+- name: Expand required RBAC permissions for primary hub
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
     role: "{{ acm_switchover_rbac.role | default('operator') }}"
@@ -12,6 +12,33 @@
         else 'none'
       }}
     argocd_install_type: unknown
+  register: _rbac_expanded
+
+- name: Run SelfSubjectAccessReview checks
+  ansible.builtin.include_tasks: run_ssar.yml
+  vars:
+    acm_rbac_permissions: "{{ _rbac_expanded.permissions }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Set empty denied list in dry-run mode
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions: []
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Summarize RBAC validation results
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: primary
+    role: "{{ acm_switchover_rbac.role | default('operator') }}"
+    include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
+    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    argocd_mode: >-
+      {{
+        'manage'
+        if acm_switchover_features.argocd.manage | default(false)
+        else 'none'
+      }}
+    argocd_install_type: unknown
+    denied_permissions: "{{ _rbac_denied_permissions | default([]) }}"
   register: acm_primary_rbac_validation
 
 - name: Merge RBAC results into preflight accumulator
