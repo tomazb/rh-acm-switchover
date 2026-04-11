@@ -10,9 +10,23 @@
     backup_name: latest
   register: acm_restore_activation_plan
 
+- name: Apply activation patch to Restore resource
+  kubernetes.core.k8s:
+    state: patched
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    name: "{{ acm_restore_activation_plan.restore.metadata.name }}"
+    namespace: "{{ acm_restore_activation_plan.restore.metadata.namespace | default('open-cluster-management-backup') }}"
+    definition: "{{ acm_restore_activation_plan.patch }}"
+  register: _restore_patch_result
+  when:
+    - acm_restore_activation_plan.restore is not none
+    - acm_restore_activation_plan.patch is not none
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
 - name: Publish restore activation result
   ansible.builtin.set_fact:
     acm_switchover_restore_activation_result:
-      changed: true
+      changed: "{{ _restore_patch_result.changed | default(false) or (acm_switchover_execution.mode | default('dry_run') == 'dry_run') }}"
       restore: "{{ acm_restore_activation_plan.restore }}"
       patch: "{{ acm_restore_activation_plan.patch }}"
