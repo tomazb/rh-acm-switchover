@@ -4,7 +4,7 @@ from ansible.module_utils.basic import AnsibleModule
 
 
 def build_pause_patch(sync_policy: dict, run_id: str) -> dict:
-    sync_policy = dict(sync_policy)
+    sync_policy = dict(sync_policy or {})
     sync_policy.pop("automated", None)
     return {
         "metadata": {"annotations": {"acm-switchover.argoproj.io/paused-by": run_id}},
