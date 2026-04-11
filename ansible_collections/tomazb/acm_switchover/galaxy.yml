@@ -8,7 +8,7 @@ description: >-
   Ansible Collection foundation for Red Hat Advanced Cluster Management hub
   switchover automation.
 license:
-  - Apache-2.0
+  - MIT
 tags:
   - acm
   - kubernetes
