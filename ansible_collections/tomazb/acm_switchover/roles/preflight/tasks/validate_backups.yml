@@ -57,22 +57,22 @@
             "status": "pass"
               if (
                 (acm_primary_bsl_info.resources | default([]) | length) > 0
-                and ((acm_primary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) == 0
+                and ((acm_primary_bsl_info.resources | map(attribute='status.phase', default='Unknown') | list) | difference(['Available']) | length) == 0
               )
               else "fail",
             "message": "primary hub BackupStorageLocations are available"
               if (
                 (acm_primary_bsl_info.resources | default([]) | length) > 0
-                and ((acm_primary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) == 0
+                and ((acm_primary_bsl_info.resources | map(attribute='status.phase', default='Unknown') | list) | difference(['Available']) | length) == 0
               )
               else "primary hub BackupStorageLocation is missing or unavailable",
             "details": {
-              "phases": acm_primary_bsl_info.resources | default([]) | map(attribute='status.phase') | list
+              "phases": acm_primary_bsl_info.resources | default([]) | map(attribute='status.phase', default='Unknown') | list
             },
             "recommended_action": "Repair object storage access before switchover"
               if (
                 (acm_primary_bsl_info.resources | default([]) | length) == 0
-                or ((acm_primary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) > 0
+                or ((acm_primary_bsl_info.resources | map(attribute='status.phase', default='Unknown') | list) | difference(['Available']) | length) > 0
               )
               else None
           }
@@ -91,22 +91,22 @@
             "status": "pass"
               if (
                 (acm_secondary_bsl_info.resources | default([]) | length) > 0
-                and ((acm_secondary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) == 0
+                and ((acm_secondary_bsl_info.resources | map(attribute='status.phase', default='Unknown') | list) | difference(['Available']) | length) == 0
               )
               else "fail",
             "message": "secondary hub BackupStorageLocations are available"
               if (
                 (acm_secondary_bsl_info.resources | default([]) | length) > 0
-                and ((acm_secondary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) == 0
+                and ((acm_secondary_bsl_info.resources | map(attribute='status.phase', default='Unknown') | list) | difference(['Available']) | length) == 0
               )
               else "secondary hub BackupStorageLocation is missing or unavailable",
             "details": {
-              "phases": acm_secondary_bsl_info.resources | default([]) | map(attribute='status.phase') | list
+              "phases": acm_secondary_bsl_info.resources | default([]) | map(attribute='status.phase', default='Unknown') | list
             },
             "recommended_action": "Repair object storage access on the secondary hub before switchover"
               if (
                 (acm_secondary_bsl_info.resources | default([]) | length) == 0
-                or ((acm_secondary_bsl_info.resources | map(attribute='status.phase') | list) | difference(['Available']) | length) > 0
+                or ((acm_secondary_bsl_info.resources | map(attribute='status.phase', default='Unknown') | list) | difference(['Available']) | length) > 0
               )
               else None
           }

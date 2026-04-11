@@ -50,7 +50,12 @@
     hub: secondary
     include_decommission: false  # secondary hub never runs decommission
     skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
-    argocd_mode: 'none'  # Argo CD pause happens on primary, resume on secondary
+    argocd_mode: >-
+      {{
+        'manage'
+        if acm_switchover_features.argocd.manage | default(false)
+        else 'none'
+      }}
     argocd_install_type: unknown
   register: _rbac_expanded_secondary
 
@@ -77,7 +82,12 @@
     hub: secondary
     include_decommission: false
     skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
-    argocd_mode: 'none'
+    argocd_mode: >-
+      {{
+        'manage'
+        if acm_switchover_features.argocd.manage | default(false)
+        else 'none'
+      }}
     argocd_install_type: unknown
     denied_permissions: "{{ _rbac_denied_permissions_secondary | default([]) }}"
   register: acm_secondary_rbac_validation

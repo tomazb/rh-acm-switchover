@@ -7,7 +7,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_restore_info 
 
 
 def test_select_passive_sync_restore_prefers_sync_enabled_resource():
-    restore = select_passive_sync_restore(
+    restore, diagnostics = select_passive_sync_restore(
         [
             {"metadata": {"name": "restore-old", "creationTimestamp": "2026-04-10T10:00:00Z"}, "spec": {}},
             {
@@ -17,6 +17,27 @@ def test_select_passive_sync_restore_prefers_sync_enabled_resource():
         ]
     )
     assert restore["metadata"]["name"] == "restore-passive"
+    assert diagnostics["restore_count"] == 2
+    assert diagnostics["sync_enabled_count"] == 1
+    assert "reason" not in diagnostics
+
+
+def test_select_passive_sync_restore_empty_list():
+    restore, diagnostics = select_passive_sync_restore([])
+    assert restore is None
+    assert diagnostics["restore_count"] == 0
+    assert diagnostics["sync_enabled_count"] == 0
+    assert diagnostics["reason"] == "no_restores_found"
+
+
+def test_select_passive_sync_restore_no_sync_enabled():
+    restore, diagnostics = select_passive_sync_restore(
+        [{"metadata": {"name": "r1", "creationTimestamp": "2026-04-10T10:00:00Z"}, "spec": {}}]
+    )
+    assert restore is None
+    assert diagnostics["restore_count"] == 1
+    assert diagnostics["sync_enabled_count"] == 0
+    assert diagnostics["reason"] == "no_sync_restore"
 
 
 def test_build_activation_patch_targets_latest_backup():
