@@ -12,6 +12,8 @@
 
 - name: Apply activation patch to Restore resource
   kubernetes.core.k8s:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
     state: patched
     api_version: cluster.open-cluster-management.io/v1beta1
     kind: Restore

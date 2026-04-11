@@ -8,6 +8,8 @@
 
 - name: Patch BackupSchedule to paused state
   kubernetes.core.k8s:
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
     state: patched
     api_version: cluster.open-cluster-management.io/v1beta1
     kind: BackupSchedule
@@ -24,6 +26,8 @@
 
 - name: Delete BackupSchedule for ACM 2.11 pause
   kubernetes.core.k8s:
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
     state: absent
     api_version: cluster.open-cluster-management.io/v1beta1
     kind: BackupSchedule
