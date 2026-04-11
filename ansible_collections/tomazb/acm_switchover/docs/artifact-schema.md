@@ -50,7 +50,7 @@ Only phases that ran before any failure are included in `phases`.
 Required fields:
 
 - `schema_version`
-- `timestamp`
+- `generated_at`
 - `phase`
 - `status`
 - `results`
