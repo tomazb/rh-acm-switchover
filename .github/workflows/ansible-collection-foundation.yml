@@ -17,9 +17,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install ansible-core==2.15.* pytest PyYAML ansible-builder
-      - name: Validate collection metadata tests
+      - name: Install collection dependencies
         run: |
-          PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py -q
+          ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml
+      - name: Run collection unit tests
+        run: |
+          PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
       - name: Syntax check playbooks
         env:
           ANSIBLE_COLLECTIONS_PATH: "${{ github.workspace }}:${{ env.HOME }}/.ansible/collections"
