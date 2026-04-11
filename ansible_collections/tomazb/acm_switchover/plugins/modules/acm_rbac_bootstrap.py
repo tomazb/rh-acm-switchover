@@ -16,12 +16,6 @@ description:
 author:
   - ACM Switchover Contributors (@tomazb)
 options:
-  role:
-    description:
-      - Role profile to expand. C(operator) includes write permissions; C(validator) is read-only.
-    type: str
-    default: operator
-    choices: [operator, validator]
   include_decommission:
     description:
       - Whether to append decommission-scoped ClusterRole manifests to the asset list.
@@ -35,9 +29,8 @@ options:
 """
 
 EXAMPLES = r"""
-- name: Plan RBAC assets for operator with decommission
+- name: Plan RBAC assets with decommission
   tomazb.acm_switchover.acm_rbac_bootstrap:
-    role: operator
     include_decommission: true
   register: rbac_plan
 
@@ -77,13 +70,8 @@ _DECOMMISSION_ASSETS = [
 ]
 
 
-def select_rbac_assets(role: str, include_decommission: bool) -> list[str]:
-    """Return an ordered list of RBAC manifest paths for the requested profile.
-
-    The role parameter currently accepts 'operator' or 'validator' for forward
-    compatibility. Both roles receive the same base asset set; future iterations
-    may differentiate validator-specific read-only assets.
-    """
+def select_rbac_assets(include_decommission: bool) -> list[str]:
+    """Return an ordered list of RBAC manifest paths for the requested profile."""
     assets = list(_BASE_ASSETS)
     if include_decommission:
         assets.extend(_DECOMMISSION_ASSETS)
@@ -93,14 +81,12 @@ def select_rbac_assets(role: str, include_decommission: bool) -> list[str]:
 def main() -> None:
     module = AnsibleModule(
         argument_spec=dict(
-            role=dict(type="str", default="operator", choices=["operator", "validator"]),
             include_decommission=dict(type="bool", default=False),
             generate_kubeconfigs=dict(type="bool", default=False),
         ),
         supports_check_mode=True,
     )
     assets = select_rbac_assets(
-        role=module.params["role"],
         include_decommission=module.params["include_decommission"],
     )
     module.exit_json(

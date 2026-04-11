@@ -2,7 +2,6 @@
 - name: Expand required RBAC permissions for primary hub
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
-    role: "{{ acm_switchover_rbac.role | default('operator') }}"
     include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
     skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
     argocd_mode: >-
@@ -33,7 +32,6 @@
 - name: Summarize RBAC validation results for primary hub
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
-    role: "{{ acm_switchover_rbac.role | default('operator') }}"
     include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
     skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
     argocd_mode: >-
@@ -50,7 +48,6 @@
 - name: Expand required RBAC permissions for secondary hub
   tomazb.acm_switchover.acm_rbac_validate:
     hub: secondary
-    role: "{{ acm_switchover_rbac.role | default('operator') }}"
     include_decommission: false  # secondary hub never runs decommission
     skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
     argocd_mode: 'none'  # Argo CD pause happens on primary, resume on secondary
@@ -78,7 +75,6 @@
 - name: Summarize RBAC validation results for secondary hub
   tomazb.acm_switchover.acm_rbac_validate:
     hub: secondary
-    role: "{{ acm_switchover_rbac.role | default('operator') }}"
     include_decommission: false
     skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
     argocd_mode: 'none'
