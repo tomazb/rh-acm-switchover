@@ -10,17 +10,20 @@ from pathlib import Path
 import pytest
 import yaml
 
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
 
 @pytest.fixture
 def run_switchover_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
-        repo_root = Path.cwd()
+        repo_root = _REPO_ROOT
         fixture_path = (
             repo_root
             / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover"
             / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text())
+        vars_payload.setdefault("acm_switchover_execution", {})
         vars_payload["acm_switchover_execution"]["report_dir"] = str(tmp_path / "artifacts")
 
         vars_file = tmp_path / "vars.yml"
@@ -34,21 +37,25 @@ def run_switchover_fixture(tmp_path):
             ]),
         }
 
-        completed = subprocess.run(
-            [
-                "ansible-playbook",
-                "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
-                "-i",
-                "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
-                "-e",
-                f"@{vars_file}",
-            ],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    "ansible-playbook",
+                    "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
+                    "-i",
+                    "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                    "-e",
+                    f"@{vars_file}",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired as exc:
+            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
 
         report_path = tmp_path / "artifacts" / "switchover-report.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
@@ -63,7 +70,7 @@ def run_checkpoint_fixture(tmp_path):
         fixture_name: str,
         pre_completed_phases: list[str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
-        repo_root = Path.cwd()
+        repo_root = _REPO_ROOT
         fixture_path = (
             repo_root
             / "ansible_collections/tomazb/acm_switchover/tests/scenario/fixtures/checkpoint"
@@ -72,7 +79,9 @@ def run_checkpoint_fixture(tmp_path):
         vars_payload = yaml.safe_load(fixture_path.read_text())
 
         checkpoint_path = tmp_path / "checkpoint.json"
+        vars_payload.setdefault("acm_switchover_execution", {})
         vars_payload["acm_switchover_execution"]["report_dir"] = str(tmp_path / "artifacts")
+        vars_payload["acm_switchover_execution"].setdefault("checkpoint", {})
         vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(checkpoint_path)
 
         if pre_completed_phases:
@@ -102,21 +111,25 @@ def run_checkpoint_fixture(tmp_path):
             ]),
         }
 
-        completed = subprocess.run(
-            [
-                "ansible-playbook",
-                "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
-                "-i",
-                "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
-                "-e",
-                f"@{vars_file}",
-            ],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    "ansible-playbook",
+                    "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml",
+                    "-i",
+                    "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                    "-e",
+                    f"@{vars_file}",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired as exc:
+            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
 
         checkpoint = json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
         return completed, checkpoint

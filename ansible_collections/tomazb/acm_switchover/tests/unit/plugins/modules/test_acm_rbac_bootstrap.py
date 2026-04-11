@@ -25,7 +25,7 @@ def test_base_assets_returned_without_decommission():
     assert all("decommission" not in path for path in assets)
 
 
-def test_validator_role_uses_same_manifest_set_with_profile_declared():
+def test_validator_role_returns_base_assets():
     assets = select_rbac_assets(role="validator", include_decommission=False)
     assert len(assets) == 6
     assert "deploy/rbac/serviceaccount.yaml" in assets
