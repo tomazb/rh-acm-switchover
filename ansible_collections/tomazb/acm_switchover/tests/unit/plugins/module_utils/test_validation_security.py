@@ -3,6 +3,7 @@
 import pytest
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
+    CONTEXT_NAME_MAX_LENGTH,
     ValidationError,
     validate_context_name,
     validate_safe_path,
@@ -17,7 +18,7 @@ class TestValidateContextNameNegative:
             validate_context_name("")
 
     def test_rejects_overlong_context(self):
-        overlong = "a" * 129  # CONTEXT_NAME_MAX_LENGTH is 128
+        overlong = "a" * (CONTEXT_NAME_MAX_LENGTH + 1)
         with pytest.raises(ValidationError, match="exceeds maximum length"):
             validate_context_name(overlong)
 
@@ -83,6 +84,9 @@ class TestValidateContextNamePositive:
 
     def test_accepts_single_character_context(self):
         validate_context_name("a")
+
+    def test_accepts_max_length_context(self):
+        validate_context_name("a" * CONTEXT_NAME_MAX_LENGTH)
 
 
 class TestValidateSafePathPositive:
