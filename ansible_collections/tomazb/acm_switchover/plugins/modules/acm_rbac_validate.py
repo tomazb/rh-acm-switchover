@@ -1,5 +1,4 @@
-# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 
 from __future__ import annotations
 
@@ -257,7 +256,7 @@ def summarize_rbac_results(hub: str, denied_permissions: list[dict]) -> dict:
             details={"denied_permissions": denied_permissions},
             recommended_action="Grant the documented collection RBAC role before running preflight again",
         ).to_dict()
-        return {"passed": False, "results": [result]}
+        return {"passed": False, "critical_failures": 1, "results": [result]}
 
     result = ValidationResult(
         id=f"preflight-rbac-{hub}",
@@ -265,7 +264,7 @@ def summarize_rbac_results(hub: str, denied_permissions: list[dict]) -> dict:
         status="pass",
         message=f"all required RBAC permissions validated on {hub} hub",
     ).to_dict()
-    return {"passed": True, "results": [result]}
+    return {"passed": True, "critical_failures": 0, "results": [result]}
 
 
 def main() -> None:

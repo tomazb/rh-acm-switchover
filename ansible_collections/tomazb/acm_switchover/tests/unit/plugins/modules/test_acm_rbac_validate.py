@@ -41,11 +41,13 @@ def test_summary_reports_failure_when_permission_missing():
     )
     assert summary["passed"] is False
     assert any(item["id"] == "preflight-rbac-primary" for item in summary["results"])
+    assert summary["critical_failures"] == 1
 
 
 def test_summary_reports_pass_when_all_permissions_allowed():
     summary = summarize_rbac_results(hub="secondary", denied_permissions=[])
     assert summary["passed"] is True
+    assert summary["critical_failures"] == 0
     assert summary["results"][0]["status"] == "pass"
 
 

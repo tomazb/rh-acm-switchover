@@ -1,13 +1,27 @@
 ---
-- name: Validate RBAC permissions via collection module
+- name: Expand expected RBAC permissions via collection module
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
     role: "{{ acm_switchover_rbac_bootstrap.role }}"
     include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
     denied_permissions: []
+  register: _rbac_validation_plan
+
+- name: Run SelfSubjectAccessReview checks for bootstrap RBAC
+  ansible.builtin.include_tasks: ../../preflight/tasks/run_ssar.yml
+  vars:
+    acm_rbac_permissions: "{{ _rbac_validation_plan.permissions }}"
+
+- name: Summarize bootstrap RBAC validation results
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: primary
+    role: "{{ acm_switchover_rbac_bootstrap.role }}"
+    include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
+    denied_permissions: "{{ _rbac_denied_permissions | default([]) }}"
   register: _rbac_validation
 
 - name: Fail when RBAC validation finds denied permissions
   ansible.builtin.fail:
-    msg: "RBAC validation failed: {{ _rbac_validation.denied | default([]) | join(', ') }}"
+    msg: >-
+      RBAC validation failed: {{ _rbac_validation.results[0].details.denied_permissions | default([]) | to_json }}
   when: not (_rbac_validation.passed | default(true) | bool)

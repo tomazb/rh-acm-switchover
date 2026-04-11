@@ -1,5 +1,4 @@
-# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 
 from __future__ import annotations
 
@@ -16,6 +15,13 @@ description:
 author:
   - ACM Switchover Contributors (@tomazb)
 options:
+  role:
+    description:
+      - Role profile to bootstrap. C(operator) provisions mutating switchover access.
+      - C(validator) provisions the read-only validation profile.
+    type: str
+    choices: [operator, validator]
+    default: operator
   include_decommission:
     description:
       - Whether to append decommission-scoped ClusterRole manifests to the asset list.
@@ -31,6 +37,7 @@ options:
 EXAMPLES = r"""
 - name: Plan RBAC assets with decommission
   tomazb.acm_switchover.acm_rbac_bootstrap:
+    role: operator
     include_decommission: true
   register: rbac_plan
 
@@ -51,9 +58,15 @@ generate_kubeconfigs:
   description: Whether the caller should generate kubeconfigs after applying manifests.
   type: bool
   returned: always
+role:
+  description: Requested RBAC role profile to apply from the multi-document manifest set.
+  type: str
+  returned: always
 """
 
 from ansible.module_utils.basic import AnsibleModule
+
+VALID_ROLES = ("operator", "validator")
 
 _BASE_ASSETS = [
     "deploy/rbac/namespace.yaml",
@@ -70,8 +83,10 @@ _DECOMMISSION_ASSETS = [
 ]
 
 
-def select_rbac_assets(include_decommission: bool) -> list[str]:
+def select_rbac_assets(role: str, include_decommission: bool) -> list[str]:
     """Return an ordered list of RBAC manifest paths for the requested profile."""
+    if role not in VALID_ROLES:
+        raise ValueError(f"Invalid RBAC role '{role}'. Expected one of: {', '.join(VALID_ROLES)}.")
     assets = list(_BASE_ASSETS)
     if include_decommission:
         assets.extend(_DECOMMISSION_ASSETS)
@@ -81,17 +96,20 @@ def select_rbac_assets(include_decommission: bool) -> list[str]:
 def main() -> None:
     module = AnsibleModule(
         argument_spec=dict(
+            role=dict(type="str", default="operator", choices=list(VALID_ROLES)),
             include_decommission=dict(type="bool", default=False),
             generate_kubeconfigs=dict(type="bool", default=False),
         ),
         supports_check_mode=True,
     )
     assets = select_rbac_assets(
+        role=module.params["role"],
         include_decommission=module.params["include_decommission"],
     )
     module.exit_json(
         changed=False,
         assets=assets,
+        role=module.params["role"],
         generate_kubeconfigs=module.params["generate_kubeconfigs"],
     )
 
