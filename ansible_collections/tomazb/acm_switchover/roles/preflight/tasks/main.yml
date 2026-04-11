@@ -4,9 +4,11 @@
     phase: preflight
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: enter
+  register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
 - name: Run preflight phase
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
     - name: Initialize preflight result accumulator
       ansible.builtin.set_fact:
@@ -83,4 +85,6 @@
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
     report_ref: "{{ acm_switchover_preflight_result.path | default(omit) }}"
-  when: acm_switchover_execution.checkpoint.enabled | default(false)
+  when:
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

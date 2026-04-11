@@ -4,9 +4,11 @@
     phase: finalization
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: enter
+  register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
 - name: Run finalization phase
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
     - name: Enable backup schedules on new hub
       ansible.builtin.include_tasks: enable_backups.yml
@@ -57,4 +59,6 @@
     phase: finalization
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
-  when: acm_switchover_execution.checkpoint.enabled | default(false)
+  when:
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

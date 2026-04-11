@@ -4,9 +4,11 @@
     phase: primary_prep
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: enter
+  register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
 - name: Run primary_prep phase
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
     - name: Pause BackupSchedule on primary hub
       ansible.builtin.include_tasks: pause_backups.yml
@@ -57,4 +59,6 @@
     phase: primary_prep
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
-  when: acm_switchover_execution.checkpoint.enabled | default(false)
+  when:
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

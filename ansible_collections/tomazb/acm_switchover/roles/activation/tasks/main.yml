@@ -4,9 +4,11 @@
     phase: activation
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: enter
+  register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
 - name: Run activation phase
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
     - name: Verify passive sync when method is passive
       ansible.builtin.include_tasks: verify_passive_sync.yml
@@ -46,4 +48,6 @@
     phase: activation
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
-  when: acm_switchover_execution.checkpoint.enabled | default(false)
+  when:
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

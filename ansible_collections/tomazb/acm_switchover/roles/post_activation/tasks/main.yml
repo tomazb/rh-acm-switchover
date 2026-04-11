@@ -4,9 +4,11 @@
     phase: post_activation
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: enter
+  register: _checkpoint_enter
   when: acm_switchover_execution.checkpoint.enabled | default(false)
 
 - name: Run post_activation phase
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
     - name: Verify managed clusters
       ansible.builtin.include_tasks: verify_managed_clusters.yml
@@ -52,4 +54,6 @@
     phase: post_activation
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
-  when: acm_switchover_execution.checkpoint.enabled | default(false)
+  when:
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))
