@@ -12,6 +12,8 @@
 
     - name: Remove automated sync policy and annotate with run-id
       kubernetes.core.k8s:
+        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.primary.context }}"
         state: patched
         api_version: argoproj.io/v1alpha1
         kind: Application

@@ -75,7 +75,13 @@ from ansible.module_utils.basic import AnsibleModule
 
 
 def backup_schedule_pause_mode(acm_version: str) -> str:
-    major, minor, *_rest = [int(part) for part in acm_version.split(".")]
+    try:
+        major, minor, *_rest = [int(part) for part in acm_version.split(".")]
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid ACM version format '{acm_version}'. "
+            f"Expected numeric version like '2.14.3', got error: {e}"
+        ) from e
     return "delete" if (major, minor) <= (2, 11) else "pause"
 
 
@@ -106,11 +112,14 @@ def main() -> None:
         },
         supports_check_mode=True,
     )
-    operation = build_backup_schedule_operation(
-        module.params["acm_version"],
-        module.params["intent"],
-        module.params["schedules"],
-    )
+    try:
+        operation = build_backup_schedule_operation(
+            module.params["acm_version"],
+            module.params["intent"],
+            module.params["schedules"],
+        )
+    except ValueError as e:
+        module.fail_json(msg=str(e))
     module.exit_json(changed=operation["action"] != "none", operation=operation)
 
 

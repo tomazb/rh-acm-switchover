@@ -63,9 +63,21 @@ class ActionModule(ActionBase):
         backend = checkpoint_config.get("backend", "file")
         path = checkpoint_config.get("path", ".state/checkpoint.json")
 
-        checkpoint_data = (
-            self._load_checkpoint(path) if backend == "file" else build_checkpoint_record(phase, {})
-        )
+        if status not in {"enter", "pass", "fail"}:
+            return {
+                "failed": True,
+                "msg": f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail.",
+            }
+
+        if backend not in {"file"}:
+            return {
+                "failed": True,
+                "msg": f"Invalid checkpoint backend '{backend}'. Expected: file.",
+            }
+
+        checkpoint_data = self._load_checkpoint(path) if backend == "file" else build_checkpoint_record(phase, {})
+        if checkpoint_data.get("failed"):
+            return checkpoint_data
 
         if status == "enter":
             already_done = not should_resume_phase(checkpoint_data, phase)
@@ -84,19 +96,40 @@ class ActionModule(ActionBase):
             )
 
         if backend == "file":
-            self._save_checkpoint(path, checkpoint_data)
+            save_result = self._save_checkpoint(path, checkpoint_data)
+            if save_result is not None and save_result.get("failed"):
+                return save_result
 
         return {"changed": True, "checkpoint": checkpoint_data}
 
     def _load_checkpoint(self, path: str) -> dict:
-        if os.path.exists(path):
+        if not os.path.exists(path):
+            return build_checkpoint_record("", {})
+        try:
             with open(path) as fh:
                 return json.load(fh)
-        return build_checkpoint_record("", {})
+        except json.JSONDecodeError as e:
+            return {
+                "failed": True,
+                "msg": f"Checkpoint file '{path}' is corrupted (invalid JSON): {e}. "
+                       f"Delete or repair the file to resume.",
+            }
+        except OSError as e:
+            return {
+                "failed": True,
+                "msg": f"Cannot read checkpoint file '{path}': {e}.",
+            }
 
-    def _save_checkpoint(self, path: str, data: dict) -> None:
+    def _save_checkpoint(self, path: str, data: dict) -> dict | None:
         dir_path = os.path.dirname(path)
-        if dir_path:
-            os.makedirs(dir_path, exist_ok=True)
-        with open(path, "w") as fh:
-            json.dump(data, fh, indent=2)
+        try:
+            if dir_path:
+                os.makedirs(dir_path, exist_ok=True)
+            with open(path, "w") as fh:
+                json.dump(data, fh, indent=2)
+        except OSError as e:
+            return {
+                "failed": True,
+                "msg": f"Cannot write checkpoint file '{path}': {e}.",
+            }
+        return None

@@ -77,11 +77,19 @@ def build_preflight_report(phase: str, results: list[dict], hubs: dict) -> dict:
     }
 
 
-def write_report(report: dict, destination: str) -> str:
+def write_report(report: dict, destination: str) -> tuple[str, str | None]:
+    """Write report to destination path.
+
+    Returns:
+        Tuple of (path, error_message). error_message is None on success.
+    """
     path = Path(destination)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    return str(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    except OSError as e:
+        return str(path), f"Cannot write preflight report to '{path}': {e}"
+    return str(path), None
 
 
 def main() -> None:
@@ -101,8 +109,11 @@ def main() -> None:
         hubs=module.params["hubs"],
     )
     output_path = None
+    write_error = None
     if module.params["path"] and not module.check_mode:
-        output_path = write_report(report, module.params["path"])
+        output_path, write_error = write_report(report, module.params["path"])
+        if write_error:
+            module.fail_json(msg=write_error, report=report, path=output_path)
 
     module.exit_json(changed=bool(output_path), report=report, path=output_path)
 

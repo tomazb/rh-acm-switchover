@@ -78,7 +78,12 @@ _DECOMMISSION_ASSETS = [
 
 
 def select_rbac_assets(role: str, include_decommission: bool) -> list[str]:
-    """Return an ordered list of RBAC manifest paths for the requested profile."""
+    """Return an ordered list of RBAC manifest paths for the requested profile.
+
+    The role parameter currently accepts 'operator' or 'validator' for forward
+    compatibility. Both roles receive the same base asset set; future iterations
+    may differentiate validator-specific read-only assets.
+    """
     assets = list(_BASE_ASSETS)
     if include_decommission:
         assets.extend(_DECOMMISSION_ASSETS)

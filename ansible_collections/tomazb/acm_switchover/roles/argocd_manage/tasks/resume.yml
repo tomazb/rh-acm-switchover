@@ -17,6 +17,8 @@
     # Jinja2 interprets dots as nested attribute access; use the 'in' operator instead.
     - name: Restore original sync policy and remove pause annotations
       kubernetes.core.k8s:
+        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.secondary.context }}"
         state: patched
         api_version: argoproj.io/v1alpha1
         kind: Application

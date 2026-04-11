@@ -15,7 +15,9 @@
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
   register: acm_primary_compactor_scale
-  when: (acm_primary_compactor_info.resources | default([]) | length) > 0
+  when:
+    - (acm_primary_compactor_info.resources | default([]) | length) > 0
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Publish observability scale result
   ansible.builtin.set_fact:

@@ -20,7 +20,9 @@ def build_pause_patch(sync_policy: dict, run_id: str) -> dict:
 
 def main() -> None:
     module = AnsibleModule(argument_spec={}, supports_check_mode=True)
-    module.exit_json(changed=False)
+    module.fail_json(msg="acm_argocd_autosync module is not yet fully implemented. "
+                      "The build_pause_patch() function exists but is not called. "
+                      "Use the argocd_manage role for Argo CD auto-sync operations.")
 
 
 if __name__ == "__main__":

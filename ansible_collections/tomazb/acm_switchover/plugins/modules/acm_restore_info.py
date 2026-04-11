@@ -39,10 +39,32 @@ EXAMPLES = r"""
 from ansible.module_utils.basic import AnsibleModule
 
 
-def select_passive_sync_restore(restores: list[dict]) -> dict | None:
+def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict]:
+    """Select the best passive sync restore and return diagnostics.
+
+    Returns:
+        Tuple of (selected_restore, diagnostics_dict)
+        diagnostics_dict contains: restore_count, sync_enabled_count, reason
+    """
+    total_count = len(restores)
     candidates = [item for item in restores if item.get("spec", {}).get("syncRestoreWithNewBackups") is True]
+    sync_enabled_count = len(candidates)
+
+    diagnostics = {
+        "restore_count": total_count,
+        "sync_enabled_count": sync_enabled_count,
+    }
+
+    if not restores:
+        diagnostics["reason"] = "no_restores_found"
+        return None, diagnostics
+
+    if not candidates:
+        diagnostics["reason"] = "no_sync_restore"
+        return None, diagnostics
+
     candidates.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""), reverse=True)
-    return candidates[0] if candidates else None
+    return candidates[0], diagnostics
 
 
 def build_activation_patch(backup_name: str) -> dict:
@@ -57,11 +79,18 @@ def main() -> None:
         },
         supports_check_mode=True,
     )
-    selected = select_passive_sync_restore(module.params["restores"])
+    selected, diagnostics = select_passive_sync_restore(module.params["restores"])
     patch = None
     if module.params["backup_name"]:
         patch = build_activation_patch(module.params["backup_name"])
-    module.exit_json(changed=False, restore=selected, patch=patch)
+    module.exit_json(
+        changed=False,
+        restore=selected,
+        patch=patch,
+        restore_count=diagnostics["restore_count"],
+        sync_enabled_count=diagnostics["sync_enabled_count"],
+        reason=diagnostics.get("reason"),
+    )
 
 
 if __name__ == "__main__":
