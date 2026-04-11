@@ -1,5 +1,4 @@
-# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Tests for checkpoint_phase and write_artifact action plugin runtime helpers."""
 
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
@@ -120,6 +119,73 @@ def test_action_module_persists_phase_status_on_fail(tmp_path):
     result = action.run()
     assert result["checkpoint"]["phase_status"] == "fail"
     assert "activation" not in result["checkpoint"]["completed_phases"]
+
+
+def test_action_module_rejects_missing_phase(tmp_path):
+    from unittest.mock import MagicMock
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    task = MagicMock()
+    task.async_val = 0
+    task.args = {
+        "phase": "",
+        "checkpoint": {"enabled": True, "backend": "file", "path": str(tmp_path / "checkpoint.json")},
+        "status": "pass",
+    }
+
+    action = ActionModule(
+        task=task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+
+    result = action.run()
+    assert result["failed"] is True
+    assert "Missing required checkpoint phase" in result["msg"]
+
+
+def test_action_module_reset_discards_previous_checkpoint_state(tmp_path):
+    import json
+    from unittest.mock import MagicMock
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(json.dumps({
+        "schema_version": "1.0",
+        "phase": "activation",
+        "completed_phases": ["preflight", "activation"],
+        "operational_data": {"stale": True},
+        "errors": [{"phase": "activation", "error": "boom"}],
+        "report_refs": [{"phase": "activation", "path": "/tmp/out.json", "kind": "json-report"}],
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }))
+
+    task = MagicMock()
+    task.async_val = 0
+    task.args = {
+        "phase": "primary_prep",
+        "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_file), "reset": True},
+        "status": "enter",
+    }
+
+    action = ActionModule(
+        task=task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+
+    result = action.run()
+    assert result["checkpoint"]["phase"] == "primary_prep"
+    assert result["checkpoint"]["completed_phases"] == []
+    assert result["skipped_phase"] is False
 
 
 def test_build_report_ref_accepts_custom_kind():

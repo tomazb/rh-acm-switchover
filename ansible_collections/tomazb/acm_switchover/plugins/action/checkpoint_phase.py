@@ -1,5 +1,4 @@
-# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Runtime helpers and ActionModule for the checkpoint_phase action plugin."""
 
 from __future__ import annotations
@@ -69,15 +68,24 @@ class ActionModule(ActionBase):
                 "msg": f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail.",
             }
 
+        if not phase:
+            return {
+                "failed": True,
+                "msg": "Missing required checkpoint phase.",
+            }
+
         if backend not in {"file"}:
             return {
                 "failed": True,
                 "msg": f"Invalid checkpoint backend '{backend}'. Expected: file.",
             }
 
-        checkpoint_data = self._load_checkpoint(path) if backend == "file" else build_checkpoint_record(phase, {})
+        reset = bool(checkpoint_config.get("reset", False))
+        checkpoint_data = build_checkpoint_record(phase, {}) if reset else self._load_checkpoint(path)
         if checkpoint_data.get("failed"):
             return checkpoint_data
+
+        checkpoint_data["phase"] = phase
 
         if status == "enter":
             already_done = not should_resume_phase(checkpoint_data, phase)
