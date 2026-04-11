@@ -6,8 +6,45 @@
     schedules: "{{ acm_primary_backup_schedules_info.resources | default([]) }}"
   register: acm_backup_schedule_operation
 
+- name: Patch BackupSchedule to paused state
+  kubernetes.core.k8s:
+    state: patched
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace | default('open-cluster-management-backup') }}"
+    definition: "{{ acm_backup_schedule_operation.operation.patch }}"
+  loop: "{{ acm_primary_backup_schedules_info.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: _backup_patch_results
+  when:
+    - acm_backup_schedule_operation.operation.action == 'patch'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Delete BackupSchedule for ACM 2.11 pause
+  kubernetes.core.k8s:
+    state: absent
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace | default('open-cluster-management-backup') }}"
+  loop: "{{ acm_primary_backup_schedules_info.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: _backup_delete_results
+  when:
+    - acm_backup_schedule_operation.operation.action == 'delete'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
 - name: Publish backup schedule result
   ansible.builtin.set_fact:
     acm_switchover_pause_backups_result:
-      changed: "{{ acm_backup_schedule_operation.changed }}"
+      changed: >-
+        {{
+          (_backup_patch_results.changed | default(false))
+          or (_backup_delete_results.changed | default(false))
+          or (acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+              and acm_backup_schedule_operation.operation.action != 'none')
+        }}
       operation: "{{ acm_backup_schedule_operation.operation }}"
