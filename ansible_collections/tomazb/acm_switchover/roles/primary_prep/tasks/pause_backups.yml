@@ -1,7 +1,18 @@
 ---
+- name: Derive primary ACM version safely
+  ansible.builtin.set_fact:
+    _acm_primary_version: >-
+      {{
+        (
+          (acm_primary_mch_info.resources | default([]) | first | default({}))
+          .get('status', {})
+          .get('currentVersion', '2.12.0')
+        )
+      }}
+
 - name: Plan BackupSchedule pause operation
   tomazb.acm_switchover.acm_backup_schedule:
-    acm_version: "{{ acm_primary_mch_info.resources[0].status.currentVersion | default('2.12.0') }}"
+    acm_version: "{{ _acm_primary_version }}"
     intent: pause
     schedules: "{{ acm_primary_backup_schedules_info.resources | default([]) }}"
   register: acm_backup_schedule_operation
