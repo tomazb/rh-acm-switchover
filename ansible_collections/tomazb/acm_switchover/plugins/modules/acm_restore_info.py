@@ -1,5 +1,4 @@
-# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 
 from __future__ import annotations
 
@@ -63,7 +62,7 @@ def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict
         diagnostics["reason"] = "no_sync_restore"
         return None, diagnostics
 
-    candidates.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""), reverse=True)
+    candidates.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp") or "", reverse=True)
     return candidates[0], diagnostics
 
 

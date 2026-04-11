@@ -40,6 +40,23 @@ def test_select_passive_sync_restore_no_sync_enabled():
     assert diagnostics["reason"] == "no_sync_restore"
 
 
+def test_select_passive_sync_restore_handles_null_creation_timestamp():
+    restore, diagnostics = select_passive_sync_restore(
+        [
+            {
+                "metadata": {"name": "restore-null", "creationTimestamp": None},
+                "spec": {"syncRestoreWithNewBackups": True},
+            },
+            {
+                "metadata": {"name": "restore-new", "creationTimestamp": "2026-04-10T11:00:00Z"},
+                "spec": {"syncRestoreWithNewBackups": True},
+            },
+        ]
+    )
+    assert restore["metadata"]["name"] == "restore-new"
+    assert diagnostics["sync_enabled_count"] == 2
+
+
 def test_build_activation_patch_targets_latest_backup():
     patch = build_activation_patch("latest")
     assert patch == {"spec": {"veleroManagedClustersBackupName": "latest"}}
