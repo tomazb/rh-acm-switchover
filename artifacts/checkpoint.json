@@ -1,15 +1,18 @@
 {
   "schema_version": "1.0",
-  "phase": "finalization",
+  "phase": "post_activation",
   "completed_phases": [
     "preflight",
     "primary_prep",
-    "activation",
-    "post_activation",
-    "finalization"
+    "activation"
   ],
   "operational_data": {},
-  "errors": [],
+  "errors": [
+    {
+      "phase": "post_activation",
+      "error": "Task failed: Action failed: Unknown error."
+    }
+  ],
   "report_refs": [
     {
       "phase": "preflight",
@@ -17,7 +20,7 @@
       "kind": "json-report"
     }
   ],
-  "created_at": "2026-04-13T15:04:08.855518+00:00",
-  "updated_at": "2026-04-13T15:04:21.264116+00:00",
-  "phase_status": "pass"
+  "created_at": "2026-04-13T17:56:05.618941+00:00",
+  "updated_at": "2026-04-13T18:07:12.784375+00:00",
+  "phase_status": "fail"
 }

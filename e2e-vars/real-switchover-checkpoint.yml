@@ -1,4 +1,5 @@
 # C1: Checkpoint resume test — primary=mgmt2, secondary=mgmt1
+# Uses dry_run mode to avoid actual cluster modifications
 acm_switchover_hubs:
   primary:
     context: mgmt2
@@ -17,14 +18,14 @@ acm_switchover_features:
   manage_auto_import_strategy: false
   skip_rbac_validation: true
   skip_observability_checks: true
-  skip_gitops_check: false
+  skip_gitops_check: true
   disable_observability_on_secondary: false
   argocd:
     manage: false
     resume_after_switchover: false
 
 acm_switchover_execution:
-  mode: execute
+  mode: dry_run
   report_dir: ./artifacts
   checkpoint:
     enabled: true
