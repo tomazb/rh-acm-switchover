@@ -1,6 +1,6 @@
 # ACM Hub Switchover Automation
 
-**Version 1.6.4** (2026-04-13)
+**Version 1.6.10** (2026-04-13)
 
 Automated, idempotent script for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster.
 
