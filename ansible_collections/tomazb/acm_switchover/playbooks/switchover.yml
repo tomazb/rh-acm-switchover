@@ -46,14 +46,23 @@
                   | combine({'finalization': acm_switchover_finalization_result} if acm_switchover_finalization_result is defined else {})
                 }}
 
+        - name: Resolve report directory to absolute path
+          ansible.builtin.set_fact:
+            _acm_report_dir_abs: >-
+              {{
+                (acm_switchover_execution.report_dir | default('artifacts'))
+                if (acm_switchover_execution.report_dir | default('artifacts')).startswith('/')
+                else (lookup('env', 'PWD') ~ '/' ~ (acm_switchover_execution.report_dir | default('artifacts')))
+              }}
+
         - name: Ensure switchover report directory exists
           ansible.builtin.file:
-            path: "{{ acm_switchover_execution.report_dir | default('./artifacts') }}"
+            path: "{{ _acm_report_dir_abs }}"
             state: directory
             mode: "0755"
 
         - name: Write switchover report artifact
           ansible.builtin.copy:
-            dest: "{{ (acm_switchover_execution.report_dir | default('./artifacts')) ~ '/switchover-report.json' }}"
+            dest: "{{ _acm_report_dir_abs ~ '/switchover-report.json' }}"
             content: "{{ acm_switchover_report | to_nice_json }}"
             mode: "0644"
