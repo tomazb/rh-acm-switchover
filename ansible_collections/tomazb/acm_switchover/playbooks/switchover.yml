@@ -11,6 +11,10 @@
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.preflight
 
+        - name: Stop after preflight when mode is validate
+          ansible.builtin.meta: end_play
+          when: acm_switchover_execution.mode | default('') == 'validate'
+
         - name: Run primary prep
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.primary_prep
