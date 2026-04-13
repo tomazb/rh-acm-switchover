@@ -92,7 +92,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
     except ValidationError as exc:
         results.append(_fail_result("preflight-input-primary-context", str(exc), "Set a valid primary context"))
 
-    if mode in {"execute", "validate", "dry_run"} and not secondary_context:
+    if not secondary_context:
         results.append(
             _fail_result(
                 "preflight-input-secondary-context",

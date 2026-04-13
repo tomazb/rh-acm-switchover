@@ -121,7 +121,7 @@ class ActionModule(ActionBase):
         if not os.path.exists(path):
             return build_checkpoint_record("", {})
         try:
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         except json.JSONDecodeError as e:
             return {
@@ -140,7 +140,7 @@ class ActionModule(ActionBase):
         try:
             if dir_path:
                 os.makedirs(dir_path, exist_ok=True)
-            with open(path, "w") as fh:
+            with open(path, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
         except OSError as e:
             return {

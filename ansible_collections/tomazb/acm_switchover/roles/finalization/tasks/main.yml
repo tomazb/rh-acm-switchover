@@ -29,6 +29,7 @@
         acm_switchover_argocd:
           mode: resume
           run_id: "{{ acm_switchover_execution.run_id | default('unknown') }}"
+      register: _argocd_resume_result
       when: acm_switchover_features.argocd.resume_after_switchover | default(false)
 
     - name: Publish finalization result
@@ -36,7 +37,14 @@
         acm_switchover_finalization_result:
           phase: finalization
           status: pass
-          changed: true
+          changed: >-
+            {{
+              (acm_switchover_enable_backups_result.changed | default(false))
+              or (acm_switchover_verify_backups_result.changed | default(false))
+              or (acm_switchover_verify_mch_result.changed | default(false))
+              or (acm_switchover_old_hub_disposition.changed | default(false))
+              or (_argocd_resume_result.changed | default(false))
+            }}
           old_hub_action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
           enable_backups: "{{ acm_switchover_enable_backups_result | default({}) }}"
       tags:

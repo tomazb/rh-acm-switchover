@@ -43,7 +43,7 @@
           (_enable_backup_patch_results.changed | default(false))
           or (
             acm_switchover_execution.mode | default('dry_run') == 'dry_run'
-            and acm_enable_backup_schedule_operation.changed
+            and acm_enable_backup_schedule_operation.operation.action != 'none'
           )
         }}
       operation: "{{ acm_enable_backup_schedule_operation.operation }}"

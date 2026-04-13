@@ -262,6 +262,48 @@ def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_
     assert activation_enter_result["skipped_phase"] is False
 
 
+def test_load_checkpoint_reads_with_utf8_encoding():
+    from unittest.mock import mock_open, patch
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    action = ActionModule.__new__(ActionModule)
+
+    with patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.path.exists",
+        return_value=True,
+    ), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.open",
+        mock_open(read_data='{"schema_version": "1.0"}'),
+        create=True,
+    ) as mocked_open:
+        result = action._load_checkpoint("/tmp/checkpoint.json")
+
+    assert result["schema_version"] == "1.0"
+    mocked_open.assert_called_once_with("/tmp/checkpoint.json", encoding="utf-8")
+
+
+def test_save_checkpoint_writes_with_utf8_encoding():
+    from unittest.mock import mock_open, patch
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    action = ActionModule.__new__(ActionModule)
+
+    with patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.makedirs"
+    ) as makedirs, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.open",
+        mock_open(),
+        create=True,
+    ) as mocked_open:
+        result = action._save_checkpoint("/tmp/state/checkpoint.json", {"schema_version": "1.0"})
+
+    assert result is None
+    makedirs.assert_called_once_with("/tmp/state", exist_ok=True)
+    mocked_open.assert_called_once_with("/tmp/state/checkpoint.json", "w", encoding="utf-8")
+
+
 def test_build_report_ref_accepts_custom_kind():
     ref = build_report_ref(path="/reports/out.yaml", phase="preflight", kind="yaml-report")
     assert ref["kind"] == "yaml-report"

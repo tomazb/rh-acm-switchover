@@ -35,3 +35,9 @@ def test_preflight_backup_failure_is_reported(run_preflight_fixture):
     assert "preflight-passive-restore-secondary" in result_ids
     assert "preflight-clusterdeployments" in result_ids
     assert "preflight-managed-cluster-backups" in result_ids
+
+
+def test_preflight_fixture_without_execution_block_uses_defaults(run_preflight_fixture):
+    completed, report = run_preflight_fixture("missing_execution_block.yml")
+    assert completed.returncode == 0
+    assert report["status"] == "pass"

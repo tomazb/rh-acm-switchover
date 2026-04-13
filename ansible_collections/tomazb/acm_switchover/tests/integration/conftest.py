@@ -20,8 +20,8 @@ def run_preflight_fixture(tmp_path):
             / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight"
             / fixture_name
         )
-        vars_payload = yaml.safe_load(fixture_path.read_text())
-        vars_payload["acm_switchover_execution"]["report_dir"] = str(tmp_path / "artifacts")
+        vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
+        vars_payload.setdefault("acm_switchover_execution", {})["report_dir"] = str(tmp_path / "artifacts")
 
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))

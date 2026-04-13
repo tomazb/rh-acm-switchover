@@ -68,3 +68,22 @@ def test_summary_marks_critical_failures():
     )
     assert summary["passed"] is False
     assert summary["critical_failures"] == 1
+
+
+def test_missing_secondary_context_uses_actionable_message_for_nonstandard_modes():
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {"context": "", "kubeconfig": "~/.kube/config"},
+            },
+            "operation": {"method": "passive", "activation_method": "patch"},
+            "execution": {"mode": "report_only", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": {"manage": False, "resume_after_switchover": False}},
+        }
+    )
+
+    secondary_result = next(item for item in results if item["id"] == "preflight-input-secondary-context")
+    assert secondary_result["status"] == "fail"
+    assert secondary_result["message"] == "secondary context is required for collection preflight and switchover runs"
+    assert secondary_result["recommended_action"] == "Set acm_switchover_hubs.secondary.context"
