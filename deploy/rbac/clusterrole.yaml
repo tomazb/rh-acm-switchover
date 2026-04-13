@@ -10,10 +10,10 @@ metadata:
     app.kubernetes.io/component: operator
     app.kubernetes.io/role: operator
 rules:
-  # Core API - Namespace validation
+  # Core API - Namespace validation (list needed for cluster-wide namespace discovery in preflight)
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   
   # Core API - Nodes (for cluster health validation per runbook)
   - apiGroups: [""]
@@ -73,10 +73,10 @@ metadata:
     app.kubernetes.io/component: validator
     app.kubernetes.io/role: validator
 rules:
-  # Core API - Namespace validation
+  # Core API - Namespace validation (list needed for cluster-wide namespace discovery in preflight)
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   
   # Core API - Nodes (for cluster health validation per runbook)
   - apiGroups: [""]
