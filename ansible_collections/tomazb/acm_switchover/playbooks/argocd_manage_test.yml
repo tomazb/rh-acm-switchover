@@ -26,6 +26,15 @@
           mode: resume
           run_id: test-run-001
 
+    - name: Resolve summary path to absolute
+      ansible.builtin.set_fact:
+        _acm_summary_path_abs: >-
+          {{
+            summary_path
+            if summary_path.startswith('/')
+            else (lookup('env', 'PWD') ~ '/' ~ summary_path)
+          }}
+
     - name: Write summary file
       ansible.builtin.copy:
         content: >-
@@ -35,5 +44,5 @@
               "restored": acm_switchover_argocd_summary.restored | int
             } | to_json
           }}
-        dest: "{{ summary_path }}"
+        dest: "{{ _acm_summary_path_abs }}"
         mode: "0644"
