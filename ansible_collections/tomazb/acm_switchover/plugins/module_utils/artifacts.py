@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Runtime helpers for the write_artifact action plugin."""
+"""Artifact report helpers for the ACM switchover collection."""
 
 from __future__ import annotations
 

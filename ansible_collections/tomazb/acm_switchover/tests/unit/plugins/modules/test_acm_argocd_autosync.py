@@ -1,7 +1,7 @@
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
     is_acm_touching_application,
 )
-from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_argocd_autosync import (
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
     build_pause_patch,
 )
 

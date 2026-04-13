@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
-"""Tests for checkpoint_phase and write_artifact action plugin runtime helpers."""
+"""Tests for checkpoint_phase and artifact runtime helpers."""
 
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
     build_phase_transition,
 )
-from ansible_collections.tomazb.acm_switchover.plugins.action.write_artifact import (
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts import (
     build_report_ref,
 )
 

@@ -34,3 +34,13 @@ def is_acm_touching_application(app: dict) -> bool:
 def filter_acm_applications(applications: list[dict]) -> list[dict]:
     """Return only applications that manage ACM resources."""
     return [app for app in applications if is_acm_touching_application(app)]
+
+
+def build_pause_patch(sync_policy: dict, run_id: str) -> dict:
+    """Build a patch that removes automated sync and marks the app as paused."""
+    sync_policy = dict(sync_policy or {})
+    sync_policy.pop("automated", None)
+    return {
+        "metadata": {"annotations": {"acm-switchover.argoproj.io/paused-by": run_id}},
+        "spec": {"syncPolicy": sync_policy},
+    }
