@@ -2,7 +2,12 @@
 
 ## Project Overview
 
-This is a Python CLI tool for automating Red Hat Advanced Cluster Management (ACM) hub switchover. It orchestrates a phased workflow to migrate from a primary ACM hub to a secondary hub with idempotent execution and comprehensive validation.
+This project delivers ACM hub switchover automation in two production form factors:
+
+1. **Python CLI** (`acm_switchover.py`) — the original implementation; a monolithic orchestrator with persisted state, full retry logic, and a rich CLI surface.
+2. **Ansible Collection** (`tomazb.acm_switchover` at `ansible_collections/tomazb/acm_switchover/`) — a second form factor targeting `ansible-core` CLI and Ansible Automation Platform (AAP), built with roles, playbooks, and thin custom plugins.
+
+Both tools automate the same phased workflow for migrating from a primary ACM hub to a secondary hub with idempotent execution and comprehensive validation. They share the same runbook steps but have independent codebases and cannot import from each other.
 
 ## Engineering Principles
 
@@ -125,6 +130,85 @@ Import from `lib/constants.py` - never hard-code namespaces (`BACKUP_NAMESPACE`,
 - Methods return `Optional[Dict]` for get operations (None = not found)
 - Use `e.status == 404` to check ApiException, not string matching
 - Per-instance TLS configuration to avoid global side effects
+
+## Ansible Collection
+
+The collection lives at `ansible_collections/tomazb/acm_switchover/`. It is a complete, production-ready implementation — not a prototype or wrapper.
+
+### Collection Structure
+
+**Playbooks** (operator entrypoints, in `playbooks/`):
+- `switchover.yml` — full workflow: preflight → primary_prep → activation → post_activation → finalization
+- `preflight.yml` — preflight validation only
+- `decommission.yml` — decommission old hub
+- `rbac_bootstrap.yml` — set up service accounts and RBAC
+- `discovery.yml` — standalone resource discovery
+- `argocd_resume.yml` — resume Argo CD auto-sync after switchover
+- `argocd_manage_test.yml` — test Argo CD management integration
+
+**Roles** (phase modules in `roles/`):
+
+| Role | Python equivalent | Key actions |
+| --- | --- | --- |
+| `preflight` | `preflight_coordinator.py` | Validate both hubs, check ACM versions, verify backups, RBAC |
+| `primary_prep` | `primary_prep.py` | Pause BackupSchedule, disable auto-import, scale Thanos |
+| `activation` | `activation.py` | Verify passive sync or create full restore, activate clusters |
+| `post_activation` | `post_activation.py` | Verify ManagedClusters, klusterlet agents, observability |
+| `finalization` | `finalization.py` | Enable backups, verify integrity, handle old hub |
+| `decommission` | `decommission.py` | Delete ManagedClusters, remove MultiClusterHub, observability |
+| `argocd_manage` | `lib/argocd.py` | Discover and pause/resume Argo CD auto-sync |
+| `discovery` | (shared, new) | Standalone resource discovery across both hubs |
+| `rbac_bootstrap` | RBAC setup scripts | Create service accounts, roles, and kubeconfigs |
+
+**Plugins** (in `plugins/`):
+- `modules/` — custom modules: `acm_backup_schedule`, `acm_checkpoint`, `acm_cluster_verify`, `acm_discovery`, `acm_input_validate`, `acm_managedcluster_status`, `acm_preflight_report`, `acm_rbac_bootstrap`, `acm_rbac_validate`, `acm_restore_info`, `acm_argocd_filter`
+- `module_utils/` — shared utilities: `argocd`, `artifacts`, `checkpoint`, `constants`, `gitops`, `result`, `validation`
+- `action/checkpoint_phase.py` — action plugin for phase checkpointing
+- `callback/` — progress and reporting callbacks
+
+### Key Ansible Patterns
+
+**`discover_resources.yml`** — The first `include_tasks` in each role's `main.yml` block. Uses `kubernetes.core.k8s_info` to fetch resources the role needs, guarded by `when: <var> is not defined` so tests can pre-seed variables without live clusters:
+```yaml
+- name: Get BackupSchedule on secondary hub
+  kubernetes.core.k8s_info: ...
+  register: acm_secondary_backup_schedule_info
+  when: acm_secondary_backup_schedule_info is not defined
+```
+Exception: MCH discovery in `finalization` is unconditional — the MCH status changes after activation, so the preflight-cached value is always stale.
+
+**Hub access** — All tasks reach hubs via `acm_switchover_hubs.primary` and `acm_switchover_hubs.secondary`, each providing `kubeconfig` and `context`:
+```yaml
+kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+context: "{{ acm_switchover_hubs.secondary.context }}"
+```
+
+**Variable namespacing** — All collection variables use the `acm_switchover_` prefix:
+- `acm_switchover_hubs` — hub connection details (primary + secondary)
+- `acm_switchover_operation` — controls mode (switchover/decommission/setup/dry_run)
+- `acm_switchover_features` — feature flags (e.g., `skip_observability_checks`)
+
+**Constants isolation** — The collection **cannot** import from `lib/constants.py` (different Python namespace). All constants live in `plugins/module_utils/constants.py`. Never cross-import between the collection and the Python CLI.
+
+### Ansible Collection Testing
+
+```bash
+# Collection unit tests only
+python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+
+# Full suite (collection + Python CLI tests together)
+source .venv/bin/activate && python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ tests/ -q
+```
+
+Tests live in `tests/unit/`. They use plain `pytest` (not `ansible-test`). Mock responses mirror `kubernetes.core.k8s_info` return shapes. Integration test fixtures in `tests/integration/conftest.py` use `yaml.safe_load(...) or {}` to safely handle empty fixture files.
+
+### Adding to the Collection
+
+**New role task**: Follow the `discover_resources.yml` → `main.yml` pattern. Use `acm_switchover_hubs` for hub access. Guard discovery with `when: <var> is not defined`.
+
+**New module**: Add to `plugins/modules/`, implement `run_module()` with `AnsibleModule`. Shared logic goes in `plugins/module_utils/`.
+
+**New constant**: Add to `plugins/module_utils/constants.py`. Never add to or import from `lib/constants.py`.
 
 ## Testing
 

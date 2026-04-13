@@ -13,7 +13,7 @@
 
 ACM Hub Switchover Automation is a Python CLI for performing controlled failover, migration, and decommission workflows between a primary and secondary Red Hat Advanced Cluster Management (ACM) hub. The product emphasizes operator safety, resumable execution, and explicit validation over maximum automation.
 
-An Ansible Collection rewrite is approved for planning and will deliver the same core capabilities as a second form factor targeting both `ansible-core` CLI and Ansible Automation Platform (AAP). See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md) for the approved design. The Python CLI remains the current production implementation during the coexistence period.
+An Ansible Collection (`tomazb.acm_switchover`) has been implemented as a production-ready second form factor delivering the same core capabilities, targeting both `ansible-core` CLI and Ansible Automation Platform (AAP). See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md) for the design. Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.
 
 The current product supports:
 
@@ -286,13 +286,13 @@ The PRD should limit future work to areas not already delivered in the repo.
 - Additional observability and reporting around switchover outcomes
 - Potential future expansion of GitOps-aware workflows beyond detection and Argo CD auto-sync coordination
 
-### Ansible Collection Migration
+### Ansible Collection
 
-An Ansible Collection rewrite has been approved for planning. The collection will deliver core parity with the Python CLI as a first milestone, targeting equal first-class execution in `ansible-core` CLI and AAP / Automation Controller. Key changes from the Python implementation:
+The Ansible Collection (`tomazb.acm_switchover`) has been implemented and is a production-ready second form factor. Remaining work relates to broader operational validation and AAP execution-environment packaging rather than core feature delivery. Key architectural differences from the Python CLI:
 
 - Ansible-native idempotency by default, with optional persistent checkpoints for long-running or interrupted switchovers
 - Collection-first architecture with roles, playbooks, and thin custom plugins instead of a monolithic Python CLI
 - Grouped variable model (`acm_switchover_hubs`, `acm_switchover_operation`, etc.) replacing flat CLI flags
 - Execution-environment packaging for AAP alongside `ansible-galaxy` distribution
 
-The Python CLI remains the production implementation during the coexistence period. The migration follows a phased plan: foundation → preflight → switchover execution → checkpoints → Argo CD → non-core helpers. See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md) for the full design.
+See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md) for the full design.
