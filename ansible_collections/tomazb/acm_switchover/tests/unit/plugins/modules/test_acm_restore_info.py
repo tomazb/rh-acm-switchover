@@ -135,6 +135,12 @@ def test_build_restore_activation_plan_passive_patch_already_applied():
     assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {"managed-by": "test"}
     assert plan["wait_target"]["name"] == "restore-acm-activate"
     assert plan["wait_target"]["success_phases"] == ["Finished", "Completed"]
+    # velero_restore_required must NOT be set for activation_method=restore: the Restore CR
+    # phase reaching Finished/Completed is sufficient; separate Velero restore polling is
+    # only needed for the patch path where the Restore stays "Enabled" indefinitely.
+    # Absence of velero_restore_required prevents the Ansible "Publish restore wait result"
+    # task from accessing .resources on skipped Velero polling task variables (Bug 14).
+    assert not plan["wait_target"].get("velero_restore_required", False)
 
 
 def test_build_restore_activation_plan_for_full_restore_mode():

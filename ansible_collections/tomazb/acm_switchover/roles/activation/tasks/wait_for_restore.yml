@@ -134,7 +134,10 @@
             (_restore_velero_source_info.resources | first | default({}))
             .get('status', {})
             .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field, '')
-            if (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+            if (
+              acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+              and (acm_switchover_restore_activation_result.wait_target.velero_restore_required | default(false))
+            )
             else ''
           )
         }}
@@ -142,7 +145,10 @@
         {{
           (
             (_velero_restore_wait_info.resources | first | default({})).get('status', {}).get('phase')
-            if (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+            if (
+              acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+              and (acm_switchover_restore_activation_result.wait_target.velero_restore_required | default(false))
+            )
             else None
           )
         }}
