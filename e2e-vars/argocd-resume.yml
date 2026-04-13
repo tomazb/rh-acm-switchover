@@ -1,0 +1,8 @@
+# A2: ArgoCD resume-only
+acm_switchover_hubs:
+  primary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+acm_switchover_execution:
+  mode: execute
+  run_id: "e2e-argocd-test-001"

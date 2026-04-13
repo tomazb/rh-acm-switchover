@@ -1,0 +1,12 @@
+# N4: RBAC bootstrap real apply — primary=mgmt2
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+acm_switchover_rbac_bootstrap:
+  role: operator
+  include_decommission: false
+  generate_kubeconfigs: false
+  validate_permissions: true
+acm_switchover_execution:
+  mode: execute

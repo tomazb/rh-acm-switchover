@@ -1,0 +1,25 @@
+# P1/P7: Preflight validate — primary=mgmt2, secondary=mgmt1
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+  secondary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+
+acm_switchover_operation:
+  method: passive
+  activation_method: patch
+
+acm_switchover_features:
+  skip_rbac_validation: false
+  skip_observability_checks: false
+  skip_gitops_check: false
+  disable_observability_on_secondary: false
+  argocd:
+    manage: false
+    resume_after_switchover: false
+
+acm_switchover_execution:
+  mode: validate
+  report_dir: ./artifacts

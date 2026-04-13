@@ -1,0 +1,12 @@
+# A1: ArgoCD test playbook — pause + resume on mgmt1
+acm_switchover_hubs:
+  primary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+acm_switchover_features:
+  argocd:
+    manage: true
+    resume_after_switchover: true
+acm_switchover_execution:
+  mode: execute
+  run_id: "e2e-argocd-test-001"
