@@ -23,6 +23,7 @@ from acm_switchover import (
     _run_phase_preflight,
     main,
     parse_args,
+    run_restore_only,
     run_switchover,
     validate_args,
 )
@@ -2762,3 +2763,209 @@ class TestPhaseHandlerFailure:
 
         with pytest.raises(ValueError, match="Secondary client is required"):
             run_switchover(args, Mock(), Mock(), None, Mock())
+
+
+class TestRestoreOnlyFlow:
+    """Tests for --restore-only single-hub restore workflow."""
+
+    def _make_restore_only_args(self, **overrides):
+        defaults = dict(
+            restore_only=True,
+            primary_context=None,
+            secondary_context="new-hub",
+            method=None,
+            old_hub_action=None,
+            validate_only=False,
+            dry_run=False,
+            force=False,
+            state_file="state.json",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            skip_gitops_check=True,
+            argocd_manage=False,
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    def test_restore_only_defaults_method_to_full(self):
+        """run_restore_only sets method=full when not specified."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, \
+             patch("acm_switchover._run_phase_activation", return_value=True), \
+             patch("acm_switchover._run_phase_post_activation", return_value=True), \
+             patch("acm_switchover._run_phase_finalization", return_value=True):
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        assert args.method == "full"
+        assert args.old_hub_action == "none"
+
+    def test_restore_only_skips_primary_prep(self):
+        """Restore-only flow does NOT call _run_phase_primary_prep."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, \
+             patch("acm_switchover._run_phase_primary_prep") as pp, \
+             patch("acm_switchover._run_phase_activation", return_value=True), \
+             patch("acm_switchover._run_phase_post_activation", return_value=True), \
+             patch("acm_switchover._run_phase_finalization", return_value=True):
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        pp.assert_not_called()
+
+    def test_restore_only_passes_none_primary_to_handlers(self):
+        """Phase handlers receive primary=None in restore-only mode."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        # Return INIT first, then follow each phase transition via set_phase
+        current = [Phase.INIT]
+
+        def track_phase(p):
+            current[0] = p
+
+        state.get_current_phase.side_effect = lambda: current[0]
+        state.set_phase.side_effect = track_phase
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        called_with_primary = []
+        # Map handler name to the phase it should advance to
+        phase_transitions = {
+            "preflight": Phase.PREFLIGHT,
+            "activation": Phase.ACTIVATION,
+            "post_activation": Phase.POST_ACTIVATION,
+            "finalization": Phase.FINALIZATION,
+        }
+
+        def capture_primary(name):
+            def handler(a, s, primary, sec, log):
+                called_with_primary.append((name, primary))
+                current[0] = phase_transitions[name]
+                return True
+            return handler
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=capture_primary("preflight")), \
+             patch("acm_switchover._run_phase_activation", side_effect=capture_primary("activation")), \
+             patch("acm_switchover._run_phase_post_activation", side_effect=capture_primary("post_activation")), \
+             patch("acm_switchover._run_phase_finalization", side_effect=capture_primary("finalization")):
+            run_restore_only(args, state, secondary, Mock())
+
+        assert len(called_with_primary) == 4
+        for name, primary_val in called_with_primary:
+            assert primary_val is None, f"{name} should receive primary=None"
+
+    def test_restore_only_phase_transitions(self):
+        """Restore-only flow transitions through correct phases."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True), \
+             patch("acm_switchover._run_phase_activation", return_value=True), \
+             patch("acm_switchover._run_phase_post_activation", return_value=True), \
+             patch("acm_switchover._run_phase_finalization", return_value=True):
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        state.set_phase.assert_any_call(Phase.COMPLETED)
+
+    def test_restore_only_validate_only_runs_preflight_only(self):
+        """--restore-only --validate-only only runs preflight."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args(validate_only=True)
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, \
+             patch("acm_switchover._run_phase_activation") as act:
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        pf.assert_called_once()
+        act.assert_not_called()
+
+    def test_restore_only_preflight_failure_stops_flow(self):
+        """Restore-only flow stops if preflight fails."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=False) as pf, \
+             patch("acm_switchover._run_phase_activation") as act:
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is False
+        act.assert_not_called()
+
+    def test_restore_only_preflight_sets_restore_only_flag(self):
+        """Preflight in restore-only mode passes restore_only=True to PreflightValidator."""
+        from lib.utils import Phase
+
+        args = self._make_restore_only_args()
+        state = Mock()
+        state.get_current_phase.return_value = Phase.PREFLIGHT
+        state.get_config.return_value = False
+        secondary = Mock()
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (
+                True,
+                {
+                    "primary_version": "unknown",
+                    "secondary_version": "2.14.0",
+                    "primary_observability_detected": False,
+                    "secondary_observability_detected": False,
+                    "has_observability": False,
+                },
+            )
+            _run_phase_preflight(args, state, None, secondary, Mock())
+
+        call_kwargs = validator_class.call_args[1]
+        assert call_kwargs["restore_only"] is True
+
+    def test_restore_only_finalization_uses_none_old_hub_action(self):
+        """Finalization in restore-only mode uses old_hub_action='none'."""
+        from lib.utils import Phase
+
+        args = self._make_restore_only_args()
+        # Explicitly verify old_hub_action is set to "none" by run_restore_only
+        args.method = "full"
+        state = Mock()
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True), \
+             patch("acm_switchover._run_phase_activation", return_value=True), \
+             patch("acm_switchover._run_phase_post_activation", return_value=True), \
+             patch("acm_switchover._run_phase_finalization", return_value=True) as fin:
+            run_restore_only(args, state, secondary, Mock())
+
+        assert args.old_hub_action == "none"
