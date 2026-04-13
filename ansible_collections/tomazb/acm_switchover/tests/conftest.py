@@ -22,7 +22,7 @@ def run_switchover_fixture(tmp_path):
             / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover"
             / fixture_name
         )
-        vars_payload = yaml.safe_load(fixture_path.read_text())
+        vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         vars_payload.setdefault("acm_switchover_execution", {})
         vars_payload["acm_switchover_execution"]["report_dir"] = str(tmp_path / "artifacts")
 
@@ -78,7 +78,7 @@ def run_checkpoint_fixture(tmp_path):
             / "ansible_collections/tomazb/acm_switchover/tests/scenario/fixtures/checkpoint"
             / fixture_name
         )
-        vars_payload = yaml.safe_load(fixture_path.read_text())
+        vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
         checkpoint_path = tmp_path / "checkpoint.json"
         vars_payload.setdefault("acm_switchover_execution", {})
