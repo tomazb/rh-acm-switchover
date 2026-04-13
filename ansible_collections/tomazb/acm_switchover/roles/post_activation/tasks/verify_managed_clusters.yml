@@ -1,4 +1,14 @@
 ---
+# After a Velero MC restore, the hub re-creates ManagedCluster objects with
+# status from the backup snapshot (often Available=True from the old primary).
+# The hub reconciler needs time to detect actual klusterlet connectivity and
+# update the condition to reflect reality.  Without this pause, the first
+# k8s_info query catches the stale backup status and the poll completes
+# immediately even though the clusters have not reconnected.
+- name: Wait for hub reconciler to update managed-cluster status after activation
+  ansible.builtin.pause:
+    seconds: 30
+
 # Poll until at least min_managed_clusters non-local-cluster MCs show
 # ManagedClusterConditionAvailable=True, matching the Python tool's
 # CLUSTER_VERIFY_TIMEOUT=600 (20 retries × 30 s = 600 s).
