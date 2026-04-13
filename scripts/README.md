@@ -206,6 +206,15 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 
 > **Note:** Argo CD detection runs automatically when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable.
 
+> **Restore-only mode:** `preflight-check.sh` requires both a primary and secondary hub context.
+> For single-hub restore scenarios (no primary hub available), use the Python tool's built-in
+> validation instead:
+> ```bash
+> python acm_switchover.py --restore-only --secondary-context <target-hub> --validate-only
+> ```
+> This runs secondary-only preflight checks (ACM version, namespaces, BSL, OADP) without
+> requiring a primary hub connection. See [Restore-Only Mode](../docs/operations/usage.md#restore-only-mode-single-hub-restore) for details.
+
 ### What It Checks
 
 1. **CLI Tools** - Verifies `oc`/`kubectl` and `jq` are installed (jq is required)
@@ -968,6 +977,33 @@ graph TD
 > done during initial deployment, not part of the operational switchover workflow. 
 > See [RBAC Deployment Guide](../docs/deployment/rbac-deployment.md) for setup instructions.
 
+### Restore-Only (Single-Hub) Workflow
+
+When the original hub is unavailable and you need to restore managed clusters from S3 backups
+onto a new hub, the Python tool handles validation and orchestration directly — the bash
+`preflight-check.sh` is not used in this flow:
+
+```mermaid
+graph TD
+    A[Start: Plan Restore] --> B["Run Restore-Only Preflight<br/>(python acm_switchover.py --restore-only --validate-only)"]
+    B --> C{Preflight<br/>Passed?}
+    C -->|No| D[Fix Issues<br/>BSL, OADP, namespaces]
+    D --> B
+    C -->|Yes| E["Execute Restore<br/>(python acm_switchover.py --restore-only --secondary-context target-hub)"]
+    E --> F[ACTIVATION: Create Restore from S3]
+    F --> G[POST_ACTIVATION: Wait for Clusters]
+    G --> H[FINALIZATION: Enable BackupSchedule]
+    H --> I[Run Post-flight Check<br/>./scripts/postflight-check.sh --new-hub-context target-hub]
+    I --> J{Post-flight<br/>Passed?}
+    J -->|No| K[Troubleshoot & Retry]
+    K --> I
+    J -->|Yes| L[Restore Complete]
+
+    style C fill:#ffd43b
+    style J fill:#ffd43b
+    style L fill:#51cf66
+```
+
 ---
 
 ## Best Practices
@@ -986,6 +1022,13 @@ graph TD
 3. **Check Grafana metrics** manually after 10-15 minutes
 4. **Keep old hub accessible** for at least 24 hours in case reverse switchover is needed
 5. **Save post-flight output** for documentation and compliance
+
+### Restore-Only (Single-Hub)
+
+1. **Verify S3 backup access** before starting — the target hub must have a working BSL (BackupStorageLocation)
+2. **Use `--validate-only` first** to run preflight checks without making changes
+3. **Use `--dry-run`** to preview what would be created before committing
+4. **Run `postflight-check.sh`** after restore completes to verify cluster connectivity
 
 ### Troubleshooting
 
