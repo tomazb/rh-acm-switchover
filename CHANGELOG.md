@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Restore-only RBAC preflight regression**: `--restore-only` no longer skips RBAC validation entirely; secondary hub write permissions (Restore, BackupSchedule, ManagedCluster) are now validated during preflight, so `--validate-only` catches missing permissions early instead of failing at activation.
+- **Restore-only ArgoCD safety**: `--argocd-manage` and `--argocd-resume-after-switchover` are now rejected with `--restore-only` (restore-only skips PRIMARY_PREP where ArgoCD pause occurs). A restore-only-specific advisory warns when ACM-touching Argo CD Applications with auto-sync are detected on the target hub.
 - Container release workflow now skips Quay publishing cleanly when `QUAY_USERNAME` / `QUAY_PASSWORD` secrets are absent and continues with GHCR-only publishing.
 
 ## [1.6.4] - 2026-04-13

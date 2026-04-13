@@ -680,6 +680,34 @@ class TestCLIArgumentValidation:
         with pytest.raises(ValidationError):
             InputValidator.validate_all_cli_args(args)
 
+    def test_restore_only_forbids_argocd_manage(self):
+        """Test --restore-only forbids --argocd-manage."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            argocd_manage=True,
+        )
+        with pytest.raises(ValidationError, match="--argocd-manage"):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_restore_only_forbids_argocd_resume_after_switchover(self):
+        """Test --restore-only forbids --argocd-resume-after-switchover."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            argocd_resume_after_switchover=True,
+        )
+        with pytest.raises(ValidationError, match="--argocd-resume-after-switchover"):
+            InputValidator.validate_all_cli_args(args)
+
 
 class TestKubernetesResourceValidation:
     """Test Kubernetes resource name validation."""
