@@ -2,7 +2,7 @@
 galaxy_info:
   role_name: preflight
   author: Tomaz B
-  description: Foundation stub for preflight validation behavior.
+  description: Pre-flight validation of ACM hub readiness for switchover.
   license: Apache-2.0
   min_ansible_version: "2.15"
 dependencies: []

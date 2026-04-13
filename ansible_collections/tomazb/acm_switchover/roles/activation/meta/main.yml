@@ -2,7 +2,7 @@
 galaxy_info:
   role_name: activation
   author: Tomaz B
-  description: Foundation stub for secondary activation behavior.
+  description: Secondary hub activation — restore verification and managed cluster activation.
   license: Apache-2.0
   min_ansible_version: "2.15"
 dependencies: []
