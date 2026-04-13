@@ -2,12 +2,12 @@
 Unit tests for RBAC validator module.
 """
 
-from types import MethodType
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
 
+from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.exceptions import ValidationError
 from lib.rbac_validator import RBACValidator, validate_decommission_permissions, validate_rbac_permissions
 
@@ -565,25 +565,57 @@ class TestValidateDecommissionPermissions:
         return client
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_decommission_permissions_skips_namespace_validation(
+    def test_validate_decommission_permissions_uses_dedicated_validation_path(
         self, mock_validator_class, mock_primary_client
     ):
-        """Standalone decommission must not require full switchover namespace access."""
+        """Standalone decommission should use its dedicated RBAC surface."""
         validator = RBACValidator(mock_primary_client)
-        validator.validate_cluster_permissions = MagicMock(return_value=(True, {}))
-
-        def _unexpected_namespace_validation(self, skip_observability=False, skip_agent_namespace=True):
-            raise AssertionError("namespace validation should not run for standalone decommission")
-
-        validator.validate_namespace_permissions = MethodType(_unexpected_namespace_validation, validator)
-        validator.generate_permission_report = MagicMock(return_value="Error report")
+        validator.validate_decommission_permissions = MagicMock(return_value=(True, {}))
         mock_validator_class.return_value = validator
 
         validate_decommission_permissions(mock_primary_client, skip_observability=True)
 
-        validator.validate_cluster_permissions.assert_called_once_with(
-            include_decommission=True,
+        validator.validate_decommission_permissions.assert_called_once_with(
             skip_observability=True,
-            argocd_mode="none",
-            argocd_install_type="unknown",
+        )
+
+    def test_validate_decommission_permissions_fails_when_teardown_namespace_permission_missing(self, mock_primary_client):
+        validator = RBACValidator(mock_primary_client)
+
+        def check_permission(api_group, resource, verb, namespace=None):
+            if namespace == ACM_NAMESPACE and api_group == "" and resource == "pods" and verb == "get":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=check_permission)
+
+        with patch("lib.rbac_validator.RBACValidator", return_value=validator):
+            with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                validate_decommission_permissions(mock_primary_client, skip_observability=True)
+
+    def test_validate_decommission_permissions_checks_only_teardown_surface(self, mock_primary_client):
+        validator = RBACValidator(mock_primary_client)
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        def namespace_exists(namespace):
+            if namespace in {"open-cluster-management-backup", "multicluster-engine"}:
+                raise AssertionError(f"unexpected namespace probe: {namespace}")
+            return True
+
+        mock_primary_client.namespace_exists.side_effect = namespace_exists
+
+        with patch("lib.rbac_validator.RBACValidator", return_value=validator):
+            validate_decommission_permissions(mock_primary_client, skip_observability=False)
+
+        assert (
+            call("cluster.open-cluster-management.io", "managedclusters", "delete", None)
+            in validator.check_permission.call_args_list
+        )
+        assert (
+            call("operator.open-cluster-management.io", "multiclusterhubs", "list", ACM_NAMESPACE)
+            in validator.check_permission.call_args_list
+        )
+        assert (
+            call("", "pods", "get", OBSERVABILITY_NAMESPACE)
+            in validator.check_permission.call_args_list
         )

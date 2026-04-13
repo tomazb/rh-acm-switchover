@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 from kubernetes.client.rest import ApiException
 
 from lib import KubeClient
+from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.exceptions import ValidationError
 
 logger = logging.getLogger("acm_switchover")
@@ -189,6 +190,27 @@ class RBACValidator:
             ["delete"],
         ),
     ]
+
+    # Standalone decommission only needs the teardown surface used by modules/decommission.py.
+    DECOMMISSION_CLUSTER_PERMISSIONS = [
+        ("", "namespaces", ["get"]),
+        ("cluster.open-cluster-management.io", "managedclusters", ["list", "delete"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["list", "delete"],
+        ),
+    ]
+
+    DECOMMISSION_NAMESPACE_PERMISSIONS = {
+        ACM_NAMESPACE: [
+            ("", "pods", ["get", "list"]),
+            ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
+        ],
+        OBSERVABILITY_NAMESPACE: [
+            ("", "pods", ["get", "list"]),
+        ],
+    }
 
     # F9 fix: Argo CD RBAC is split into base permissions (always needed)
     # and operator-install-only permissions (argocds get/list).
@@ -593,6 +615,79 @@ class RBACValidator:
 
         return all_valid, all_errors
 
+    def validate_decommission_permissions(
+        self,
+        skip_observability: bool = False,
+    ) -> Tuple[bool, Dict[str, List[str]]]:
+        """Validate only the permissions exercised by standalone decommission."""
+        if self.role != "operator":
+            raise ValueError("Decommission permissions are only applicable to the operator role.")
+
+        all_valid = True
+        all_errors: Dict[str, List[str]] = {}
+        cluster_errors: List[str] = []
+        namespace_errors: List[str] = []
+
+        logger.info("Validating standalone decommission RBAC permissions for role: %s", self.role)
+
+        check_observability = not skip_observability
+        if check_observability and not self.client.namespace_exists(OBSERVABILITY_NAMESPACE):
+            logger.info(
+                "Namespace %s does not exist - skipping observability decommission permission checks",
+                OBSERVABILITY_NAMESPACE,
+            )
+            check_observability = False
+
+        for api_group, resource, verbs in self.DECOMMISSION_CLUSTER_PERMISSIONS:
+            if not check_observability and "observability" in api_group:
+                logger.info("Skipping observability permission: %s/%s", api_group, resource)
+                continue
+
+            for verb in verbs:
+                has_perm, error = self.check_permission(api_group, resource, verb, None)
+                if not has_perm:
+                    all_valid = False
+                    group_name = api_group if api_group else "core"
+                    error_msg = f"Missing decommission permission: {verb} {group_name}/{resource}"
+                    if error:
+                        error_msg += f" - {error}"
+                    cluster_errors.append(error_msg)
+                    logger.error(error_msg)
+
+        if cluster_errors:
+            all_errors["cluster"] = cluster_errors
+
+        for namespace, permissions in self.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            if namespace == OBSERVABILITY_NAMESPACE and not check_observability:
+                continue
+
+            logger.info("Checking decommission permissions in namespace: %s", namespace)
+
+            for api_group, resource, verbs in permissions:
+                for verb in verbs:
+                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                    if not has_perm:
+                        all_valid = False
+                        group_name = api_group if api_group else "core"
+                        error_msg = f"Missing decommission permission in {namespace}: {verb} {group_name}/{resource}"
+                        if error:
+                            error_msg += f" - {error}"
+                        namespace_errors.append(error_msg)
+                        logger.error(error_msg)
+
+        if namespace_errors:
+            all_errors["namespaces"] = namespace_errors
+
+        if all_valid:
+            logger.info("✓ Standalone decommission RBAC permissions validated successfully")
+        else:
+            logger.error("✗ Standalone decommission RBAC permission validation failed")
+            logger.error("Error summary:")
+            for category, error_list in all_errors.items():
+                logger.error("  %s: %d errors", category, len(error_list))
+
+        return all_valid, all_errors
+
     def generate_permission_report(
         self,
         include_decommission: bool = False,
@@ -754,16 +849,13 @@ def validate_decommission_permissions(
 
     validator = RBACValidator(primary_client)
     try:
-        cluster_valid, cluster_errors = validator.validate_cluster_permissions(
-            include_decommission=True,
+        all_valid, all_errors = validator.validate_decommission_permissions(
             skip_observability=skip_observability,
-            argocd_mode="none",
-            argocd_install_type="unknown",
         )
     except ValidationError as exc:
         raise ValidationError(f"Decommission RBAC validation could not be completed on primary hub: {exc}") from exc
 
-    if not cluster_valid:
+    if not all_valid:
         report = ["=" * 80]
         report.append("DECOMMISSION RBAC PERMISSION VALIDATION REPORT")
         report.append("=" * 80)
@@ -772,9 +864,11 @@ def validate_decommission_permissions(
         report.append("")
         report.append("The following decommission permissions are missing:")
         report.append("")
-        for error in cluster_errors:
-            report.append(f"  - {error}")
-        report.append("")
+        for category, error_list in all_errors.items():
+            report.append(f"{category.upper()} PERMISSIONS:")
+            for error in error_list:
+                report.append(f"  - {error}")
+            report.append("")
         report.append("REMEDIATION:")
         report.append("")
         report.append("  1. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/")

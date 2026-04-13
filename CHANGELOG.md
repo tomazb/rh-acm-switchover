@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Container release workflow now skips Quay publishing cleanly when `QUAY_USERNAME` / `QUAY_PASSWORD` secrets are absent and continues with GHCR-only publishing.
 
+## [1.6.4] - 2026-04-13
+
+### Fixed
+
+- Standalone decommission RBAC validation now checks the actual teardown permission surface, including namespaced MultiClusterHub and pod-read access, without requiring full switchover namespace permissions.
+
 ## [1.6.3] - 2026-04-07
 
 ### Changed
