@@ -9,7 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `--restore-only` mode for single-hub restore from existing S3 backups when the old hub is unavailable. Skips PRIMARY_PREP, runs secondary-only preflight, and enables BackupSchedule on the restored hub. Implies `--method full`.
+- **Single-Hub Restore Mode (`--restore-only`)** — a new operational mode for restoring managed clusters from S3 backups onto a fresh ACM hub when the original hub is permanently unavailable (disaster recovery, decommissioned, or unreachable). Key capabilities:
+  - Runs a reduced phase flow: `PREFLIGHT → ACTIVATION → POST_ACTIVATION → FINALIZATION` (skips `PRIMARY_PREP` entirely since there is no source hub)
+  - Secondary-only preflight validates ACM version, OADP/Velero, BackupStorageLocation (BSL) connectivity, and required namespaces — without needing a primary hub connection
+  - Creates a one-time full Restore from the latest S3 backup to import all managed clusters
+  - Automatically enables BackupSchedule on the restored hub so it becomes the new primary
+  - Compatible with `--dry-run` and `--validate-only` for safe pre-execution checks
+  - Implies `--method full`; rejects incompatible flags (`--primary-context`, `--method passive`, `--old-hub-action`, `--decommission`, `--setup`, `--argocd-resume-only`)
+  - New Claude SKILL (`.claude/skills/operations/restore-only.skill.md`) for interactive operator guidance
+  - Updated README with usage examples and Mermaid flow diagram
+  - Updated `discover-hub.sh` to suggest `--restore-only` when no secondary hub is detected
+  - Updated `scripts/README.md` with restore-only workflow diagram and best practices
 
 ### Fixed
 
