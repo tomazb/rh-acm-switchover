@@ -1,4 +1,26 @@
 ---
+# Poll until at least min_managed_clusters non-local-cluster MCs show
+# ManagedClusterConditionAvailable=True, matching the Python tool's
+# CLUSTER_VERIFY_TIMEOUT=600 (20 retries × 30 s = 600 s).
+- name: Wait for managed clusters to become available
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_managed_clusters_info
+  retries: 20
+  delay: 30
+  until: >-
+    (acm_secondary_managed_clusters_info.resources | default([])
+    | selectattr('metadata.name', 'ne', 'local-cluster')
+    | map(attribute='status', default={})
+    | map(attribute='conditions', default=[])
+    | flatten
+    | selectattr('type', 'equalto', 'ManagedClusterConditionAvailable')
+    | selectattr('status', 'equalto', 'True')
+    | list | length) >= (acm_switchover_operation.min_managed_clusters | default(1) | int)
+
 - name: Summarize managed cluster conditions
   tomazb.acm_switchover.acm_managedcluster_status:
     clusters: "{{ acm_secondary_managed_clusters_info.resources | default([]) }}"
