@@ -218,7 +218,7 @@ def build_restore_activation_plan(
             if passive_restore is not None:
                 wait_target = build_wait_target(
                     passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
-                    ["Enabled"],
+                    ["Enabled", "Finished", "Completed"],
                     passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
                     velero_restore_required=True,
                     velero_restore_status_field="veleroManagedClustersRestoreName",

@@ -80,13 +80,34 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
     assert plan["operation"]["action"] == "patch"
     assert plan["operation"]["patch"] == {"spec": {"veleroManagedClustersBackupName": "latest"}}
     assert plan["wait_target"]["name"] == "restore-acm-passive-sync"
-    assert plan["wait_target"]["success_phases"] == ["Enabled"]
+    assert plan["wait_target"]["success_phases"] == ["Enabled", "Finished", "Completed"]
     assert plan["wait_target"]["velero_restore_required"] is True
     assert plan["wait_target"]["velero_restore_status_field"] == "veleroManagedClustersRestoreName"
     assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
 
 
-def test_build_restore_activation_plan_for_passive_restore_mode():
+def test_build_restore_activation_plan_passive_patch_already_applied():
+    """When veleroManagedClustersBackupName is already 'latest', skip patch but still set wait_target with Finished accepted."""
+    plan = build_restore_activation_plan(
+        method="passive",
+        activation_method="patch",
+        restores=[
+            {
+                "metadata": {"name": "restore-acm-passive-sync", "namespace": "open-cluster-management-backup"},
+                "spec": {"syncRestoreWithNewBackups": True, "veleroManagedClustersBackupName": "latest"},
+                "status": {"phase": "Finished"},
+            }
+        ],
+        backup_name="latest",
+    )
+
+    assert plan["operation"]["action"] == "none"
+    assert plan["wait_target"]["name"] == "restore-acm-passive-sync"
+    assert "Finished" in plan["wait_target"]["success_phases"]
+    assert "Enabled" in plan["wait_target"]["success_phases"]
+
+
+
     plan = build_restore_activation_plan(
         method="passive",
         activation_method="restore",
