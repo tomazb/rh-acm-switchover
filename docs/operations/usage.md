@@ -316,6 +316,46 @@ oc get managedclusters -o custom-columns=NAME:.metadata.name,AVAILABLE:.status.c
 
 > **Tip:** The same validate → dry-run → execute workflow applies to reverse switchovers.
 
+## Restore-Only Mode (Single Hub)
+
+When the original hub is gone (destroyed, decommissioned, or unreachable) and you need to restore managed clusters from existing S3 backups onto a new hub:
+
+```bash
+# Validate the new hub is ready for restore
+python acm_switchover.py \
+  --restore-only \
+  --validate-only \
+  --secondary-context new-hub
+
+# Dry-run to preview planned actions
+python acm_switchover.py \
+  --restore-only \
+  --dry-run \
+  --secondary-context new-hub
+
+# Execute the restore
+python acm_switchover.py \
+  --restore-only \
+  --secondary-context new-hub
+```
+
+**What happens:**
+1. **Preflight** — validates the target hub only (ACM version, BSL credentials, namespaces)
+2. **Activation** — creates a one-time full Restore from the latest backup in S3
+3. **Post-Activation** — waits for ManagedClusters to connect and verifies klusterlet agents
+4. **Finalization** — enables BackupSchedule on the new hub
+
+**Key differences from normal switchover:**
+- No `--primary-context` needed (there is no primary hub)
+- `--method full` is implied and enforced
+- `--old-hub-action` is not accepted (no old hub to manage)
+- PRIMARY_PREP phase is entirely skipped
+- Cannot be combined with `--decommission` or `--method passive`
+
+**Prerequisites:**
+- The new hub must have ACM installed and a BackupStorageLocation (BSL) pointing to the same S3 bucket as the old hub's backups
+- A valid backup must exist in the S3 bucket
+
 ## Decommission Old Hub
 
 After confirming successful switchover, decommission the old primary hub:

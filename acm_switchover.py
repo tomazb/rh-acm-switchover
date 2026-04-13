@@ -91,6 +91,15 @@ Examples:
 
   # Decommission old hub
   %(prog)s --decommission --primary-context old-hub --method passive --old-hub-action none
+
+  # Restore-only (single hub, restore from S3 backups — no primary hub needed)
+  %(prog)s --restore-only --secondary-context new-hub
+
+  # Restore-only with pre-validation
+  %(prog)s --restore-only --validate-only --secondary-context new-hub
+
+  # Restore-only dry-run
+  %(prog)s --restore-only --dry-run --secondary-context new-hub
         """,
     )
 

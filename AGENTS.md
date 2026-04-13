@@ -69,6 +69,12 @@ The switchover executes phases sequentially, with state tracking for resume capa
 ```
 INIT → PREFLIGHT → PRIMARY_PREP → ACTIVATION → POST_ACTIVATION → FINALIZATION → COMPLETED
 ```
+
+Restore-only mode (`--restore-only`) uses a reduced flow, skipping PRIMARY_PREP:
+```
+INIT → PREFLIGHT(secondary-only) → ACTIVATION → POST_ACTIVATION → FINALIZATION(backups-only) → COMPLETED
+```
+
 Defined phases in `Phase` enum: `INIT`, `PREFLIGHT`, `PRIMARY_PREP`, `SECONDARY_VERIFY`, `ACTIVATION`, `POST_ACTIVATION`, `FINALIZATION`, `COMPLETED`, `FAILED`. The main switchover flow uses the diagram above; `FAILED` is set on errors.
 |
 | Phase | Runbook Steps | Module | Key Actions |
@@ -264,6 +270,7 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
     - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
     - `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`.
     - `--setup` requires `--admin-kubeconfig` and validates `--token-duration` format (e.g., `48h`, `30m`, `3600s`).
+    - `--restore-only` requires `--secondary-context`, forbids `--primary-context`, `--method passive`, `--old-hub-action`, and `--decommission`. Implies `--method full`.
 - If you change these rules, update `docs/reference/validation-rules.md`, `docs/operations/usage.md`, and `docs/operations/quickref.md` to match.
 
 ## Code Review Checklist for Future Refactoring
