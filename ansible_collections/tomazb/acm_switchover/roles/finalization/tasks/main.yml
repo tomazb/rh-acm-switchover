@@ -38,6 +38,7 @@
           status: pass
           changed: true
           old_hub_action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
+          enable_backups: "{{ acm_switchover_enable_backups_result | default({}) }}"
       tags:
         - finalization
   rescue:

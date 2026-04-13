@@ -5,7 +5,7 @@
     state: present
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
-  loop: "{{ lookup('ansible.builtin.file', _rbac_manifest_file) | from_yaml_all | select | list }}"
+  loop: "{{ lookup('ansible.builtin.file', role_path ~ '/files/' ~ _rbac_manifest_file) | from_yaml_all | select | list }}"
   loop_control:
     label: >-
       {{
