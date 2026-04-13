@@ -9,7 +9,7 @@
   register: acm_secondary_backup_schedules_info
   when: acm_secondary_backup_schedules_info is not defined
 
-- name: Refresh secondary MultiClusterHub (may have changed since preflight)
+- name: Refresh secondary MultiClusterHub when not pre-seeded by tests
   kubernetes.core.k8s_info:
     api_version: operator.open-cluster-management.io/v1
     kind: MultiClusterHub
@@ -17,3 +17,4 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: acm_secondary_mch_info
+  when: acm_secondary_mch_info is not defined
