@@ -1,34 +1,10 @@
 ---
-- name: Read existing passive restore on old hub (if any)
-  kubernetes.core.k8s_info:
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Restore
-    name: restore-acm-passive-sync
-    namespace: open-cluster-management-backup
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context }}"
-  register: _old_hub_restore_info
-  when: (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
-
-# The existing restore is considered "stale" when it was previously activated
-# (veleroManagedClustersBackupName=latest). A stale restore must be deleted so
-# the next activation can trigger a fresh managed-cluster Velero restore.
-- name: Delete stale active restore on old hub
-  kubernetes.core.k8s:
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Restore
-    name: restore-acm-passive-sync
-    namespace: open-cluster-management-backup
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context }}"
-    state: absent
-  when:
-    - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
-    - (_old_hub_restore_info.resources | default([]) | length) > 0
-    - (_old_hub_restore_info.resources[0].spec.veleroManagedClustersBackupName | default('skip')) != 'skip'
-  register: _old_hub_restore_deleted
-
-- name: Create passive sync restore on old hub
+# When old_hub_action=secondary, ensure the old primary hub has a passive
+# sync restore (veleroManagedClustersBackupName=skip).  If the restore
+# was previously activated (latest), patching it back to skip is sufficient
+# because the next activation changes skip→latest, which ACM's operator
+# detects as a spec change and triggers a fresh managed-cluster Velero restore.
+- name: Apply passive sync restore on old hub
   kubernetes.core.k8s:
     api_version: cluster.open-cluster-management.io/v1beta1
     kind: Restore
@@ -37,6 +13,7 @@
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
     state: present
+    apply: true
     definition:
       apiVersion: cluster.open-cluster-management.io/v1beta1
       kind: Restore
@@ -50,18 +27,14 @@
         veleroManagedClustersBackupName: skip
         veleroCredentialsBackupName: latest
         veleroResourcesBackupName: latest
-  when:
-    - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
-    - >-
-      (_old_hub_restore_info.resources | default([]) | length) == 0
-      or (_old_hub_restore_deleted.changed | default(false))
-  register: _old_hub_restore_created
+  register: _old_hub_restore_applied
+  when: (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
 
 - name: Determine old hub disposition
   ansible.builtin.set_fact:
     acm_switchover_old_hub_disposition:
       action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
-      changed: "{{ _old_hub_restore_created.changed | default(false) }}"
+      changed: "{{ _old_hub_restore_applied.changed | default(false) }}"
       message: >-
         {{
           'Old hub configured as secondary ACM hub with passive sync restore'
