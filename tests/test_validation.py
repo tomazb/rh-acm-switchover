@@ -652,6 +652,34 @@ class TestCLIArgumentValidation:
         )
         InputValidator.validate_all_cli_args(args)
 
+    def test_restore_only_forbids_setup(self):
+        """Test --restore-only forbids --setup."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            setup=True,
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_restore_only_forbids_argocd_resume_only(self):
+        """Test --restore-only forbids --argocd-resume-only."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            argocd_resume_only=True,
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
 
 class TestKubernetesResourceValidation:
     """Test Kubernetes resource name validation."""
