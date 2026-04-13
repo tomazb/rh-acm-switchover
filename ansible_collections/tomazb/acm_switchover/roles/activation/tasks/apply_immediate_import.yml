@@ -2,5 +2,5 @@
 - name: Publish immediate import result
   ansible.builtin.set_fact:
     acm_switchover_immediate_import_result:
-      changed: "{{ acm_switchover_operation.activation_method == 'patch' }}"
-      mode: "{{ acm_switchover_operation.activation_method }}"
+      changed: "{{ (acm_switchover_operation.activation_method | default('patch')) == 'patch' }}"
+      mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
