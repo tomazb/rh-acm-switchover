@@ -1,6 +1,8 @@
 ---
-- name: Build activation patch plan
+- name: Build activation plan
   tomazb.acm_switchover.acm_restore_info:
+    method: "{{ acm_switchover_operation.method }}"
+    activation_method: "{{ acm_switchover_operation.activation_method | default('patch') }}"
     restores: >-
       {{
         [acm_switchover_restore_selection.restore]
@@ -17,18 +19,95 @@
     state: patched
     api_version: cluster.open-cluster-management.io/v1beta1
     kind: Restore
-    name: "{{ acm_restore_activation_plan.restore.metadata.name }}"
-    namespace: "{{ acm_restore_activation_plan.restore.metadata.namespace | default('open-cluster-management-backup') }}"
-    definition: "{{ acm_restore_activation_plan.patch }}"
+    name: "{{ acm_restore_activation_plan.operation.patch_target.name | default(acm_restore_activation_plan.restore.metadata.name) }}"
+    namespace: "{{ acm_restore_activation_plan.operation.patch_target.namespace | default(acm_restore_activation_plan.restore.metadata.namespace | default('open-cluster-management-backup')) }}"
+    definition: "{{ acm_restore_activation_plan.operation.patch }}"
   register: _restore_patch_result
   when:
-    - acm_restore_activation_plan.restore is not none
-    - acm_restore_activation_plan.patch is not none
+    - acm_restore_activation_plan.operation.action == 'patch'
+    - acm_restore_activation_plan.operation.patch is not none
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Delete source Restore before activation create
+  kubernetes.core.k8s:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: absent
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    name: "{{ acm_restore_activation_plan.operation.delete_restore.name }}"
+    namespace: "{{ acm_restore_activation_plan.operation.delete_restore.namespace | default('open-cluster-management-backup') }}"
+  register: _restore_delete_result
+  when:
+    - acm_restore_activation_plan.operation.delete_restore is defined
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Wait for deleted Restore to disappear
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    name: "{{ acm_restore_activation_plan.operation.delete_restore.name }}"
+    namespace: "{{ acm_restore_activation_plan.operation.delete_restore.namespace | default('open-cluster-management-backup') }}"
+  register: _restore_delete_wait
+  retries: 60
+  delay: 30
+  until: (_restore_delete_wait.resources | default([]) | length) == 0
+  when:
+    - acm_restore_activation_plan.operation.delete_restore is defined
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Create activation Restore resource when required
+  when:
+    - acm_restore_activation_plan.operation.create_restore is defined
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  block:
+    - name: Create planned Restore resource
+      kubernetes.core.k8s:
+        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.secondary.context }}"
+        state: present
+        definition: "{{ acm_restore_activation_plan.operation.create_restore }}"
+      register: _restore_create_result
+  rescue:
+    - name: Roll back passive sync Restore when activation create fails
+      kubernetes.core.k8s:
+        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.secondary.context }}"
+        state: present
+        definition: "{{ acm_restore_activation_plan.operation.rollback_restore }}"
+      register: _restore_rollback_result
+      when: acm_restore_activation_plan.operation.rollback_restore is defined
+      ignore_errors: true
+
+    - name: Re-raise activation create failure with rollback context
+      ansible.builtin.fail:
+        msg: >-
+          Failed to create activation restore
+          {{ acm_restore_activation_plan.operation.create_restore.metadata.name }}:
+          {{ ansible_failed_result.msg | default('unknown failure') }}.{% if acm_restore_activation_plan.operation.rollback_restore is defined %}
+          {% if (_restore_rollback_result is defined) and not (_restore_rollback_result.failed | default(false)) %}
+          Recreated passive sync restore
+          {{ acm_restore_activation_plan.operation.rollback_restore.metadata.name }}
+          as rollback.{% else %}
+          Rollback failed to recreate passive sync restore
+          {{ acm_restore_activation_plan.operation.rollback_restore.metadata.name }}.{% endif %}{% endif %}
 
 - name: Publish restore activation result
   ansible.builtin.set_fact:
     acm_switchover_restore_activation_result:
-      changed: "{{ _restore_patch_result.changed | default(false) or (acm_switchover_execution.mode | default('dry_run') == 'dry_run') }}"
+      changed: >-
+        {{
+          (_restore_patch_result.changed | default(false))
+          or (_restore_delete_result.changed | default(false))
+          or (_restore_create_result.changed | default(false))
+          or (
+            acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+            and (acm_restore_activation_plan.changed | default(false))
+          )
+        }}
       restore: "{{ acm_restore_activation_plan.restore }}"
       patch: "{{ acm_restore_activation_plan.patch }}"
+      operation: "{{ acm_restore_activation_plan.operation }}"
+      wait_target: "{{ acm_restore_activation_plan.wait_target }}"

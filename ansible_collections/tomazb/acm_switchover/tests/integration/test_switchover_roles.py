@@ -13,3 +13,26 @@ def test_post_activation_failure_reports_pending_clusters(run_switchover_fixture
     assert completed.returncode != 0
     assert report["phases"]["post_activation"]["status"] == "fail"
     assert "cluster-b" in report["phases"]["post_activation"]["summary"]["pending"]
+
+
+def test_restore_activation_fixture_reports_delete_and_create_plan(run_switchover_fixture):
+    completed, report = run_switchover_fixture("restore_activation_success.yml")
+    assert completed.returncode == 0
+    assert report["phases"]["activation"]["status"] == "pass"
+    assert report["phases"]["activation"]["operation"]["action"] == "delete_and_create"
+    assert report["phases"]["activation"]["wait_target"]["name"] == "restore-acm-activate"
+
+
+def test_full_activation_fixture_reports_full_restore_plan(run_switchover_fixture):
+    completed, report = run_switchover_fixture("full_activation_success.yml")
+    assert completed.returncode == 0
+    assert report["phases"]["activation"]["status"] == "pass"
+    assert report["phases"]["activation"]["operation"]["action"] == "create"
+    assert report["phases"]["activation"]["wait_target"]["name"] == "restore-acm-full"
+
+
+def test_finalization_fixture_reports_enable_backup_operation(run_switchover_fixture):
+    completed, report = run_switchover_fixture("finalization_backup_recovery.yml")
+    assert completed.returncode == 0
+    assert report["phases"]["finalization"]["status"] == "pass"
+    assert report["phases"]["finalization"]["enable_backups"]["operation"]["action"] == "patch"

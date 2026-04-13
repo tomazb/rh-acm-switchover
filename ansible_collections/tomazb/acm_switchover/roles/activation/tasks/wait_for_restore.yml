@@ -1,6 +1,148 @@
 ---
+- name: Poll Restore status until it reaches a terminal phase
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    name: "{{ acm_switchover_restore_activation_result.wait_target.name }}"
+    namespace: "{{ acm_switchover_restore_activation_result.wait_target.namespace | default('open-cluster-management-backup') }}"
+  register: _restore_wait_info
+  retries: 60
+  delay: 30
+  until: >-
+    {{
+      (_restore_wait_info.resources | default([]) | length) > 0
+      and (
+        ((_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown'))
+        in (
+          (acm_switchover_restore_activation_result.wait_target.success_phases | default([]))
+          + (acm_switchover_restore_activation_result.wait_target.failure_phases | default([]))
+        )
+      )
+    }}
+  when:
+    - acm_switchover_restore_activation_result.wait_target is defined
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Fail when Restore reaches an error phase
+  ansible.builtin.assert:
+    that:
+      - >-
+        ((_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown'))
+        in (acm_switchover_restore_activation_result.wait_target.success_phases | default([]))
+    fail_msg: >-
+      Restore {{ acm_switchover_restore_activation_result.wait_target.name }}
+      reached terminal phase
+      {{ (_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}
+      with message
+      {{ (_restore_wait_info.resources | first | default({})).get('status', {}).get('lastMessage', '') }}.
+  when:
+    - acm_switchover_restore_activation_result.wait_target is defined
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Wait for managed-clusters Velero restore to be created
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    name: "{{ acm_switchover_restore_activation_result.wait_target.name }}"
+    namespace: "{{ acm_switchover_restore_activation_result.wait_target.namespace | default('open-cluster-management-backup') }}"
+  register: _restore_velero_source_info
+  retries: 60
+  delay: 30
+  until: >-
+    {{
+      (
+        (_restore_velero_source_info.resources | first | default({}))
+        .get('status', {})
+        .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field, '')
+      ) | length > 0
+    }}
+  when:
+    - acm_switchover_restore_activation_result.wait_target.velero_restore_required | default(false)
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Poll managed-clusters Velero restore to completion
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    api_version: velero.io/v1
+    kind: Restore
+    name: >-
+      {{
+        (_restore_velero_source_info.resources | first | default({}))
+        .get('status', {})
+        .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field)
+      }}
+    namespace: "{{ acm_switchover_restore_activation_result.wait_target.namespace | default('open-cluster-management-backup') }}"
+  register: _velero_restore_wait_info
+  retries: 60
+  delay: 30
+  until: >-
+    {{
+      (_velero_restore_wait_info.resources | default([]) | length) > 0
+      and (
+        ((_velero_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown'))
+        in (
+          (acm_switchover_restore_activation_result.wait_target.velero_success_phases | default([]))
+          + (acm_switchover_restore_activation_result.wait_target.velero_failure_phases | default([]))
+        )
+      )
+    }}
+  when:
+    - acm_switchover_restore_activation_result.wait_target.velero_restore_required | default(false)
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Fail when managed-clusters Velero restore reaches an error phase
+  ansible.builtin.assert:
+    that:
+      - >-
+        ((_velero_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown'))
+        in (acm_switchover_restore_activation_result.wait_target.velero_success_phases | default([]))
+    fail_msg: >-
+      Velero restore
+      {{
+        (_restore_velero_source_info.resources | first | default({}))
+        .get('status', {})
+        .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field, 'unknown')
+      }}
+      reached terminal phase
+      {{ (_velero_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}.
+  when:
+    - acm_switchover_restore_activation_result.wait_target.velero_restore_required | default(false)
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
 - name: Publish restore wait result
   ansible.builtin.set_fact:
     acm_switchover_wait_for_restore_result:
       changed: false
-      phase: "{{ acm_switchover_restore_activation_result.restore.status.phase | default('Enabled') }}"
+      phase: >-
+        {{
+          (
+            (_restore_wait_info.resources | first | default({})).get('status', {}).get('phase')
+            if (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+            else (
+              (acm_switchover_restore_activation_result.wait_target.success_phases | default(['Enabled'])) | first
+            )
+          )
+        }}
+      velero_restore_name: >-
+        {{
+          (
+            (_restore_velero_source_info.resources | first | default({}))
+            .get('status', {})
+            .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field, '')
+            if (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+            else ''
+          )
+        }}
+      velero_phase: >-
+        {{
+          (
+            (_velero_restore_wait_info.resources | first | default({})).get('status', {}).get('phase')
+            if (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+            else None
+          )
+        }}
