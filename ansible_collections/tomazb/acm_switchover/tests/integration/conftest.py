@@ -83,6 +83,8 @@ def run_argocd_fixture(tmp_path):
             "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
 
+        summary_path = tmp_path / "summary.json"
+
         completed = subprocess.run(
             [
                 "ansible-playbook",
@@ -130,6 +132,8 @@ def run_noncore_fixture(tmp_path):
             "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
             "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
+
+        summary_path = tmp_path / "summary.json"
 
         completed = subprocess.run(
             [
