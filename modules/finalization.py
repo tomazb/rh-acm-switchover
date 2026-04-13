@@ -1114,7 +1114,11 @@ class Finalization:
 
         logger.info("Setting up old primary hub as new secondary...")
 
-        # Check if restore already exists
+        # Check if restore already exists and whether it is in passive mode.
+        # A previously-activated restore has veleroManagedClustersBackupName=latest;
+        # leaving it as-is means the next activation patch is a no-op and ACM
+        # won't re-trigger the managed-cluster Velero restore that redirects
+        # klusterlets to the new hub.  Delete and recreate it in passive mode.
         existing_restore = self.primary.get_custom_resource(
             group="cluster.open-cluster-management.io",
             version="v1beta1",
@@ -1124,8 +1128,27 @@ class Finalization:
         )
 
         if existing_restore:
-            logger.info("Passive sync restore already exists on old primary")
-            return
+            mc_backup = existing_restore.get("spec", {}).get(
+                SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME, VELERO_BACKUP_SKIP
+            )
+            if mc_backup == VELERO_BACKUP_SKIP:
+                logger.info("Passive sync restore already exists on old primary in correct passive mode")
+                return
+            logger.info(
+                "Existing restore on old primary has veleroManagedClustersBackupName=%s; "
+                "deleting it so the next activation triggers a fresh managed-cluster restore",
+                mc_backup,
+            )
+            try:
+                self.primary.delete_custom_resource(
+                    group="cluster.open-cluster-management.io",
+                    version="v1beta1",
+                    plural="restores",
+                    name=RESTORE_PASSIVE_SYNC_NAME,
+                    namespace=BACKUP_NAMESPACE,
+                )
+            except ApiException as e:
+                raise SwitchoverError("Failed to delete stale passive sync restore on old primary hub") from e
 
         # Create passive sync restore on old primary
         restore_body = {
