@@ -708,7 +708,7 @@ def _run_phase_preflight(
         state.get_config("primary_has_observability", False) or secondary_obs_enabled,
     )
 
-    if not getattr(args, "skip_gitops_check", False) and primary is not None:
+    if not getattr(args, "skip_gitops_check", False):
         _report_argocd_acm_impact(primary, secondary, logger, argocd_manage=getattr(args, "argocd_manage", False))
 
     if args.validate_only:
@@ -720,14 +720,18 @@ def _run_phase_preflight(
 
 
 def _report_argocd_acm_impact(
-    primary: KubeClient,
+    primary: Optional[KubeClient],
     secondary: KubeClient,
     logger: logging.Logger,
-    argocd_manage: bool = False,  # Used by advisory-warning task to emit warning when ACM apps found
+    argocd_manage: bool = False,
 ) -> None:
-    """Run Argo CD detection and log ACM-touching Applications on both hubs."""
+    """Run Argo CD detection and log ACM-touching Applications on available hubs."""
     all_acm_apps: list = []
-    for label, client in (("Primary hub", primary), ("Secondary hub", secondary)):
+    hub_pairs = []
+    if primary is not None:
+        hub_pairs.append(("Primary hub", primary))
+    hub_pairs.append(("Secondary hub", secondary))
+    for label, client in hub_pairs:
         try:
             discovery = argocd_lib.detect_argocd_installation(client)
             if not discovery.has_applications_crd:
@@ -778,13 +782,22 @@ def _report_argocd_acm_impact(
             1 for a in all_acm_apps if (a.app.get("spec", {}) or {}).get("syncPolicy", {}).get("automated")
         )
         if autosync_count:
-            logger.warning(
-                "\n⚠ ArgoCD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
-                "  Consider --argocd-manage to pause auto-sync during switchover.\n"
-                "  Without pausing, ArgoCD may revert switchover changes.\n"
-                "  To suppress: --skip-gitops-check",
-                autosync_count,
-            )
+            if primary is None:
+                logger.warning(
+                    "\n⚠ ArgoCD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
+                    "  --argocd-manage is not supported in restore-only mode.\n"
+                    "  Pause Argo CD auto-sync manually before proceeding to avoid drift.\n"
+                    "  To suppress: --skip-gitops-check",
+                    autosync_count,
+                )
+            else:
+                logger.warning(
+                    "\n⚠ ArgoCD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
+                    "  Consider --argocd-manage to pause auto-sync during switchover.\n"
+                    "  Without pausing, ArgoCD may revert switchover changes.\n"
+                    "  To suppress: --skip-gitops-check",
+                    autosync_count,
+                )
 
 
 def _run_phase_primary_prep(

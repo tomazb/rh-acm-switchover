@@ -330,3 +330,82 @@ def test_validate_all_passes_per_hub_argocd_install_types():
         argocd_install_type="operator",
         secondary_argocd_install_type="vanilla",
     )
+
+
+def _build_restore_only_validator() -> PreflightValidator:
+    """Create a PreflightValidator in restore-only mode (no primary)."""
+    secondary = Mock()
+    secondary.namespace_exists.return_value = True
+
+    validator = PreflightValidator(
+        primary_client=None,
+        secondary_client=secondary,
+        method="full",
+        skip_rbac_validation=False,
+        restore_only=True,
+    )
+
+    validator.kubeconfig_validator.run = Mock()
+    validator.tooling_validator.run = Mock()
+    validator.namespace_validator.run = Mock()
+    validator.version_validator.run = Mock(return_value=("2.14.0", "2.14.0"))
+    validator.hub_component_validator.run = Mock()
+    validator.backup_validator.run = Mock()
+    validator.backup_schedule_validator.run = Mock()
+    validator.backup_storage_location_validator.run = Mock()
+    validator.cluster_deployment_validator.run = Mock()
+    validator.managed_cluster_backup_validator.run = Mock()
+    validator.passive_sync_validator.run = Mock()
+    validator.observability_detector.detect = Mock(return_value=(False, False))
+    validator.observability_prereq_validator.run = Mock()
+    validator.reporter.print_summary = Mock()
+
+    return validator
+
+
+@pytest.mark.unit
+def test_restore_only_validates_secondary_rbac():
+    """Restore-only mode should validate RBAC on secondary hub (not skip entirely)."""
+    validator = _build_restore_only_validator()
+
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
+        "modules.preflight_coordinator.AutoImportStrategyValidator"
+    ) as auto_import_validator, patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        return_value=argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=False,
+            has_argocds_crd=False,
+            install_type="none",
+        ),
+    ):
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is True
+    validate_rbac.assert_called_once_with(
+        primary_client=None,
+        secondary_client=validator.secondary,
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+        secondary_argocd_install_type="unknown",
+    )
+
+
+@pytest.mark.unit
+def test_restore_only_rbac_failure_blocks_preflight():
+    """RBAC failure on secondary in restore-only mode should fail preflight."""
+    validator = _build_restore_only_validator()
+
+    with patch(
+        "modules.preflight_coordinator.validate_rbac_permissions",
+        side_effect=ValidationError("Missing create restores permission"),
+    ), patch("modules.preflight_coordinator.AutoImportStrategyValidator") as auto_import_validator:
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is False
+    rbac_results = [r for r in validator.reporter.results if r["check"] == "RBAC Permissions"]
+    assert len(rbac_results) == 1
+    assert rbac_results[0]["passed"] is False

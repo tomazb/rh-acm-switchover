@@ -553,6 +553,42 @@ class TestValidateRBACPermissions:
             validate_rbac_permissions(mock_primary_client, argocd_mode="invalid")
         mock_validator_class.assert_not_called()
 
+    def test_validate_both_clients_none_raises(self):
+        """Test validate_rbac_permissions raises ValueError when both clients are None."""
+        with pytest.raises(ValueError, match="At least one of primary_client or secondary_client"):
+            validate_rbac_permissions(None, None)
+
+    def test_validate_decommission_without_primary_raises(self, mock_secondary_client):
+        """Test validate_rbac_permissions raises ValueError for decommission without primary."""
+        with pytest.raises(ValueError, match="include_decommission requires primary_client"):
+            validate_rbac_permissions(None, mock_secondary_client, include_decommission=True)
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_secondary_only_success(self, mock_validator_class, mock_secondary_client):
+        """Test validate_rbac_permissions with only secondary hub (restore-only mode)."""
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (True, {})
+        mock_validator_class.return_value = mock_validator
+
+        validate_rbac_permissions(None, mock_secondary_client)
+
+        # Should only create one validator (for secondary)
+        mock_validator_class.assert_called_once_with(mock_secondary_client)
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_secondary_only_failure(self, mock_validator_class, mock_secondary_client):
+        """Test validate_rbac_permissions fails when secondary-only RBAC check fails."""
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (
+            False,
+            {"cluster": ["Missing permission: create restores"]},
+        )
+        mock_validator.generate_permission_report.return_value = "Error report"
+        mock_validator_class.return_value = mock_validator
+
+        with pytest.raises(ValidationError, match="secondary hub"):
+            validate_rbac_permissions(None, mock_secondary_client)
+
 
 class TestValidateDecommissionPermissions:
     """Tests for standalone decommission RBAC validation."""
