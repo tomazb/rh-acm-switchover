@@ -29,6 +29,11 @@ jobs:
         run: |
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/preflight.yml --syntax-check
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/decommission.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/discovery.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/rbac_bootstrap.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/argocd_manage_test.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/argocd_resume.yml --syntax-check
       - name: Build collection archive
         run: |
           cd ansible_collections/tomazb/acm_switchover
