@@ -113,6 +113,29 @@ python acm_switchover.py \
 
 ```
 
+### Restore-Only (Single Hub)
+
+```bash
+
+# Validate new hub readiness
+python acm_switchover.py \
+  --restore-only \
+  --validate-only \
+  --secondary-context <new-hub>
+
+# Dry-run
+python acm_switchover.py \
+  --restore-only \
+  --dry-run \
+  --secondary-context <new-hub>
+
+# Execute restore
+python acm_switchover.py \
+  --restore-only \
+  --secondary-context <new-hub>
+
+```
+
 ### State Management
 
 ```bash
@@ -252,6 +275,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
 | `--decommission` | Decommission old hub (interactive) |
+| `--restore-only` | Restore managed clusters from S3 backups onto a single hub (no primary needed; implies `--method full`) |
 | `--setup` | Deploy RBAC resources and optionally generate kubeconfigs |
 | `--include-decommission` | With `--setup`, also deploy the opt-in decommission RBAC extension |
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |

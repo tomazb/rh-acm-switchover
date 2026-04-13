@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--restore-only` mode for single-hub restore from existing S3 backups when the old hub is unavailable. Skips PRIMARY_PREP, runs secondary-only preflight, and enables BackupSchedule on the restored hub. Implies `--method full`.
+
 ### Fixed
 
 - Container release workflow now skips Quay publishing cleanly when `QUAY_USERNAME` / `QUAY_PASSWORD` secrets are absent and continues with GHCR-only publishing.
