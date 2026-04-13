@@ -129,7 +129,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
             )
 
     try:
-        normalized_operation = validate_operation_inputs(operation=operation, execution=execution, features=features)
+        normalized_operation = validate_operation_inputs(operation=operation, features=features)
         results.append(
             _pass_result(
                 "preflight-input-operation",

@@ -62,8 +62,8 @@ def validate_safe_path(path: str) -> None:
         )
 
 
-def validate_operation_inputs(operation: dict, execution: dict, features: dict) -> dict:
-    """Validate that operation, execution, and feature params form a supported combination.
+def validate_operation_inputs(operation: dict, features: dict) -> dict:
+    """Validate that operation and feature params form a supported combination.
 
     Returns:
         Normalized dict of validated values.
