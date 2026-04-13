@@ -1,4 +1,22 @@
 ---
+- name: Read primary hub namespaces when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_namespace_info
+  when: acm_primary_namespace_info is not defined
+
+- name: Read secondary hub namespaces when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_namespace_info
+  when: acm_secondary_namespace_info is not defined
+
 - name: Read primary MultiClusterHub when not pre-seeded by tests
   kubernetes.core.k8s_info:
     api_version: operator.open-cluster-management.io/v1

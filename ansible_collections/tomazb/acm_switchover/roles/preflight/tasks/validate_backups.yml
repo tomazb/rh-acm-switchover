@@ -147,33 +147,27 @@
           },
           {
             "id": "preflight-clusterdeployments",
-            "severity": "critical",
-            "status": "pass"
-              if (acm_primary_cluster_deployments_info.resources | default([]) | length) > 0
-              else "fail",
-            "message": "primary hub ClusterDeployments were discovered"
-              if (acm_primary_cluster_deployments_info.resources | default([]) | length) > 0
-              else "primary hub ClusterDeployments are missing",
+            "severity": "warning",
+            "status": "pass",
+            "message": (acm_primary_cluster_deployments_info.resources | default([]) | length | string)
+              + " Hive ClusterDeployment(s) found on primary hub",
             "details": {
               "clusterdeployment_count": acm_primary_cluster_deployments_info.resources | default([]) | length
             },
-            "recommended_action": "Investigate missing Hive ClusterDeployment resources before switchover"
-              if (acm_primary_cluster_deployments_info.resources | default([]) | length) == 0
+            "recommended_action": "Verify preserveOnDelete=true on each ClusterDeployment before switchover"
+              if (acm_primary_cluster_deployments_info.resources | default([]) | length) > 0
               else None
           },
           {
             "id": "preflight-managed-cluster-backups",
-            "severity": "critical",
-            "status": "pass"
-              if (acm_primary_managed_cluster_backups_info.resources | default([]) | length) > 0
-              else "fail",
-            "message": "primary hub ManagedClusterBackup resources were discovered"
-              if (acm_primary_managed_cluster_backups_info.resources | default([]) | length) > 0
-              else "primary hub ManagedClusterBackup resources are missing",
+            "severity": "warning",
+            "status": "pass",
+            "message": (acm_primary_managed_cluster_backups_info.resources | default([]) | length | string)
+              + " ManagedClusterBackup resource(s) found on primary hub",
             "details": {
               "managed_cluster_backup_count": acm_primary_managed_cluster_backups_info.resources | default([]) | length
             },
-            "recommended_action": "Repair managed cluster backup generation before switchover"
+            "recommended_action": "ManagedClusterBackup CRD may not be installed; verify cluster backup coverage manually"
               if (acm_primary_managed_cluster_backups_info.resources | default([]) | length) == 0
               else None
           }
