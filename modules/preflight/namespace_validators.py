@@ -2,7 +2,7 @@
 
 import logging
 import shutil
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 from lib.constants import (
     ACM_NAMESPACE,
@@ -26,15 +26,16 @@ class NamespaceValidator(BaseValidator):
         BACKUP_NAMESPACE,
     )
 
-    def run(self, primary: KubeClient, secondary: KubeClient) -> None:
+    def run(self, primary: Optional[KubeClient], secondary: KubeClient) -> None:
         """Run validation with both clients.
 
         Args:
-            primary: Primary hub KubeClient instance
+            primary: Primary hub KubeClient instance (None in restore-only mode)
             secondary: Secondary hub KubeClient instance
         """
         for namespace in self.REQUIRED_NAMESPACES:
-            self._check_namespace(primary, namespace, "primary")
+            if primary is not None:
+                self._check_namespace(primary, namespace, "primary")
             self._check_namespace(secondary, namespace, "secondary")
 
     def _check_namespace(
@@ -80,11 +81,11 @@ class NamespaceValidator(BaseValidator):
 class ObservabilityDetector(BaseValidator):
     """Detects whether ACM Observability is deployed on each hub."""
 
-    def detect(self, primary: KubeClient, secondary: KubeClient) -> Tuple[bool, bool]:
+    def detect(self, primary: Optional[KubeClient], secondary: KubeClient) -> Tuple[bool, bool]:
         """Detect observability on both hubs.
 
         Args:
-            primary: Primary hub KubeClient instance
+            primary: Primary hub KubeClient instance (None in restore-only mode)
             secondary: Secondary hub KubeClient instance
 
         Returns:
@@ -98,7 +99,7 @@ class ObservabilityDetector(BaseValidator):
             logger.debug("Observability namespace validation failed: %s", OBSERVABILITY_NAMESPACE)
             return False, False
 
-        primary_has = primary.namespace_exists(OBSERVABILITY_NAMESPACE)
+        primary_has = primary.namespace_exists(OBSERVABILITY_NAMESPACE) if primary else False
         secondary_has = secondary.namespace_exists(OBSERVABILITY_NAMESPACE)
 
         if primary_has and secondary_has:
