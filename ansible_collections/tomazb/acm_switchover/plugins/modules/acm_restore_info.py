@@ -57,13 +57,15 @@ EXAMPLES = r"""
 
 from ansible.module_utils.basic import AnsibleModule
 
-BACKUP_NAMESPACE = "open-cluster-management-backup"
-PASSIVE_SYNC_RESTORE_NAME = "restore-acm-passive-sync"
-ACTIVATION_RESTORE_NAME = "restore-acm-activate"
-FULL_RESTORE_NAME = "restore-acm-full"
-VELERO_BACKUP_SKIP = "skip"
-CLEANUP_BEFORE_RESTORE_VALUE = "CleanupRestored"
-WAIT_FAILURE_PHASES = ["FinishedWithErrors", "Error", "Failed", "PartiallyFailed", "FailedWithErrors"]
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ACTIVATION_RESTORE_NAME,
+    BACKUP_NAMESPACE,
+    CLEANUP_BEFORE_RESTORE_VALUE,
+    FULL_RESTORE_NAME,
+    PASSIVE_SYNC_RESTORE_NAME,
+    VELERO_BACKUP_SKIP,
+    WAIT_FAILURE_PHASES,
+)
 
 
 def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict]:

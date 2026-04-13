@@ -56,6 +56,24 @@ EXAMPLES = r"""
 
 from ansible.module_utils.basic import AnsibleModule
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ACM_NAMESPACE,
+    APPS,
+    APIEXTENSIONS_K8S_IO,
+    ARGOCD_IO,
+    BACKUP_NAMESPACE,
+    CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO,
+    CONFIG_OPENSHIFT_IO,
+    HIVE_OPENSHIFT_IO,
+    MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MCE_NAMESPACE,
+    OADP_OPENSHIFT_IO,
+    OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,
+    OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO,
+    ROUTE_OPENSHIFT_IO,
+    VELERO_IO,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.result import ValidationResult
 
 VALID_ROLES = ("operator", "validator")
@@ -65,117 +83,117 @@ VALID_ARGOCD_MODES = ("none", "check", "manage")
 OPERATOR_CLUSTER_PERMISSIONS = [
     ("", "namespaces", ["get"]),
     ("", "nodes", ["get", "list"]),
-    ("config.openshift.io", "clusteroperators", ["get", "list"]),
-    ("config.openshift.io", "clusterversions", ["get", "list"]),
-    ("cluster.open-cluster-management.io", "managedclusters", ["get", "list", "patch"]),
-    ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
-    ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-    ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+    (CONFIG_OPENSHIFT_IO, "clusteroperators", ["get", "list"]),
+    (CONFIG_OPENSHIFT_IO, "clusterversions", ["get", "list"]),
+    (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["get", "list", "patch"]),
+    (HIVE_OPENSHIFT_IO, "clusterdeployments", ["get", "list"]),
+    (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["get", "list"]),
+    (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["get", "list"]),
 ]
 
 # Cluster-scoped permissions for validator role (read-only)
 VALIDATOR_CLUSTER_PERMISSIONS = [
     ("", "namespaces", ["get"]),
     ("", "nodes", ["get", "list"]),
-    ("config.openshift.io", "clusteroperators", ["get", "list"]),
-    ("config.openshift.io", "clusterversions", ["get", "list"]),
-    ("cluster.open-cluster-management.io", "managedclusters", ["get", "list"]),
-    ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
-    ("operator.open-cluster-management.io", "multiclusterhubs", ["get", "list"]),
-    ("observability.open-cluster-management.io", "multiclusterobservabilities", ["get", "list"]),
+    (CONFIG_OPENSHIFT_IO, "clusteroperators", ["get", "list"]),
+    (CONFIG_OPENSHIFT_IO, "clusterversions", ["get", "list"]),
+    (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["get", "list"]),
+    (HIVE_OPENSHIFT_IO, "clusterdeployments", ["get", "list"]),
+    (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["get", "list"]),
+    (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["get", "list"]),
 ]
 
 # Hub namespace-scoped permissions for operator role
 OPERATOR_HUB_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
-    "open-cluster-management-backup": [
+    BACKUP_NAMESPACE: [
         ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
         ("", "secrets", ["get"]),
         ("", "pods", ["get", "list"]),
-        ("cluster.open-cluster-management.io", "backupschedules", ["get", "list", "create", "patch", "delete"]),
-        ("cluster.open-cluster-management.io", "restores", ["get", "list", "create", "patch", "delete"]),
-        ("velero.io", "backups", ["get", "list"]),
-        ("velero.io", "restores", ["get", "list"]),
-        ("velero.io", "backupstoragelocations", ["get", "list"]),
-        ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
+        (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "backupschedules", ["get", "list", "create", "patch", "delete"]),
+        (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "restores", ["get", "list", "create", "patch", "delete"]),
+        (VELERO_IO, "backups", ["get", "list"]),
+        (VELERO_IO, "restores", ["get", "list"]),
+        (VELERO_IO, "backupstoragelocations", ["get", "list"]),
+        (OADP_OPENSHIFT_IO, "dataprotectionapplications", ["get", "list"]),
     ],
-    "open-cluster-management": [
+    ACM_NAMESPACE: [
         ("", "pods", ["get", "list"]),
     ],
-    "open-cluster-management-observability": [
+    OBSERVABILITY_NAMESPACE: [
         ("", "pods", ["get", "list"]),
         ("", "secrets", ["get"]),
-        ("apps", "deployments", ["get", "patch"]),
-        ("apps", "statefulsets", ["get", "patch"]),
-        ("apps", "statefulsets/scale", ["get", "patch"]),
-        ("route.openshift.io", "routes", ["get"]),
+        (APPS, "deployments", ["get", "patch"]),
+        (APPS, "statefulsets", ["get", "patch"]),
+        (APPS, "statefulsets/scale", ["get", "patch"]),
+        (ROUTE_OPENSHIFT_IO, "routes", ["get"]),
     ],
-    "multicluster-engine": [
+    MCE_NAMESPACE: [
         ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
     ],
 }
 
 # Hub namespace-scoped permissions for validator role (read-only)
 VALIDATOR_HUB_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
-    "open-cluster-management-backup": [
+    BACKUP_NAMESPACE: [
         ("", "configmaps", ["get", "list"]),
         ("", "secrets", ["get"]),
         ("", "pods", ["get", "list"]),
-        ("cluster.open-cluster-management.io", "backupschedules", ["get", "list"]),
-        ("cluster.open-cluster-management.io", "restores", ["get", "list"]),
-        ("velero.io", "backups", ["get", "list"]),
-        ("velero.io", "restores", ["get", "list"]),
-        ("velero.io", "backupstoragelocations", ["get", "list"]),
-        ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
+        (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "backupschedules", ["get", "list"]),
+        (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "restores", ["get", "list"]),
+        (VELERO_IO, "backups", ["get", "list"]),
+        (VELERO_IO, "restores", ["get", "list"]),
+        (VELERO_IO, "backupstoragelocations", ["get", "list"]),
+        (OADP_OPENSHIFT_IO, "dataprotectionapplications", ["get", "list"]),
     ],
-    "open-cluster-management": [
+    ACM_NAMESPACE: [
         ("", "pods", ["get", "list"]),
     ],
-    "open-cluster-management-observability": [
+    OBSERVABILITY_NAMESPACE: [
         ("", "pods", ["get", "list"]),
         ("", "secrets", ["get"]),
-        ("apps", "deployments", ["get", "list"]),
-        ("apps", "statefulsets", ["get", "list"]),
-        ("route.openshift.io", "routes", ["get"]),
+        (APPS, "deployments", ["get", "list"]),
+        (APPS, "statefulsets", ["get", "list"]),
+        (ROUTE_OPENSHIFT_IO, "routes", ["get"]),
     ],
-    "multicluster-engine": [
+    MCE_NAMESPACE: [
         ("", "configmaps", ["get", "list"]),
     ],
 }
 
 # Managed-cluster namespace permissions for operator role
 OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
-    "open-cluster-management-agent": [
+    MANAGED_CLUSTER_AGENT_NAMESPACE: [
         ("", "secrets", ["get", "create", "delete"]),
-        ("apps", "deployments", ["get", "patch"]),
+        (APPS, "deployments", ["get", "patch"]),
     ],
 }
 
 # Managed-cluster namespace permissions for validator role (read-only)
 VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
-    "open-cluster-management-agent": [
+    MANAGED_CLUSTER_AGENT_NAMESPACE: [
         ("", "secrets", ["get"]),
-        ("apps", "deployments", ["get"]),
+        (APPS, "deployments", ["get"]),
     ],
 }
 
 DECOMMISSION_PERMISSIONS = [
-    ("cluster.open-cluster-management.io", "managedclusters", ["delete"]),
-    ("operator.open-cluster-management.io", "multiclusterhubs", ["delete"]),
-    ("observability.open-cluster-management.io", "multiclusterobservabilities", ["delete"]),
+    (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["delete"]),
+    (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["delete"]),
+    (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["delete"]),
 ]
 
 # F9: Argo CD permissions split into base and operator-install-only
 ARGOCD_BASE_CLUSTER_PERMISSIONS = [
-    ("argoproj.io", "applications", ["get", "list"]),
-    ("apiextensions.k8s.io", "customresourcedefinitions", ["get"]),
+    (ARGOCD_IO, "applications", ["get", "list"]),
+    (APIEXTENSIONS_K8S_IO, "customresourcedefinitions", ["get"]),
 ]
 
 ARGOCD_OPERATOR_CLUSTER_PERMISSIONS = [
-    ("argoproj.io", "argocds", ["get", "list"]),
+    (ARGOCD_IO, "argocds", ["get", "list"]),
 ]
 
 ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS = [
-    ("argoproj.io", "applications", ["patch"]),
+    (ARGOCD_IO, "applications", ["patch"]),
 ]
 
 
@@ -217,13 +235,13 @@ def expand_rbac_requirements(
     filtered_cluster = [
         (g, r, v)
         for g, r, v in cluster_perms
-        if not (skip_observability and g == "observability.open-cluster-management.io")
+        if not (skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO)
     ]
     permissions.extend(_expand_permission_list(filtered_cluster))
 
     # Hub namespace-scoped
     for namespace, ns_perms in hub_ns_perms.items():
-        if skip_observability and namespace == "open-cluster-management-observability":
+        if skip_observability and namespace == OBSERVABILITY_NAMESPACE:
             continue
         permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
 
