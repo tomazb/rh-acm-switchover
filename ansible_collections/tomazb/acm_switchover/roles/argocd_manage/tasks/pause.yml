@@ -22,7 +22,7 @@
         definition:
           metadata:
             annotations:
-              acm-switchover.argoproj.io/paused-by: "{{ acm_switchover_argocd.run_id }}"
+              acm-switchover.argoproj.io/paused-by: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('unknown')) }}"
               acm-switchover.argoproj.io/original-sync-policy: >-
                 {{ item.spec.syncPolicy | default({}) | to_json }}
           spec:

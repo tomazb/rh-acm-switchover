@@ -29,9 +29,8 @@
       ansible.builtin.include_role:
         name: tomazb.acm_switchover.argocd_manage
       vars:
-        acm_switchover_argocd:
-          mode: resume
-          run_id: "{{ acm_switchover_execution.run_id | default('unknown') }}"
+        acm_switchover_argocd_mode_override: resume
+        _argocd_discover_hub: secondary
       register: _argocd_resume_result
       when: acm_switchover_features.argocd.resume_after_switchover | default(false)
 

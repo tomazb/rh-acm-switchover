@@ -4,8 +4,8 @@
 
 - name: Pause autosync
   ansible.builtin.import_tasks: pause.yml
-  when: acm_switchover_argocd.mode == 'pause'
+  when: (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'pause'
 
 - name: Resume autosync
   ansible.builtin.import_tasks: resume.yml
-  when: acm_switchover_argocd.mode == 'resume'
+  when: (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'resume'

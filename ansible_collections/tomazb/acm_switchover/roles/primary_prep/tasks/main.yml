@@ -27,9 +27,8 @@
       ansible.builtin.include_role:
         name: tomazb.acm_switchover.argocd_manage
       vars:
-        acm_switchover_argocd:
-          mode: pause
-          run_id: "{{ acm_switchover_execution.run_id | default('unknown') }}"
+        acm_switchover_argocd_mode_override: pause
+        _argocd_discover_hub: primary
       when: acm_switchover_features.argocd.manage | default(false)
 
     - name: Publish primary_prep result contract
