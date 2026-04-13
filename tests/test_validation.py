@@ -508,6 +508,150 @@ class TestCLIArgumentValidation:
         assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
         assert "decommission" in str(exc_info.value).lower()
 
+    # --- restore-only validation tests ---
+
+    def test_restore_only_valid_args(self):
+        """Test --restore-only with valid arguments passes validation."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            log_format="text",
+            state_file=None,
+        )
+        InputValidator.validate_all_cli_args(args)
+
+    def test_restore_only_requires_secondary_context(self):
+        """Test --restore-only requires --secondary-context."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context=None,
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "secondary-context" in str(exc_info.value).lower()
+
+    def test_restore_only_forbids_primary_context(self):
+        """Test --restore-only forbids --primary-context."""
+        args = MockArgs(
+            primary_context="old-hub",
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "primary-context" in str(exc_info.value).lower()
+
+    def test_restore_only_forbids_passive_method(self):
+        """Test --restore-only forbids --method passive."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="passive",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "method" in str(exc_info.value).lower()
+
+    def test_restore_only_forbids_old_hub_action(self):
+        """Test --restore-only forbids --old-hub-action."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action="secondary",
+            decommission=False,
+            restore_only=True,
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "old-hub-action" in str(exc_info.value).lower()
+
+    def test_restore_only_forbids_decommission(self):
+        """Test --restore-only forbids --decommission."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=True,
+            restore_only=True,
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "decommission" in str(exc_info.value).lower()
+
+    def test_restore_only_allows_validate_only(self):
+        """Test --restore-only allows --validate-only."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            validate_only=True,
+            log_format="text",
+            state_file=None,
+        )
+        InputValidator.validate_all_cli_args(args)
+
+    def test_restore_only_allows_dry_run(self):
+        """Test --restore-only allows --dry-run."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            dry_run=True,
+            log_format="text",
+            state_file=None,
+        )
+        InputValidator.validate_all_cli_args(args)
+
+    def test_restore_only_defaults_method_to_full(self):
+        """Test --restore-only with no method defaults to full (None is acceptable)."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method=None,
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            log_format="text",
+            state_file=None,
+        )
+        InputValidator.validate_all_cli_args(args)
+
+    def test_restore_only_method_full_explicit(self):
+        """Test --restore-only accepts explicit --method full."""
+        args = MockArgs(
+            primary_context=None,
+            secondary_context="new-hub",
+            method="full",
+            old_hub_action=None,
+            decommission=False,
+            restore_only=True,
+            log_format="text",
+            state_file=None,
+        )
+        InputValidator.validate_all_cli_args(args)
+
 
 class TestKubernetesResourceValidation:
     """Test Kubernetes resource name validation."""
