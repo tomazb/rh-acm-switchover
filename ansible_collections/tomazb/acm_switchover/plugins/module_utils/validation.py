@@ -12,7 +12,7 @@ import re
 CONTEXT_NAME_MAX_LENGTH = 128
 CONTEXT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/@]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
 
-UNSAFE_PATH_CHARS = ["~", "$", "{", "}", "|", "&", ";", "<", ">", "`"]
+UNSAFE_PATH_CHARS = ["$", "{", "}", "|", "&", ";", "<", ">", "`"]
 
 
 class ValidationError(Exception):
@@ -44,6 +44,10 @@ def validate_context_name(context: str) -> None:
 def validate_safe_path(path: str) -> None:
     """Validate that a path is safe (no traversal, no shell metacharacters).
 
+    A leading ``~/`` is permitted so that home-relative kubeconfig paths
+    such as ``~/.kube/config`` work out of the box.  A bare ``~`` or ``~``
+    appearing anywhere else in the path is still rejected.
+
     Raises:
         ValidationError: If the path is empty or unsafe.
     """
@@ -55,10 +59,19 @@ def validate_safe_path(path: str) -> None:
             f"Path traversal attempt detected in '{path}'. The '..' sequence is not allowed."
         )
 
+    # Strip a leading ~/ before the metacharacter scan so that the common
+    # ~/.kube/config idiom is accepted, but ~/foo~bar or mid-path ~ is not.
+    scan_path = path[2:] if path.startswith("~/") else path
+    if "~" in scan_path:
+        raise ValidationError(
+            f"Path '{path}' contains unsafe characters. "
+            f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
+        )
+
     if any(char in path for char in UNSAFE_PATH_CHARS):
         raise ValidationError(
             f"Path '{path}' contains unsafe characters. "
-            f"Disallowed: {', '.join(UNSAFE_PATH_CHARS)}"
+            f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
         )
 
 

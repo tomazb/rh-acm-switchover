@@ -104,5 +104,16 @@ class TestValidateSafePathPositive:
     def test_accepts_single_dot(self):
         validate_safe_path("./file")
 
-    def test_accepts_deeply_nested_path(self):
-        validate_safe_path("/very/deeply/nested/path/to/file")
+    def test_accepts_home_relative_kubeconfig(self):
+        validate_safe_path("~/.kube/config")  # should not raise
+
+    def test_accepts_home_relative_nested(self):
+        validate_safe_path("~/projects/kubeconfigs/cluster.yaml")  # should not raise
+
+    def test_rejects_mid_path_tilde(self):
+        with pytest.raises(ValidationError, match="unsafe characters"):
+            validate_safe_path("/path/file~backup")
+
+    def test_rejects_tilde_without_slash(self):
+        with pytest.raises(ValidationError, match="unsafe characters"):
+            validate_safe_path("~etc/passwd")
