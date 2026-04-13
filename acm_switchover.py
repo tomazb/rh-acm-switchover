@@ -136,7 +136,10 @@ Examples:
             "Use after retargeting Git or for failback to original primary."
         ),
     )
-    mode_group.add_argument(
+
+    # Restore-only is a separate operation type (not in mode_group so it can
+    # combine with --dry-run and --validate-only)
+    parser.add_argument(
         "--restore-only",
         action="store_true",
         help=(
