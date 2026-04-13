@@ -68,7 +68,7 @@ rh-acm-switchover/
 
 ## Runtime Branches
 
-The entrypoint exposes four distinct execution branches:
+The entrypoint exposes five distinct execution branches:
 
 1. **Standard switchover path**
    - Uses state tracking, two `KubeClient` instances, phased execution, and optional Argo CD management.
@@ -78,6 +78,8 @@ The entrypoint exposes four distinct execution branches:
    - Bypasses the phased switchover workflow and runs the old-hub teardown flow directly.
 4. **Argo CD resume-only path (`--argocd-resume-only`)**
    - Loads recorded pause state and resumes Application auto-sync without running switchover phases.
+5. **Restore-only path (`--restore-only`)**
+   - Single-hub restore from S3 backups. No primary hub needed. Skips PRIMARY_PREP, runs secondary-only preflight.
 
 ```mermaid
 flowchart TD
@@ -85,10 +87,20 @@ flowchart TD
     B -->|--setup| C[Run setup-rbac.sh wrapper]
     B -->|--decommission| D[Run decommission flow]
     B -->|--argocd-resume-only| E[Load state and resume recorded Argo CD apps]
+    B -->|--restore-only| R[Initialize state and secondary client]
     B -->|standard switchover| F[Initialize state and clients]
     D --> D1{Success?}
     D1 -->|yes| D2[Exit 0]
     D1 -->|no| D3[Exit 1]
+    R --> RG[PREFLIGHT secondary-only]
+    RG --> RI[ACTIVATION full restore]
+    RI --> RJ[POST_ACTIVATION]
+    RJ --> RM[FINALIZATION backups-only]
+    RM --> RK[COMPLETED]
+    RG --> RL[FAILED]
+    RI --> RL
+    RJ --> RL
+    RM --> RL
     F --> G[PREFLIGHT]
     G --> H[PRIMARY_PREP]
     H --> I[ACTIVATION]

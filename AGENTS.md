@@ -393,6 +393,7 @@ The `.claude/skills/` directory contains conversational guides for Claude to hel
 | [enable-backups.skill.md](.claude/skills/operations/enable-backups.skill.md) | Enable BackupSchedule on new hub | Steps 11-12 |
 | [rollback.skill.md](.claude/skills/operations/rollback.skill.md) | Rollback procedure with decision tree by failure point | Rollback 1-5 |
 | [decommission.skill.md](.claude/skills/operations/decommission.skill.md) | Safe decommissioning with safety checks | Step 14 |
+| [restore-only.skill.md](.claude/skills/operations/restore-only.skill.md) | Single-hub restore from S3 backups (no primary) | `--restore-only` |
 
 ### Troubleshooting SKILLS
 |

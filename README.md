@@ -16,6 +16,7 @@ Automated, idempotent script for switching over Red Hat Advanced Cluster Managem
 - ✅ **Validate-only mode** - Run all validations without execution
 - ✅ **State tracking** - JSON state file for resume capability
 - ✅ **Two methods supported** - Continuous passive restore (Method 1) or one-time full restore (Method 2)
+- ✅ **Restore-only mode** - Restore managed clusters from S3 backups onto a new hub when the old hub is gone
 - ✅ **Multi-deployment support** - RBAC via Kustomize, Helm, or ACM Policies
 
 ---
@@ -217,6 +218,26 @@ python acm_switchover.py --decommission \
   --primary-context primary-hub
 ```
 
+### Restore-Only (Single Hub — No Primary Needed)
+
+When the old hub is gone and you need to restore managed clusters from existing S3 backups:
+
+```bash
+# Validate new hub readiness
+python acm_switchover.py --restore-only --validate-only \
+  --secondary-context new-hub
+
+# Dry-run to preview planned actions
+python acm_switchover.py --restore-only --dry-run \
+  --secondary-context new-hub
+
+# Execute the restore
+python acm_switchover.py --restore-only \
+  --secondary-context new-hub
+```
+
+> **Note:** Requires ACM installed on the new hub with a BackupStorageLocation pointing to the same S3 bucket as the old hub's backups.
+
 ## Command Line Options
 
 | Option | Description |
@@ -231,6 +252,7 @@ python acm_switchover.py --decommission \
 | `--dry-run` | Show planned actions without executing |
 | `--state-file` | Path to state file (default: `.state/switchover-<primary>__<secondary>.json`) |
 | `--decommission` | Decommission old hub (interactive) |
+| `--restore-only` | Restore managed clusters from S3 backups onto a single hub (no primary needed; implies `--method full`) |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Skip Observability-related steps even if detected |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
@@ -280,6 +302,25 @@ python acm_switchover.py --decommission \
      - `none`: Leave unchanged for manual handling
    - Optional: delete MultiClusterObservability on old hub when keeping it as secondary
    - Generate completion report
+
+### Restore-Only Flow
+
+When using `--restore-only` (no primary hub available), the workflow is simplified:
+
+```mermaid
+flowchart LR
+    A[PREFLIGHT] --> B[ACTIVATION]
+    B --> C[POST_ACTIVATION]
+    C --> D[FINALIZATION]
+    D --> E[COMPLETED]
+    style A fill:#e1f5fe
+    style E fill:#c8e6c9
+```
+
+1. **Preflight** — validates target hub only (ACM version, BSL credentials, namespaces)
+2. **Activation** — creates a one-time full Restore from the latest S3 backup
+3. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents
+4. **Finalization** — enables BackupSchedule on the new hub
 
 ### State Management
 
