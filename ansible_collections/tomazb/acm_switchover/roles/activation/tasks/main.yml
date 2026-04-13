@@ -32,7 +32,7 @@
           method: "{{ acm_switchover_operation.method }}"
           activation_method: "{{ acm_switchover_operation.activation_method | default('patch') }}"
           restore: "{{ acm_switchover_restore_activation_result.restore | default({}) }}"
-          patch: "{{ acm_switchover_restore_activation_result.patch | default(None) }}"
+          patch: "{{ acm_switchover_restore_activation_result.patch | default(omit) }}"
           operation: "{{ acm_switchover_restore_activation_result.operation | default({}) }}"
           wait_target: "{{ acm_switchover_restore_activation_result.wait_target | default({}) }}"
           wait: "{{ acm_switchover_wait_for_restore_result | default({}) }}"

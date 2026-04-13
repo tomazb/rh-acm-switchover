@@ -42,11 +42,11 @@
               else (
                 "pass" if 'open-cluster-management-observability' in acm_primary_namespace_names else "fail"
               ),
-            "message": "primary hub observability namespace exists"
-              if 'open-cluster-management-observability' in acm_primary_namespace_names
+            "message": "observability checks skipped by operator request"
+              if (acm_switchover_features.skip_observability_checks | default(false))
               else (
-                "observability checks skipped by operator request"
-                if (acm_switchover_features.skip_observability_checks | default(false))
+                "primary hub observability namespace exists"
+                if 'open-cluster-management-observability' in acm_primary_namespace_names
                 else "primary hub observability namespace is not installed"
               ),
             "details": {"namespaces": acm_primary_namespace_names},

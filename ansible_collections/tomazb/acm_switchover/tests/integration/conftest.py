@@ -68,8 +68,7 @@ def run_argocd_fixture(tmp_path):
             / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd"
             / fixture_name
         )
-        vars_payload = yaml.safe_load(fixture_path.read_text())
-        summary_path = tmp_path / "argocd-summary.json"
+        vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
@@ -117,8 +116,7 @@ def run_noncore_fixture(tmp_path):
             / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/noncore"
             / fixture_name
         )
-        vars_payload = yaml.safe_load(fixture_path.read_text())
-        summary_path = tmp_path / "noncore-summary.json"
+        vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))

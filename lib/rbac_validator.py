@@ -661,6 +661,13 @@ class RBACValidator:
             if namespace == OBSERVABILITY_NAMESPACE and not check_observability:
                 continue
 
+            if not self.client.namespace_exists(namespace):
+                warning = f"Namespace {namespace} does not exist - skipping decommission permission checks"
+                logger.warning(warning)
+                namespace_errors.append(warning)
+                all_valid = False
+                continue
+
             logger.info("Checking decommission permissions in namespace: %s", namespace)
 
             for api_group, resource, verbs in permissions:
