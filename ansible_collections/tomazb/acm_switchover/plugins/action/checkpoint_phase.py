@@ -49,6 +49,7 @@ class ActionModule(ActionBase):
     """
 
     TRANSFERS_FILES = False
+    INITIAL_PHASE = "preflight"
 
     def run(self, tmp=None, task_vars=None):
         super().run(tmp, task_vars)
@@ -81,11 +82,17 @@ class ActionModule(ActionBase):
             }
 
         reset = bool(checkpoint_config.get("reset", False))
-        checkpoint_data = build_checkpoint_record(phase, {}) if reset else self._load_checkpoint(path)
+        should_reset = reset and status == "enter" and phase == self.INITIAL_PHASE
+        checkpoint_data = build_checkpoint_record(phase, {}) if should_reset else self._load_checkpoint(path)
         if checkpoint_data.get("failed"):
             return checkpoint_data
 
         checkpoint_data["phase"] = phase
+
+        if should_reset and backend == "file":
+            save_result = self._save_checkpoint(path, checkpoint_data)
+            if save_result is not None and save_result.get("failed"):
+                return save_result
 
         if status == "enter":
             already_done = not should_resume_phase(checkpoint_data, phase)

@@ -148,7 +148,7 @@ def test_action_module_rejects_missing_phase(tmp_path):
     assert "Missing required checkpoint phase" in result["msg"]
 
 
-def test_action_module_reset_discards_previous_checkpoint_state(tmp_path):
+def test_action_module_reset_discards_previous_checkpoint_state_on_preflight_enter(tmp_path):
     import json
     from unittest.mock import MagicMock
 
@@ -168,7 +168,7 @@ def test_action_module_reset_discards_previous_checkpoint_state(tmp_path):
     task = MagicMock()
     task.async_val = 0
     task.args = {
-        "phase": "primary_prep",
+        "phase": "preflight",
         "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_file), "reset": True},
         "status": "enter",
     }
@@ -183,9 +183,83 @@ def test_action_module_reset_discards_previous_checkpoint_state(tmp_path):
     )
 
     result = action.run()
-    assert result["checkpoint"]["phase"] == "primary_prep"
+    assert result["checkpoint"]["phase"] == "preflight"
     assert result["checkpoint"]["completed_phases"] == []
     assert result["skipped_phase"] is False
+
+
+def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_path):
+    import json
+    from unittest.mock import MagicMock
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(json.dumps({
+        "schema_version": "1.0",
+        "phase": "activation",
+        "completed_phases": ["preflight", "activation"],
+        "operational_data": {"stale": True},
+        "errors": [{"phase": "activation", "error": "boom"}],
+        "report_refs": [{"phase": "activation", "path": "/tmp/out.json", "kind": "json-report"}],
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }))
+
+    enter_task = MagicMock()
+    enter_task.async_val = 0
+    enter_task.args = {
+        "phase": "preflight",
+        "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_file), "reset": True},
+        "status": "enter",
+    }
+    enter_action = ActionModule(
+        task=enter_task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+    enter_result = enter_action.run()
+    assert enter_result["checkpoint"]["completed_phases"] == []
+
+    pass_task = MagicMock()
+    pass_task.async_val = 0
+    pass_task.args = {
+        "phase": "preflight",
+        "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_file), "reset": True},
+        "status": "pass",
+    }
+    pass_action = ActionModule(
+        task=pass_task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+    pass_result = pass_action.run()
+    assert pass_result["checkpoint"]["completed_phases"] == ["preflight"]
+
+    activation_enter_task = MagicMock()
+    activation_enter_task.async_val = 0
+    activation_enter_task.args = {
+        "phase": "activation",
+        "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_file), "reset": True},
+        "status": "enter",
+    }
+    activation_enter_action = ActionModule(
+        task=activation_enter_task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+    activation_enter_result = activation_enter_action.run()
+
+    assert activation_enter_result["checkpoint"]["completed_phases"] == ["preflight"]
+    assert activation_enter_result["skipped_phase"] is False
 
 
 def test_build_report_ref_accepts_custom_kind():
