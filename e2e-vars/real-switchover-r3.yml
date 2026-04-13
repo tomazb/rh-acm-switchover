@@ -1,0 +1,30 @@
+# R3: Passive + ArgoCD manage=true | mgmt1→mgmt2
+acm_switchover_hubs:
+  primary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+  secondary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+
+acm_switchover_operation:
+  method: passive
+  activation_method: patch
+  old_hub_action: secondary
+  min_managed_clusters: 3
+
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_rbac_validation: true
+  skip_observability_checks: true
+  skip_gitops_check: false
+  disable_observability_on_secondary: false
+  argocd:
+    manage: true
+    resume_after_switchover: true
+
+acm_switchover_execution:
+  mode: execute
+  report_dir: ./artifacts
+  run_id: "e2e-r3-switchover"
+  verbosity: 1

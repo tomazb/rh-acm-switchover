@@ -1,0 +1,31 @@
+# R6: Controlled RBAC failure test
+# primary=mgmt2 uses validator-only kubeconfig → fails at first mutation (BackupSchedule patch)
+# secondary=mgmt1 uses normal kubeconfig (preflight reads succeed, never reached for mutations)
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/r6-validator-kubeconfig
+  secondary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+
+acm_switchover_operation:
+  method: passive
+  activation_method: patch
+  old_hub_action: secondary
+  min_managed_clusters: 3
+
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_rbac_validation: true
+  skip_observability_checks: true
+  skip_gitops_check: false
+  disable_observability_on_secondary: false
+  argocd:
+    manage: false
+    resume_after_switchover: false
+
+acm_switchover_execution:
+  mode: execute
+  report_dir: ./artifacts
+  verbosity: 1

@@ -1,0 +1,13 @@
+# R6 setup: Bootstrap validator SA on mgmt2 (current primary) with kubeconfig generation
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+acm_switchover_rbac_bootstrap:
+  role: validator
+  include_decommission: false
+  generate_kubeconfigs: true
+  validate_permissions: true
+  kubeconfig_path: ~/.kube/r6-validator-kubeconfig
+acm_switchover_execution:
+  mode: execute
