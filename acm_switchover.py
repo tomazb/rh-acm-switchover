@@ -469,6 +469,141 @@ def run_switchover(
     return True
 
 
+def run_restore_only(
+    args: argparse.Namespace,
+    state: StateManager,
+    secondary: KubeClient,
+    logger: logging.Logger,
+) -> bool:
+    """Execute restore-only workflow for single-hub restore from backup.
+
+    This is a simplified variant of run_switchover() that skips PRIMARY_PREP
+    (no primary hub exists) and runs finalization with old_hub_action="none".
+    """
+    # Default method to full for restore-only
+    if not args.method:
+        args.method = "full"
+
+    # Default old_hub_action to none (no old hub)
+    if not getattr(args, "old_hub_action", None):
+        args.old_hub_action = "none"
+
+    # Stale/failed state handling (same logic as run_switchover)
+    current_phase = state.get_current_phase()
+    if current_phase == Phase.COMPLETED:
+        state_age = state.get_state_age()
+        if state_age is None:
+            state_age = timedelta(seconds=STALE_STATE_THRESHOLD + 1)
+
+        if args.validate_only:
+            pass
+        elif state_age.total_seconds() > STALE_STATE_THRESHOLD:
+            logger.warning("")
+            logger.warning("⚠️  DETECTED STALE COMPLETED STATE")
+            logger.warning(
+                "Restore appears already completed, but state file is %s old.",
+                f"{int(state_age.total_seconds() // 60)} minutes",
+            )
+            logger.warning("")
+            logger.warning("To start a fresh restore:")
+            logger.warning("  1. Remove state file: rm %s", state.state_file)
+            logger.warning("  2. Or use: --reset-state")
+            logger.warning("  3. Or use: --force to override (use with caution)")
+            logger.warning("")
+            if not getattr(args, "force", False):
+                logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
+                sys.exit(EXIT_FAILURE)
+            logger.warning("--force used: Resetting state to start fresh restore")
+            state.reset()
+        elif not args.validate_only:
+            _log_completed_noop(state, logger, state_age)
+            return True
+    elif current_phase == Phase.FAILED and not args.validate_only:
+        last_error_phase = state.get_last_error_phase()
+        errors = state.get_errors()
+        last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+
+        logger.info("")
+        logger.info("⚠️  RESUMING FROM FAILED STATE")
+        logger.info("Last error: %s", last_error_msg)
+
+        if last_error_phase and last_error_phase in (
+            Phase.PREFLIGHT,
+            Phase.ACTIVATION,
+            Phase.POST_ACTIVATION,
+            Phase.FINALIZATION,
+        ):
+            logger.info("Failed at phase: %s", last_error_phase.value)
+            logger.info("Will retry from this phase")
+            state._retry_error_baseline = {
+                "phase": last_error_phase.value,
+                "count": len(errors),
+            }
+            state.set_phase(last_error_phase)
+        else:
+            logger.warning("Cannot determine which phase failed from error history")
+            logger.warning("")
+            logger.warning("Options:")
+            logger.warning("  1. Remove state file: rm %s", state.state_file)
+            logger.warning("  2. Or use: --reset-state to start fresh")
+            logger.warning("  3. Or use: --force to reset and retry from beginning")
+            logger.warning("")
+            if not getattr(args, "force", False):
+                logger.error("Use --force to reset state and retry, or remove state file to start fresh.")
+                sys.exit(EXIT_FAILURE)
+            logger.warning("--force used: Resetting state to start fresh restore")
+            state.reset()
+
+    if args.validate_only:
+        runtime_checkpoint = state.capture_runtime_checkpoint()
+        try:
+            return _run_phase_preflight(args, state, None, secondary, logger)
+        finally:
+            state.restore_runtime_checkpoint(runtime_checkpoint)
+
+    # Restore-only phase flow: skip PRIMARY_PREP entirely
+    phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
+        (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
+        (_run_phase_activation, (Phase.PREFLIGHT, Phase.ACTIVATION)),
+        (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION)),
+        (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION)),
+    )
+
+    current_phase = state.get_current_phase()
+    runnable_phases = {phase for _, phases in phase_flow for phase in phases}
+    if current_phase not in runnable_phases:
+        return _fail_phase(
+            state,
+            f"State phase '{current_phase.value}' is not runnable in restore-only flow.",
+            logger,
+        )
+
+    ran_phase = False
+    for handler, allowed_states in phase_flow:
+        if state.get_current_phase() in allowed_states:
+            ran_phase = True
+            result = handler(args, state, None, secondary, logger)
+            if not result:
+                return False
+
+    if not ran_phase:
+        return _fail_phase(state, "No runnable phase matched current state.", logger)
+
+    state.set_phase(Phase.COMPLETED)
+
+    logger.info("\n" + "=" * 60)
+    logger.info("RESTORE-ONLY COMPLETED SUCCESSFULLY!")
+    logger.info("=" * 60)
+    logger.info("\nRestore completed at: %s", datetime.now().astimezone().isoformat())
+    logger.info("State file: %s", args.state_file)
+    logger.info("\nNext steps:")
+    logger.info("  1. Verify managed clusters are connected and healthy")
+    logger.info("  2. Inform stakeholders that restore is complete")
+    logger.info("  3. Provide new hub connection details")
+
+    return True
+
+
 def _log_completed_noop(state: StateManager, logger: logging.Logger, state_age: timedelta) -> None:
     """Log an explicit no-op banner for reruns against a recent completed state."""
 
@@ -510,7 +645,7 @@ def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bo
 def _run_phase_preflight(
     args: argparse.Namespace,
     state: StateManager,
-    primary: KubeClient,
+    primary: Optional[KubeClient],
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
@@ -518,40 +653,50 @@ def _run_phase_preflight(
 
     state.set_phase(Phase.PREFLIGHT)
 
+    is_restore_only = getattr(args, "restore_only", False)
     effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(args, "validate_only", False)
     validator = PreflightValidator(
         primary,
         secondary,
         args.method,
         skip_rbac_validation=args.skip_rbac_validation,
-        include_decommission=args.old_hub_action == "decommission",
+        include_decommission=getattr(args, "old_hub_action", None) == "decommission",
         argocd_manage=effective_argocd_manage,
         skip_gitops_check=getattr(args, "skip_gitops_check", False),
+        restore_only=is_restore_only,
     )
     passed, config = validator.validate_all()
 
     if not passed:
         return _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
 
-    state.set_config("primary_version", config["primary_version"])
+    if is_restore_only:
+        state.set_config("primary_version", "unknown")
+        state.set_config("primary_observability_detected", False)
+        state.set_config("primary_has_observability", False)
+    else:
+        state.set_config("primary_version", config["primary_version"])
+        state.set_config(
+            "primary_observability_detected",
+            config["primary_observability_detected"],
+        )
+        primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
+        state.set_config("primary_has_observability", primary_obs_enabled)
+
     state.set_config("secondary_version", config["secondary_version"])
-    state.set_config(
-        "primary_observability_detected",
-        config["primary_observability_detected"],
-    )
     state.set_config(
         "secondary_observability_detected",
         config["secondary_observability_detected"],
     )
 
-    primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
     secondary_obs_enabled = config["secondary_observability_detected"] and not args.skip_observability_checks
-
-    state.set_config("primary_has_observability", primary_obs_enabled)
     state.set_config("secondary_has_observability", secondary_obs_enabled)
-    state.set_config("has_observability", primary_obs_enabled or secondary_obs_enabled)
+    state.set_config(
+        "has_observability",
+        state.get_config("primary_has_observability", False) or secondary_obs_enabled,
+    )
 
-    if not getattr(args, "skip_gitops_check", False):
+    if not getattr(args, "skip_gitops_check", False) and primary is not None:
         _report_argocd_acm_impact(primary, secondary, logger, argocd_manage=getattr(args, "argocd_manage", False))
 
     if args.validate_only:
@@ -660,7 +805,7 @@ def _run_phase_primary_prep(
 def _run_phase_activation(
     args: argparse.Namespace,
     state: StateManager,
-    _primary: KubeClient,
+    _primary: Optional[KubeClient],
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
@@ -671,9 +816,9 @@ def _run_phase_activation(
         secondary_client=secondary,
         state_manager=state,
         method=args.method,
-        activation_method=args.activation_method,
-        manage_auto_import_strategy=args.manage_auto_import_strategy,
-        old_hub_action=args.old_hub_action,
+        activation_method=getattr(args, "activation_method", "patch"),
+        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
+        old_hub_action=getattr(args, "old_hub_action", "none"),
         min_managed_clusters=getattr(args, "min_managed_clusters", 0),
     )
 
@@ -687,7 +832,7 @@ def _run_phase_activation(
 def _run_phase_post_activation(
     args: argparse.Namespace,
     state: StateManager,
-    _primary: KubeClient,
+    _primary: Optional[KubeClient],
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
@@ -711,13 +856,14 @@ def _run_phase_post_activation(
 def _run_phase_finalization(
     args: argparse.Namespace,
     state: StateManager,
-    primary: KubeClient,
+    primary: Optional[KubeClient],
     secondary: KubeClient,
     logger: logging.Logger,
 ) -> bool:
     _log_phase_banner("PHASE 5: FINALIZATION", logger)
     state.set_phase(Phase.FINALIZATION)
 
+    old_hub_action = "none" if getattr(args, "restore_only", False) else args.old_hub_action
     finalization = Finalization(
         secondary_client=secondary,
         state_manager=state,
@@ -725,9 +871,9 @@ def _run_phase_finalization(
         primary_client=primary,
         primary_has_observability=state.get_config("primary_has_observability", False),
         dry_run=args.dry_run,
-        old_hub_action=args.old_hub_action,
-        manage_auto_import_strategy=args.manage_auto_import_strategy,
-        disable_observability_on_secondary=args.disable_observability_on_secondary,
+        old_hub_action=old_hub_action,
+        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
+        disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
         argocd_resume_after_switchover=getattr(args, "argocd_resume_after_switchover", False),
     )
 
@@ -875,9 +1021,10 @@ def main():  # noqa: C901
     try:
         resolved_state_file = _resolve_state_file(
             args.state_file,
-            args.primary_context,
+            getattr(args, "primary_context", None),
             args.secondary_context,
             argocd_resume_only=getattr(args, "argocd_resume_only", False),
+            restore_only=getattr(args, "restore_only", False),
         )
     except ValueError as exc:
         logger.error("%s", exc)
@@ -946,7 +1093,7 @@ def main():  # noqa: C901
         sys.exit(EXIT_FAILURE)
 
     if not getattr(args, "argocd_resume_only", False):
-        state.ensure_contexts(args.primary_context, args.secondary_context)
+        state.ensure_contexts(getattr(args, "primary_context", None), args.secondary_context)
 
     try:
         primary, secondary = _initialize_clients(args, logger)
@@ -992,11 +1139,13 @@ def main():  # noqa: C901
 def _initialize_clients(
     args: argparse.Namespace,
     logger: logging.Logger,
-) -> Tuple[KubeClient, Optional[KubeClient]]:
+) -> Tuple[Optional[KubeClient], Optional[KubeClient]]:
     """Create Kubernetes clients for provided contexts."""
 
-    logger.info("Connecting to primary hub: %s", args.primary_context)
-    primary = KubeClient(args.primary_context, dry_run=args.dry_run)
+    primary = None
+    if getattr(args, "primary_context", None):
+        logger.info("Connecting to primary hub: %s", args.primary_context)
+        primary = KubeClient(args.primary_context, dry_run=args.dry_run)
 
     secondary = None
     if args.secondary_context:
@@ -1018,18 +1167,20 @@ def _get_default_state_dir() -> str:
     return ".state"
 
 
-def _build_default_state_file(primary_ctx: str, secondary_ctx: Optional[str]) -> str:
+def _build_default_state_file(primary_ctx: Optional[str], secondary_ctx: Optional[str]) -> str:
     """Build the default state file path for the provided context ordering."""
+    primary_label = primary_ctx or "restore-only"
     secondary_label = secondary_ctx or "none"
-    slug = f"{_sanitize_context_identifier(primary_ctx)}__{_sanitize_context_identifier(secondary_label)}"
+    slug = f"{_sanitize_context_identifier(primary_label)}__{_sanitize_context_identifier(secondary_label)}"
     return os.path.join(_get_default_state_dir(), f"switchover-{slug}.json")
 
 
 def _resolve_state_file(
     requested_path: Optional[str],
-    primary_ctx: str,
+    primary_ctx: Optional[str],
     secondary_ctx: Optional[str],
     argocd_resume_only: bool = False,
+    restore_only: bool = False,
 ) -> str:
     """Derive the state file path based on contexts unless user provided one."""
     if requested_path:
@@ -1130,7 +1281,7 @@ def _run_argocd_resume_only(
 def _execute_operation(
     args: argparse.Namespace,
     state: StateManager,
-    primary: KubeClient,
+    primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
 ) -> bool:
@@ -1138,6 +1289,11 @@ def _execute_operation(
 
     if args.decommission:
         return run_decommission(args, primary, state, logger)
+
+    if getattr(args, "restore_only", False):
+        if secondary is None:
+            raise ValueError("Secondary context is required for restore-only")
+        return run_restore_only(args, state, secondary, logger)
 
     if secondary is None:
         raise ValueError("Secondary context is required for switchover")

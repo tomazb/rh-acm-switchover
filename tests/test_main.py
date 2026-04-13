@@ -1615,6 +1615,7 @@ class TestPreflightPhase:
             include_decommission=False,
             argocd_manage=True,
             skip_gitops_check=False,
+            restore_only=False,
         )
         report_argocd_impact.assert_called_once_with(primary, secondary, logger, argocd_manage=True)
 
@@ -1657,6 +1658,7 @@ class TestPreflightPhase:
             include_decommission=True,
             argocd_manage=False,
             skip_gitops_check=False,
+            restore_only=False,
         )
 
     def test_report_argocd_impact_warns_instead_of_raising_on_list_failure(self):
