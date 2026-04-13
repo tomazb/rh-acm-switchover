@@ -32,6 +32,8 @@ def run_preflight_fixture(tmp_path):
                 str(repo_root),
                 os.path.expanduser("~/.ansible/collections"),
             ]),
+            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
+            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
 
         completed = subprocess.run(
@@ -78,6 +80,8 @@ def run_argocd_fixture(tmp_path):
                 str(repo_root),
                 os.path.expanduser("~/.ansible/collections"),
             ]),
+            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
+            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
 
         completed = subprocess.run(
@@ -125,6 +129,8 @@ def run_noncore_fixture(tmp_path):
                 str(repo_root),
                 os.path.expanduser("~/.ansible/collections"),
             ]),
+            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
+            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
 
         completed = subprocess.run(

@@ -35,6 +35,8 @@ def run_switchover_fixture(tmp_path):
                 str(repo_root),
                 os.path.expanduser("~/.ansible/collections"),
             ]),
+            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
+            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
 
         try:
@@ -109,6 +111,8 @@ def run_checkpoint_fixture(tmp_path):
                 str(repo_root),
                 os.path.expanduser("~/.ansible/collections"),
             ]),
+            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
+            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
 
         try:
