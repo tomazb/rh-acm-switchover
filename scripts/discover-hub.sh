@@ -863,6 +863,9 @@ propose_check() {
         echo "    1. Ensure secondary hub has OADP/Velero configured"
         echo "    2. Create a Restore resource with syncRestoreWithNewBackups=true"
         echo ""
+        echo "  For single-hub restore from S3 backup (no primary hub available):"
+        echo "    python acm_switchover.py --restore-only --secondary-context <target-hub> --validate-only"
+        echo ""
         return 1
         
     elif [[ ${#UNIQUE_API_SERVERS[@]} -eq 0 ]]; then
@@ -881,6 +884,9 @@ propose_check() {
         echo ""
         echo "  For postflight checks:"
         echo "    ${SCRIPT_DIR}/postflight-check.sh --new-hub-context <new> [--old-hub-context <old>]"
+        echo ""
+        echo "  For single-hub restore from S3 backup (no primary hub available):"
+        echo "    python acm_switchover.py --restore-only --secondary-context <target-hub> --validate-only"
         echo ""
         return 1
     fi
