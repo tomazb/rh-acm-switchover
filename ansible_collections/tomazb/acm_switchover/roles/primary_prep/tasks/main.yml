@@ -10,6 +10,9 @@
 - name: Run primary_prep phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    - name: Discover primary hub resources
+      ansible.builtin.include_tasks: discover_resources.yml
+
     - name: Pause BackupSchedule on primary hub
       ansible.builtin.include_tasks: pause_backups.yml
 

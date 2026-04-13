@@ -10,6 +10,9 @@
 - name: Run post_activation phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    - name: Discover secondary hub resources
+      ansible.builtin.include_tasks: discover_resources.yml
+
     - name: Verify managed clusters
       ansible.builtin.include_tasks: verify_managed_clusters.yml
 
