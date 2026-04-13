@@ -66,7 +66,8 @@ def parse_args():
     """Parse command line arguments."""
     # Keep switchover/decommission CLI contracts intact while allowing
     # standalone modes that do not perform a switchover flow.
-    standalone_mode_requested = any(flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only"))
+    standalone_mode_requested = any(flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only", "--restore-only"))
+    restore_only_requested = "--restore-only" in sys.argv[1:]
 
     parser = argparse.ArgumentParser(
         description="ACM Hub Switchover Automation",
@@ -94,7 +95,7 @@ Examples:
     )
 
     # Context arguments
-    parser.add_argument("--primary-context", required=True, help="Kubernetes context for primary hub")
+    parser.add_argument("--primary-context", required=not restore_only_requested, help="Kubernetes context for primary hub")
     parser.add_argument(
         "--secondary-context",
         help="Kubernetes context for secondary hub (required for switchover)",
@@ -124,6 +125,14 @@ Examples:
         help=(
             "Load state file and restore Argo CD auto-sync for previously paused Applications, then exit. "
             "Use after retargeting Git or for failback to original primary."
+        ),
+    )
+    mode_group.add_argument(
+        "--restore-only",
+        action="store_true",
+        help=(
+            "Restore managed clusters from existing S3 backups onto a single hub. "
+            "No primary hub required. Implies --method full."
         ),
     )
 
