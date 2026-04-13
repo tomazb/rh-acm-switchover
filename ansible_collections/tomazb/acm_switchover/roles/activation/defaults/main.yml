@@ -1,4 +1,12 @@
 ---
+acm_switchover_hubs:
+  primary:
+    context: ""
+    kubeconfig: ""
+  secondary:
+    context: ""
+    kubeconfig: ""
+
 acm_switchover_execution:
   mode: execute
   verbose: false

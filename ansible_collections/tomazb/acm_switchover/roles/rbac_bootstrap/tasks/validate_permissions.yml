@@ -8,7 +8,9 @@
   register: _rbac_validation_plan
 
 - name: Run SelfSubjectAccessReview checks for bootstrap RBAC
-  ansible.builtin.include_tasks: ../../preflight/tasks/run_ssar.yml
+  ansible.builtin.include_role:
+    name: tomazb.acm_switchover.preflight
+    tasks_from: run_ssar.yml
   vars:
     acm_rbac_permissions: "{{ _rbac_validation_plan.permissions }}"
 
