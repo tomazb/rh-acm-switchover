@@ -2970,6 +2970,88 @@ class TestRestoreOnlyFlow:
 
         assert args.old_hub_action == "none"
 
+    def test_argocd_pause_called_before_activation_when_argocd_manage(self):
+        """When --argocd-manage is set, _pause_argocd_for_restore is called before ACTIVATION."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args(argocd_manage=True)
+        state = Mock(spec=StateManager)
+        current = [Phase.INIT]
+        state.get_current_phase.side_effect = lambda: current[0]
+        state.get_state_age.return_value = None
+        state.is_step_completed.return_value = False
+        secondary = Mock()
+
+        pause_order = []
+
+        def track_pause(sec, st, dry_run, log):
+            pause_order.append("pause")
+            return True
+
+        def track_preflight(a, s, primary, sec, log):
+            current[0] = Phase.PREFLIGHT
+            return True
+
+        def track_activation(a, s, primary, sec, log):
+            pause_order.append("activation")
+            current[0] = Phase.ACTIVATION
+            return True
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=track_preflight), \
+             patch("acm_switchover._pause_argocd_for_restore", side_effect=track_pause) as pause_fn, \
+             patch("acm_switchover._run_phase_activation", side_effect=track_activation), \
+             patch("acm_switchover._run_phase_post_activation", return_value=True), \
+             patch("acm_switchover._run_phase_finalization", return_value=True):
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        pause_fn.assert_called_once_with(secondary, state, False, ANY)
+        assert pause_order == ["pause", "activation"], "pause must run before activation"
+
+    def test_argocd_pause_not_called_without_argocd_manage(self):
+        """When --argocd-manage is not set, _pause_argocd_for_restore is NOT called."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args(argocd_manage=False)
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True), \
+             patch("acm_switchover._pause_argocd_for_restore") as pause_fn, \
+             patch("acm_switchover._run_phase_activation", return_value=True), \
+             patch("acm_switchover._run_phase_post_activation", return_value=True), \
+             patch("acm_switchover._run_phase_finalization", return_value=True):
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        pause_fn.assert_not_called()
+
+    def test_argocd_pause_failure_aborts_restore(self):
+        """When _pause_argocd_for_restore returns False, run_restore_only returns False."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args(argocd_manage=True)
+        state = Mock(spec=StateManager)
+        current = [Phase.INIT]
+        state.get_current_phase.side_effect = lambda: current[0]
+        state.get_state_age.return_value = None
+        state.is_step_completed.return_value = False
+        secondary = Mock()
+
+        def track_preflight(a, s, primary, sec, log):
+            current[0] = Phase.PREFLIGHT
+            return True
+
+        with patch("acm_switchover._run_phase_preflight", side_effect=track_preflight), \
+             patch("acm_switchover._pause_argocd_for_restore", return_value=False), \
+             patch("acm_switchover._run_phase_activation") as activation:
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is False
+        activation.assert_not_called()
+
 
 @pytest.mark.unit
 class TestPauseArgocdForRestore:

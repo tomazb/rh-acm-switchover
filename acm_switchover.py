@@ -595,6 +595,11 @@ def run_restore_only(
     for handler, allowed_states in phase_flow:
         if state.get_current_phase() in allowed_states:
             ran_phase = True
+            # In restore-only mode, pause ArgoCD on the target hub before ACTIVATION.
+            if handler is _run_phase_activation and getattr(args, "argocd_manage", False):
+                if not state.is_step_completed("pause_argocd_apps"):
+                    if not _pause_argocd_for_restore(secondary, state, args.dry_run, logger):
+                        return False
             result = handler(args, state, None, secondary, logger)
             if not result:
                 return False
