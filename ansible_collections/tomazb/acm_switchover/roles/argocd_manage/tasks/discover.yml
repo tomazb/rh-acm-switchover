@@ -24,18 +24,18 @@
         namespace: "{{ acm_switchover_argocd.namespace | default('argocd') }}"
         kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
         context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
-      register: acm_argocd_app_list
+      register: _argocd_app_list
 
     - name: Filter to ACM-touching applications
       tomazb.acm_switchover.acm_argocd_filter:
-        applications: "{{ acm_argocd_app_list.resources | default([]) }}"
+        applications: "{{ _argocd_app_list.resources | default([]) }}"
       register: _argocd_live_filtered
 
     - name: Record discovered ACM apps
       ansible.builtin.set_fact:
         acm_switchover_argocd_installed: true
         acm_switchover_argocd_acm_apps: "{{ _argocd_live_filtered.applications }}"
-        acm_switchover_argocd_all_apps: "{{ acm_argocd_app_list.resources | default([]) }}"
+        acm_switchover_argocd_all_apps: "{{ _argocd_app_list.resources | default([]) }}"
 
   rescue:
     - name: Mark Argo CD as not installed
