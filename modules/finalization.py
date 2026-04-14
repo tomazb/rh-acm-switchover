@@ -889,7 +889,7 @@ class Finalization:
                 logger.warning(
                     "No BackupSchedule found after restore. "
                     "Create one manually: oc apply -f <backupschedule.yaml> "
-                    "-n open-cluster-management-backup"
+                    f"-n {BACKUP_NAMESPACE}"
                 )
                 return
             raise SwitchoverError("No BackupSchedule found while verifying finalization")
