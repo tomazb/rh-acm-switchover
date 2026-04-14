@@ -401,7 +401,14 @@ def test_restore_only_rbac_failure_blocks_preflight():
     with patch(
         "modules.preflight_coordinator.validate_rbac_permissions",
         side_effect=ValidationError("Missing create restores permission"),
-    ), patch("modules.preflight_coordinator.AutoImportStrategyValidator") as auto_import_validator:
+    ), patch("modules.preflight_coordinator.AutoImportStrategyValidator") as auto_import_validator, patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        return_value=argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=False,
+            has_argocds_crd=False,
+            install_type="none",
+        ),
+    ):
         auto_import_validator.return_value.run = Mock()
         passed, _config = validator.validate_all()
 

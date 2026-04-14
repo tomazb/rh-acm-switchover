@@ -66,7 +66,7 @@ INIT → PREFLIGHT → PRIMARY_PREP → ACTIVATION → POST_ACTIVATION → FINAL
 ```
 
 Restore-only mode (`--restore-only`) uses a reduced flow, skipping PRIMARY_PREP:
-```
+```text
 INIT → PREFLIGHT(secondary-only) → ACTIVATION → POST_ACTIVATION → FINALIZATION(backups-only) → COMPLETED
 ```
 
