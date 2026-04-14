@@ -1019,6 +1019,7 @@ def _run_phase_finalization(
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
         argocd_resume_after_switchover=getattr(args, "argocd_resume_after_switchover", False),
+        restore_only=getattr(args, "restore_only", False),
     )
 
     if not finalization.finalize():

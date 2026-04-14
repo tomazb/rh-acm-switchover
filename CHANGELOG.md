@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ArgoCD auto-sync pause was a no-op for apps with empty `syncPolicy`**: `pause_autosync()` built
+  a merge patch of `{"spec": {"syncPolicy": {}}}`, which Kubernetes treats as a no-op — leaving
+  `automated` intact and auto-sync still active. Fixed by setting `new_sync["automated"] = None`
+  so the merge patch explicitly removes the field.
+
+- **Finalization no longer fails when BackupSchedule is absent after `--restore-only`**: If the
+  Velero restore does not include a BackupSchedule resource (it is not always part of the backup),
+  finalization now logs a warning directing the operator to create one manually rather than failing
+  the entire operation. Backup verification steps are also skipped gracefully in this case.
+
 - **ArgoCD management in restore-only mode**: `--argocd-manage` and `--argocd-resume-after-switchover`
   are now supported with `--restore-only`. A new pre-ACTIVATION step pauses ACM-touching ArgoCD
   Applications with auto-sync on the target hub before Velero runs the restore, preventing

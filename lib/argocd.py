@@ -439,8 +439,11 @@ def pause_autosync(
             patched=False,
             skip_reason=PAUSE_SKIP_REASON_AUTOSYNC_DISABLED,
         )
-    # Remove automated, keep rest; add annotation
+    # Remove automated, keep rest; add annotation.
+    # Use explicit null for "automated" so the merge patch removes it — an
+    # empty dict patch {"syncPolicy": {}} is a no-op in Kubernetes merge patch.
     new_sync = {k: v for k, v in sync_policy.items() if k != "automated"}
+    new_sync["automated"] = None
     patch: Dict[str, Any] = {
         "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: run_id}},
         "spec": {"syncPolicy": new_sync},

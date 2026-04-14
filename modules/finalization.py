@@ -69,6 +69,7 @@ class Finalization:
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,
         argocd_resume_after_switchover: bool = False,
+        restore_only: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -80,6 +81,7 @@ class Finalization:
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.disable_observability_on_secondary = disable_observability_on_secondary
         self.argocd_resume_after_switchover = argocd_resume_after_switchover
+        self.restore_only = restore_only
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -397,6 +399,14 @@ class Finalization:
         Args:
             timeout: Maximum wait time in seconds
         """
+
+        # In restore-only mode without a BackupSchedule, no new backups will be created.
+        if self.restore_only and not self._get_backup_schedules():
+            logger.warning(
+                "Skipping new backup verification: no BackupSchedule exists. "
+                "Create a BackupSchedule manually to enable automatic backups."
+            )
+            return
 
         logger.info("Verifying new backups are being created...")
 
@@ -875,6 +885,13 @@ class Finalization:
         schedules = self._get_backup_schedules()
 
         if not schedules:
+            if self.restore_only:
+                logger.warning(
+                    "No BackupSchedule found after restore. "
+                    "Create one manually: oc apply -f <backupschedule.yaml> "
+                    "-n open-cluster-management-backup"
+                )
+                return
             raise SwitchoverError("No BackupSchedule found while verifying finalization")
 
         schedule = schedules[0]
@@ -1175,6 +1192,12 @@ class Finalization:
         schedules = self._get_backup_schedules(force_refresh=True)
 
         if not schedules:
+            if self.restore_only:
+                logger.warning(
+                    "No BackupSchedule found on new primary; skipping collision repair. "
+                    "Create a BackupSchedule manually after restore completes."
+                )
+                return
             raise SwitchoverError("No BackupSchedule found on new primary while repairing collision state")
 
         schedule = schedules[0]

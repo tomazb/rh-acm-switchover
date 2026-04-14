@@ -174,7 +174,7 @@ class TestPauseAutosync:
         assert call_kw["name"] == "app"
         patch = call_kw["patch"]
         assert patch["metadata"]["annotations"][argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION] == "run-1"
-        assert "automated" not in patch["spec"]["syncPolicy"]
+        assert patch["spec"]["syncPolicy"]["automated"] is None
         assert patch["spec"]["syncPolicy"].get("syncOptions") == []
 
     def test_api_exception_on_patch_returns_patched_false(self):
@@ -201,7 +201,7 @@ class TestPauseAutosync:
         assert result.patched is True
         client.patch_custom_resource.assert_called_once()
         patch = client.patch_custom_resource.call_args[1]["patch"]
-        assert "automated" not in patch["spec"]["syncPolicy"]
+        assert patch["spec"]["syncPolicy"]["automated"] is None
 
     def test_dry_run_pause_supports_keyword_arguments(self):
         client = MagicMock()
