@@ -5,6 +5,17 @@ All notable changes to the ACM Switchover Automation project will be documented 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **ArgoCD management in restore-only mode**: `--argocd-manage` and `--argocd-resume-after-switchover`
+  are now supported with `--restore-only`. A new pre-ACTIVATION step pauses ACM-touching ArgoCD
+  Applications with auto-sync on the target hub before Velero runs the restore, preventing
+  auto-sync from fighting restored objects. Resume works via existing `--argocd-resume-after-switchover`
+  or `--argocd-resume-only` mechanisms. The advisory message when ArgoCD is detected without
+  `--argocd-manage` now correctly suggests using the flag in restore-only mode.
+
 ## [1.6.10] - 2026-04-13
 
 ### Added
@@ -24,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Restore-only RBAC preflight regression**: `--restore-only` no longer skips RBAC validation entirely; secondary hub write permissions (Restore, BackupSchedule, ManagedCluster) are now validated during preflight, so `--validate-only` catches missing permissions early instead of failing at activation.
-- **Restore-only ArgoCD safety**: `--argocd-manage` and `--argocd-resume-after-switchover` are now rejected with `--restore-only` (restore-only skips PRIMARY_PREP where ArgoCD pause occurs). A restore-only-specific advisory warns when ACM-touching Argo CD Applications with auto-sync are detected on the target hub.
+- **Restore-only ArgoCD safety**: Added a restore-only-specific advisory warning when ACM-touching Argo CD Applications with auto-sync are detected on the target hub (subsequently extended in `[Unreleased]` to support `--argocd-manage` directly).
 - Container release workflow now skips Quay publishing cleanly when `QUAY_USERNAME` / `QUAY_PASSWORD` secrets are absent and continues with GHCR-only publishing.
 
 ## [1.6.3] - 2026-04-07
