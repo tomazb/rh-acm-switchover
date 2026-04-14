@@ -985,7 +985,7 @@ onto a new hub, the Python tool handles validation and orchestration directly â€
 
 ```mermaid
 graph TD
-    A[Start: Plan Restore] --> B["Run Restore-Only Preflight<br/>(python acm_switchover.py --restore-only --validate-only)"]
+    A[Start: Plan Restore] --> B["Run Restore-Only Preflight<br/>(python acm_switchover.py --restore-only --validate-only --secondary-context target-hub)"]
     B --> C{Preflight<br/>Passed?}
     C -->|No| D[Fix Issues<br/>BSL, OADP, namespaces]
     D --> B

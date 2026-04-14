@@ -529,7 +529,7 @@ def run_restore_only(
             logger.warning("--force used: Resetting state to start fresh restore")
             state.reset()
         elif not args.validate_only:
-            _log_completed_noop(state, logger, state_age)
+            _log_restore_completed_noop(state, logger, state_age)
             return True
     elif current_phase == Phase.FAILED and not args.validate_only:
         last_error_phase = state.get_last_error_phase()
@@ -628,6 +628,18 @@ def _log_completed_noop(state: StateManager, logger: logging.Logger, state_age: 
     age_minutes = int(state_age.total_seconds() // 60)
     logger.info("\n" + "=" * 60)
     logger.info("SWITCHOVER ALREADY COMPLETED")
+    logger.info("=" * 60)
+    logger.info("Existing state file age: %s minutes", age_minutes)
+    logger.info("No phases were executed on this run.")
+    logger.info("State file: %s", state.state_file)
+
+
+def _log_restore_completed_noop(state: StateManager, logger: logging.Logger, state_age: timedelta) -> None:
+    """Log an explicit no-op banner for reruns against a recent completed restore-only state."""
+
+    age_minutes = int(state_age.total_seconds() // 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("RESTORE-ONLY ALREADY COMPLETED")
     logger.info("=" * 60)
     logger.info("Existing state file age: %s minutes", age_minutes)
     logger.info("No phases were executed on this run.")
@@ -949,7 +961,7 @@ def _run_phase_activation(
         state_manager=state,
         method=args.method,
         activation_method=getattr(args, "activation_method", "patch"),
-        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
+        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
         old_hub_action=getattr(args, "old_hub_action", "none"),
         min_managed_clusters=getattr(args, "min_managed_clusters", 0),
     )
@@ -1004,7 +1016,7 @@ def _run_phase_finalization(
         primary_has_observability=state.get_config("primary_has_observability", False),
         dry_run=args.dry_run,
         old_hub_action=old_hub_action,
-        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
+        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
         argocd_resume_after_switchover=getattr(args, "argocd_resume_after_switchover", False),
     )

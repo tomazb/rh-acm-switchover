@@ -48,7 +48,10 @@ INIT → PREFLIGHT(secondary-only) → ACTIVATION → POST_ACTIVATION → FINALI
 | `--method` | Defaults to `full`; rejects `passive` |
 | `--old-hub-action` | **Forbidden** |
 | `--decommission` | **Forbidden** |
+| `--setup` | **Forbidden** |
+| `--argocd-resume-only` | **Forbidden** |
 | `--argocd-manage` | Allowed |
+| `--argocd-resume-after-switchover` | Allowed (with `--argocd-manage`, not with `--validate-only`) |
 | `--validate-only` | Allowed |
 | `--dry-run` | Allowed |
 

@@ -174,11 +174,14 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--argocd-resume-after-switchover` requires `--argocd-manage`
 - `--argocd-resume-after-switchover` cannot be used with `--old-hub-action decommission`
 - `--include-decommission` is only valid with `--setup` when `--role` is `operator` or `both`
-- `--restore-only` requires `--secondary-context` (the restore target hub)
 - `--restore-only` cannot be used with `--primary-context` (no primary hub needed)
+- `--restore-only` requires `--secondary-context` (the restore target hub)
 - `--restore-only` requires `--method full` (passive sync needs a live primary); method defaults to `full` if unset
 - `--restore-only` cannot be used with `--old-hub-action` (no old hub to manage)
 - `--restore-only` cannot be used with `--decommission`
+- `--restore-only` cannot be used with `--setup`
+- `--restore-only` cannot be used with `--argocd-resume-only`
+- `--argocd-manage` is allowed with `--restore-only`; `--argocd-resume-after-switchover` also works when its global prerequisites are met
 - In `check_rbac.py`, `--include-decommission` is only valid with `--role operator`; combining it with `--role validator` is rejected with an explicit error (decommission permissions are operator-only)
 - With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
 - ArgoCD detection runs automatically when CRD is detected; `--skip-gitops-check` disables all GitOps detection including ArgoCD deep dive

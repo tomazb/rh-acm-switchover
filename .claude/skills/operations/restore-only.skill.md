@@ -85,14 +85,15 @@ python acm_switchover.py \
 ---
 
 ## Phase Flow
-
-```
+```text
 INIT → PREFLIGHT (secondary-only) → ACTIVATION → POST_ACTIVATION → FINALIZATION (backups-only) → COMPLETED
 ```
 
 **Skipped phases** (vs. normal switchover):
 - PRIMARY_PREP — no primary hub exists
-- RBAC validation — primary hub absent
+- Primary-side RBAC validation — skipped because primary=None; secondary-hub RBAC checks still run during PREFLIGHT
+
+> Keep runbook and SKILLS synchronized whenever Restore-only PREFLIGHT behavior or primary=None assumptions change.
 
 ---
 
@@ -144,6 +145,8 @@ Expected: `Available`. If not, check S3 credentials and bucket access.
 - `--method full` is implied and enforced (passive sync needs a live primary)
 - `--old-hub-action` is **not accepted** (no old hub to manage)
 - Cannot combine with `--decommission`, `--setup`, or `--argocd-resume-only`
+- Can combine with `--argocd-manage`
+- `--argocd-resume-after-switchover` is allowed with `--argocd-manage` and cannot be combined with `--validate-only`
 - Can combine with `--validate-only` and `--dry-run`
 
 ---
