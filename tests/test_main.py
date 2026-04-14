@@ -1887,6 +1887,42 @@ class TestPreflightPhase:
             "Consider --argocd-manage" in t for t in warning_texts
         ), f"Advisory warning should NOT appear without auto-sync apps, got: {warning_texts}"
 
+    def test_argocd_advisory_warning_shown_with_primary_none(self):
+        """Advisory warning renders correctly in restore-only mode (primary=None)."""
+        secondary = Mock()
+        logger = Mock()
+        discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=False,
+            install_type="vanilla",
+        )
+        acm_app = argocd_lib.AppImpact(
+            namespace="openshift-gitops",
+            name="acm-config",
+            resource_count=3,
+            app={"spec": {"syncPolicy": {"automated": {"prune": True}}}},
+        )
+
+        with patch(
+            "acm_switchover.argocd_lib.detect_argocd_installation",
+            return_value=discovery,
+        ), patch(
+            "acm_switchover.argocd_lib.list_argocd_applications",
+            return_value=[{"metadata": {"name": "acm-config"}}],
+        ), patch(
+            "acm_switchover.argocd_lib.find_acm_touching_apps",
+            return_value=[acm_app],
+        ):
+            _report_argocd_acm_impact(None, secondary, logger, argocd_manage=False)
+
+        warning_texts = [
+            call.args[0] % call.args[1:] if len(call.args) > 1 else call.args[0]
+            for call in logger.warning.call_args_list
+        ]
+        assert any(
+            "Consider --argocd-manage" in t for t in warning_texts
+        ), f"Expected advisory warning with 'Consider --argocd-manage' in restore-only mode, got: {warning_texts}"
+
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
@@ -3302,3 +3338,22 @@ class TestPauseArgocdForRestore:
                         if call[0][0] == "argocd_paused_apps"]
         if paused_writes:
             assert paused_writes[-1] == []
+
+    def test_list_apps_failure_returns_false(self):
+        """When list_argocd_applications raises, returns False and records error."""
+        from acm_switchover import _pause_argocd_for_restore
+
+        secondary = Mock()
+        state = self._make_state()
+        logger = Mock()
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation") as detect, \
+             patch("acm_switchover.argocd_lib.list_argocd_applications",
+                   side_effect=Exception("api timeout")), \
+             patch("acm_switchover.argocd_lib.run_id_or_new", return_value="run-123"):
+            detect.return_value = Mock(has_applications_crd=True)
+            result = _pause_argocd_for_restore(secondary, state, dry_run=False, logger=logger)
+
+        assert result is False
+        state.add_error.assert_called_once_with(ANY, "argocd_pause_restore")
+        state.mark_step_completed.assert_not_called()

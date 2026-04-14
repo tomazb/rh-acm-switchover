@@ -900,7 +900,7 @@ def _report_argocd_acm_impact(
         if autosync_count:
             logger.warning(
                 "\n⚠ ArgoCD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
-                "  Consider --argocd-manage to pause auto-sync during switchover.\n"
+                "  Consider --argocd-manage to pause auto-sync during switchover or restore.\n"
                 "  Without pausing, ArgoCD may revert switchover changes.\n"
                 "  To suppress: --skip-gitops-check",
                 autosync_count,
