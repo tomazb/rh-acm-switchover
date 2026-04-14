@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
@@ -2969,3 +2969,254 @@ class TestRestoreOnlyFlow:
             run_restore_only(args, state, secondary, Mock())
 
         assert args.old_hub_action == "none"
+
+
+@pytest.mark.unit
+class TestPauseArgocdForRestore:
+    """Tests for _pause_argocd_for_restore() helper."""
+
+    def _make_state(self, completed_steps=None):
+        """Create a mock StateManager."""
+        from lib.utils import StateManager
+        state = Mock(spec=StateManager)
+        completed = set(completed_steps or [])
+        state.is_step_completed.side_effect = lambda s: s in completed
+        state.get_config.return_value = None
+        state.set_config.return_value = None
+        state.mark_step_completed.return_value = None
+        state.add_error.return_value = None
+        return state
+
+    def test_no_crd_is_noop(self):
+        """When ArgoCD CRD is absent, pause is a no-op and step is marked complete."""
+        from acm_switchover import _pause_argocd_for_restore
+
+        secondary = Mock()
+        state = self._make_state()
+        logger = Mock()
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation") as detect:
+            detect.return_value = Mock(has_applications_crd=False)
+            result = _pause_argocd_for_restore(secondary, state, dry_run=False, logger=logger)
+
+        assert result is True
+        state.set_config.assert_any_call("argocd_paused_apps", [])
+        state.set_config.assert_any_call("argocd_run_id", None)
+        state.set_config.assert_any_call("argocd_pause_dry_run", False)
+        state.mark_step_completed.assert_called_once_with("pause_argocd_apps")
+
+    def test_step_already_completed_returns_immediately(self):
+        """When step is already completed, no ArgoCD calls are made."""
+        from acm_switchover import _pause_argocd_for_restore
+
+        secondary = Mock()
+        state = self._make_state(completed_steps=["pause_argocd_apps"])
+        logger = Mock()
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation") as detect:
+            result = _pause_argocd_for_restore(secondary, state, dry_run=False, logger=logger)
+            detect.assert_not_called()
+
+        assert result is True
+        detect.assert_not_called()
+        state.set_config.assert_not_called()
+        state.mark_step_completed.assert_not_called()
+        state.add_error.assert_not_called()
+
+    def test_auto_sync_apps_are_paused(self):
+        """Apps with auto-sync are paused and recorded in state with hub='secondary'."""
+        from acm_switchover import _pause_argocd_for_restore
+        import copy
+
+        secondary = Mock()
+        state = self._make_state()
+        logger = Mock()
+
+        app = {
+            "metadata": {"namespace": "argocd", "name": "my-app"},
+            "spec": {"syncPolicy": {"automated": {}}},
+        }
+        impact = Mock()
+        impact.app = app
+
+        pause_result = Mock()
+        pause_result.patched = True
+        pause_result.namespace = "argocd"
+        pause_result.name = "my-app"
+        pause_result.original_sync_policy = {"automated": {"selfHeal": True}}
+        pause_result.error = None
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation") as detect, \
+             patch("acm_switchover.argocd_lib.list_argocd_applications") as list_apps, \
+             patch("acm_switchover.argocd_lib.find_acm_touching_apps") as find_acm, \
+             patch("acm_switchover.argocd_lib.pause_autosync") as pause, \
+             patch("acm_switchover.argocd_lib.run_id_or_new", return_value="run-123"):
+            detect.return_value = Mock(has_applications_crd=True)
+            list_apps.return_value = [app]
+            find_acm.return_value = [impact]
+            pause.return_value = pause_result
+
+            result = _pause_argocd_for_restore(secondary, state, dry_run=False, logger=logger)
+
+        assert result is True
+        pause.assert_called_once_with(secondary, app, "run-123")
+        state.mark_step_completed.assert_called_once_with("pause_argocd_apps")
+        # Verify state recorded the paused app with hub="secondary"
+        set_config_calls = {call[0][0]: call[0][1] for call in state.set_config.call_args_list
+                           if call[0][0] == "argocd_paused_apps"}
+        last_paused = list(set_config_calls.values())[-1]
+        assert len(last_paused) == 1
+        assert last_paused[0]["hub"] == "secondary"
+        assert last_paused[0]["namespace"] == "argocd"
+        assert last_paused[0]["name"] == "my-app"
+        assert last_paused[0]["pause_applied"] is True
+        assert last_paused[0]["original_sync_policy"] == {"automated": {"selfHeal": True}}
+        state.set_config.assert_any_call("argocd_run_id", "run-123")
+        state.set_config.assert_any_call("argocd_pause_dry_run", False)
+
+    def test_dry_run_does_not_mark_pause_applied(self):
+        """In dry-run mode, pause_applied=False and argocd_pause_dry_run=True."""
+        from acm_switchover import _pause_argocd_for_restore
+
+        secondary = Mock()
+        state = self._make_state()
+        logger = Mock()
+
+        app = {
+            "metadata": {"namespace": "argocd", "name": "my-app"},
+            "spec": {"syncPolicy": {"automated": {}}},
+        }
+        impact = Mock()
+        impact.app = app
+
+        pause_result = Mock()
+        pause_result.patched = True
+        pause_result.namespace = "argocd"
+        pause_result.name = "my-app"
+        pause_result.original_sync_policy = {"automated": {"selfHeal": True}}
+        pause_result.error = None
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation") as detect, \
+             patch("acm_switchover.argocd_lib.list_argocd_applications", return_value=[app]), \
+             patch("acm_switchover.argocd_lib.find_acm_touching_apps", return_value=[impact]), \
+             patch("acm_switchover.argocd_lib.pause_autosync", return_value=pause_result), \
+             patch("acm_switchover.argocd_lib.run_id_or_new", return_value="run-123"):
+            detect.return_value = Mock(has_applications_crd=True)
+            result = _pause_argocd_for_restore(secondary, state, dry_run=True, logger=logger)
+
+        assert result is True
+        state.set_config.assert_any_call("argocd_pause_dry_run", True)
+        # Verify pause_applied=False for dry-run
+        paused_writes = [call[0][1] for call in state.set_config.call_args_list
+                        if call[0][0] == "argocd_paused_apps" and isinstance(call[0][1], list) and call[0][1]]
+        assert paused_writes, "Expected at least one non-empty argocd_paused_apps write in dry-run"
+        assert paused_writes[-1][0]["pause_applied"] is False
+
+    def test_detection_failure_returns_false(self):
+        """When ArgoCD detection raises, function returns False and records error."""
+        from acm_switchover import _pause_argocd_for_restore
+
+        secondary = Mock()
+        state = self._make_state()
+        logger = Mock()
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation", side_effect=Exception("timeout")):
+            result = _pause_argocd_for_restore(secondary, state, dry_run=False, logger=logger)
+
+        assert result is False
+        state.add_error.assert_called_once_with(ANY, "argocd_pause_restore")
+        state.mark_step_completed.assert_not_called()
+
+    def test_no_acm_apps_skips_pause(self):
+        """When no ACM-touching apps are found, step is marked complete with empty list."""
+        from acm_switchover import _pause_argocd_for_restore
+
+        secondary = Mock()
+        state = self._make_state()
+        logger = Mock()
+
+        non_acm_app = {
+            "metadata": {"namespace": "argocd", "name": "unrelated-app"},
+            "spec": {"syncPolicy": {"automated": {}}},
+        }
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation") as detect, \
+             patch("acm_switchover.argocd_lib.list_argocd_applications", return_value=[non_acm_app]), \
+             patch("acm_switchover.argocd_lib.find_acm_touching_apps", return_value=[]), \
+             patch("acm_switchover.argocd_lib.pause_autosync") as pause_fn, \
+             patch("acm_switchover.argocd_lib.run_id_or_new", return_value="run-123"):
+            detect.return_value = Mock(has_applications_crd=True)
+            result = _pause_argocd_for_restore(secondary, state, dry_run=False, logger=logger)
+
+        assert result is True
+        pause_fn.assert_not_called()
+        state.mark_step_completed.assert_called_once_with("pause_argocd_apps")
+
+    def test_pause_failure_returns_false(self):
+        """When pause_autosync returns patched=False with an error, returns False and records error."""
+        from acm_switchover import _pause_argocd_for_restore
+
+        secondary = Mock()
+        state = self._make_state()
+        logger = Mock()
+
+        app = {
+            "metadata": {"namespace": "argocd", "name": "my-app"},
+            "spec": {"syncPolicy": {"automated": {}}},
+        }
+        impact = Mock()
+        impact.app = app
+
+        pause_result = Mock()
+        pause_result.patched = False
+        pause_result.namespace = "argocd"
+        pause_result.name = "my-app"
+        pause_result.error = "connection refused"
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation") as detect, \
+             patch("acm_switchover.argocd_lib.list_argocd_applications", return_value=[app]), \
+             patch("acm_switchover.argocd_lib.find_acm_touching_apps", return_value=[impact]), \
+             patch("acm_switchover.argocd_lib.pause_autosync", return_value=pause_result), \
+             patch("acm_switchover.argocd_lib.run_id_or_new", return_value="run-123"):
+            detect.return_value = Mock(has_applications_crd=True)
+            result = _pause_argocd_for_restore(secondary, state, dry_run=False, logger=logger)
+
+        assert result is False
+        state.add_error.assert_called_once_with(ANY, "argocd_pause_restore")
+        state.mark_step_completed.assert_not_called()
+        # Entry is removed from state after failure — last paused_apps write should be empty
+        paused_writes = [call[0][1] for call in state.set_config.call_args_list
+                        if call[0][0] == "argocd_paused_apps"]
+        assert paused_writes[-1] == [], "Failed app should be removed from paused_apps state"
+
+    def test_manual_sync_app_not_paused(self):
+        """ACM-touching apps without auto-sync are skipped (not paused)."""
+        from acm_switchover import _pause_argocd_for_restore
+
+        secondary = Mock()
+        state = self._make_state()
+        logger = Mock()
+
+        manual_app = {
+            "metadata": {"namespace": "argocd", "name": "manual-app"},
+            "spec": {"syncPolicy": {"syncOptions": ["CreateNamespace=true"]}},
+        }
+        impact = Mock()
+        impact.app = manual_app
+
+        with patch("acm_switchover.argocd_lib.detect_argocd_installation") as detect, \
+             patch("acm_switchover.argocd_lib.list_argocd_applications", return_value=[manual_app]), \
+             patch("acm_switchover.argocd_lib.find_acm_touching_apps", return_value=[impact]), \
+             patch("acm_switchover.argocd_lib.pause_autosync") as pause_fn, \
+             patch("acm_switchover.argocd_lib.run_id_or_new", return_value="run-123"):
+            detect.return_value = Mock(has_applications_crd=True)
+            result = _pause_argocd_for_restore(secondary, state, dry_run=False, logger=logger)
+
+        assert result is True
+        pause_fn.assert_not_called()
+        state.mark_step_completed.assert_called_once_with("pause_argocd_apps")
+        # Verify no entries were recorded in paused_apps
+        paused_writes = [call[0][1] for call in state.set_config.call_args_list
+                        if call[0][0] == "argocd_paused_apps"]
+        if paused_writes:
+            assert paused_writes[-1] == []

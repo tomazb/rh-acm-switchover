@@ -17,6 +17,7 @@ Features:
 """
 
 import argparse
+import copy
 import logging
 import os
 import sys
@@ -716,6 +717,116 @@ def _run_phase_preflight(
         return True
 
     logger.info("\n✓ Pre-flight validation passed!")
+    return True
+
+
+def _pause_argocd_for_restore(
+    secondary: KubeClient,
+    state: "StateManager",
+    dry_run: bool,
+    logger: logging.Logger,
+) -> bool:
+    """Pause Argo CD auto-sync on the restore target hub before running restore.
+
+    In restore-only mode there is no primary hub, so ArgoCD management targets
+    the secondary (target) hub only.  Writes state with the same schema as
+    PrimaryPrep._pause_argocd_acm_apps so finalization._resume_argocd_apps()
+    works without modification.
+    """
+    if state.is_step_completed("pause_argocd_apps"):
+        logger.info("Argo CD pause already completed (restore-only); skipping")
+        return True
+
+    try:
+        discovery = argocd_lib.detect_argocd_installation(secondary)
+    except Exception as exc:
+        logger.error("Failed to detect Argo CD installation on target hub: %s", exc)
+        state.add_error(f"ArgoCD detection failed: {exc}", "argocd_pause_restore")
+        return False
+
+    if not discovery.has_applications_crd:
+        logger.info("Argo CD Applications CRD not found on target hub; skipping Argo CD pause")
+        state.set_config("argocd_paused_apps", [])
+        state.set_config("argocd_run_id", None)
+        state.set_config("argocd_pause_dry_run", False)
+        state.mark_step_completed("pause_argocd_apps")
+        return True
+
+    run_id = argocd_lib.run_id_or_new(state.get_config("argocd_run_id"))
+    state.set_config("argocd_run_id", run_id)
+    state.set_config("argocd_pause_dry_run", dry_run)
+
+    try:
+        apps = argocd_lib.list_argocd_applications(secondary, namespaces=None)
+    except Exception as exc:
+        logger.error("Failed to list Argo CD Applications on target hub: %s", exc)
+        state.add_error(f"ArgoCD list failed: {exc}", "argocd_pause_restore")
+        return False
+
+    acm_apps = argocd_lib.find_acm_touching_apps(apps)
+    paused_apps = copy.deepcopy(state.get_config("argocd_paused_apps") or [])
+    pause_failures = 0
+
+    for impact in acm_apps:
+        meta = impact.app.get("metadata", {}) or {}
+        namespace = meta.get("namespace", "")
+        name = meta.get("name", "")
+        sync_policy = dict((impact.app.get("spec", {}) or {}).get("syncPolicy") or {})
+        if "automated" not in sync_policy:
+            logger.debug("  Skip %s/%s (no auto-sync)", namespace, name)
+            continue
+
+        # Idempotent retry: skip apps already recorded in state.
+        if any(
+            e.get("hub") == "secondary" and e.get("namespace") == namespace and e.get("name") == name
+            for e in paused_apps
+        ):
+            logger.debug("  Skip %s/%s (already recorded)", namespace, name)
+            continue
+
+        entry: dict = {
+            "hub": "secondary",
+            "namespace": namespace,
+            "name": name,
+            "original_sync_policy": sync_policy,
+            "pause_applied": False,
+        }
+        paused_apps.append(entry)
+        state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+
+        result = argocd_lib.pause_autosync(secondary, impact.app, run_id)
+        if result.patched:
+            entry["original_sync_policy"] = result.original_sync_policy
+            entry["pause_applied"] = not dry_run
+            if dry_run:
+                logger.info("  [DRY-RUN] Would pause %s/%s on target hub", result.namespace, result.name)
+            else:
+                logger.info("  Paused %s/%s on target hub", result.namespace, result.name)
+            state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+        elif result.error:
+            paused_apps.remove(entry)
+            state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+            logger.warning("  Failed to pause %s/%s on target hub: %s", namespace, name, result.error)
+            pause_failures += 1
+        else:
+            paused_apps.remove(entry)
+            state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+            logger.debug("  Skip %s/%s (no auto-sync after recheck)", result.namespace, result.name)
+
+    if pause_failures:
+        state.add_error(
+            f"Argo CD auto-sync pause failed for {pause_failures} Application(s)",
+            "argocd_pause_restore",
+        )
+        return False
+
+    logger.info(
+        "Argo CD: %d Application(s) paused on target hub (run_id=%s). "
+        "Use --argocd-resume-after-switchover or --argocd-resume-only after restore completes.",
+        len(paused_apps),
+        run_id,
+    )
+    state.mark_step_completed("pause_argocd_apps")
     return True
 
 
