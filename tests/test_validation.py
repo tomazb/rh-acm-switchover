@@ -680,8 +680,8 @@ class TestCLIArgumentValidation:
         with pytest.raises(ValidationError):
             InputValidator.validate_all_cli_args(args)
 
-    def test_restore_only_forbids_argocd_manage(self):
-        """Test --restore-only forbids --argocd-manage."""
+    def test_restore_only_allows_argocd_manage(self):
+        """Test --restore-only allows --argocd-manage (targets secondary hub only)."""
         args = MockArgs(
             primary_context=None,
             secondary_context="new-hub",
@@ -691,11 +691,11 @@ class TestCLIArgumentValidation:
             restore_only=True,
             argocd_manage=True,
         )
-        with pytest.raises(ValidationError, match="--argocd-manage"):
-            InputValidator.validate_all_cli_args(args)
+        # Should not raise
+        InputValidator.validate_all_cli_args(args)
 
-    def test_restore_only_forbids_argocd_resume_after_switchover(self):
-        """Test --restore-only forbids --argocd-resume-after-switchover."""
+    def test_restore_only_allows_argocd_resume_after_switchover(self):
+        """Test --restore-only allows --argocd-resume-after-switchover."""
         args = MockArgs(
             primary_context=None,
             secondary_context="new-hub",
@@ -703,10 +703,11 @@ class TestCLIArgumentValidation:
             old_hub_action=None,
             decommission=False,
             restore_only=True,
+            argocd_manage=True,
             argocd_resume_after_switchover=True,
         )
-        with pytest.raises(ValidationError, match="--argocd-resume-after-switchover"):
-            InputValidator.validate_all_cli_args(args)
+        # Should not raise
+        InputValidator.validate_all_cli_args(args)
 
 
 class TestKubernetesResourceValidation:

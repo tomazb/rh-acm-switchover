@@ -411,17 +411,8 @@ class InputValidator:
                 raise ValidationError("--restore-only cannot be used with --setup")
             if has_argocd_resume_only:
                 raise ValidationError("--restore-only cannot be used with --argocd-resume-only")
-            if has_argocd_manage:
-                raise ValidationError(
-                    "--restore-only cannot be used with --argocd-manage "
-                    "(restore-only skips PRIMARY_PREP where Argo CD pause occurs; "
-                    "pause Argo CD Applications manually before running restore-only)"
-                )
-            if has_argocd_resume_after:
-                raise ValidationError(
-                    "--restore-only cannot be used with --argocd-resume-after-switchover "
-                    "(restore-only does not pause Argo CD Applications)"
-                )
+            # --argocd-manage and --argocd-resume-after-switchover are allowed with --restore-only.
+            # The new _pause_argocd_for_restore() helper handles pausing on the target hub before ACTIVATION.
 
         # Validate that secondary context is provided when not in decommission or setup mode
         if not is_decommission and not is_setup and not has_argocd_resume_only and not is_restore_only:
