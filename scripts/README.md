@@ -213,7 +213,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 > python acm_switchover.py --restore-only --secondary-context <target-hub> --validate-only
 > ```
 > This runs secondary-only preflight checks (ACM version, namespaces, BSL, OADP) without
-> requiring a primary hub connection. See [Restore-Only Mode](../docs/operations/usage.md#restore-only-mode-single-hub-restore) for details.
+> requiring a primary hub connection. See [Restore-Only Mode](../docs/operations/usage.md#restore-only-mode-single-hub) for details.
 
 ### What It Checks
 

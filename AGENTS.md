@@ -60,7 +60,7 @@ The following files are **safety-critical operational documents** that AI agents
 ## Phase Flow
 
 The switchover executes phases sequentially, with state tracking for resume capability:
-
+```text
 ```
 INIT → PREFLIGHT → PRIMARY_PREP → ACTIVATION → POST_ACTIVATION → FINALIZATION → COMPLETED
 ```
