@@ -26,12 +26,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Restore-only RBAC preflight regression**: `--restore-only` no longer skips RBAC validation entirely; secondary hub write permissions (Restore, BackupSchedule, ManagedCluster) are now validated during preflight, so `--validate-only` catches missing permissions early instead of failing at activation.
 - **Restore-only ArgoCD safety**: `--argocd-manage` and `--argocd-resume-after-switchover` are now rejected with `--restore-only` (restore-only skips PRIMARY_PREP where ArgoCD pause occurs). A restore-only-specific advisory warns when ACM-touching Argo CD Applications with auto-sync are detected on the target hub.
 - Container release workflow now skips Quay publishing cleanly when `QUAY_USERNAME` / `QUAY_PASSWORD` secrets are absent and continues with GHCR-only publishing.
+- Standalone decommission RBAC validation now checks the actual teardown permission surface, including namespaced MultiClusterHub and pod-read access, without requiring full switchover namespace permissions.
 
-## [1.6.4] - 2026-04-13
+## [1.7.0] - 2026-04-10
+
+### Added
+
+- **`tomazb.acm_switchover` Ansible Collection** — full ACM hub switchover automation for `ansible-core` CLI and Ansible Automation Platform (AAP), with feature parity to the Python CLI.
+- **Roles** (9): `preflight`, `primary_prep`, `activation`, `post_activation`, `finalization`, `decommission`, `argocd_manage`, `rbac_bootstrap`, `discovery` — each corresponding to a Python CLI phase module.
+- **Playbooks** (7): `switchover.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`, `argocd_manage_test.yml`.
+- **Custom modules** (11): `acm_backup_schedule`, `acm_checkpoint`, `acm_cluster_verify`, `acm_discovery`, `acm_input_validate`, `acm_managedcluster_status`, `acm_preflight_report`, `acm_rbac_bootstrap`, `acm_rbac_validate`, `acm_restore_info`, `acm_argocd_filter`.
+- **Checkpoint and resume**: `acm_checkpoint` module and action plugin provide phase-level idempotency; interrupted playbook runs resume from the last completed phase.
+- **Structured preflight report**: `acm_preflight_report` module writes a go/no-go preflight report to disk.
+- **Argo CD management**: `argocd_manage` role and `argocd_resume.yml` playbook detect and pause/resume Argo CD auto-sync during switchover.
+- **RBAC bootstrap**: `rbac_bootstrap` role and playbook automate service account, ClusterRole, and kubeconfig creation for both hubs.
+- **Discovery playbook**: standalone resource discovery across both hubs without running switchover phases.
 
 ### Fixed
 
-- Standalone decommission RBAC validation now checks the actual teardown permission surface, including namespaced MultiClusterHub and pod-read access, without requiring full switchover namespace permissions.
+- **Preflight**: namespace discovery added; Hive CRD and ManagedClusterBackup checks downgraded from required to advisory.
+- **Preflight**: validate mode now stops after preflight without continuing into switchover phases.
+- **Activation**: passive restore wait now accepts `Finished` and `Completed` as terminal success phases (matches ACM 2.14 behavior).
+- **Activation**: default guard added for `activation_method` in the immediate-import path to prevent task failure on undefined variable.
+- **Activation**: Velero restore wait result guarded against tasks skipped in dry-run mode.
+- **Finalization**: old hub restore patched to passive mode in-place instead of delete-and-recreate, avoiding MCH reconciliation race.
+- **Finalization**: stale active restore on old hub reset to passive before finalization proceeds.
+- **Finalization**: MCH refresh task guarded with `is not defined` check to prevent redundant re-discovery.
+- **Post-activation**: cluster readiness check retries with backoff instead of failing on a single probe.
+- **Post-activation**: pre-pause inserted before cluster verification to clear stale Velero data from the previous restore.
+- **RBAC**: `namespaces:list` added to operator and validator ClusterRoles (required for namespace-scoped resource enumeration).
+- **Reports**: `report_dir` and `summary_path` resolved to absolute paths relative to the invocation working directory.
+- **Argo CD**: mode routing and hub-context corrected in `argocd_manage` role.
+- **Input validation**: kubeconfig paths with leading `~/` are now accepted.
+- **Checkpoint**: corrupted checkpoint files, disk-full errors, and unknown status values handled gracefully.
+- **BackupSchedule module**: malformed ACM version strings now produce a clear error instead of a raw exception.
+- **Preflight report module**: I/O errors during report write produce `fail_json` instead of an unhandled exception.
+- **Restore info module**: diagnostic counts returned when no passive sync restore is found.
+- **License**: collection module headers and `galaxy.yml` aligned to MIT.
 
 ## [1.6.3] - 2026-04-07
 

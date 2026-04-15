@@ -1,8 +1,11 @@
 # ACM Hub Switchover Automation
 
-**Version 1.6.10** (2026-04-13)
+**Version 1.7.0** (2026-04-10)
 
-Automated, idempotent script for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster.
+Automated, idempotent tool for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster. Available in two form factors:
+
+- **Python CLI** (`acm_switchover.py`) — standalone script with full phase orchestration, state persistence, and rich CLI surface.
+- **Ansible Collection** (`tomazb.acm_switchover`) — production-ready collection for `ansible-core` CLI and Ansible Automation Platform (AAP), with roles and playbooks covering the full switchover workflow (see [`ansible_collections/tomazb/acm_switchover/`](ansible_collections/tomazb/acm_switchover/)).
 
 ## Features
 
