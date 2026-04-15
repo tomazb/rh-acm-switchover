@@ -54,6 +54,23 @@ def test_run_id_default_is_not_empty_string():
         "run_id defaults to empty string, which bypasses Jinja default() filter"
 
 
+def test_pause_has_clobber_guard():
+    """pause.yml k8s patch task should skip apps already paused (have our annotation)."""
+    tasks = _load_yaml("pause.yml")
+    for task in tasks:
+        for block_task in task.get("block", []):
+            k8s = block_task.get("kubernetes.core.k8s", {})
+            if k8s:
+                when = block_task.get("when", [])
+                if isinstance(when, str):
+                    when = [when]
+                when_text = " ".join(str(w) for w in when)
+                assert "paused-by" in when_text, (
+                    "pause.yml k8s patch task should check for existing paused-by "
+                    f"annotation in when condition to prevent clobber. Current when: {when}"
+                )
+
+
 def test_discover_uses_parameterized_hub():
     """discover.yml should already use _argocd_discover_hub (baseline check)."""
     tasks = _load_yaml("discover.yml")
@@ -66,3 +83,29 @@ def test_discover_uses_parameterized_hub():
                 assert "_argocd_discover_hub" in kc
                 found = True
     assert found, "discover.yml should have at least one k8s_info task with _argocd_discover_hub"
+
+
+ROLES_DIR = ROLE_DIR.parents[1]
+
+
+def _load_role_yaml(role_name: str, task_name: str) -> list[dict]:
+    return yaml.safe_load((ROLES_DIR / role_name / "tasks" / task_name).read_text())
+
+
+def test_primary_prep_pauses_both_hubs():
+    """primary_prep/main.yml should include argocd_manage for both primary and secondary hubs."""
+    text = (ROLES_DIR / "primary_prep" / "tasks" / "main.yml").read_text()
+    assert text.count("argocd_manage") >= 2, \
+        "primary_prep should include argocd_manage role at least twice (primary + secondary)"
+    assert "_argocd_discover_hub: primary" in text, "Should pause primary hub"
+    assert "_argocd_discover_hub: secondary" in text, "Should pause secondary hub"
+
+
+def test_finalization_resumes_both_hubs():
+    """finalization/main.yml should resume argocd on both primary and secondary hubs."""
+    text = (ROLES_DIR / "finalization" / "tasks" / "main.yml").read_text()
+    resume_count = text.count("acm_switchover_argocd_mode_override: resume")
+    assert resume_count >= 2, \
+        f"finalization should resume argocd on both hubs, found {resume_count} resume include(s)"
+    assert "_argocd_discover_hub: secondary" in text, "Should resume secondary hub"
+    assert "_argocd_discover_hub: primary" in text, "Should resume primary hub"

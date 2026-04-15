@@ -37,7 +37,9 @@
       loop_control:
         label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
       register: acm_argocd_pause_results
-      when: acm_switchover_argocd_mock_apps is not defined
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - "'acm-switchover.argoproj.io/paused-by' not in (item.metadata.annotations | default({}))"
 
     - name: Record pause summary
       ansible.builtin.set_fact:
