@@ -929,7 +929,7 @@ Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io
 3. Run switchover (Python tool or manual runbook steps)
 4. After updating Git/desired state for the new hub, resume: `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause-state.json`
 
-The Python tool can perform pause/resume during switchover when using `--argocd-manage` and optionally `--argocd-resume-after-switchover` or `--argocd-resume-only`; see [usage.md](../docs/operations/usage.md).
+The Python tool can perform pause/resume during switchover when using `--argocd-manage`; resume explicitly after updating Git for the new hub with `--argocd-resume-only`. See [usage.md](../docs/operations/usage.md).
 
 ---
 

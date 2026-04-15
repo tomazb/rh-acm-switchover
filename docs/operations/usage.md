@@ -96,7 +96,7 @@ python acm_switchover.py \
 > Both hubs share the same object storage backend; re-enabling on the old hub can cause data corruption and split-brain.
 > Only re-enable on the old hub if you are switching back and have shut down these components on the current primary first.
 
-**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused by default; resume only after updating Git/desired state for the new hub, using `--argocd-resume-after-switchover` during finalization or `--argocd-resume-only` as a standalone step. Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
+**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused after switchover; resume only after updating Git/desired state for the new hub, using `--argocd-resume-only` as a standalone step. Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
 
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
@@ -485,11 +485,10 @@ python acm_switchover.py \
 Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and left paused by default. State is stored in the switchover state file.
 
 **Resume auto-sync after updating Git for the new hub:**
-- During finalization (opt-in): add `--argocd-resume-after-switchover` to the same run.
-- Standalone later: `--argocd-resume-only` with `--primary-context` and `--secondary-context` to restore from state.
+- Standalone: `--argocd-resume-only` with `--primary-context` and `--secondary-context` to restore from state.
 - Resume-only auto-discovers the original state file when the swapped-context match is unambiguous. If both context orderings have state files, pass the original file explicitly with `--state-file`.
 
-Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-after-switchover` and `--argocd-resume-only` are not compatible with `--validate-only`. `--argocd-resume-only` is also not compatible with `--decommission` or `--setup`. `--argocd-resume-after-switchover` is not valid with `--old-hub-action decommission`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
+Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-only` is not compatible with `--validate-only`, `--decommission`, or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 

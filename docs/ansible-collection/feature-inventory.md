@@ -42,7 +42,6 @@ Deferred phase numbers refer to later Ansible Collection rewrite implementation 
 | `--decommission` | `acm_switchover_execution.mode=decommission` | 6 | Separate playbook later |
 | `--setup` | `acm_switchover_execution.mode=setup` | 6 | Becomes `rbac_bootstrap` content |
 | `--argocd-manage` | `acm_switchover_features.argocd.manage` | 5 | Runtime behavior deferred |
-| `--argocd-resume-after-switchover` | `acm_switchover_features.argocd.resume_after_switchover` | 5 | Runtime behavior deferred |
 | `--argocd-resume-only` | `acm_switchover_execution.mode=argocd_resume` | 5 | Playbook deferred |
 | `--admin-kubeconfig` | `acm_switchover_rbac.admin_kubeconfig` | 6 | RBAC bootstrap only |
 | `--role` | `acm_switchover_rbac.role` | 6 | RBAC bootstrap only |

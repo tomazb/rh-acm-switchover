@@ -169,10 +169,6 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--argocd-resume-only` cannot be used with `--setup`
 - `--argocd-manage` has no effect with `--validate-only`; a warning is emitted and validation continues
 - `--argocd-manage` cannot be used with `--argocd-resume-only`
-- `--argocd-resume-after-switchover` cannot be used with `--validate-only`
-- `--argocd-resume-after-switchover` cannot be used with `--argocd-resume-only`
-- `--argocd-resume-after-switchover` requires `--argocd-manage`
-- `--argocd-resume-after-switchover` cannot be used with `--old-hub-action decommission`
 - `--include-decommission` is only valid with `--setup` when `--role` is `operator` or `both`
 - `--restore-only` requires `--secondary-context` (the restore target hub)
 - `--restore-only` cannot be used with `--primary-context` (no primary hub needed)
@@ -328,7 +324,7 @@ except ValidationError as e:
 - Secondary context requirement: `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
 - Non-interactive constraint: `--non-interactive` can only be used together with `--decommission`.
 - Managed cluster threshold: `--min-managed-clusters` must be a non-negative integer. `0` keeps the post-restore cluster count check informational-only.
-- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning. `--argocd-resume-after-switchover` cannot be combined with `--validate-only`, `--argocd-resume-only`, or `--old-hub-action decommission`, and it requires `--argocd-manage`.
+- Argo CD flags: `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`. `--argocd-manage` is allowed with `--validate-only` but has no effect and emits a warning.
 - Setup RBAC extension: `--include-decommission` is only valid during `--setup`, and only with `--role operator` or `--role both`.
 
 ### Utilities

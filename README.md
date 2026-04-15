@@ -30,8 +30,7 @@ ArgoCD integration is fully available and stable in the switchover workflow.
 
 - Automatic read-only ArgoCD discovery runs when the Applications CRD is present
 - Optional managed pause/resume is available through `--argocd-manage`
-- Optional automatic resume at the end of switchover is available through `--argocd-resume-after-switchover`
-- Resume-only mode is available through `--argocd-resume-only`
+- Resume-only mode is available through `--argocd-resume-only` (after updating Git for the new hub)
 
 For full ArgoCD behavior, constraints, and examples, see [Detailed Usage Guide](docs/operations/usage.md) and [Scripts README](scripts/README.md).
 
@@ -179,11 +178,10 @@ python acm_switchover.py \
   --secondary-context secondary-hub \
   --old-hub-action secondary \
   --method passive \
-  --argocd-manage \
-  --argocd-resume-after-switchover
+  --argocd-manage
 ```
 
-For post-cutover-only resumption, use `--argocd-resume-only` with `--secondary-context`.
+Applications are left paused by default. After updating Git/desired state for the new hub, resume explicitly with `--argocd-resume-only`.
 
 ### Resume from Previous Run
 
@@ -260,9 +258,8 @@ python acm_switchover.py --restore-only \
 | `--skip-observability-checks` | Skip Observability-related steps even if detected |
 | `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
 | `--skip-rbac-validation` | Skip RBAC permission validation during pre-flight checks |
-| `--argocd-manage` | Pause/resume ACM-touching ArgoCD Applications as part of switchover |
-| `--argocd-resume-after-switchover` | Resume ArgoCD Applications after successful switchover completion |
-| `--argocd-resume-only` | Only resume previously paused ArgoCD Applications (no switchover execution) |
+| `--argocd-manage` | Pause ACM-touching ArgoCD Applications during switchover (left paused by default) |
+| `--argocd-resume-only` | Resume previously paused ArgoCD Applications (standalone; after updating Git for the new hub) |
 | `--verbose` | Enable verbose logging |
 
 ## How It Works

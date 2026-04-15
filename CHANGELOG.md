@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Bash**: Deprecated `argocd-manage.sh` — use Python CLI (`--argocd-manage`) or Ansible collection (`argocd_manage` role) instead
 
+### Removed
+
+- **`--argocd-resume-after-switchover` flag removed** — automatic ArgoCD resume during finalization was problematic because it could fight with recent switchover changes before Git/desired state is updated. Operators must now resume explicitly with `--argocd-resume-only` (Python CLI) or `ansible-playbook tomazb.acm_switchover.argocd_resume` (Ansible) after updating Git repos/paths for the new hub.
+- **Ansible `resume_after_switchover` variable removed** — `acm_switchover_features.argocd.resume_after_switchover` is no longer recognized; finalization emits an advisory message instead of auto-resuming.
+
+### Fixed (Ansible ArgoCD)
+
+- **Ansible ArgoCD resume**: Now checks `run_id` marker before resuming — only resumes apps paused by the same run, warns about apps paused by a different run
+
 ### Added
 
 - Cross-form-factor parity tests for `ACM_KINDS` and `ACM_NAMESPACES` between Python and Ansible
@@ -28,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integration test fixtures for restore-only and re-pause clobber scenarios
 - **Ansible Collection restore-only support** — full `restore_only` mode for the Ansible collection (`tomazb.acm_switchover`):
   - New `restore_only.yml` playbook: preflight → ArgoCD pause (optional) → activation → post_activation → finalization
-  - Validation rules in `validation.py` and `acm_input_validate.py`: forces method=full, old_hub_action=none, rejects `argocd.resume_after_switchover`, allows `argocd.manage`
+  - Validation rules in `validation.py` and `acm_input_validate.py`: forces method=full, old_hub_action=none, allows `argocd.manage`
   - Preflight guards: all primary-hub-only discovery and validation tasks are skipped in restore-only mode; secondary-only checks remain active
   - Finalization guards: old hub disposition and ArgoCD auto-resume are skipped
   - Role defaults: `restore_only: false` added to preflight, activation, and finalization roles
@@ -36,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Python CLI: `--argocd-manage` now allowed with `--restore-only`** — pauses ACM-touching ArgoCD Applications on the secondary hub before restore activation, preventing ArgoCD from reverting restored resources. ArgoCD auto-resume (`--argocd-resume-after-switchover`) remains rejected; operators must retarget git repos/paths then resume manually via `--argocd-resume-only`.
+- **Python CLI: `--argocd-manage` now allowed with `--restore-only`** — pauses ACM-touching ArgoCD Applications on the secondary hub before restore activation, preventing ArgoCD from reverting restored resources. Operators must retarget git repos/paths then resume manually via `--argocd-resume-only`.
 
 ## [1.6.10] - 2026-04-13
 
@@ -57,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Restore-only RBAC preflight regression**: `--restore-only` no longer skips RBAC validation entirely; secondary hub write permissions (Restore, BackupSchedule, ManagedCluster) are now validated during preflight, so `--validate-only` catches missing permissions early instead of failing at activation.
-- **Restore-only ArgoCD safety**: `--argocd-manage` and `--argocd-resume-after-switchover` are now rejected with `--restore-only` (restore-only skips PRIMARY_PREP where ArgoCD pause occurs). A restore-only-specific advisory warns when ACM-touching Argo CD Applications with auto-sync are detected on the target hub.
+- **Restore-only ArgoCD safety**: `--argocd-manage` is supported with `--restore-only` for pausing ACM-touching Applications. A restore-only-specific advisory warns when ACM-touching Argo CD Applications with auto-sync are detected on the target hub.
 - Container release workflow now skips Quay publishing cleanly when `QUAY_USERNAME` / `QUAY_PASSWORD` secrets are absent and continues with GHCR-only publishing.
 - Standalone decommission RBAC validation now checks the actual teardown permission surface, including namespaced MultiClusterHub and pod-read access, without requiring full switchover namespace permissions.
 
@@ -114,7 +123,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `--argocd-resume-only` now reuses the reversed default state file when swapped contexts match exactly one existing state file
-- `--argocd-resume-after-switchover` is now rejected when combined with `--old-hub-action decommission`, and finalization fails closed if the combination reaches runtime
 - Retried phase failures now record a fresh wrapper error when no new same-attempt phase error was added
 - `FinishedWithErrors` restore phase now treated as success when all messages indicate managed clusters are "already available" (expected for consecutive switchovers)
 - Bandit now uses a repo-level `.bandit` config in CI/local tooling, avoiding `.venv` scan noise and malformed `# nosec` warning output
