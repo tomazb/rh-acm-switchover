@@ -383,9 +383,6 @@ class InputValidator:
         is_setup = hasattr(args, "setup") and args.setup
         is_restore_only = hasattr(args, "restore_only") and args.restore_only
         has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
-        has_argocd_resume_after = (
-            hasattr(args, "argocd_resume_after_switchover") and args.argocd_resume_after_switchover
-        )
         has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
         has_validate_only = hasattr(args, "validate_only") and args.validate_only
 
@@ -411,11 +408,6 @@ class InputValidator:
                 raise ValidationError("--restore-only cannot be used with --setup")
             if has_argocd_resume_only:
                 raise ValidationError("--restore-only cannot be used with --argocd-resume-only")
-            if has_argocd_resume_after:
-                raise ValidationError(
-                    "--restore-only cannot be used with --argocd-resume-after-switchover "
-                    "(after restore, retarget Git repos/paths then resume manually with --argocd-resume-only)"
-                )
 
         # Validate that secondary context is provided when not in decommission or setup mode
         if not is_decommission and not is_setup and not has_argocd_resume_only and not is_restore_only:
@@ -442,18 +434,6 @@ class InputValidator:
                 raise ValidationError("--disable-observability-on-secondary requires --old-hub-action secondary")
 
         # Validate Argo CD argument combinations
-
-        if has_argocd_resume_after:
-            if has_argocd_resume_only:
-                raise ValidationError("--argocd-resume-after-switchover cannot be used with --argocd-resume-only")
-            if has_validate_only:
-                raise ValidationError("--argocd-resume-after-switchover cannot be used with --validate-only")
-            if not has_argocd_manage:
-                raise ValidationError("--argocd-resume-after-switchover requires --argocd-manage")
-            if getattr(args, "old_hub_action", None) == "decommission":
-                raise ValidationError(
-                    "--argocd-resume-after-switchover cannot be used with --old-hub-action decommission"
-                )
 
         if has_argocd_manage:
             if has_argocd_resume_only:

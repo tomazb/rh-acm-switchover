@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from kubernetes.client.rest import ApiException
 
-from lib import argocd as argocd_lib
 from lib.constants import (
     ACM_BACKUP_NAME_RE,
     ACM_BACKUP_SCHEDULE_TYPE_LABEL,
@@ -72,7 +71,6 @@ class Finalization:
         old_hub_action: str = "secondary",
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,
-        argocd_resume_after_switchover: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -83,7 +81,6 @@ class Finalization:
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.disable_observability_on_secondary = disable_observability_on_secondary
-        self.argocd_resume_after_switchover = argocd_resume_after_switchover
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -238,16 +235,6 @@ class Finalization:
                 with self.state.step("verify_old_hub_state", logger) as should_run:
                     if should_run:
                         self._verify_old_hub_state()
-
-            # Optional: Restore Argo CD auto-sync only after all finalization work is finished.
-            if self.argocd_resume_after_switchover:
-                if self.old_hub_action == "decommission":
-                    raise SwitchoverError(
-                        "--argocd-resume-after-switchover cannot be used with --old-hub-action decommission"
-                    )
-                with self.state.step("resume_argocd_apps", logger) as should_run:
-                    if should_run:
-                        self._resume_argocd_apps()
 
             logger.info("Finalization completed successfully")
             return True
@@ -1589,28 +1576,6 @@ class Finalization:
             )
         else:
             logger.info("%s is scaled down on old hub", component_name)
-
-    @dry_run_skip(message="Would resume Argo CD auto-sync for paused apps")
-    def _resume_argocd_apps(self) -> None:
-        """Restore auto-sync for Argo CD Applications recorded in state (only when --argocd-resume-after-switchover)."""
-        if self.state.get_config("argocd_pause_dry_run", False):
-            raise SwitchoverError(
-                "Argo CD auto-sync resume requested, but the pause step was run in dry-run mode. "
-                "Re-run pause without --dry-run to generate resumable state."
-            )
-        run_id = self.state.get_config("argocd_run_id")
-        paused_apps = self.state.get_config("argocd_paused_apps") or []
-        if not run_id or not paused_apps:
-            logger.info("No Argo CD paused apps in state; skipping resume")
-            return
-        logger.info(
-            "Resuming Argo CD auto-sync for %d Application(s) (run_id=%s)",
-            len(paused_apps),
-            run_id,
-        )
-        summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, self.primary, self.secondary, logger)
-        if summary.failed:
-            raise SwitchoverError(f"Argo CD auto-sync restore failed for {summary.failed} Application(s)")
 
     def _run_reset_auto_import_strategy_step(self) -> None:
         """Execute the explicit reset_auto_import_strategy step when applicable."""

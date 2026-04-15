@@ -115,7 +115,7 @@ class PrimaryPreparation:
         run_id = self.state.get_config("argocd_run_id")
         if run_id is not None:
             logger.info(
-                "Argo CD: %d Application(s) paused (run_id=%s). Left paused by default; use --argocd-resume-after-switchover or --argocd-resume-only after retargeting Git.",
+                "Argo CD: %d Application(s) paused (run_id=%s). Resume explicitly with --argocd-resume-only after retargeting Git.",
                 len(paused_apps),
                 run_id,
             )

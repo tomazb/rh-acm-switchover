@@ -275,16 +275,8 @@ Examples:
         "--argocd-manage",
         action="store_true",
         help=(
-            "Pause auto-sync for ACM-touching Argo CD Applications during switchover (pause-only by default). "
-            "Applications are left paused unless --argocd-resume-after-switchover is set."
-        ),
-    )
-    parser.add_argument(
-        "--argocd-resume-after-switchover",
-        action="store_true",
-        help=(
-            "Restore Argo CD auto-sync during finalization. Only use after Git/desired state has been "
-            "updated for the new hub, otherwise resume may revert switchover changes."
+            "Pause auto-sync for ACM-touching Argo CD Applications during switchover. "
+            "Applications are left paused; resume explicitly with --argocd-resume-only after updating Git."
         ),
     )
     parser.add_argument(
@@ -940,7 +932,6 @@ def _run_phase_finalization(
 
     is_restore_only = getattr(args, "restore_only", False)
     old_hub_action = "none" if is_restore_only else args.old_hub_action
-    argocd_resume = False if is_restore_only else getattr(args, "argocd_resume_after_switchover", False)
     finalization = Finalization(
         secondary_client=secondary,
         state_manager=state,
@@ -951,7 +942,6 @@ def _run_phase_finalization(
         old_hub_action=old_hub_action,
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
-        argocd_resume_after_switchover=argocd_resume,
     )
 
     if not finalization.finalize():
