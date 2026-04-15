@@ -35,3 +35,4 @@ kubeconfigs/
 e2e-soak-24h/
 
 e2e-15-switchover/
+artifacts/
