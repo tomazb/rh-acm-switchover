@@ -66,7 +66,7 @@ Review the planned actions. The tool will:
 1. Create a one-time full Restore from the latest S3 backup
 2. Wait for ManagedClusters to reconnect
 3. Verify klusterlet agents on managed clusters
-4. Enable BackupSchedule on the new hub
+4. Attempt to enable BackupSchedule on the new hub (warns if none found — see Post-Restore section)
 
 ### Step 3: Execute Restore
 
@@ -80,7 +80,7 @@ python acm_switchover.py \
 1. **Preflight** — validates target hub only (ACM version, BSL, namespaces)
 2. **Activation** — creates a one-time full Restore from latest backup
 3. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents
-4. **Finalization** — enables BackupSchedule on the new hub
+4. **Finalization** — attempts to enable BackupSchedule; warns if none found (ACM excludes BackupSchedule from Velero backups — must be created manually post-restore)
 
 ---
 
@@ -105,7 +105,10 @@ After successful restore, verify:
 # Check ManagedClusters are connected
 oc get managedcluster --context <new-hub>
 
-# Check BackupSchedule is enabled
+# BackupSchedule is NOT restored automatically (ACM excludes it from Velero backups)
+# Create it manually — example:
+# oc apply -f your-backupschedule.yaml --context <new-hub>
+# Then verify:
 oc get backupschedule -n open-cluster-management-backup --context <new-hub>
 
 # Check klusterlet agents
