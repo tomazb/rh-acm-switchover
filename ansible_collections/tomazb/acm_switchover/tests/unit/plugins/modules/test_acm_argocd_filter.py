@@ -37,3 +37,17 @@ def test_non_acm_app_is_excluded():
     assert is_acm_touching_application(
         {"metadata": {"name": "frontend"}, "status": {"resources": [{"kind": "Deployment", "namespace": "web"}]}}
     ) is False
+
+
+def test_policy_kind_is_acm_touching():
+    """Policy kind (newly added) should be recognized as ACM-touching."""
+    assert is_acm_touching_application(
+        {"metadata": {"name": "policy-app"}, "status": {"resources": [{"kind": "Policy", "namespace": "default"}]}}
+    ) is True
+
+
+def test_placement_binding_kind_is_acm_touching():
+    """PlacementBinding kind (newly added) should be recognized as ACM-touching."""
+    assert is_acm_touching_application(
+        {"metadata": {"name": "placement-app"}, "status": {"resources": [{"kind": "PlacementBinding", "namespace": "default"}]}}
+    ) is True

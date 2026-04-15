@@ -13,10 +13,18 @@ ACM_NAMESPACES = {
 
 ACM_KINDS = {
     "MultiClusterHub",
+    "MultiClusterEngine",
     "MultiClusterObservability",
     "ManagedCluster",
+    "ManagedClusterSet",
+    "ManagedClusterSetBinding",
+    "Placement",
+    "PlacementBinding",
+    "Policy",
+    "PolicySet",
     "BackupSchedule",
     "Restore",
+    "DataProtectionApplication",
     "ClusterDeployment",
 }
 
