@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ansible ArgoCD**: Fix hub hardcoding in `pause.yml`/`resume.yml` — now uses parameterized `_argocd_discover_hub` lookup matching `discover.yml` pattern (broken in restore-only mode)
+- **Ansible ArgoCD**: Expand `ACM_KINDS` from 6 to 14 entries (matching Python) — Applications touching Policy, Placement, ManagedClusterSet, etc. were not detected
+- **Ansible ArgoCD**: Fix empty `run_id` default causing blank `paused-by` annotations — now generates UUID when not provided
+- **Ansible ArgoCD**: Add clobber guard to pause task — prevents overwriting `original-sync-policy` on retry
+- **Ansible ArgoCD**: Pause/resume ArgoCD on both hubs during switchover (matching Python behavior)
+
+### Changed
+
+- **Bash**: Deprecated `argocd-manage.sh` — use Python CLI (`--argocd-manage`) or Ansible collection (`argocd_manage` role) instead
+
 ### Added
 
+- Cross-form-factor parity tests for `ACM_KINDS` and `ACM_NAMESPACES` between Python and Ansible
+- `has_applicationset_owner()` helper in Ansible `module_utils/argocd.py` for ApplicationSet detection
+- Debug logging for empty `status.resources` in Python `find_acm_touching_apps`
+- Patch divergence equivalence test (`build_pause_patch` vs Jinja logic)
+- Integration test fixtures for restore-only and re-pause clobber scenarios
 - **Ansible Collection restore-only support** — full `restore_only` mode for the Ansible collection (`tomazb.acm_switchover`):
   - New `restore_only.yml` playbook: preflight → ArgoCD pause (optional) → activation → post_activation → finalization
   - Validation rules in `validation.py` and `acm_input_validate.py`: forces method=full, old_hub_action=none, rejects `argocd.resume_after_switchover`, allows `argocd.manage`
