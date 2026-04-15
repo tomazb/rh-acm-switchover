@@ -79,11 +79,11 @@ class TestStateHandoffContracts:
         ]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.run_id_or_new", return_value="run-123"),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.run_id_or_new", return_value="run-123"),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="openshift-gitops",
