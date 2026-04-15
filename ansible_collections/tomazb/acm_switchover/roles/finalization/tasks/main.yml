@@ -24,6 +24,7 @@
 
     - name: Handle old hub disposition
       ansible.builtin.include_tasks: handle_old_hub.yml
+      when: not (acm_switchover_operation.restore_only | default(false))
 
     - name: Resume Argo CD auto-sync when enabled
       ansible.builtin.include_role:
@@ -32,7 +33,9 @@
         acm_switchover_argocd_mode_override: resume
         _argocd_discover_hub: secondary
       register: _argocd_resume_result
-      when: acm_switchover_features.argocd.resume_after_switchover | default(false)
+      when:
+        - acm_switchover_features.argocd.resume_after_switchover | default(false)
+        - not (acm_switchover_operation.restore_only | default(false))
 
     - name: Publish finalization result
       ansible.builtin.set_fact:
