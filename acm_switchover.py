@@ -504,8 +504,6 @@ def _run_restore_only_argocd_pause(
         logger.info("Argo CD pause already completed, skipping")
         return True
 
-    from lib.exceptions import SwitchoverError
-
     try:
         discovery = argocd_lib.detect_argocd_installation(secondary)
     except Exception as exc:
@@ -988,7 +986,9 @@ def _run_phase_finalization(
     _log_phase_banner("PHASE 5: FINALIZATION", logger)
     state.set_phase(Phase.FINALIZATION)
 
-    old_hub_action = "none" if getattr(args, "restore_only", False) else args.old_hub_action
+    is_restore_only = getattr(args, "restore_only", False)
+    old_hub_action = "none" if is_restore_only else args.old_hub_action
+    argocd_resume = False if is_restore_only else getattr(args, "argocd_resume_after_switchover", False)
     finalization = Finalization(
         secondary_client=secondary,
         state_manager=state,
@@ -999,7 +999,7 @@ def _run_phase_finalization(
         old_hub_action=old_hub_action,
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
-        argocd_resume_after_switchover=getattr(args, "argocd_resume_after_switchover", False),
+        argocd_resume_after_switchover=argocd_resume,
     )
 
     if not finalization.finalize():

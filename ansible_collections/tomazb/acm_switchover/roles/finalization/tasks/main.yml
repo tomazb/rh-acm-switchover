@@ -37,6 +37,16 @@
         - acm_switchover_features.argocd.resume_after_switchover | default(false)
         - not (acm_switchover_operation.restore_only | default(false))
 
+    - name: Advisory — ArgoCD left paused in restore-only mode
+      ansible.builtin.debug:
+        msg: >-
+          Argo CD Applications were paused before restore. Retarget git
+          repos/paths to primary-role configuration before resuming.
+          Resume with: ansible-playbook tomazb.acm_switchover.argocd_resume
+      when:
+        - acm_switchover_operation.restore_only | default(false)
+        - acm_switchover_features.argocd.manage | default(false)
+
     - name: Publish finalization result
       ansible.builtin.set_fact:
         acm_switchover_finalization_result:
