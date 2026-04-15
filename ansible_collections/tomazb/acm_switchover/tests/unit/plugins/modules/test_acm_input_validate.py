@@ -15,7 +15,7 @@ def test_missing_secondary_context_fails_execute_mode():
             },
             "operation": {"method": "passive", "activation_method": "patch"},
             "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
-            "features": {"argocd": {"manage": False, "resume_after_switchover": False}},
+            "features": {"argocd": {"manage": False}},
         }
     )
     assert any(item["id"] == "preflight-input-secondary-context" for item in results)
@@ -31,7 +31,7 @@ def test_restore_requires_passive_method():
             },
             "operation": {"method": "full", "activation_method": "restore"},
             "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
-            "features": {"argocd": {"manage": False, "resume_after_switchover": False}},
+            "features": {"argocd": {"manage": False}},
         }
     )
     assert any(item["id"] == "preflight-input-operation" for item in results)
@@ -47,7 +47,7 @@ def test_safe_paths_and_valid_contexts_pass():
             },
             "operation": {"method": "passive", "activation_method": "patch"},
             "execution": {"mode": "dry_run", "checkpoint": {"path": ".state/run.json"}},
-            "features": {"argocd": {"manage": True, "resume_after_switchover": True}},
+            "features": {"argocd": {"manage": True}},
         }
     )
     assert all(item["status"] == "pass" for item in results)
@@ -79,7 +79,7 @@ def test_missing_secondary_context_uses_actionable_message_for_nonstandard_modes
             },
             "operation": {"method": "passive", "activation_method": "patch"},
             "execution": {"mode": "report_only", "checkpoint": {"path": ".state/run.json"}},
-            "features": {"argocd": {"manage": False, "resume_after_switchover": False}},
+            "features": {"argocd": {"manage": False}},
         }
     )
 
@@ -103,7 +103,7 @@ def _restore_only_params(**overrides):
         },
         "operation": {"restore_only": True, "activation_method": "patch"},
         "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
-        "features": {"argocd": {"manage": False, "resume_after_switchover": False}},
+        "features": {"argocd": {"manage": False}},
     }
     for key, value in overrides.items():
         # support dotted paths like "hubs.primary.context"
@@ -205,27 +205,3 @@ def test_restore_only_allows_argocd_manage():
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "pass"
     assert op_result["details"]["argocd_manage"] is True
-
-
-def test_restore_only_rejects_argocd_resume_after_switchover():
-    """ArgoCD resume would restore secondary-role state — must be rejected."""
-    results = build_input_validation_results(
-        _restore_only_params(
-            **{
-                "features.argocd.manage": True,
-                "features.argocd.resume_after_switchover": True,
-            }
-        )
-    )
-    op_result = next(r for r in results if r["id"] == "preflight-input-operation")
-    assert op_result["status"] == "fail"
-    assert "resume_after_switchover" in op_result["message"]
-
-
-def test_restore_only_skips_primary_kubeconfig_validation():
-    """Primary kubeconfig is irrelevant in restore-only — should not produce results."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"hubs.primary.kubeconfig": "~/.kube/config"})
-    )
-    result_ids = [r["id"] for r in results]
-    assert "preflight-input-primary-kubeconfig" not in result_ids

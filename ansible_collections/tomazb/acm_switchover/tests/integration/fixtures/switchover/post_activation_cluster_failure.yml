@@ -23,7 +23,6 @@ acm_switchover_features:
   skip_observability_checks: true
   argocd:
     manage: false
-    resume_after_switchover: false
 
 acm_primary_mch_info:
   resources:

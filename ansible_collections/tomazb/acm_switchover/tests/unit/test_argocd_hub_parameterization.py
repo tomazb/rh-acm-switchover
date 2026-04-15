@@ -123,14 +123,12 @@ def test_primary_prep_pauses_both_hubs():
     assert "_argocd_discover_hub: secondary" in text, "Should pause secondary hub"
 
 
-def test_finalization_resumes_both_hubs():
-    """finalization/main.yml should resume argocd on both primary and secondary hubs."""
+def test_finalization_does_not_auto_resume():
+    """finalization/main.yml should NOT auto-resume argocd (removed feature)."""
     text = (ROLES_DIR / "finalization" / "tasks" / "main.yml").read_text()
     resume_count = text.count("acm_switchover_argocd_mode_override: resume")
-    assert resume_count >= 2, \
-        f"finalization should resume argocd on both hubs, found {resume_count} resume include(s)"
-    assert "_argocd_discover_hub: secondary" in text, "Should resume secondary hub"
-    assert "_argocd_discover_hub: primary" in text, "Should resume primary hub"
+    assert resume_count == 0, \
+        f"finalization should not auto-resume argocd, found {resume_count} resume include(s)"
 
 
 PLAYBOOKS_DIR = pathlib.Path(__file__).resolve().parents[2] / "playbooks"
