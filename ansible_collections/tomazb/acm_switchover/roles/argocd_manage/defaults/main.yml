@@ -2,6 +2,7 @@
 acm_switchover_features:
   argocd:
     manage: false
+    resume_on_failure: false
 
 acm_switchover_argocd:
   mode: pause

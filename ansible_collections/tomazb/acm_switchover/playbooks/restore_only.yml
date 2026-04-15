@@ -44,6 +44,22 @@
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.finalization
 
+      rescue:
+        - name: Attempt Argo CD resume on secondary hub after failure
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.argocd_manage
+          vars:
+            acm_switchover_argocd_mode_override: resume
+            _argocd_discover_hub: secondary
+          when:
+            - acm_switchover_features.argocd.manage | default(false)
+            - acm_switchover_features.argocd.resume_on_failure | default(false)
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Re-raise original restore-only failure
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default('Restore-only workflow failed') }}"
+
       always:
         - name: Build restore-only report contract
           ansible.builtin.set_fact:
