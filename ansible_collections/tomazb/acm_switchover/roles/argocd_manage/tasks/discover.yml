@@ -30,7 +30,7 @@
       kubernetes.core.k8s_info:
         api_version: argoproj.io/v1alpha1
         kind: Application
-        namespace: "{{ acm_switchover_argocd.namespace | default('argocd') }}"
+        namespace: "{{ acm_switchover_argocd.namespace | default(omit) }}"
         kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
         context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
       register: _argocd_app_list

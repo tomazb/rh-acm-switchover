@@ -35,14 +35,18 @@ from lib.constants import (
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
     OBSERVATORIUM_API_DEPLOYMENT,
+    RESTORE_FAST_POLL_INTERVAL,
+    RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_PASSIVE_SYNC_NAME,
+    RESTORE_POLL_INTERVAL,
+    RESTORE_WAIT_TIMEOUT,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
     THANOS_COMPACTOR_STATEFULSET,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
-from lib.exceptions import SwitchoverError, TransientError
+from lib.exceptions import FatalError, SwitchoverError, TransientError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient, is_retryable_error
 from lib.utils import StateManager, dry_run_skip, is_acm_version_ge
@@ -1146,9 +1150,12 @@ class Finalization:
                     plural="restores",
                     name=RESTORE_PASSIVE_SYNC_NAME,
                     namespace=BACKUP_NAMESPACE,
+                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
                 )
             except ApiException as e:
                 raise SwitchoverError("Failed to delete stale passive sync restore on old primary hub") from e
+
+            self._wait_for_primary_restore_deletion(RESTORE_PASSIVE_SYNC_NAME)
 
         # Create passive sync restore on old primary
         restore_body = {
@@ -1179,6 +1186,41 @@ class Finalization:
         except ApiException as e:
             raise SwitchoverError("Failed to create passive sync restore on old primary hub") from e
         logger.info("Created passive sync restore on old primary hub")
+
+    def _wait_for_primary_restore_deletion(
+        self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT
+    ) -> None:
+        """Wait until a restore resource is fully deleted from the old primary hub."""
+        if self.primary.dry_run:
+            logger.info("[DRY-RUN] Skipping wait for deletion of %s on primary", restore_name)
+            return
+
+        def _poll():
+            restore = self.primary.get_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                name=restore_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not restore:
+                return True, "deleted"
+            phase = restore.get("status", {}).get("phase", "unknown")
+            return False, f"still present (phase={phase})"
+
+        completed = wait_for_condition(
+            f"deletion of restore {restore_name} on primary",
+            _poll,
+            timeout=timeout,
+            interval=RESTORE_POLL_INTERVAL,
+            fast_interval=RESTORE_FAST_POLL_INTERVAL,
+            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
+            logger=logger,
+        )
+        if not completed:
+            raise FatalError(
+                f"Timeout waiting for restore {restore_name} to be deleted on primary after {timeout}s"
+            )
 
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")
     def _fix_backup_schedule_collision(self):

@@ -85,6 +85,28 @@ def test_discover_uses_parameterized_hub():
     assert found, "discover.yml should have at least one k8s_info task with _argocd_discover_hub"
 
 
+def test_discover_namespace_defaults_to_omit():
+    """discover.yml must NOT hardcode a single default namespace like 'argocd'.
+
+    When acm_switchover_argocd.namespace is not set, discovery should search
+    cluster-wide (default(omit)) to match Bash/Python behavior.
+    """
+    text = (ROLE_DIR / "discover.yml").read_text()
+    assert "default('argocd')" not in text, (
+        "discover.yml still hardcodes default('argocd'); "
+        "should use default(omit) for cluster-wide discovery"
+    )
+    tasks = _load_yaml("discover.yml")
+    for task in tasks:
+        for block_task in task.get("block", []):
+            k8s_info = block_task.get("kubernetes.core.k8s_info", {})
+            if k8s_info:
+                ns = str(k8s_info.get("namespace", ""))
+                assert "default(omit)" in ns, (
+                    f"discover.yml namespace should use default(omit), got: {ns}"
+                )
+
+
 ROLES_DIR = ROLE_DIR.parents[1]
 
 
@@ -109,3 +131,25 @@ def test_finalization_resumes_both_hubs():
         f"finalization should resume argocd on both hubs, found {resume_count} resume include(s)"
     assert "_argocd_discover_hub: secondary" in text, "Should resume secondary hub"
     assert "_argocd_discover_hub: primary" in text, "Should resume primary hub"
+
+
+PLAYBOOKS_DIR = pathlib.Path(__file__).resolve().parents[2] / "playbooks"
+
+
+def test_standalone_argocd_resume_covers_both_hubs():
+    """argocd_resume.yml must resume on both secondary and primary hubs.
+
+    primary_prep pauses both hubs, so the standalone resume recovery playbook
+    must mirror that by resuming both. Primary resume should be guarded by
+    acm_switchover_hubs.primary is defined.
+    """
+    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+    resume_count = text.count("acm_switchover_argocd_mode_override: resume")
+    assert resume_count >= 2, (
+        f"argocd_resume.yml should resume on both hubs, found {resume_count} resume block(s)"
+    )
+    assert "_argocd_discover_hub: secondary" in text, "Should resume secondary hub"
+    assert "_argocd_discover_hub: primary" in text, "Should resume primary hub"
+    assert "acm_switchover_hubs.primary is defined" in text, (
+        "Primary hub resume should be guarded by acm_switchover_hubs.primary is defined"
+    )

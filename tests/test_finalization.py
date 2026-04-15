@@ -1859,11 +1859,15 @@ class TestFinalization:
     def test_setup_old_hub_as_secondary_resets_stale_active_restore(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
-        """Existing restore with veleroManagedClustersBackupName=latest must be deleted and recreated."""
+        """Existing restore with veleroManagedClustersBackupName=latest must be deleted, waited on, and recreated."""
         primary = Mock()
-        primary.get_custom_resource.return_value = {
-            "spec": {"veleroManagedClustersBackupName": "latest"}
-        }
+        primary.dry_run = False
+        # First call: return stale restore for initial check.
+        # Subsequent calls (during wait polling): return None to indicate deletion completed.
+        primary.get_custom_resource.side_effect = [
+            {"spec": {"veleroManagedClustersBackupName": "latest"}},
+            None,
+        ]
 
         fin = Finalization(
             secondary_client=mock_secondary_client,
@@ -1875,6 +1879,9 @@ class TestFinalization:
         fin._setup_old_hub_as_secondary()
 
         primary.delete_custom_resource.assert_called_once()
+        # Verify wait polling happened (at least 2 get_custom_resource calls:
+        # initial check + at least one deletion poll)
+        assert primary.get_custom_resource.call_count >= 2
         primary.create_custom_resource.assert_called_once()
         created_spec = primary.create_custom_resource.call_args.kwargs["body"]["spec"]
         assert created_spec["veleroManagedClustersBackupName"] == "skip"
@@ -1923,6 +1930,34 @@ class TestFinalization:
             match="Failed to delete stale passive sync restore on old primary hub",
         ):
             fin._setup_old_hub_as_secondary()
+
+    def test_setup_old_hub_as_secondary_raises_on_deletion_timeout(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Timeout waiting for restore deletion must raise FatalError without attempting create."""
+        from lib.exceptions import FatalError
+
+        primary = Mock()
+        primary.dry_run = False
+        # First call returns stale restore; all subsequent calls also return it (never deleted)
+        primary.get_custom_resource.return_value = {
+            "spec": {"veleroManagedClustersBackupName": "latest"}
+        }
+
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=primary,
+            old_hub_action="secondary",
+        )
+
+        with patch("modules.finalization.wait_for_condition", return_value=False):
+            with pytest.raises(FatalError, match="Timeout waiting for restore"):
+                fin._setup_old_hub_as_secondary()
+
+        primary.delete_custom_resource.assert_called_once()
+        primary.create_custom_resource.assert_not_called()
 
     def test_cleanup_restore_resources_archives_before_deletion(
         self, finalization, mock_secondary_client, mock_state_manager

@@ -9,3 +9,11 @@
       vars:
         acm_switchover_argocd_mode_override: resume
         _argocd_discover_hub: secondary
+
+    - name: Resume autosync on primary hub
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+      vars:
+        acm_switchover_argocd_mode_override: resume
+        _argocd_discover_hub: primary
+      when: acm_switchover_hubs.primary is defined
