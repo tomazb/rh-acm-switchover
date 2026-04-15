@@ -343,7 +343,7 @@ python acm_switchover.py \
 1. **Preflight** — validates the target hub only (ACM version, BSL credentials, namespaces)
 2. **Activation** — creates a one-time full Restore from the latest backup in S3
 3. **Post-Activation** — waits for ManagedClusters to connect and verifies klusterlet agents
-4. **Finalization** — enables BackupSchedule on the new hub
+4. **Finalization** — attempts to enable BackupSchedule on the new hub; if none is found (ACM excludes BackupSchedule from Velero backups to avoid circular backup-of-backup), a warning is emitted and the operator must create one manually after restore
 
 **Key differences from normal switchover:**
 - No `--primary-context` needed (there is no primary hub)
