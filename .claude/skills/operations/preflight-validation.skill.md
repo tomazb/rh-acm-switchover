@@ -140,8 +140,8 @@ python acm_switchover.py --validate-only --primary-context <primary> --secondary
   ```
 
 **Resume (only after Git/desired state reflects the new hub):**
-- **During finalization (Python):** Add `--argocd-resume-after-switchover` to the switchover run (requires `--argocd-manage`; cannot be used with `--validate-only`).
-- **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>` (cannot be used with `--validate-only`, `--decommission`, `--setup`, `--argocd-manage`, or `--argocd-resume-after-switchover`)
+- **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>` (cannot be used with `--validate-only`, `--decommission`, `--setup`, or `--argocd-manage`)
+- **Ansible:** `ansible-playbook tomazb.acm_switchover.argocd_resume`
 - **Bash:** `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
 
 **Decision:** If the report shows ACM-touching Applications → advise pausing before Step 1. If pausing is skipped, warn that GitOps may re-apply Git state and undo pause-backup, disable-auto-import, or activation changes. Do not resume until Git reflects the new primary.

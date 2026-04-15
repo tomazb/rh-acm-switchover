@@ -50,7 +50,7 @@ Argo CD auto-sync pause/resume is the **only supported mutating GitOps integrati
 in the collection. It is managed by the `argocd_manage` role:
 
 - Pause is triggered in `primary_prep` when `acm_switchover_features.argocd.manage: true`
-- Resume is triggered in `finalization` when `acm_switchover_features.argocd.resume_after_switchover: true`
+- Automatic resume during finalization has been removed (unsafe — operator must retarget Git first)
 - A standalone resume entrypoint is available at `playbooks/argocd_resume.yml`
 
 The `app.kubernetes.io/instance` label is treated as `UNRELIABLE` by the marker detector

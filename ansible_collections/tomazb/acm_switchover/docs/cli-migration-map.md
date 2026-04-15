@@ -13,14 +13,13 @@
 | `--state-file` | `acm_switchover_execution.checkpoint.path` |
 | `--reset-state` | `acm_switchover_execution.checkpoint.reset` |
 | `--argocd-manage` | `acm_switchover_features.argocd.manage` |
-| `--argocd-resume-after-switchover` | `acm_switchover_features.argocd.resume_after_switchover` |
 
 ## Phase 5 Capability Status
 
 | Python / CLI Capability | Collection Phase 5 Status |
 |-------------------------|---------------------------|
 | ArgoCD auto-sync management | dual-supported |
-| ArgoCD resume after switchover | dual-supported |
+| ArgoCD resume after switchover | **removed** — use `argocd_resume.yml` after Git retarget |
 
 ## Phase 6 Non-Core Capability Status
 

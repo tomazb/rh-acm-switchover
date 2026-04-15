@@ -272,8 +272,8 @@ Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io
   ```
 
 **Resume (only after Git/desired state reflects the new hub):**
-- **During finalization (Python):** Add `--argocd-resume-after-switchover` to the switchover run.
 - **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>`
+- **Ansible:** `ansible-playbook tomazb.acm_switchover.argocd_resume`
 - **Bash:** `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
 
 If you do not pause, GitOps may re-apply Git state and undo pause-backup, disable-auto-import, or activation changes. Do not resume until Git is updated for the new primary; otherwise Argo CD can revert the switchover.

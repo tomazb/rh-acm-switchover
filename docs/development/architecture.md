@@ -272,13 +272,11 @@ Important activation-related flags:
 - re-enabling or recreating `BackupSchedule`
 - verifying new backups after promotion
 - handling old-hub-as-secondary or old-hub decommission prep
-- optionally resuming Argo CD auto-sync
 
 Important finalization-related flags:
 
 - `--old-hub-action`
 - `--disable-observability-on-secondary`
-- `--argocd-resume-after-switchover`
 
 ### Decommission
 

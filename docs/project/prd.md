@@ -102,7 +102,7 @@ Manual ACM hub switchover is operationally expensive:
 - GitOps ownership markers are reported before execution
 - ACM-touching Argo CD Applications are auto-detected when ArgoCD CRD is present
 - Auto-sync can be paused with `--argocd-manage`
-- Auto-sync can be resumed later with `--argocd-resume-after-switchover` or `--argocd-resume-only`
+- Auto-sync can be resumed later with `--argocd-resume-only` (standalone mode, after Git is retargeted)
 
 ### UC-4: Safe dry-run or validation-only rehearsal
 
@@ -181,7 +181,7 @@ The product must complete the switchover and make the requested old-hub outcome 
 - Verify that post-switchover backups resume correctly
 - Support `--old-hub-action secondary`, `decommission`, and `none`
 - Optionally delete `MultiClusterObservability` on the old hub when keeping it as a secondary via `--disable-observability-on-secondary`
-- Resume Argo CD auto-sync when `--argocd-resume-after-switchover` is requested
+- Advise operator to resume Argo CD auto-sync after retargeting Git (via `--argocd-resume-only`)
 - Provide a completion summary with next-step guidance
 
 ### FR-6: Decommission workflow
@@ -265,7 +265,6 @@ The Ansible Collection design maps these flags to grouped collection variables; 
 - `--min-managed-clusters`
 - `--skip-gitops-check`
 - `--argocd-manage`
-- `--argocd-resume-after-switchover`
 - `--argocd-resume-only`
 - `--setup`
 - `--include-decommission`
