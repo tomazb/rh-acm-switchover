@@ -79,6 +79,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
 
     results: list[dict] = []
 
+    restore_only = operation.get("restore_only", False)
     primary_context = hubs.get("primary", {}).get("context", "")
     secondary_context = hubs.get("secondary", {}).get("context", "")
     primary_kubeconfig = hubs.get("primary", {}).get("kubeconfig", "")
@@ -86,12 +87,28 @@ def build_input_validation_results(params: dict) -> list[dict]:
     checkpoint_path = execution.get("checkpoint", {}).get("path")
     mode = execution.get("mode", "execute")
 
-    try:
-        validate_context_name(primary_context)
-        results.append(_pass_result("preflight-input-primary-context", "primary context is valid"))
-    except ValidationError as exc:
-        results.append(_fail_result("preflight-input-primary-context", str(exc), "Set a valid primary context"))
+    # --- Primary context validation ---
+    if restore_only:
+        if primary_context:
+            results.append(
+                _fail_result(
+                    "preflight-input-primary-context",
+                    "restore_only mode does not use a primary hub; leave primary context empty",
+                    "Remove acm_switchover_hubs.primary.context for restore-only",
+                )
+            )
+        else:
+            results.append(
+                _pass_result("preflight-input-primary-context", "primary context correctly empty for restore-only")
+            )
+    else:
+        try:
+            validate_context_name(primary_context)
+            results.append(_pass_result("preflight-input-primary-context", "primary context is valid"))
+        except ValidationError as exc:
+            results.append(_fail_result("preflight-input-primary-context", str(exc), "Set a valid primary context"))
 
+    # --- Secondary context validation ---
     if not secondary_context:
         results.append(
             _fail_result(
@@ -109,11 +126,15 @@ def build_input_validation_results(params: dict) -> list[dict]:
                 _fail_result("preflight-input-secondary-context", str(exc), "Set a valid secondary context")
             )
 
-    for result_id, path_value in (
-        ("preflight-input-primary-kubeconfig", primary_kubeconfig),
+    # --- Path validation (skip primary kubeconfig in restore-only) ---
+    path_checks = [
         ("preflight-input-secondary-kubeconfig", secondary_kubeconfig),
         ("preflight-input-checkpoint-path", checkpoint_path),
-    ):
+    ]
+    if not restore_only:
+        path_checks.insert(0, ("preflight-input-primary-kubeconfig", primary_kubeconfig))
+
+    for result_id, path_value in path_checks:
         if not path_value:
             continue
         try:
@@ -128,6 +149,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
                 )
             )
 
+    # --- Operation combination validation ---
     try:
         normalized_operation = validate_operation_inputs(operation=operation, features=features)
         results.append(
