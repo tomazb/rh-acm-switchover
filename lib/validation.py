@@ -435,9 +435,20 @@ class InputValidator:
 
         # Validate Argo CD argument combinations
 
+        has_argocd_resume_on_failure = hasattr(args, "argocd_resume_on_failure") and args.argocd_resume_on_failure
+
         if has_argocd_manage:
             if has_argocd_resume_only:
                 raise ValidationError("--argocd-manage cannot be used with --argocd-resume-only")
+
+        # --argocd-resume-on-failure requires --argocd-manage and conflicts with resume-only/validate-only
+        if has_argocd_resume_on_failure:
+            if not has_argocd_manage:
+                raise ValidationError("--argocd-resume-on-failure requires --argocd-manage")
+            if has_argocd_resume_only:
+                raise ValidationError("--argocd-resume-on-failure cannot be used with --argocd-resume-only")
+            if has_validate_only:
+                raise ValidationError("--argocd-resume-on-failure cannot be used with --validate-only")
 
         # --argocd-resume-only needs state file (primary + secondary context) to restore from
         if has_argocd_resume_only:

@@ -354,6 +354,78 @@ class TestCLIArgumentValidation:
 
         InputValidator.validate_all_cli_args(args)
 
+    def test_argocd_resume_on_failure_requires_argocd_manage(self):
+        """--argocd-resume-on-failure requires --argocd-manage."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            decommission=False,
+            argocd_resume_on_failure=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-on-failure" in str(exc_info.value).lower()
+        assert "argocd-manage" in str(exc_info.value).lower()
+
+    def test_argocd_resume_on_failure_rejects_resume_only(self):
+        """--argocd-resume-on-failure cannot be combined with --argocd-resume-only."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            decommission=False,
+            argocd_manage=True,
+            argocd_resume_on_failure=True,
+            argocd_resume_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        # Either the argocd-manage vs resume-only check or the
+        # resume-on-failure vs resume-only check catches this.
+        assert "argocd-resume-only" in str(exc_info.value).lower()
+
+    def test_argocd_resume_on_failure_rejects_validate_only(self):
+        """--argocd-resume-on-failure cannot be combined with --validate-only."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            decommission=False,
+            argocd_manage=True,
+            argocd_resume_on_failure=True,
+            validate_only=True,
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            InputValidator.validate_all_cli_args(args)
+        assert "argocd-resume-on-failure" in str(exc_info.value).lower()
+        assert "validate-only" in str(exc_info.value).lower()
+
+    def test_argocd_resume_on_failure_with_argocd_manage_passes(self):
+        """--argocd-resume-on-failure with --argocd-manage passes validation."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            decommission=False,
+            argocd_manage=True,
+            argocd_resume_on_failure=True,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
     def test_setup_include_decommission_rejects_validator_role(self):
         """--include-decommission is only valid for operator-capable setup roles."""
         args = MockArgs(

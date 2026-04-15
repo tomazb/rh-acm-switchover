@@ -18,6 +18,7 @@ from kubernetes.client.rest import ApiException
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from acm_switchover import (
+    _attempt_argocd_resume_on_failure,
     _fail_phase,
     _report_argocd_acm_impact,
     _run_phase_preflight,
@@ -2968,3 +2969,91 @@ class TestRestoreOnlyFlow:
             run_restore_only(args, state, secondary, Mock())
 
         assert args.old_hub_action == "none"
+
+
+@pytest.mark.unit
+class TestAttemptArgoCDResumeOnFailure:
+    """Tests for _attempt_argocd_resume_on_failure best-effort cleanup."""
+
+    def _make_args(self, *, argocd_resume_on_failure=True):
+        return SimpleNamespace(argocd_resume_on_failure=argocd_resume_on_failure)
+
+    def _make_state(self, *, run_id="abc123", paused_apps=None):
+        state = Mock()
+        if paused_apps is None:
+            paused_apps = [
+                {"hub": "primary", "namespace": "argocd", "name": "app1",
+                 "original_sync_policy": {"automated": {}}, "pause_applied": True}
+            ]
+        state.get_config.side_effect = lambda key, *a: {
+            "argocd_run_id": run_id,
+            "argocd_paused_apps": paused_apps,
+        }.get(key, a[0] if a else None)
+        return state
+
+    def test_resume_called_when_flag_set_and_apps_paused(self):
+        """Resume is attempted when flag is set and paused apps exist in state."""
+        args = self._make_args()
+        state = self._make_state()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = Mock(restored=1, already_resumed=0, failed=0)
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        mock_resume.assert_called_once()
+
+    def test_no_resume_when_flag_not_set(self):
+        """Resume is NOT attempted when flag is not set."""
+        args = self._make_args(argocd_resume_on_failure=False)
+        state = self._make_state()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        mock_resume.assert_not_called()
+
+    def test_no_resume_when_no_paused_apps(self):
+        """Resume is skipped gracefully when no paused apps in state."""
+        args = self._make_args()
+        state = self._make_state(paused_apps=[])
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        mock_resume.assert_not_called()
+
+    def test_no_resume_when_no_run_id(self):
+        """Resume is skipped gracefully when run_id is missing."""
+        args = self._make_args()
+        state = self._make_state(run_id=None)
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        mock_resume.assert_not_called()
+
+    def test_resume_failure_does_not_raise(self):
+        """If resume itself fails, the exception is caught and logged (best-effort)."""
+        args = self._make_args()
+        state = self._make_state()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.side_effect = RuntimeError("API unreachable")
+            # Must not raise
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+    def test_resume_partial_failure_logs_warning(self, caplog):
+        """Partial resume failure is logged but doesn't raise."""
+        args = self._make_args()
+        state = self._make_state()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = Mock(restored=0, already_resumed=0, failed=1)
+            with caplog.at_level(logging.WARNING):
+                _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)

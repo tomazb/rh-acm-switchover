@@ -280,6 +280,15 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--argocd-resume-on-failure",
+        action="store_true",
+        help=(
+            "When used with --argocd-manage, attempt to resume paused Argo CD Applications "
+            "if the switchover fails. Best-effort: resume errors are logged but do not mask "
+            "the original failure."
+        ),
+    )
+    parser.add_argument(
         "--non-interactive",
         action="store_true",
         help="Non-interactive mode for decommission (dangerous)",
@@ -453,6 +462,7 @@ def run_switchover(
             ran_phase = True
             result = handler(args, state, primary, secondary, logger)
             if not result:
+                _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
                 return False
 
     if not ran_phase:
@@ -638,6 +648,7 @@ def run_restore_only(
             ran_phase = True
             result = handler(args, state, None, secondary, logger)
             if not result:
+                _attempt_argocd_resume_on_failure(args, state, None, secondary, logger)
                 return False
 
     if not ran_phase:
@@ -668,6 +679,55 @@ def _log_completed_noop(state: StateManager, logger: logging.Logger, state_age: 
     logger.info("Existing state file age: %s minutes", age_minutes)
     logger.info("No phases were executed on this run.")
     logger.info("State file: %s", state.state_file)
+
+
+def _attempt_argocd_resume_on_failure(
+    args: argparse.Namespace,
+    state: StateManager,
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+    logger: logging.Logger,
+) -> None:
+    """Best-effort resume of paused ArgoCD Applications after a switchover failure.
+
+    Called when a phase handler returns False and --argocd-resume-on-failure is set.
+    Resume errors are logged but never mask the original failure.
+    """
+    if not getattr(args, "argocd_resume_on_failure", False):
+        return
+
+    paused_apps = state.get_config("argocd_paused_apps") or []
+    run_id = state.get_config("argocd_run_id")
+    if not paused_apps or not run_id:
+        return
+
+    logger.warning(
+        "Switchover failed — attempting to resume %d paused Argo CD Application(s) (run_id=%s)...",
+        len(paused_apps),
+        run_id,
+    )
+    try:
+        summary = argocd_lib.resume_recorded_applications(
+            paused_apps, run_id, primary, secondary, logger
+        )
+        logger.info(
+            "Argo CD resume-on-failure: restored=%d, already_resumed=%d, failed=%d",
+            summary.restored,
+            summary.already_resumed,
+            summary.failed,
+        )
+        if summary.failed:
+            logger.warning(
+                "Argo CD resume-on-failure: %d Application(s) could not be resumed. "
+                "Use --argocd-resume-only to retry manually.",
+                summary.failed,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Argo CD resume-on-failure failed: %s. "
+            "Use --argocd-resume-only to resume manually.",
+            exc,
+        )
 
 
 def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
