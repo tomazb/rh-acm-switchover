@@ -211,7 +211,6 @@ class TestArgParsing:
             validate_only=True,
             argocd_manage=True,
             argocd_resume_only=False,
-            argocd_resume_after_switchover=False,
             non_interactive=False,
         )
         logger = Mock()

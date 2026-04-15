@@ -430,84 +430,6 @@ class TestCLIArgumentValidation:
         assert "argocd-manage" in str(exc_info.value).lower()
         assert "argocd-resume-only" in str(exc_info.value).lower()
 
-    def test_argocd_resume_after_requires_manage(self):
-        """--argocd-resume-after-switchover requires --argocd-manage."""
-        args = MockArgs(
-            primary_context="primary-hub",
-            secondary_context="secondary-hub",
-            method="passive",
-            old_hub_action="secondary",
-            log_format="text",
-            state_file=".state/switchover-state.json",
-            decommission=False,
-            argocd_resume_after_switchover=True,
-            argocd_manage=False,
-        )
-
-        with pytest.raises(ValidationError) as exc_info:
-            InputValidator.validate_all_cli_args(args)
-        assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
-        assert "argocd-manage" in str(exc_info.value).lower()
-
-    def test_argocd_resume_after_rejects_resume_only(self):
-        """--argocd-resume-after-switchover cannot be combined with --argocd-resume-only."""
-        args = MockArgs(
-            primary_context="primary-hub",
-            secondary_context="secondary-hub",
-            method="passive",
-            old_hub_action="secondary",
-            log_format="text",
-            state_file=".state/switchover-state.json",
-            decommission=False,
-            argocd_resume_after_switchover=True,
-            argocd_manage=True,
-            argocd_resume_only=True,
-        )
-
-        with pytest.raises(ValidationError) as exc_info:
-            InputValidator.validate_all_cli_args(args)
-        assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
-        assert "argocd-resume-only" in str(exc_info.value).lower()
-
-    def test_argocd_resume_after_rejects_validate_only(self):
-        """--argocd-resume-after-switchover cannot be combined with --validate-only."""
-        args = MockArgs(
-            primary_context="primary-hub",
-            secondary_context="secondary-hub",
-            method="passive",
-            old_hub_action="secondary",
-            log_format="text",
-            state_file=".state/switchover-state.json",
-            decommission=False,
-            argocd_resume_after_switchover=True,
-            argocd_manage=True,
-            validate_only=True,
-        )
-
-        with pytest.raises(ValidationError) as exc_info:
-            InputValidator.validate_all_cli_args(args)
-        assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
-        assert "validate-only" in str(exc_info.value).lower()
-
-    def test_argocd_resume_after_rejects_old_hub_action_decommission(self):
-        """--argocd-resume-after-switchover cannot be combined with old-hub decommission."""
-        args = MockArgs(
-            primary_context="primary-hub",
-            secondary_context="secondary-hub",
-            method="passive",
-            old_hub_action="decommission",
-            log_format="text",
-            state_file=".state/switchover-state.json",
-            decommission=False,
-            argocd_resume_after_switchover=True,
-            argocd_manage=True,
-        )
-
-        with pytest.raises(ValidationError) as exc_info:
-            InputValidator.validate_all_cli_args(args)
-        assert "argocd-resume-after-switchover" in str(exc_info.value).lower()
-        assert "decommission" in str(exc_info.value).lower()
-
     # --- restore-only validation tests ---
 
     def test_restore_only_valid_args(self):
@@ -692,35 +614,6 @@ class TestCLIArgumentValidation:
             argocd_manage=True,
         )
         InputValidator.validate_all_cli_args(args)  # Should not raise
-
-    def test_restore_only_forbids_argocd_resume_after_switchover(self):
-        """Test --restore-only forbids --argocd-resume-after-switchover."""
-        args = MockArgs(
-            primary_context=None,
-            secondary_context="new-hub",
-            method="full",
-            old_hub_action=None,
-            decommission=False,
-            restore_only=True,
-            argocd_resume_after_switchover=True,
-        )
-        with pytest.raises(ValidationError, match="--argocd-resume-after-switchover"):
-            InputValidator.validate_all_cli_args(args)
-
-    def test_restore_only_argocd_manage_with_resume_after_forbidden(self):
-        """Test --restore-only + --argocd-manage + --argocd-resume-after rejects."""
-        args = MockArgs(
-            primary_context=None,
-            secondary_context="new-hub",
-            method="full",
-            old_hub_action=None,
-            decommission=False,
-            restore_only=True,
-            argocd_manage=True,
-            argocd_resume_after_switchover=True,
-        )
-        with pytest.raises(ValidationError, match="--argocd-resume-after-switchover"):
-            InputValidator.validate_all_cli_args(args)
 
 
 class TestKubernetesResourceValidation:
