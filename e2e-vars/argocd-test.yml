@@ -10,7 +10,6 @@ acm_switchover_hubs:
 acm_switchover_features:
   argocd:
     manage: true
-    resume_after_switchover: true
 acm_switchover_argocd:
   namespace: openshift-gitops
 acm_switchover_execution:
