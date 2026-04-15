@@ -237,7 +237,7 @@ python acm_switchover.py ... --argocd-resume-after-switchover
 python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>
 ```
 
-Bash: `./scripts/preflight-check.sh` (Argo CD detection is automatic), `./scripts/argocd-manage.sh --mode pause|resume`. See [scripts/README.md](../scripts/README.md).
+Bash (deprecated): `./scripts/argocd-manage.sh` is deprecated. Use the Python CLI or Ansible collection instead.
 
 Note: Resume treats already-resumed apps as idempotent no-ops and fails only when an Application cannot be restored for actionable reasons. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
 

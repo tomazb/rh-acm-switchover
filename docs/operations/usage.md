@@ -493,7 +493,7 @@ Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect 
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 
-**Bash alternative:** Use `./scripts/preflight-check.sh` (Argo CD detection is automatic) and `./scripts/argocd-manage.sh` for pause/resume with a state file. See [scripts/README.md](../../scripts/README.md).
+**Bash alternative (deprecated):** `./scripts/argocd-manage.sh` is deprecated and will be removed in a future release. Use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
 
 ### Issue: Script Hangs During Restore
 
