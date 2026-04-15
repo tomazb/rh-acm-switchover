@@ -264,7 +264,7 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 **New workflow step**: Follow idempotent pattern with `state.is_step_completed()` / `mark_step_completed()`
 **New validation**: Add to `lib/validation.py` with `InputValidator` static method
 **Hub discovery and preflight**: Use `./scripts/discover-hub.sh --auto --run` to discover hub contexts and run smart preflight checks
-**Argo CD pause/resume**: Use `python acm_switchover.py --argocd-manage` (Python CLI) or the `argocd_manage` Ansible role. See `docs/operations/usage.md` for Python flags (`--argocd-manage`, `--argocd-resume-only`). The Bash script `scripts/argocd-manage.sh` is **deprecated** and will be removed in a future release. Note: `app.kubernetes.io/instance` is flagged as `UNRELIABLE` by GitOps marker detection and must not be used as a definitive GitOps signal.
+**Argo CD pause/resume**: Use `python acm_switchover.py --argocd-manage` (Python CLI) or the `argocd_manage` Ansible role. See `docs/operations/usage.md` for Python flags (`--argocd-manage`, `--argocd-resume-only`, `--argocd-resume-on-failure`). The Bash script `scripts/argocd-manage.sh` is **deprecated** and will be removed in a future release. Note: `app.kubernetes.io/instance` is flagged as `UNRELIABLE` by GitOps marker detection and must not be used as a definitive GitOps signal.
 
 ### CLI Validation Guidance (Contributor note)
 - CLI validation is implemented in `lib/validation.py` (class `InputValidator`). When changing existing arguments or adding new ones, update the validator accordingly and add tests in `tests/test_validation.py`.
@@ -272,6 +272,7 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
     - `--secondary-context` is required for switchover operations unless `--decommission` or `--setup` is set.
     - `--non-interactive` can only be used together with `--decommission` (it's disallowed for normal switchovers).
     - `--argocd-resume-only` requires `--secondary-context` and cannot be combined with `--validate-only`, `--decommission`, or `--setup`.
+    - `--argocd-resume-on-failure` requires `--argocd-manage` and cannot be combined with `--argocd-resume-only` or `--validate-only`. Best-effort resume of paused ArgoCD Applications when a switchover fails.
     - `--setup` requires `--admin-kubeconfig` and validates `--token-duration` format (e.g., `48h`, `30m`, `3600s`).
     - `--restore-only` requires `--secondary-context`, forbids `--primary-context`, `--method passive`, `--old-hub-action`, and `--decommission`. Implies `--method full`.
 

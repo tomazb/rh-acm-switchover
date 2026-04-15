@@ -492,6 +492,8 @@ Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect 
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 
+**Resume on failure:** Add `--argocd-resume-on-failure` alongside `--argocd-manage` to automatically attempt ArgoCD resume if the switchover fails. This is safe because Git repos have not been updated yet, so ArgoCD syncing back to the original desired state helps restore pre-switchover state. Resume errors are logged but do not compound the original failure. For Ansible, set `acm_switchover_features.argocd.resume_on_failure: true` in your vars file.
+
 **Bash alternative (deprecated):** `./scripts/argocd-manage.sh` is deprecated and will be removed in a future release. Use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
 
 ### Issue: Script Hangs During Restore

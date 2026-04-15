@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ArgoCD resume-on-failure**: New `--argocd-resume-on-failure` CLI flag (Python) and `acm_switchover_features.argocd.resume_on_failure` variable (Ansible) to attempt best-effort resume of paused ArgoCD Applications when a switchover fails. Prevents apps from being left indefinitely paused after failures. Resume errors are logged but do not compound the original failure.
+
 ### Fixed
 
 - **Ansible ArgoCD**: Fix hub hardcoding in `pause.yml`/`resume.yml` — now uses parameterized `_argocd_discover_hub` lookup matching `discover.yml` pattern (broken in restore-only mode)
