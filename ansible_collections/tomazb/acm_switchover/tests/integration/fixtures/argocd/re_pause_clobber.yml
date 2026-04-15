@@ -1,0 +1,53 @@
+---
+# Re-pause scenario: app already has paused-by annotation (clobber guard should skip it).
+acm_switchover_argocd_mock_apps:
+  - metadata:
+      name: already-paused-app
+      namespace: argocd
+      annotations:
+        acm-switchover.argoproj.io/paused-by: previous-run-001
+        acm-switchover.argoproj.io/original-sync-policy: '{"automated":{"selfHeal":true}}'
+    spec:
+      syncPolicy: {}
+    status:
+      resources:
+        - kind: ManagedCluster
+          namespace: open-cluster-management
+  - metadata:
+      name: fresh-app
+      namespace: argocd
+      annotations: {}
+    spec:
+      syncPolicy:
+        automated:
+          prune: true
+    status:
+      resources:
+        - kind: BackupSchedule
+          namespace: open-cluster-management-backup
+
+acm_switchover_argocd_mock_apps_for_resume:
+  - metadata:
+      name: already-paused-app
+      namespace: argocd
+      annotations:
+        acm-switchover.argoproj.io/paused-by: previous-run-001
+        acm-switchover.argoproj.io/original-sync-policy: '{"automated":{"selfHeal":true}}'
+    spec:
+      syncPolicy: {}
+    status:
+      resources:
+        - kind: ManagedCluster
+          namespace: open-cluster-management
+  - metadata:
+      name: fresh-app
+      namespace: argocd
+      annotations:
+        acm-switchover.argoproj.io/paused-by: test-run-002
+        acm-switchover.argoproj.io/original-sync-policy: '{"automated":{"prune":true}}'
+    spec:
+      syncPolicy: {}
+    status:
+      resources:
+        - kind: BackupSchedule
+          namespace: open-cluster-management-backup
