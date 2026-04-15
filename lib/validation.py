@@ -411,16 +411,10 @@ class InputValidator:
                 raise ValidationError("--restore-only cannot be used with --setup")
             if has_argocd_resume_only:
                 raise ValidationError("--restore-only cannot be used with --argocd-resume-only")
-            if has_argocd_manage:
-                raise ValidationError(
-                    "--restore-only cannot be used with --argocd-manage "
-                    "(restore-only skips PRIMARY_PREP where Argo CD pause occurs; "
-                    "pause Argo CD Applications manually before running restore-only)"
-                )
             if has_argocd_resume_after:
                 raise ValidationError(
                     "--restore-only cannot be used with --argocd-resume-after-switchover "
-                    "(restore-only does not pause Argo CD Applications)"
+                    "(after restore, retarget Git repos/paths then resume manually with --argocd-resume-only)"
                 )
 
         # Validate that secondary context is provided when not in decommission or setup mode

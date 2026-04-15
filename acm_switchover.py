@@ -17,6 +17,7 @@ Features:
 """
 
 import argparse
+import copy
 import logging
 import os
 import sys
@@ -481,6 +482,103 @@ def run_switchover(
     return True
 
 
+def _run_restore_only_argocd_pause(
+    args: argparse.Namespace,
+    state: StateManager,
+    _primary: Optional[KubeClient],
+    secondary: KubeClient,
+    logger: logging.Logger,
+) -> bool:
+    """Pause ArgoCD auto-sync on secondary hub before restore-only activation.
+
+    This is the restore-only equivalent of PrimaryPrep._pause_argocd_acm_apps,
+    targeting only the secondary hub. Uses the same state keys (argocd_run_id,
+    argocd_paused_apps) so --argocd-resume-only works after restore completes.
+    """
+    if not getattr(args, "argocd_manage", False):
+        return True
+    if args.dry_run:
+        logger.info("[DRY-RUN] Would pause Argo CD auto-sync for ACM-touching Applications on secondary hub")
+        return True
+    if state.is_step_completed("pause_argocd_apps"):
+        logger.info("Argo CD pause already completed, skipping")
+        return True
+
+    from lib.exceptions import SwitchoverError
+
+    try:
+        discovery = argocd_lib.detect_argocd_installation(secondary)
+    except Exception as exc:
+        return _fail_phase(state, f"Failed to detect Argo CD installation on secondary hub: {exc}", logger)
+
+    if not discovery.has_applications_crd:
+        logger.info("Argo CD Applications CRD not found on secondary hub; skipping Argo CD pause")
+        state.set_config("argocd_paused_apps", [])
+        state.set_config("argocd_run_id", None)
+        state.set_config("argocd_pause_dry_run", False)
+        state.mark_step_completed("pause_argocd_apps")
+        return True
+
+    run_id = argocd_lib.run_id_or_new(state.get_config("argocd_run_id"))
+    state.set_config("argocd_run_id", run_id)
+    state.set_config("argocd_pause_dry_run", False)
+    paused_apps = copy.deepcopy(state.get_config("argocd_paused_apps") or [])
+    pause_failures = 0
+
+    try:
+        apps = argocd_lib.list_argocd_applications(secondary, namespaces=None)
+    except Exception as exc:
+        return _fail_phase(state, f"Failed to list Argo CD Applications on secondary hub: {exc}", logger)
+
+    acm_apps = argocd_lib.find_acm_touching_apps(apps)
+    for impact in acm_apps:
+        meta = impact.app.get("metadata", {}) or {}
+        namespace = meta.get("namespace", "")
+        name = meta.get("name", "")
+        sync_policy = dict((impact.app.get("spec", {}) or {}).get("syncPolicy") or {})
+        has_automated = "automated" in sync_policy
+
+        if not has_automated:
+            logger.debug("  Skip %s/%s (no auto-sync)", namespace, name)
+            continue
+
+        result = argocd_lib.pause_autosync(secondary, impact.app, run_id)
+        if result.patched:
+            paused_apps.append(
+                {
+                    "hub": "secondary",
+                    "namespace": result.namespace,
+                    "name": result.name,
+                    "original_sync_policy": result.original_sync_policy,
+                    "pause_applied": True,
+                }
+            )
+            state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+            logger.info("  Paused Argo CD Application %s/%s on secondary", result.namespace, result.name)
+        elif result.error:
+            pause_failures += 1
+        else:
+            logger.debug("  Skip %s/%s (no auto-sync)", result.namespace, result.name)
+
+    state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+
+    if pause_failures:
+        return _fail_phase(
+            state,
+            f"Argo CD auto-sync pause failed for {pause_failures} Application(s)",
+            logger,
+        )
+
+    logger.info(
+        "Argo CD: %d Application(s) paused on secondary hub (run_id=%s). "
+        "Left paused by default; use --argocd-resume-only after retargeting Git.",
+        len(paused_apps),
+        run_id,
+    )
+    state.mark_step_completed("pause_argocd_apps")
+    return True
+
+
 def run_restore_only(
     args: argparse.Namespace,
     state: StateManager,
@@ -574,8 +672,10 @@ def run_restore_only(
             state.restore_runtime_checkpoint(runtime_checkpoint)
 
     # Restore-only phase flow: skip PRIMARY_PREP entirely
+    # ArgoCD pause runs between preflight and activation (secondary hub only)
     phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
+        (_run_restore_only_argocd_pause, (Phase.PREFLIGHT,)),
         (_run_phase_activation, (Phase.PREFLIGHT, Phase.ACTIVATION)),
         (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION)),
         (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION)),
@@ -785,8 +885,8 @@ def _report_argocd_acm_impact(
             if primary is None:
                 logger.warning(
                     "\n⚠ ArgoCD advisory: %d ACM-touching Application(s) with auto-sync detected.\n"
-                    "  --argocd-manage is not supported in restore-only mode.\n"
-                    "  Pause Argo CD auto-sync manually before proceeding to avoid drift.\n"
+                    "  Use --argocd-manage to pause auto-sync on the secondary hub before restore.\n"
+                    "  Without pausing, ArgoCD may revert restored resources.\n"
                     "  To suppress: --skip-gitops-check",
                     autosync_count,
                 )

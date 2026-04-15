@@ -680,8 +680,8 @@ class TestCLIArgumentValidation:
         with pytest.raises(ValidationError):
             InputValidator.validate_all_cli_args(args)
 
-    def test_restore_only_forbids_argocd_manage(self):
-        """Test --restore-only forbids --argocd-manage."""
+    def test_restore_only_allows_argocd_manage(self):
+        """Test --restore-only allows --argocd-manage (pause on secondary before restore)."""
         args = MockArgs(
             primary_context=None,
             secondary_context="new-hub",
@@ -691,8 +691,7 @@ class TestCLIArgumentValidation:
             restore_only=True,
             argocd_manage=True,
         )
-        with pytest.raises(ValidationError, match="--argocd-manage"):
-            InputValidator.validate_all_cli_args(args)
+        InputValidator.validate_all_cli_args(args)  # Should not raise
 
     def test_restore_only_forbids_argocd_resume_after_switchover(self):
         """Test --restore-only forbids --argocd-resume-after-switchover."""
