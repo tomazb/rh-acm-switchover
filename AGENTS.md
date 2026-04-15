@@ -147,6 +147,7 @@ The collection lives at `ansible_collections/tomazb/acm_switchover/`. It is a co
 
 **Playbooks** (operator entrypoints, in `playbooks/`):
 - `switchover.yml` — full workflow: preflight → primary_prep → activation → post_activation → finalization
+- `restore_only.yml` — restore-only workflow: preflight → [ArgoCD pause] → activation → post_activation → finalization (no primary hub)
 - `preflight.yml` — preflight validation only
 - `decommission.yml` — decommission old hub
 - `rbac_bootstrap.yml` — set up service accounts and RBAC
@@ -193,7 +194,7 @@ context: "{{ acm_switchover_hubs.secondary.context }}"
 
 **Variable namespacing** — All collection variables use the `acm_switchover_` prefix:
 - `acm_switchover_hubs` — hub connection details (primary + secondary)
-- `acm_switchover_operation` — controls mode (switchover/decommission/setup/dry_run)
+- `acm_switchover_operation` — controls mode (switchover/decommission/setup/dry_run/restore_only)
 - `acm_switchover_features` — feature flags (e.g., `skip_observability_checks`)
 
 **Constants isolation** — The collection **cannot** import from `lib/constants.py` (different Python namespace). All constants live in `plugins/module_utils/constants.py`. Never cross-import between the collection and the Python CLI.

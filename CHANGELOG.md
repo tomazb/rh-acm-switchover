@@ -5,6 +5,22 @@ All notable changes to the ACM Switchover Automation project will be documented 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Ansible Collection restore-only support** — full `restore_only` mode for the Ansible collection (`tomazb.acm_switchover`):
+  - New `restore_only.yml` playbook: preflight → ArgoCD pause (optional) → activation → post_activation → finalization
+  - Validation rules in `validation.py` and `acm_input_validate.py`: forces method=full, old_hub_action=none, rejects `argocd.resume_after_switchover`, allows `argocd.manage`
+  - Preflight guards: all primary-hub-only discovery and validation tasks are skipped in restore-only mode; secondary-only checks remain active
+  - Finalization guards: old hub disposition and ArgoCD auto-resume are skipped
+  - Role defaults: `restore_only: false` added to preflight, activation, and finalization roles
+  - E2E vars: `restore-only.yml` and `restore-only-argocd.yml` for dry-run testing
+
+### Changed
+
+- **Python CLI: `--argocd-manage` now allowed with `--restore-only`** — pauses ACM-touching ArgoCD Applications on the secondary hub before restore activation, preventing ArgoCD from reverting restored resources. ArgoCD auto-resume (`--argocd-resume-after-switchover`) remains rejected; operators must retarget git repos/paths then resume manually via `--argocd-resume-only`.
+
 ## [1.6.10] - 2026-04-13
 
 ### Added
