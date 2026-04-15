@@ -26,37 +26,13 @@
       ansible.builtin.include_tasks: handle_old_hub.yml
       when: not (acm_switchover_operation.restore_only | default(false))
 
-    - name: Resume Argo CD auto-sync on secondary hub when enabled
-      ansible.builtin.include_role:
-        name: tomazb.acm_switchover.argocd_manage
-      vars:
-        acm_switchover_argocd_mode_override: resume
-        _argocd_discover_hub: secondary
-      register: _argocd_resume_result
-      when:
-        - acm_switchover_features.argocd.resume_after_switchover | default(false)
-        - not (acm_switchover_operation.restore_only | default(false))
-
-    - name: Resume Argo CD auto-sync on primary hub when enabled
-      ansible.builtin.include_role:
-        name: tomazb.acm_switchover.argocd_manage
-      vars:
-        acm_switchover_argocd_mode_override: resume
-        _argocd_discover_hub: primary
-      register: _argocd_resume_primary_result
-      when:
-        - acm_switchover_features.argocd.resume_after_switchover | default(false)
-        - not (acm_switchover_operation.restore_only | default(false))
-        - acm_switchover_hubs.primary is defined
-
-    - name: Advisory — ArgoCD left paused in restore-only mode
+    - name: Advisory — ArgoCD Applications left paused after switchover
       ansible.builtin.debug:
         msg: >-
-          Argo CD Applications were paused before restore. Retarget git
-          repos/paths to primary-role configuration before resuming.
-          Resume with: ansible-playbook tomazb.acm_switchover.argocd_resume
+          Argo CD Applications are left paused after switchover. Update Git
+          repos/paths to reflect the new hub role, then resume explicitly with:
+          ansible-playbook tomazb.acm_switchover.argocd_resume
       when:
-        - acm_switchover_operation.restore_only | default(false)
         - acm_switchover_features.argocd.manage | default(false)
 
     - name: Publish finalization result

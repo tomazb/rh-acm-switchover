@@ -22,7 +22,6 @@ acm_switchover_features:
   disable_observability_on_secondary: false
   argocd:
     manage: false
-    resume_after_switchover: false
 
 acm_switchover_execution:
   mode: execute

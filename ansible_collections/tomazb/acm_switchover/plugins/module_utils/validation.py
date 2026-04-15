@@ -88,7 +88,6 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
     activation_method = operation.get("activation_method", "patch")
     argocd = features.get("argocd", {})
     argocd_manage = argocd.get("manage", False)
-    argocd_resume_after = argocd.get("resume_after_switchover", False)
 
     if restore_only:
         method = operation.get("method", "full")
@@ -102,12 +101,6 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
             raise ValidationError(
                 "restore_only requires old_hub_action=none (no old hub to manage)"
             )
-        if argocd_resume_after:
-            raise ValidationError(
-                "restore_only cannot use argocd.resume_after_switchover "
-                "(secondary-role ArgoCD state must not be auto-resumed; "
-                "retarget git repos first, then resume manually)"
-            )
 
         return {
             "restore_only": True,
@@ -115,7 +108,6 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
             "old_hub_action": "none",
             "activation_method": activation_method,
             "argocd_manage": argocd_manage,
-            "argocd_resume_after_switchover": False,
         }
 
     method = operation.get("method", "passive")
@@ -125,15 +117,9 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
             "activation_method=restore requires method=passive; full restore does not use a passive sync restore"
         )
 
-    if argocd_resume_after and not argocd_manage:
-        raise ValidationError(
-            "argocd.resume_after_switchover requires argocd.manage to be true"
-        )
-
     return {
         "restore_only": False,
         "method": method,
         "activation_method": activation_method,
         "argocd_manage": argocd_manage,
-        "argocd_resume_after_switchover": argocd_resume_after,
     }
