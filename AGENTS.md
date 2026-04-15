@@ -59,7 +59,7 @@ The following files are **safety-critical operational documents** that AI agents
 - `primary_prep.py` - Pause backups, disable auto-import, scale down Thanos
 - `activation.py` - Patch restore resource to activate managed clusters
 - `post_activation.py` - Verify cluster connections, fix klusterlet agents
-- `finalization.py` - Set up old hub as secondary or prepare for decommission
+- `finalization.py` - Set up old hub as secondary or prepare for decommission; accepts `restore_only=True` to warn (not fail) when BackupSchedule is absent
 - `decommission.py` - Remove ACM from old hub
 
 ## Phase Flow
@@ -74,6 +74,8 @@ Restore-only mode (`--restore-only`) uses a reduced flow, skipping PRIMARY_PREP:
 ```
 INIT → PREFLIGHT(secondary-only) → ACTIVATION → POST_ACTIVATION → FINALIZATION(backups-only) → COMPLETED
 ```
+
+> **Note**: ACM excludes `BackupSchedule` from Velero backups to prevent circular backup-of-backup issues. After `--restore-only`, no BackupSchedule exists on the hub — the operator must create one manually. `Finalization` handles this gracefully when `restore_only=True` (warns instead of failing).
 
 Defined phases in `Phase` enum: `INIT`, `PREFLIGHT`, `PRIMARY_PREP`, `SECONDARY_VERIFY`, `ACTIVATION`, `POST_ACTIVATION`, `FINALIZATION`, `COMPLETED`, `FAILED`. The main switchover flow uses the diagram above; `FAILED` is set on errors.
 |
