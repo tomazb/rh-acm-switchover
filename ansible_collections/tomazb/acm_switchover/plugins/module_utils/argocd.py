@@ -52,3 +52,11 @@ def build_pause_patch(sync_policy: dict, run_id: str) -> dict:
         "metadata": {"annotations": {"acm-switchover.argoproj.io/paused-by": run_id}},
         "spec": {"syncPolicy": sync_policy},
     }
+
+
+def has_applicationset_owner(app: dict) -> bool:
+    """Return True if app is owned by an ApplicationSet (patching may be reverted by the controller)."""
+    for ref in app.get("metadata", {}).get("ownerReferences", []):
+        if ref.get("kind") == "ApplicationSet":
+            return True
+    return False

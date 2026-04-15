@@ -327,7 +327,9 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
         ns = meta.get("namespace", "")
         name = meta.get("name", "")
         resources = app.get("status", {}).get("resources") or []
-        if not isinstance(resources, list):
+        if not isinstance(resources, list) or not resources:
+            if not resources:
+                logger.debug("App %s/%s has no status.resources; cannot verify ACM impact — skipped", ns, name)
             continue
         acm_count = sum(1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r))
         if acm_count > 0:

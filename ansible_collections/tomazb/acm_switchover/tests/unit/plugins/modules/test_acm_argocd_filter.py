@@ -2,6 +2,7 @@
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
     filter_acm_applications,
+    has_applicationset_owner,
     is_acm_touching_application,
 )
 
@@ -51,3 +52,30 @@ def test_placement_binding_kind_is_acm_touching():
     assert is_acm_touching_application(
         {"metadata": {"name": "placement-app"}, "status": {"resources": [{"kind": "PlacementBinding", "namespace": "default"}]}}
     ) is True
+
+
+def test_has_applicationset_owner_true():
+    """App owned by an ApplicationSet should be detected."""
+    app = {
+        "metadata": {
+            "name": "my-app",
+            "ownerReferences": [{"kind": "ApplicationSet", "name": "my-appset"}],
+        },
+    }
+    assert has_applicationset_owner(app) is True
+
+
+def test_has_applicationset_owner_false_no_refs():
+    """App without ownerReferences returns False."""
+    assert has_applicationset_owner({"metadata": {"name": "solo-app"}}) is False
+
+
+def test_has_applicationset_owner_false_other_owner():
+    """App owned by something other than ApplicationSet returns False."""
+    app = {
+        "metadata": {
+            "name": "my-app",
+            "ownerReferences": [{"kind": "Deployment", "name": "my-deploy"}],
+        },
+    }
+    assert has_applicationset_owner(app) is False

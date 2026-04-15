@@ -86,6 +86,16 @@ class TestFindAcmTouchingApps:
         result = argocd_lib.find_acm_touching_apps(apps)
         assert len(result) == 0
 
+    def test_logs_debug_for_empty_resources(self, caplog):
+        """Apps with empty status.resources should emit a debug log."""
+        import logging
+
+        apps = [{"metadata": {"namespace": "argocd", "name": "empty-res"}, "status": {"resources": []}}]
+        with caplog.at_level(logging.DEBUG, logger="acm_switchover"):
+            result = argocd_lib.find_acm_touching_apps(apps)
+        assert len(result) == 0
+        assert any("empty-res" in msg and "no status.resources" in msg for msg in caplog.messages)
+
     def test_excludes_app_with_missing_status(self):
         apps = [{"metadata": {"namespace": "argocd", "name": "x"}}]
         result = argocd_lib.find_acm_touching_apps(apps)
