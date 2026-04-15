@@ -1,0 +1,81 @@
+---
+# Restore-only workflow: activate a Velero restore on the secondary hub
+# without touching the primary hub.
+#
+# Phases: preflight → [ArgoCD pause] → activation → post_activation → finalization
+# Skipped: primary_prep (no primary hub access)
+#
+# Usage:
+#   ansible-playbook tomazb.acm_switchover.restore_only \
+#     -e @vars/restore-only.yml
+- name: ACM Hub Restore-Only
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Run restore-only phases
+      block:
+        - name: Run preflight validation
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.preflight
+
+        - name: Stop after preflight when mode is validate
+          ansible.builtin.meta: end_play
+          when: acm_switchover_execution.mode | default('') == 'validate'
+
+        - name: Pause Argo CD auto-sync on secondary hub before restore
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.argocd_manage
+          vars:
+            acm_switchover_argocd_mode_override: pause
+            _argocd_discover_hub: secondary
+          when: acm_switchover_features.argocd.manage | default(false)
+
+        - name: Run activation
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.activation
+
+        - name: Run post activation verification
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.post_activation
+
+        - name: Run finalization
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.finalization
+
+      always:
+        - name: Build restore-only report contract
+          ansible.builtin.set_fact:
+            acm_switchover_report:
+              schema_version: "1.0"
+              source: tomazb.acm_switchover
+              operation: restore_only
+              phases: >-
+                {{
+                  {}
+                  | combine({'activation': acm_switchover_activation_result} if acm_switchover_activation_result is defined else {})
+                  | combine({'post_activation': acm_switchover_post_activation_result} if acm_switchover_post_activation_result is defined else {})
+                  | combine({'finalization': acm_switchover_finalization_result} if acm_switchover_finalization_result is defined else {})
+                }}
+
+        - name: Resolve report directory to absolute path
+          ansible.builtin.set_fact:
+            _acm_report_dir_abs: >-
+              {{
+                (acm_switchover_execution.report_dir | default('artifacts'))
+                if (acm_switchover_execution.report_dir | default('artifacts')).startswith('/')
+                else (lookup('env', 'PWD') ~ '/' ~ (acm_switchover_execution.report_dir | default('artifacts')))
+              }}
+
+        - name: Ensure restore-only report directory exists
+          ansible.builtin.file:
+            path: "{{ _acm_report_dir_abs }}"
+            state: directory
+            mode: "0755"
+
+        - name: Write restore-only report artifact
+          ansible.builtin.copy:
+            dest: "{{ _acm_report_dir_abs ~ '/restore-only-report.json' }}"
+            content: "{{ acm_switchover_report | to_nice_json }}"
+            mode: "0644"
