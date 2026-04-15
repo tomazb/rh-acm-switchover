@@ -26,7 +26,7 @@
       ansible.builtin.include_tasks: handle_old_hub.yml
       when: not (acm_switchover_operation.restore_only | default(false))
 
-    - name: Resume Argo CD auto-sync when enabled
+    - name: Resume Argo CD auto-sync on secondary hub when enabled
       ansible.builtin.include_role:
         name: tomazb.acm_switchover.argocd_manage
       vars:
@@ -36,6 +36,18 @@
       when:
         - acm_switchover_features.argocd.resume_after_switchover | default(false)
         - not (acm_switchover_operation.restore_only | default(false))
+
+    - name: Resume Argo CD auto-sync on primary hub when enabled
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+      vars:
+        acm_switchover_argocd_mode_override: resume
+        _argocd_discover_hub: primary
+      register: _argocd_resume_primary_result
+      when:
+        - acm_switchover_features.argocd.resume_after_switchover | default(false)
+        - not (acm_switchover_operation.restore_only | default(false))
+        - acm_switchover_hubs.primary is defined
 
     - name: Advisory — ArgoCD left paused in restore-only mode
       ansible.builtin.debug:
