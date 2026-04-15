@@ -44,6 +44,16 @@ def test_resume_uses_parameterized_hub():
                 assert "_argocd_discover_hub" in kc, f"resume.yml kubeconfig should use _argocd_discover_hub: {kc}"
 
 
+def test_run_id_default_is_not_empty_string():
+    """defaults/main.yml run_id must not default to empty string."""
+    defaults = yaml.safe_load((ROLE_DIR.parent / "defaults" / "main.yml").read_text())
+    run_id = defaults.get("acm_switchover_argocd", {}).get("run_id")
+    # run_id should either be absent (undefined → triggers Jinja default())
+    # or be a non-empty string. Empty string breaks resume matching.
+    assert run_id is None or (isinstance(run_id, str) and run_id != ""), \
+        "run_id defaults to empty string, which bypasses Jinja default() filter"
+
+
 def test_discover_uses_parameterized_hub():
     """discover.yml should already use _argocd_discover_hub (baseline check)."""
     tasks = _load_yaml("discover.yml")

@@ -17,6 +17,15 @@
 - name: Discover Argo CD Applications from cluster
   when: acm_switchover_argocd_mock_apps is not defined
   block:
+    - name: Generate run_id if not provided
+      ansible.builtin.set_fact:
+        acm_switchover_argocd: >-
+          {{
+            acm_switchover_argocd | default({})
+            | combine({'run_id': lookup('pipe', 'python3 -c "import uuid; print(uuid.uuid4().hex[:12])"')})
+          }}
+      when: (acm_switchover_argocd.run_id | default('')) == ''
+
     - name: List Applications in Argo CD namespace
       kubernetes.core.k8s_info:
         api_version: argoproj.io/v1alpha1

@@ -6,4 +6,3 @@ acm_switchover_features:
 
 acm_switchover_argocd:
   mode: pause
-  run_id: ""
