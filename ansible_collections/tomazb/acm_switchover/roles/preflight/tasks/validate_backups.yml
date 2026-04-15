@@ -21,6 +21,7 @@
           }
         ]
       }}
+  when: not (acm_switchover_operation.restore_only | default(false))
 
 - name: Record BackupSchedule presence
   ansible.builtin.set_fact:
@@ -44,6 +45,7 @@
           }
         ]
       }}
+  when: not (acm_switchover_operation.restore_only | default(false))
 
 - name: Record primary hub BackupStorageLocation health
   ansible.builtin.set_fact:
@@ -78,6 +80,7 @@
           }
         ]
       }}
+  when: not (acm_switchover_operation.restore_only | default(false))
 
 - name: Record secondary hub BackupStorageLocation health
   ansible.builtin.set_fact:
@@ -144,7 +147,16 @@
                 and (acm_secondary_restore_info.resources | default([]) | length) == 0
               )
               else None
-          },
+          }
+        ]
+      }}
+
+- name: Record primary hub ClusterDeployment and ManagedClusterBackup info
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
           {
             "id": "preflight-clusterdeployments",
             "severity": "warning",
@@ -173,3 +185,4 @@
           }
         ]
       }}
+  when: not (acm_switchover_operation.restore_only | default(false))

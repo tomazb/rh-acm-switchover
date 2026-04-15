@@ -12,22 +12,29 @@
       }}
     argocd_install_type: unknown
   register: _rbac_expanded_primary
+  when: not (acm_switchover_operation.restore_only | default(false))
 
 - name: Run SelfSubjectAccessReview checks for primary hub
   ansible.builtin.include_tasks: run_ssar.yml
   vars:
     acm_rbac_permissions: "{{ _rbac_expanded_primary.permissions }}"
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Collect denied permissions for primary hub
   ansible.builtin.set_fact:
     _rbac_denied_permissions_primary: "{{ _rbac_denied_permissions }}"
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Set empty denied list in dry-run mode for primary
   ansible.builtin.set_fact:
     _rbac_denied_permissions_primary: []
-  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 
 - name: Summarize RBAC validation results for primary hub
   tomazb.acm_switchover.acm_rbac_validate:
@@ -43,6 +50,7 @@
     argocd_install_type: unknown
     denied_permissions: "{{ _rbac_denied_permissions_primary | default([]) }}"
   register: acm_primary_rbac_validation
+  when: not (acm_switchover_operation.restore_only | default(false))
 
 # Secondary hub RBAC validation (where activation happens)
 - name: Expand required RBAC permissions for secondary hub
@@ -97,20 +105,20 @@
     acm_switchover_validation_results: >-
       {{
         (acm_switchover_validation_results | default([]))
-        + acm_primary_rbac_validation.results
+        + (acm_primary_rbac_validation.results | default([]))
         + acm_secondary_rbac_validation.results
       }}
     acm_switchover_preflight_summary:
       passed: >-
         {{
           (acm_switchover_preflight_summary.passed | default(true))
-          and acm_primary_rbac_validation.passed
+          and (acm_primary_rbac_validation.passed | default(true))
           and acm_secondary_rbac_validation.passed
         }}
       critical_failures: >-
         {{
           (acm_switchover_preflight_summary.critical_failures | default(0))
-          + (0 if acm_primary_rbac_validation.passed else 1)
+          + (0 if (acm_primary_rbac_validation.passed | default(true)) else 1)
           + (0 if acm_secondary_rbac_validation.passed else 1)
         }}
       warning_failures: "{{ acm_switchover_preflight_summary.warning_failures | default(0) }}"

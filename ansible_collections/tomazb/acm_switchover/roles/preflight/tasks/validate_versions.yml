@@ -51,3 +51,29 @@
           }
         ]
       }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record secondary ACM version availability for restore-only
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-version-secondary",
+            "severity": "critical",
+            "status": "pass" if acm_secondary_version else "fail",
+            "message": "secondary hub ACM version detected"
+              if acm_secondary_version
+              else "secondary hub ACM version is unavailable",
+            "details": {
+              "secondary_version": acm_secondary_version,
+              "secondary_found": (acm_secondary_mch_info.resources | default([]) | length > 0)
+            },
+            "recommended_action": "Verify MultiClusterHub is installed and healthy on the secondary hub"
+              if not acm_secondary_version
+              else None
+          }
+        ]
+      }}
+  when: acm_switchover_operation.restore_only | default(false)
