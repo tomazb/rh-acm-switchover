@@ -19,6 +19,7 @@ acm_switchover_execution:
     reset: false
 
 acm_switchover_operation:
+  restore_only: false
   method: passive
   old_hub_action: secondary
   activation_method: patch

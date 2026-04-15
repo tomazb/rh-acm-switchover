@@ -8,6 +8,7 @@ acm_switchover_hubs:
     kubeconfig: ""
 
 acm_switchover_operation:
+  restore_only: false
   method: passive
   old_hub_action: secondary
   activation_method: patch
