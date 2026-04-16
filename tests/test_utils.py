@@ -808,7 +808,7 @@ class TestDryRunSkipDecorator:
         assert obj2.executed is True
 
     def test_decorator_with_missing_attribute(self):
-        """Test decorator gracefully handles missing attribute."""
+        """When dry_run attribute doesn't exist at all, skip safely."""
 
         class TestClass:
             def __init__(self):
@@ -823,9 +823,9 @@ class TestDryRunSkipDecorator:
         obj = TestClass()
         result = obj.test_method()
 
-        # Should execute since attribute is missing (falsy)
-        assert result == "executed"
-        assert obj.executed is True
+        # Should skip since attribute is missing (safe default)
+        assert result == "skipped"
+        assert obj.executed is False
 
     def test_decorator_with_arguments(self):
         """Test decorator preserves function arguments."""
@@ -906,6 +906,24 @@ class TestDryRunSkipDecorator:
 
         mock_get_logger.assert_called_with("acm_switchover")
         mock_logger.info.assert_called_with("[DRY-RUN] %s", "Custom skip message")
+
+    def test_decorator_skips_when_intermediate_attribute_is_none(self):
+        """When an intermediate in the dot-path is None, default to skipping (safe)."""
+
+        class Outer:
+            client = None  # intermediate is None
+
+        @dry_run_skip(
+            message="Should skip safely",
+            return_value="skipped",
+            dry_run_attr="client.dry_run",
+        )
+        def guarded_method(self):
+            return "executed"
+
+        obj = Outer()
+        result = guarded_method(obj)
+        assert result == "skipped"
 
 
 @pytest.mark.unit

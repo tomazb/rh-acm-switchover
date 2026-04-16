@@ -79,7 +79,18 @@ def dry_run_skip(
             for attr_name in dry_run_attr.split("."):
                 obj = getattr(obj, attr_name, None)
                 if obj is None:
-                    break
+                    # Attribute path broken — cannot determine dry-run state.
+                    # Safe default: skip execution to avoid unintended changes.
+                    logger = logging.getLogger("acm_switchover")
+                    logger.warning(
+                        "[DRY-RUN] Cannot resolve attribute path '%s' on %s; "
+                        "skipping for safety",
+                        dry_run_attr,
+                        type(root).__name__,
+                    )
+                    if callable(return_value):
+                        return return_value(*args, **kwargs)
+                    return return_value
 
             # Explicitly check for True to avoid truthy object references
             if obj is True:
