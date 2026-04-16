@@ -1468,6 +1468,11 @@ class TestFinalization:
         primary = Mock()
         primary.list_custom_resources.return_value = []
         primary.get_pods.return_value = []
+        # _setup_old_hub_as_secondary checks for an existing restore on the
+        # old hub via primary.get_custom_resource.  Return None so it skips
+        # the delete-wait cycle (which would hang because time.time is mocked
+        # to always return 0, preventing the timeout from ever firing).
+        primary.get_custom_resource.return_value = None
 
         fin = Finalization(
             secondary_client=mock_secondary_client,
