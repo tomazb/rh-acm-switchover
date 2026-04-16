@@ -655,3 +655,17 @@ class TestValidateDecommissionPermissions:
             call("", "pods", "get", OBSERVABILITY_NAMESPACE)
             in validator.check_permission.call_args_list
         )
+
+    def test_validate_decommission_rbac_succeeds_when_acm_namespace_missing(self, mock_primary_client):
+        """Missing ACM namespace on rerun should NOT fail validation (idempotent)."""
+        mock_primary_client.namespace_exists.side_effect = lambda ns: {
+            "open-cluster-management": False,
+            "open-cluster-management-observability": True,
+        }.get(ns, False)
+        mock_primary_client.check_permission.return_value = (True, None)
+
+        validator = RBACValidator(client=mock_primary_client, role="operator")
+        all_valid, errors = validator.validate_decommission_permissions()
+
+        assert all_valid is True
+        assert not errors.get("namespaces", [])

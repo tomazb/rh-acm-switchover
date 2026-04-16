@@ -662,6 +662,15 @@ class RBACValidator:
                 continue
 
             if not self.client.namespace_exists(namespace):
+                if namespace == ACM_NAMESPACE:
+                    # ACM namespace removal is expected after successful decommission.
+                    # Treat as success to allow idempotent reruns.
+                    logger.info(
+                        "Namespace %s does not exist — ACM already removed, "
+                        "skipping decommission permission checks for this namespace",
+                        namespace,
+                    )
+                    continue
                 warning = f"Namespace {namespace} does not exist - skipping decommission permission checks"
                 logger.warning(warning)
                 namespace_errors.append(warning)
