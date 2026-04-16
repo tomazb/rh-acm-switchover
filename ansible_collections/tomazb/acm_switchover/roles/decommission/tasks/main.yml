@@ -29,15 +29,15 @@
   ansible.builtin.set_fact:
     _acm_summary_path_abs: >-
       {{
-        summary_path
-        if summary_path.startswith('/')
-        else (lookup('env', 'PWD') ~ '/' ~ summary_path)
+        acm_switchover_summary_path
+        if acm_switchover_summary_path.startswith('/')
+        else (lookup('env', 'PWD') ~ '/' ~ acm_switchover_summary_path)
       }}
-  when: summary_path is defined
+  when: acm_switchover_summary_path is defined
 
 - name: Write summary when requested
   ansible.builtin.copy:
     content: "{{ acm_switchover_decommission_result | to_json }}"
     dest: "{{ _acm_summary_path_abs }}"
     mode: "0644"
-  when: summary_path is defined
+  when: acm_switchover_summary_path is defined

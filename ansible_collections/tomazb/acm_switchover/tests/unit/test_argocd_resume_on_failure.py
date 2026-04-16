@@ -49,8 +49,7 @@ def test_switchover_rescue_resumes_argocd_on_secondary():
     resume_tasks = [
         t
         for t in rescue_tasks
-        if "include_role" in (t.get("ansible.builtin.include_role") or {}).get("name", "")
-        or t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
+        if t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
     ]
     assert len(resume_tasks) >= 1, "rescue must include argocd_manage role for resume"
 

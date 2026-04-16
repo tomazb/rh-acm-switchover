@@ -107,7 +107,8 @@ def test_build_restore_activation_plan_passive_patch_already_applied():
     assert "Enabled" in plan["wait_target"]["success_phases"]
 
 
-
+def test_build_restore_activation_plan_passive_restore_activation():
+    """When activation_method is restore, plan should delete existing passive sync restore and create activation restore."""
     plan = build_restore_activation_plan(
         method="passive",
         activation_method="restore",

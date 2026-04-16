@@ -76,7 +76,8 @@ pip install PyYAML>=6.0 kubernetes>=24.2.0
 ansible-galaxy collection install kubernetes.core
 
 # 4. Set ANSIBLE_COLLECTIONS_PATH to include the repo
-export ANSIBLE_COLLECTIONS_PATH="/home/tomaz/sources/rh-acm-switchover:${ANSIBLE_COLLECTIONS_PATH:-~/.ansible/collections}"
+export ANSIBLE_COLLECTIONS_PATH="${HOME}/sources/rh-acm-switchover:${ANSIBLE_COLLECTIONS_PATH:-~/.ansible/collections}"
+# Note: Replace ${HOME}/sources/rh-acm-switchover with the actual path to your checkout of this repository.
 
 # 5. Verify collection is loadable
 ansible-doc tomazb.acm_switchover.acm_input_validate

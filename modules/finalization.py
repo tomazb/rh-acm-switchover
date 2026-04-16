@@ -1178,7 +1178,7 @@ class Finalization:
         self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT
     ) -> None:
         """Wait until a restore resource is fully deleted from the old primary hub."""
-        if self.primary.dry_run:
+        if self.dry_run:
             logger.info("[DRY-RUN] Skipping wait for deletion of %s on primary", restore_name)
             return
 
