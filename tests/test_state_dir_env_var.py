@@ -107,6 +107,4 @@ def test_restore_only_produces_correct_state_filename(monkeypatch: pytest.Monkey
         secondary_ctx="secondary-hub",
     )
 
-    assert resolved == os.path.join(
-        str(tmp_path), "switchover-restore-only__secondary-hub.json"
-    )
+    assert resolved == os.path.join(str(tmp_path), "switchover-restore-only__secondary-hub.json")

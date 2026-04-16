@@ -152,17 +152,14 @@ class PreflightValidator:
                 # escaping as uncaught exceptions.
                 # Check if observability namespace exists on either hub
                 # If not installed, skip observability permission checks
-                primary_has_obs = (
-                    self.primary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.primary else False
-                )
+                primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.primary else False
                 secondary_has_obs = (
                     self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.secondary else False
                 )
                 skip_obs = not (primary_has_obs or secondary_has_obs)
                 if skip_obs:
                     logger.info(
-                        "Observability namespace not found on either hub, "
-                        "skipping observability permission checks"
+                        "Observability namespace not found on either hub, " "skipping observability permission checks"
                     )
 
                 (

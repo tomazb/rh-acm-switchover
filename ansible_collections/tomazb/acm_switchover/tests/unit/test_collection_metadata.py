@@ -2,7 +2,6 @@ from pathlib import Path
 
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[5]
 COLLECTION_ROOT = REPO_ROOT / "ansible_collections" / "tomazb" / "acm_switchover"
 PACKAGED_RBAC_ROOT = COLLECTION_ROOT / "roles" / "rbac_bootstrap" / "files" / "deploy" / "rbac"

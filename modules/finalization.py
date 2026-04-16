@@ -1174,9 +1174,7 @@ class Finalization:
             raise SwitchoverError("Failed to create passive sync restore on old primary hub") from e
         logger.info("Created passive sync restore on old primary hub")
 
-    def _wait_for_primary_restore_deletion(
-        self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT
-    ) -> None:
+    def _wait_for_primary_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
         """Wait until a restore resource is fully deleted from the old primary hub."""
         if self.dry_run:
             logger.info("[DRY-RUN] Skipping wait for deletion of %s on primary", restore_name)
@@ -1205,9 +1203,7 @@ class Finalization:
             logger=logger,
         )
         if not completed:
-            raise FatalError(
-                f"Timeout waiting for restore {restore_name} to be deleted on primary after {timeout}s"
-            )
+            raise FatalError(f"Timeout waiting for restore {restore_name} to be deleted on primary after {timeout}s")
 
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")
     def _fix_backup_schedule_collision(self):

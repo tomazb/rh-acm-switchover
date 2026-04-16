@@ -67,7 +67,9 @@ def parse_args():
     """Parse command line arguments."""
     # Keep switchover/decommission CLI contracts intact while allowing
     # standalone modes that do not perform a switchover flow.
-    standalone_mode_requested = any(flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only", "--restore-only"))
+    standalone_mode_requested = any(
+        flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only", "--restore-only")
+    )
     restore_only_requested = "--restore-only" in sys.argv[1:]
 
     parser = argparse.ArgumentParser(
@@ -105,7 +107,9 @@ Examples:
     )
 
     # Context arguments
-    parser.add_argument("--primary-context", required=not restore_only_requested, help="Kubernetes context for primary hub")
+    parser.add_argument(
+        "--primary-context", required=not restore_only_requested, help="Kubernetes context for primary hub"
+    )
     parser.add_argument(
         "--secondary-context",
         help="Kubernetes context for secondary hub (required for switchover)",
@@ -707,9 +711,7 @@ def _attempt_argocd_resume_on_failure(
         run_id,
     )
     try:
-        summary = argocd_lib.resume_recorded_applications(
-            paused_apps, run_id, primary, secondary, logger
-        )
+        summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, primary, secondary, logger)
         logger.info(
             "Argo CD resume-on-failure: restored=%d, already_resumed=%d, failed=%d",
             summary.restored,
@@ -724,8 +726,7 @@ def _attempt_argocd_resume_on_failure(
             )
     except Exception as exc:
         logger.warning(
-            "Argo CD resume-on-failure failed: %s. "
-            "Use --argocd-resume-only to resume manually.",
+            "Argo CD resume-on-failure failed: %s. " "Use --argocd-resume-only to resume manually.",
             exc,
         )
 

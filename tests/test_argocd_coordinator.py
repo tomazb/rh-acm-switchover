@@ -90,10 +90,12 @@ class TestPauseHubsSingleHub:
         assert paused_apps[0]["pause_applied"] is True
 
     def test_no_crd_clears_state(self):
-        state = _make_state_manager({
-            "argocd_run_id": "stale",
-            "argocd_paused_apps": [{"hub": "secondary", "name": "old"}],
-        })
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "stale",
+                "argocd_paused_apps": [{"hub": "secondary", "name": "old"}],
+            }
+        )
         client = Mock()
 
         with patch(
@@ -164,10 +166,12 @@ class TestPauseHubsTwoHubs:
             patch("lib.argocd_coordinator.argocd_lib.pause_autosync", side_effect=pause_side_effect),
         ):
             coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([
-                (primary_client, "primary"),
-                (secondary_client, "secondary"),
-            ])
+            paused_apps, failures = coordinator.pause_hubs(
+                [
+                    (primary_client, "primary"),
+                    (secondary_client, "secondary"),
+                ]
+            )
 
         assert failures == 0
         assert len(paused_apps) == 2
@@ -196,10 +200,12 @@ class TestPauseHubsTwoHubs:
                 namespace="argocd", name="app-1", original_sync_policy={"automated": {}}, patched=True
             )
             coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
-            paused_apps, failures = coordinator.pause_hubs([
-                (primary_client, "primary"),
-                (secondary_client, "secondary"),
-            ])
+            paused_apps, failures = coordinator.pause_hubs(
+                [
+                    (primary_client, "primary"),
+                    (secondary_client, "secondary"),
+                ]
+            )
 
         assert failures == 0
         assert len(paused_apps) == 1
@@ -212,16 +218,20 @@ class TestIdempotentRepause:
 
     def test_already_paused_and_recorded_is_skipped(self):
         """An app already paused and confirmed in state must not be re-paused."""
-        state = _make_state_manager({
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": [{
-                "hub": "primary",
-                "namespace": "argocd",
-                "name": "app-1",
-                "original_sync_policy": {"automated": {"prune": True}},
-                "pause_applied": True,
-            }],
-        })
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [
+                    {
+                        "hub": "primary",
+                        "namespace": "argocd",
+                        "name": "app-1",
+                        "original_sync_policy": {"automated": {"prune": True}},
+                        "pause_applied": True,
+                    }
+                ],
+            }
+        )
         client = Mock()
         # App is already paused (no automated in syncPolicy)
         app = _make_app("argocd", "app-1", automated=False)
@@ -242,16 +252,20 @@ class TestIdempotentRepause:
 
     def test_recovers_pending_entry_when_app_already_paused(self):
         """Entry with pause_applied=False should be confirmed when live app lacks automated sync."""
-        state = _make_state_manager({
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": [{
-                "hub": "primary",
-                "namespace": "argocd",
-                "name": "app-1",
-                "original_sync_policy": {"automated": {"prune": True}},
-                "pause_applied": False,
-            }],
-        })
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [
+                    {
+                        "hub": "primary",
+                        "namespace": "argocd",
+                        "name": "app-1",
+                        "original_sync_policy": {"automated": {"prune": True}},
+                        "pause_applied": False,
+                    }
+                ],
+            }
+        )
         client = Mock()
         app = _make_app("argocd", "app-1", automated=False)
 
@@ -316,8 +330,11 @@ class TestErrorHandling:
             patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
-                namespace="argocd", name="app-1", original_sync_policy={"automated": {}},
-                patched=False, error="403 Forbidden",
+                namespace="argocd",
+                name="app-1",
+                original_sync_policy={"automated": {}},
+                patched=False,
+                error="403 Forbidden",
             )
             coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
@@ -357,16 +374,20 @@ class TestErrorHandling:
 
     def test_failed_retry_removes_stale_entry(self):
         """A failed pause attempt must clean up the provisional state entry."""
-        state = _make_state_manager({
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": [{
-                "hub": "primary",
-                "namespace": "argocd",
-                "name": "app-1",
-                "original_sync_policy": {"automated": {}},
-                "pause_applied": False,
-            }],
-        })
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [
+                    {
+                        "hub": "primary",
+                        "namespace": "argocd",
+                        "name": "app-1",
+                        "original_sync_policy": {"automated": {}},
+                        "pause_applied": False,
+                    }
+                ],
+            }
+        )
         client = Mock()
         # App still has automated (the previous pause didn't actually apply)
         app = _make_app("argocd", "app-1", automated=True)
@@ -378,8 +399,11 @@ class TestErrorHandling:
             patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
         ):
             mock_pause.return_value = argocd_lib.PauseResult(
-                namespace="argocd", name="app-1", original_sync_policy={"automated": {}},
-                patched=False, error="patch failed",
+                namespace="argocd",
+                name="app-1",
+                original_sync_policy={"automated": {}},
+                patched=False,
+                error="patch failed",
             )
             coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
             paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
@@ -452,9 +476,7 @@ class TestStatePersistence:
         assert len(paused_apps) == 2
 
         # Verify set_config was called multiple times (provisional + confirmed for each app)
-        paused_calls = [
-            call for call in state.set_config.call_args_list if call.args[0] == "argocd_paused_apps"
-        ]
+        paused_calls = [call for call in state.set_config.call_args_list if call.args[0] == "argocd_paused_apps"]
         # 2 apps × 2 persists each (provisional + confirmed) = 4
         assert len(paused_calls) == 4
 

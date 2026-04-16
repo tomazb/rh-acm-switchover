@@ -58,8 +58,8 @@ from ansible.module_utils.basic import AnsibleModule
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
     ACM_NAMESPACE,
-    APPS,
     APIEXTENSIONS_K8S_IO,
+    APPS,
     ARGOCD_IO,
     BACKUP_NAMESPACE,
     CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO,

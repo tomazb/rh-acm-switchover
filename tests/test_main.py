@@ -2797,10 +2797,11 @@ class TestRestoreOnlyFlow:
         state.get_state_age.return_value = None
         secondary = Mock()
 
-        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, \
-             patch("acm_switchover._run_phase_activation", return_value=True), \
-             patch("acm_switchover._run_phase_post_activation", return_value=True), \
-             patch("acm_switchover._run_phase_finalization", return_value=True):
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, patch(
+            "acm_switchover._run_phase_activation", return_value=True
+        ), patch("acm_switchover._run_phase_post_activation", return_value=True), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ):
             result = run_restore_only(args, state, secondary, Mock())
 
         assert result is True
@@ -2817,11 +2818,13 @@ class TestRestoreOnlyFlow:
         state.get_state_age.return_value = None
         secondary = Mock()
 
-        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, \
-             patch("acm_switchover._run_phase_primary_prep") as pp, \
-             patch("acm_switchover._run_phase_activation", return_value=True), \
-             patch("acm_switchover._run_phase_post_activation", return_value=True), \
-             patch("acm_switchover._run_phase_finalization", return_value=True):
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, patch(
+            "acm_switchover._run_phase_primary_prep"
+        ) as pp, patch("acm_switchover._run_phase_activation", return_value=True), patch(
+            "acm_switchover._run_phase_post_activation", return_value=True
+        ), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ):
             result = run_restore_only(args, state, secondary, Mock())
 
         assert result is True
@@ -2858,12 +2861,14 @@ class TestRestoreOnlyFlow:
                 called_with_primary.append((name, primary))
                 current[0] = phase_transitions[name]
                 return True
+
             return handler
 
-        with patch("acm_switchover._run_phase_preflight", side_effect=capture_primary("preflight")), \
-             patch("acm_switchover._run_phase_activation", side_effect=capture_primary("activation")), \
-             patch("acm_switchover._run_phase_post_activation", side_effect=capture_primary("post_activation")), \
-             patch("acm_switchover._run_phase_finalization", side_effect=capture_primary("finalization")):
+        with patch("acm_switchover._run_phase_preflight", side_effect=capture_primary("preflight")), patch(
+            "acm_switchover._run_phase_activation", side_effect=capture_primary("activation")
+        ), patch("acm_switchover._run_phase_post_activation", side_effect=capture_primary("post_activation")), patch(
+            "acm_switchover._run_phase_finalization", side_effect=capture_primary("finalization")
+        ):
             run_restore_only(args, state, secondary, Mock())
 
         assert len(called_with_primary) == 4
@@ -2880,10 +2885,11 @@ class TestRestoreOnlyFlow:
         state.get_state_age.return_value = None
         secondary = Mock()
 
-        with patch("acm_switchover._run_phase_preflight", return_value=True), \
-             patch("acm_switchover._run_phase_activation", return_value=True), \
-             patch("acm_switchover._run_phase_post_activation", return_value=True), \
-             patch("acm_switchover._run_phase_finalization", return_value=True):
+        with patch("acm_switchover._run_phase_preflight", return_value=True), patch(
+            "acm_switchover._run_phase_activation", return_value=True
+        ), patch("acm_switchover._run_phase_post_activation", return_value=True), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ):
             result = run_restore_only(args, state, secondary, Mock())
 
         assert result is True
@@ -2899,8 +2905,9 @@ class TestRestoreOnlyFlow:
         state.get_state_age.return_value = None
         secondary = Mock()
 
-        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, \
-             patch("acm_switchover._run_phase_activation") as act:
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, patch(
+            "acm_switchover._run_phase_activation"
+        ) as act:
             result = run_restore_only(args, state, secondary, Mock())
 
         assert result is True
@@ -2917,8 +2924,9 @@ class TestRestoreOnlyFlow:
         state.get_state_age.return_value = None
         secondary = Mock()
 
-        with patch("acm_switchover._run_phase_preflight", return_value=False) as pf, \
-             patch("acm_switchover._run_phase_activation") as act:
+        with patch("acm_switchover._run_phase_preflight", return_value=False) as pf, patch(
+            "acm_switchover._run_phase_activation"
+        ) as act:
             result = run_restore_only(args, state, secondary, Mock())
 
         assert result is False
@@ -2962,10 +2970,11 @@ class TestRestoreOnlyFlow:
         state.get_state_age.return_value = None
         secondary = Mock()
 
-        with patch("acm_switchover._run_phase_preflight", return_value=True), \
-             patch("acm_switchover._run_phase_activation", return_value=True), \
-             patch("acm_switchover._run_phase_post_activation", return_value=True), \
-             patch("acm_switchover._run_phase_finalization", return_value=True) as fin:
+        with patch("acm_switchover._run_phase_preflight", return_value=True), patch(
+            "acm_switchover._run_phase_activation", return_value=True
+        ), patch("acm_switchover._run_phase_post_activation", return_value=True), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ) as fin:
             run_restore_only(args, state, secondary, Mock())
 
         assert args.old_hub_action == "none"
@@ -2982,8 +2991,13 @@ class TestAttemptArgoCDResumeOnFailure:
         state = Mock()
         if paused_apps is None:
             paused_apps = [
-                {"hub": "primary", "namespace": "argocd", "name": "app1",
-                 "original_sync_policy": {"automated": {}}, "pause_applied": True}
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app1",
+                    "original_sync_policy": {"automated": {}},
+                    "pause_applied": True,
+                }
             ]
         state.get_config.side_effect = lambda key, *a: {
             "argocd_run_id": run_id,

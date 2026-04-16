@@ -1,6 +1,7 @@
 """Tests for activation role auto-import strategy management."""
 
 import pathlib
+
 import yaml
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
@@ -30,9 +31,7 @@ def test_main_includes_manage_before_activation():
     assert block_tasks is not None, "main.yml must have a block"
 
     task_names = [t.get("name", "") for t in block_tasks]
-    includes = [
-        t.get("ansible.builtin.include_tasks", "") for t in block_tasks
-    ]
+    includes = [t.get("ansible.builtin.include_tasks", "") for t in block_tasks]
 
     manage_idx = None
     activate_idx = None

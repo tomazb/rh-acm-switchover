@@ -3,8 +3,8 @@
 
 def test_acm_kinds_parity():
     """Ansible and Python ACM_KINDS must contain the same entries."""
-    from lib.argocd import ARGOCD_ACM_KINDS
     from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import ACM_KINDS
+    from lib.argocd import ARGOCD_ACM_KINDS
 
     python_kinds = set(ARGOCD_ACM_KINDS)
     ansible_kinds = set(ACM_KINDS)
@@ -16,8 +16,8 @@ def test_acm_kinds_parity():
 
 def test_acm_namespaces_parity():
     """Ansible and Python ACM namespaces must cover the same set."""
-    from lib.argocd import ARGOCD_ACM_NS_REGEX
     from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import ACM_NAMESPACES
+    from lib.argocd import ARGOCD_ACM_NS_REGEX
 
     for ns in ACM_NAMESPACES:
         assert ARGOCD_ACM_NS_REGEX.match(ns), f"Ansible namespace '{ns}' not matched by Python regex"

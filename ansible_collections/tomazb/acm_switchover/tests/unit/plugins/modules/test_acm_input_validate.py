@@ -118,9 +118,9 @@ def _restore_only_params(**overrides):
 def test_restore_only_valid_inputs_pass():
     """Minimal valid restore-only scenario: empty primary, valid secondary."""
     results = build_input_validation_results(_restore_only_params())
-    assert all(item["status"] == "pass" for item in results), (
-        f"Expected all pass, got: {[r for r in results if r['status'] != 'pass']}"
-    )
+    assert all(
+        item["status"] == "pass" for item in results
+    ), f"Expected all pass, got: {[r for r in results if r['status'] != 'pass']}"
     # Normalized operation values
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["details"]["method"] == "full"
@@ -130,9 +130,7 @@ def test_restore_only_valid_inputs_pass():
 
 def test_restore_only_rejects_primary_context():
     """Primary context must be empty in restore-only mode."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"hubs.primary.context": "old-hub"})
-    )
+    results = build_input_validation_results(_restore_only_params(**{"hubs.primary.context": "old-hub"}))
     primary_result = next(r for r in results if r["id"] == "preflight-input-primary-context")
     assert primary_result["status"] == "fail"
     assert "restore_only" in primary_result["message"]
@@ -140,18 +138,14 @@ def test_restore_only_rejects_primary_context():
 
 def test_restore_only_rejects_missing_secondary_context():
     """Secondary context is required in restore-only mode."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"hubs.secondary.context": ""})
-    )
+    results = build_input_validation_results(_restore_only_params(**{"hubs.secondary.context": ""}))
     secondary_result = next(r for r in results if r["id"] == "preflight-input-secondary-context")
     assert secondary_result["status"] == "fail"
 
 
 def test_restore_only_rejects_method_passive():
     """Passive method requires a live primary — incompatible with restore-only."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"operation.method": "passive"})
-    )
+    results = build_input_validation_results(_restore_only_params(**{"operation.method": "passive"}))
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "fail"
     assert "method" in op_result["message"]
@@ -159,9 +153,7 @@ def test_restore_only_rejects_method_passive():
 
 def test_restore_only_accepts_method_full_explicit():
     """Explicitly setting method=full is fine in restore-only mode."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"operation.method": "full"})
-    )
+    results = build_input_validation_results(_restore_only_params(**{"operation.method": "full"}))
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "pass"
     assert op_result["details"]["method"] == "full"
@@ -169,9 +161,7 @@ def test_restore_only_accepts_method_full_explicit():
 
 def test_restore_only_rejects_old_hub_action_secondary():
     """old_hub_action must be none — no old hub to manage."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"operation.old_hub_action": "secondary"})
-    )
+    results = build_input_validation_results(_restore_only_params(**{"operation.old_hub_action": "secondary"}))
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "fail"
     assert "old_hub_action" in op_result["message"]
@@ -179,9 +169,7 @@ def test_restore_only_rejects_old_hub_action_secondary():
 
 def test_restore_only_rejects_old_hub_action_decommission():
     """old_hub_action=decommission is also rejected in restore-only."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"operation.old_hub_action": "decommission"})
-    )
+    results = build_input_validation_results(_restore_only_params(**{"operation.old_hub_action": "decommission"}))
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "fail"
     assert "old_hub_action" in op_result["message"]
@@ -189,9 +177,7 @@ def test_restore_only_rejects_old_hub_action_decommission():
 
 def test_restore_only_accepts_old_hub_action_none_explicit():
     """Explicitly setting old_hub_action=none is fine."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"operation.old_hub_action": "none"})
-    )
+    results = build_input_validation_results(_restore_only_params(**{"operation.old_hub_action": "none"}))
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "pass"
     assert op_result["details"]["old_hub_action"] == "none"
@@ -199,9 +185,7 @@ def test_restore_only_accepts_old_hub_action_none_explicit():
 
 def test_restore_only_allows_argocd_manage():
     """ArgoCD pause on secondary is allowed — protects against auto-sync during restore."""
-    results = build_input_validation_results(
-        _restore_only_params(**{"features.argocd.manage": True})
-    )
+    results = build_input_validation_results(_restore_only_params(**{"features.argocd.manage": True}))
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "pass"
     assert op_result["details"]["argocd_manage"] is True

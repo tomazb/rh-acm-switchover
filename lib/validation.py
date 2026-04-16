@@ -389,17 +389,11 @@ class InputValidator:
         # --restore-only validation rules
         if is_restore_only:
             if hasattr(args, "primary_context") and args.primary_context:
-                raise ValidationError(
-                    "--restore-only cannot be used with --primary-context (no primary hub needed)"
-                )
+                raise ValidationError("--restore-only cannot be used with --primary-context (no primary hub needed)")
             if not (hasattr(args, "secondary_context") and args.secondary_context):
-                raise ValidationError(
-                    "--restore-only requires --secondary-context (the restore target hub)"
-                )
+                raise ValidationError("--restore-only requires --secondary-context (the restore target hub)")
             if hasattr(args, "method") and args.method and args.method != "full":
-                raise ValidationError(
-                    "--restore-only requires --method full (passive sync needs a live primary)"
-                )
+                raise ValidationError("--restore-only requires --method full (passive sync needs a live primary)")
             if hasattr(args, "old_hub_action") and args.old_hub_action:
                 raise ValidationError("--restore-only cannot be used with --old-hub-action (no old hub)")
             if is_decommission:

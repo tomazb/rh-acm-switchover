@@ -75,6 +75,7 @@ def test_build_pause_delete_mode_for_acm_211():
 def test_pause_mode_raises_on_prerelease_version():
     """Pre-release versions like 2.14.3-rc1 should raise ValueError."""
     import pytest
+
     with pytest.raises(ValueError, match="Invalid ACM version format"):
         backup_schedule_pause_mode("2.14.3-rc1")
 
@@ -82,6 +83,7 @@ def test_pause_mode_raises_on_prerelease_version():
 def test_pause_mode_raises_on_single_segment_version():
     """Single segment versions should raise ValueError."""
     import pytest
+
     with pytest.raises(ValueError, match="Invalid ACM version format"):
         backup_schedule_pause_mode("2")
 
@@ -89,5 +91,6 @@ def test_pause_mode_raises_on_single_segment_version():
 def test_pause_mode_raises_on_empty_version():
     """Empty version should raise ValueError."""
     import pytest
+
     with pytest.raises(ValueError, match="Invalid ACM version format"):
         backup_schedule_pause_mode("")

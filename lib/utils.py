@@ -83,8 +83,7 @@ def dry_run_skip(
                     # Safe default: skip execution to avoid unintended changes.
                     logger = logging.getLogger("acm_switchover")
                     logger.warning(
-                        "[DRY-RUN] Cannot resolve attribute path '%s' on %s; "
-                        "skipping for safety",
+                        "[DRY-RUN] Cannot resolve attribute path '%s' on %s; " "skipping for safety",
                         dry_run_attr,
                         type(root).__name__,
                     )

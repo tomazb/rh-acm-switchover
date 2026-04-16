@@ -1,18 +1,19 @@
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
-    is_acm_touching_application,
-)
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
     build_pause_patch,
+    is_acm_touching_application,
 )
 
 
 def test_acm_touching_app_matches_backup_schedule_kind():
-    assert is_acm_touching_application(
-        {
-            "metadata": {"namespace": "argocd", "name": "acm-app"},
-            "status": {"resources": [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}]},
-        }
-    ) is True
+    assert (
+        is_acm_touching_application(
+            {
+                "metadata": {"namespace": "argocd", "name": "acm-app"},
+                "status": {"resources": [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}]},
+            }
+        )
+        is True
+    )
 
 
 def test_build_pause_patch_removes_automated_and_sets_run_id():

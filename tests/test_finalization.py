@@ -1614,9 +1614,7 @@ class TestFinalization:
     ):
         """Existing restore already in passive mode must not be deleted or recreated."""
         primary = Mock()
-        primary.get_custom_resource.return_value = {
-            "spec": {"veleroManagedClustersBackupName": "skip"}
-        }
+        primary.get_custom_resource.return_value = {"spec": {"veleroManagedClustersBackupName": "skip"}}
 
         fin = Finalization(
             secondary_client=mock_secondary_client,
@@ -1635,9 +1633,7 @@ class TestFinalization:
     ):
         """Delete failure for stale active restore must raise SwitchoverError."""
         primary = Mock()
-        primary.get_custom_resource.return_value = {
-            "spec": {"veleroManagedClustersBackupName": "latest"}
-        }
+        primary.get_custom_resource.return_value = {"spec": {"veleroManagedClustersBackupName": "latest"}}
         primary.delete_custom_resource.side_effect = ApiException(status=500, reason="Internal Server Error")
 
         fin = Finalization(
@@ -1663,9 +1659,7 @@ class TestFinalization:
         primary = Mock()
         primary.dry_run = False
         # First call returns stale restore; all subsequent calls also return it (never deleted)
-        primary.get_custom_resource.return_value = {
-            "spec": {"veleroManagedClustersBackupName": "latest"}
-        }
+        primary.get_custom_resource.return_value = {"spec": {"veleroManagedClustersBackupName": "latest"}}
 
         fin = Finalization(
             secondary_client=mock_secondary_client,

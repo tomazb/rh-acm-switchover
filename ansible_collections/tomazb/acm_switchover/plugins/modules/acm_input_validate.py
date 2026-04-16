@@ -122,9 +122,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
             validate_context_name(secondary_context)
             results.append(_pass_result("preflight-input-secondary-context", "secondary context is valid"))
         except ValidationError as exc:
-            results.append(
-                _fail_result("preflight-input-secondary-context", str(exc), "Set a valid secondary context")
-            )
+            results.append(_fail_result("preflight-input-secondary-context", str(exc), "Set a valid secondary context"))
 
     # --- Path validation (skip primary kubeconfig in restore-only) ---
     path_checks = [

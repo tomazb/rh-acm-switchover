@@ -46,9 +46,7 @@ def secondary_client():
 class TestStateHandoffContracts:
     """Verify real producers and consumers share state through StateManager."""
 
-    def test_primary_prep_records_pause_state(
-        self, state_file, primary_client, secondary_client
-    ):
+    def test_primary_prep_records_pause_state(self, state_file, primary_client, secondary_client):
         """Primary prep pause state should be correctly persisted for later resume."""
         producer_state = StateManager(state_file)
         prep = PrimaryPreparation(

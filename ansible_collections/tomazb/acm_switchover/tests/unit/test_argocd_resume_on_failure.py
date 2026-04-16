@@ -1,7 +1,8 @@
 """Tests to verify ArgoCD resume-on-failure rescue blocks in playbooks."""
 
-import yaml
 import pathlib
+
+import yaml
 
 PLAYBOOK_DIR = pathlib.Path(__file__).resolve().parents[2] / "playbooks"
 DEFAULTS_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "defaults"
@@ -56,10 +57,10 @@ def test_switchover_rescue_resumes_argocd_on_secondary():
     # Check secondary hub resume task
     secondary_task = resume_tasks[0]
     vars_ = secondary_task.get("vars", {})
-    assert vars_.get("acm_switchover_argocd_mode_override") == "resume", \
-        "Secondary resume task must set mode_override to 'resume'"
-    assert vars_.get("_argocd_discover_hub") == "secondary", \
-        "First resume task must target secondary hub"
+    assert (
+        vars_.get("acm_switchover_argocd_mode_override") == "resume"
+    ), "Secondary resume task must set mode_override to 'resume'"
+    assert vars_.get("_argocd_discover_hub") == "secondary", "First resume task must target secondary hub"
 
 
 def test_switchover_rescue_resumes_argocd_on_primary():
@@ -77,14 +78,14 @@ def test_switchover_rescue_resumes_argocd_on_primary():
 
     primary_task = resume_tasks[1]
     vars_ = primary_task.get("vars", {})
-    assert vars_.get("_argocd_discover_hub") == "primary", \
-        "Second resume task must target primary hub"
+    assert vars_.get("_argocd_discover_hub") == "primary", "Second resume task must target primary hub"
 
     # Primary hub task must also check that primary is defined
     when = primary_task.get("when", [])
     when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
-    assert "acm_switchover_hubs.primary is defined" in when_text, \
-        "Primary resume task must guard with 'acm_switchover_hubs.primary is defined'"
+    assert (
+        "acm_switchover_hubs.primary is defined" in when_text
+    ), "Primary resume task must guard with 'acm_switchover_hubs.primary is defined'"
 
 
 def test_switchover_rescue_has_resume_on_failure_guard():
@@ -101,8 +102,7 @@ def test_switchover_rescue_has_resume_on_failure_guard():
     for task in resume_tasks:
         when = task.get("when", [])
         when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
-        assert "resume_on_failure" in when_text, \
-            f"Resume task must be guarded by resume_on_failure flag. when: {when}"
+        assert "resume_on_failure" in when_text, f"Resume task must be guarded by resume_on_failure flag. when: {when}"
 
 
 def test_switchover_rescue_uses_ignore_errors():
@@ -117,8 +117,9 @@ def test_switchover_rescue_uses_ignore_errors():
         if t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
     ]
     for task in resume_tasks:
-        assert task.get("ignore_errors") is True, \
-            f"Resume task must have ignore_errors: true, got: {task.get('ignore_errors')}"
+        assert (
+            task.get("ignore_errors") is True
+        ), f"Resume task must have ignore_errors: true, got: {task.get('ignore_errors')}"
 
 
 def test_switchover_rescue_reraises_failure():
@@ -167,12 +168,12 @@ def test_restore_only_rescue_resumes_secondary_only():
         for t in rescue_tasks
         if t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
     ]
-    assert len(resume_tasks) == 1, \
-        f"restore_only rescue should resume only on secondary hub, found {len(resume_tasks)} resume tasks"
+    assert (
+        len(resume_tasks) == 1
+    ), f"restore_only rescue should resume only on secondary hub, found {len(resume_tasks)} resume tasks"
 
     vars_ = resume_tasks[0].get("vars", {})
-    assert vars_.get("_argocd_discover_hub") == "secondary", \
-        "restore_only resume task must target secondary hub"
+    assert vars_.get("_argocd_discover_hub") == "secondary", "restore_only resume task must target secondary hub"
 
 
 def test_restore_only_rescue_has_resume_on_failure_guard():
@@ -189,8 +190,7 @@ def test_restore_only_rescue_has_resume_on_failure_guard():
     for task in resume_tasks:
         when = task.get("when", [])
         when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
-        assert "resume_on_failure" in when_text, \
-            f"Resume task must be guarded by resume_on_failure flag. when: {when}"
+        assert "resume_on_failure" in when_text, f"Resume task must be guarded by resume_on_failure flag. when: {when}"
 
 
 def test_restore_only_rescue_uses_ignore_errors():
@@ -205,8 +205,9 @@ def test_restore_only_rescue_uses_ignore_errors():
         if t.get("ansible.builtin.include_role", {}).get("name", "") == "tomazb.acm_switchover.argocd_manage"
     ]
     for task in resume_tasks:
-        assert task.get("ignore_errors") is True, \
-            f"Resume task must have ignore_errors: true, got: {task.get('ignore_errors')}"
+        assert (
+            task.get("ignore_errors") is True
+        ), f"Resume task must have ignore_errors: true, got: {task.get('ignore_errors')}"
 
 
 def test_restore_only_rescue_reraises_failure():

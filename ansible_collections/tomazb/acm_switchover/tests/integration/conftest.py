@@ -16,9 +16,7 @@ def run_preflight_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = Path.cwd()
         fixture_path = (
-            repo_root
-            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight"
-            / fixture_name
+            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         vars_payload.setdefault("acm_switchover_execution", {})["report_dir"] = str(tmp_path / "artifacts")
@@ -28,10 +26,12 @@ def run_preflight_fixture(tmp_path):
 
         env = {
             **os.environ,
-            "ANSIBLE_COLLECTIONS_PATH": ":".join([
-                str(repo_root),
-                os.path.expanduser("~/.ansible/collections"),
-            ]),
+            "ANSIBLE_COLLECTIONS_PATH": ":".join(
+                [
+                    str(repo_root),
+                    os.path.expanduser("~/.ansible/collections"),
+                ]
+            ),
             "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
             "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
@@ -64,9 +64,7 @@ def run_argocd_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = Path.cwd()
         fixture_path = (
-            repo_root
-            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd"
-            / fixture_name
+            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
@@ -75,10 +73,12 @@ def run_argocd_fixture(tmp_path):
 
         env = {
             **os.environ,
-            "ANSIBLE_COLLECTIONS_PATH": ":".join([
-                str(repo_root),
-                os.path.expanduser("~/.ansible/collections"),
-            ]),
+            "ANSIBLE_COLLECTIONS_PATH": ":".join(
+                [
+                    str(repo_root),
+                    os.path.expanduser("~/.ansible/collections"),
+                ]
+            ),
             "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
             "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }
@@ -114,9 +114,7 @@ def run_noncore_fixture(tmp_path):
     def _run(fixture_name: str, playbook_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = Path.cwd()
         fixture_path = (
-            repo_root
-            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/noncore"
-            / fixture_name
+            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/noncore" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
@@ -125,10 +123,12 @@ def run_noncore_fixture(tmp_path):
 
         env = {
             **os.environ,
-            "ANSIBLE_COLLECTIONS_PATH": ":".join([
-                str(repo_root),
-                os.path.expanduser("~/.ansible/collections"),
-            ]),
+            "ANSIBLE_COLLECTIONS_PATH": ":".join(
+                [
+                    str(repo_root),
+                    os.path.expanduser("~/.ansible/collections"),
+                ]
+            ),
             "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
             "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
         }

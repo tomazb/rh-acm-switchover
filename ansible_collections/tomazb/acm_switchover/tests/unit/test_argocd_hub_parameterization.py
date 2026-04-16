@@ -1,7 +1,8 @@
 """Tests to verify ArgoCD role tasks use parameterized hub access."""
 
-import yaml
 import pathlib
+
+import yaml
 
 ROLE_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "tasks"
 
@@ -50,8 +51,9 @@ def test_run_id_default_is_not_empty_string():
     run_id = defaults.get("acm_switchover_argocd", {}).get("run_id")
     # run_id should either be absent (undefined → triggers Jinja default())
     # or be a non-empty string. Empty string breaks resume matching.
-    assert run_id is None or (isinstance(run_id, str) and run_id != ""), \
-        "run_id defaults to empty string, which bypasses Jinja default() filter"
+    assert run_id is None or (
+        isinstance(run_id, str) and run_id != ""
+    ), "run_id defaults to empty string, which bypasses Jinja default() filter"
 
 
 def test_pause_has_clobber_guard():
@@ -93,8 +95,7 @@ def test_discover_namespace_defaults_to_omit():
     """
     text = (ROLE_DIR / "discover.yml").read_text()
     assert "default('argocd')" not in text, (
-        "discover.yml still hardcodes default('argocd'); "
-        "should use default(omit) for cluster-wide discovery"
+        "discover.yml still hardcodes default('argocd'); " "should use default(omit) for cluster-wide discovery"
     )
     tasks = _load_yaml("discover.yml")
     for task in tasks:
@@ -102,9 +103,7 @@ def test_discover_namespace_defaults_to_omit():
             k8s_info = block_task.get("kubernetes.core.k8s_info", {})
             if k8s_info:
                 ns = str(k8s_info.get("namespace", ""))
-                assert "default(omit)" in ns, (
-                    f"discover.yml namespace should use default(omit), got: {ns}"
-                )
+                assert "default(omit)" in ns, f"discover.yml namespace should use default(omit), got: {ns}"
 
 
 ROLES_DIR = ROLE_DIR.parents[1]
@@ -117,8 +116,9 @@ def _load_role_yaml(role_name: str, task_name: str) -> list[dict]:
 def test_primary_prep_pauses_both_hubs():
     """primary_prep/main.yml should include argocd_manage for both primary and secondary hubs."""
     text = (ROLES_DIR / "primary_prep" / "tasks" / "main.yml").read_text()
-    assert text.count("argocd_manage") >= 2, \
-        "primary_prep should include argocd_manage role at least twice (primary + secondary)"
+    assert (
+        text.count("argocd_manage") >= 2
+    ), "primary_prep should include argocd_manage role at least twice (primary + secondary)"
     assert "_argocd_discover_hub: primary" in text, "Should pause primary hub"
     assert "_argocd_discover_hub: secondary" in text, "Should pause secondary hub"
 
@@ -127,8 +127,7 @@ def test_finalization_does_not_auto_resume():
     """finalization/main.yml should NOT auto-resume argocd (removed feature)."""
     text = (ROLES_DIR / "finalization" / "tasks" / "main.yml").read_text()
     resume_count = text.count("acm_switchover_argocd_mode_override: resume")
-    assert resume_count == 0, \
-        f"finalization should not auto-resume argocd, found {resume_count} resume include(s)"
+    assert resume_count == 0, f"finalization should not auto-resume argocd, found {resume_count} resume include(s)"
 
 
 PLAYBOOKS_DIR = pathlib.Path(__file__).resolve().parents[2] / "playbooks"
@@ -143,11 +142,9 @@ def test_standalone_argocd_resume_covers_both_hubs():
     """
     text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
     resume_count = text.count("acm_switchover_argocd_mode_override: resume")
-    assert resume_count >= 2, (
-        f"argocd_resume.yml should resume on both hubs, found {resume_count} resume block(s)"
-    )
+    assert resume_count >= 2, f"argocd_resume.yml should resume on both hubs, found {resume_count} resume block(s)"
     assert "_argocd_discover_hub: secondary" in text, "Should resume secondary hub"
     assert "_argocd_discover_hub: primary" in text, "Should resume primary hub"
-    assert "acm_switchover_hubs.primary is defined" in text, (
-        "Primary hub resume should be guarded by acm_switchover_hubs.primary is defined"
-    )
+    assert (
+        "acm_switchover_hubs.primary is defined" in text
+    ), "Primary hub resume should be guarded by acm_switchover_hubs.primary is defined"

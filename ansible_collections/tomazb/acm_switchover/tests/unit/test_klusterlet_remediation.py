@@ -1,6 +1,7 @@
 """Tests for post_activation klusterlet auto-remediation."""
 
 import pathlib
+
 import yaml
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
@@ -28,23 +29,16 @@ def test_verify_klusterlet_includes_remediation():
 def test_defaults_include_managed_clusters():
     """post_activation defaults must define acm_switchover_managed_clusters."""
     defaults = yaml.safe_load((POST_ACTIVATION_DEFAULTS / "main.yml").read_text())
-    assert "acm_switchover_managed_clusters" in defaults, \
-        "Defaults must define acm_switchover_managed_clusters"
-    assert defaults["acm_switchover_managed_clusters"] == {}, \
-        "Default must be empty dict"
+    assert "acm_switchover_managed_clusters" in defaults, "Defaults must define acm_switchover_managed_clusters"
+    assert defaults["acm_switchover_managed_clusters"] == {}, "Default must be empty dict"
 
 
 def test_fix_klusterlet_single_has_required_steps():
     """fix_klusterlet_single.yml must have the 5 remediation steps."""
     content = (POST_ACTIVATION_TASKS / "fix_klusterlet_single.yml").read_text()
     # Check for the key operations
-    assert "_import_yaml_raw: null" in content, \
-        "Must clear state at start of each iteration"
-    assert "import" in content.lower() and "secret" in content.lower(), \
-        "Must fetch import secret from hub"
-    assert "bootstrap-hub-kubeconfig" in content, \
-        "Must handle bootstrap-hub-kubeconfig secret"
-    assert "klusterlet" in content.lower(), \
-        "Must restart klusterlet deployment"
-    assert "open-cluster-management-agent" in content, \
-        "Must reference agent namespace"
+    assert "_import_yaml_raw: null" in content, "Must clear state at start of each iteration"
+    assert "import" in content.lower() and "secret" in content.lower(), "Must fetch import secret from hub"
+    assert "bootstrap-hub-kubeconfig" in content, "Must handle bootstrap-hub-kubeconfig secret"
+    assert "klusterlet" in content.lower(), "Must restart klusterlet deployment"
+    assert "open-cluster-management-agent" in content, "Must reference agent namespace"

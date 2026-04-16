@@ -78,8 +78,7 @@ def backup_schedule_pause_mode(acm_version: str) -> str:
         major, minor, *_rest = [int(part) for part in acm_version.split(".")]
     except ValueError as e:
         raise ValueError(
-            f"Invalid ACM version format '{acm_version}'. "
-            f"Expected numeric version like '2.14.3', got error: {e}"
+            f"Invalid ACM version format '{acm_version}'. " f"Expected numeric version like '2.14.3', got error: {e}"
         ) from e
     return "delete" if (major, minor) <= (2, 11) else "pause"
 

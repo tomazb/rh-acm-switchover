@@ -20,7 +20,9 @@ def test_preflight_version_mismatch_fails(run_preflight_fixture):
     completed, report = run_preflight_fixture("version_mismatch.yml")
     assert completed.returncode != 0
     assert report["status"] == "fail"
-    assert any(item["id"] == "preflight-version-compatibility" and item["status"] == "fail" for item in report["results"])
+    assert any(
+        item["id"] == "preflight-version-compatibility" and item["status"] == "fail" for item in report["results"]
+    )
 
 
 def test_preflight_backup_failure_is_reported(run_preflight_fixture):

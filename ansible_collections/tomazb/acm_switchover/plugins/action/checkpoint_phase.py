@@ -127,7 +127,7 @@ class ActionModule(ActionBase):
             return {
                 "failed": True,
                 "msg": f"Checkpoint file '{path}' is corrupted (invalid JSON): {e}. "
-                       f"Delete or repair the file to resume.",
+                f"Delete or repair the file to resume.",
             }
         except OSError as e:
             return {

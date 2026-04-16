@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 
-
 CONTEXT_NAME_MAX_LENGTH = 128
 CONTEXT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/@]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
 
@@ -55,23 +54,19 @@ def validate_safe_path(path: str) -> None:
         raise ValidationError("Path cannot be empty")
 
     if ".." in path.split("/"):
-        raise ValidationError(
-            f"Path traversal attempt detected in '{path}'. The '..' sequence is not allowed."
-        )
+        raise ValidationError(f"Path traversal attempt detected in '{path}'. The '..' sequence is not allowed.")
 
     # Strip a leading ~/ before the metacharacter scan so that the common
     # ~/.kube/config idiom is accepted, but ~/foo~bar or mid-path ~ is not.
     scan_path = path[2:] if path.startswith("~/") else path
     if "~" in scan_path:
         raise ValidationError(
-            f"Path '{path}' contains unsafe characters. "
-            f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
+            f"Path '{path}' contains unsafe characters. " f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
         )
 
     if any(char in path for char in UNSAFE_PATH_CHARS):
         raise ValidationError(
-            f"Path '{path}' contains unsafe characters. "
-            f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
+            f"Path '{path}' contains unsafe characters. " f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
         )
 
 
@@ -94,13 +89,9 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
         old_hub_action = operation.get("old_hub_action", "none")
 
         if method != "full":
-            raise ValidationError(
-                "restore_only requires method=full (passive sync needs a live primary hub)"
-            )
+            raise ValidationError("restore_only requires method=full (passive sync needs a live primary hub)")
         if old_hub_action != "none":
-            raise ValidationError(
-                "restore_only requires old_hub_action=none (no old hub to manage)"
-            )
+            raise ValidationError("restore_only requires old_hub_action=none (no old hub to manage)")
 
         return {
             "restore_only": True,

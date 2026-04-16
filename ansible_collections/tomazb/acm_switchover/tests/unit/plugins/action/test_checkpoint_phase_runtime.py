@@ -47,14 +47,18 @@ def test_action_module_persists_phase_status_on_pass(tmp_path):
     from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
 
     checkpoint_file = tmp_path / "checkpoint.json"
-    checkpoint_file.write_text(json.dumps({
-        "schema_version": "1.0",
-        "completed_phases": ["preflight"],
-        "operational_data": {},
-        "errors": [],
-        "report_refs": [],
-        "updated_at": "2026-01-01T00:00:00+00:00",
-    }))
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
 
     task = MagicMock()
     task.async_val = 0
@@ -89,14 +93,18 @@ def test_action_module_persists_phase_status_on_fail(tmp_path):
     from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
 
     checkpoint_file = tmp_path / "checkpoint.json"
-    checkpoint_file.write_text(json.dumps({
-        "schema_version": "1.0",
-        "completed_phases": ["preflight"],
-        "operational_data": {},
-        "errors": [],
-        "report_refs": [],
-        "updated_at": "2026-01-01T00:00:00+00:00",
-    }))
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
 
     task = MagicMock()
     task.async_val = 0
@@ -155,15 +163,19 @@ def test_action_module_reset_discards_previous_checkpoint_state_on_preflight_ent
     from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
 
     checkpoint_file = tmp_path / "checkpoint.json"
-    checkpoint_file.write_text(json.dumps({
-        "schema_version": "1.0",
-        "phase": "activation",
-        "completed_phases": ["preflight", "activation"],
-        "operational_data": {"stale": True},
-        "errors": [{"phase": "activation", "error": "boom"}],
-        "report_refs": [{"phase": "activation", "path": "/tmp/out.json", "kind": "json-report"}],
-        "updated_at": "2026-01-01T00:00:00+00:00",
-    }))
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "phase": "activation",
+                "completed_phases": ["preflight", "activation"],
+                "operational_data": {"stale": True},
+                "errors": [{"phase": "activation", "error": "boom"}],
+                "report_refs": [{"phase": "activation", "path": "/tmp/out.json", "kind": "json-report"}],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
 
     task = MagicMock()
     task.async_val = 0
@@ -195,15 +207,19 @@ def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_
     from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
 
     checkpoint_file = tmp_path / "checkpoint.json"
-    checkpoint_file.write_text(json.dumps({
-        "schema_version": "1.0",
-        "phase": "activation",
-        "completed_phases": ["preflight", "activation"],
-        "operational_data": {"stale": True},
-        "errors": [{"phase": "activation", "error": "boom"}],
-        "report_refs": [{"phase": "activation", "path": "/tmp/out.json", "kind": "json-report"}],
-        "updated_at": "2026-01-01T00:00:00+00:00",
-    }))
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "phase": "activation",
+                "completed_phases": ["preflight", "activation"],
+                "operational_data": {"stale": True},
+                "errors": [{"phase": "activation", "error": "boom"}],
+                "report_refs": [{"phase": "activation", "path": "/tmp/out.json", "kind": "json-report"}],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
 
     enter_task = MagicMock()
     enter_task.async_val = 0
