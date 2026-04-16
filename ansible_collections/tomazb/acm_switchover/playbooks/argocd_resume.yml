@@ -16,4 +16,7 @@
       vars:
         acm_switchover_argocd_mode_override: resume
         _argocd_discover_hub: primary
-      when: acm_switchover_hubs.primary is defined
+      when:
+        - acm_switchover_hubs.primary is defined
+        - (acm_switchover_hubs.primary.kubeconfig | default('')) | length > 0
+        - (acm_switchover_hubs.primary.context | default('')) | length > 0

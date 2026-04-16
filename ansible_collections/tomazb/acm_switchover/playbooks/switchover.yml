@@ -53,6 +53,8 @@
             - acm_switchover_features.argocd.manage | default(false)
             - acm_switchover_features.argocd.resume_on_failure | default(false)
             - acm_switchover_hubs.primary is defined
+            - (acm_switchover_hubs.primary.kubeconfig | default('')) | length > 0
+            - (acm_switchover_hubs.primary.context | default('')) | length > 0
           ignore_errors: true  # noqa: ignore-errors
 
         - name: Re-raise original switchover failure

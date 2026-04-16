@@ -134,6 +134,21 @@ def test_switchover_rescue_reraises_failure():
 # --- restore_only.yml ---
 
 
+def test_primary_resume_guard_checks_kubeconfig_not_empty():
+    """The primary resume guard must check that kubeconfig is actually populated."""
+    playbooks_to_check = [
+        PLAYBOOK_DIR / "argocd_resume.yml",
+        PLAYBOOK_DIR / "switchover.yml",
+    ]
+    for pb_path in playbooks_to_check:
+        text = pb_path.read_text()
+        # Verify the guard checks kubeconfig length, not just 'is defined'
+        assert "kubeconfig" in text and "length" in text, (
+            f"{pb_path.name}: Primary hub resume guard must check that "
+            "kubeconfig is non-empty, not just 'is defined'"
+        )
+
+
 def test_restore_only_has_rescue_block():
     """restore_only.yml must have a rescue block."""
     playbook = _load_playbook("restore_only.yml")
