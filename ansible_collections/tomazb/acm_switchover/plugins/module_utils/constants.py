@@ -28,3 +28,11 @@ APPS = "apps"
 ROUTE_OPENSHIFT_IO = "route.openshift.io"
 ARGOCD_IO = "argoproj.io"
 APIEXTENSIONS_K8S_IO = "apiextensions.k8s.io"
+
+# Auto-import strategy constants (ACM 2.14+)
+IMPORT_CONTROLLER_CONFIG_CM = "import-controller-config"
+AUTO_IMPORT_STRATEGY_KEY = "autoImportStrategy"
+AUTO_IMPORT_STRATEGY_DEFAULT = "ImportOnly"
+AUTO_IMPORT_STRATEGY_SYNC = "ImportAndSync"
+IMMEDIATE_IMPORT_ANNOTATION = "import.open-cluster-management.io/immediate-import"
+LOCAL_CLUSTER_NAME = "local-cluster"

@@ -1,0 +1,15 @@
+---
+# After activation, reset autoImportStrategy to ImportOnly if we changed it.
+- name: Reset autoImportStrategy to ImportOnly
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ConfigMap
+    name: import-controller-config
+    namespace: multicluster-engine
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    definition:
+      data:
+        autoImportStrategy: ImportOnly
+  when: _auto_import_strategy_changed | default(false) | bool

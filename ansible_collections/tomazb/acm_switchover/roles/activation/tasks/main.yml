@@ -10,6 +10,10 @@
 - name: Run activation phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    - name: Manage auto-import strategy for ACM 2.14+
+      ansible.builtin.include_tasks: manage_auto_import.yml
+      when: acm_switchover_features.manage_auto_import_strategy | default(false)
+
     - name: Verify passive sync when method is passive
       ansible.builtin.include_tasks: verify_passive_sync.yml
       when: acm_switchover_operation.method == 'passive'
@@ -22,6 +26,10 @@
 
     - name: Apply immediate import annotations when required
       ansible.builtin.include_tasks: apply_immediate_import.yml
+
+    - name: Reset auto-import strategy after activation
+      ansible.builtin.include_tasks: reset_auto_import.yml
+      when: acm_switchover_features.manage_auto_import_strategy | default(false)
 
     - name: Publish activation result contract
       ansible.builtin.set_fact:

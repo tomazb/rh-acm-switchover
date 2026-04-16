@@ -1,6 +1,58 @@
 ---
+# Mirrors Python _apply_immediate_import_annotations() in modules/activation.py.
+# When autoImportStrategy is ImportOnly (ACM 2.14+ default), apply the
+# immediate-import annotation to each non-local ManagedCluster so the
+# import controller processes them without waiting for the next sync.
+- name: Get current autoImportStrategy
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: import-controller-config
+    namespace: multicluster-engine
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _import_cm_for_annotation
+
+- name: Determine if immediate-import annotations are needed
+  ansible.builtin.set_fact:
+    _apply_immediate_import: >-
+      {{ (_import_cm_for_annotation.resources | default([]) | first | default({}))
+         .get('data', {}).get('autoImportStrategy', 'ImportOnly')
+         in ['ImportOnly', 'default', ''] }}
+
+- name: Get ManagedClusters on secondary hub
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _mc_for_import
+  when: _apply_immediate_import | bool
+
+- name: Apply immediate-import annotation to non-local clusters
+  kubernetes.core.k8s:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    name: "{{ item.metadata.name }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    definition:
+      metadata:
+        annotations:
+          import.open-cluster-management.io/immediate-import: ""
+  loop: >-
+    {{ (_mc_for_import.resources | default([]))
+       | rejectattr('metadata.name', 'equalto', 'local-cluster')
+       | list }}
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  when:
+    - _apply_immediate_import | bool
+  ignore_errors: true  # noqa: ignore-errors
+
 - name: Publish immediate import result
   ansible.builtin.set_fact:
     acm_switchover_immediate_import_result:
-      changed: "{{ (acm_switchover_operation.activation_method | default('patch')) == 'patch' }}"
+      changed: "{{ _apply_immediate_import | default(false) | bool }}"
       mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
