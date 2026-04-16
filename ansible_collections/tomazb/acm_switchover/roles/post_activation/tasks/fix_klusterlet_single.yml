@@ -1,0 +1,68 @@
+---
+# Fix a single cluster's klusterlet. Called in a loop from fix_klusterlet.yml.
+# Variable: _fix_cluster_name (the ManagedCluster name)
+
+- name: "{{ _fix_cluster_name }} — Get import secret from new hub"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ _fix_cluster_name }}-import"
+    namespace: "{{ _fix_cluster_name }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _import_secret
+
+- name: "{{ _fix_cluster_name }} — Skip when import secret not found"
+  ansible.builtin.debug:
+    msg: "No import secret found for {{ _fix_cluster_name }} on new hub — skipping"
+  when: (_import_secret.resources | default([]) | length) == 0
+
+- name: "{{ _fix_cluster_name }} — Decode import YAML"
+  ansible.builtin.set_fact:
+    _import_yaml_raw: >-
+      {{ (_import_secret.resources | first).data['import.yaml'] | b64decode }}
+  when: (_import_secret.resources | default([]) | length) > 0
+
+- name: "{{ _fix_cluster_name }} — Delete bootstrap-hub-kubeconfig on managed cluster"
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Secret
+    name: bootstrap-hub-kubeconfig
+    namespace: open-cluster-management-agent
+    kubeconfig: "{{ acm_switchover_managed_clusters[_fix_cluster_name].kubeconfig }}"
+    context: "{{ acm_switchover_managed_clusters[_fix_cluster_name].context | default(omit) }}"
+    state: absent
+  when: _import_yaml_raw is defined
+  ignore_errors: true  # noqa: ignore-errors — secret may already be gone
+
+- name: "{{ _fix_cluster_name }} — Re-apply bootstrap-hub-kubeconfig from import manifest"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ acm_switchover_managed_clusters[_fix_cluster_name].kubeconfig }}"
+    context: "{{ acm_switchover_managed_clusters[_fix_cluster_name].context | default(omit) }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ _import_yaml_raw | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind | default('unknown') }}/{{ item.metadata.name | default('unknown') }}"
+  when:
+    - _import_yaml_raw is defined
+    - item is mapping
+    - item.kind | default('') == 'Secret'
+    - item.metadata.name | default('') == 'bootstrap-hub-kubeconfig'
+
+- name: "{{ _fix_cluster_name }} — Restart klusterlet deployment"
+  kubernetes.core.k8s:
+    api_version: apps/v1
+    kind: Deployment
+    name: klusterlet
+    namespace: open-cluster-management-agent
+    kubeconfig: "{{ acm_switchover_managed_clusters[_fix_cluster_name].kubeconfig }}"
+    context: "{{ acm_switchover_managed_clusters[_fix_cluster_name].context | default(omit) }}"
+    state: patched
+    definition:
+      spec:
+        template:
+          metadata:
+            annotations:
+              acm-switchover/restartedAt: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+  when: _import_yaml_raw is defined

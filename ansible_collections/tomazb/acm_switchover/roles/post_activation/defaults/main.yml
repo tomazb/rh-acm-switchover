@@ -26,3 +26,12 @@ acm_switchover_features:
   disable_observability_on_secondary: false
   argocd:
     manage: false
+
+# Optional: kubeconfigs for managed clusters to enable automatic klusterlet
+# remediation. Without this, pending clusters get a warning only.
+# Format:
+#   acm_switchover_managed_clusters:
+#     cluster1:
+#       kubeconfig: "/path/to/cluster1-kubeconfig"
+#       context: ""  # optional, uses default context if omitted
+acm_switchover_managed_clusters: {}
