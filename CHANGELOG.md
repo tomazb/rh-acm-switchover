@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ansible ArgoCD**: Fix empty `run_id` default causing blank `paused-by` annotations — now generates UUID when not provided
 - **Ansible ArgoCD**: Add clobber guard to pause task — prevents overwriting `original-sync-policy` on retry
 - **Ansible ArgoCD**: Pause/resume ArgoCD on both hubs during switchover (matching Python behavior)
+- **Ansible finalization**: `handle_old_hub.yml` now uses delete+wait+create cycle instead of patch (`state: present, apply: true`) when setting up passive sync restore on old hub — matches Python `_setup_old_hub_as_secondary()` behavior and prevents stale status fields from blocking ACM backup controller re-processing
 
 ### Changed
 
