@@ -1151,7 +1151,6 @@ def main():  # noqa: C901
             getattr(args, "primary_context", None),
             args.secondary_context,
             argocd_resume_only=getattr(args, "argocd_resume_only", False),
-            restore_only=getattr(args, "restore_only", False),
         )
     except ValueError as exc:
         logger.error("%s", exc)
@@ -1307,9 +1306,14 @@ def _resolve_state_file(
     primary_ctx: Optional[str],
     secondary_ctx: Optional[str],
     argocd_resume_only: bool = False,
-    restore_only: bool = False,
 ) -> str:
-    """Derive the state file path based on contexts unless user provided one."""
+    """Derive the state file path based on contexts unless user provided one.
+
+    Note: restore-only mode needs no special handling here because
+    --restore-only forbids --primary-context, so primary_ctx is None,
+    and _build_default_state_file(None, secondary_ctx) naturally
+    produces the correct "switchover-restore-only__<sec>.json" filename.
+    """
     if requested_path:
         return requested_path
 
