@@ -10,9 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **ArgoCD resume-on-failure**: New `--argocd-resume-on-failure` CLI flag (Python) and `acm_switchover_features.argocd.resume_on_failure` variable (Ansible) to attempt best-effort resume of paused ArgoCD Applications when a switchover fails. Prevents apps from being left indefinitely paused after failures. Resume errors are logged but do not compound the original failure.
+- **Ansible activation**: Auto-import strategy management (`manage_auto_import.yml` / `reset_auto_import.yml`) — disables auto-import before activation and re-enables afterward, matching Python CLI behavior (ACM 2.14+)
+- **Ansible post_activation**: Klusterlet auto-remediation (`fix_klusterlet.yml`) — automatically patches degraded klusterlet agents after switchover, matching Python CLI behavior
 
 ### Fixed
 
+- **RBAC decommission rerun**: `validate_decommission_permissions` now succeeds when ACM namespace is already deleted — allows idempotent decommission reruns without false RBAC failures
+- **Ansible ArgoCD primary resume guard**: `argocd_resume.yml` and `switchover.yml` rescue block now check kubeconfig/context are non-empty strings (not just `is defined`) — prevents `kubectl` errors when primary hub vars exist but are blank
+- **dry_run_skip null-safety**: Decorator now skips (safe) instead of executing when intermediate attribute path is broken (e.g., `self.client` is None)
 - **Ansible ArgoCD**: Fix hub hardcoding in `pause.yml`/`resume.yml` — now uses parameterized `_argocd_discover_hub` lookup matching `discover.yml` pattern (broken in restore-only mode)
 - **Ansible ArgoCD**: Expand `ACM_KINDS` from 6 to 14 entries (matching Python) — Applications touching Policy, Placement, ManagedClusterSet, etc. were not detected
 - **Ansible ArgoCD**: Fix empty `run_id` default causing blank `paused-by` annotations — now generates UUID when not provided
@@ -22,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Bash**: Deprecated `argocd-manage.sh` — use Python CLI (`--argocd-manage`) or Ansible collection (`argocd_manage` role) instead
+- Removed unused `restore_only` parameter from `_resolve_state_file()` — dead code cleanup
 
 ### Removed
 
