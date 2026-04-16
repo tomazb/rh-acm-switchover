@@ -35,9 +35,11 @@ def test_defaults_include_managed_clusters():
 
 
 def test_fix_klusterlet_single_has_required_steps():
-    """fix_klusterlet_single.yml must have the 4 remediation steps."""
+    """fix_klusterlet_single.yml must have the 5 remediation steps."""
     content = (POST_ACTIVATION_TASKS / "fix_klusterlet_single.yml").read_text()
     # Check for the key operations
+    assert "_import_yaml_raw: null" in content, \
+        "Must clear state at start of each iteration"
     assert "import" in content.lower() and "secret" in content.lower(), \
         "Must fetch import secret from hub"
     assert "bootstrap-hub-kubeconfig" in content, \

@@ -2,6 +2,10 @@
 # Fix a single cluster's klusterlet. Called in a loop from fix_klusterlet.yml.
 # Variable: _fix_cluster_name (the ManagedCluster name)
 
+- name: "{{ _fix_cluster_name }} — Clear previous iteration state"
+  ansible.builtin.set_fact:
+    _import_yaml_raw: null
+
 - name: "{{ _fix_cluster_name }} — Get import secret from new hub"
   kubernetes.core.k8s_info:
     api_version: v1
@@ -32,7 +36,7 @@
     kubeconfig: "{{ acm_switchover_managed_clusters[_fix_cluster_name].kubeconfig }}"
     context: "{{ acm_switchover_managed_clusters[_fix_cluster_name].context | default(omit) }}"
     state: absent
-  when: _import_yaml_raw is defined
+  when: _import_yaml_raw is not none
   ignore_errors: true  # noqa: ignore-errors — secret may already be gone
 
 - name: "{{ _fix_cluster_name }} — Re-apply bootstrap-hub-kubeconfig from import manifest"
@@ -45,10 +49,11 @@
   loop_control:
     label: "{{ item.kind | default('unknown') }}/{{ item.metadata.name | default('unknown') }}"
   when:
-    - _import_yaml_raw is defined
+    - _import_yaml_raw is not none
     - item is mapping
     - item.kind | default('') == 'Secret'
     - item.metadata.name | default('') == 'bootstrap-hub-kubeconfig'
+  ignore_errors: true  # noqa: ignore-errors — remediation is best-effort
 
 - name: "{{ _fix_cluster_name }} — Restart klusterlet deployment"
   kubernetes.core.k8s:
@@ -65,4 +70,5 @@
           metadata:
             annotations:
               acm-switchover/restartedAt: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
-  when: _import_yaml_raw is defined
+  when: _import_yaml_raw is not none
+  ignore_errors: true  # noqa: ignore-errors — remediation is best-effort
