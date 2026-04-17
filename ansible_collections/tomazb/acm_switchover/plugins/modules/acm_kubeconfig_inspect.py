@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -103,14 +104,29 @@ def _load_kubeconfig(kubeconfig: str) -> dict:
     return config
 
 
-def _load_token_file(token_file: str) -> str:
+def _normalize_token_file_path(token_file: object, kubeconfig: str, user_name: str) -> Path:
     try:
-        return Path(token_file).read_text(encoding="utf-8").strip()
+        token_file_path = Path(os.fspath(token_file))
+    except TypeError as exc:
+        raise ValueError(f"user entry '{user_name}' must define 'tokenFile' as a string or path") from exc
+
+    if not token_file_path.is_absolute():
+        token_file_path = Path(kubeconfig).resolve().parent / token_file_path
+    return token_file_path
+
+
+def _load_token_file(token_file: object, kubeconfig: str, user_name: str) -> str:
+    token_file_path = _normalize_token_file_path(token_file, kubeconfig, user_name)
+    try:
+        return token_file_path.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        raise ValueError(f"unable to read tokenFile '{token_file}': {exc}") from exc
+        raise ValueError(f"unable to read tokenFile '{token_file_path}': {exc}") from exc
 
 
 def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 4) -> dict:
+    if warning_hours < 0:
+        raise ValueError("warning_hours must be non-negative")
+
     config = _load_kubeconfig(kubeconfig)
     contexts = _require_list_field(config, "contexts")
     users = _require_list_field(config, "users")
@@ -168,9 +184,12 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         }
 
     token = user_cfg.get("token")
+    if token is not None and not isinstance(token, str):
+        raise ValueError(f"user entry '{user_name}' must define 'token' as a string")
+
     token_file = user_cfg.get("tokenFile")
-    if not token and token_file:
-        token = _load_token_file(token_file)
+    if token_file is not None:
+        token = _load_token_file(token_file, kubeconfig, user_name)
     if token:
         expires_at, decode_error = _decode_jwt_exp(token)
         if decode_error:

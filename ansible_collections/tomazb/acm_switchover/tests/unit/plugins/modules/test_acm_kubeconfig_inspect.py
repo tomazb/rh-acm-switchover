@@ -182,6 +182,39 @@ def test_token_file_with_opaque_token_returns_warn(tmp_path):
     assert result["auth_type"] == "bearer_opaque"
 
 
+def test_relative_token_file_is_resolved_from_kubeconfig_dir(tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    token_file = config_dir / "relative-token.txt"
+    token_file.write_text("opaque-token-value", encoding="utf-8")
+    kubeconfig = config_dir / "kubeconfig.yaml"
+    kubeconfig.write_text(
+        yaml.safe_dump(_kubeconfig_for_user({"tokenFile": "relative-token.txt"})),
+        encoding="utf-8",
+    )
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "warn"
+    assert result["severity"] == "warning"
+    assert result["auth_type"] == "bearer_opaque"
+
+
+def test_token_file_takes_precedence_over_inline_token(tmp_path):
+    expiry = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
+    token_file = write_text_file(tmp_path, "token.txt", _jwt_with_exp(expiry))
+    kubeconfig = write_kubeconfig(
+        tmp_path,
+        _kubeconfig_for_user({"token": "opaque-inline-token", "tokenFile": str(token_file)}),
+    )
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "pass"
+    assert result["severity"] == "info"
+    assert result["auth_type"] == "bearer_jwt"
+
+
 def test_exec_auth_returns_warn_without_execution(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"exec": {"command": "oc", "args": ["whoami"]}}))
 
@@ -295,6 +328,14 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
             | {"contexts": [{"name": "primary-hub", "context": {"cluster": "primary-cluster"}}]},
             "context entry 'primary-hub' is missing required 'user' reference",
         ),
+        (
+            _kubeconfig_for_user({"token": {"bad": "type"}}),
+            "user entry 'primary-user' must define 'token' as a string",
+        ),
+        (
+            _kubeconfig_for_user({"tokenFile": {"bad": "type"}}),
+            "user entry 'primary-user' must define 'tokenFile' as a string or path",
+        ),
     ],
 )
 def test_malformed_kubeconfig_structure_raises_value_error(tmp_path, kubeconfig_data, error_match):
@@ -302,6 +343,13 @@ def test_malformed_kubeconfig_structure_raises_value_error(tmp_path, kubeconfig_
 
     with pytest.raises(ValueError, match=error_match):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
+def test_negative_warning_hours_raises_value_error(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "header.payload.signature"}))
+
+    with pytest.raises(ValueError, match="warning_hours must be non-negative"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub", warning_hours=-1)
 
 
 def test_run_module_exits_with_inspection_result(monkeypatch):
