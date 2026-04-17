@@ -132,6 +132,27 @@ def test_invalid_jwt_format_returns_warn(tmp_path):
     assert result["auth_type"] == "bearer_opaque"
 
 
+@pytest.mark.parametrize(
+    "payload_bytes",
+    [
+        b"\xff\xfe\xfd",
+        json.dumps(["not", "an", "object"]).encode("utf-8"),
+    ],
+)
+def test_malformed_jwt_payload_returns_warn_opaque(tmp_path, payload_bytes):
+    payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode("utf-8").rstrip("=")
+    kubeconfig = write_kubeconfig(
+        tmp_path,
+        _kubeconfig_for_user({"token": f"header.{payload_b64}.signature"}),
+    )
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "warn"
+    assert result["severity"] == "warning"
+    assert result["auth_type"] == "bearer_opaque"
+
+
 def test_exec_auth_returns_warn_without_execution(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"exec": {"command": "oc", "args": ["whoami"]}}))
 
@@ -210,6 +231,11 @@ def test_missing_user_raises_validation_error(tmp_path):
             _kubeconfig_for_user({"token": "header.payload.signature"})
             | {"contexts": [{"name": "primary-hub", "context": "bad"}]},
             "context entry 'primary-hub' must contain a mapping under 'context'",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"})
+            | {"users": [{"name": "primary-user", "user": "bad"}]},
+            "user entry 'primary-user' must contain a mapping under 'user'",
         ),
     ],
 )

@@ -72,7 +72,9 @@ def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
 
     try:
         claims = json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")))
-    except (ValueError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return None, "invalid JWT payload"
+    if not isinstance(claims, dict):
         return None, "invalid JWT payload"
 
     exp = claims.get("exp")
@@ -108,6 +110,8 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         raise ValueError(f"user '{user_name}' not found for context '{context}'")
 
     user_cfg = user_entry.get("user", {})
+    if not isinstance(user_cfg, dict):
+        raise ValueError(f"user entry '{user_name}' must contain a mapping under 'user'")
 
     if "exec" in user_cfg:
         return {
