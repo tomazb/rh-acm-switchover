@@ -253,3 +253,59 @@ def test_checkpoint_enabled_requires_a_checkpoint_path():
     checkpoint_result = next(r for r in results if r["id"] == "preflight-input-checkpoint-path")
     assert checkpoint_result["status"] == "fail"
     assert "checkpoint.path is required" in checkpoint_result["message"]
+
+
+# ---------------------------------------------------------------------------
+# enum validation
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_method_rejected():
+    """A typo in method must be caught during validation, not in activation."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+            },
+            "operation": {"method": "pasive", "activation_method": "patch"},
+            "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+    assert any(item["id"] == "preflight-input-operation" and item["status"] == "fail" for item in results)
+    assert any("pasive" in item["message"] for item in results)
+
+
+def test_invalid_old_hub_action_rejected():
+    """A typo in old_hub_action must be caught during validation."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+            },
+            "operation": {"method": "passive", "activation_method": "patch", "old_hub_action": "secodnary"},
+            "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+    assert any(item["id"] == "preflight-input-operation" and item["status"] == "fail" for item in results)
+    assert any("secodnary" in item["message"] for item in results)
+
+
+def test_invalid_activation_method_rejected():
+    """A typo in activation_method must be caught during validation."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+            },
+            "operation": {"method": "passive", "activation_method": "restor"},
+            "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+    assert any(item["id"] == "preflight-input-operation" and item["status"] == "fail" for item in results)
+    assert any("restor" in item["message"] for item in results)

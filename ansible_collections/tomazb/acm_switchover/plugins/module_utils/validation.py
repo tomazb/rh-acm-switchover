@@ -70,6 +70,19 @@ def validate_safe_path(path: str) -> None:
         )
 
 
+def _validate_choice(value: str, valid_choices: list[str], field_name: str) -> None:
+    """Validate that a value is one of the allowed choices.
+
+    Raises:
+        ValidationError: If the value is not in the allowed choices.
+    """
+    if value not in valid_choices:
+        choices_str = ", ".join(valid_choices)
+        raise ValidationError(
+            f"Invalid {field_name} '{value}'. Must be one of: {choices_str}"
+        )
+
+
 def validate_operation_inputs(operation: dict, features: dict) -> dict:
     """Validate that operation and feature params form a supported combination.
 
@@ -85,6 +98,8 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
     disable_observability_on_secondary = features.get("disable_observability_on_secondary", False)
     argocd = features.get("argocd", {})
     argocd_manage = argocd.get("manage", False)
+
+    _validate_choice(activation_method, ["patch", "restore"], "activation_method")
 
     if disable_observability_on_secondary and old_hub_action != "secondary":
         raise ValidationError(
@@ -109,6 +124,9 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
         }
 
     method = operation.get("method", "passive")
+
+    _validate_choice(method, ["passive", "full"], "method")
+    _validate_choice(old_hub_action, ["secondary", "decommission", "none"], "old_hub_action")
 
     if method != "passive" and activation_method == "restore":
         raise ValidationError(

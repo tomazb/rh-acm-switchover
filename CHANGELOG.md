@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ansible ArgoCD resume safety**: `resume.yml` now requires a non-empty `run_id` before resuming any Applications. Previously, an empty `run_id` acted as a wildcard that would unpause all Applications carrying the pause annotation — including those paused by other switchover runs or maintenance windows.
+- **Ansible ArgoCD discovery safety**: `discover.yml` rescue block now distinguishes CRD-absent errors from other failures (RBAC denial, transient API errors). Only a missing Application CRD is treated as "Argo CD not installed"; other errors fail the play so GitOps protection is not silently skipped.
+- **Ansible input validation**: `validate_operation_inputs()` now validates enum values for `method` (passive/full), `old_hub_action` (secondary/decommission/none), and `activation_method` (patch/restore). Previously, typos like `method: pasive` passed preflight and only failed during activation after primary_prep had already paused backups.
 - **Ansible restore_only playbook**: `restore_only.yml` now pins `restore_only: true`, `method: full`, `old_hub_action: none` via `pre_tasks`, preventing role defaults from silently overriding restore-only semantics.
 - **Ansible preflight/activation alignment**: Preflight passive restore validation now uses `acm_restore_info` module (checking `sync_enabled_count`) instead of raw restore count, matching activation's filter logic. Previously, preflight could pass with non-sync restores that activation would reject.
 - **Ansible ArgoCD resume**: `discover.yml` no longer generates a fresh `run_id` in resume mode, allowing the safety fallback in `resume.yml` to resume all paused applications when no explicit `run_id` is provided.

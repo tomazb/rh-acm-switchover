@@ -9,6 +9,17 @@
           {{ acm_switchover_argocd.run_id
              | default(acm_switchover_execution.run_id | default('')) }}
 
+    - name: Require run_id for resume safety
+      ansible.builtin.fail:
+        msg: >-
+          Cannot resume Argo CD applications without a run_id.
+          Set acm_switchover_argocd.run_id or acm_switchover_execution.run_id
+          to the run_id from the pause operation, or use the switchover report
+          artifact to find it.
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - _argocd_expected_run_id == ''
+
     # In mock mode (integration testing without a real cluster), count all provided
     # apps as restored (the fixture ensures they all have the pause annotation).
     - name: Record mock resume summary
@@ -48,9 +59,7 @@
       when:
         - acm_switchover_argocd_mock_apps is not defined
         - "'acm-switchover.argoproj.io/paused-by' in item.metadata.annotations"
-        - >-
-          _argocd_expected_run_id == ''
-          or item.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == _argocd_expected_run_id
+        - item.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == _argocd_expected_run_id
       register: acm_argocd_resume_results
 
     - name: Warn about apps paused by a different run

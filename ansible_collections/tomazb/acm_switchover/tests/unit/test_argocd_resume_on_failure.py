@@ -6,6 +6,7 @@ import yaml
 
 PLAYBOOK_DIR = pathlib.Path(__file__).resolve().parents[2] / "playbooks"
 DEFAULTS_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "defaults"
+ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 
 
 def _load_playbook(name: str) -> list[dict]:
@@ -261,4 +262,73 @@ def test_restore_only_pins_correct_values():
     )
     assert "'old_hub_action': 'none'" in text or "old_hub_action: none" in text, (
         "restore_only.yml must pin old_hub_action to none"
+    )
+
+
+# --- resume.yml run_id safety ---
+
+
+def _load_resume_tasks():
+    return yaml.safe_load((ROLES_DIR / "argocd_manage" / "tasks" / "resume.yml").read_text())
+
+
+def test_resume_fails_when_run_id_is_empty():
+    """resume.yml must contain a fail task that fires when _argocd_expected_run_id is empty."""
+    tasks_list = _load_resume_tasks()
+    block_tasks = tasks_list[0]["block"]
+
+    fail_tasks = [
+        t for t in block_tasks if "ansible.builtin.fail" in t
+    ]
+    assert len(fail_tasks) >= 1, "resume.yml must have at least one ansible.builtin.fail task"
+
+    # The fail task must trigger when run_id is empty
+    fail_task = fail_tasks[0]
+    when = fail_task.get("when", [])
+    when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
+    assert "_argocd_expected_run_id == ''" in when_text, (
+        "fail task must trigger when _argocd_expected_run_id is empty"
+    )
+    assert "acm_switchover_argocd_mock_apps is not defined" in when_text, (
+        "fail task must skip in mock mode"
+    )
+
+
+def test_resume_fail_task_precedes_patch_task():
+    """The run_id fail-safe must come before the live-mode patch task."""
+    tasks_list = _load_resume_tasks()
+    block_tasks = tasks_list[0]["block"]
+
+    fail_idx = None
+    patch_idx = None
+    for i, t in enumerate(block_tasks):
+        if "ansible.builtin.fail" in t and "run_id" in t.get("name", "").lower():
+            fail_idx = i
+        if "kubernetes.core.k8s" in t:
+            patch_idx = i
+
+    assert fail_idx is not None, "resume.yml must have a run_id fail-safe task"
+    assert patch_idx is not None, "resume.yml must have a k8s patch task"
+    assert fail_idx < patch_idx, (
+        f"run_id fail-safe (index {fail_idx}) must come before k8s patch (index {patch_idx})"
+    )
+
+
+def test_resume_patch_has_no_empty_run_id_wildcard():
+    """The patch task's when condition must NOT allow empty run_id to match all apps."""
+    tasks_list = _load_resume_tasks()
+    block_tasks = tasks_list[0]["block"]
+
+    patch_tasks = [t for t in block_tasks if "kubernetes.core.k8s" in t]
+    assert len(patch_tasks) == 1, "Expected exactly one k8s patch task in resume.yml"
+
+    patch_task = patch_tasks[0]
+    when = patch_task.get("when", [])
+    when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
+
+    assert "_argocd_expected_run_id == ''" not in when_text, (
+        "patch task must not contain an empty-string wildcard for _argocd_expected_run_id"
+    )
+    assert "paused-by'] == _argocd_expected_run_id" in when_text, (
+        "patch task must require exact run_id match on the paused-by annotation"
     )
