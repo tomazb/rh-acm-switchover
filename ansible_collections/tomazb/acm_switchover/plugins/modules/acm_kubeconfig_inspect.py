@@ -183,13 +183,14 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             "message": "kubeconfig uses client certificate authentication; token expiry is not applicable",
         }
 
-    token = user_cfg.get("token")
-    if token is not None and not isinstance(token, str):
-        raise ValueError(f"user entry '{user_name}' must define 'token' as a string")
-
     token_file = user_cfg.get("tokenFile")
+    token = None
     if token_file is not None:
         token = _load_token_file(token_file, kubeconfig, user_name)
+    else:
+        token = user_cfg.get("token")
+        if token is not None and not isinstance(token, str):
+            raise ValueError(f"user entry '{user_name}' must define 'token' as a string")
     if token:
         expires_at, decode_error = _decode_jwt_exp(token)
         if decode_error:

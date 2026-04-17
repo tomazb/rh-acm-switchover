@@ -215,6 +215,21 @@ def test_token_file_takes_precedence_over_inline_token(tmp_path):
     assert result["auth_type"] == "bearer_jwt"
 
 
+def test_token_file_overrides_malformed_inline_token(tmp_path):
+    expiry = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
+    token_file = write_text_file(tmp_path, "token.txt", _jwt_with_exp(expiry))
+    kubeconfig = write_kubeconfig(
+        tmp_path,
+        _kubeconfig_for_user({"token": {"bad": "type"}, "tokenFile": str(token_file)}),
+    )
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "pass"
+    assert result["severity"] == "info"
+    assert result["auth_type"] == "bearer_jwt"
+
+
 def test_exec_auth_returns_warn_without_execution(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"exec": {"command": "oc", "args": ["whoami"]}}))
 
