@@ -11,6 +11,7 @@ import yaml
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_kubeconfig_inspect import (
     inspect_kubeconfig_auth,
+    run_module,
 )
 
 
@@ -179,3 +180,76 @@ def test_missing_user_raises_validation_error(tmp_path):
 
     with pytest.raises(ValueError, match="user 'missing-user' not found for context 'primary-hub'"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
+def test_run_module_exits_with_inspection_result(monkeypatch):
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "kubeconfig": "/tmp/fake-kubeconfig",
+                "context": "primary-hub",
+                "warning_hours": 9,
+            }
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+
+        def fail_json(self, **kwargs):
+            raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_kubeconfig_inspect.AnsibleModule",
+        FakeModule,
+    )
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_kubeconfig_inspect.inspect_kubeconfig_auth",
+        lambda kubeconfig, context, warning_hours=4: {
+            "status": "pass",
+            "severity": "info",
+            "auth_type": "bearer_jwt",
+            "message": f"{kubeconfig}:{context}:{warning_hours}",
+        },
+    )
+
+    run_module()
+
+    assert captured["exit"] == {
+        "changed": False,
+        "status": "pass",
+        "severity": "info",
+        "auth_type": "bearer_jwt",
+        "message": "/tmp/fake-kubeconfig:primary-hub:9",
+    }
+
+
+def test_run_module_maps_value_error_to_fail_json(monkeypatch):
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "kubeconfig": "/tmp/fake-kubeconfig",
+                "context": "missing",
+                "warning_hours": 4,
+            }
+
+        def exit_json(self, **kwargs):
+            raise AssertionError(f"unexpected exit_json: {kwargs}")
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_kubeconfig_inspect.AnsibleModule",
+        FakeModule,
+    )
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_kubeconfig_inspect.inspect_kubeconfig_auth",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad kubeconfig")),
+    )
+
+    run_module()
+
+    assert captured["fail"] == {"msg": "bad kubeconfig"}
