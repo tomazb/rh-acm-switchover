@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 from ansible.module_utils.basic import AnsibleModule
+from yaml import YAMLError
 
 DOCUMENTATION = r"""
 ---
@@ -86,11 +87,31 @@ def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
         return None, "invalid JWT expiration claim"
 
 
-def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 4) -> dict:
-    config = yaml.safe_load(Path(kubeconfig).read_text(encoding="utf-8")) or {}
+def _load_kubeconfig(kubeconfig: str) -> dict:
+    try:
+        content = Path(kubeconfig).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"unable to read kubeconfig '{kubeconfig}': {exc}") from exc
+
+    try:
+        config = yaml.safe_load(content) or {}
+    except YAMLError as exc:
+        raise ValueError(f"invalid kubeconfig YAML in '{kubeconfig}': {exc}") from exc
+
     if not isinstance(config, dict):
         raise ValueError("kubeconfig must be a YAML mapping")
+    return config
 
+
+def _load_token_file(token_file: str) -> str:
+    try:
+        return Path(token_file).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ValueError(f"unable to read tokenFile '{token_file}': {exc}") from exc
+
+
+def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 4) -> dict:
+    config = _load_kubeconfig(kubeconfig)
     contexts = _require_list_field(config, "contexts")
     users = _require_list_field(config, "users")
     _require_mapping_entries(contexts, "contexts")
@@ -108,6 +129,9 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         raise ValueError(f"context entry '{context}' must contain a mapping under 'context'")
 
     user_name = context_cfg.get("user")
+    if not user_name:
+        raise ValueError(f"context entry '{context}' is missing required 'user' reference")
+
     user_entry = _find_named(users, user_name)
     if user_entry is None:
         raise ValueError(f"user '{user_name}' not found for context '{context}'")
@@ -143,7 +167,10 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             "message": "kubeconfig uses client certificate authentication; token expiry is not applicable",
         }
 
-    token = user_cfg.get("token") or user_cfg.get("tokenFile")
+    token = user_cfg.get("token")
+    token_file = user_cfg.get("tokenFile")
+    if not token and token_file:
+        token = _load_token_file(token_file)
     if token:
         expires_at, decode_error = _decode_jwt_exp(token)
         if decode_error:

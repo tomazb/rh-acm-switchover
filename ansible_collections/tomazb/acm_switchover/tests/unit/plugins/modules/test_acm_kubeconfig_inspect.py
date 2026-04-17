@@ -21,6 +21,12 @@ def write_kubeconfig(tmp_path, data):
     return path
 
 
+def write_text_file(tmp_path, name, content):
+    path = tmp_path / name
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
 def _jwt_with_exp(expiry: datetime) -> str:
     payload = {"exp": int(expiry.timestamp())}
     payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
@@ -153,6 +159,29 @@ def test_malformed_jwt_payload_returns_warn_opaque(tmp_path, payload_bytes):
     assert result["auth_type"] == "bearer_opaque"
 
 
+def test_token_file_with_jwt_returns_pass(tmp_path):
+    expiry = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
+    token_file = write_text_file(tmp_path, "token.txt", _jwt_with_exp(expiry))
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)}))
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "pass"
+    assert result["severity"] == "info"
+    assert result["auth_type"] == "bearer_jwt"
+
+
+def test_token_file_with_opaque_token_returns_warn(tmp_path):
+    token_file = write_text_file(tmp_path, "token.txt", "opaque-token-value")
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)}))
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "warn"
+    assert result["severity"] == "warning"
+    assert result["auth_type"] == "bearer_opaque"
+
+
 def test_exec_auth_returns_warn_without_execution(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"exec": {"command": "oc", "args": ["whoami"]}}))
 
@@ -219,6 +248,20 @@ def test_missing_user_raises_validation_error(tmp_path):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
+def test_invalid_yaml_raises_value_error(tmp_path):
+    kubeconfig = write_text_file(tmp_path, "invalid-kubeconfig.yaml", "contexts: [oops")
+
+    with pytest.raises(ValueError, match="invalid kubeconfig YAML"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
+def test_missing_kubeconfig_path_raises_value_error(tmp_path):
+    kubeconfig = tmp_path / "missing-kubeconfig.yaml"
+
+    with pytest.raises(ValueError, match="unable to read kubeconfig"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
 @pytest.mark.parametrize(
     ("kubeconfig_data", "error_match"),
     [
@@ -246,6 +289,11 @@ def test_missing_user_raises_validation_error(tmp_path):
             _kubeconfig_for_user({"token": "header.payload.signature"})
             | {"users": [{"name": "primary-user"}]},
             "user entry 'primary-user' is missing required 'user' mapping",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"})
+            | {"contexts": [{"name": "primary-hub", "context": {"cluster": "primary-cluster"}}]},
+            "context entry 'primary-hub' is missing required 'user' reference",
         ),
     ],
 )
