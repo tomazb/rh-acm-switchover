@@ -49,7 +49,7 @@ EXAMPLES = r"""
 
 
 def _find_named(items: list[dict], name: str) -> dict | None:
-    return next((item for item in items if item.get("name") == name), None)
+    return next((item for item in items if item["name"] == name), None)
 
 
 def _require_list_field(config: dict, field_name: str) -> list[dict]:
@@ -66,6 +66,13 @@ def _require_mapping_entries(items: list[dict], field_name: str) -> None:
         raise ValueError(f"'{field_name}' entries must be mappings")
 
 
+def _require_named_entries(items: list[dict], field_name: str) -> None:
+    for item in items:
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"'{field_name}' entries must define 'name' as a non-empty string")
+
+
 def _require_string_field(user_cfg: dict, field_name: str, user_name: str) -> None:
     if field_name in user_cfg:
         value = user_cfg[field_name]
@@ -73,10 +80,10 @@ def _require_string_field(user_cfg: dict, field_name: str, user_name: str) -> No
             raise ValueError(f"user entry '{user_name}' must define '{field_name}' as a non-empty string")
 
 
-def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
+def _decode_jwt_exp(token: str) -> tuple[datetime | None, bool, str | None]:
     parts = token.split(".")
     if len(parts) != 3:
-        return None, "invalid JWT format"
+        return None, False, "invalid JWT format"
 
     payload = parts[1]
     payload += "=" * (-len(payload) % 4)
@@ -84,17 +91,17 @@ def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
     try:
         claims = json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")))
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
-        return None, "invalid JWT payload"
+        return None, False, "invalid JWT payload"
     if not isinstance(claims, dict):
-        return None, "invalid JWT payload"
+        return None, False, "invalid JWT payload"
 
     exp = claims.get("exp")
     if exp is None:
-        return None, "token has no expiration claim"
+        return None, False, "token has no expiration claim"
     try:
-        return datetime.fromtimestamp(exp, tz=timezone.utc), None
+        return datetime.fromtimestamp(exp, tz=timezone.utc), True, None
     except (TypeError, ValueError, OverflowError):
-        return None, "invalid JWT expiration claim"
+        return None, True, "invalid JWT expiration claim"
 
 
 def _load_kubeconfig(kubeconfig: str) -> dict:
@@ -139,6 +146,10 @@ def _load_token_file(token_file: object, kubeconfig: str, user_name: str) -> str
     return token_value
 
 
+def _base_details(context: str, user_name: str) -> dict:
+    return {"context": context, "user": user_name}
+
+
 def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 4) -> dict:
     if warning_hours < 0:
         raise ValueError("warning_hours must be non-negative")
@@ -148,6 +159,8 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
     users = _require_list_field(config, "users")
     _require_mapping_entries(contexts, "contexts")
     _require_mapping_entries(users, "users")
+    _require_named_entries(contexts, "contexts")
+    _require_named_entries(users, "users")
 
     ctx = _find_named(contexts, context)
     if ctx is None:
@@ -161,7 +174,7 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         raise ValueError(f"context entry '{context}' must contain a mapping under 'context'")
 
     user_name = context_cfg.get("user")
-    if not user_name:
+    if not isinstance(user_name, str) or not user_name.strip():
         raise ValueError(f"context entry '{context}' is missing required 'user' reference")
 
     user_entry = _find_named(users, user_name)
@@ -174,6 +187,7 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
     user_cfg = user_entry.get("user")
     if not isinstance(user_cfg, dict):
         raise ValueError(f"user entry '{user_name}' must contain a mapping under 'user'")
+    details = _base_details(context, user_name)
 
     if "exec" in user_cfg and not isinstance(user_cfg["exec"], dict):
         raise ValueError(f"user entry '{user_name}' must define 'exec' as a mapping")
@@ -196,6 +210,7 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             "severity": "warning",
             "auth_type": "exec",
             "message": "kubeconfig uses exec authentication; external auth plugins are not executed during inspection",
+            "details": details,
         }
 
     if "auth-provider" in user_cfg:
@@ -204,6 +219,7 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             "severity": "warning",
             "auth_type": "auth_provider",
             "message": "kubeconfig uses auth-provider authentication; provider plugins are not executed during inspection",
+            "details": details,
         }
 
     token_file = user_cfg.get("tokenFile")
@@ -217,7 +233,7 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         if token is not None and not token.strip():
             raise ValueError(f"user entry '{user_name}' defines an empty bearer token")
     if token:
-        expires_at, decode_error = _decode_jwt_exp(token)
+        expires_at, has_exp_claim, decode_error = _decode_jwt_exp(token)
         if decode_error:
             auth_type = "bearer_jwt" if decode_error == "token has no expiration claim" else "bearer_opaque"
             return {
@@ -225,34 +241,42 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
                 "severity": "warning",
                 "auth_type": auth_type,
                 "message": f"static bearer token could not be fully evaluated: {decode_error}",
+                "details": {
+                    **details,
+                    "has_exp_claim": has_exp_claim,
+                },
             }
 
         hours_until_expiry = (expires_at - datetime.now(timezone.utc)).total_seconds() / 3600
-        result = {
-            "auth_type": "bearer_jwt",
+        bearer_details = {
+            **details,
+            "has_exp_claim": has_exp_claim,
             "expires_at": expires_at.isoformat(),
             "hours_until_expiry": hours_until_expiry,
         }
 
         if hours_until_expiry < 0:
             return {
-                **result,
                 "status": "fail",
                 "severity": "critical",
+                "auth_type": "bearer_jwt",
                 "message": "static bearer JWT is expired",
+                "details": bearer_details,
             }
         if hours_until_expiry < warning_hours:
             return {
-                **result,
                 "status": "warn",
                 "severity": "warning",
+                "auth_type": "bearer_jwt",
                 "message": "static bearer JWT is nearing expiration",
+                "details": bearer_details,
             }
         return {
-            **result,
             "status": "pass",
             "severity": "info",
+            "auth_type": "bearer_jwt",
             "message": "static bearer JWT is valid and not nearing expiration",
+            "details": bearer_details,
         }
 
     if file_pair or data_pair:
@@ -261,6 +285,7 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             "severity": "info",
             "auth_type": "client_cert",
             "message": "kubeconfig uses client certificate authentication; token expiry is not applicable",
+            "details": details,
         }
 
     if "username" in user_cfg or "password" in user_cfg:
@@ -275,13 +300,15 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             "severity": "info",
             "auth_type": "basic",
             "message": "kubeconfig uses basic authentication; token expiry is not applicable",
+            "details": details,
         }
 
     return {
         "status": "pass",
         "severity": "info",
-        "auth_type": "non_bearer",
+        "auth_type": "unknown",
         "message": "kubeconfig does not use bearer token authentication; token expiry is not applicable",
+        "details": details,
     }
 
 

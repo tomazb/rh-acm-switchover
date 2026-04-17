@@ -66,8 +66,12 @@ def test_bearer_jwt_valid_returns_pass(tmp_path):
     assert result["status"] == "pass"
     assert result["severity"] == "info"
     assert result["auth_type"] == "bearer_jwt"
-    assert result["expires_at"] == expiry.isoformat()
-    assert result["hours_until_expiry"] > 0
+    assert set(result) == {"status", "severity", "auth_type", "message", "details"}
+    assert result["details"]["context"] == "primary-hub"
+    assert result["details"]["user"] == "primary-user"
+    assert result["details"]["has_exp_claim"] is True
+    assert result["details"]["expires_at"] == expiry.isoformat()
+    assert result["details"]["hours_until_expiry"] > 0
 
 
 def test_bearer_jwt_expired_returns_critical_fail(tmp_path):
@@ -82,6 +86,11 @@ def test_bearer_jwt_expired_returns_critical_fail(tmp_path):
     assert result["status"] == "fail"
     assert result["severity"] == "critical"
     assert result["auth_type"] == "bearer_jwt"
+    assert result["details"]["context"] == "primary-hub"
+    assert result["details"]["user"] == "primary-user"
+    assert result["details"]["has_exp_claim"] is True
+    assert result["details"]["expires_at"] == expiry.isoformat()
+    assert result["details"]["hours_until_expiry"] < 0
 
 
 def test_bearer_jwt_near_expiry_returns_warn(tmp_path):
@@ -96,6 +105,11 @@ def test_bearer_jwt_near_expiry_returns_warn(tmp_path):
     assert result["status"] == "warn"
     assert result["severity"] == "warning"
     assert result["auth_type"] == "bearer_jwt"
+    assert result["details"]["context"] == "primary-hub"
+    assert result["details"]["user"] == "primary-user"
+    assert result["details"]["has_exp_claim"] is True
+    assert result["details"]["expires_at"] == expiry.isoformat()
+    assert result["details"]["hours_until_expiry"] > 0
 
 
 def test_bearer_jwt_without_exp_returns_warn(tmp_path):
@@ -112,6 +126,7 @@ def test_bearer_jwt_without_exp_returns_warn(tmp_path):
     assert result["status"] == "warn"
     assert result["severity"] == "warning"
     assert result["auth_type"] == "bearer_jwt"
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user", "has_exp_claim": False}
 
 
 def test_bearer_jwt_with_non_numeric_exp_returns_warn(tmp_path):
@@ -128,6 +143,7 @@ def test_bearer_jwt_with_non_numeric_exp_returns_warn(tmp_path):
     assert result["status"] == "warn"
     assert result["severity"] == "warning"
     assert result["auth_type"] == "bearer_opaque"
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user", "has_exp_claim": True}
 
 
 def test_invalid_jwt_format_returns_warn(tmp_path):
@@ -138,6 +154,7 @@ def test_invalid_jwt_format_returns_warn(tmp_path):
     assert result["status"] == "warn"
     assert result["severity"] == "warning"
     assert result["auth_type"] == "bearer_opaque"
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user", "has_exp_claim": False}
 
 
 @pytest.mark.parametrize(
@@ -171,6 +188,8 @@ def test_token_file_with_jwt_returns_pass(tmp_path):
     assert result["status"] == "pass"
     assert result["severity"] == "info"
     assert result["auth_type"] == "bearer_jwt"
+    assert result["details"]["context"] == "primary-hub"
+    assert result["details"]["user"] == "primary-user"
 
 
 def test_static_bearer_takes_precedence_over_client_cert(tmp_path):
@@ -191,6 +210,8 @@ def test_static_bearer_takes_precedence_over_client_cert(tmp_path):
     assert result["status"] == "fail"
     assert result["severity"] == "critical"
     assert result["auth_type"] == "bearer_jwt"
+    assert result["details"]["context"] == "primary-hub"
+    assert result["details"]["user"] == "primary-user"
 
 
 def test_token_file_with_opaque_token_returns_warn(tmp_path):
@@ -202,6 +223,7 @@ def test_token_file_with_opaque_token_returns_warn(tmp_path):
     assert result["status"] == "warn"
     assert result["severity"] == "warning"
     assert result["auth_type"] == "bearer_opaque"
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user", "has_exp_claim": False}
 
 
 def test_empty_inline_token_raises_value_error(tmp_path):
@@ -256,6 +278,7 @@ def test_relative_token_file_is_resolved_from_kubeconfig_dir(tmp_path):
     assert result["status"] == "warn"
     assert result["severity"] == "warning"
     assert result["auth_type"] == "bearer_opaque"
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user", "has_exp_claim": False}
 
 
 def test_token_file_takes_precedence_over_inline_token(tmp_path):
@@ -297,6 +320,7 @@ def test_exec_auth_returns_warn_without_execution(tmp_path):
     assert result["severity"] == "warning"
     assert result["auth_type"] == "exec"
     assert "not executed" in result["message"]
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user"}
 
 
 def test_exec_auth_must_be_mapping(tmp_path):
@@ -318,6 +342,7 @@ def test_auth_provider_returns_warn_without_execution(tmp_path):
     assert result["severity"] == "warning"
     assert result["auth_type"] == "auth_provider"
     assert "not executed" in result["message"]
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user"}
 
 
 def test_auth_provider_must_be_mapping(tmp_path):
@@ -343,6 +368,7 @@ def test_client_certificate_auth_fields_are_recognized(tmp_path):
     assert result["status"] == "pass"
     assert result["severity"] == "info"
     assert result["auth_type"] == "client_cert"
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user"}
 
 
 def test_client_certificate_file_pair_returns_pass(tmp_path):
@@ -361,6 +387,21 @@ def test_client_certificate_file_pair_returns_pass(tmp_path):
     assert result["status"] == "pass"
     assert result["severity"] == "info"
     assert result["auth_type"] == "client_cert"
+    assert result["details"] == {"context": "primary-hub", "user": "primary-user"}
+
+
+def test_unknown_auth_returns_pass_with_details(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({}))
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result == {
+        "status": "pass",
+        "severity": "info",
+        "auth_type": "unknown",
+        "message": "kubeconfig does not use bearer token authentication; token expiry is not applicable",
+        "details": {"context": "primary-hub", "user": "primary-user"},
+    }
 
 
 @pytest.mark.parametrize(
@@ -438,6 +479,20 @@ def test_malformed_basic_auth_raises_value_error(tmp_path, user_config, error_ma
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
+def test_basic_auth_returns_pass_with_details(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"username": "admin", "password": "secret"}))
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result == {
+        "status": "pass",
+        "severity": "info",
+        "auth_type": "basic",
+        "message": "kubeconfig uses basic authentication; token expiry is not applicable",
+        "details": {"context": "primary-hub", "user": "primary-user"},
+    }
+
+
 def test_missing_context_raises_validation_error(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "header.payload.signature"}))
 
@@ -494,6 +549,30 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
         (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": ["bad"]}, "'contexts' entries must be mappings"),
         (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": ["bad"]}, "'users' entries must be mappings"),
         (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{}]},
+            "'contexts' entries must define 'name' as a non-empty string",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{"name": "", "context": {}}]},
+            "'contexts' entries must define 'name' as a non-empty string",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{"name": 123, "context": {}}]},
+            "'contexts' entries must define 'name' as a non-empty string",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": [{}]},
+            "'users' entries must define 'name' as a non-empty string",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": [{"name": "", "user": {}}]},
+            "'users' entries must define 'name' as a non-empty string",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": [{"name": 123, "user": {}}]},
+            "'users' entries must define 'name' as a non-empty string",
+        ),
+        (
             _kubeconfig_for_user({"token": "header.payload.signature"})
             | {"contexts": [{"name": "primary-hub", "context": "bad"}]},
             "context entry 'primary-hub' must contain a mapping under 'context'",
@@ -516,6 +595,16 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
         (
             _kubeconfig_for_user({"token": "header.payload.signature"})
             | {"contexts": [{"name": "primary-hub", "context": {"cluster": "primary-cluster"}}]},
+            "context entry 'primary-hub' is missing required 'user' reference",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"})
+            | {"contexts": [{"name": "primary-hub", "context": {"cluster": "primary-cluster", "user": ""}}]},
+            "context entry 'primary-hub' is missing required 'user' reference",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"})
+            | {"contexts": [{"name": "primary-hub", "context": {"cluster": "primary-cluster", "user": 123}}]},
             "context entry 'primary-hub' is missing required 'user' reference",
         ),
         (
@@ -570,6 +659,7 @@ def test_run_module_exits_with_inspection_result(monkeypatch):
             "severity": "info",
             "auth_type": "bearer_jwt",
             "message": f"{kubeconfig}:{context}:{warning_hours}",
+            "details": {"context": context, "user": "primary-user"},
         },
     )
 
@@ -581,6 +671,7 @@ def test_run_module_exits_with_inspection_result(monkeypatch):
         "severity": "info",
         "auth_type": "bearer_jwt",
         "message": "/tmp/fake-kubeconfig:primary-hub:9",
+        "details": {"context": "primary-hub", "user": "primary-user"},
     }
 
 
