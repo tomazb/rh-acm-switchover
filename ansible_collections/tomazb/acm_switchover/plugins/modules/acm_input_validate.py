@@ -84,7 +84,10 @@ def build_input_validation_results(params: dict) -> list[dict]:
     secondary_context = hubs.get("secondary", {}).get("context", "")
     primary_kubeconfig = hubs.get("primary", {}).get("kubeconfig", "")
     secondary_kubeconfig = hubs.get("secondary", {}).get("kubeconfig", "")
-    checkpoint_path = execution.get("checkpoint", {}).get("path")
+    checkpoint = execution.get("checkpoint", {})
+    checkpoint_path = checkpoint.get("path")
+    checkpoint_enabled = checkpoint.get("enabled", False)
+    report_dir = execution.get("report_dir", "")
     mode = execution.get("mode", "execute")
 
     # --- Primary context validation ---
@@ -125,12 +128,13 @@ def build_input_validation_results(params: dict) -> list[dict]:
             results.append(_fail_result("preflight-input-secondary-context", str(exc), "Set a valid secondary context"))
 
     # --- Path validation (skip primary kubeconfig in restore-only) ---
-    path_checks = [
-        ("preflight-input-secondary-kubeconfig", secondary_kubeconfig),
-        ("preflight-input-checkpoint-path", checkpoint_path),
-    ]
+    path_checks = [("preflight-input-secondary-kubeconfig", secondary_kubeconfig)]
     if not restore_only:
         path_checks.insert(0, ("preflight-input-primary-kubeconfig", primary_kubeconfig))
+    if report_dir:
+        path_checks.append(("preflight-input-report-dir", report_dir))
+    if checkpoint_path:
+        path_checks.append(("preflight-input-checkpoint-path", checkpoint_path))
 
     for result_id, path_value in path_checks:
         if not path_value:
@@ -146,6 +150,15 @@ def build_input_validation_results(params: dict) -> list[dict]:
                     "Use a relative path without traversal or shell metacharacters",
                 )
             )
+
+    if checkpoint_enabled and not checkpoint_path:
+        results.append(
+            _fail_result(
+                "preflight-input-checkpoint-path",
+                "checkpoint.path is required when checkpoint.enabled=true",
+                "Set acm_switchover_execution.checkpoint.path to a safe writable path",
+            )
+        )
 
     # --- Operation combination validation ---
     try:

@@ -189,3 +189,67 @@ def test_restore_only_allows_argocd_manage():
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "pass"
     assert op_result["details"]["argocd_manage"] is True
+
+
+def test_disable_observability_on_secondary_requires_secondary_old_hub_action():
+    """Observability teardown on the old hub only makes sense when the old hub becomes secondary."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+            },
+            "operation": {"method": "passive", "activation_method": "patch", "old_hub_action": "decommission"},
+            "execution": {"mode": "execute", "report_dir": "./artifacts", "checkpoint": {"path": ".state/run.json"}},
+            "features": {
+                "disable_observability_on_secondary": True,
+                "argocd": {"manage": False},
+            },
+        }
+    )
+
+    op_result = next(r for r in results if r["id"] == "preflight-input-operation")
+    assert op_result["status"] == "fail"
+    assert "disable_observability_on_secondary" in op_result["message"]
+
+
+def test_report_dir_must_be_a_safe_path():
+    """Unsafe report_dir values must be rejected before execution starts."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+            },
+            "operation": {"method": "passive", "activation_method": "patch"},
+            "execution": {
+                "mode": "execute",
+                "report_dir": "../artifacts",
+                "checkpoint": {"enabled": True, "path": ".state/run.json"},
+            },
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+
+    report_dir_result = next(r for r in results if r["id"] == "preflight-input-report-dir")
+    assert report_dir_result["status"] == "fail"
+    assert "Path traversal attempt" in report_dir_result["message"]
+
+
+def test_checkpoint_enabled_requires_a_checkpoint_path():
+    """Enabled checkpointing without a path should fail early with an actionable error."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+            },
+            "operation": {"method": "passive", "activation_method": "patch"},
+            "execution": {"mode": "execute", "checkpoint": {"enabled": True, "path": ""}},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+
+    checkpoint_result = next(r for r in results if r["id"] == "preflight-input-checkpoint-path")
+    assert checkpoint_result["status"] == "fail"
+    assert "checkpoint.path is required" in checkpoint_result["message"]

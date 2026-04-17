@@ -28,6 +28,34 @@
     - acm_restore_activation_plan.operation.patch is not none
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
+- name: Verify activation patch is observed on Restore resource
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    name: "{{ acm_restore_activation_plan.operation.patch_target.name | default(acm_restore_activation_plan.restore.metadata.name) }}"
+    namespace: "{{ acm_restore_activation_plan.operation.patch_target.namespace | default(acm_restore_activation_plan.restore.metadata.namespace | default('open-cluster-management-backup')) }}"
+  register: _restore_patch_verify
+  retries: 10
+  delay: 3
+  until: >-
+    {{
+      (_restore_patch_verify.resources | default([]) | length) > 0
+      and (
+        ((_restore_patch_verify.resources | first | default({})).get('metadata', {}).get('resourceVersion', ''))
+        != (acm_restore_activation_plan.restore.metadata.resourceVersion | default(''))
+      )
+      and (
+        ((_restore_patch_verify.resources | first | default({})).get('spec', {}).get('veleroManagedClustersBackupName', ''))
+        == 'latest'
+      )
+    }}
+  when:
+    - acm_restore_activation_plan.operation.action == 'patch'
+    - acm_restore_activation_plan.operation.patch is not none
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
 - name: Delete source Restore before activation create
   kubernetes.core.k8s:
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"

@@ -1,0 +1,43 @@
+---
+- name: Expand required RBAC permissions for decommission
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: primary
+    include_decommission: true
+    skip_observability: "{{ not (acm_switchover_decommission.has_observability | default(false) | bool) }}"
+    argocd_mode: none
+    argocd_install_type: vanilla
+  register: _decommission_rbac_expanded
+
+- name: Run SelfSubjectAccessReview checks for decommission
+  ansible.builtin.include_tasks: "{{ role_path }}/../preflight/tasks/run_ssar.yml"
+  vars:
+    acm_rbac_permissions: "{{ _decommission_rbac_expanded.permissions }}"
+    _ssar_target_kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    _ssar_target_context: "{{ acm_switchover_hubs.primary.context }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Collect denied permissions for decommission
+  ansible.builtin.set_fact:
+    _decommission_rbac_denied_permissions: "{{ _rbac_denied_permissions }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Set empty denied list in dry-run mode for decommission
+  ansible.builtin.set_fact:
+    _decommission_rbac_denied_permissions: []
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Summarize decommission RBAC validation
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: primary
+    include_decommission: true
+    skip_observability: "{{ not (acm_switchover_decommission.has_observability | default(false) | bool) }}"
+    argocd_mode: none
+    argocd_install_type: vanilla
+    denied_permissions: "{{ _decommission_rbac_denied_permissions | default([]) }}"
+  register: acm_switchover_decommission_rbac_validation
+
+- name: Fail when RBAC permissions are missing for decommission
+  ansible.builtin.fail:
+    msg: >-
+      Decommission RBAC validation failed: required permissions are missing on the primary hub.
+  when: not acm_switchover_decommission_rbac_validation.passed

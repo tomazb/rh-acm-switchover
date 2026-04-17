@@ -81,8 +81,15 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
     """
     restore_only = operation.get("restore_only", False)
     activation_method = operation.get("activation_method", "patch")
+    old_hub_action = operation.get("old_hub_action", "secondary")
+    disable_observability_on_secondary = features.get("disable_observability_on_secondary", False)
     argocd = features.get("argocd", {})
     argocd_manage = argocd.get("manage", False)
+
+    if disable_observability_on_secondary and old_hub_action != "secondary":
+        raise ValidationError(
+            "disable_observability_on_secondary requires old_hub_action=secondary so the old hub remains available"
+        )
 
     if restore_only:
         method = operation.get("method", "full")
@@ -111,6 +118,7 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
     return {
         "restore_only": False,
         "method": method,
+        "old_hub_action": old_hub_action,
         "activation_method": activation_method,
         "argocd_manage": argocd_manage,
     }

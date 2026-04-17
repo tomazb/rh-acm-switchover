@@ -8,6 +8,9 @@
     not (acm_switchover_decommission.confirmed | default(false) | bool)
     and (acm_switchover_execution.mode | default('') != 'dry_run')
 
+- name: Validate RBAC before decommission
+  ansible.builtin.include_tasks: validate_rbac.yml
+
 - name: Delete Observability resources
   ansible.builtin.include_tasks: delete_observability.yml
   when: acm_switchover_decommission.has_observability | default(false) | bool
