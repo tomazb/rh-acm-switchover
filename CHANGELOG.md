@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python CLI getattr defaults**: Fixed wrong `getattr` fallback (`True` → `False`) for `manage_auto_import_strategy` in activation and finalization phase runners. While argparse always sets the attribute making the fallback unreachable, the semantic intent was wrong and created latent risk.
+- **Constants parity test**: Added explicit contract map test (`tests/test_constants_parity.py`) covering ~18 shared constants between `lib/constants.py` and Ansible `module_utils/constants.py` to detect drift. Previously only `ACM_KINDS` and `ACM_NAMESPACES` had parity coverage.
+- **CI workflow env var**: Fixed `ANSIBLE_COLLECTIONS_PATH` in GitHub Actions workflow — `${{ env.HOME }}` doesn't resolve system env vars in `env:` blocks; moved to shell `$HOME` in `run:` block.
+- **Integration test Path.cwd()**: Replaced fragile `Path.cwd()` with `_find_repo_root()` helper that walks upward from `__file__` to find `.git`, so integration tests work from any directory.
+- **Integration test subprocess timeout**: Added `timeout=300` to all `subprocess.run()` calls in integration conftest to prevent stuck `ansible-playbook` processes from hanging CI.
+- **Collection validate_safe_path**: Added absolute path validation with allowed prefixes (`/tmp/`, `/var/`, home dir), matching the Python CLI's `validate_safe_filesystem_path` approach. Previously `/etc/passwd` passed validation.
+- **Post-activation zero-pods**: Added explicit `expected_count` to all `wait_for_pods_ready()` callers in post-activation observability scale-up, using actual target replica counts from `scaled_components` instead of relying on zero-pods-is-ready semantics.
+- **E2E stale flag references**: Removed all E2E test references to `--argocd-resume-after-switchover` (removed flag). Phase 8 now tests the recommended workflow: `--argocd-manage` + separate `--argocd-resume-only`.
 - **Ansible ArgoCD resume safety**: `resume.yml` now requires a non-empty `run_id` before resuming any Applications. Previously, an empty `run_id` acted as a wildcard that would unpause all Applications carrying the pause annotation — including those paused by other switchover runs or maintenance windows.
 - **Ansible ArgoCD discovery safety**: `discover.yml` rescue block now distinguishes CRD-absent errors from other failures (RBAC denial, transient API errors). Only a missing Application CRD is treated as "Argo CD not installed"; other errors fail the play so GitOps protection is not silently skipped.
 - **Ansible input validation**: `validate_operation_inputs()` now validates enum values for `method` (passive/full), `old_hub_action` (secondary/decommission/none), and `activation_method` (patch/restore). Previously, typos like `method: pasive` passed preflight and only failed during activation after primary_prep had already paused backups.

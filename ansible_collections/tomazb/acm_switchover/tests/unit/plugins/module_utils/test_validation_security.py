@@ -117,3 +117,17 @@ class TestValidateSafePathPositive:
     def test_rejects_tilde_without_slash(self):
         with pytest.raises(ValidationError, match="unsafe characters"):
             validate_safe_path("~etc/passwd")
+
+    def test_rejects_absolute_path_outside_allowed_dirs(self):
+        with pytest.raises(ValidationError, match="outside allowed directories"):
+            validate_safe_path("/etc/passwd")
+
+    def test_rejects_absolute_path_usr(self):
+        with pytest.raises(ValidationError, match="outside allowed directories"):
+            validate_safe_path("/usr/local/bin/something")
+
+    def test_accepts_absolute_path_tmp(self):
+        validate_safe_path("/tmp/state.json")
+
+    def test_accepts_absolute_path_var(self):
+        validate_safe_path("/var/data/file.txt")

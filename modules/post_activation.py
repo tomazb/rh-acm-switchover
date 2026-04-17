@@ -352,11 +352,13 @@ class PostActivationVerification:
 
             # Wait for observatorium-api if it was scaled
             if any(name == "observatorium-api" for name, _ in scaled_components):
+                target = next(count for name, count in scaled_components if name == "observatorium-api")
                 logger.info("Waiting for observatorium-api pods to be ready...")
                 ready = self.secondary.wait_for_pods_ready(
                     namespace=OBSERVABILITY_NAMESPACE,
                     label_selector="app.kubernetes.io/name=observatorium-api",
                     timeout=OBSERVABILITY_POD_TIMEOUT,
+                    expected_count=target,
                 )
                 if ready:
                     logger.info("observatorium-api pods are ready")
@@ -365,11 +367,13 @@ class PostActivationVerification:
 
             # Wait for thanos-compact if it was scaled
             if any(name == "thanos-compact" for name, _ in scaled_components):
+                target = next(count for name, count in scaled_components if name == "thanos-compact")
                 logger.info("Waiting for thanos-compact pods to be ready...")
                 ready = self.secondary.wait_for_pods_ready(
                     namespace=OBSERVABILITY_NAMESPACE,
                     label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
                     timeout=OBSERVABILITY_POD_TIMEOUT,
+                    expected_count=target,
                 )
                 if ready:
                     logger.info("thanos-compact pods are ready")
@@ -401,6 +405,7 @@ class PostActivationVerification:
                 namespace=OBSERVABILITY_NAMESPACE,
                 label_selector="app.kubernetes.io/name=observatorium-api",
                 timeout=OBSERVABILITY_POD_TIMEOUT,
+                expected_count=1,
             )
 
             if ready:

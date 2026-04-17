@@ -605,10 +605,6 @@ class TestFullValidation:
             argocd_variants = [
                 ("no-argocd", []),
                 ("argocd-pause", ["--argocd-manage"]),
-                (
-                    "argocd-full",
-                    ["--argocd-manage", "--argocd-resume-after-switchover"],
-                ),
             ]
 
             for label, argocd_args in argocd_variants:
@@ -896,7 +892,7 @@ class TestFullValidation:
     # ── Phase 8: Switchover — ArgoCD Pause + Auto-Resume ──────────────
 
     def test_phase8_switchover_argocd_pause_resume(self, require_cluster_contexts):
-        """Switchover with --argocd-manage + --argocd-resume-after-switchover."""
+        """Switchover with --argocd-manage + separate --argocd-resume-only."""
         PhaseTracker.require("phase7")
         passed = False
         try:
@@ -915,7 +911,6 @@ class TestFullValidation:
                 current_secondary,
                 extra_args=[
                     "--argocd-manage",
-                    "--argocd-resume-after-switchover",
                     "--state-file",
                     state,
                 ],
@@ -926,7 +921,30 @@ class TestFullValidation:
             # New primary is self._secondary
             wait_and_assert_hub_is_primary(current_secondary, timeout=300)
 
-            # With auto-resume, apps should NOT have paused annotation
+            # After --argocd-manage (without auto-resume), apps should still be paused
+            apps = get_argocd_apps(current_secondary)
+            if apps:
+                paused = [
+                    a
+                    for a in apps
+                    if a.get("metadata", {}).get("annotations", {}).get("acm-switchover.argoproj.io/paused-by")
+                ]
+                logger.info("Phase 8: %d/%d apps still paused after switchover", len(paused), len(apps))
+
+            # Now do explicit resume with --argocd-resume-only
+            resume_result = run_switchover(
+                current_primary,
+                current_secondary,
+                extra_args=[
+                    "--argocd-resume-only",
+                    "--state-file",
+                    state,
+                ],
+                timeout=120,
+            )
+            resume_result.assert_success("Phase 8 argocd-resume-only failed")
+
+            # After explicit resume, apps should NOT have paused annotation
             apps = get_argocd_apps(current_secondary)
             assert len(apps) > 0, f"No ArgoCD apps found on {current_secondary} — possible API failure"
             still_paused = [
@@ -935,11 +953,11 @@ class TestFullValidation:
                 if a.get("metadata", {}).get("annotations", {}).get("acm-switchover.argoproj.io/paused-by")
             ]
             assert len(still_paused) == 0, (
-                f"Phase 8: expected 0 paused apps after auto-resume, " f"found {len(still_paused)}"
+                f"Phase 8: expected 0 paused apps after explicit resume, " f"found {len(still_paused)}"
             )
-            logger.info("Phase 8: switchover + auto-resume OK on %s", current_secondary)
+            logger.info("Phase 8: switchover + explicit resume OK on %s", current_secondary)
 
-            # argocd-manage.sh status after auto-resume
+            # argocd-manage.sh status after resume
             result = run_shell_script(
                 "argocd-manage.sh",
                 ["--context", current_secondary, "--mode", "status"],
@@ -1033,10 +1051,6 @@ class TestFullValidation:
             argocd_rotation = [
                 ("no-argocd", []),
                 ("argocd-pause", ["--argocd-manage"]),
-                (
-                    "argocd-full",
-                    ["--argocd-manage", "--argocd-resume-after-switchover"],
-                ),
             ]
 
             # After phase 9: self._primary is original primary
@@ -1062,11 +1076,8 @@ class TestFullValidation:
                 elif argocd_mode == "pause":
                     argocd_args, mode_label = ["--argocd-manage"], "argocd-pause"
                 else:
-                    argocd_args = [
-                        "--argocd-manage",
-                        "--argocd-resume-after-switchover",
-                    ]
-                    mode_label = "argocd-full"
+                    # Unknown mode — default to argocd-pause
+                    argocd_args, mode_label = ["--argocd-manage"], "argocd-pause"
 
                 state = self._state_file(f"soak-cycle-{cycle:04d}")
                 start = time.time()
@@ -1119,7 +1130,7 @@ class TestFullValidation:
                         result.output[-500:],
                     )
 
-                # If argocd-pause (no auto-resume), do a standalone resume
+                # If argocd-pause was used, do a standalone resume
                 if success and mode_label == "argocd-pause":
                     resume_result = run_switchover(
                         current_primary,

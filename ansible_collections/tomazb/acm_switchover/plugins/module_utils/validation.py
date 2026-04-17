@@ -6,6 +6,7 @@ Operates on dictionary-structured collection params rather than argparse args.
 
 from __future__ import annotations
 
+import os
 import re
 
 CONTEXT_NAME_MAX_LENGTH = 128
@@ -68,6 +69,16 @@ def validate_safe_path(path: str) -> None:
         raise ValidationError(
             f"Path '{path}' contains unsafe characters. " f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
         )
+
+    # Validate absolute paths against allowed prefixes
+    if path.startswith("/"):
+        home_dir = os.path.expanduser("~")
+        allowed_prefixes = ["/tmp/", "/var/", home_dir + "/"]
+        if not any(path.startswith(prefix) for prefix in allowed_prefixes):
+            raise ValidationError(
+                f"Absolute path '{path}' is outside allowed directories. "
+                f"Allowed prefixes: /tmp/, /var/, {home_dir}/"
+            )
 
 
 def _validate_choice(value: str, valid_choices: list[str], field_name: str) -> None:

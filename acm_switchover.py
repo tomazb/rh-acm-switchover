@@ -944,7 +944,7 @@ def _run_phase_activation(
         state_manager=state,
         method=args.method,
         activation_method=getattr(args, "activation_method", "patch"),
-        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
+        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
         old_hub_action=getattr(args, "old_hub_action", "none"),
         min_managed_clusters=getattr(args, "min_managed_clusters", 0),
     )
@@ -1000,7 +1000,7 @@ def _run_phase_finalization(
         primary_has_observability=state.get_config("primary_has_observability", False),
         dry_run=args.dry_run,
         old_hub_action=old_hub_action,
-        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
+        manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
         restore_only=is_restore_only,
     )

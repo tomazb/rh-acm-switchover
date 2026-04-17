@@ -11,10 +11,20 @@ import pytest
 import yaml
 
 
+def _find_repo_root() -> Path:
+    """Walk upward from this file to find the repository root (contains .git)."""
+    current = Path(__file__).resolve().parent
+    while current != current.parent:
+        if (current / ".git").exists():
+            return current
+        current = current.parent
+    raise RuntimeError("Could not find repository root from %s" % Path(__file__))
+
+
 @pytest.fixture
 def run_preflight_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
-        repo_root = Path.cwd()
+        repo_root = _find_repo_root()
         fixture_path = (
             repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight" / fixture_name
         )
@@ -50,6 +60,7 @@ def run_preflight_fixture(tmp_path):
             text=True,
             check=False,
             env=env,
+            timeout=300,
         )
 
         report_path = tmp_path / "artifacts" / "preflight-report.json"
@@ -62,7 +73,7 @@ def run_preflight_fixture(tmp_path):
 @pytest.fixture
 def run_argocd_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
-        repo_root = Path.cwd()
+        repo_root = _find_repo_root()
         fixture_path = (
             repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd" / fixture_name
         )
@@ -101,6 +112,7 @@ def run_argocd_fixture(tmp_path):
             text=True,
             check=False,
             env=env,
+            timeout=300,
         )
 
         summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
@@ -112,7 +124,7 @@ def run_argocd_fixture(tmp_path):
 @pytest.fixture
 def run_noncore_fixture(tmp_path):
     def _run(fixture_name: str, playbook_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
-        repo_root = Path.cwd()
+        repo_root = _find_repo_root()
         fixture_path = (
             repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/noncore" / fixture_name
         )
@@ -151,6 +163,7 @@ def run_noncore_fixture(tmp_path):
             text=True,
             check=False,
             env=env,
+            timeout=300,
         )
 
         summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
