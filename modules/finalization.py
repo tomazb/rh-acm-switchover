@@ -71,6 +71,7 @@ class Finalization:
         old_hub_action: str = "secondary",
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,
+        restore_only: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -81,6 +82,7 @@ class Finalization:
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.disable_observability_on_secondary = disable_observability_on_secondary
+        self.restore_only = restore_only
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -389,6 +391,10 @@ class Finalization:
             timeout: Maximum wait time in seconds
         """
 
+        if self._restore_only_missing_backup_schedule():
+            logger.warning("Skipping backup continuity verification in restore-only mode because no BackupSchedule exists yet")
+            return
+
         logger.info("Verifying new backups are being created...")
 
         # Get current ACM-owned backup list (Velero Backups use velero.io/v1)
@@ -691,6 +697,10 @@ class Finalization:
         Falls back to the latest-by-timestamp backup (with a warning) only when no
         recorded name is available (e.g. during a dry-run).
         """
+        if self._restore_only_missing_backup_schedule():
+            logger.warning("Skipping backup integrity verification in restore-only mode because no BackupSchedule exists yet")
+            return
+
         logger.info("Verifying backup integrity...")
         effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
 
@@ -859,6 +869,14 @@ class Finalization:
             )
         return self._cached_schedules
 
+    def _restore_only_missing_backup_schedule(self, schedules: Optional[List[Dict]] = None) -> bool:
+        """Return True when restore-only finalization should tolerate no BackupSchedule."""
+        if not self.restore_only:
+            return False
+        if schedules is None:
+            schedules = self._get_backup_schedules()
+        return not schedules
+
     @dry_run_skip(message="Skipping BackupSchedule verification")
     def _verify_backup_schedule_enabled(self):
         """Ensure BackupSchedule is present and not paused."""
@@ -866,6 +884,9 @@ class Finalization:
         schedules = self._get_backup_schedules()
 
         if not schedules:
+            if self._restore_only_missing_backup_schedule(schedules):
+                logger.warning("No BackupSchedule found during restore-only finalization; manual backup setup is required")
+                return
             raise SwitchoverError("No BackupSchedule found while verifying finalization")
 
         schedule = schedules[0]
@@ -1222,6 +1243,11 @@ class Finalization:
         schedules = self._get_backup_schedules(force_refresh=True)
 
         if not schedules:
+            if self._restore_only_missing_backup_schedule(schedules):
+                logger.warning(
+                    "Skipping BackupSchedule collision repair in restore-only mode because no BackupSchedule exists yet"
+                )
+                return
             raise SwitchoverError("No BackupSchedule found on new primary while repairing collision state")
 
         schedule = schedules[0]

@@ -1,0 +1,77 @@
+---
+- name: Initialize old hub observability disable result
+  ansible.builtin.set_fact:
+    acm_switchover_disable_old_hub_observability_result:
+      changed: false
+      scaled_resources: []
+
+- name: Read old hub observatorium-api Deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: observability-observatorium-api
+    namespace: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_old_hub_observatorium_api_info
+  failed_when: false
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Read old hub thanos-compact StatefulSet
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: StatefulSet
+    name: observability-thanos-compact
+    namespace: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_old_hub_thanos_compact_info
+  failed_when: false
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Scale old hub observatorium-api to zero replicas
+  kubernetes.core.k8s_scale:
+    api_version: apps/v1
+    kind: Deployment
+    name: observability-observatorium-api
+    namespace: open-cluster-management-observability
+    replicas: 0
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_old_hub_observatorium_scale_result
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_old_hub_observatorium_api_info.resources | default([]) | length) > 0
+
+- name: Scale old hub thanos-compact to zero replicas
+  kubernetes.core.k8s_scale:
+    api_version: apps/v1
+    kind: StatefulSet
+    name: observability-thanos-compact
+    namespace: open-cluster-management-observability
+    replicas: 0
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_old_hub_thanos_scale_result
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_old_hub_thanos_compact_info.resources | default([]) | length) > 0
+
+- name: Publish old hub observability disable result
+  ansible.builtin.set_fact:
+    acm_switchover_disable_old_hub_observability_result:
+      changed: >-
+        {{
+          (_acm_old_hub_observatorium_scale_result.changed | default(false))
+          or (_acm_old_hub_thanos_scale_result.changed | default(false))
+        }}
+      scaled_resources: >-
+        {%- set scaled = [] -%}
+        {%- if _acm_old_hub_observatorium_scale_result.changed | default(false) -%}
+        {%- set _ = scaled.append('observability-observatorium-api') -%}
+        {%- endif -%}
+        {%- if _acm_old_hub_thanos_scale_result.changed | default(false) -%}
+        {%- set _ = scaled.append('observability-thanos-compact') -%}
+        {%- endif -%}
+        {{ scaled }}
+      status: "{{ 'skipped' if acm_switchover_execution.mode | default('execute') == 'dry_run' else 'pass' }}"

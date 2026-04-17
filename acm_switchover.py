@@ -409,10 +409,7 @@ def run_switchover(
         ):
             logger.info("Failed at phase: %s", last_error_phase.value)
             logger.info("Will retry from this phase")
-            state._retry_error_baseline = {
-                "phase": last_error_phase.value,
-                "count": len(errors),
-            }
+            state.record_retry_error_baseline(last_error_phase, len(errors))
             state.set_phase(last_error_phase)
         else:
             logger.warning("Cannot determine which phase failed from error history")
@@ -601,10 +598,7 @@ def run_restore_only(
         ):
             logger.info("Failed at phase: %s", last_error_phase.value)
             logger.info("Will retry from this phase")
-            state._retry_error_baseline = {
-                "phase": last_error_phase.value,
-                "count": len(errors),
-            }
+            state.record_retry_error_baseline(last_error_phase, len(errors))
             state.set_phase(last_error_phase)
         else:
             logger.warning("Cannot determine which phase failed from error history")
@@ -748,7 +742,7 @@ def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bo
     current_phase = state.get_current_phase().value
     errors = state.get_errors()
     last_error = errors[-1] if errors else {}
-    retry_error_baseline = getattr(state, "_retry_error_baseline", None)
+    retry_error_baseline = state.get_retry_error_baseline()
     retry_has_no_new_phase_error = (
         isinstance(retry_error_baseline, dict)
         and retry_error_baseline.get("phase") == current_phase
@@ -1008,6 +1002,7 @@ def _run_phase_finalization(
         old_hub_action=old_hub_action,
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", True),
         disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
+        restore_only=is_restore_only,
     )
 
     if not finalization.finalize():

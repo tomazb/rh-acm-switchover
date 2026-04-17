@@ -47,12 +47,12 @@
        | list }}
   loop_control:
     label: "{{ item.metadata.name }}"
+  register: acm_apply_immediate_import_results
   when:
     - _apply_immediate_import | bool
-  ignore_errors: true  # noqa: ignore-errors
 
 - name: Publish immediate import result
   ansible.builtin.set_fact:
     acm_switchover_immediate_import_result:
-      changed: "{{ _apply_immediate_import | default(false) | bool }}"
+      changed: "{{ acm_apply_immediate_import_results.changed | default(false) }}"
       mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"

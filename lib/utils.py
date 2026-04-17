@@ -431,6 +431,15 @@ class StateManager:
         self.state["current_phase"] = phase.value
         self.flush_state()  # Phase transitions are critical checkpoints
 
+    def record_retry_error_baseline(self, phase: Any, count: int) -> None:
+        """Record the error baseline for a resumed retry attempt."""
+        phase_value = phase.value if isinstance(phase, Phase) else str(phase)
+        self._retry_error_baseline = {"phase": phase_value, "count": count}
+
+    def get_retry_error_baseline(self) -> Optional[Dict[str, Any]]:
+        """Return the current retry error baseline, if any."""
+        return dict(self._retry_error_baseline) if self._retry_error_baseline is not None else None
+
     def capture_runtime_checkpoint(self) -> Dict[str, Optional[str]]:
         """Capture the durable state fields that validate-only must preserve."""
         return {

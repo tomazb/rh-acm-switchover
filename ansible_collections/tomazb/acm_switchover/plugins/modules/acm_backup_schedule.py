@@ -25,6 +25,12 @@ options:
     type: list
     elements: dict
     default: []
+  saved_schedule:
+    description:
+      - Previously persisted BackupSchedule body used to recreate the resource
+        when ACM 2.11 pause deleted it on the old primary.
+    type: dict
+    default: {}
 """
 
 EXAMPLES = r"""
@@ -70,6 +76,8 @@ operation:
       sample: {"spec": {"paused": true}}
 """
 
+import copy
+
 from ansible.module_utils.basic import AnsibleModule
 
 
@@ -83,9 +91,30 @@ def backup_schedule_pause_mode(acm_version: str) -> str:
     return "delete" if (major, minor) <= (2, 11) else "pause"
 
 
-def build_backup_schedule_operation(acm_version: str, intent: str, schedules: list[dict]) -> dict:
+def _build_saved_schedule_body(saved_schedule: dict) -> dict:
+    body = copy.deepcopy(saved_schedule)
+    metadata = body.get("metadata") or {}
+    for key in ("uid", "resourceVersion", "creationTimestamp", "generation", "managedFields"):
+        metadata.pop(key, None)
+    if metadata:
+        body["metadata"] = metadata
+    body.pop("status", None)
+    body.setdefault("spec", {})
+    body["spec"]["paused"] = False
+    return body
+
+
+def build_backup_schedule_operation(
+    acm_version: str, intent: str, schedules: list[dict], saved_schedule: dict | None = None
+) -> dict:
     mode = backup_schedule_pause_mode(acm_version)
     if not schedules:
+        if intent == "enable" and saved_schedule:
+            return {
+                "action": "create",
+                "mode": mode,
+                "body": _build_saved_schedule_body(saved_schedule),
+            }
         return {"action": "none", "mode": mode}
     if intent == "pause":
         if mode == "delete":
@@ -107,6 +136,7 @@ def main() -> None:
             "acm_version": {"type": "str", "required": True},
             "intent": {"type": "str", "required": True, "choices": ["pause", "enable"]},
             "schedules": {"type": "list", "elements": "dict", "default": []},
+            "saved_schedule": {"type": "dict", "default": {}},
         },
         supports_check_mode=True,
     )
@@ -115,6 +145,7 @@ def main() -> None:
             module.params["acm_version"],
             module.params["intent"],
             module.params["schedules"],
+            module.params["saved_schedule"],
         )
     except ValueError as e:
         module.fail_json(msg=str(e))

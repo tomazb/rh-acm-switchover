@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python finalization**: `--restore-only` finalization now treats a missing `BackupSchedule` as expected, warning instead of failing backup enable/continuity/integrity checks until operators create a new schedule manually.
+- **Python activation**: restore wait no longer treats the non-existent `FailedWithErrors` phase as terminal failure; real ACM terminal failures remain unchanged.
+- **Python state handling**: `StateManager` now exposes retry-baseline accessors so resume logic no longer reaches into private state internals.
+- **Python kube client**: `wait_for_pods_ready()` now treats zero pods as ready when no explicit `expected_count` is required, avoiding false hangs on empty namespaces.
+- **Python RBAC**: namespace permission maps now use centralized namespace constants instead of duplicated literals.
+- **Bash security**: `generate-merged-kubeconfig.sh` now writes merged kubeconfig output with owner-only permissions.
+- **Ansible safety defaults**: destructive roles now fall back to `dry_run` when `acm_switchover_execution.mode` is missing instead of evaluating as live execution.
+- **Ansible activation**: immediate-import task failures are no longer swallowed; patch errors now fail the phase visibly.
+- **Ansible backup continuity**: primary prep now persists full `BackupSchedule` state so finalization can recreate a missing schedule, including ACM 2.11 delete/recreate paths.
+- **Ansible finalization**: restore-only runs now skip backup verification cleanly when no `BackupSchedule` exists yet instead of failing.
+- **Ansible preflight**: kubeconfig reachability now uses a direct API probe instead of depending on `MultiClusterHub` discovery, preflight now warns or fails on kubeconfig token expiry via static auth inspection, and it enforces `useManagedServiceAccount`, `preserveOnDelete`, OADP/Velero presence, DPA `Reconciled=True`, and joined clusters imported after the latest managed-clusters backup.
+- **Ansible old-hub handling**: `primary_prep` now adds real `disable-auto-import` annotations before activation, and finalization now wires `disable_observability_on_secondary` / old-hub verification into concrete task files.
+
 - **Python error handling**: Replace redundant `except (ApiException, Exception)` with `except Exception` in best-effort paths in `post_activation.py` (C1)
 - **Python not-found detection**: Fix string-based `"not found" in str(e).lower()` check in `_restart_observatorium_api` — now uses `e.status == 404` (C2). Previously `ApiException(status=404)` without a reason was incorrectly re-raised; `ApiException(status=403)` with "not found" in reason text was incorrectly swallowed.
 - **Python asserts replaced**: Remove dead `assert` statements in `activation.py`, `finalization.py`, and `post_activation.py`. In `finalization.py`, two asserts protecting `_scale_down_old_hub_observability` and `_wait_for_observability_scale_down` are replaced with `raise FatalError(...)` for explicit diagnostics (C3).

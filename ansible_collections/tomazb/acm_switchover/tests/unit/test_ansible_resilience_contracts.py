@@ -85,3 +85,34 @@ def test_decommission_playbook_exposes_precheck_role_path():
     """decommission playbook must still run through the decommission role entrypoint."""
     playbook = (PLAYBOOKS_DIR / "decommission.yml").read_text()
     assert "role: tomazb.acm_switchover.decommission" in playbook
+
+
+def test_decommission_defaults_missing_execution_mode_to_dry_run_for_destructive_tasks():
+    """Missing execution.mode must not fall through to live deletes."""
+    files = [
+        DECOMMISSION_TASKS / "main.yml",
+        DECOMMISSION_TASKS / "delete_managed_clusters.yml",
+        DECOMMISSION_TASKS / "delete_multiclusterhub.yml",
+        DECOMMISSION_TASKS / "delete_observability.yml",
+    ]
+
+    for path in files:
+        text = path.read_text()
+        assert "default('') != 'dry_run'" not in text
+        assert "default('') == 'dry_run'" not in text
+        assert "default('dry_run')" in text, f"{path.name} must treat missing execution.mode as dry_run"
+
+
+def test_rbac_bootstrap_defaults_missing_execution_mode_to_dry_run_for_mutations():
+    """Missing execution.mode must not trigger bootstrap mutations implicitly."""
+    files = [
+        ROLES_DIR / "rbac_bootstrap" / "tasks" / "main.yml",
+        ROLES_DIR / "rbac_bootstrap" / "tasks" / "deploy_manifests.yml",
+        ROLES_DIR / "rbac_bootstrap" / "tasks" / "generate_kubeconfigs.yml",
+    ]
+
+    for path in files:
+        text = path.read_text()
+        assert "default('') != 'dry_run'" not in text
+        assert "default('') == 'dry_run'" not in text
+        assert "default('dry_run')" in text, f"{path.name} must treat missing execution.mode as dry_run"

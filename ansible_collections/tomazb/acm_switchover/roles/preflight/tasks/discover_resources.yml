@@ -53,6 +53,32 @@
     - acm_primary_backups_info is not defined
     - not (acm_switchover_operation.restore_only | default(false))
 
+- name: Read primary hub Velero pods when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: open-cluster-management-backup
+    label_selectors:
+      - "app.kubernetes.io/name=velero"
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_velero_pods_info
+  when:
+    - acm_primary_velero_pods_info is not defined
+    - not (acm_switchover_operation.restore_only | default(false))
+
+- name: Read secondary hub Velero pods when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: open-cluster-management-backup
+    label_selectors:
+      - "app.kubernetes.io/name=velero"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_velero_pods_info
+  when: acm_secondary_velero_pods_info is not defined
+
 - name: Read primary hub BackupSchedules when not pre-seeded by tests
   kubernetes.core.k8s_info:
     api_version: cluster.open-cluster-management.io/v1beta1
@@ -76,6 +102,28 @@
   when:
     - acm_primary_bsl_info is not defined
     - not (acm_switchover_operation.restore_only | default(false))
+
+- name: Read primary hub DataProtectionApplications when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: oadp.openshift.io/v1alpha1
+    kind: DataProtectionApplication
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_dpa_info
+  when:
+    - acm_primary_dpa_info is not defined
+    - not (acm_switchover_operation.restore_only | default(false))
+
+- name: Read secondary hub DataProtectionApplications when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: oadp.openshift.io/v1alpha1
+    kind: DataProtectionApplication
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_dpa_info
+  when: acm_secondary_dpa_info is not defined
 
 - name: Read secondary hub BackupStorageLocations when not pre-seeded by tests
   kubernetes.core.k8s_info:
@@ -108,6 +156,17 @@
     - acm_primary_cluster_deployments_info is not defined
     - not (acm_switchover_operation.restore_only | default(false))
 
+- name: Read primary ManagedClusters when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_managed_clusters_info
+  when:
+    - acm_primary_managed_clusters_info is not defined
+    - not (acm_switchover_operation.restore_only | default(false))
+
 - name: Read primary hub ManagedCluster backups when not pre-seeded by tests
   kubernetes.core.k8s_info:
     api_version: cluster.open-cluster-management.io/v1beta1
@@ -125,9 +184,12 @@
     acm_primary_namespace_info: { resources: [] }
     acm_primary_mch_info: { resources: [] }
     acm_primary_backups_info: { resources: [] }
+    acm_primary_velero_pods_info: { resources: [] }
     acm_primary_backup_schedules_info: { resources: [] }
     acm_primary_bsl_info: { resources: [] }
+    acm_primary_dpa_info: { resources: [] }
     acm_primary_cluster_deployments_info: { resources: [] }
+    acm_primary_managed_clusters_info: { resources: [] }
     acm_primary_managed_cluster_backups_info: { resources: [] }
   when:
     - acm_switchover_operation.restore_only | default(false)

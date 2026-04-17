@@ -59,6 +59,8 @@
         checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
         status: fail
         error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+        operational_data:
+          saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
       when: acm_switchover_execution.checkpoint.enabled | default(false)
 
     - name: Re-raise failure
@@ -71,6 +73,8 @@
     phase: primary_prep
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
+    operational_data:
+      saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

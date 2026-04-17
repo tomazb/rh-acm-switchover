@@ -421,6 +421,18 @@ class TestKubeClient:
         mock_sleep.assert_not_called()
 
     @patch("lib.kube_client.time.sleep")
+    def test_wait_for_pods_ready_succeeds_when_no_pods_exist_and_count_unspecified(
+        self, mock_sleep, kube_client, mock_k8s_apis
+    ):
+        """Namespace readiness checks should treat zero pods as ready when no count is required."""
+        mock_k8s_apis["core_api"].list_namespaced_pod.return_value = MagicMock(items=[])
+
+        result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=5)
+
+        assert result is True
+        mock_sleep.assert_not_called()
+
+    @patch("lib.kube_client.time.sleep")
     @patch("lib.kube_client.time.time")
     def test_wait_for_pods_ready_uses_remaining_budget(self, mock_time, mock_sleep, kube_client, mock_k8s_apis):
         """Each polling API call should use the remaining wall-clock timeout budget."""

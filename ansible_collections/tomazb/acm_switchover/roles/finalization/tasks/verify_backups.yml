@@ -7,6 +7,21 @@
       reason: dry_run
   when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 
+- name: Skip backup continuity verification when restore_only has no BackupSchedule
+  ansible.builtin.set_fact:
+    acm_switchover_verify_backups_result:
+      changed: false
+      status: skipped
+      reason: restore_only_no_backup_schedule
+      message: >-
+        Restore-only mode does not recreate BackupSchedule automatically when none
+        was present to restore. Create it manually after finalization.
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_operation.restore_only | default(false)
+    - (acm_secondary_backup_schedules_info.resources | default([]) | length) == 0
+    - acm_enable_backup_schedule_operation.operation.action == 'none'
+
 - name: Wait for a fresh ACM-owned backup on the secondary hub
   ansible.builtin.set_fact:
     _acm_secondary_backup_verify_timeout_seconds: >-
@@ -30,7 +45,9 @@
       {%- else -%}
       600
       {%- endif -%}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_verify_backups_result is not defined
 
 - name: Wait for a fresh ACM-owned backup on the secondary hub
   kubernetes.core.k8s_info:
@@ -61,7 +78,9 @@
     {%- endif -%}
     {%- endfor -%}
     {{ fresh_backups | length > 0 }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_verify_backups_result is not defined
 
 - name: Collect fresh ACM-owned backups
   ansible.builtin.set_fact:
@@ -84,7 +103,9 @@
       {%- endif -%}
       {%- endfor -%}
       {{ fresh_backups }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_verify_backups_result is not defined
 
 - name: Select fresh ACM-owned backup to validate
   ansible.builtin.set_fact:
@@ -99,7 +120,9 @@
         .get('metadata', {})
         .get('name', '')
       }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_verify_backups_result is not defined
 
 - name: Wait for fresh ACM-owned backup to reach a terminal phase
   kubernetes.core.k8s_info:
@@ -120,7 +143,9 @@
         in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']
       )
     }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_verify_backups_result is not defined
 
 - name: Fail when fresh ACM-owned backup is unhealthy
   ansible.builtin.assert:
@@ -136,7 +161,9 @@
       {{ (_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}
       with errors
       {{ ((_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('errors', 0)) | int }}.
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_verify_backups_result is not defined
 
 - name: Publish backup verification result
   ansible.builtin.set_fact:

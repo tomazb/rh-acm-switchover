@@ -852,7 +852,7 @@ class SecondaryActivation:
                     )
                     return True, message or "restore completed (clusters already available)"
                 raise FatalError(f"Restore failed: {phase} - {message}")
-            if phase in ("Error", "Failed", "PartiallyFailed", "FailedWithErrors"):
+            if phase in ("Error", "Failed", "PartiallyFailed"):
                 raise FatalError(f"Restore failed: {phase} - {message}")
 
             return False, f"phase={phase} message={message}"

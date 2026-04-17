@@ -45,6 +45,14 @@ def test_main_restores_backup_baseline_from_checkpoint():
     assert "default(omit)" not in text, "main.yml must not persist nested omit placeholders into checkpoint data"
 
 
+def test_main_restores_saved_backup_schedule_from_checkpoint():
+    """finalization/main.yml must reload saved BackupSchedule state on resume."""
+    text = (FINALIZATION_TASKS / "main.yml").read_text()
+    assert "saved_backup_schedule" in text, (
+        "main.yml must rehydrate saved_backup_schedule from checkpoint operational_data"
+    )
+
+
 def test_verify_backups_waits_for_clean_completed_acm_owned_velero_backup():
     """verify_backups.yml must wait for a clean completed ACM-owned Velero backup."""
     tasks = _load_yaml("verify_backups.yml")
@@ -105,6 +113,27 @@ def test_enable_backups_only_records_baseline_for_real_runs():
     assert "acm_switchover_backup_schedule_enabled_at" in text
     assert "default('dry_run') != 'dry_run'" in text, (
         "enable_backups.yml must guard baseline timestamp recording for real execution only"
+    )
+
+
+def test_enable_backups_can_recreate_saved_schedule():
+    """enable_backups.yml must support recreating a saved BackupSchedule when none exists."""
+    text = (FINALIZATION_TASKS / "enable_backups.yml").read_text()
+    assert "saved_schedule" in text, "enable_backups.yml must pass saved_schedule into acm_backup_schedule"
+    assert "operation.action == 'create'" in text, (
+        "enable_backups.yml must create a BackupSchedule when planning returns create"
+    )
+    assert "acm_secondary_backup_schedules_info" in text, (
+        "enable_backups.yml must refresh schedule facts after create/patch so later verification sees current state"
+    )
+
+
+def test_verify_backups_skips_restore_only_when_no_backup_schedule_exists():
+    """restore-only finalization must not fail because BackupSchedule is intentionally absent."""
+    text = (FINALIZATION_TASKS / "verify_backups.yml").read_text()
+    assert "restore_only" in text, "verify_backups.yml must branch explicitly for restore-only mode"
+    assert "status: skipped" in text, (
+        "verify_backups.yml must publish a skipped result when restore-only has no BackupSchedule to verify"
     )
 
 

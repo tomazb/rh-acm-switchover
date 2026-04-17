@@ -25,8 +25,27 @@
           .get('operational_data', {})
           .get('backup_schedule_enabled_at', '')) | length > 0
 
+    - name: Restore saved BackupSchedule from checkpoint
+      ansible.builtin.set_fact:
+        acm_switchover_saved_backup_schedule: >-
+          {{
+            (_checkpoint_enter.checkpoint | default({}))
+            .get('operational_data', {})
+            .get('saved_backup_schedule')
+          }}
+      when:
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - (_checkpoint_enter.checkpoint | default({})).get('operational_data', {}).get('saved_backup_schedule') is mapping
+
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
+
+    - name: Disable observability on the old hub when requested
+      ansible.builtin.include_tasks: disable_old_hub_observability.yml
+      when:
+        - acm_switchover_features.disable_observability_on_secondary | default(false)
+        - not (acm_switchover_operation.restore_only | default(false))
+        - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
 
     - name: Clean up secondary restore resources before enabling backups
       ansible.builtin.include_tasks: cleanup_restores.yml
@@ -43,6 +62,12 @@
     - name: Handle old hub disposition
       ansible.builtin.include_tasks: handle_old_hub.yml
       when: not (acm_switchover_operation.restore_only | default(false))
+
+    - name: Verify old hub state after disposition
+      ansible.builtin.include_tasks: verify_old_hub_state.yml
+      when:
+        - not (acm_switchover_operation.restore_only | default(false))
+        - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
 
     - name: Advisory — ArgoCD Applications left paused after switchover
       ansible.builtin.debug:
@@ -61,17 +86,21 @@
           changed: >-
             {{
               (acm_switchover_cleanup_restores_result.changed | default(false))
+              or (acm_switchover_disable_old_hub_observability_result.changed | default(false))
               or (acm_switchover_enable_backups_result.changed | default(false))
               or (acm_switchover_verify_backups_result.changed | default(false))
               or (acm_switchover_verify_mch_result.changed | default(false))
               or (acm_switchover_old_hub_disposition.changed | default(false))
+              or (acm_switchover_verify_old_hub_state_result.changed | default(false))
               or (_argocd_resume_result.changed | default(false))
             }}
           old_hub_action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
+          disable_old_hub_observability: "{{ acm_switchover_disable_old_hub_observability_result | default({}) }}"
           cleanup_restores: "{{ acm_switchover_cleanup_restores_result | default({}) }}"
           enable_backups: "{{ acm_switchover_enable_backups_result | default({}) }}"
           verify_backups: "{{ acm_switchover_verify_backups_result | default({}) }}"
           verify_mch: "{{ acm_switchover_verify_mch_result | default({}) }}"
+          verify_old_hub_state: "{{ acm_switchover_verify_old_hub_state_result | default({}) }}"
       tags:
         - finalization
   rescue:
@@ -83,6 +112,7 @@
         error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
         operational_data:
           backup_schedule_enabled_at: "{{ acm_switchover_backup_schedule_enabled_at | default('') }}"
+          saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
       when: acm_switchover_execution.checkpoint.enabled | default(false)
 
     - name: Re-raise failure
@@ -97,6 +127,7 @@
     status: pass
     operational_data:
       backup_schedule_enabled_at: "{{ acm_switchover_backup_schedule_enabled_at | default('') }}"
+      saved_backup_schedule: "{{ acm_switchover_saved_backup_schedule | default('') }}"
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

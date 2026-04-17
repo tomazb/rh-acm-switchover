@@ -567,6 +567,44 @@ class TestSecondaryActivation:
             with pytest.raises(FatalError, match="Restore failed: Error"):
                 activation_full._wait_for_restore_completion()
 
+    def test_poll_restore_failed_with_errors_phase_keeps_waiting(self, activation_full, mock_secondary_client):
+        """FailedWithErrors is not a real terminal ACM restore phase and should not fail immediately."""
+        restore_states = iter(
+            [
+                {
+                    "metadata": {"name": "restore-acm-full", "resourceVersion": "500"},
+                    "status": {
+                        "phase": "FailedWithErrors",
+                        "lastMessage": "controller still reconciling",
+                    },
+                },
+                {
+                    "metadata": {"name": "restore-acm-full", "resourceVersion": "501"},
+                    "status": {
+                        "phase": "Completed",
+                        "lastMessage": "restore completed",
+                    },
+                },
+            ]
+        )
+
+        def get_custom_resource_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
+                return next(restore_states)
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+
+            def side_effect(_desc, callback, **_kwargs):
+                assert callback()[0] is False
+                return callback()[0]
+
+            mock_wait.side_effect = side_effect
+
+            activation_full._wait_for_restore_completion()
+
     @patch("modules.activation.wait_for_condition")
     def test_activate_passive_restore_method(self, mock_wait, mock_secondary_client, mock_state_manager):
         """Test passive activation using restore-acm-activate (Option B)."""

@@ -13,6 +13,13 @@ from typing import List
 import pytest
 import yaml
 
+from lib.constants import (
+    ACM_NAMESPACE,
+    BACKUP_NAMESPACE,
+    MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MCE_NAMESPACE,
+    OBSERVABILITY_NAMESPACE,
+)
 from lib.rbac_validator import RBACValidator
 
 
@@ -448,7 +455,7 @@ class TestRBACValidatorRoleAware:
 
     def test_operator_hub_permissions_include_write_verbs(self):
         """Test that operator hub permissions include write verbs where needed."""
-        backup_perms = RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS.get("open-cluster-management-backup", [])
+        backup_perms = RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS.get(BACKUP_NAMESPACE, [])
         configmaps_perm = next((p for p in backup_perms if p[1] == "configmaps"), None)
 
         assert configmaps_perm is not None
@@ -458,13 +465,21 @@ class TestRBACValidatorRoleAware:
 
     def test_managed_cluster_permissions_exist_for_both_roles(self):
         """Test that managed cluster permissions are defined for both roles."""
-        assert "open-cluster-management-agent" in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
-        assert "open-cluster-management-agent" in RBACValidator.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+        assert MANAGED_CLUSTER_AGENT_NAMESPACE in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+        assert MANAGED_CLUSTER_AGENT_NAMESPACE in RBACValidator.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
 
     def test_validator_backup_namespace_has_secrets_get(self):
         """Test that validator backup namespace includes secrets get permission."""
-        backup_perms = RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.get("open-cluster-management-backup", [])
+        backup_perms = RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS.get(BACKUP_NAMESPACE, [])
         secrets_perm = next((p for p in backup_perms if p[1] == "secrets"), None)
 
         assert secrets_perm is not None, "Validator should have secrets permission in backup namespace"
         assert "get" in secrets_perm[2], "Validator should have 'get' verb for secrets"
+
+    def test_namespace_permission_maps_cover_centralized_namespaces(self):
+        """RBAC namespace permission maps should align with the shared constants module."""
+        assert BACKUP_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert ACM_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert OBSERVABILITY_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert MCE_NAMESPACE in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert MANAGED_CLUSTER_AGENT_NAMESPACE in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS

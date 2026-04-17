@@ -61,6 +61,14 @@ def test_apply_immediate_import_is_not_a_stub():
     assert "local-cluster" in content, "Must filter out local-cluster"
 
 
+def test_apply_immediate_import_does_not_swallow_patch_failures():
+    """activation must fail if immediate-import annotations cannot be applied."""
+    content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
+    assert "ignore_errors: true" not in content, (
+        "apply_immediate_import.yml must not ignore ManagedCluster patch failures"
+    )
+
+
 def test_constants_include_auto_import():
     """Ansible constants must include auto-import strategy constants."""
     content = CONSTANTS_FILE.read_text()

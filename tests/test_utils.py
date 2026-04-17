@@ -600,7 +600,7 @@ class TestStateManagerExitRegistration:
         sm = StateManager(str(tmp_path / "state.json"))
         sm.set_phase(Phase.ACTIVATION)
         sm.add_error("stale prior failure", phase=Phase.ACTIVATION.value)
-        sm._retry_error_baseline = {"phase": Phase.ACTIVATION.value, "count": 1}
+        sm.record_retry_error_baseline(Phase.ACTIVATION, 1)
         sm.add_error("specific root cause", phase=Phase.ACTIVATION.value)
 
         logger = logging.getLogger("test")
@@ -611,6 +611,17 @@ class TestStateManagerExitRegistration:
         errors = sm.get_errors()
         assert len(errors) == 2
         assert errors[-1]["error"] == "specific root cause"
+
+    def test_retry_error_baseline_accessor_returns_copy(self, tmp_path):
+        """Reading the retry baseline should not expose mutable internal state."""
+        sm = StateManager(str(tmp_path / "state.json"))
+
+        sm.record_retry_error_baseline(Phase.ACTIVATION, 2)
+        baseline = sm.get_retry_error_baseline()
+
+        assert baseline == {"phase": Phase.ACTIVATION.value, "count": 2}
+        baseline["count"] = 999
+        assert sm.get_retry_error_baseline() == {"phase": Phase.ACTIVATION.value, "count": 2}
 
     def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
         """After a phase failure, get_last_error_phase returns the phase to retry."""

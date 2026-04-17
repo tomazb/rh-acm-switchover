@@ -15,7 +15,13 @@ from typing import Dict, List, Optional, Tuple
 from kubernetes.client.rest import ApiException
 
 from lib import KubeClient
-from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
+from lib.constants import (
+    ACM_NAMESPACE,
+    BACKUP_NAMESPACE,
+    MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MCE_NAMESPACE,
+    OBSERVABILITY_NAMESPACE,
+)
 from lib.exceptions import ValidationError
 
 logger = logging.getLogger("acm_switchover")
@@ -88,7 +94,7 @@ class RBACValidator:
 
     # Required namespace-scoped permissions for OPERATOR role on HUB clusters
     OPERATOR_HUB_NAMESPACE_PERMISSIONS = {
-        "open-cluster-management-backup": [
+        BACKUP_NAMESPACE: [
             ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
             ("", "secrets", ["get"]),
             ("", "pods", ["get", "list"]),  # For Velero pod health checks
@@ -111,10 +117,10 @@ class RBACValidator:
             ),  # For storage health check
             ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
         ],
-        "open-cluster-management": [
+        ACM_NAMESPACE: [
             ("", "pods", ["get", "list"]),  # For ACM pod health checks
         ],
-        "open-cluster-management-observability": [
+        OBSERVABILITY_NAMESPACE: [
             ("", "pods", ["get", "list"]),
             ("", "secrets", ["get"]),  # For Thanos object storage config
             ("apps", "deployments", ["get", "patch"]),
@@ -126,14 +132,14 @@ class RBACValidator:
             ),  # For Thanos compactor scaling
             ("route.openshift.io", "routes", ["get"]),  # For Grafana route access
         ],
-        "multicluster-engine": [
+        MCE_NAMESPACE: [
             ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
         ],
     }
 
     # Required namespace-scoped permissions for VALIDATOR role on HUB clusters (read-only)
     VALIDATOR_HUB_NAMESPACE_PERMISSIONS = {
-        "open-cluster-management-backup": [
+        BACKUP_NAMESPACE: [
             ("", "configmaps", ["get", "list"]),
             ("", "secrets", ["get"]),  # For Thanos config validation
             ("", "pods", ["get", "list"]),
@@ -144,17 +150,17 @@ class RBACValidator:
             ("velero.io", "backupstoragelocations", ["get", "list"]),
             ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
         ],
-        "open-cluster-management": [
+        ACM_NAMESPACE: [
             ("", "pods", ["get", "list"]),
         ],
-        "open-cluster-management-observability": [
+        OBSERVABILITY_NAMESPACE: [
             ("", "pods", ["get", "list"]),
             ("", "secrets", ["get"]),
             ("apps", "deployments", ["get", "list"]),  # No patch for validator
             ("apps", "statefulsets", ["get", "list"]),  # No patch for validator
             ("route.openshift.io", "routes", ["get"]),
         ],
-        "multicluster-engine": [
+        MCE_NAMESPACE: [
             ("", "configmaps", ["get", "list"]),  # No create/patch/delete for validator
         ],
     }
@@ -162,7 +168,7 @@ class RBACValidator:
     # Required namespace-scoped permissions for OPERATOR role on MANAGED clusters
     # These are only needed when connecting to managed clusters for klusterlet operations
     OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS = {
-        "open-cluster-management-agent": [
+        MANAGED_CLUSTER_AGENT_NAMESPACE: [
             ("", "secrets", ["get", "create", "delete"]),  # For klusterlet reconnection
             ("apps", "deployments", ["get", "patch"]),  # For klusterlet restart
         ],
@@ -170,7 +176,7 @@ class RBACValidator:
 
     # Required namespace-scoped permissions for VALIDATOR role on MANAGED clusters (read-only)
     VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS = {
-        "open-cluster-management-agent": [
+        MANAGED_CLUSTER_AGENT_NAMESPACE: [
             ("", "secrets", ["get"]),  # Read-only for validation
             ("apps", "deployments", ["get"]),  # Read-only for validation
         ],
@@ -479,7 +485,7 @@ class RBACValidator:
                 continue
 
             # Skip agent namespace on hubs (it exists on managed clusters)
-            if skip_agent_namespace and namespace == "open-cluster-management-agent":
+            if skip_agent_namespace and namespace == MANAGED_CLUSTER_AGENT_NAMESPACE:
                 logger.info(
                     "Skipping agent namespace: %s (exists on managed clusters only)",
                     namespace,

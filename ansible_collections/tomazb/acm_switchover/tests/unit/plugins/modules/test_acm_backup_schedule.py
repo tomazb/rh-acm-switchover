@@ -34,6 +34,23 @@ def test_build_returns_none_when_schedules_empty():
         assert operation["action"] == "none"
 
 
+def test_build_enable_creates_saved_schedule_when_missing_on_secondary():
+    operation = build_backup_schedule_operation(
+        acm_version="2.11.6",
+        intent="enable",
+        schedules=[],
+        saved_schedule={
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "BackupSchedule",
+            "metadata": {"name": "acm-hub-backup", "namespace": "open-cluster-management-backup"},
+            "spec": {"veleroSchedule": "*/30 * * * *", "paused": True},
+        },
+    )
+    assert operation["action"] == "create"
+    assert operation["body"]["metadata"]["name"] == "acm-hub-backup"
+    assert operation["body"]["spec"]["paused"] is False
+
+
 def test_build_returns_none_when_already_paused():
     operation = build_backup_schedule_operation(
         acm_version="2.13.2",

@@ -15,7 +15,7 @@ FULL_RESTORE_NAME = "restore-acm-full"
 
 VELERO_BACKUP_SKIP = "skip"
 CLEANUP_BEFORE_RESTORE_VALUE = "CleanupRestored"
-WAIT_FAILURE_PHASES = ["FinishedWithErrors", "Error", "Failed", "PartiallyFailed", "FailedWithErrors"]
+WAIT_FAILURE_PHASES = ["FinishedWithErrors", "Error", "Failed", "PartiallyFailed"]
 
 CONFIG_OPENSHIFT_IO = "config.openshift.io"
 CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO = "cluster.open-cluster-management.io"

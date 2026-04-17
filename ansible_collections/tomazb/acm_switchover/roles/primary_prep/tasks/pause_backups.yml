@@ -17,6 +17,14 @@
     schedules: "{{ acm_primary_backup_schedules_info.resources | default([]) }}"
   register: acm_backup_schedule_operation
 
+- name: Persist reusable BackupSchedule body before pause/delete
+  ansible.builtin.set_fact:
+    acm_switchover_saved_backup_schedule: >-
+      {{
+        (acm_primary_backup_schedules_info.resources | default([]) | first | default({}))
+      }}
+  when: (acm_primary_backup_schedules_info.resources | default([]) | length) > 0
+
 - name: Patch BackupSchedule to paused state
   kubernetes.core.k8s:
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"

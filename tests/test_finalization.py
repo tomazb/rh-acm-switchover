@@ -442,6 +442,81 @@ class TestFinalization:
         ):
             finalization._verify_backup_schedule_enabled()
 
+    def test_verify_backup_schedule_enabled_warns_when_missing_in_restore_only(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            restore_only=True,
+        )
+        fin._cached_schedules = []
+
+        with patch.object(finalization_module, "logger") as logger:
+            fin._verify_backup_schedule_enabled()
+
+        logger.warning.assert_called_with(
+            "No BackupSchedule found during restore-only finalization; manual backup setup is required"
+        )
+
+    def test_fix_backup_schedule_collision_warns_when_missing_in_restore_only(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            restore_only=True,
+        )
+        fin._cached_schedules = []
+        mock_secondary_client.list_custom_resources.return_value = []
+
+        with patch.object(finalization_module, "logger") as logger:
+            fin._fix_backup_schedule_collision()
+
+        logger.warning.assert_called_with(
+            "Skipping BackupSchedule collision repair in restore-only mode because no BackupSchedule exists yet"
+        )
+
+    def test_verify_new_backups_skips_when_restore_only_has_no_backup_schedule(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            restore_only=True,
+        )
+        fin._cached_schedules = []
+
+        with patch.object(finalization_module, "logger") as logger:
+            fin._verify_new_backups(timeout=10)
+
+        logger.warning.assert_called_with(
+            "Skipping backup continuity verification in restore-only mode because no BackupSchedule exists yet"
+        )
+        mock_secondary_client.list_custom_resources.assert_not_called()
+
+    def test_verify_backup_integrity_skips_when_restore_only_has_no_backup_schedule(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            restore_only=True,
+        )
+        fin._cached_schedules = []
+
+        with patch.object(finalization_module, "logger") as logger:
+            fin._verify_backup_integrity(max_age_seconds=600)
+
+        logger.warning.assert_called_with(
+            "Skipping backup integrity verification in restore-only mode because no BackupSchedule exists yet"
+        )
+        mock_secondary_client.get_custom_resource.assert_not_called()
+
     def test_verify_multiclusterhub_health_raises_switchover_error_when_missing(
         self, finalization, mock_secondary_client
     ):

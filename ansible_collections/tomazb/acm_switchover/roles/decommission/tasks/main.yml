@@ -6,7 +6,7 @@
       Set acm_switchover_decommission.confirmed: true to proceed.
   when: >-
     not (acm_switchover_decommission.confirmed | default(false) | bool)
-    and (acm_switchover_execution.mode | default('') != 'dry_run')
+    and (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
 
 - name: Validate RBAC before decommission
   ansible.builtin.include_tasks: validate_rbac.yml
@@ -25,7 +25,7 @@
   ansible.builtin.set_fact:
     acm_switchover_decommission_result:
       phase: decommission
-      mode: "{{ acm_switchover_execution.mode | default('normal') }}"
+      mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
       status: pass
 
 - name: Resolve summary path to absolute

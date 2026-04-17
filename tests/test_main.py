@@ -21,6 +21,7 @@ from acm_switchover import (
     _attempt_argocd_resume_on_failure,
     _fail_phase,
     _report_argocd_acm_impact,
+    _run_phase_finalization,
     _run_phase_preflight,
     main,
     parse_args,
@@ -1024,7 +1025,7 @@ class TestSwitchoverPhaseFlow:
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="preflight_validation")
         state.get_errors.return_value = [{"phase": "preflight_validation", "error": "old failure"}]
-        state._retry_error_baseline = {
+        state.get_retry_error_baseline.return_value = {
             "phase": "preflight_validation",
             "count": 1,
         }
@@ -2389,8 +2390,7 @@ class TestResumeFromFailedState:
         assert call_order == ["finalization"]
 
     def test_failed_state_records_retry_error_baseline(self, tmp_path):
-        """Resuming from FAILED should set _retry_error_baseline on the state,
-        so that _fail_phase can detect duplicate errors vs new ones."""
+        """Resuming from FAILED should record a retry error baseline on the state."""
         from lib.utils import Phase, StateManager
 
         state_file = tmp_path / "state.json"
@@ -2411,9 +2411,10 @@ class TestResumeFromFailedState:
         ):
             run_switchover(args, state, Mock(), Mock(), Mock())
 
-        assert hasattr(state, "_retry_error_baseline")
-        assert state._retry_error_baseline["phase"] == Phase.POST_ACTIVATION.value
-        assert state._retry_error_baseline["count"] == 1
+        assert state.get_retry_error_baseline() == {
+            "phase": Phase.POST_ACTIVATION.value,
+            "count": 1,
+        }
 
 
 @pytest.mark.unit
@@ -2978,6 +2979,24 @@ class TestRestoreOnlyFlow:
             run_restore_only(args, state, secondary, Mock())
 
         assert args.old_hub_action == "none"
+
+    def test_restore_only_phase_finalization_passes_restore_only_flag(self):
+        """_run_phase_finalization must wire restore_only through to Finalization."""
+        from lib.utils import Phase
+
+        args = self._make_restore_only_args()
+        args.method = "full"
+        state = Mock()
+        state.get_current_phase.return_value = Phase.POST_ACTIVATION
+        state.get_config.side_effect = lambda key, default=None: default
+        secondary = Mock()
+
+        with patch("acm_switchover.Finalization") as finalization_class:
+            finalization_class.return_value.finalize.return_value = True
+            assert _run_phase_finalization(args, state, None, secondary, Mock()) is True
+
+        call_kwargs = finalization_class.call_args.kwargs
+        assert call_kwargs["restore_only"] is True
 
     def test_restore_only_completed_noop_banner_says_restore(self, tmp_path, caplog):
         """Noop banner for a recent completed restore-only run must say 'RESTORE', not 'SWITCHOVER'.
