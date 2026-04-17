@@ -64,6 +64,11 @@ def _require_mapping_entries(items: list[dict], field_name: str) -> None:
         raise ValueError(f"'{field_name}' entries must be mappings")
 
 
+def _require_string_field(user_cfg: dict, field_name: str, user_name: str) -> None:
+    if field_name in user_cfg and not isinstance(user_cfg[field_name], str):
+        raise ValueError(f"user entry '{user_name}' must define '{field_name}' as a string")
+
+
 def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
     parts = token.split(".")
     if len(parts) != 3:
@@ -162,6 +167,13 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
     if not isinstance(user_cfg, dict):
         raise ValueError(f"user entry '{user_name}' must contain a mapping under 'user'")
 
+    if "exec" in user_cfg and not isinstance(user_cfg["exec"], dict):
+        raise ValueError(f"user entry '{user_name}' must define 'exec' as a mapping")
+    if "auth-provider" in user_cfg and not isinstance(user_cfg["auth-provider"], dict):
+        raise ValueError(f"user entry '{user_name}' must define 'auth-provider' as a mapping")
+    for field_name in ("client-certificate", "client-certificate-data", "client-key", "client-key-data"):
+        _require_string_field(user_cfg, field_name, user_name)
+
     if "exec" in user_cfg:
         return {
             "status": "warn",
@@ -194,7 +206,7 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         token = user_cfg.get("token")
         if token is not None and not isinstance(token, str):
             raise ValueError(f"user entry '{user_name}' must define 'token' as a string")
-        if token == "":
+        if token is not None and not token.strip():
             raise ValueError(f"user entry '{user_name}' defines an empty bearer token")
     if token:
         expires_at, decode_error = _decode_jwt_exp(token)

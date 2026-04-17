@@ -199,6 +199,13 @@ def test_whitespace_only_token_file_raises_value_error(tmp_path):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
+def test_whitespace_only_inline_token_raises_value_error(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "   \n\t "}))
+
+    with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty bearer token"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
 def test_relative_token_file_is_resolved_from_kubeconfig_dir(tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
@@ -258,6 +265,13 @@ def test_exec_auth_returns_warn_without_execution(tmp_path):
     assert "not executed" in result["message"]
 
 
+def test_exec_auth_must_be_mapping(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"exec": "oc whoami"}))
+
+    with pytest.raises(ValueError, match="user entry 'primary-user' must define 'exec' as a mapping"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
 def test_auth_provider_returns_warn_without_execution(tmp_path):
     kubeconfig = write_kubeconfig(
         tmp_path,
@@ -270,6 +284,13 @@ def test_auth_provider_returns_warn_without_execution(tmp_path):
     assert result["severity"] == "warning"
     assert result["auth_type"] == "auth_provider"
     assert "not executed" in result["message"]
+
+
+def test_auth_provider_must_be_mapping(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"auth-provider": "oidc"}))
+
+    with pytest.raises(ValueError, match="user entry 'primary-user' must define 'auth-provider' as a mapping"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
 def test_client_certificate_auth_fields_are_recognized(tmp_path):
@@ -288,6 +309,22 @@ def test_client_certificate_auth_fields_are_recognized(tmp_path):
     assert result["status"] == "pass"
     assert result["severity"] == "info"
     assert result["auth_type"] == "client_cert"
+
+
+@pytest.mark.parametrize(
+    ("user_config", "field_name"),
+    [
+        ({"client-certificate": {"bad": "type"}}, "client-certificate"),
+        ({"client-certificate-data": {"bad": "type"}}, "client-certificate-data"),
+        ({"client-key": {"bad": "type"}}, "client-key"),
+        ({"client-key-data": {"bad": "type"}}, "client-key-data"),
+    ],
+)
+def test_client_cert_fields_must_be_strings(tmp_path, user_config, field_name):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user(user_config))
+
+    with pytest.raises(ValueError, match=rf"user entry 'primary-user' must define '{field_name}' as a string"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
 @pytest.mark.parametrize(
