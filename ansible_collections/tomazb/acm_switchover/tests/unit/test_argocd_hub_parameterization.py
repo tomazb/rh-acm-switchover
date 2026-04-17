@@ -148,3 +148,31 @@ def test_standalone_argocd_resume_covers_both_hubs():
     assert (
         "acm_switchover_hubs.primary is defined" in text
     ), "Primary hub resume should be guarded by acm_switchover_hubs.primary is defined"
+
+
+def test_discover_run_id_gated_by_resume_mode():
+    """discover.yml must NOT generate run_id when mode is resume.
+
+    When the argocd_manage role runs in resume mode without an explicit run_id,
+    _argocd_expected_run_id should resolve to '' so resume.yml's safety
+    fallback ('resume ALL paused apps') fires. Generating a fresh run_id
+    defeats this fallback because the new UUID never matches any annotation.
+    """
+    tasks = _load_yaml("discover.yml")
+
+    # Find the "Generate run_id" set_fact task
+    for task in tasks:
+        for block_task in task.get("block", []):
+            sf = block_task.get("ansible.builtin.set_fact")
+            if sf and "run_id" in str(sf):
+                when = block_task.get("when", [])
+                if isinstance(when, str):
+                    when = [when]
+                when_text = " ".join(str(w) for w in when)
+                assert "resume" in when_text, (
+                    "discover.yml run_id generation must be gated to exclude resume mode. "
+                    f"Current when: {when}"
+                )
+                return
+
+    raise AssertionError("discover.yml: Could not find 'Generate run_id' set_fact task")

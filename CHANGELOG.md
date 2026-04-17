@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ansible restore_only playbook**: `restore_only.yml` now pins `restore_only: true`, `method: full`, `old_hub_action: none` via `pre_tasks`, preventing role defaults from silently overriding restore-only semantics.
+- **Ansible preflight/activation alignment**: Preflight passive restore validation now uses `acm_restore_info` module (checking `sync_enabled_count`) instead of raw restore count, matching activation's filter logic. Previously, preflight could pass with non-sync restores that activation would reject.
+- **Ansible ArgoCD resume**: `discover.yml` no longer generates a fresh `run_id` in resume mode, allowing the safety fallback in `resume.yml` to resume all paused applications when no explicit `run_id` is provided.
 - **Python finalization**: `--restore-only` finalization now treats a missing `BackupSchedule` as expected, warning instead of failing backup enable/continuity/integrity checks until operators create a new schedule manually.
 - **Python activation**: restore wait no longer treats the non-existent `FailedWithErrors` phase as terminal failure; real ACM terminal failures remain unchanged.
 - **Python state handling**: `StateManager` now exposes retry-baseline accessors so resume logic no longer reaches into private state internals.

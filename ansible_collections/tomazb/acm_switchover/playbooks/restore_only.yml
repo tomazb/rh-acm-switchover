@@ -13,6 +13,19 @@
   connection: local
   gather_facts: false
 
+  pre_tasks:
+    - name: Pin restore-only operation flags
+      ansible.builtin.set_fact:
+        acm_switchover_operation: >-
+          {{
+            acm_switchover_operation | default({})
+            | combine({
+                'restore_only': true,
+                'method': 'full',
+                'old_hub_action': 'none'
+              })
+          }}
+
   tasks:
     - name: Run restore-only phases
       block:

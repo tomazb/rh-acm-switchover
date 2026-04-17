@@ -164,6 +164,12 @@
         ]
       }}
 
+- name: Analyze passive sync restores on secondary hub
+  tomazb.acm_switchover.acm_restore_info:
+    restores: "{{ acm_secondary_restore_info.resources | default([]) }}"
+  register: acm_preflight_passive_restore_analysis
+  when: acm_switchover_operation.method != 'full'
+
 - name: Record passive restore availability on secondary hub
   ansible.builtin.set_fact:
     acm_switchover_validation_results: >-
@@ -176,23 +182,24 @@
             "status": "pass"
               if (
                 acm_switchover_operation.method == 'full'
-                or (acm_secondary_restore_info.resources | default([]) | length) > 0
+                or (acm_preflight_passive_restore_analysis.sync_enabled_count | default(0)) > 0
               )
               else "fail",
-            "message": "secondary hub passive restore is present or not required"
+            "message": "secondary hub passive sync restore is present"
               if (
                 acm_switchover_operation.method == 'full'
-                or (acm_secondary_restore_info.resources | default([]) | length) > 0
+                or (acm_preflight_passive_restore_analysis.sync_enabled_count | default(0)) > 0
               )
-              else "secondary hub passive restore is missing",
+              else "secondary hub has no sync-enabled passive restore",
             "details": {
               "method": acm_switchover_operation.method,
-              "restore_count": acm_secondary_restore_info.resources | default([]) | length
+              "restore_count": acm_secondary_restore_info.resources | default([]) | length,
+              "sync_enabled_count": acm_preflight_passive_restore_analysis.sync_enabled_count | default(0)
             },
-            "recommended_action": "Seed or repair passive sync restore on the secondary hub"
+            "recommended_action": "Verify a Restore with syncRestoreWithNewBackups=true exists on the secondary hub"
               if (
                 acm_switchover_operation.method != 'full'
-                and (acm_secondary_restore_info.resources | default([]) | length) == 0
+                and (acm_preflight_passive_restore_analysis.sync_enabled_count | default(0)) == 0
               )
               else None
           }

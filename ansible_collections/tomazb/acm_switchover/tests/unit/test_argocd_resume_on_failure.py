@@ -218,3 +218,47 @@ def test_restore_only_rescue_reraises_failure():
 
     fail_tasks = [t for t in rescue_tasks if "ansible.builtin.fail" in t]
     assert len(fail_tasks) >= 1, "rescue must re-raise original failure with ansible.builtin.fail"
+
+
+def test_restore_only_pins_operation_flags():
+    """restore_only.yml must enforce restore_only=true, method=full, old_hub_action=none.
+
+    Without pinning, role defaults (restore_only=false, method=passive,
+    old_hub_action=secondary) apply, breaking the restore-only contract.
+    """
+    playbook = _load_playbook("restore_only.yml")
+    play = playbook[0]
+
+    # The playbook must set operation flags before roles run.
+    # Acceptable locations: pre_tasks or vars.
+    pre_tasks = play.get("pre_tasks", [])
+    play_vars = play.get("vars", {})
+
+    # Check pre_tasks for set_fact that pins operation flags
+    pins_via_pre_tasks = any(
+        "acm_switchover_operation" in str(t.get("ansible.builtin.set_fact", {}))
+        for t in pre_tasks
+    )
+    # Check play-level vars for operation pinning
+    pins_via_vars = "acm_switchover_operation" in play_vars
+
+    assert pins_via_pre_tasks or pins_via_vars, (
+        "restore_only.yml must pin acm_switchover_operation (restore_only, method, "
+        "old_hub_action) via pre_tasks or play-level vars before including roles"
+    )
+
+
+def test_restore_only_pins_correct_values():
+    """restore_only.yml pinned values must match restore-only semantics."""
+    text = (PLAYBOOK_DIR / "restore_only.yml").read_text()
+
+    # The pinned values must include these three critical fields
+    assert "'restore_only': true" in text or "'restore_only': True" in text or "restore_only: true" in text, (
+        "restore_only.yml must pin restore_only to true"
+    )
+    assert "'method': 'full'" in text or "method: full" in text, (
+        "restore_only.yml must pin method to full"
+    )
+    assert "'old_hub_action': 'none'" in text or "old_hub_action: none" in text, (
+        "restore_only.yml must pin old_hub_action to none"
+    )
