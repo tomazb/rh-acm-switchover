@@ -2979,6 +2979,40 @@ class TestRestoreOnlyFlow:
 
         assert args.old_hub_action == "none"
 
+    def test_restore_only_completed_noop_banner_says_restore(self, tmp_path, caplog):
+        """Noop banner for a recent completed restore-only run must say 'RESTORE', not 'SWITCHOVER'.
+
+        Bug: _log_completed_noop always logs 'SWITCHOVER ALREADY COMPLETED' regardless of
+        operation type. A restore-only rerun must log 'RESTORE ALREADY COMPLETED' to avoid
+        misleading operators.
+        """
+        from datetime import timedelta
+
+        from lib.constants import STALE_STATE_THRESHOLD
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        # Set last_updated to a recent timestamp so it is NOT stale (age < threshold)
+        recent_age = timedelta(seconds=STALE_STATE_THRESHOLD - 60)
+        recent_ts = (datetime.now(timezone.utc) - recent_age).isoformat()
+        state.state["last_updated"] = recent_ts
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+        args = self._make_restore_only_args()
+        real_logger = logging.getLogger("acm_switchover")
+
+        with caplog.at_level(logging.INFO, logger="acm_switchover"):
+            result = run_restore_only(args, reloaded, Mock(), real_logger)
+
+        assert result is True
+        assert "RESTORE ALREADY COMPLETED" in caplog.text, (
+            "Expected 'RESTORE ALREADY COMPLETED' in log output; got: " + caplog.text
+        )
+        assert "SWITCHOVER ALREADY COMPLETED" not in caplog.text
+
 
 @pytest.mark.unit
 class TestAttemptArgoCDResumeOnFailure:

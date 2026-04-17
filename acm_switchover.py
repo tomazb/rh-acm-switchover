@@ -582,7 +582,7 @@ def run_restore_only(
             logger.warning("--force used: Resetting state to start fresh restore")
             state.reset()
         elif not args.validate_only:
-            _log_completed_noop(state, logger, state_age)
+            _log_completed_noop(state, logger, state_age, operation_label="RESTORE")
             return True
     elif current_phase == Phase.FAILED and not args.validate_only:
         last_error_phase = state.get_last_error_phase()
@@ -673,12 +673,17 @@ def run_restore_only(
     return True
 
 
-def _log_completed_noop(state: StateManager, logger: logging.Logger, state_age: timedelta) -> None:
+def _log_completed_noop(
+    state: StateManager,
+    logger: logging.Logger,
+    state_age: timedelta,
+    operation_label: str = "SWITCHOVER",
+) -> None:
     """Log an explicit no-op banner for reruns against a recent completed state."""
 
     age_minutes = int(state_age.total_seconds() // 60)
     logger.info("\n" + "=" * 60)
-    logger.info("SWITCHOVER ALREADY COMPLETED")
+    logger.info("%s ALREADY COMPLETED", operation_label)
     logger.info("=" * 60)
     logger.info("Existing state file age: %s minutes", age_minutes)
     logger.info("No phases were executed on this run.")

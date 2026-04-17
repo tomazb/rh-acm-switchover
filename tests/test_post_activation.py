@@ -350,6 +350,36 @@ class TestPostActivationVerification:
         )
         mock_secondary_client.get_pods.assert_called()
 
+    def test_restart_observatorium_api_404_without_reason_is_graceful(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
+        """ApiException(status=404) without 'Not Found' in reason must be treated as not-found, not re-raised.
+
+        Bug: current code checks 'not found' in str(e).lower() — ApiException(status=404) without
+        an explicit reason contains 'Reason: None', so 'not found' is absent and the error is
+        incorrectly re-raised. Fix: check e.status == 404 instead.
+        """
+        mock_secondary_client.rollout_restart_deployment.side_effect = ApiException(status=404)
+
+        # Must not raise — a missing deployment should log a warning, not crash the step
+        post_verify_with_obs._restart_observatorium_api()
+
+    def test_restart_observatorium_api_non_404_with_not_found_text_reraises(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
+        """ApiException with non-404 status containing 'not found' in reason must re-raise.
+
+        Bug: current code checks 'not found' in str(e).lower() — a 403 with 'namespace not found'
+        in the reason is incorrectly swallowed. Fix: check e.status == 404 instead.
+        """
+        exc = ApiException(status=403, reason="namespace not found in service account token")
+        mock_secondary_client.rollout_restart_deployment.side_effect = exc
+
+        with pytest.raises(ApiException) as exc_info:
+            post_verify_with_obs._restart_observatorium_api()
+
+        assert exc_info.value.status == 403
+
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_observability_pods_all_ready(self, mock_wait, post_verify_with_obs, mock_secondary_client):
         """Test when all observability pods are ready."""

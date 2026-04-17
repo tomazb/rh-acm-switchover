@@ -311,7 +311,7 @@ class PostActivationVerification:
                         "observatorium-api already has %d replica(s), no scale-up needed",
                         current_replicas,
                     )
-        except (ApiException, Exception) as e:
+        except Exception as e:
             logger.warning("Failed to check/scale observatorium-api: %s", e)
             # Continue with thanos-compact check
 
@@ -342,7 +342,7 @@ class PostActivationVerification:
                         "thanos-compact already has %d replica(s), no scale-up needed",
                         current_replicas,
                     )
-        except (ApiException, Exception) as e:
+        except Exception as e:
             logger.warning("Failed to check/scale thanos-compact: %s", e)
             # Continue to wait for any components that were scaled
 
@@ -420,12 +420,15 @@ class PostActivationVerification:
             else:
                 logger.warning("observatorium-api pods did not become ready in time")
 
-        except (ApiException, Exception) as e:
+        except ApiException as e:
             logger.error("Failed to restart observatorium-api: %s", e)
-            if "not found" in str(e).lower():
+            if e.status == 404:
                 logger.warning("observatorium-api deployment not found")
             else:
                 raise
+        except Exception as e:
+            logger.error("Failed to restart observatorium-api: %s", e)
+            raise
 
     def _verify_observability_pods(self):
         """Verify all Observability pods are running and ready."""
@@ -550,7 +553,7 @@ class PostActivationVerification:
                 )
             else:
                 logger.warning("Grafana route not found in Observability namespace")
-        except (ApiException, Exception) as exc:
+        except Exception as exc:
             logger.warning("Unable to query Grafana route: %s", exc)
 
     def _verify_disable_auto_import_cleared(self):
@@ -677,7 +680,7 @@ class PostActivationVerification:
 
                 result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
                 return (cluster_name, result, context_name)
-            except (ApiException, Exception) as e:
+            except Exception as e:
                 logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
                 return (cluster_name, "unreachable", None)
 
@@ -801,7 +804,7 @@ class PostActivationVerification:
             logger.info("Force-reconnected klusterlet for %s", cluster_name)
             return True
 
-        except (ApiException, Exception) as e:
+        except Exception as e:
             logger.warning("Failed to force-reconnect klusterlet for %s: %s", cluster_name, e)
             return False
 
@@ -985,7 +988,7 @@ class PostActivationVerification:
                     for cluster in kubeconfig_data.get("clusters", []):
                         if cluster.get("name") == cluster_name:
                             return cluster.get("cluster", {}).get("server", "")
-        except (ApiException, Exception) as e:
+        except Exception as e:
             logger.debug("Error getting hub API server: %s", e)
 
         return ""
@@ -1063,7 +1066,6 @@ class PostActivationVerification:
                 try:
                     # Check file size before loading to prevent memory exhaustion
                     if check_size:
-                        assert size_limit is not None  # Guaranteed by check_size logic
                         kubeconfig_size = os.path.getsize(expanded_path)
                         if kubeconfig_size > size_limit:
                             logger.warning(
