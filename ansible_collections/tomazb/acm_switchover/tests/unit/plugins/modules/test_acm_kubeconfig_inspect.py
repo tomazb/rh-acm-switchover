@@ -199,6 +199,13 @@ def test_whitespace_only_token_file_raises_value_error(tmp_path):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
+def test_empty_token_file_raises_value_error(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": ""}))
+
+    with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty tokenFile path"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
 def test_whitespace_only_inline_token_raises_value_error(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "   \n\t "}))
 
@@ -402,6 +409,8 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
     ("kubeconfig_data", "error_match"),
     [
         (["not", "a", "mapping"], "kubeconfig must be a YAML mapping"),
+        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": None}, "kubeconfig is missing required 'contexts' list"),
+        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": None}, "kubeconfig is missing required 'users' list"),
         (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": "bad"}, "'contexts' must be a list"),
         (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": "bad"}, "'users' must be a list"),
         (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": ["bad"]}, "'contexts' entries must be mappings"),

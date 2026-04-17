@@ -53,6 +53,8 @@ def _find_named(items: list[dict], name: str) -> dict | None:
 
 
 def _require_list_field(config: dict, field_name: str) -> list[dict]:
+    if field_name not in config or config[field_name] is None:
+        raise ValueError(f"kubeconfig is missing required '{field_name}' list")
     value = config.get(field_name, [])
     if not isinstance(value, list):
         raise ValueError(f"'{field_name}' must be a list in kubeconfig")
@@ -111,9 +113,13 @@ def _load_kubeconfig(kubeconfig: str) -> dict:
 
 def _normalize_token_file_path(token_file: object, kubeconfig: str, user_name: str) -> Path:
     try:
-        token_file_path = Path(os.fspath(token_file))
+        token_file_str = os.fspath(token_file)
     except TypeError as exc:
         raise ValueError(f"user entry '{user_name}' must define 'tokenFile' as a string or path") from exc
+    if not token_file_str:
+        raise ValueError(f"user entry '{user_name}' defines an empty tokenFile path")
+
+    token_file_path = Path(token_file_str)
 
     if not token_file_path.is_absolute():
         token_file_path = Path(kubeconfig).resolve().parent / token_file_path
