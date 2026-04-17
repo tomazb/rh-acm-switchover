@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 import yaml
@@ -26,6 +26,16 @@ def _jwt_with_exp(expiry: datetime) -> str:
     return f"header.{payload_b64}.signature"
 
 
+def _pem_data(label: str) -> str:
+    return base64.b64encode(
+        (
+            f"-----BEGIN {label}-----\n"
+            f"{label.lower()}-fixture\n"
+            f"-----END {label}-----\n"
+        ).encode("utf-8")
+    ).decode("utf-8")
+
+
 def _kubeconfig_for_user(user: dict, context_name: str = "primary-hub") -> dict:
     return {
         "apiVersion": "v1",
@@ -38,9 +48,10 @@ def _kubeconfig_for_user(user: dict, context_name: str = "primary-hub") -> dict:
 
 
 def test_bearer_jwt_valid_returns_pass(tmp_path):
+    expiry = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
     kubeconfig = write_kubeconfig(
         tmp_path,
-        _kubeconfig_for_user({"token": _jwt_with_exp(datetime.now(timezone.utc) + timedelta(hours=24))}),
+        _kubeconfig_for_user({"token": _jwt_with_exp(expiry)}),
     )
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
@@ -51,9 +62,10 @@ def test_bearer_jwt_valid_returns_pass(tmp_path):
 
 
 def test_bearer_jwt_expired_returns_critical_fail(tmp_path):
+    expiry = datetime(2000, 1, 1, 12, 0, tzinfo=timezone.utc)
     kubeconfig = write_kubeconfig(
         tmp_path,
-        _kubeconfig_for_user({"token": _jwt_with_exp(datetime.now(timezone.utc) - timedelta(hours=1))}),
+        _kubeconfig_for_user({"token": _jwt_with_exp(expiry)}),
     )
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
@@ -64,9 +76,10 @@ def test_bearer_jwt_expired_returns_critical_fail(tmp_path):
 
 
 def test_bearer_jwt_near_expiry_returns_warn(tmp_path):
+    expiry = datetime(2099, 1, 1, 15, 0, tzinfo=timezone.utc)
     kubeconfig = write_kubeconfig(
         tmp_path,
-        _kubeconfig_for_user({"token": _jwt_with_exp(datetime.now(timezone.utc) + timedelta(hours=2))}),
+        _kubeconfig_for_user({"token": _jwt_with_exp(expiry)}),
     )
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
@@ -130,7 +143,12 @@ def test_auth_provider_returns_warn_without_execution(tmp_path):
 def test_client_certificate_auth_returns_pass(tmp_path):
     kubeconfig = write_kubeconfig(
         tmp_path,
-        _kubeconfig_for_user({"client-certificate-data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"}),
+        _kubeconfig_for_user(
+            {
+                "client-certificate-data": _pem_data("CERTIFICATE"),
+                "client-key-data": _pem_data("PRIVATE KEY"),
+            }
+        ),
     )
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
