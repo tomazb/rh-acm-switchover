@@ -234,8 +234,18 @@ def test_missing_user_raises_validation_error(tmp_path):
         ),
         (
             _kubeconfig_for_user({"token": "header.payload.signature"})
+            | {"contexts": [{"name": "primary-hub"}]},
+            "context entry 'primary-hub' is missing required 'context' mapping",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"})
             | {"users": [{"name": "primary-user", "user": "bad"}]},
             "user entry 'primary-user' must contain a mapping under 'user'",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"})
+            | {"users": [{"name": "primary-user"}]},
+            "user entry 'primary-user' is missing required 'user' mapping",
         ),
     ],
 )

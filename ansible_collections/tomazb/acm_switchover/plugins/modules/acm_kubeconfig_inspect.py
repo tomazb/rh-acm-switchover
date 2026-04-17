@@ -100,7 +100,10 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
     if ctx is None:
         raise ValueError(f"context '{context}' not found in kubeconfig")
 
-    context_cfg = ctx.get("context", {})
+    if "context" not in ctx:
+        raise ValueError(f"context entry '{context}' is missing required 'context' mapping")
+
+    context_cfg = ctx.get("context")
     if not isinstance(context_cfg, dict):
         raise ValueError(f"context entry '{context}' must contain a mapping under 'context'")
 
@@ -109,7 +112,10 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
     if user_entry is None:
         raise ValueError(f"user '{user_name}' not found for context '{context}'")
 
-    user_cfg = user_entry.get("user", {})
+    if "user" not in user_entry:
+        raise ValueError(f"user entry '{user_name}' is missing required 'user' mapping")
+
+    user_cfg = user_entry.get("user")
     if not isinstance(user_cfg, dict):
         raise ValueError(f"user entry '{user_name}' must contain a mapping under 'user'")
 
