@@ -16,7 +16,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_kubeconfig_in
 
 def write_kubeconfig(tmp_path, data):
     path = tmp_path / "kubeconfig.yaml"
-    path.write_text(yaml.safe_dump(data))
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
     return path
 
 
@@ -82,7 +82,7 @@ def test_bearer_jwt_near_expiry_returns_warn(tmp_path):
         _kubeconfig_for_user({"token": _jwt_with_exp(expiry)}),
     )
 
-    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub", warning_hours=1_000_000)
 
     assert result["status"] == "warn"
     assert result["severity"] == "warning"
@@ -140,7 +140,7 @@ def test_auth_provider_returns_warn_without_execution(tmp_path):
     assert "not executed" in result["message"]
 
 
-def test_client_certificate_auth_returns_pass(tmp_path):
+def test_client_certificate_auth_fields_are_recognized(tmp_path):
     kubeconfig = write_kubeconfig(
         tmp_path,
         _kubeconfig_for_user(
