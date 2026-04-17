@@ -35,6 +35,15 @@
     - acm_enable_backup_schedule_operation.operation.action == 'patch'
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
+- name: Record backup verification baseline timestamp
+  ansible.builtin.set_fact:
+    acm_switchover_backup_schedule_enabled_at: >-
+      {{
+        acm_switchover_backup_schedule_enabled_at
+        | default(now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'), true)
+      }}
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
 - name: Publish enable backups result
   ansible.builtin.set_fact:
     acm_switchover_enable_backups_result:

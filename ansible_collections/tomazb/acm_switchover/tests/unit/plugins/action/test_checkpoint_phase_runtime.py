@@ -85,6 +85,105 @@ def test_action_module_persists_phase_status_on_pass(tmp_path):
     assert saved["phase_status"] == "pass"
 
 
+def test_action_module_merges_operational_data_on_pass(tmp_path):
+    """checkpoint_phase should merge operational_data updates into persisted state."""
+    import json
+    from unittest.mock import MagicMock
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "completed_phases": ["preflight"],
+                "operational_data": {"existing": "keep"},
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+
+    task = MagicMock()
+    task.async_val = 0
+    task.args = {
+        "phase": "activation",
+        "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_file)},
+        "status": "pass",
+        "operational_data": {"backup_schedule_enabled_at": "2026-04-16T10:00:00Z"},
+    }
+
+    action = ActionModule(
+        task=task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+
+    result = action.run()
+    assert result["checkpoint"]["operational_data"] == {
+        "existing": "keep",
+        "backup_schedule_enabled_at": "2026-04-16T10:00:00Z",
+    }
+
+    saved = json.loads(checkpoint_file.read_text())
+    assert saved["operational_data"] == {
+        "existing": "keep",
+        "backup_schedule_enabled_at": "2026-04-16T10:00:00Z",
+    }
+
+
+def test_action_module_does_not_overwrite_operational_data_with_empty_strings(tmp_path):
+    """checkpoint_phase should ignore empty-string operational_data updates."""
+    import json
+    from unittest.mock import MagicMock
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "completed_phases": ["preflight"],
+                "operational_data": {"backup_schedule_enabled_at": "2026-04-16T10:00:00Z"},
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+
+    task = MagicMock()
+    task.async_val = 0
+    task.args = {
+        "phase": "activation",
+        "checkpoint": {"enabled": True, "backend": "file", "path": str(checkpoint_file)},
+        "status": "fail",
+        "error": "dry-run failure",
+        "operational_data": {"backup_schedule_enabled_at": ""},
+    }
+
+    action = ActionModule(
+        task=task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+
+    result = action.run()
+    assert result["checkpoint"]["operational_data"]["backup_schedule_enabled_at"] == "2026-04-16T10:00:00Z"
+
+    saved = json.loads(checkpoint_file.read_text())
+    assert saved["operational_data"]["backup_schedule_enabled_at"] == "2026-04-16T10:00:00Z"
+
+
 def test_action_module_persists_phase_status_on_fail(tmp_path):
     """Verify phase_status is 'fail' when status is fail."""
     import json

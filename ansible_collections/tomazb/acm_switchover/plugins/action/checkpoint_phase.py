@@ -59,6 +59,7 @@ class ActionModule(ActionBase):
         status = self._task.args.get("status", "enter")
         error = self._task.args.get("error")
         report_ref = self._task.args.get("report_ref")
+        operational_data = self._task.args.get("operational_data") or {}
 
         backend = checkpoint_config.get("backend", "file")
         path = checkpoint_config.get("path", ".state/checkpoint.json")
@@ -102,6 +103,12 @@ class ActionModule(ActionBase):
         checkpoint_data["completed_phases"] = transition["completed_phases"]
         checkpoint_data["phase_status"] = transition["phase_status"]
         checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        sanitized_operational_data = {
+            key: value
+            for key, value in operational_data.items()
+            if value not in (None, "")
+        }
+        checkpoint_data.setdefault("operational_data", {}).update(sanitized_operational_data)
 
         if error:
             checkpoint_data.setdefault("errors", []).append({"phase": phase, "error": error})
