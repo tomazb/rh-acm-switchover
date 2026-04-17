@@ -57,6 +57,11 @@ def _require_list_field(config: dict, field_name: str) -> list[dict]:
     return value
 
 
+def _require_mapping_entries(items: list[dict], field_name: str) -> None:
+    if any(not isinstance(item, dict) for item in items):
+        raise ValueError(f"'{field_name}' entries must be mappings")
+
+
 def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
     parts = token.split(".")
     if len(parts) != 3:
@@ -86,12 +91,18 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
 
     contexts = _require_list_field(config, "contexts")
     users = _require_list_field(config, "users")
+    _require_mapping_entries(contexts, "contexts")
+    _require_mapping_entries(users, "users")
 
     ctx = _find_named(contexts, context)
     if ctx is None:
         raise ValueError(f"context '{context}' not found in kubeconfig")
 
-    user_name = ctx.get("context", {}).get("user")
+    context_cfg = ctx.get("context", {})
+    if not isinstance(context_cfg, dict):
+        raise ValueError(f"context entry '{context}' must contain a mapping under 'context'")
+
+    user_name = context_cfg.get("user")
     user_entry = _find_named(users, user_name)
     if user_entry is None:
         raise ValueError(f"user '{user_name}' not found for context '{context}'")

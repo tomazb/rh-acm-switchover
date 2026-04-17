@@ -204,6 +204,13 @@ def test_missing_user_raises_validation_error(tmp_path):
         (["not", "a", "mapping"], "kubeconfig must be a YAML mapping"),
         (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": "bad"}, "'contexts' must be a list"),
         (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": "bad"}, "'users' must be a list"),
+        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": ["bad"]}, "'contexts' entries must be mappings"),
+        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": ["bad"]}, "'users' entries must be mappings"),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"})
+            | {"contexts": [{"name": "primary-hub", "context": "bad"}]},
+            "context entry 'primary-hub' must contain a mapping under 'context'",
+        ),
     ],
 )
 def test_malformed_kubeconfig_structure_raises_value_error(tmp_path, kubeconfig_data, error_match):
