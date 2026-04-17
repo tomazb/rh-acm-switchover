@@ -35,4 +35,9 @@ AUTO_IMPORT_STRATEGY_KEY = "autoImportStrategy"
 AUTO_IMPORT_STRATEGY_DEFAULT = "ImportOnly"
 AUTO_IMPORT_STRATEGY_SYNC = "ImportAndSync"
 IMMEDIATE_IMPORT_ANNOTATION = "import.open-cluster-management.io/immediate-import"
+DISABLE_AUTO_IMPORT_ANNOTATION = "import.open-cluster-management.io/disable-auto-import"
 LOCAL_CLUSTER_NAME = "local-cluster"
+
+# Observability component names
+OBSERVATORIUM_API_DEPLOYMENT = "observability-observatorium-api"
+THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"

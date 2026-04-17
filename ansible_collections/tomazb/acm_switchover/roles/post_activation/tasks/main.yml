@@ -19,6 +19,9 @@
     - name: Verify klusterlet status
       ansible.builtin.include_tasks: verify_klusterlet.yml
 
+    - name: Clean stale disable-auto-import annotations
+      ansible.builtin.include_tasks: cleanup_auto_import_annotations.yml
+
     - name: Verify observability
       ansible.builtin.include_tasks: verify_observability.yml
       when: not (acm_switchover_features.skip_observability_checks | default(false))
@@ -30,6 +33,8 @@
           status: "{{ 'pass' if acm_cluster_verify_result.passed else 'fail' }}"
           changed: false
           summary: "{{ acm_cluster_verify_result }}"
+          cleanup_auto_import: "{{ acm_switchover_cleanup_auto_import_result | default({}) }}"
+          observability: "{{ acm_observability_check_result | default({}) }}"
       tags:
         - post_activation
         - verify
