@@ -106,6 +106,22 @@ def test_bearer_jwt_without_exp_returns_warn(tmp_path):
     assert result["auth_type"] == "bearer_jwt"
 
 
+def test_bearer_jwt_with_non_numeric_exp_returns_warn(tmp_path):
+    payload_b64 = base64.urlsafe_b64encode(json.dumps({"exp": "not-a-timestamp"}).encode("utf-8")).decode(
+        "utf-8"
+    ).rstrip("=")
+    kubeconfig = write_kubeconfig(
+        tmp_path,
+        _kubeconfig_for_user({"token": f"header.{payload_b64}.signature"}),
+    )
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "warn"
+    assert result["severity"] == "warning"
+    assert result["auth_type"] == "bearer_opaque"
+
+
 def test_invalid_jwt_format_returns_warn(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "not.a-valid-jwt"}))
 

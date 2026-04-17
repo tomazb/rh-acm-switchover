@@ -66,7 +66,10 @@ def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
     exp = claims.get("exp")
     if exp is None:
         return None, "token has no expiration claim"
-    return datetime.fromtimestamp(exp, tz=timezone.utc), None
+    try:
+        return datetime.fromtimestamp(exp, tz=timezone.utc), None
+    except (TypeError, ValueError, OverflowError):
+        return None, "invalid JWT expiration claim"
 
 
 def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 4) -> dict:
