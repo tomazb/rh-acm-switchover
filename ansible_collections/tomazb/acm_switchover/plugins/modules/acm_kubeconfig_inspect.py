@@ -50,6 +50,13 @@ def _find_named(items: list[dict], name: str) -> dict | None:
     return next((item for item in items if item.get("name") == name), None)
 
 
+def _require_list_field(config: dict, field_name: str) -> list[dict]:
+    value = config.get(field_name, [])
+    if not isinstance(value, list):
+        raise ValueError(f"'{field_name}' must be a list in kubeconfig")
+    return value
+
+
 def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
     parts = token.split(".")
     if len(parts) != 3:
@@ -74,8 +81,11 @@ def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
 
 def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 4) -> dict:
     config = yaml.safe_load(Path(kubeconfig).read_text(encoding="utf-8")) or {}
-    contexts = config.get("contexts", [])
-    users = config.get("users", [])
+    if not isinstance(config, dict):
+        raise ValueError("kubeconfig must be a YAML mapping")
+
+    contexts = _require_list_field(config, "contexts")
+    users = _require_list_field(config, "users")
 
     ctx = _find_named(contexts, context)
     if ctx is None:

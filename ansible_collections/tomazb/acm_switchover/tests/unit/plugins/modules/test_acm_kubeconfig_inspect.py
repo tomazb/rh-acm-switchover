@@ -198,6 +198,21 @@ def test_missing_user_raises_validation_error(tmp_path):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
+@pytest.mark.parametrize(
+    ("kubeconfig_data", "error_match"),
+    [
+        (["not", "a", "mapping"], "kubeconfig must be a YAML mapping"),
+        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": "bad"}, "'contexts' must be a list"),
+        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": "bad"}, "'users' must be a list"),
+    ],
+)
+def test_malformed_kubeconfig_structure_raises_value_error(tmp_path, kubeconfig_data, error_match):
+    kubeconfig = write_kubeconfig(tmp_path, kubeconfig_data)
+
+    with pytest.raises(ValueError, match=error_match):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
 def test_run_module_exits_with_inspection_result(monkeypatch):
     captured = {}
 
