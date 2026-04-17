@@ -284,6 +284,7 @@ if [[ $BACKUPS -gt 0 ]]; then
     IN_PROGRESS=""
     IN_PROGRESS_ERROR=""
     IN_PROGRESS_ERR_FILE=$(mktemp)
+    trap 'rm -f "${IN_PROGRESS_ERR_FILE:-}"' EXIT
     if IN_PROGRESS=$(oc --context="$PRIMARY_CONTEXT" get $RES_BACKUP -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[?(@.status.phase=="InProgress")].metadata.name}' 2>"$IN_PROGRESS_ERR_FILE"); then
         if [[ -z "$IN_PROGRESS" ]]; then
             check_pass "Primary hub: No backups in progress"

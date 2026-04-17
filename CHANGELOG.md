@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python error handling**: Replace redundant `except (ApiException, Exception)` with `except Exception` in best-effort paths in `post_activation.py` (C1)
+- **Python not-found detection**: Fix string-based `"not found" in str(e).lower()` check in `_restart_observatorium_api` — now uses `e.status == 404` (C2). Previously `ApiException(status=404)` without a reason was incorrectly re-raised; `ApiException(status=403)` with "not found" in reason text was incorrectly swallowed.
+- **Python asserts replaced**: Remove dead `assert` statements in `activation.py`, `finalization.py`, and `post_activation.py`. In `finalization.py`, two asserts protecting `_scale_down_old_hub_observability` and `_wait_for_observability_scale_down` are replaced with `raise FatalError(...)` for explicit diagnostics (C3).
+- **Restore-only noop banner**: `_log_completed_noop()` now accepts `operation_label` parameter; restore-only reruns now log `RESTORE ALREADY COMPLETED` instead of `SWITCHOVER ALREADY COMPLETED` (L1).
+- **Preflight temp file cleanup**: Add `trap 'rm -f "${IN_PROGRESS_ERR_FILE:-}"' EXIT` after `mktemp` in `preflight-check.sh` to ensure cleanup on unexpected exit.
+
+### Changed
+
+- **`scripts/setup-rbac.sh` deprecation warning**: Script now emits a runtime `WARNING` to stderr pointing operators to `playbooks/rbac_bootstrap.yml`.
+- **`scripts/README.md` version refresh**: Example output in README now shows current script version (`v1.7.0`) instead of stale `v1.5.3`.
+- **`lib/argocd.py` comment**: Updated annotation key comment to reference the Ansible `argocd_manage` role instead of the deprecated `scripts/argocd-manage.sh`.
+- **`postflight-check.sh` variable rename**: `BACKUP_SCHEDULE_ENABLED` renamed to `BACKUP_SCHEDULE_PAUSED` to accurately reflect that it stores the `spec.paused` field value.
+- **pytest filterwarnings**: Added `ignore::DeprecationWarning:modules.preflight_validators` in `setup.cfg` to suppress expected deprecation noise from the compatibility shim during test runs.
+
 - **RBAC decommission rerun**: `validate_decommission_permissions` now succeeds when ACM namespace is already deleted — allows idempotent decommission reruns without false RBAC failures
 - **Ansible ArgoCD primary resume guard**: `argocd_resume.yml` and `switchover.yml` rescue block now check kubeconfig/context are non-empty strings (not just `is defined`) — prevents `kubectl` errors when primary hub vars exist but are blank
 - **dry_run_skip null-safety**: Decorator now skips (safe) instead of executing when intermediate attribute path is broken (e.g., `self.client` is None)

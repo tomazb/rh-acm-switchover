@@ -33,7 +33,7 @@ ARGOCD_APP_VERSION = "v1alpha1"
 ARGOCD_APP_PLURAL = "applications"
 ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
 
-# Annotation key for our pause marker (must match scripts/argocd-manage.sh)
+# Annotation key for our pause marker (must match the Ansible argocd_manage role)
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 
 # ACM namespace regex (must match scripts/lib-common.sh)

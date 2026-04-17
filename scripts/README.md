@@ -29,7 +29,7 @@ All scripts display their version number in the output header for troubleshootin
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                    ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.5.3 (2026-01-29)
+preflight-check.sh v1.7.0 (2026-04-10)
 ```
 
 The version is defined in `constants.sh` and follows [Semantic Versioning](https://semver.org/):
@@ -124,7 +124,7 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Hub Discovery                                        ║
 ╚════════════════════════════════════════════════════════════╝
-discover-hub.sh v1.5.3 (2026-01-29)
+discover-hub.sh v1.7.0 (2026-04-10)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts
@@ -254,7 +254,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                     ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.5.3 (2026-01-29)
+preflight-check.sh v1.7.0 (2026-04-10)
 
 Primary Hub:    primary-hub
 Secondary Hub:  secondary-hub
