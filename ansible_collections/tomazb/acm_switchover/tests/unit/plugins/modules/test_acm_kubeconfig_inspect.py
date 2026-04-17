@@ -66,6 +66,8 @@ def test_bearer_jwt_valid_returns_pass(tmp_path):
     assert result["status"] == "pass"
     assert result["severity"] == "info"
     assert result["auth_type"] == "bearer_jwt"
+    assert result["expires_at"] == expiry.isoformat()
+    assert result["hours_until_expiry"] > 0
 
 
 def test_bearer_jwt_expired_returns_critical_fail(tmp_path):
@@ -182,6 +184,21 @@ def test_token_file_with_opaque_token_returns_warn(tmp_path):
     assert result["auth_type"] == "bearer_opaque"
 
 
+def test_empty_inline_token_raises_value_error(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": ""}))
+
+    with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty bearer token"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
+def test_whitespace_only_token_file_raises_value_error(tmp_path):
+    token_file = write_text_file(tmp_path, "token.txt", "   \n\t ")
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)}))
+
+    with pytest.raises(ValueError, match="user entry 'primary-user' tokenFile resolved to empty content"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
 def test_relative_token_file_is_resolved_from_kubeconfig_dir(tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
@@ -271,6 +288,28 @@ def test_client_certificate_auth_fields_are_recognized(tmp_path):
     assert result["status"] == "pass"
     assert result["severity"] == "info"
     assert result["auth_type"] == "client_cert"
+
+
+@pytest.mark.parametrize(
+    ("user_config", "error_match"),
+    [
+        ({"username": "admin"}, "user entry 'primary-user' basic auth requires both 'username' and 'password'"),
+        ({"password": "secret"}, "user entry 'primary-user' basic auth requires both 'username' and 'password'"),
+        (
+            {"username": 123, "password": "secret"},
+            "user entry 'primary-user' must define basic auth 'username' and 'password' as strings",
+        ),
+        (
+            {"username": "admin", "password": 123},
+            "user entry 'primary-user' must define basic auth 'username' and 'password' as strings",
+        ),
+    ],
+)
+def test_malformed_basic_auth_raises_value_error(tmp_path, user_config, error_match):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user(user_config))
+
+    with pytest.raises(ValueError, match=error_match):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
 def test_missing_context_raises_validation_error(tmp_path):

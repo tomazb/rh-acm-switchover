@@ -118,9 +118,12 @@ def _normalize_token_file_path(token_file: object, kubeconfig: str, user_name: s
 def _load_token_file(token_file: object, kubeconfig: str, user_name: str) -> str:
     token_file_path = _normalize_token_file_path(token_file, kubeconfig, user_name)
     try:
-        return token_file_path.read_text(encoding="utf-8").strip()
+        token_value = token_file_path.read_text(encoding="utf-8").strip()
     except OSError as exc:
         raise ValueError(f"unable to read tokenFile '{token_file_path}': {exc}") from exc
+    if not token_value:
+        raise ValueError(f"user entry '{user_name}' tokenFile resolved to empty content")
+    return token_value
 
 
 def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 4) -> dict:
@@ -191,6 +194,8 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         token = user_cfg.get("token")
         if token is not None and not isinstance(token, str):
             raise ValueError(f"user entry '{user_name}' must define 'token' as a string")
+        if token == "":
+            raise ValueError(f"user entry '{user_name}' defines an empty bearer token")
     if token:
         expires_at, decode_error = _decode_jwt_exp(token)
         if decode_error:
@@ -231,6 +236,10 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         }
 
     if "username" in user_cfg or "password" in user_cfg:
+        if "username" not in user_cfg or "password" not in user_cfg:
+            raise ValueError(f"user entry '{user_name}' basic auth requires both 'username' and 'password'")
+        if not isinstance(user_cfg["username"], str) or not isinstance(user_cfg["password"], str):
+            raise ValueError(f"user entry '{user_name}' must define basic auth 'username' and 'password' as strings")
         return {
             "status": "pass",
             "severity": "info",
