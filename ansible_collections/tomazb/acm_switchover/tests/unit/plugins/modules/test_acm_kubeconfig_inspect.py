@@ -296,6 +296,18 @@ def test_client_certificate_auth_fields_are_recognized(tmp_path):
         ({"username": "admin"}, "user entry 'primary-user' basic auth requires both 'username' and 'password'"),
         ({"password": "secret"}, "user entry 'primary-user' basic auth requires both 'username' and 'password'"),
         (
+            {"username": "", "password": "secret"},
+            "user entry 'primary-user' basic auth 'username' and 'password' must be non-empty",
+        ),
+        (
+            {"username": "admin", "password": ""},
+            "user entry 'primary-user' basic auth 'username' and 'password' must be non-empty",
+        ),
+        (
+            {"username": "   ", "password": "\t"},
+            "user entry 'primary-user' basic auth 'username' and 'password' must be non-empty",
+        ),
+        (
             {"username": 123, "password": "secret"},
             "user entry 'primary-user' must define basic auth 'username' and 'password' as strings",
         ),

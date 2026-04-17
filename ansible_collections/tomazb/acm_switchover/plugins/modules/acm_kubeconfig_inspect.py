@@ -240,6 +240,8 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             raise ValueError(f"user entry '{user_name}' basic auth requires both 'username' and 'password'")
         if not isinstance(user_cfg["username"], str) or not isinstance(user_cfg["password"], str):
             raise ValueError(f"user entry '{user_name}' must define basic auth 'username' and 'password' as strings")
+        if not user_cfg["username"].strip() or not user_cfg["password"].strip():
+            raise ValueError(f"user entry '{user_name}' basic auth 'username' and 'password' must be non-empty")
         return {
             "status": "pass",
             "severity": "info",
