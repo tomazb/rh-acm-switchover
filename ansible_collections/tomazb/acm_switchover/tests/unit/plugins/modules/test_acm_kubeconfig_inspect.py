@@ -173,6 +173,26 @@ def test_token_file_with_jwt_returns_pass(tmp_path):
     assert result["auth_type"] == "bearer_jwt"
 
 
+def test_static_bearer_takes_precedence_over_client_cert(tmp_path):
+    expiry = datetime(2000, 1, 1, 12, 0, tzinfo=timezone.utc)
+    kubeconfig = write_kubeconfig(
+        tmp_path,
+        _kubeconfig_for_user(
+            {
+                "token": _jwt_with_exp(expiry),
+                "client-certificate-data": _pem_data("CERTIFICATE"),
+                "client-key-data": _pem_data("PRIVATE KEY"),
+            }
+        ),
+    )
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "fail"
+    assert result["severity"] == "critical"
+    assert result["auth_type"] == "bearer_jwt"
+
+
 def test_token_file_with_opaque_token_returns_warn(tmp_path):
     token_file = write_text_file(tmp_path, "token.txt", "opaque-token-value")
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)}))
@@ -201,6 +221,13 @@ def test_whitespace_only_token_file_raises_value_error(tmp_path):
 
 def test_empty_token_file_raises_value_error(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": ""}))
+
+    with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty tokenFile path"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
+def test_whitespace_only_token_file_path_raises_value_error(tmp_path):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": "   \n\t "}))
 
     with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty tokenFile path"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
@@ -318,6 +345,24 @@ def test_client_certificate_auth_fields_are_recognized(tmp_path):
     assert result["auth_type"] == "client_cert"
 
 
+def test_client_certificate_file_pair_returns_pass(tmp_path):
+    kubeconfig = write_kubeconfig(
+        tmp_path,
+        _kubeconfig_for_user(
+            {
+                "client-certificate": "/tmp/client.crt",
+                "client-key": "/tmp/client.key",
+            }
+        ),
+    )
+
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+    assert result["status"] == "pass"
+    assert result["severity"] == "info"
+    assert result["auth_type"] == "client_cert"
+
+
 @pytest.mark.parametrize(
     ("user_config", "field_name"),
     [
@@ -325,12 +370,37 @@ def test_client_certificate_auth_fields_are_recognized(tmp_path):
         ({"client-certificate-data": {"bad": "type"}}, "client-certificate-data"),
         ({"client-key": {"bad": "type"}}, "client-key"),
         ({"client-key-data": {"bad": "type"}}, "client-key-data"),
+        ({"client-certificate": "   "}, "client-certificate"),
+        ({"client-certificate-data": "   "}, "client-certificate-data"),
+        ({"client-key": "   "}, "client-key"),
+        ({"client-key-data": "   "}, "client-key-data"),
     ],
 )
 def test_client_cert_fields_must_be_strings(tmp_path, user_config, field_name):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user(user_config))
 
-    with pytest.raises(ValueError, match=rf"user entry 'primary-user' must define '{field_name}' as a string"):
+    with pytest.raises(
+        ValueError,
+        match=rf"user entry 'primary-user' must define '{field_name}' as a non-empty string",
+    ):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
+@pytest.mark.parametrize(
+    "user_config",
+    [
+        {"client-certificate": "/tmp/client.crt"},
+        {"client-key": "/tmp/client.key"},
+        {"client-certificate-data": _pem_data("CERTIFICATE")},
+        {"client-key-data": _pem_data("PRIVATE KEY")},
+        {"client-certificate": "/tmp/client.crt", "client-key-data": _pem_data("PRIVATE KEY")},
+        {"client-certificate-data": _pem_data("CERTIFICATE"), "client-key": "/tmp/client.key"},
+    ],
+)
+def test_partial_or_mixed_client_cert_config_raises_value_error(tmp_path, user_config):
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user(user_config))
+
+    with pytest.raises(ValueError, match="user entry 'primary-user' must define a complete client certificate pair"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
@@ -395,6 +465,14 @@ def test_invalid_yaml_raises_value_error(tmp_path):
     kubeconfig = write_text_file(tmp_path, "invalid-kubeconfig.yaml", "contexts: [oops")
 
     with pytest.raises(ValueError, match="invalid kubeconfig YAML"):
+        inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
+
+
+@pytest.mark.parametrize("content", ["", "null\n", "[]\n"])
+def test_non_mapping_top_level_yaml_raises_value_error(tmp_path, content):
+    kubeconfig = write_text_file(tmp_path, "invalid-kubeconfig.yaml", content)
+
+    with pytest.raises(ValueError, match="kubeconfig must be a YAML mapping"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 

@@ -67,8 +67,10 @@ def _require_mapping_entries(items: list[dict], field_name: str) -> None:
 
 
 def _require_string_field(user_cfg: dict, field_name: str, user_name: str) -> None:
-    if field_name in user_cfg and not isinstance(user_cfg[field_name], str):
-        raise ValueError(f"user entry '{user_name}' must define '{field_name}' as a string")
+    if field_name in user_cfg:
+        value = user_cfg[field_name]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"user entry '{user_name}' must define '{field_name}' as a non-empty string")
 
 
 def _decode_jwt_exp(token: str) -> tuple[datetime | None, str | None]:
@@ -102,7 +104,7 @@ def _load_kubeconfig(kubeconfig: str) -> dict:
         raise ValueError(f"unable to read kubeconfig '{kubeconfig}': {exc}") from exc
 
     try:
-        config = yaml.safe_load(content) or {}
+        config = yaml.safe_load(content)
     except YAMLError as exc:
         raise ValueError(f"invalid kubeconfig YAML in '{kubeconfig}': {exc}") from exc
 
@@ -177,8 +179,16 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         raise ValueError(f"user entry '{user_name}' must define 'exec' as a mapping")
     if "auth-provider" in user_cfg and not isinstance(user_cfg["auth-provider"], dict):
         raise ValueError(f"user entry '{user_name}' must define 'auth-provider' as a mapping")
-    for field_name in ("client-certificate", "client-certificate-data", "client-key", "client-key-data"):
+    cert_fields = ("client-certificate", "client-certificate-data", "client-key", "client-key-data")
+    for field_name in cert_fields:
         _require_string_field(user_cfg, field_name, user_name)
+    file_pair = "client-certificate" in user_cfg or "client-key" in user_cfg
+    data_pair = "client-certificate-data" in user_cfg or "client-key-data" in user_cfg
+    if file_pair or data_pair:
+        has_complete_file_pair = "client-certificate" in user_cfg and "client-key" in user_cfg and not data_pair
+        has_complete_data_pair = "client-certificate-data" in user_cfg and "client-key-data" in user_cfg and not file_pair
+        if not (has_complete_file_pair or has_complete_data_pair):
+            raise ValueError(f"user entry '{user_name}' must define a complete client certificate pair")
 
     if "exec" in user_cfg:
         return {
@@ -194,14 +204,6 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             "severity": "warning",
             "auth_type": "auth_provider",
             "message": "kubeconfig uses auth-provider authentication; provider plugins are not executed during inspection",
-        }
-
-    if "client-certificate" in user_cfg or "client-certificate-data" in user_cfg:
-        return {
-            "status": "pass",
-            "severity": "info",
-            "auth_type": "client_cert",
-            "message": "kubeconfig uses client certificate authentication; token expiry is not applicable",
         }
 
     token_file = user_cfg.get("tokenFile")
@@ -251,6 +253,14 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
             "status": "pass",
             "severity": "info",
             "message": "static bearer JWT is valid and not nearing expiration",
+        }
+
+    if file_pair or data_pair:
+        return {
+            "status": "pass",
+            "severity": "info",
+            "auth_type": "client_cert",
+            "message": "kubeconfig uses client certificate authentication; token expiry is not applicable",
         }
 
     if "username" in user_cfg or "password" in user_cfg:
