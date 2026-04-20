@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import re
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +11,11 @@ COMPLETIONS_DIR = REPO_ROOT / "completions"
 
 def _completion_text(name: str) -> str:
     return (COMPLETIONS_DIR / name).read_text(encoding="utf-8")
+
+
+def _is_repo_owned_completion_name(name: str) -> bool:
+    junk_suffixes = ("~", ".swp", ".swo", ".tmp", ".bak", ".orig")
+    return not name.startswith(".") and not name.endswith(junk_suffixes)
 
 
 def test_acm_switchover_completion_tracks_current_cli_surface():
@@ -86,6 +92,21 @@ def test_generate_merged_kubeconfig_completion_exists_and_lists_supported_flags(
         assert token in content, f"Missing {token} from generate-merged-kubeconfig.sh completion"
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    (
+        ("acm_switchover.py", True),
+        (".DS_Store", False),
+        ("check_rbac.py~", False),
+        ("generate-merged-kubeconfig.sh.swp", False),
+        ("notes.txt", True),
+    ),
+)
+def test_completion_file_filter_ignores_local_junk_names(name: str, expected: bool):
+    """Completion parity checks should ignore common local junk files."""
+    assert _is_repo_owned_completion_name(name) is expected
+
+
 def test_install_completion_verification_tracks_all_completion_files():
     """Install verification should fail if any shipped completion file is missing."""
     script_text = (REPO_ROOT / "scripts" / "install-completions.sh").read_text(encoding="utf-8")
@@ -97,6 +118,10 @@ def test_install_completion_verification_tracks_all_completion_files():
         for entry in match.group(1).split()
         if entry.strip()
     }
-    actual = {path.name for path in COMPLETIONS_DIR.iterdir() if path.is_file()}
+    actual = {
+        path.name
+        for path in COMPLETIONS_DIR.iterdir()
+        if path.is_file() and _is_repo_owned_completion_name(path.name)
+    }
 
     assert expected == actual

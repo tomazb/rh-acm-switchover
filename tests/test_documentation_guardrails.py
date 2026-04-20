@@ -1,6 +1,7 @@
 """Regression checks for maintained support documentation."""
 
 from pathlib import Path
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -8,6 +9,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8")
+
+
+def _assert_argocd_script_only_in_deprecated_context(path: str, content: str) -> None:
+    lines = content.splitlines()
+
+    for idx, line in enumerate(lines):
+        if "argocd-manage.sh" not in line:
+            continue
+
+        window_start = max(0, idx - 2)
+        window_end = min(len(lines), idx + 3)
+        context = "\n".join(lines[window_start:window_end]).lower()
+        assert "deprecated" in context, f"Non-deprecated argocd-manage.sh guidance remains in {path}: {line}"
 
 
 def test_docs_index_surfaces_collection_and_tldr_docs():
@@ -47,6 +61,40 @@ def test_kustomize_readme_mentions_optional_decommission_extension():
     assert "deploy/rbac/extensions/decommission/clusterrolebinding.yaml" in content
 
 
+def test_argocd_guardrail_matches_script_without_dot_slash_prefix():
+    """The guardrail should match deprecated script guidance regardless of path prefix."""
+    _assert_argocd_script_only_in_deprecated_context(
+        "sample.md",
+        "Bash alternative (deprecated): `scripts/argocd-manage.sh` is deprecated.\n",
+    )
+
+
+def test_argocd_guardrail_accepts_deprecation_marker_in_nearby_context():
+    """A nearby deprecation marker should satisfy the guardrail for a code example."""
+    _assert_argocd_script_only_in_deprecated_context(
+        "sample.md",
+        "Deprecated:\n`argocd-manage.sh --context hub --mode pause`\n",
+    )
+
+
+def test_argocd_guardrail_rejects_non_deprecated_script_guidance():
+    """Any active argocd-manage.sh recommendation should still fail the guardrail."""
+    with pytest.raises(AssertionError):
+        _assert_argocd_script_only_in_deprecated_context(
+            "sample.md",
+            "Run `argocd-manage.sh --context hub --mode pause` before the switchover.\n",
+        )
+
+
+def test_install_quick_test_mentions_supported_virtualenv_names():
+    """Quick-test guidance should clarify both supported virtualenv directory names."""
+    content = _read("docs/getting-started/install.md")
+    quick_test_section = content.split("### Quick Test", 1)[1].split("### Enable Bash Completions", 1)[0]
+
+    assert "source .venv/bin/activate" in quick_test_section
+    assert "source venv/bin/activate" in quick_test_section
+
+
 def test_active_operator_docs_do_not_recommend_deprecated_argocd_script():
     """Active operator guidance may mention the script only as deprecated, never as the recommended path."""
     guarded_paths = (
@@ -57,7 +105,4 @@ def test_active_operator_docs_do_not_recommend_deprecated_argocd_script():
     )
 
     for path in guarded_paths:
-        for line in _read(path).splitlines():
-            if "./scripts/argocd-manage.sh" not in line:
-                continue
-            assert "deprecated" in line.lower(), f"Non-deprecated argocd-manage.sh guidance remains in {path}: {line}"
+        _assert_argocd_script_only_in_deprecated_context(path, _read(path))

@@ -300,8 +300,11 @@ kubectl config set-context acm-switchover-context \
 ### Quick Test
 
 ```bash
-# Activate virtual environment (if using one)
+# Activate the virtual environment you created earlier (if using one)
+# If you created `.venv`:
 source .venv/bin/activate
+# OR, if you created `venv`:
+source venv/bin/activate
 
 # Run help command
 python acm_switchover.py --help
