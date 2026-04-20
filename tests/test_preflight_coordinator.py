@@ -11,7 +11,10 @@ from modules.preflight_coordinator import PreflightValidator
 
 
 def _build_validator(
-    argocd_manage: bool = False, include_decommission: bool = False, skip_gitops_check: bool = False
+    argocd_manage: bool = False,
+    include_decommission: bool = False,
+    skip_gitops_check: bool = False,
+    restore_only: bool = False,
 ) -> PreflightValidator:
     """Create PreflightValidator with internal validators stubbed for focused RBAC tests."""
     primary = Mock()
@@ -27,6 +30,7 @@ def _build_validator(
         include_decommission=include_decommission,
         argocd_manage=argocd_manage,
         skip_gitops_check=skip_gitops_check,
+        restore_only=restore_only,
     )
 
     # Stub downstream validators so this test only exercises RBAC wiring.
@@ -46,6 +50,32 @@ def _build_validator(
     validator.reporter.print_summary = Mock()
 
     return validator
+
+
+@pytest.mark.unit
+def test_validate_all_restore_only_checks_backup_presence_on_secondary():
+    """Restore-only preflight must still prove restorable backup artifacts exist."""
+    validator = _build_validator(restore_only=True)
+
+    discovery = argocd_lib.ArgocdDiscoveryResult(
+        has_applications_crd=False,
+        has_argocds_crd=False,
+        install_type="none",
+    )
+
+    with patch("modules.preflight_coordinator.validate_rbac_permissions"), patch(
+        "modules.preflight_coordinator.AutoImportStrategyValidator"
+    ) as auto_import_validator, patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        return_value=discovery,
+    ):
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is True
+    validator.backup_validator.run.assert_called_once_with(validator.secondary)
+    validator.backup_schedule_validator.run.assert_not_called()
+    validator.managed_cluster_backup_validator.run.assert_not_called()
 
 
 @pytest.mark.unit

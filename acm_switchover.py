@@ -71,6 +71,7 @@ def parse_args():
         flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only", "--restore-only")
     )
     restore_only_requested = "--restore-only" in sys.argv[1:]
+    argocd_resume_only_requested = "--argocd-resume-only" in sys.argv[1:]
 
     parser = argparse.ArgumentParser(
         description="ACM Hub Switchover Automation",
@@ -108,7 +109,9 @@ Examples:
 
     # Context arguments
     parser.add_argument(
-        "--primary-context", required=not restore_only_requested, help="Kubernetes context for primary hub"
+        "--primary-context",
+        required=not (restore_only_requested or argocd_resume_only_requested),
+        help="Kubernetes context for primary hub",
     )
     parser.add_argument(
         "--secondary-context",

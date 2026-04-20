@@ -235,7 +235,11 @@ class PreflightValidator:
             for label, client in (("primary", self.primary), ("secondary", self.secondary)):
                 self.hub_component_validator.run(client, label)
 
-        if not self.restore_only:
+        if self.restore_only:
+            # Restore-only still needs proof that backup artifacts exist on the
+            # destination hub before activation asks ACM to restore "latest".
+            self.backup_validator.run(self.secondary)
+        else:
             # Primary-only validators: skip entirely in restore-only mode
             self.backup_validator.run(self.primary)
             self.backup_schedule_validator.run(self.primary)

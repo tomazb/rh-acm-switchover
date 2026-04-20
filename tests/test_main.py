@@ -164,6 +164,22 @@ class TestArgParsing:
             assert args.method is None
             assert args.old_hub_action is None
 
+    def test_argocd_resume_only_parses_without_primary_context(self):
+        """Standalone resume-only mode must allow restore-only follow-up without a dummy primary context."""
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--secondary-context",
+                "p2",
+                "--argocd-resume-only",
+            ],
+        ):
+            args = parse_args()
+            assert args.argocd_resume_only is True
+            assert args.primary_context is None
+            assert args.secondary_context == "p2"
+
     def test_setup_parses_without_method_or_old_hub_action(self):
         """Setup mode must not require switchover-only flags."""
         with patch(

@@ -53,6 +53,16 @@
     - acm_primary_backups_info is not defined
     - not (acm_switchover_operation.restore_only | default(false))
 
+- name: Read secondary hub backups when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_backups_info
+  when: acm_secondary_backups_info is not defined
+
 - name: Read primary hub Velero pods when not pre-seeded by tests
   kubernetes.core.k8s_info:
     api_version: v1

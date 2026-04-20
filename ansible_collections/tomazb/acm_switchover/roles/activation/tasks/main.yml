@@ -52,6 +52,8 @@
         checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
         status: fail
         error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+        operational_data:
+          argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
       when: acm_switchover_execution.checkpoint.enabled | default(false)
 
     - name: Re-raise failure
@@ -64,6 +66,8 @@
     phase: activation
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
+    operational_data:
+      argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

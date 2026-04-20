@@ -80,6 +80,9 @@
               schema_version: "1.0"
               source: tomazb.acm_switchover
               operation: restore_only
+              argocd:
+                run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+                summary: "{{ acm_switchover_argocd_summary | default({}) }}"
               phases: >-
                 {{
                   {}

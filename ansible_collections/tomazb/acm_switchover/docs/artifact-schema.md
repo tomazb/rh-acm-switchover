@@ -24,6 +24,10 @@
 {
   "schema_version": "1.0",
   "source": "tomazb.acm_switchover",
+  "argocd": {
+    "run_id": "9f2e4c13b8aa",
+    "summary": {"paused": 3, "restored": 0}
+  },
   "phases": {
     "primary_prep": {"phase": "primary_prep", "status": "pass|fail", "changed": true},
     "activation":   {"phase": "activation",   "status": "pass|fail", "changed": true},
@@ -44,6 +48,10 @@
 ```
 
 Only phases that ran before any failure are included in `phases`.
+
+The optional `argocd` object records pause metadata needed for later explicit
+resume when Argo CD management is enabled. `run_id` matches the
+`acm-switchover.argoproj.io/paused-by` marker written to Applications.
 
 ## Report Artifact
 
@@ -75,7 +83,9 @@ Written by the `tomazb.acm_switchover.checkpoint_phase` action plugin after each
   "schema_version": "1.0",
   "completed_phases": ["preflight", "primary_prep", "activation"],
   "phase_status": "pass",
-  "operational_data": {},
+  "operational_data": {
+    "argocd_run_id": "9f2e4c13b8aa"
+  },
   "errors": [],
   "report_refs": [
     {"phase": "preflight", "path": "/artifacts/preflight-report.json", "kind": "json-report"}
@@ -90,7 +100,7 @@ Fields:
 - `schema_version` — always `"1.0"`
 - `completed_phases` — ordered list of phase names that have passed; used to skip phases on resume
 - `phase_status` — last recorded phase outcome (`"pass"` or `"fail"`)
-- `operational_data` — reserved for future runtime state (e.g., Argo CD pause metadata)
+- `operational_data` — runtime state carried across resumes (for example `argocd_run_id` and backup verification baselines)
 - `errors` — list of `{phase, error}` objects recorded on failure
 - `report_refs` — list of `{phase, path, kind}` report artifact references (preflight only at present)
 - `locked_by` — identifier of the active run holding the checkpoint lock; prevents concurrent switchover executions from corrupting state. Null or absent when no run is active

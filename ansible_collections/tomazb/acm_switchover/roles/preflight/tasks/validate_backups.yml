@@ -23,6 +23,30 @@
       }}
   when: not (acm_switchover_operation.restore_only | default(false))
 
+- name: Record restore-only backup existence on target hub
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-latest-restore-only",
+            "severity": "critical",
+            "status": "pass" if (acm_secondary_backups_info.resources | default([]) | length) > 0 else "fail",
+            "message": "restore-only target hub has at least one backup artifact"
+              if (acm_secondary_backups_info.resources | default([]) | length) > 0
+              else "restore-only target hub has no Velero backup artifacts",
+            "details": {
+              "backup_count": acm_secondary_backups_info.resources | default([]) | length
+            },
+            "recommended_action": "Verify the target hub points at the correct backup bucket and that Velero has synced the backup artifacts"
+              if (acm_secondary_backups_info.resources | default([]) | length) == 0
+              else None
+          }
+        ]
+      }}
+  when: acm_switchover_operation.restore_only | default(false)
+
 - name: Record BackupSchedule presence
   ansible.builtin.set_fact:
     acm_switchover_validation_results: >-
