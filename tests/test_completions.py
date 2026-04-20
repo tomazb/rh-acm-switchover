@@ -42,6 +42,15 @@ def test_acm_switchover_completion_tracks_current_cli_surface():
     assert "operator validator both" in content
 
 
+def test_acm_switchover_boolean_flags_do_not_offer_argument_values():
+    """Boolean flags should appear in option lists without value completion branches."""
+    content = _completion_text("acm_switchover.py")
+
+    assert "--manage-auto-import-strategy" in content
+    assert "--manage-auto-import-strategy)" not in content
+    assert "--manage-auto-import-strategy=*" not in content
+
+
 def test_check_rbac_completion_tracks_role_and_managed_cluster_flags():
     """RBAC completion should cover newer mode and role flags."""
     content = _completion_text("check_rbac.py")

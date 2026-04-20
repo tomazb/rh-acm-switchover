@@ -23,10 +23,6 @@ _acm_switchover_complete() {
             _acm_complete_from_list "patch restore"
             return
             ;;
-        --manage-auto-import-strategy)
-            _acm_complete_from_list "ImportAndSync ImportOnly"
-            return
-            ;;
         --old-hub-action)
             _acm_complete_from_list "secondary decommission none"
             return
@@ -70,12 +66,6 @@ _acm_switchover_complete() {
     if [[ "$cur" == --activation-method=* ]]; then
         local value="${cur#*=}" prefix="--activation-method="
         COMPREPLY=( $(compgen -W "patch restore" -- "$value") )
-        COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
-        return
-    fi
-    if [[ "$cur" == --manage-auto-import-strategy=* ]]; then
-        local value="${cur#*=}" prefix="--manage-auto-import-strategy="
-        COMPREPLY=( $(compgen -W "ImportAndSync ImportOnly" -- "$value") )
         COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
         return
     fi
