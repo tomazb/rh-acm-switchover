@@ -37,8 +37,25 @@
         - acm_switchover_execution.checkpoint.enabled | default(false)
         - (_checkpoint_enter.checkpoint | default({})).get('operational_data', {}).get('saved_backup_schedule') is mapping
 
+    - name: Restore deferred auto-import reset flag from checkpoint
+      ansible.builtin.set_fact:
+        _auto_import_strategy_changed: >-
+          {{
+            (_checkpoint_enter.checkpoint | default({}))
+            .get('operational_data', {})
+            .get('auto_import_strategy_changed', false)
+            | bool
+          }}
+      when:
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - ((_checkpoint_enter.checkpoint | default({})).get('operational_data', {}).get('auto_import_strategy_changed', false) | bool)
+
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
+
+    - name: Reset auto-import strategy to default after post-activation window
+      ansible.builtin.include_tasks: reset_auto_import.yml
+      when: acm_switchover_features.manage_auto_import_strategy | default(false)
 
     - name: Disable observability on the old hub when requested
       ansible.builtin.include_tasks: disable_old_hub_observability.yml

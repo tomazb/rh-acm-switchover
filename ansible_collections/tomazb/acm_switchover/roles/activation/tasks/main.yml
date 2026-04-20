@@ -27,10 +27,6 @@
     - name: Apply immediate import annotations when required
       ansible.builtin.include_tasks: apply_immediate_import.yml
 
-    - name: Reset auto-import strategy after activation
-      ansible.builtin.include_tasks: reset_auto_import.yml
-      when: acm_switchover_features.manage_auto_import_strategy | default(false)
-
     - name: Publish activation result contract
       ansible.builtin.set_fact:
         acm_switchover_activation_result:
@@ -54,6 +50,14 @@
         error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
         operational_data:
           argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+          auto_import_strategy_changed: >-
+            {{
+              (_auto_import_strategy_changed | default(false))
+              or
+              ((_checkpoint_enter.checkpoint | default({}))
+              .get('operational_data', {})
+              .get('auto_import_strategy_changed', false))
+            }}
       when: acm_switchover_execution.checkpoint.enabled | default(false)
 
     - name: Re-raise failure
@@ -68,6 +72,14 @@
     status: pass
     operational_data:
       argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+      auto_import_strategy_changed: >-
+        {{
+          (_auto_import_strategy_changed | default(false))
+          or
+          ((_checkpoint_enter.checkpoint | default({}))
+          .get('operational_data', {})
+          .get('auto_import_strategy_changed', false))
+        }}
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

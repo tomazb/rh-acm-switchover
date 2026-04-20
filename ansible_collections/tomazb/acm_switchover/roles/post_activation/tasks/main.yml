@@ -19,6 +19,10 @@
     - name: Verify klusterlet status
       ansible.builtin.include_tasks: verify_klusterlet.yml
 
+    - name: Re-verify managed clusters after klusterlet remediation
+      ansible.builtin.include_tasks: verify_managed_clusters.yml
+      when: _klusterlet_remediation_attempted | default(false)
+
     - name: Clean stale disable-auto-import annotations
       ansible.builtin.include_tasks: cleanup_auto_import_annotations.yml
 

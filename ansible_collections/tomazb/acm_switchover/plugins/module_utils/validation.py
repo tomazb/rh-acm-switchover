@@ -103,6 +103,15 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
     Raises:
         ValidationError: If the combination is not supported.
     """
+    min_mc = operation.get("min_managed_clusters")
+    if min_mc is not None:
+        try:
+            min_mc = int(min_mc)
+        except (TypeError, ValueError):
+            raise ValidationError("min_managed_clusters must be an integer")
+        if min_mc < 0:
+            raise ValidationError("min_managed_clusters must be a non-negative integer")
+
     restore_only = operation.get("restore_only", False)
     activation_method = operation.get("activation_method", "patch")
     old_hub_action = operation.get("old_hub_action", "secondary")

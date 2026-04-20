@@ -40,6 +40,8 @@ from ansible.module_utils.basic import AnsibleModule
 
 
 def summarize_cluster_group(clusters: list[dict], min_managed_clusters: int) -> dict:
+    if min_managed_clusters < 0:
+        raise ValueError("min_managed_clusters must be a non-negative integer")
     pending = [item["name"] for item in clusters if not (item["joined"] and item["available"])]
     return {
         "passed": len(clusters) >= min_managed_clusters and not pending,
@@ -56,9 +58,12 @@ def main() -> None:
         },
         supports_check_mode=True,
     )
+    min_mc = module.params["min_managed_clusters"]
+    if min_mc < 0:
+        module.fail_json(msg="min_managed_clusters must be a non-negative integer")
     result = summarize_cluster_group(
         module.params["cluster_status"],
-        module.params["min_managed_clusters"],
+        min_mc,
     )
     module.exit_json(changed=False, **result)
 
