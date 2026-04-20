@@ -2,6 +2,41 @@
 - name: Resume Argo CD auto-sync after switchover
   hosts: localhost
   gather_facts: false
+  pre_tasks:
+    - name: Check for persisted checkpoint with Argo CD run_id
+      ansible.builtin.stat:
+        path: "{{ (acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '') }}"
+      register: _argocd_resume_checkpoint_stat
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length > 0
+
+    - name: Load persisted checkpoint data
+      ansible.builtin.set_fact:
+        _argocd_resume_checkpoint: >-
+          {{
+            lookup(
+              'file',
+              (acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')
+            ) | from_json
+          }}
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - (_argocd_resume_checkpoint_stat.stat.exists | default(false))
+
+    - name: Seed Argo CD run_id from checkpoint
+      ansible.builtin.set_fact:
+        acm_switchover_argocd: >-
+          {{
+            acm_switchover_argocd | default({})
+            | combine({
+                'run_id': (_argocd_resume_checkpoint.get('operational_data', {}).get('argocd_run_id'))
+              })
+          }}
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - (_argocd_resume_checkpoint.get('operational_data', {}).get('argocd_run_id', '')) | length > 0
+
   tasks:
     - name: Resume autosync on secondary hub
       ansible.builtin.include_role:

@@ -150,6 +150,33 @@ def test_standalone_argocd_resume_covers_both_hubs():
     ), "Primary hub resume should be guarded by acm_switchover_hubs.primary is defined"
 
 
+def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
+    """argocd_resume.yml must seed run_id from checkpoint before resuming.
+
+    The pause run_id is persisted in checkpoint operational_data during
+    switchover/restore-only runs. Standalone resume must reload that value so
+    resume.yml can match the paused-by annotation without requiring operators
+    to pass run_id manually.
+    """
+    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+
+    assert "acm_switchover_execution" in text and "checkpoint" in text, (
+        "argocd_resume.yml must inspect the configured checkpoint path"
+    )
+    assert "lookup(" in text and "'file'" in text and "from_json" in text, (
+        "argocd_resume.yml must load checkpoint JSON before including argocd_manage"
+    )
+    assert "operational_data" in text and "argocd_run_id" in text, (
+        "argocd_resume.yml must read operational_data.argocd_run_id from the checkpoint"
+    )
+    assert "combine({" in text and "'run_id':" in text, (
+        "argocd_resume.yml must seed acm_switchover_argocd.run_id from the persisted checkpoint"
+    )
+    assert "(acm_switchover_argocd.run_id | default('')) | length == 0" in text, (
+        "argocd_resume.yml must not overwrite an explicit run_id supplied by the operator"
+    )
+
+
 def test_discover_run_id_gated_by_resume_mode():
     """discover.yml must NOT generate run_id when mode is resume.
 
