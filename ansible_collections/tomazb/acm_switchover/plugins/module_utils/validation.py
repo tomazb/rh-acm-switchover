@@ -70,11 +70,27 @@ def validate_safe_path(path: str) -> None:
             f"Path '{path}' contains unsafe characters. " f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
         )
 
-    # Validate absolute paths against allowed prefixes
+    # Validate absolute paths against allowed prefixes with symlink-aware resolution
     if path.startswith("/"):
+        if os.path.exists(path):
+            resolved_path = os.path.realpath(path)
+        else:
+            parent = os.path.dirname(path)
+            if parent and os.path.exists(parent):
+                resolved_path = os.path.join(os.path.realpath(parent), os.path.basename(path))
+            else:
+                raise ValidationError(
+                    f"Absolute path '{path}' has a non-existent parent directory. "
+                    "Create the parent directory in an allowed location before using this path."
+                )
+
         home_dir = os.path.expanduser("~")
-        allowed_prefixes = ["/tmp/", "/var/", home_dir + "/"]
-        if not any(path.startswith(prefix) for prefix in allowed_prefixes):
+        allowed_prefixes = ["/tmp/", "/var/", os.path.realpath(home_dir) + "/"]
+        cwd = os.getcwd()
+        if cwd:
+            allowed_prefixes.append(os.path.realpath(cwd) + "/")
+
+        if not any(resolved_path.startswith(prefix) for prefix in allowed_prefixes):
             raise ValidationError(
                 f"Absolute path '{path}' is outside allowed directories. "
                 f"Allowed prefixes: /tmp/, /var/, {home_dir}/"

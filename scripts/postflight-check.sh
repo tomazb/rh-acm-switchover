@@ -42,10 +42,12 @@ SKIP_GITOPS_CHECK=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --new-hub-context)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --new-hub-context requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             NEW_HUB_CONTEXT="$2"
             shift 2
             ;;
         --old-hub-context)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --old-hub-context requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             OLD_HUB_CONTEXT="$2"
             shift 2
             ;;

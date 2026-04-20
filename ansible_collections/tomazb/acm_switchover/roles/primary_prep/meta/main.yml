@@ -3,6 +3,6 @@ galaxy_info:
   role_name: primary_prep
   author: Tomaz B
   description: Primary hub preparation — pause backups, manage auto-import, scale observability.
-  license: Apache-2.0
+  license: MIT
   min_ansible_version: "2.15"
 dependencies: []

@@ -124,6 +124,25 @@ def test_unknown_option(script, bad_option):
     assert "Unknown option" in out or "help" in out.lower()
 
 
+@pytest.mark.parametrize(
+    "script,args",
+    [
+        ("preflight-check.sh", ["--primary-context"]),
+        ("preflight-check.sh", ["--secondary-context"]),
+        ("preflight-check.sh", ["--method"]),
+        ("postflight-check.sh", ["--new-hub-context"]),
+        ("postflight-check.sh", ["--old-hub-context"]),
+        ("discover-hub.sh", ["--contexts"]),
+        ("discover-hub.sh", ["--timeout"]),
+    ],
+)
+def test_rejects_missing_option_values(script, args):
+    """Options that require a value should fail cleanly instead of hitting set -u."""
+    code, out = run_script(script, *args)
+    assert code == 2, f"{script} should exit with EXIT_INVALID_ARGS when {args[0]} is missing a value"
+    assert "requires a value" in out
+
+
 def test_preflight_invalid_method():
     """Test preflight with valid args runs checks (will fail without real cluster but args parse)."""
     code, out = run_script(

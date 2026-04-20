@@ -22,7 +22,7 @@ from lib.constants import (
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
-from lib.utils import StateManager, is_acm_version_ge
+from lib.utils import Phase, StateManager, is_acm_version_ge
 
 logger = logging.getLogger("acm_switchover")
 
@@ -95,11 +95,11 @@ class PrimaryPreparation:
 
         except SwitchoverError as e:
             logger.error("Primary hub preparation failed: %s", e)
-            self.state.add_error(str(e), "primary_preparation")
+            self.state.add_error(str(e), Phase.PRIMARY_PREP.value)
             return False
         except Exception as e:
             logger.error("Unexpected error during primary preparation: %s", e)
-            self.state.add_error(f"Unexpected: {str(e)}", "primary_preparation")
+            self.state.add_error(f"Unexpected: {str(e)}", Phase.PRIMARY_PREP.value)
             return False
 
     def _pause_argocd_acm_apps(self) -> None:

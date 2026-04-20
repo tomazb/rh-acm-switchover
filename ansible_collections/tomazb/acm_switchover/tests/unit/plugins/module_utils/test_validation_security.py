@@ -66,6 +66,17 @@ class TestValidateSafePathNegative:
         with pytest.raises(ValidationError, match="cannot be empty"):
             validate_safe_path("")
 
+    def test_rejects_absolute_path_through_symlink_escape(self, tmp_path):
+        escape_link = tmp_path / "safe-link"
+        escape_link.symlink_to("/etc", target_is_directory=True)
+
+        with pytest.raises(ValidationError, match="outside allowed directories"):
+            validate_safe_path(str(escape_link / "passwd"))
+
+    def test_rejects_absolute_path_with_missing_parent_directory(self, tmp_path):
+        with pytest.raises(ValidationError, match="non-existent parent directory"):
+            validate_safe_path(str(tmp_path / "missing-parent" / "state.json"))
+
 
 class TestValidateContextNamePositive:
     """Positive tests to ensure valid contexts still pass."""
@@ -96,7 +107,7 @@ class TestValidateSafePathPositive:
         validate_safe_path("/var/data")  # should not raise
 
     def test_accepts_path_with_dots(self):
-        validate_safe_path("/var/data/file.txt")
+        validate_safe_path("/var/log/file.txt")
 
     def test_accepts_relative_path(self):
         validate_safe_path("./state/checkpoint.json")
@@ -130,4 +141,4 @@ class TestValidateSafePathPositive:
         validate_safe_path("/tmp/state.json")
 
     def test_accepts_absolute_path_var(self):
-        validate_safe_path("/var/data/file.txt")
+        validate_safe_path("/var/log/file.txt")

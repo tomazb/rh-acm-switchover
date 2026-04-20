@@ -32,6 +32,7 @@
             if summary_path.startswith('/')
             else (lookup('env', 'PWD') ~ '/' ~ summary_path)
           }}
+      when: summary_path is defined
 
     - name: Write summary file
       ansible.builtin.copy:
@@ -44,3 +45,4 @@
           }}
         dest: "{{ _acm_summary_path_abs }}"
         mode: "0644"
+      when: summary_path is defined

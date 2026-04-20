@@ -36,7 +36,7 @@ from lib.constants import (
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
-from lib.utils import StateManager, dry_run_skip
+from lib.utils import Phase, StateManager, dry_run_skip
 from lib.waiter import wait_for_condition
 
 logger = logging.getLogger("acm_switchover")
@@ -106,11 +106,11 @@ class PostActivationVerification:
 
         except SwitchoverError as e:
             logger.error("Post-activation verification failed: %s", e)
-            self.state.add_error(str(e), "post_activation_verification")
+            self.state.add_error(str(e), Phase.POST_ACTIVATION.value)
             return False
         except Exception as e:
             logger.error("Unexpected error during post-activation verification: %s", e)
-            self.state.add_error(f"Unexpected: {str(e)}", "post_activation_verification")
+            self.state.add_error(f"Unexpected: {str(e)}", Phase.POST_ACTIVATION.value)
             return False
 
     def _verify_cluster_connections(self) -> None:

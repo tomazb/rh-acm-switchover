@@ -938,6 +938,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --contexts)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --contexts requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             CONTEXTS="$2"
             shift 2
             ;;
@@ -950,6 +951,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --timeout)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --timeout requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             CONNECTION_TIMEOUT="$2"
             shift 2
             ;;

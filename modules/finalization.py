@@ -48,7 +48,7 @@ from lib.constants import (
 from lib.exceptions import FatalError, SwitchoverError, TransientError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient, is_retryable_error
-from lib.utils import StateManager, dry_run_skip, is_acm_version_ge
+from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge
 from lib.waiter import wait_for_condition
 
 from .backup_schedule import BackupScheduleManager
@@ -243,11 +243,11 @@ class Finalization:
 
         except SwitchoverError as e:
             logger.error("Finalization failed: %s", e)
-            self.state.add_error(str(e), "finalization")
+            self.state.add_error(str(e), Phase.FINALIZATION.value)
             return False
         except Exception as e:
             logger.error("Unexpected error during finalization: %s", e)
-            self.state.add_error(f"Unexpected: {str(e)}", "finalization")
+            self.state.add_error(f"Unexpected: {str(e)}", Phase.FINALIZATION.value)
             return False
 
     def _enable_backup_schedule(self):
@@ -890,7 +890,7 @@ class Finalization:
             raise SwitchoverError("No BackupSchedule found while verifying finalization")
 
         schedule = schedules[0]
-        schedule_name = schedule.get("metadata", {}).get("name", "schedule-rhacm")
+        schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
         paused = schedule.get("spec", {}).get("paused", False)
 
         if paused:

@@ -83,3 +83,12 @@ def test_restore_only_persists_argocd_run_id_in_checkpoint_after_pause():
     assert "operational_data" in text and "argocd_run_id" in text, (
         "restore_only.yml must persist operational_data.argocd_run_id for standalone argocd_resume.yml"
     )
+
+
+def test_argocd_manage_test_only_writes_summary_when_requested():
+    """The Argo CD integration-test playbook should tolerate omitted summary_path."""
+    text = (PLAYBOOKS / "argocd_manage_test.yml").read_text()
+    assert text.count("when: summary_path is defined") >= 2, (
+        "argocd_manage_test.yml should guard summary-path resolution and file write "
+        "so the playbook still runs when summary_path is omitted"
+    )

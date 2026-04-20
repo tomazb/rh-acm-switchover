@@ -255,6 +255,33 @@ def test_action_module_rejects_missing_phase(tmp_path):
     assert "Missing required checkpoint phase" in result["msg"]
 
 
+def test_action_module_rejects_unknown_phase(tmp_path):
+    from unittest.mock import MagicMock
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    task = MagicMock()
+    task.async_val = 0
+    task.args = {
+        "phase": "bogus-phase",
+        "checkpoint": {"enabled": True, "backend": "file", "path": str(tmp_path / "checkpoint.json")},
+        "status": "pass",
+    }
+
+    action = ActionModule(
+        task=task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+
+    result = action.run()
+    assert result["failed"] is True
+    assert "Invalid checkpoint phase" in result["msg"]
+
+
 def test_action_module_reset_discards_previous_checkpoint_state_on_preflight_enter(tmp_path):
     import json
     from unittest.mock import MagicMock

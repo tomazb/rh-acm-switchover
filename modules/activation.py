@@ -38,7 +38,7 @@ from lib.constants import (
 from lib.exceptions import FatalError, SwitchoverError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
-from lib.utils import StateManager, is_acm_version_ge
+from lib.utils import Phase, StateManager, is_acm_version_ge
 from lib.waiter import wait_for_condition
 
 from .restore_discovery import find_passive_sync_restore
@@ -153,11 +153,11 @@ class SecondaryActivation:
 
         except SwitchoverError as e:
             logger.error("Secondary hub activation failed: %s", e)
-            self.state.add_error(str(e), "activation")
+            self.state.add_error(str(e), Phase.ACTIVATION.value)
             return False
         except (RuntimeError, ValueError) as e:
             logger.error("Unexpected error during activation: %s", e)
-            self.state.add_error(f"Unexpected: {str(e)}", "activation")
+            self.state.add_error(f"Unexpected: {str(e)}", Phase.ACTIVATION.value)
             return False
         except Exception as e:
             # Log programming errors but re-raise so they're not hidden
@@ -624,6 +624,8 @@ class SecondaryActivation:
             )
             self.state.set_config("auto_import_strategy_set", True)
         except Exception as e:
+            if self.manage_auto_import_strategy:
+                raise SwitchoverError(f"Failed to manage autoImportStrategy on destination hub: {e}") from e
             logger.warning("Unable to manage auto-import strategy: %s", e)
 
     def _get_auto_import_strategy(self) -> str:

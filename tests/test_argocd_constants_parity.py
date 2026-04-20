@@ -30,6 +30,21 @@ def test_acm_namespaces_parity():
         assert ARGOCD_ACM_NS_REGEX.match(ns), f"Python regex should match ACM sub-namespace '{ns}'"
 
 
+def test_ansible_argocd_filters_match_acm_sub_namespaces():
+    """Ansible Argo CD filtering should match the same ACM sub-namespaces as Python/Bash."""
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import is_acm_touching_application
+
+    app = {
+        "status": {
+            "resources": [
+                {"namespace": "open-cluster-management-agent", "kind": "ConfigMap"},
+            ]
+        }
+    }
+
+    assert is_acm_touching_application(app) is True
+
+
 def test_build_pause_patch_matches_jinja_logic():
     """Verify build_pause_patch produces same result as pause.yml Jinja template.
 

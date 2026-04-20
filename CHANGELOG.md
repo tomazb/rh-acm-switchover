@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bash argument parsing**: `preflight-check.sh`, `postflight-check.sh`, and `discover-hub.sh` now reject missing option values with a clear invalid-arguments error instead of crashing under `set -u`.
+- **Python auto-import management**: `activation.py` now fails closed when explicit `--manage-auto-import-strategy` updates cannot be read or patched, while detect-only mode remains warning-only.
+- **Collection metadata drift**: Bumped collection version to `1.7.1` and aligned role metadata licenses to `MIT` to match the repository license and release version.
+- **Ansible ArgoCD namespace parity**: Collection ArgoCD filtering now treats `open-cluster-management-*` sub-namespaces as ACM-managed, matching the Python and Bash implementations.
+- **Ansible path validation parity**: Collection `validate_safe_path()` now resolves symlinks, rejects absolute paths with missing parent directories, and allows only `/tmp`, `/var`, workspace, and home-rooted absolute paths.
+- **Checkpoint phase validation**: `checkpoint_phase` now rejects unknown phase names instead of silently persisting invalid checkpoint state.
+- **Finalization and test-playbook cleanup**: Finalization now uses the shared backup schedule default name in fallback errors, phase error recording uses `Phase.*.value`, and `argocd_manage_test.yml` only writes summary output when `summary_path` is supplied.
+
 - **Python CLI getattr defaults**: Fixed wrong `getattr` fallback (`True` → `False`) for `manage_auto_import_strategy` in activation and finalization phase runners. While argparse always sets the attribute making the fallback unreachable, the semantic intent was wrong and created latent risk.
 - **Constants parity test**: Added explicit contract map test (`tests/test_constants_parity.py`) covering ~18 shared constants between `lib/constants.py` and Ansible `module_utils/constants.py` to detect drift. Previously only `ACM_KINDS` and `ACM_NAMESPACES` had parity coverage.
 - **CI workflow env var**: Fixed `ANSIBLE_COLLECTIONS_PATH` in GitHub Actions workflow — `${{ env.HOME }}` doesn't resolve system env vars in `env:` blocks; moved to shell `$HOME` in `run:` block.

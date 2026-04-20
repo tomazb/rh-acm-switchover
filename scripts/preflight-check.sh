@@ -43,14 +43,17 @@ SKIP_GITOPS_CHECK=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --primary-context)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --primary-context requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             PRIMARY_CONTEXT="$2"
             shift 2
             ;;
         --secondary-context)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --secondary-context requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             SECONDARY_CONTEXT="$2"
             shift 2
             ;;
         --method)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --method requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             METHOD="$2"
             shift 2
             ;;

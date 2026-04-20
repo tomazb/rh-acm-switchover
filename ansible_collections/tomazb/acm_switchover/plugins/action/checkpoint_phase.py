@@ -11,6 +11,7 @@ from ansible.plugins.action import ActionBase
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     build_checkpoint_record,
+    KNOWN_PHASES,
     should_resume_phase,
 )
 
@@ -74,6 +75,13 @@ class ActionModule(ActionBase):
             return {
                 "failed": True,
                 "msg": "Missing required checkpoint phase.",
+            }
+
+        if phase not in KNOWN_PHASES:
+            valid_phases = ", ".join(KNOWN_PHASES)
+            return {
+                "failed": True,
+                "msg": f"Invalid checkpoint phase '{phase}'. Expected one of: {valid_phases}.",
             }
 
         if backend not in {"file"}:
