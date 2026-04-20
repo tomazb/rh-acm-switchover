@@ -35,6 +35,18 @@
                 )
               })
           }}
+        acm_switchover_argocd_summary_by_hub: >-
+          {%- set hub = _argocd_discover_hub | default('secondary') -%}
+          {%- set existing = (acm_switchover_argocd_summary_by_hub | default({})).get(hub, {}) -%}
+          {{
+            (acm_switchover_argocd_summary_by_hub | default({}))
+            | combine({
+                hub: {
+                  'paused': (existing.get('paused', 0) | int),
+                  'restored': (existing.get('restored', 0) | int) + (acm_switchover_argocd_acm_apps | length | int)
+                }
+              })
+          }}
       when: acm_switchover_argocd_mock_apps is defined
 
     # Live mode: iterate apps that have the pause annotation AND whose run_id matches.
@@ -96,6 +108,19 @@
                   ((acm_switchover_argocd_summary | default({})).get('restored', 0) | int)
                   + (acm_argocd_resume_results.results | default([]) | selectattr('changed') | list | length | int)
                 )
+              })
+          }}
+        acm_switchover_argocd_summary_by_hub: >-
+          {%- set hub = _argocd_discover_hub | default('secondary') -%}
+          {%- set existing = (acm_switchover_argocd_summary_by_hub | default({})).get(hub, {}) -%}
+          {{
+            (acm_switchover_argocd_summary_by_hub | default({}))
+            | combine({
+                hub: {
+                  'paused': (existing.get('paused', 0) | int),
+                  'restored': (existing.get('restored', 0) | int)
+                    + (acm_argocd_resume_results.results | default([]) | selectattr('changed') | list | length | int)
+                }
               })
           }}
       when: acm_switchover_argocd_mock_apps is not defined

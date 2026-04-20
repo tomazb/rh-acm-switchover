@@ -94,7 +94,19 @@
               operation: restore_only
               argocd:
                 run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
-                summary: "{{ acm_switchover_argocd_summary | default({}) }}"
+                summary: >-
+                  {%- set hubs = acm_switchover_argocd_summary_by_hub | default({}) -%}
+                  {%- if hubs | length > 0 -%}
+                  {%- set paused = 0 -%}
+                  {%- set restored = 0 -%}
+                  {%- for _hub_name, hub_summary in hubs.items() -%}
+                  {%- set paused = paused + (hub_summary.get('paused', 0) | int) -%}
+                  {%- set restored = restored + (hub_summary.get('restored', 0) | int) -%}
+                  {%- endfor -%}
+                  {{ {'paused': paused, 'restored': restored} }}
+                  {%- else -%}
+                  {{ acm_switchover_argocd_summary | default({}) }}
+                  {%- endif -%}
               phases: >-
                 {{
                   {}

@@ -16,6 +16,18 @@
                 'restored': ((acm_switchover_argocd_summary | default({})).get('restored', 0) | int)
               })
           }}
+        acm_switchover_argocd_summary_by_hub: >-
+          {%- set hub = _argocd_discover_hub | default('primary') -%}
+          {%- set existing = (acm_switchover_argocd_summary_by_hub | default({})).get(hub, {}) -%}
+          {{
+            (acm_switchover_argocd_summary_by_hub | default({}))
+            | combine({
+                hub: {
+                  'paused': (existing.get('paused', 0) | int) + (acm_switchover_argocd_acm_apps | length | int),
+                  'restored': (existing.get('restored', 0) | int)
+                }
+              })
+          }}
       when: acm_switchover_argocd_mock_apps is defined
 
     - name: Remove automated sync policy and annotate with run-id
@@ -60,6 +72,19 @@
                   + (acm_argocd_pause_results.results | selectattr('changed') | list | length | int)
                 ),
                 'restored': ((acm_switchover_argocd_summary | default({})).get('restored', 0) | int)
+              })
+          }}
+        acm_switchover_argocd_summary_by_hub: >-
+          {%- set hub = _argocd_discover_hub | default('primary') -%}
+          {%- set existing = (acm_switchover_argocd_summary_by_hub | default({})).get(hub, {}) -%}
+          {{
+            (acm_switchover_argocd_summary_by_hub | default({}))
+            | combine({
+                hub: {
+                  'paused': (existing.get('paused', 0) | int)
+                    + (acm_argocd_pause_results.results | selectattr('changed') | list | length | int),
+                  'restored': (existing.get('restored', 0) | int)
+                }
               })
           }}
       when: acm_switchover_argocd_mock_apps is not defined
