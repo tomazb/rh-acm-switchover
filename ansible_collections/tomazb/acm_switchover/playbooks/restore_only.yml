@@ -45,6 +45,18 @@
             _argocd_discover_hub: secondary
           when: acm_switchover_features.argocd.manage | default(false)
 
+        - name: Persist Argo CD pause run_id in checkpoint for standalone resume
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: preflight
+            checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+            status: pass
+            operational_data:
+              argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+          when:
+            - acm_switchover_features.argocd.manage | default(false)
+            - acm_switchover_execution.checkpoint.enabled | default(false)
+            - (acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default(''))) | length > 0
+
         - name: Run activation
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.activation

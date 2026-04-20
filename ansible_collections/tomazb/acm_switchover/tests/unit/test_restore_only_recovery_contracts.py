@@ -6,6 +6,7 @@ import yaml
 
 COLLECTION_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PREFLIGHT_TASKS = COLLECTION_ROOT / "roles" / "preflight" / "tasks"
+PRIMARY_PREP_TASKS = COLLECTION_ROOT / "roles" / "primary_prep" / "tasks"
 ACTIVATION_TASKS = COLLECTION_ROOT / "roles" / "activation" / "tasks"
 PLAYBOOKS = COLLECTION_ROOT / "playbooks"
 
@@ -55,6 +56,12 @@ def test_activation_checkpoint_persists_argocd_run_id():
     assert "argocd_run_id:" in text, "activation/main.yml must persist argocd_run_id in checkpoint operational_data"
 
 
+def test_primary_prep_checkpoint_persists_argocd_run_id():
+    """primary_prep checkpoint writes must preserve the generated Argo CD run_id."""
+    text = (PRIMARY_PREP_TASKS / "main.yml").read_text()
+    assert "argocd_run_id:" in text, "primary_prep/main.yml must persist argocd_run_id in checkpoint operational_data"
+
+
 def test_switchover_report_persists_argocd_run_id():
     """switchover-report.json must include Argo CD pause metadata for later explicit resume."""
     text = (PLAYBOOKS / "switchover.yml").read_text()
@@ -67,3 +74,12 @@ def test_restore_only_report_persists_argocd_run_id():
     text = (PLAYBOOKS / "restore_only.yml").read_text()
     assert "argocd:" in text, "restore_only.yml must publish Argo CD metadata into the report contract"
     assert "run_id" in text, "restore_only.yml report must carry the generated Argo CD run_id"
+
+
+def test_restore_only_persists_argocd_run_id_in_checkpoint_after_pause():
+    """restore_only.yml must persist the Argo CD pause run_id before activation starts."""
+    text = (PLAYBOOKS / "restore_only.yml").read_text()
+    assert "checkpoint_phase" in text, "restore_only.yml must update the checkpoint after Argo CD pause"
+    assert "operational_data" in text and "argocd_run_id" in text, (
+        "restore_only.yml must persist operational_data.argocd_run_id for standalone argocd_resume.yml"
+    )

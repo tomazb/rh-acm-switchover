@@ -163,8 +163,11 @@ def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
     assert "acm_switchover_execution" in text and "checkpoint" in text, (
         "argocd_resume.yml must inspect the configured checkpoint path"
     )
-    assert "lookup(" in text and "'file'" in text and "from_json" in text, (
-        "argocd_resume.yml must load checkpoint JSON before including argocd_manage"
+    assert "ansible.builtin.slurp" in text and "b64decode" in text and "from_json" in text, (
+        "argocd_resume.yml must load checkpoint JSON (controller-side) before including argocd_manage"
+    )
+    assert "lookup('env', 'PWD')" in text and "startswith('/')" in text, (
+        "argocd_resume.yml must resolve relative checkpoint paths against the run directory ($PWD)"
     )
     assert "operational_data" in text and "argocd_run_id" in text, (
         "argocd_resume.yml must read operational_data.argocd_run_id from the checkpoint"
@@ -174,6 +177,9 @@ def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
     )
     assert "(acm_switchover_argocd.run_id | default('')) | length == 0" in text, (
         "argocd_resume.yml must not overwrite an explicit run_id supplied by the operator"
+    )
+    assert "get('run_id', '')" in text, (
+        "argocd_resume.yml must not overwrite an explicit execution.run_id supplied by the operator"
     )
 
 

@@ -55,7 +55,9 @@
 
     - name: Reset auto-import strategy to default after post-activation window
       ansible.builtin.include_tasks: reset_auto_import.yml
-      when: acm_switchover_features.manage_auto_import_strategy | default(false)
+      when: >-
+        (acm_switchover_features.manage_auto_import_strategy | default(false))
+        or (_auto_import_strategy_changed | default(false) | bool)
 
     - name: Disable observability on the old hub when requested
       ansible.builtin.include_tasks: disable_old_hub_observability.yml
