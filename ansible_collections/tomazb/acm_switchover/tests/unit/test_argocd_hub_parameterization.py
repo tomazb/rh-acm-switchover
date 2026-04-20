@@ -177,6 +177,24 @@ def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
     )
 
 
+def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
+    """argocd_resume.yml must not load a stale checkpoint when checkpointing is disabled.
+
+    A checkpoint file may exist from a previous run at the configured path even
+    when checkpoint.enabled is false for the current run (no fresh write happened).
+    Loading it would seed a wrong run_id. All three checkpoint pre_tasks must
+    require checkpoint.enabled before touching the file.
+    """
+    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+    enabled_guard = "acm_switchover_execution.checkpoint.enabled | default(false)"
+    # Count occurrences — one per pre_task (stat, load, seed)
+    count = text.count(enabled_guard)
+    assert count >= 3, (
+        f"argocd_resume.yml must guard all three checkpoint pre_tasks with "
+        f"'{enabled_guard}', found {count} occurrence(s)"
+    )
+
+
 def test_discover_run_id_gated_by_resume_mode():
     """discover.yml must NOT generate run_id when mode is resume.
 
