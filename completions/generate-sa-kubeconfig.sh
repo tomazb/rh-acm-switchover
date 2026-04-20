@@ -14,6 +14,13 @@ _generate_sa_kubeconfig_complete() {
             _acm_complete_from_list "$(_acm_get_contexts)"
             return
             ;;
+        --kubeconfig)
+            _acm_complete_files
+            return
+            ;;
+        --user|--token-duration)
+            return
+            ;;
     esac
 
     if [[ "$cur" == --context=* ]]; then
@@ -22,9 +29,15 @@ _generate_sa_kubeconfig_complete() {
         COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
         return
     fi
+    if [[ "$cur" == --kubeconfig=* ]]; then
+        local value="${cur#*=}"
+        COMPREPLY=( $(compgen -f -- "$value") )
+        COMPREPLY=( "${COMPREPLY[@]/#/--kubeconfig=}" )
+        return
+    fi
 
     if [[ "$cur" == -* ]]; then
-        local opts="--context --help -h"
+        local opts="--kubeconfig --context --user --token-duration --help -h"
         _acm_complete_from_list "$opts"
         return
     fi
