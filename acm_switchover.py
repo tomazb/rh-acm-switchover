@@ -1305,6 +1305,24 @@ def _build_default_state_file(primary_ctx: Optional[str], secondary_ctx: Optiona
     return os.path.join(_get_default_state_dir(), f"switchover-{slug}.json")
 
 
+def _find_resume_state_candidates(secondary_ctx: str) -> list[str]:
+    """Return resume-only state file candidates that target the provided secondary context."""
+    state_dir = _get_default_state_dir()
+    if not os.path.isdir(state_dir):
+        return []
+
+    secondary_slug = _sanitize_context_identifier(secondary_ctx)
+    suffix = f"__{secondary_slug}.json"
+    candidates = []
+    for entry in os.listdir(state_dir):
+        if not entry.startswith("switchover-") or not entry.endswith(suffix):
+            continue
+        path = os.path.join(state_dir, entry)
+        if os.path.isfile(path):
+            candidates.append(path)
+    return sorted(candidates)
+
+
 def _resolve_state_file(
     requested_path: Optional[str],
     primary_ctx: Optional[str],
@@ -1323,6 +1341,18 @@ def _resolve_state_file(
 
     default_path = _build_default_state_file(primary_ctx, secondary_ctx)
     if not argocd_resume_only or not secondary_ctx:
+        return default_path
+
+    if primary_ctx is None:
+        candidates = _find_resume_state_candidates(secondary_ctx)
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise ValueError(
+                "Multiple candidate state files found for --argocd-resume-only "
+                f"matching secondary context {secondary_ctx}: {', '.join(candidates)}. "
+                "Pass --state-file explicitly or provide --primary-context to disambiguate."
+            )
         return default_path
 
     reversed_path = _build_default_state_file(secondary_ctx, primary_ctx)
@@ -1345,7 +1375,7 @@ def _resolve_state_file(
 def _run_argocd_resume_only(
     args: argparse.Namespace,
     state: StateManager,
-    primary: KubeClient,
+    primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
 ) -> bool:
@@ -1383,7 +1413,9 @@ def _run_argocd_resume_only(
         if stored_primary_ctx == current_secondary_ctx and stored_secondary_ctx == current_primary_ctx:
             logger.info("Resume-only contexts are reversed from the recorded state; swapping client mapping.")
             resume_primary, resume_secondary = secondary, primary
-        elif stored_primary_ctx != current_primary_ctx or stored_secondary_ctx != current_secondary_ctx:
+        elif current_primary_ctx is not None and (
+            stored_primary_ctx != current_primary_ctx or stored_secondary_ctx != current_secondary_ctx
+        ):
             logger.warning(
                 "Resume-only contexts (%s/%s) differ from recorded state (%s/%s); "
                 "preserving state and using the provided client mapping. "
@@ -1393,6 +1425,24 @@ def _run_argocd_resume_only(
                 stored_primary_ctx,
                 stored_secondary_ctx,
             )
+
+    primary_apps_recorded = any(isinstance(item, dict) and item.get("hub") == "primary" for item in paused_apps)
+    if primary_apps_recorded and resume_primary is None:
+        if not stored_primary_ctx:
+            logger.error(
+                "Argo CD resume state references Applications paused on the primary hub, "
+                "but the recorded primary context is missing. Pass --primary-context or "
+                "--state-file for a valid switchover state."
+            )
+            return False
+        if stored_primary_ctx == current_secondary_ctx and secondary is not None:
+            resume_primary = secondary
+        else:
+            logger.info(
+                "Resume-only primary context omitted; loading recorded primary hub client: %s",
+                stored_primary_ctx,
+            )
+            resume_primary = KubeClient(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
 
     summary = argocd_lib.resume_recorded_applications(
         paused_apps,

@@ -1344,6 +1344,39 @@ class TestMainGitOpsReporting:
         state_manager.assert_called_once_with(str(reversed_path))
         assert args.state_file == str(reversed_path)
 
+    def test_main_resume_only_uses_unique_secondary_matched_state_file_without_primary_context(
+        self, tmp_path, monkeypatch
+    ):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        args.state_file = None
+        args.primary_context = None
+        args.secondary_context = "secondary-b"
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+        state_path = tmp_path / "switchover-primary-a__secondary-b.json"
+        state_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover.StateManager", return_value=state
+        ) as state_manager, patch(
+            "acm_switchover._initialize_clients", return_value=(None, Mock())
+        ), patch(
+            "acm_switchover._run_argocd_resume_only", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        state_manager.assert_called_once_with(str(state_path))
+        assert args.state_file == str(state_path)
+
     def test_main_resume_only_missing_state_file_exits_before_state_manager(self, tmp_path):
         args = self._base_args()
         args.argocd_resume_only = True
@@ -1370,6 +1403,23 @@ class TestMainGitOpsReporting:
         initialize_clients.assert_not_called()
         assert not missing_state_file.exists()
         collector.print_report.assert_not_called()
+
+    def test_resolve_state_file_resume_only_without_primary_context_rejects_ambiguous_candidates(
+        self, tmp_path, monkeypatch
+    ):
+        from acm_switchover import _resolve_state_file
+
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+        (tmp_path / "switchover-primary-a__secondary-b.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "switchover-restore-only__secondary-b.json").write_text("{}", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Multiple candidate state files found"):
+            _resolve_state_file(
+                requested_path=None,
+                primary_ctx=None,
+                secondary_ctx="secondary-b",
+                argocd_resume_only=True,
+            )
 
     def test_main_enforces_contexts_for_normal_operation(self):
         args = self._base_args()
@@ -1907,6 +1957,49 @@ class TestPreflightPhase:
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
+    def test_resume_only_builds_primary_client_from_recorded_state_when_primary_context_omitted(self):
+        from acm_switchover import _run_argocd_resume_only
+
+        paused_apps = [
+            {
+                "hub": "primary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+            }
+        ]
+        state = Mock()
+        state.state = {
+            "contexts": {
+                "primary": "hub-a",
+                "secondary": "hub-b",
+            }
+        }
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace(primary_context=None, secondary_context="hub-b", dry_run=False)
+        secondary = Mock(name="secondary-client")
+        created_primary = Mock(name="primary-client")
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.KubeClient", return_value=created_primary) as kube_client, patch(
+            "acm_switchover.argocd_lib.resume_recorded_applications"
+        ) as resume_recorded:
+            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+
+            assert _run_argocd_resume_only(args, state, None, secondary, logger) is True
+
+        kube_client.assert_called_once_with("hub-a", dry_run=False)
+        resume_recorded.assert_called_once_with(
+            paused_apps,
+            "run-1",
+            created_primary,
+            secondary,
+            logger,
+        )
+
     def test_resume_only_swaps_clients_when_contexts_are_reversed(self):
         from acm_switchover import _run_argocd_resume_only
 

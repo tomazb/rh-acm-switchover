@@ -30,7 +30,10 @@ def test_switchover_report_aggregates_argocd_summary_by_hub_when_available():
     summary = report.get("argocd", {}).get("summary")
     assert isinstance(summary, str)
     assert "acm_switchover_argocd_summary_by_hub" in summary
+    assert "namespace(" in summary
     assert "hubs.items()" in summary
+    assert "ns.paused" in summary
+    assert "ns.restored" in summary
 
 
 def test_restore_only_report_aggregates_argocd_summary_by_hub_when_available():
@@ -38,5 +41,7 @@ def test_restore_only_report_aggregates_argocd_summary_by_hub_when_available():
     summary = report.get("argocd", {}).get("summary")
     assert isinstance(summary, str)
     assert "acm_switchover_argocd_summary_by_hub" in summary
+    assert "namespace(" in summary
     assert "hubs.items()" in summary
-
+    assert "ns.paused" in summary
+    assert "ns.restored" in summary

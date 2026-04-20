@@ -28,6 +28,32 @@ def test_decommission_adds_delete_permissions():
     assert ("cluster.open-cluster-management.io", "managedclusters", "delete", None) in permissions
 
 
+def test_decommission_only_excludes_switchover_permissions():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=True,
+        skip_observability=True,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+        decommission_only=True,
+    )
+
+    assert ("cluster.open-cluster-management.io", "managedclusters", "delete", None) in permissions
+    assert ("cluster.open-cluster-management.io", "managedclusters", "patch", None) not in permissions
+    assert (
+        "cluster.open-cluster-management.io",
+        "backupschedules",
+        "get",
+        "open-cluster-management-backup",
+    ) not in permissions
+    assert (
+        "operator.open-cluster-management.io",
+        "multiclusterhubs",
+        "delete",
+        "open-cluster-management",
+    ) in permissions
+
+
 def test_summary_reports_failure_when_permission_missing():
     summary = summarize_rbac_results(
         hub="primary",

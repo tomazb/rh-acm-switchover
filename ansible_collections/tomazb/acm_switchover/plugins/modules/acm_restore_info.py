@@ -244,6 +244,7 @@ def build_restore_activation_plan(
                         "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
                     },
                     "create_restore": create_restore,
+                    "rollback_restore": build_restore_snapshot(passive_restore),
                 }
             else:
                 operation = {

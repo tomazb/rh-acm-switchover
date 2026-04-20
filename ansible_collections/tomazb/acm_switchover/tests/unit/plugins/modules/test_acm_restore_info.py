@@ -159,3 +159,32 @@ def test_build_restore_activation_plan_for_full_restore_mode():
     assert plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"] == "latest"
     assert plan["wait_target"]["name"] == "restore-acm-full"
     assert plan["wait_target"]["success_phases"] == ["Finished", "Completed"]
+
+
+def test_build_restore_activation_plan_for_full_restore_preserves_passive_restore_for_rollback():
+    plan = build_restore_activation_plan(
+        method="full",
+        activation_method="patch",
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                    "labels": {"managed-by": "test"},
+                    "annotations": {"example": "annotation"},
+                },
+                "spec": {
+                    "syncRestoreWithNewBackups": True,
+                    "veleroManagedClustersBackupName": "latest",
+                },
+                "status": {"phase": "Enabled"},
+            }
+        ],
+        backup_name="latest",
+    )
+
+    assert plan["operation"]["action"] == "delete_and_create"
+    assert plan["operation"]["delete_restore"]["name"] == "restore-acm-passive-sync"
+    assert plan["operation"]["create_restore"]["metadata"]["name"] == "restore-acm-full"
+    assert plan["operation"]["rollback_restore"]["metadata"]["name"] == "restore-acm-passive-sync"
+    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {"managed-by": "test"}

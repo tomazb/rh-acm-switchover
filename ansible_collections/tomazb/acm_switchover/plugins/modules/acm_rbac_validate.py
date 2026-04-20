@@ -26,6 +26,12 @@ options:
     description: Whether to include delete permissions required for hub decommission.
     type: bool
     default: false
+  decommission_only:
+    description:
+      - Whether to expand only the standalone decommission permission surface.
+      - Intended for the dedicated decommission role, not switchover preflight.
+    type: bool
+    default: false
   skip_observability:
     description: Whether to omit observability-related permissions from the matrix.
     type: bool
@@ -182,6 +188,22 @@ DECOMMISSION_PERMISSIONS = [
     (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["delete"]),
 ]
 
+DECOMMISSION_CLUSTER_PERMISSIONS = [
+    ("", "namespaces", ["get"]),
+    (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["list", "delete"]),
+    (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["list", "delete"]),
+]
+
+DECOMMISSION_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
+    ACM_NAMESPACE: [
+        ("", "pods", ["get", "list"]),
+        (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["list", "delete"]),
+    ],
+    OBSERVABILITY_NAMESPACE: [
+        ("", "pods", ["get", "list"]),
+    ],
+}
+
 # F9: Argo CD permissions split into base and operator-install-only
 ARGOCD_BASE_CLUSTER_PERMISSIONS = [
     (ARGOCD_IO, "applications", ["get", "list"]),
@@ -215,12 +237,32 @@ def expand_rbac_requirements(
     skip_observability: bool,
     argocd_mode: str,
     argocd_install_type: str,
+    decommission_only: bool = False,
 ) -> list[tuple[str, str, str, str | None]]:
     """Return the full flat list of (api_group, resource, verb, namespace) tuples for a given configuration.
 
     This mirrors the permission matrix from lib/rbac_validator.py and is used by
     the role's RBAC validation tasks to enumerate what to check via SelfSubjectAccessReview.
     """
+    if decommission_only:
+        if role != "operator":
+            raise ValueError("decommission_only is only valid for the operator role")
+
+        permissions: list[tuple[str, str, str, str | None]] = []
+        filtered_cluster = [
+            (g, r, v)
+            for g, r, v in DECOMMISSION_CLUSTER_PERMISSIONS
+            if not (skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO)
+        ]
+        permissions.extend(_expand_permission_list(filtered_cluster))
+
+        for namespace, ns_perms in DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            if skip_observability and namespace == OBSERVABILITY_NAMESPACE:
+                continue
+            permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
+
+        return permissions
+
     cluster_perms = OPERATOR_CLUSTER_PERMISSIONS if role == "operator" else VALIDATOR_CLUSTER_PERMISSIONS
     hub_ns_perms = OPERATOR_HUB_NAMESPACE_PERMISSIONS if role == "operator" else VALIDATOR_HUB_NAMESPACE_PERMISSIONS
     managed_ns_perms = (
@@ -291,6 +333,7 @@ def main() -> None:
             "hub": {"type": "str", "required": True},
             "role": {"type": "str", "default": "operator", "choices": list(VALID_ROLES)},
             "include_decommission": {"type": "bool", "default": False},
+            "decommission_only": {"type": "bool", "default": False},
             "skip_observability": {"type": "bool", "default": False},
             "argocd_mode": {"type": "str", "default": "none", "choices": list(VALID_ARGOCD_MODES)},
             "argocd_install_type": {"type": "str", "default": "unknown"},
@@ -305,6 +348,7 @@ def main() -> None:
         skip_observability=module.params["skip_observability"],
         argocd_mode=module.params["argocd_mode"],
         argocd_install_type=module.params["argocd_install_type"],
+        decommission_only=module.params["decommission_only"],
     )
     summary = summarize_rbac_results(module.params["hub"], module.params["denied_permissions"])
     module.exit_json(changed=False, permissions=permissions, **summary)

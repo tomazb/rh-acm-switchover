@@ -78,6 +78,7 @@ def test_decommission_validates_rbac_before_destructive_steps():
     validate_text = (DECOMMISSION_TASKS / "validate_rbac.yml").read_text()
     assert "tomazb.acm_switchover.acm_rbac_validate" in validate_text
     assert "include_decommission: true" in validate_text
+    assert "decommission_only: true" in validate_text
     assert "run_ssar" in validate_text, "decommission validate_rbac.yml must execute SSAR checks before proceeding"
 
 

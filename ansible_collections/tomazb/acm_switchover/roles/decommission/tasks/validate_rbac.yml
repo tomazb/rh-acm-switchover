@@ -3,6 +3,7 @@
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
     include_decommission: true
+    decommission_only: true
     skip_observability: "{{ not (acm_switchover_decommission.has_observability | default(false) | bool) }}"
     argocd_mode: none
     argocd_install_type: vanilla
@@ -30,6 +31,7 @@
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
     include_decommission: true
+    decommission_only: true
     skip_observability: "{{ not (acm_switchover_decommission.has_observability | default(false) | bool) }}"
     argocd_mode: none
     argocd_install_type: vanilla
