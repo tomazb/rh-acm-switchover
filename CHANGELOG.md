@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ArgoCD resume-on-failure**: New `--argocd-resume-on-failure` CLI flag (Python) and `acm_switchover_features.argocd.resume_on_failure` variable (Ansible) to attempt best-effort resume of paused ArgoCD Applications when a switchover fails. Prevents apps from being left indefinitely paused after failures. Resume errors are logged but do not compound the original failure.
 - **Ansible activation**: Auto-import strategy management (`manage_auto_import.yml` / `reset_auto_import.yml`) — disables auto-import before activation and re-enables afterward, matching Python CLI behavior (ACM 2.14+)
 - **Ansible post_activation**: Klusterlet auto-remediation (`fix_klusterlet.yml`) — automatically patches degraded klusterlet agents after switchover, matching Python CLI behavior
+- **Support-surface guardrails**: Added completion parity tests and documentation regression checks to catch stale shell completions, incomplete completion installs, and active operator docs that drift back to deprecated Argo CD guidance.
 
 ### Fixed
 
@@ -41,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python kube client**: `wait_for_pods_ready()` now treats zero pods as ready when no explicit `expected_count` is required, avoiding false hangs on empty namespaces.
 - **Python RBAC**: namespace permission maps now use centralized namespace constants instead of duplicated literals.
 - **Bash security**: `generate-merged-kubeconfig.sh` now writes merged kubeconfig output with owner-only permissions.
+- **Completion parity**: Refreshed bash completions for `acm_switchover.py`, `check_rbac.py`, pre/postflight helpers, and kubeconfig generators; added the missing `generate-merged-kubeconfig.sh` completion and tightened `install-completions.sh` verification to cover the shipped completion set.
+- **Stale support docs**: Refreshed contributor, test, docs-index, and Kustomize deployment docs to match the current Python CLI, Ansible collection, and RBAC extension layout.
+- **Deprecated Argo CD guidance**: The protected runbook and synced preflight skill no longer present `scripts/argocd-manage.sh` as an active operator workflow, steering operators to the supported Python and Ansible paths instead.
 - **Ansible safety defaults**: destructive roles now fall back to `dry_run` when `acm_switchover_execution.mode` is missing instead of evaluating as live execution.
 - **Ansible activation**: immediate-import task failures are no longer swallowed; patch errors now fail the phase visibly.
 - **Ansible backup continuity**: primary prep now persists full `BackupSchedule` state so finalization can recreate a missing schedule, including ACM 2.11 delete/recreate paths.
