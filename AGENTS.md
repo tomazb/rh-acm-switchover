@@ -329,6 +329,15 @@ pytest -m integration tests/  # Integration tests
 
 Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock responses should include `resourceVersion` in metadata for patch verification tests.
 
+### Pre-Push CI Guardrails
+
+Before pushing changes, verify the same CI assumptions that have recently caused failures:
+
+- **Root `tests/` jobs do not install `ansible-core`**: top-level tests under [`tests/`](tests/) may import collection helpers, but they must not hard-require `ansible.module_utils` at import time. If a parity test needs a collection module, keep the test import-safe without assuming the root Python job has Ansible installed.
+- **CodeQL can flag URL-like strings in tests**: avoid putting raw host-like strings such as CRD names ending in `.argoproj.io` into assertion message text when a less URL-like description will do. Prefer messages like "applications CRD" or "argocds CRD" unless the exact literal is required by the assertion itself.
+- **Run formatting checks on tracked source trees, not the virtualenv**: scope `black`/`isort` to repository paths such as `acm_switchover.py`, `lib`, `modules`, `ansible_collections`, and `tests`. Do not run repo-wide formatting commands that can walk `.venv/` or other generated directories.
+- **If CI formatting fails, fix the repo to match the pinned formatter**: the current workflows enforce `black` and `isort`, so run both locally before push when touching Python files.
+
 ### Cross-Implementation Verification
 
 For parity-sensitive changes, do not verify only one form factor.
