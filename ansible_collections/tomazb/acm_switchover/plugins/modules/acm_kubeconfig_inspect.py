@@ -200,7 +200,9 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
     data_pair = "client-certificate-data" in user_cfg or "client-key-data" in user_cfg
     if file_pair or data_pair:
         has_complete_file_pair = "client-certificate" in user_cfg and "client-key" in user_cfg and not data_pair
-        has_complete_data_pair = "client-certificate-data" in user_cfg and "client-key-data" in user_cfg and not file_pair
+        has_complete_data_pair = (
+            "client-certificate-data" in user_cfg and "client-key-data" in user_cfg and not file_pair
+        )
         if not (has_complete_file_pair or has_complete_data_pair):
             raise ValueError(f"user entry '{user_name}' must define a complete client certificate pair")
 

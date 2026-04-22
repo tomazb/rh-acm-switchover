@@ -104,15 +104,11 @@ class TestManageAutoImportFlag:
             mock_cls.return_value.activate.return_value = True
             _run_phase_activation(args, state, None, secondary, MagicMock())
             call_kwargs = mock_cls.call_args[1]
-            assert call_kwargs["manage_auto_import_strategy"] is False, (
-                "Activation getattr fallback must be False"
-            )
+            assert call_kwargs["manage_auto_import_strategy"] is False, "Activation getattr fallback must be False"
 
         # Finalization: Finalization constructor receives the fallback
         with patch("acm_switchover.Finalization") as mock_cls:
             mock_cls.return_value.finalize.return_value = True
             _run_phase_finalization(args, state, None, secondary, MagicMock())
             call_kwargs = mock_cls.call_args[1]
-            assert call_kwargs["manage_auto_import_strategy"] is False, (
-                "Finalization getattr fallback must be False"
-            )
+            assert call_kwargs["manage_auto_import_strategy"] is False, "Finalization getattr fallback must be False"

@@ -11,12 +11,12 @@ import pathlib
 import pytest
 import yaml
 
-from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_cluster_verify import (
-    summarize_cluster_group,
-)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
     ValidationError,
     validate_operation_inputs,
+)
+from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_cluster_verify import (
+    summarize_cluster_group,
 )
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
@@ -130,16 +130,14 @@ class TestKlusterletReverification:
         when = reverify_task.get("when")
         assert when is not None, "Re-verify task must have a 'when' guard"
         when_str = str(when)
-        assert "remediation_attempted" in when_str, (
-            "Re-verify 'when' must check a remediation-attempted flag"
-        )
+        assert "remediation_attempted" in when_str, "Re-verify 'when' must check a remediation-attempted flag"
 
     def test_verify_klusterlet_sets_remediation_flag(self):
         """verify_klusterlet.yml must set a remediation-attempted flag."""
         content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
-        assert "_klusterlet_remediation_attempted" in content, (
-            "verify_klusterlet.yml must set _klusterlet_remediation_attempted flag"
-        )
+        assert (
+            "_klusterlet_remediation_attempted" in content
+        ), "verify_klusterlet.yml must set _klusterlet_remediation_attempted flag"
 
 
 # ── Issue 4: Negative min_managed_clusters rejection ──

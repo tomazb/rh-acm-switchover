@@ -105,9 +105,7 @@ def _validate_choice(value: str, valid_choices: list[str], field_name: str) -> N
     """
     if value not in valid_choices:
         choices_str = ", ".join(valid_choices)
-        raise ValidationError(
-            f"Invalid {field_name} '{value}'. Must be one of: {choices_str}"
-        )
+        raise ValidationError(f"Invalid {field_name} '{value}'. Must be one of: {choices_str}")
 
 
 def validate_operation_inputs(operation: dict, features: dict) -> dict:

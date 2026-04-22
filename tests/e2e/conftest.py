@@ -162,8 +162,6 @@ def pytest_addoption(parser):
     )
 
 
-
-
 def pytest_configure(config):
     """Register E2E and resilience markers."""
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring real clusters")
@@ -215,7 +213,6 @@ def e2e_config(request, tmp_path_factory) -> RunConfig:
         inject_at_phase=request.config.getoption("--e2e-inject-at-phase"),
         disable_observability_on_secondary=request.config.getoption("--e2e-disable-observability-on-secondary"),
         argocd_manage=request.config.getoption("--e2e-argocd-manage"),
-
     )
 
 

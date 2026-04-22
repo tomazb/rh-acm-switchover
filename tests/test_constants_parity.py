@@ -1,8 +1,7 @@
 """Parity contract: shared constants between Python CLI and Ansible collection must match."""
 
-import lib.constants as py_constants
 import ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants as ans_constants
-
+import lib.constants as py_constants
 
 # Explicit contract map: Python constant name → Ansible constant name.
 # Only constants that MUST stay in sync are listed here.
@@ -48,9 +47,7 @@ def test_shared_constants_parity():
         elif ans_val is _MISSING:
             mismatches.append(f"Ansible missing: {ans_name}")
         elif py_val != ans_val:
-            mismatches.append(
-                f"{py_name}={py_val!r} (Python) != {ans_name}={ans_val!r} (Ansible)"
-            )
+            mismatches.append(f"{py_name}={py_val!r} (Python) != {ans_name}={ans_val!r} (Ansible)")
 
     assert not mismatches, "Constants drift detected:\n  " + "\n  ".join(mismatches)
 

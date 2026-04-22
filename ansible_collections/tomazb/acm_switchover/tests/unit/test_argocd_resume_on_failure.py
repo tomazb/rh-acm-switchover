@@ -237,8 +237,7 @@ def test_restore_only_pins_operation_flags():
 
     # Check pre_tasks for set_fact that pins operation flags
     pins_via_pre_tasks = any(
-        "acm_switchover_operation" in str(t.get("ansible.builtin.set_fact", {}))
-        for t in pre_tasks
+        "acm_switchover_operation" in str(t.get("ansible.builtin.set_fact", {})) for t in pre_tasks
     )
     # Check play-level vars for operation pinning
     pins_via_vars = "acm_switchover_operation" in play_vars
@@ -254,15 +253,13 @@ def test_restore_only_pins_correct_values():
     text = (PLAYBOOK_DIR / "restore_only.yml").read_text()
 
     # The pinned values must include these three critical fields
-    assert "'restore_only': true" in text or "'restore_only': True" in text or "restore_only: true" in text, (
-        "restore_only.yml must pin restore_only to true"
-    )
-    assert "'method': 'full'" in text or "method: full" in text, (
-        "restore_only.yml must pin method to full"
-    )
-    assert "'old_hub_action': 'none'" in text or "old_hub_action: none" in text, (
-        "restore_only.yml must pin old_hub_action to none"
-    )
+    assert (
+        "'restore_only': true" in text or "'restore_only': True" in text or "restore_only: true" in text
+    ), "restore_only.yml must pin restore_only to true"
+    assert "'method': 'full'" in text or "method: full" in text, "restore_only.yml must pin method to full"
+    assert (
+        "'old_hub_action': 'none'" in text or "old_hub_action: none" in text
+    ), "restore_only.yml must pin old_hub_action to none"
 
 
 # --- resume.yml run_id safety ---
@@ -277,21 +274,15 @@ def test_resume_fails_when_run_id_is_empty():
     tasks_list = _load_resume_tasks()
     block_tasks = tasks_list[0]["block"]
 
-    fail_tasks = [
-        t for t in block_tasks if "ansible.builtin.fail" in t
-    ]
+    fail_tasks = [t for t in block_tasks if "ansible.builtin.fail" in t]
     assert len(fail_tasks) >= 1, "resume.yml must have at least one ansible.builtin.fail task"
 
     # The fail task must trigger when run_id is empty
     fail_task = fail_tasks[0]
     when = fail_task.get("when", [])
     when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
-    assert "_argocd_expected_run_id == ''" in when_text, (
-        "fail task must trigger when _argocd_expected_run_id is empty"
-    )
-    assert "acm_switchover_argocd_mock_apps is not defined" in when_text, (
-        "fail task must skip in mock mode"
-    )
+    assert "_argocd_expected_run_id == ''" in when_text, "fail task must trigger when _argocd_expected_run_id is empty"
+    assert "acm_switchover_argocd_mock_apps is not defined" in when_text, "fail task must skip in mock mode"
 
 
 def test_resume_fail_task_precedes_patch_task():
@@ -309,9 +300,7 @@ def test_resume_fail_task_precedes_patch_task():
 
     assert fail_idx is not None, "resume.yml must have a run_id fail-safe task"
     assert patch_idx is not None, "resume.yml must have a k8s patch task"
-    assert fail_idx < patch_idx, (
-        f"run_id fail-safe (index {fail_idx}) must come before k8s patch (index {patch_idx})"
-    )
+    assert fail_idx < patch_idx, f"run_id fail-safe (index {fail_idx}) must come before k8s patch (index {patch_idx})"
 
 
 def test_resume_patch_has_no_empty_run_id_wildcard():
@@ -326,9 +315,9 @@ def test_resume_patch_has_no_empty_run_id_wildcard():
     when = patch_task.get("when", [])
     when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
 
-    assert "_argocd_expected_run_id == ''" not in when_text, (
-        "patch task must not contain an empty-string wildcard for _argocd_expected_run_id"
-    )
-    assert "paused-by'] == _argocd_expected_run_id" in when_text, (
-        "patch task must require exact run_id match on the paused-by annotation"
-    )
+    assert (
+        "_argocd_expected_run_id == ''" not in when_text
+    ), "patch task must not contain an empty-string wildcard for _argocd_expected_run_id"
+    assert (
+        "paused-by'] == _argocd_expected_run_id" in when_text
+    ), "patch task must require exact run_id match on the paused-by annotation"

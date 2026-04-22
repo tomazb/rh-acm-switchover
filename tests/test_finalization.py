@@ -1287,9 +1287,7 @@ class TestFinalization:
 
     def test_verify_backup_schedule_enabled_uses_default_name_in_error(self, finalization, mock_secondary_client):
         """Fallback error text should use the canonical BackupSchedule default name."""
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {}, "spec": {"paused": True}}
-        ]
+        mock_secondary_client.list_custom_resources.return_value = [{"metadata": {}, "spec": {"paused": True}}]
 
         with pytest.raises(SwitchoverError, match=BACKUP_SCHEDULE_DEFAULT_NAME):
             finalization._verify_backup_schedule_enabled()

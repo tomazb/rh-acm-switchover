@@ -30,13 +30,13 @@ def test_main_cleans_auto_import_annotations_before_observability():
     """post_activation/main.yml must clean stale auto-import markers before observability checks."""
     includes = [task.get("ansible.builtin.include_tasks", "") for task in _main_block_tasks()]
 
-    assert "cleanup_auto_import_annotations.yml" in includes, (
-        "main.yml must include cleanup_auto_import_annotations.yml"
-    )
+    assert (
+        "cleanup_auto_import_annotations.yml" in includes
+    ), "main.yml must include cleanup_auto_import_annotations.yml"
     assert "verify_observability.yml" in includes, "main.yml must include verify_observability.yml"
-    assert includes.index("cleanup_auto_import_annotations.yml") < includes.index("verify_observability.yml"), (
-        "cleanup_auto_import_annotations.yml must run before verify_observability.yml"
-    )
+    assert includes.index("cleanup_auto_import_annotations.yml") < includes.index(
+        "verify_observability.yml"
+    ), "cleanup_auto_import_annotations.yml must run before verify_observability.yml"
 
 
 def test_verify_observability_performs_real_health_checks():
@@ -44,9 +44,7 @@ def test_verify_observability_performs_real_health_checks():
     tasks = _load_yaml("verify_observability.yml")
     text = (POST_ACTIVATION_TASKS / "verify_observability.yml").read_text()
 
-    deployment_checks = [
-        task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Deployment"
-    ]
+    deployment_checks = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Deployment"]
     pod_checks = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
 
     assert deployment_checks, "verify_observability.yml must query observability Deployments"
@@ -54,12 +52,12 @@ def test_verify_observability_performs_real_health_checks():
     assert "observatorium-api" in text, "verify_observability.yml must verify observatorium-api readiness"
     assert "thanos-compact" in text, "verify_observability.yml must verify thanos-compact readiness"
     assert "manual verification" not in text.lower(), "verify_observability.yml must not remain a placeholder"
-    assert any("retries" in task and "delay" in task for task in deployment_checks + pod_checks), (
-        "verify_observability.yml must poll until workloads recover"
-    )
-    assert any("ansible.builtin.assert" in task or "ansible.builtin.fail" in task for task in tasks), (
-        "verify_observability.yml must fail when critical observability health checks do not pass"
-    )
+    assert any(
+        "retries" in task and "delay" in task for task in deployment_checks + pod_checks
+    ), "verify_observability.yml must poll until workloads recover"
+    assert any(
+        "ansible.builtin.assert" in task or "ansible.builtin.fail" in task for task in tasks
+    ), "verify_observability.yml must fail when critical observability health checks do not pass"
 
 
 def test_cleanup_auto_import_annotations_patches_managed_clusters():
@@ -74,12 +72,12 @@ def test_cleanup_auto_import_annotations_patches_managed_clusters():
 
     assert managed_cluster_queries, "cleanup_auto_import_annotations.yml must query ManagedCluster resources"
     assert patch_tasks, "cleanup_auto_import_annotations.yml must patch stale ManagedCluster annotations"
-    assert "disable-auto-import" in text, (
-        "cleanup_auto_import_annotations.yml must remove the disable-auto-import annotation"
-    )
-    assert "local-cluster" in text or "LOCAL_CLUSTER_NAME" in text, (
-        "cleanup_auto_import_annotations.yml must exclude the local-cluster"
-    )
+    assert (
+        "disable-auto-import" in text
+    ), "cleanup_auto_import_annotations.yml must remove the disable-auto-import annotation"
+    assert (
+        "local-cluster" in text or "LOCAL_CLUSTER_NAME" in text
+    ), "cleanup_auto_import_annotations.yml must exclude the local-cluster"
     assert "null" in text, "cleanup_auto_import_annotations.yml must remove the annotation with a null patch"
 
 

@@ -4,13 +4,7 @@ import pathlib
 
 import yaml
 
-PREFLIGHT_MAIN = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "roles"
-    / "preflight"
-    / "tasks"
-    / "main.yml"
-)
+PREFLIGHT_MAIN = pathlib.Path(__file__).resolve().parents[2] / "roles" / "preflight" / "tasks" / "main.yml"
 
 
 def _top_level_and_block_tasks() -> list[dict]:
@@ -27,9 +21,7 @@ def test_preflight_validates_inputs_before_entering_checkpoint_phase():
     tasks = _top_level_and_block_tasks()
 
     validate_inputs_index = next(
-        index
-        for index, task in enumerate(tasks)
-        if task.get("ansible.builtin.include_tasks") == "validate_inputs.yml"
+        index for index, task in enumerate(tasks) if task.get("ansible.builtin.include_tasks") == "validate_inputs.yml"
     )
     checkpoint_enter_index = next(
         index
@@ -47,10 +39,6 @@ def test_preflight_validates_inputs_before_entering_checkpoint_phase():
 def test_preflight_initializes_validation_accumulator_only_once():
     """Preflight must not reset validation facts after input validation runs."""
     tasks = _top_level_and_block_tasks()
-    init_count = sum(
-        1
-        for task in tasks
-        if task.get("name") == "Initialize preflight result accumulator"
-    )
+    init_count = sum(1 for task in tasks if task.get("name") == "Initialize preflight result accumulator")
 
     assert init_count == 1, "preflight should initialize the validation accumulator once and preserve input results"

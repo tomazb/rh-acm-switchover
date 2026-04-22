@@ -29,12 +29,12 @@ def test_restore_only_validates_secondary_backup_artifacts():
     """Restore-only preflight must fail when the target bucket has no synced backups."""
     text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
 
-    assert "acm_secondary_backups_info.resources" in text, (
-        "validate_backups.yml must inspect secondary backup artifacts in restore-only mode"
-    )
-    assert "restore-only" in text.lower(), (
-        "validate_backups.yml should describe the restore-only backup validation path explicitly"
-    )
+    assert (
+        "acm_secondary_backups_info.resources" in text
+    ), "validate_backups.yml must inspect secondary backup artifacts in restore-only mode"
+    assert (
+        "restore-only" in text.lower()
+    ), "validate_backups.yml should describe the restore-only backup validation path explicitly"
 
 
 def test_verify_passive_sync_passes_activation_method_to_restore_selector():
@@ -89,9 +89,9 @@ def test_restore_only_persists_argocd_run_id_in_checkpoint_after_pause():
     """restore_only.yml must persist the Argo CD pause run_id before activation starts."""
     text = (PLAYBOOKS / "restore_only.yml").read_text()
     assert "checkpoint_phase" in text, "restore_only.yml must update the checkpoint after Argo CD pause"
-    assert "operational_data" in text and "argocd_run_id" in text, (
-        "restore_only.yml must persist operational_data.argocd_run_id for standalone argocd_resume.yml"
-    )
+    assert (
+        "operational_data" in text and "argocd_run_id" in text
+    ), "restore_only.yml must persist operational_data.argocd_run_id for standalone argocd_resume.yml"
 
 
 def test_argocd_manage_test_only_writes_summary_when_requested():

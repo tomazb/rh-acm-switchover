@@ -706,7 +706,6 @@ class E2EOrchestrator:
                 manage_auto_import_strategy=self.config.manage_auto_import_strategy,
                 disable_observability_on_secondary=self.config.disable_observability_on_secondary,
                 argocd_manage=self.config.argocd_manage,
-
                 phase_callback=phase_callback,
             )
 

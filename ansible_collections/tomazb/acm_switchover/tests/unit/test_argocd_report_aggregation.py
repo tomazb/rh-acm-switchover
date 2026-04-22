@@ -4,7 +4,6 @@ import pathlib
 
 import yaml
 
-
 COLLECTION_DIR = pathlib.Path(__file__).resolve().parents[2]
 PLAYBOOKS_DIR = COLLECTION_DIR / "playbooks"
 

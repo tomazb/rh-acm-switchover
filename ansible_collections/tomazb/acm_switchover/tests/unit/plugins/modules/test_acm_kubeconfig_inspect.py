@@ -35,11 +35,7 @@ def _jwt_with_exp(expiry: datetime) -> str:
 
 def _pem_data(label: str) -> str:
     return base64.b64encode(
-        (
-            f"-----BEGIN {label}-----\n"
-            f"{label.lower()}-fixture\n"
-            f"-----END {label}-----\n"
-        ).encode("utf-8")
+        (f"-----BEGIN {label}-----\n" f"{label.lower()}-fixture\n" f"-----END {label}-----\n").encode("utf-8")
     ).decode("utf-8")
 
 
@@ -113,9 +109,11 @@ def test_bearer_jwt_near_expiry_returns_warn(tmp_path):
 
 
 def test_bearer_jwt_without_exp_returns_warn(tmp_path):
-    payload_b64 = base64.urlsafe_b64encode(json.dumps({"sub": "system:serviceaccount:test"}).encode("utf-8")).decode(
-        "utf-8"
-    ).rstrip("=")
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps({"sub": "system:serviceaccount:test"}).encode("utf-8"))
+        .decode("utf-8")
+        .rstrip("=")
+    )
     kubeconfig = write_kubeconfig(
         tmp_path,
         _kubeconfig_for_user({"token": f"header.{payload_b64}.signature"}),
@@ -130,9 +128,9 @@ def test_bearer_jwt_without_exp_returns_warn(tmp_path):
 
 
 def test_bearer_jwt_with_non_numeric_exp_returns_warn(tmp_path):
-    payload_b64 = base64.urlsafe_b64encode(json.dumps({"exp": "not-a-timestamp"}).encode("utf-8")).decode(
-        "utf-8"
-    ).rstrip("=")
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps({"exp": "not-a-timestamp"}).encode("utf-8")).decode("utf-8").rstrip("=")
+    )
     kubeconfig = write_kubeconfig(
         tmp_path,
         _kubeconfig_for_user({"token": f"header.{payload_b64}.signature"}),
@@ -542,12 +540,27 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
     ("kubeconfig_data", "error_match"),
     [
         (["not", "a", "mapping"], "kubeconfig must be a YAML mapping"),
-        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": None}, "kubeconfig is missing required 'contexts' list"),
-        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": None}, "kubeconfig is missing required 'users' list"),
-        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": "bad"}, "'contexts' must be a list"),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": None},
+            "kubeconfig is missing required 'contexts' list",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": None},
+            "kubeconfig is missing required 'users' list",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": "bad"},
+            "'contexts' must be a list",
+        ),
         (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": "bad"}, "'users' must be a list"),
-        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": ["bad"]}, "'contexts' entries must be mappings"),
-        (_kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": ["bad"]}, "'users' entries must be mappings"),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": ["bad"]},
+            "'contexts' entries must be mappings",
+        ),
+        (
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": ["bad"]},
+            "'users' entries must be mappings",
+        ),
         (
             _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{}]},
             "'contexts' entries must define 'name' as a non-empty string",
@@ -578,8 +591,7 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
             "context entry 'primary-hub' must contain a mapping under 'context'",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"contexts": [{"name": "primary-hub"}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{"name": "primary-hub"}]},
             "context entry 'primary-hub' is missing required 'context' mapping",
         ),
         (
@@ -588,8 +600,7 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
             "user entry 'primary-user' must contain a mapping under 'user'",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"users": [{"name": "primary-user"}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": [{"name": "primary-user"}]},
             "user entry 'primary-user' is missing required 'user' mapping",
         ),
         (

@@ -26,4 +26,3 @@ def test_primary_prep_manage_auto_import_patches_managed_clusters():
     assert patch_tasks, "manage_auto_import.yml must patch ManagedClusters"
     assert "disable-auto-import" in text, "manage_auto_import.yml must add the disable-auto-import annotation"
     assert "local-cluster" in text, "manage_auto_import.yml must exclude local-cluster"
-

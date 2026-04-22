@@ -160,27 +160,27 @@ def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
     """
     text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
 
-    assert "acm_switchover_execution" in text and "checkpoint" in text, (
-        "argocd_resume.yml must inspect the configured checkpoint path"
-    )
-    assert "ansible.builtin.slurp" in text and "b64decode" in text and "from_json" in text, (
-        "argocd_resume.yml must load checkpoint JSON (controller-side) before including argocd_manage"
-    )
-    assert "lookup('env', 'PWD')" in text and "startswith('/')" in text, (
-        "argocd_resume.yml must resolve relative checkpoint paths against the run directory ($PWD)"
-    )
-    assert "operational_data" in text and "argocd_run_id" in text, (
-        "argocd_resume.yml must read operational_data.argocd_run_id from the checkpoint"
-    )
-    assert "combine({" in text and "'run_id':" in text, (
-        "argocd_resume.yml must seed acm_switchover_argocd.run_id from the persisted checkpoint"
-    )
-    assert "(acm_switchover_argocd.run_id | default('')) | length == 0" in text, (
-        "argocd_resume.yml must not overwrite an explicit run_id supplied by the operator"
-    )
-    assert "get('run_id', '')" in text, (
-        "argocd_resume.yml must not overwrite an explicit execution.run_id supplied by the operator"
-    )
+    assert (
+        "acm_switchover_execution" in text and "checkpoint" in text
+    ), "argocd_resume.yml must inspect the configured checkpoint path"
+    assert (
+        "ansible.builtin.slurp" in text and "b64decode" in text and "from_json" in text
+    ), "argocd_resume.yml must load checkpoint JSON (controller-side) before including argocd_manage"
+    assert (
+        "lookup('env', 'PWD')" in text and "startswith('/')" in text
+    ), "argocd_resume.yml must resolve relative checkpoint paths against the run directory ($PWD)"
+    assert (
+        "operational_data" in text and "argocd_run_id" in text
+    ), "argocd_resume.yml must read operational_data.argocd_run_id from the checkpoint"
+    assert (
+        "combine({" in text and "'run_id':" in text
+    ), "argocd_resume.yml must seed acm_switchover_argocd.run_id from the persisted checkpoint"
+    assert (
+        "(acm_switchover_argocd.run_id | default('')) | length == 0" in text
+    ), "argocd_resume.yml must not overwrite an explicit run_id supplied by the operator"
+    assert (
+        "get('run_id', '')" in text
+    ), "argocd_resume.yml must not overwrite an explicit execution.run_id supplied by the operator"
 
 
 def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
@@ -232,8 +232,7 @@ def test_discover_run_id_gated_by_resume_mode():
                     when = [when]
                 when_text = " ".join(str(w) for w in when)
                 assert "resume" in when_text, (
-                    "discover.yml run_id generation must be gated to exclude resume mode. "
-                    f"Current when: {when}"
+                    "discover.yml run_id generation must be gated to exclude resume mode. " f"Current when: {when}"
                 )
                 return
 

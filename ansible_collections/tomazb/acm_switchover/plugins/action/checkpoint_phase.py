@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from ansible.plugins.action import ActionBase
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
-    build_checkpoint_record,
     KNOWN_PHASES,
+    build_checkpoint_record,
     should_resume_phase,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
@@ -123,11 +123,7 @@ class ActionModule(ActionBase):
         checkpoint_data["completed_phases"] = transition["completed_phases"]
         checkpoint_data["phase_status"] = transition["phase_status"]
         checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        sanitized_operational_data = {
-            key: value
-            for key, value in operational_data.items()
-            if value not in (None, "")
-        }
+        sanitized_operational_data = {key: value for key, value in operational_data.items() if value not in (None, "")}
         checkpoint_data.setdefault("operational_data", {}).update(sanitized_operational_data)
 
         if error:

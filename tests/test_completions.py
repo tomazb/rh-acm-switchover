@@ -1,9 +1,9 @@
 """Regression checks for bash completion coverage and install verification."""
 
-from pathlib import Path
 import re
-import pytest
+from pathlib import Path
 
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPLETIONS_DIR = REPO_ROOT / "completions"
@@ -113,15 +113,9 @@ def test_install_completion_verification_tracks_all_completion_files():
     match = re.search(r"EXPECTED_COMPLETION_FILES=\((.*?)\)", script_text, re.DOTALL)
     assert match, "install-completions.sh must declare EXPECTED_COMPLETION_FILES"
 
-    expected = {
-        entry.strip('"').strip("'")
-        for entry in match.group(1).split()
-        if entry.strip()
-    }
+    expected = {entry.strip('"').strip("'") for entry in match.group(1).split() if entry.strip()}
     actual = {
-        path.name
-        for path in COMPLETIONS_DIR.iterdir()
-        if path.is_file() and _is_repo_owned_completion_name(path.name)
+        path.name for path in COMPLETIONS_DIR.iterdir() if path.is_file() and _is_repo_owned_completion_name(path.name)
     }
 
     assert expected == actual

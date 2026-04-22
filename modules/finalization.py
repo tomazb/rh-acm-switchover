@@ -392,7 +392,9 @@ class Finalization:
         """
 
         if self._restore_only_missing_backup_schedule():
-            logger.warning("Skipping backup continuity verification in restore-only mode because no BackupSchedule exists yet")
+            logger.warning(
+                "Skipping backup continuity verification in restore-only mode because no BackupSchedule exists yet"
+            )
             return
 
         logger.info("Verifying new backups are being created...")
@@ -698,7 +700,9 @@ class Finalization:
         recorded name is available (e.g. during a dry-run).
         """
         if self._restore_only_missing_backup_schedule():
-            logger.warning("Skipping backup integrity verification in restore-only mode because no BackupSchedule exists yet")
+            logger.warning(
+                "Skipping backup integrity verification in restore-only mode because no BackupSchedule exists yet"
+            )
             return
 
         logger.info("Verifying backup integrity...")
@@ -885,7 +889,9 @@ class Finalization:
 
         if not schedules:
             if self._restore_only_missing_backup_schedule(schedules):
-                logger.warning("No BackupSchedule found during restore-only finalization; manual backup setup is required")
+                logger.warning(
+                    "No BackupSchedule found during restore-only finalization; manual backup setup is required"
+                )
                 return
             raise SwitchoverError("No BackupSchedule found while verifying finalization")
 

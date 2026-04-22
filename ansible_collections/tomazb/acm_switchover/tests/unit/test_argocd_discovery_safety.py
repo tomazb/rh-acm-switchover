@@ -14,9 +14,7 @@ ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 
 
 def _load_discover_tasks():
-    return yaml.safe_load(
-        (ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml").read_text()
-    )
+    return yaml.safe_load((ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml").read_text())
 
 
 def _get_discovery_block(tasks):
@@ -24,9 +22,7 @@ def _get_discovery_block(tasks):
     for task in tasks:
         if task.get("name", "") == "Discover Argo CD Applications from cluster":
             return task
-    raise AssertionError(
-        "Could not find 'Discover Argo CD Applications from cluster' block"
-    )
+    raise AssertionError("Could not find 'Discover Argo CD Applications from cluster' block")
 
 
 def _get_rescue_tasks(tasks):
@@ -49,8 +45,7 @@ class TestDiscoverRescueBlockExists:
         """Rescue must have more than one task (not just a blanket set_fact)."""
         rescue = _get_rescue_tasks(_load_discover_tasks())
         assert len(rescue) > 1, (
-            "Rescue block must have more than one task to distinguish "
-            "CRD-absent from unexpected errors"
+            "Rescue block must have more than one task to distinguish " "CRD-absent from unexpected errors"
         )
 
 
@@ -62,10 +57,7 @@ class TestMarkNotInstalledIsConditional:
             sf = task.get("ansible.builtin.set_fact", {})
             if isinstance(sf, dict) and "acm_switchover_argocd_installed" in sf:
                 return task
-        raise AssertionError(
-            "Rescue block must contain a set_fact task for "
-            "acm_switchover_argocd_installed"
-        )
+        raise AssertionError("Rescue block must contain a set_fact task for " "acm_switchover_argocd_installed")
 
     def test_mark_not_installed_has_when(self):
         rescue = _get_rescue_tasks(_load_discover_tasks())
@@ -94,8 +86,7 @@ class TestFailOnUnexpectedError:
             if "ansible.builtin.fail" in task:
                 return task
         raise AssertionError(
-            "Rescue block must contain an ansible.builtin.fail task "
-            "for unexpected (non-CRD) errors"
+            "Rescue block must contain an ansible.builtin.fail task " "for unexpected (non-CRD) errors"
         )
 
     def test_fail_task_exists(self):
@@ -106,8 +97,7 @@ class TestFailOnUnexpectedError:
         rescue = _get_rescue_tasks(_load_discover_tasks())
         task = self._find_fail_task(rescue)
         assert "when" in task, (
-            "The fail task must have a 'when' condition "
-            "(inverse of the mark-not-installed condition)"
+            "The fail task must have a 'when' condition " "(inverse of the mark-not-installed condition)"
         )
 
     def test_fail_task_when_is_inverse_of_mark_not_installed(self):
@@ -129,12 +119,12 @@ class TestFailOnUnexpectedError:
         fail_when = str(fail_task["when"]).lower()
 
         # mark-not-installed uses ' in ' (substring match); fail uses ' not in '
-        assert " in " in mark_when and " or " in mark_when, (
-            f"mark-not-installed 'when' should use 'in' with 'or': {mark_when}"
-        )
-        assert "not in" in fail_when and " and " in fail_when, (
-            f"fail 'when' should use 'not in' with 'and': {fail_when}"
-        )
+        assert (
+            " in " in mark_when and " or " in mark_when
+        ), f"mark-not-installed 'when' should use 'in' with 'or': {mark_when}"
+        assert (
+            "not in" in fail_when and " and " in fail_when
+        ), f"fail 'when' should use 'not in' with 'and': {fail_when}"
 
     def test_fail_task_message_includes_error(self):
         """The fail message must include the actual error for debugging."""
@@ -142,8 +132,7 @@ class TestFailOnUnexpectedError:
         task = self._find_fail_task(rescue)
         msg = str(task["ansible.builtin.fail"].get("msg", ""))
         assert "_argocd_discovery_error" in msg, (
-            "Fail task msg must include {{ _argocd_discovery_error }} "
-            "so operators can diagnose the real failure"
+            "Fail task msg must include {{ _argocd_discovery_error }} " "so operators can diagnose the real failure"
         )
 
 
@@ -156,6 +145,5 @@ class TestErrorCapture:
         first = rescue[0]
         sf = first.get("ansible.builtin.set_fact", {})
         assert isinstance(sf, dict) and "_argocd_discovery_error" in sf, (
-            "First rescue task must capture the error into "
-            "_argocd_discovery_error via set_fact"
+            "First rescue task must capture the error into " "_argocd_discovery_error via set_fact"
         )

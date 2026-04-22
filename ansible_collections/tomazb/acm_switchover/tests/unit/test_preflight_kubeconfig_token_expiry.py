@@ -4,7 +4,6 @@ import pathlib
 
 import yaml
 
-
 COLLECTION_DIR = pathlib.Path(__file__).resolve().parents[2]
 PREFLIGHT_TASKS = COLLECTION_DIR / "roles" / "preflight" / "tasks"
 PREFLIGHT_DEFAULTS = COLLECTION_DIR / "roles" / "preflight" / "defaults" / "main.yml"
