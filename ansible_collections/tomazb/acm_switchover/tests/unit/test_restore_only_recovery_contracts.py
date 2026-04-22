@@ -50,6 +50,15 @@ def test_verify_passive_sync_passes_activation_method_to_restore_selector():
     )
 
 
+def test_verify_passive_sync_requires_sync_enabled_count():
+    """Passive activation precheck must reject stale restore-acm-activate objects."""
+    text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
+    assert "sync_enabled_count" in text, (
+        "verify_passive_sync.yml must require sync_enabled_count > 0 so stale activation restores "
+        "cannot satisfy the passive-sync prerequisite"
+    )
+
+
 def test_activation_checkpoint_persists_argocd_run_id():
     """Activation checkpoint writes must preserve the generated Argo CD run_id."""
     text = (ACTIVATION_TASKS / "main.yml").read_text()

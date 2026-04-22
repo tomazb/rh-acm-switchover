@@ -14,6 +14,10 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     KNOWN_PHASES,
     should_resume_phase,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
+    ValidationError,
+    validate_safe_path,
+)
 
 
 def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
@@ -88,6 +92,14 @@ class ActionModule(ActionBase):
             return {
                 "failed": True,
                 "msg": f"Invalid checkpoint backend '{backend}'. Expected: file.",
+            }
+
+        try:
+            validate_safe_path(path)
+        except ValidationError as exc:
+            return {
+                "failed": True,
+                "msg": str(exc),
             }
 
         reset = bool(checkpoint_config.get("reset", False))

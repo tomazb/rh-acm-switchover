@@ -1,25 +1,30 @@
 ---
+- name: Initialize preflight result accumulator
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: []
+    acm_switchover_preflight_summary:
+      passed: true
+      critical_failures: 0
+      warning_failures: 0
+
+- name: Validate controller-side inputs
+  ansible.builtin.include_tasks: validate_inputs.yml
+
 - name: Enter checkpointed phase
   tomazb.acm_switchover.checkpoint_phase:
     phase: preflight
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: enter
   register: _checkpoint_enter
-  when: acm_switchover_execution.checkpoint.enabled | default(false)
+  when:
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - acm_switchover_preflight_summary.passed
 
 - name: Run preflight phase
-  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+  when:
+    - acm_switchover_preflight_summary.passed
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
-    - name: Initialize preflight result accumulator
-      ansible.builtin.set_fact:
-        acm_switchover_validation_results: []
-        acm_switchover_preflight_summary:
-          passed: true
-          critical_failures: 0
-          warning_failures: 0
-
-    - name: Validate controller-side inputs
-      ansible.builtin.include_tasks: validate_inputs.yml
 
     - name: Record GitOps drift warning (informational only)
       ansible.builtin.include_tasks: validate_gitops.yml
@@ -56,16 +61,6 @@
           passed: "{{ ((acm_switchover_validation_results | selectattr('severity', 'equalto', 'critical') | selectattr('status', 'in', ['fail', 'error']) | list | length) == 0) | bool }}"
           critical_failures: "{{ (acm_switchover_validation_results | selectattr('severity', 'equalto', 'critical') | selectattr('status', 'in', ['fail', 'error']) | list | length) | int }}"
           warning_failures: "{{ (acm_switchover_validation_results | selectattr('severity', 'equalto', 'warning') | selectattr('status', 'in', ['fail', 'error']) | list | length) | int }}"
-
-    - name: Persist report and summary facts
-      ansible.builtin.include_tasks: write_report.yml
-
-    - name: Stop on critical preflight failures
-      ansible.builtin.fail:
-        msg: >-
-          Preflight failed with {{ acm_switchover_preflight_summary.critical_failures }} critical finding(s).
-          See {{ acm_switchover_preflight_result.path }} for details.
-      when: not acm_switchover_preflight_summary.passed
   rescue:
     - name: Mark checkpoint failure
       tomazb.acm_switchover.checkpoint_phase:
@@ -79,6 +74,19 @@
       ansible.builtin.fail:
         msg: "{{ ansible_failed_result.msg | default('Phase preflight failed') }}"
 
+- name: Persist report and summary facts
+  ansible.builtin.include_tasks: write_report.yml
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+
+- name: Stop on critical preflight failures
+  ansible.builtin.fail:
+    msg: >-
+      Preflight failed with {{ acm_switchover_preflight_summary.critical_failures }} critical finding(s).
+      See {{ acm_switchover_preflight_result.path }} for details.
+  when:
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+    - not acm_switchover_preflight_summary.passed
+
 - name: Mark checkpoint phase completion
   tomazb.acm_switchover.checkpoint_phase:
     phase: preflight
@@ -87,4 +95,5 @@
     report_ref: "{{ acm_switchover_preflight_result.path | default(omit) }}"
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)
+    - acm_switchover_preflight_summary.passed
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

@@ -18,6 +18,15 @@
         - acm_switchover_execution.checkpoint.enabled | default(false)
         - ((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length > 0
 
+    - name: Validate persisted checkpoint path
+      tomazb.acm_switchover.acm_safe_path_validate:
+        path: "{{ _argocd_resume_checkpoint_path_abs }}"
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - (_argocd_resume_checkpoint_path_abs | default('')) | length > 0
+
     - name: Check for persisted checkpoint with Argo CD run_id
       ansible.builtin.stat:
         path: "{{ _argocd_resume_checkpoint_path_abs }}"

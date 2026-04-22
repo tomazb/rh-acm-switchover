@@ -404,6 +404,39 @@ def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_
     assert activation_enter_result["skipped_phase"] is False
 
 
+def test_action_module_rejects_unsafe_checkpoint_path_before_file_access():
+    """checkpoint_phase must validate checkpoint.path before any filesystem call."""
+    from unittest.mock import MagicMock
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import ActionModule
+
+    task = MagicMock()
+    task.async_val = 0
+    task.args = {
+        "phase": "preflight",
+        "checkpoint": {"enabled": True, "backend": "file", "path": "/etc/passwd", "reset": True},
+        "status": "enter",
+    }
+
+    action = ActionModule(
+        task=task,
+        connection=MagicMock(),
+        play_context=MagicMock(),
+        loader=MagicMock(),
+        templar=MagicMock(),
+        shared_loader_obj=MagicMock(),
+    )
+    action._load_checkpoint = MagicMock(side_effect=AssertionError("_load_checkpoint should not be called"))
+    action._save_checkpoint = MagicMock(side_effect=AssertionError("_save_checkpoint should not be called"))
+
+    result = action.run()
+
+    assert result["failed"] is True
+    assert "outside allowed directories" in result["msg"]
+    action._load_checkpoint.assert_not_called()
+    action._save_checkpoint.assert_not_called()
+
+
 def test_load_checkpoint_reads_with_utf8_encoding():
     from unittest.mock import mock_open, patch
 

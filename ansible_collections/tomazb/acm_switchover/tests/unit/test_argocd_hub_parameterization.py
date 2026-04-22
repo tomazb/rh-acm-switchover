@@ -201,6 +201,17 @@ def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
     )
 
 
+def test_standalone_argocd_resume_validates_checkpoint_path_before_file_reads():
+    """argocd_resume.yml must validate checkpoint.path before stat/slurp."""
+    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+    validate_index = text.find("tomazb.acm_switchover.acm_safe_path_validate")
+    stat_index = text.find("ansible.builtin.stat")
+
+    assert validate_index != -1, "argocd_resume.yml must validate checkpoint.path before touching controller files"
+    assert stat_index != -1, "argocd_resume.yml should still inspect the checkpoint file after validation"
+    assert validate_index < stat_index, "argocd_resume.yml must validate checkpoint.path before stat/slurp"
+
+
 def test_discover_run_id_gated_by_resume_mode():
     """discover.yml must NOT generate run_id when mode is resume.
 
