@@ -33,14 +33,14 @@ def test_activate_restore_verifies_patch_application_after_patch():
     assert verification_tasks, "activate_restore.yml must poll until the activation patch is observable"
 
     verify_task = verification_tasks[0]
-    assert "retries" in verify_task and "delay" in verify_task, (
-        "activate_restore.yml must retry patch verification instead of trusting a single patch response"
-    )
+    assert (
+        "retries" in verify_task and "delay" in verify_task
+    ), "activate_restore.yml must retry patch verification instead of trusting a single patch response"
     until = str(verify_task.get("until", ""))
     assert "resourceVersion" in until, "activate_restore.yml must verify a Restore resourceVersion change"
-    assert "veleroManagedClustersBackupName" in until, (
-        "activate_restore.yml must verify the managed-clusters backup field after patching"
-    )
+    assert (
+        "veleroManagedClustersBackupName" in until
+    ), "activate_restore.yml must verify the managed-clusters backup field after patching"
 
 
 def test_preflight_validate_rbac_detects_argocd_install_type():
@@ -49,36 +49,34 @@ def test_preflight_validate_rbac_detects_argocd_install_type():
     text = (PREFLIGHT_TASKS / "validate_rbac.yml").read_text()
 
     crd_queries = [
-        task
-        for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "CustomResourceDefinition"
+        task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "CustomResourceDefinition"
     ]
     assert crd_queries, "validate_rbac.yml must query Argo CD CRDs to determine install type"
-    assert "argocds.argoproj.io" in text, "validate_rbac.yml must detect operator installs via argocds.argoproj.io"
-    assert "argocd_install_type: unknown" not in text, (
-        "validate_rbac.yml must stop widening permissions with a hardcoded unknown install type"
-    )
-    assert "applications.argoproj.io" in text, (
-        "validate_rbac.yml must probe applications.argoproj.io to distinguish vanilla Argo CD from no install"
-    )
+    assert "argocds.argoproj.io" in text, "validate_rbac.yml must detect operator installs via the argocds CRD"
+    assert (
+        "argocd_install_type: unknown" not in text
+    ), "validate_rbac.yml must stop widening permissions with a hardcoded unknown install type"
+    assert (
+        "applications.argoproj.io" in text
+    ), "validate_rbac.yml must probe the applications CRD to distinguish vanilla Argo CD from no install"
     assert "'check'" in text, "validate_rbac.yml must support the read-only Argo CD RBAC check mode"
     assert "skip_gitops_check" in text, "validate_rbac.yml must derive Argo CD RBAC mode from skip_gitops_check"
 
 
 def test_decommission_validates_rbac_before_destructive_steps():
     """decommission must perform RBAC validation before deleting resources."""
-    assert (DECOMMISSION_TASKS / "validate_rbac.yml").exists(), (
-        "decommission must define a dedicated RBAC validation task file"
-    )
+    assert (
+        DECOMMISSION_TASKS / "validate_rbac.yml"
+    ).exists(), "decommission must define a dedicated RBAC validation task file"
 
     main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
     includes = [task.get("ansible.builtin.include_tasks", "") for task in main_tasks]
 
     assert "validate_rbac.yml" in includes, "decommission/main.yml must include validate_rbac.yml"
     assert "delete_managed_clusters.yml" in includes, "decommission/main.yml must include delete_managed_clusters.yml"
-    assert includes.index("validate_rbac.yml") < includes.index("delete_managed_clusters.yml"), (
-        "decommission RBAC validation must run before destructive delete tasks"
-    )
+    assert includes.index("validate_rbac.yml") < includes.index(
+        "delete_managed_clusters.yml"
+    ), "decommission RBAC validation must run before destructive delete tasks"
 
     validate_text = (DECOMMISSION_TASKS / "validate_rbac.yml").read_text()
     assert "tomazb.acm_switchover.acm_rbac_validate" in validate_text

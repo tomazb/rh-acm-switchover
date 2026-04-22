@@ -1,9 +1,41 @@
 """Parity tests for collection RBAC expansion against Python RBAC definitions."""
 
+import importlib
+import sys
+import types
+
 import pytest
 
-from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate import expand_rbac_requirements
 from lib.rbac_validator import RBACValidator
+
+
+def _load_expand_rbac_requirements():
+    """Import the collection RBAC helper without requiring ansible-core in root test jobs."""
+    module_name = "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate"
+    try:
+        return importlib.import_module(module_name).expand_rbac_requirements
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"ansible", "ansible.module_utils", "ansible.module_utils.basic"}:
+            raise
+
+    ansible_module = types.ModuleType("ansible")
+    module_utils = types.ModuleType("ansible.module_utils")
+    basic = types.ModuleType("ansible.module_utils.basic")
+
+    class _AnsibleModule:  # pragma: no cover - the stub only exists in CI environments without ansible-core.
+        pass
+
+    basic.AnsibleModule = _AnsibleModule
+    ansible_module.module_utils = module_utils
+    module_utils.basic = basic
+    sys.modules.setdefault("ansible", ansible_module)
+    sys.modules.setdefault("ansible.module_utils", module_utils)
+    sys.modules.setdefault("ansible.module_utils.basic", basic)
+    sys.modules.pop(module_name, None)
+    return importlib.import_module(module_name).expand_rbac_requirements
+
+
+expand_rbac_requirements = _load_expand_rbac_requirements()
 
 
 def _expand(entries, namespace=None):
