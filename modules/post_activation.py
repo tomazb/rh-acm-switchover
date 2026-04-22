@@ -37,7 +37,7 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import Phase, StateManager, dry_run_skip
-from lib.waiter import wait_for_condition
+from lib.waiter import WaitConditionResult, wait_for_condition
 
 logger = logging.getLogger("acm_switchover")
 
@@ -200,7 +200,7 @@ class PostActivationVerification:
 
             if not managed_clusters:
                 latest_status = {"available": 0, "joined": 0, "total": 0, "pending": []}
-                return False, "no ManagedClusters found"
+                return WaitConditionResult.pending("no ManagedClusters found")
 
             total_clusters = 0
             available_clusters = 0
@@ -240,14 +240,15 @@ class PostActivationVerification:
 
             # If there are no non-local ManagedClusters, that's OK - nothing to wait for
             if total_clusters == 0:
-                return (
-                    True,
-                    "No non-local ManagedClusters to verify (only local-cluster exists)",
+                return WaitConditionResult.complete(
+                    "No non-local ManagedClusters to verify (only local-cluster exists)"
                 )
 
             is_ready = available_clusters == total_clusters and joined_clusters == total_clusters
             detail = f"available={available_clusters}/{total_clusters}, " f"joined={joined_clusters}/{total_clusters}"
-            return is_ready, detail
+            if is_ready:
+                return WaitConditionResult.complete(detail)
+            return WaitConditionResult.pending(detail)
 
         success = wait_for_condition(
             "ManagedCluster connections",
@@ -921,18 +922,18 @@ class PostActivationVerification:
             cluster_name: Name of the ManagedCluster
         """
 
-        def secret_exists() -> tuple:
+        def secret_exists() -> WaitConditionResult:
             """Check if bootstrap-hub-kubeconfig secret exists."""
             try:
                 v1.read_namespaced_secret(
                     name="bootstrap-hub-kubeconfig",
                     namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                 )
-                return (True, "secret exists")
+                return WaitConditionResult.complete("secret exists")
             except ApiException as e:
                 if e.status == 404:
-                    return (False, "secret not found")
-                return (False, f"error: {e.status}")
+                    return WaitConditionResult.pending("secret not found")
+                return WaitConditionResult.pending(f"api status={getattr(e, 'status', 'unknown')}")
 
         secret_ready = wait_for_condition(
             description=f"bootstrap-hub-kubeconfig secret on {cluster_name}",

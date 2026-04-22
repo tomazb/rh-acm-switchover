@@ -49,7 +49,7 @@ from lib.exceptions import FatalError, SwitchoverError, TransientError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient, is_retryable_error
 from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge
-from lib.waiter import wait_for_condition
+from lib.waiter import WaitConditionResult, wait_for_condition
 
 from .backup_schedule import BackupScheduleManager
 from .decommission import Decommission
@@ -764,7 +764,7 @@ class Finalization:
             if phase in ("New", "InProgress", "Finalizing"):
                 backup_verify_timeout = self._get_backup_verify_timeout()
 
-                def _poll_backup_completion() -> Tuple[bool, str]:
+                def _poll_backup_completion() -> WaitConditionResult:
                     backup = self.secondary.get_custom_resource(
                         group="velero.io",
                         version="v1",
@@ -776,10 +776,10 @@ class Finalization:
                         raise SwitchoverError(f"Backup {backup_name} disappeared during integrity check")
                     poll_phase = backup.get("status", {}).get("phase", "unknown")
                     if poll_phase == "Completed":
-                        return True, "completed"
+                        return WaitConditionResult.complete("phase=Completed")
                     if poll_phase in ("Failed", "PartiallyFailed"):
                         raise SwitchoverError(f"Latest backup {backup_name} failed (phase={poll_phase})")
-                    return False, f"phase={poll_phase}"
+                    return WaitConditionResult.pending(f"phase={poll_phase}")
 
                 completed = wait_for_condition(
                     f"backup {backup_name} completion",
@@ -1035,8 +1035,8 @@ class Finalization:
         def _observability_terminated():
             pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
             if not pods:
-                return True, "no observability pods remaining"
-            return False, f"{len(pods)} pod(s) remaining"
+                return WaitConditionResult.complete("no observability pods remaining")
+            return WaitConditionResult.pending(f"{len(pods)} pod(s) remaining")
 
         success = wait_for_condition(
             "observability pod termination on old hub",
@@ -1215,9 +1215,9 @@ class Finalization:
                 namespace=BACKUP_NAMESPACE,
             )
             if not restore:
-                return True, "deleted"
+                return WaitConditionResult.complete("deleted")
             phase = restore.get("status", {}).get("phase", "unknown")
-            return False, f"still present (phase={phase})"
+            return WaitConditionResult.pending(f"still present (phase={phase})")
 
         completed = wait_for_condition(
             f"deletion of restore {restore_name} on primary",

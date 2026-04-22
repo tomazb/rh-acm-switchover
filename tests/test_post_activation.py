@@ -29,6 +29,7 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
 )
 from lib.exceptions import SwitchoverError
+from lib.waiter import WaitConditionResult
 
 PostActivationVerification = post_activation_module.PostActivationVerification
 
@@ -318,7 +319,16 @@ class TestPostActivationVerification:
     def test_verify_no_clusters(self, mock_wait, post_verify_with_obs, mock_secondary_client):
         """Test when no managed clusters exist - should timeout waiting for clusters."""
         mock_secondary_client.list_custom_resources.return_value = []
-        mock_wait.return_value = False  # Simulate timeout (no clusters found)
+
+        def capture_wait(*args, **kwargs):
+            condition_fn = kwargs.get("condition_fn", args[1])
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is False
+            assert result.public_detail == "no ManagedClusters found"
+            return False
+
+        mock_wait.side_effect = capture_wait
 
         # Should raise SwitchoverError with timeout message
         with pytest.raises(SwitchoverError, match="Timeout waiting for ManagedClusters"):
@@ -330,6 +340,28 @@ class TestPostActivationVerification:
         assert call_args[0][0] == "ManagedCluster connections"  # description
         assert call_args[1]["timeout"] == 1
         assert call_args[1]["interval"] == CLUSTER_VERIFY_INTERVAL
+
+    @patch("modules.post_activation.wait_for_condition")
+    def test_wait_for_secret_visibility_returns_public_wait_result(
+        self, mock_wait, post_verify_no_obs, mock_secondary_client
+    ):
+        """Secret visibility poller should return an explicit public wait result."""
+        mock_v1 = Mock()
+        mock_v1.read_namespaced_secret.side_effect = ApiException(status=404)
+
+        def capture_wait(*_args, **kwargs):
+            condition_fn = kwargs["condition_fn"]
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is False
+            assert result.public_detail == "secret not found"
+            return False
+
+        mock_wait.side_effect = capture_wait
+
+        post_verify_no_obs._wait_for_secret_visibility(mock_v1, "cluster-a")
+
+        mock_wait.assert_called_once()
 
     def test_restart_observatorium_api(self, post_verify_with_obs, mock_secondary_client):
         """Test restarting observatorium API deployment."""

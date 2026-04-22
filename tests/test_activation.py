@@ -30,6 +30,7 @@ from lib.constants import (
     VELERO_BACKUP_SKIP,
 )
 from lib.exceptions import FatalError
+from lib.waiter import WaitConditionResult
 
 SecondaryActivation = activation_module.SecondaryActivation
 
@@ -453,7 +454,9 @@ class TestSecondaryActivation:
         with patch("modules.activation.wait_for_condition") as mock_wait:
             # Define side effect to execute the callback passed to wait_for_condition
             def side_effect(desc, callback, **kwargs):
-                return callback()[0]  # Execute callback and return done status
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                return result.done  # Execute callback and return done status
 
             mock_wait.side_effect = side_effect
 
@@ -502,7 +505,9 @@ class TestSecondaryActivation:
         with patch("modules.activation.wait_for_condition") as mock_wait:
 
             def side_effect(desc, callback, **kwargs):
-                return callback()[0]
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                return result.done
 
             mock_wait.side_effect = side_effect
             activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
@@ -533,7 +538,9 @@ class TestSecondaryActivation:
         with patch("modules.activation.wait_for_condition") as mock_wait:
 
             def side_effect(desc, callback, **kwargs):
-                return callback()[0]
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                return result.done
 
             mock_wait.side_effect = side_effect
             activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
@@ -560,7 +567,7 @@ class TestSecondaryActivation:
         with patch("modules.activation.wait_for_condition") as mock_wait:
 
             def side_effect(desc, callback, **kwargs):
-                return callback()[0]
+                return callback().done
 
             mock_wait.side_effect = side_effect
 
@@ -598,12 +605,57 @@ class TestSecondaryActivation:
         with patch("modules.activation.wait_for_condition") as mock_wait:
 
             def side_effect(_desc, callback, **_kwargs):
-                assert callback()[0] is False
-                return callback()[0]
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                assert result.done is False
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                return result.done
 
             mock_wait.side_effect = side_effect
 
             activation_full._wait_for_restore_completion()
+
+    def test_poll_velero_restore_waits_when_acm_restore_missing(self, activation_passive, mock_secondary_client):
+        """Velero restore wait must return structured pending status when ACM restore is absent."""
+        mock_secondary_client.get_custom_resource.return_value = None
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+
+            def side_effect(_desc, callback, **_kwargs):
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                assert result.done is False
+                assert result.public_detail == "ACM restore not found"
+                return result.done
+
+            mock_wait.side_effect = side_effect
+
+            with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
+                activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
+
+    def test_poll_velero_restore_waits_when_velero_restore_name_missing(
+        self, activation_passive, mock_secondary_client
+    ):
+        """Velero restore wait must return structured pending status until the Velero restore is created."""
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "status": {"phase": "Enabled"},
+        }
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+
+            def side_effect(_desc, callback, **_kwargs):
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                assert result.done is False
+                assert result.public_detail == "Velero managed clusters restore not yet created"
+                return result.done
+
+            mock_wait.side_effect = side_effect
+
+            with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
+                activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
 
     @patch("modules.activation.wait_for_condition")
     def test_activate_passive_restore_method(self, mock_wait, mock_secondary_client, mock_state_manager):

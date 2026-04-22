@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.finalization as finalization_module
 from lib.constants import BACKUP_SCHEDULE_DEFAULT_NAME
 from lib.exceptions import SwitchoverError
+from lib.waiter import WaitConditionResult
 
 Finalization = finalization_module.Finalization
 ACM_BACKUP_LABEL = {"cluster.open-cluster-management.io/backup-schedule-type": "managedClusters"}
@@ -1154,7 +1155,6 @@ class TestFinalization:
         self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
         """Optional MCO deletion should remove observability on old hub."""
-        mock_wait.return_value = True
         primary = Mock()
         fin = Finalization(
             secondary_client=mock_secondary_client,
@@ -1166,6 +1166,15 @@ class TestFinalization:
         )
         primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
         primary.get_pods.return_value = []
+
+        def capture_wait(_description, condition_fn, **_kwargs):
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is True
+            assert result.public_detail == "no observability pods remaining"
+            return True
+
+        mock_wait.side_effect = capture_wait
 
         fin._disable_observability_on_old_hub()
 

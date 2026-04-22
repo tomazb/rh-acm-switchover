@@ -39,7 +39,7 @@ from lib.exceptions import FatalError, SwitchoverError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.utils import Phase, StateManager, is_acm_version_ge
-from lib.waiter import wait_for_condition
+from lib.waiter import WaitConditionResult, wait_for_condition
 
 from .restore_discovery import find_passive_sync_restore
 
@@ -403,10 +403,10 @@ class SecondaryActivation:
             )
 
             if not restore:
-                return True, "deleted"
+                return WaitConditionResult.complete("deleted")
 
             phase = restore.get("status", {}).get("phase", "unknown")
-            return False, f"still present (phase={phase})"
+            return WaitConditionResult.pending(f"still present (phase={phase})")
 
         completed = wait_for_condition(
             f"deletion of restore {restore_name}",
@@ -839,9 +839,9 @@ class SecondaryActivation:
             # For passive sync, "Enabled" means the restore is actively syncing - this is the success state
             # For full restore, "Finished"/"Completed" mean the restore completed
             if self.method == "passive" and phase == "Enabled":
-                return True, message or "passive sync enabled and running"
+                return WaitConditionResult.complete("phase=Enabled")
             if phase in ("Finished", "Completed"):
-                return True, message or "restore completed"
+                return WaitConditionResult.complete(f"phase={phase}")
             if phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
                 if messages and all("already available" in m for m in messages):
@@ -852,12 +852,12 @@ class SecondaryActivation:
                         restore_name,
                         "; ".join(messages),
                     )
-                    return True, message or "restore completed (clusters already available)"
+                    return WaitConditionResult.complete("phase=FinishedWithErrors (clusters already available)")
                 raise FatalError(f"Restore failed: {phase} - {message}")
             if phase in ("Error", "Failed", "PartiallyFailed"):
                 raise FatalError(f"Restore failed: {phase} - {message}")
 
-            return False, f"phase={phase} message={message}"
+            return WaitConditionResult.pending(f"phase={phase}")
 
         completed = wait_for_condition(
             f"restore {restore_name}",
@@ -906,13 +906,13 @@ class SecondaryActivation:
             )
 
             if not restore:
-                return False, "ACM restore not found"
+                return WaitConditionResult.pending("ACM restore not found")
 
             status = restore.get("status", {})
             velero_mc_restore_name = status.get("veleroManagedClustersRestoreName")
 
             if not velero_mc_restore_name:
-                return False, "Velero managed clusters restore not yet created"
+                return WaitConditionResult.pending("Velero managed clusters restore not yet created")
 
             # Check the Velero restore status
             velero_restore = self.secondary.get_custom_resource(
@@ -924,7 +924,7 @@ class SecondaryActivation:
             )
 
             if not velero_restore:
-                return False, f"Velero restore {velero_mc_restore_name} not found"
+                return WaitConditionResult.pending(f"waiting for Velero restore {velero_mc_restore_name}")
 
             velero_phase = velero_restore.get("status", {}).get("phase", "unknown")
 
@@ -934,11 +934,11 @@ class SecondaryActivation:
                     "Velero managed clusters restore completed: %s items restored",
                     items_restored,
                 )
-                return True, f"completed ({items_restored} items)"
+                return WaitConditionResult.complete(f"phase=Completed ({items_restored} items)")
             if velero_phase in ("Failed", "PartiallyFailed"):
                 raise FatalError(f"Velero managed clusters restore failed: {velero_phase}")
 
-            return False, f"Velero restore phase: {velero_phase}"
+            return WaitConditionResult.pending(f"phase={velero_phase}")
 
         completed = wait_for_condition(
             "Velero managed clusters restore",

@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.decommission as decommission_module
 from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.exceptions import SwitchoverError
+from lib.waiter import WaitConditionResult
 
 Decommission = decommission_module.Decommission
 
@@ -278,9 +279,12 @@ class TestDecommissionIntegration:
             # Simulate calling the condition function
             def capture_condition_call(name, condition_fn, **kwargs):
                 if "pod removal" in name.lower():
-                    success, msg = condition_fn()
-                    assert success is True, f"Expected success but got: {msg}"
-                    assert "operator" in msg.lower(), f"Expected operator mention in: {msg}"
+                    result = condition_fn()
+                    assert isinstance(result, WaitConditionResult)
+                    assert result.done is True, f"Expected success but got: {result.public_detail}"
+                    assert "operator" in result.public_detail.lower(), (
+                        f"Expected operator mention in: {result.public_detail}"
+                    )
                 return True
 
             mock_wait.side_effect = capture_condition_call
