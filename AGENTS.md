@@ -20,6 +20,89 @@ Both tools automate the same phased workflow for migrating from a primary ACM hu
 - **Respect existing patterns and abstractions**: Align with current architecture and style unless there is a strong reason to refactor.
 - **Keep AGENTS.md current**: Update this file when making significant architectural, workflow, module, or CLI changes.
 
+## Dual-Supported Parity Contract
+
+The Python CLI and the Ansible collection are independent codebases, but many operator-facing capabilities remain **dual-supported** during coexistence. Drift is not allowed by default.
+
+- **Status authority**: [`docs/ansible-collection/parity-matrix.md`](docs/ansible-collection/parity-matrix.md) defines whether a capability is `dual-supported`, `Python only`, `collection only`, or `deprecated`.
+- **Behavior mapping authority**: [`docs/ansible-collection/behavior-map.md`](docs/ansible-collection/behavior-map.md) maps Python sources to the collection target that must be reviewed for parity.
+- **Coexistence policy**: [`ansible_collections/tomazb/acm_switchover/docs/coexistence.md`](ansible_collections/tomazb/acm_switchover/docs/coexistence.md) defines the shared-behavior contract during the coexistence period.
+- **Default rule**: If a capability is documented as `dual-supported`, update both implementations and their tests/docs together unless an intentional divergence is explicitly approved and documented first.
+- **Independent codebases are not an exception**: "cannot import from each other" means parity must be maintained deliberately via docs, tests, and mirrored implementation work.
+
+### Current Dual-Supported Capability Surface
+
+Treat these as parity-sensitive unless the parity matrix says otherwise:
+
+- preflight validation
+- primary prep
+- activation
+- post-activation verification
+- finalization
+- RBAC self-validation
+- RBAC bootstrap
+- Argo CD management
+- discovery
+- decommission
+- shared machine-readable reports
+- optional checkpoints
+
+### Approval Gate For Intentional Parity Changes
+
+**Explicit operator approval is required before implementing an intentional parity change.**
+
+This approval gate applies when a planned change would:
+
+- leave a `dual-supported` capability intentionally different between Python and the collection
+- change a capability's documented parity status (`dual-supported`, `Python only`, `collection only`, `deprecated`)
+- knowingly defer realignment of the other implementation as follow-up work
+
+Do **not** use this gate for ordinary parity-preserving bug fixes where both implementations are updated together.
+
+When requesting approval for an intentional parity change, include:
+
+1. The affected capability or capabilities
+2. The current documented parity status
+3. The proposed new status or intentional divergence
+4. Why parity cannot or should not be preserved in the current change
+5. Operational/user impact
+6. Test and documentation impact
+7. What must be realigned later if the divergence is temporary
+
+### Where To Record Approved Parity Changes
+
+Approved parity changes must be documented in the repo, not only in a PR or commit message.
+
+- Update [`docs/ansible-collection/parity-matrix.md`](docs/ansible-collection/parity-matrix.md) whenever parity status or support posture changes.
+- Update [`docs/ansible-collection/behavior-map.md`](docs/ansible-collection/behavior-map.md) when behavior ownership, mapping, or implementation target changes.
+- Update [`ansible_collections/tomazb/acm_switchover/docs/coexistence.md`](ansible_collections/tomazb/acm_switchover/docs/coexistence.md) when the shared-behavior boundary or coexistence policy changes.
+- Update [`ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md`](ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md) when the operator-facing CLI-to-collection capability contract changes.
+- Update [`docs/ansible-collection/scenario-catalog.md`](docs/ansible-collection/scenario-catalog.md) or [`docs/ansible-collection/test-migration-catalog.md`](docs/ansible-collection/test-migration-catalog.md) when shared scenarios or parity test expectations change.
+- Update [`CHANGELOG.md`](CHANGELOG.md) when the approved parity change affects supported workflows, operator-facing behavior, or deprecation/support status.
+- Update the domain-specific docs as well when they are part of the impacted support surface (for example architecture, RBAC deployment/requirements, or usage docs).
+
+### RBAC Realignment And Divergence
+
+RBAC changes are parity-sensitive even when the code edit is indirect. If RBAC behavior, permissions, or resources change, review and realign all affected surfaces:
+
+- Python RBAC validation logic in [`lib/rbac_validator.py`](lib/rbac_validator.py)
+- Collection RBAC validation logic in [`ansible_collections/tomazb/acm_switchover/plugins/modules/acm_rbac_validate.py`](ansible_collections/tomazb/acm_switchover/plugins/modules/acm_rbac_validate.py)
+- Collection task wiring that consumes the RBAC matrix (`preflight`, `decommission`, `rbac_bootstrap`)
+- Root RBAC manifests in [`deploy/rbac/`](deploy/rbac/)
+- Collection-bundled RBAC manifest copies in [`ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/files/deploy/rbac/`](ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/files/deploy/rbac/)
+- Helm RBAC chart/templates in [`deploy/helm/acm-switchover-rbac/`](deploy/helm/acm-switchover-rbac/)
+- RBAC docs in [`docs/deployment/rbac-requirements.md`](docs/deployment/rbac-requirements.md), [`docs/deployment/rbac-deployment.md`](docs/deployment/rbac-deployment.md), and [`docs/development/rbac-implementation.md`](docs/development/rbac-implementation.md)
+- RBAC tests on both sides
+
+Examples of indirect RBAC changes that still require review:
+
+- adding a new Kubernetes API call, verb, resource kind, or namespace
+- changing Argo CD integration behavior that alters required permissions
+- changing bootstrap-applied manifests or asset selection
+- changing decommission privileges or support boundaries
+
+If an RBAC parity change is intentional rather than a full realignment, get operator approval first and document exactly which permissions, resources, or workflows now differ and why.
+
 ## Protected Critical Files
 
 The following files are **safety-critical operational documents** that AI agents MUST NOT modify without explicit operator approval:
@@ -132,7 +215,10 @@ def scale_deployment(self, name, namespace, replicas):
 - Wrapper methods (e.g., `secret_exists`) should NOT have `@retry_api_call` if they call methods that already have it
 
 ### Constants Usage
-Import from `lib/constants.py` - never hard-code namespaces (`BACKUP_NAMESPACE`, `OBSERVABILITY_NAMESPACE`) or resource names
+- Python-only constants belong in `lib/constants.py`
+- Collection-only constants belong in `ansible_collections/tomazb/acm_switchover/plugins/module_utils/constants.py`
+- Shared cross-form-factor constants must be updated on both sides and kept in parity via the existing parity tests
+- Never hard-code shared namespaces or resource names when a centralized constant already exists
 
 ### KubeClient Pattern
 - Methods return `Optional[Dict]` for get operations (None = not found)
@@ -243,6 +329,15 @@ pytest -m integration tests/  # Integration tests
 
 Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock responses should include `resourceVersion` in metadata for patch verification tests.
 
+### Cross-Implementation Verification
+
+For parity-sensitive changes, do not verify only one form factor.
+
+- Run the relevant Python tests and the relevant collection tests for any `dual-supported` capability change.
+- Run targeted parity/alignment tests when shared behavior, constants, or support boundaries change.
+- For RBAC changes, verify both Python RBAC tests and collection RBAC tests, plus any affected parity/static-contract tests.
+- If you intentionally change parity status or leave an approved divergence, verify that the docs/tests updated to reflect that decision.
+
 ### Test Quality Guidelines
 - **DO NOT create meaningless or superficial tests** - tests should verify real logic and functionality
 - Focus on testing actual business logic, error handling, and edge cases
@@ -259,7 +354,7 @@ Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock res
 
 ## Common Tasks
 
-**Adding a new constant**: Add to `lib/constants.py`, import where needed
+**Adding a new constant**: If Python-only, add to `lib/constants.py`. If collection-only, add to `ansible_collections/tomazb/acm_switchover/plugins/module_utils/constants.py`. If shared across both form factors, update both and keep the parity tests green.
 **Adding a KubeClient method**: Add `@retry_api_call` for API calls, return `Optional[Dict]` for gets, handle 404→None
 **New workflow step**: Follow idempotent pattern with `state.is_step_completed()` / `mark_step_completed()`
 **New validation**: Add to `lib/validation.py` with `InputValidator` static method
@@ -289,9 +384,13 @@ When doing similar refactoring work:
 ## Files to Know
 
 - `CHANGELOG.md` - Update `[Unreleased]` section for changes
+- `docs/ansible-collection/parity-matrix.md` - Source of truth for parity/support status
+- `docs/ansible-collection/behavior-map.md` - Python-to-collection behavior mapping
+- `ansible_collections/tomazb/acm_switchover/docs/coexistence.md` - Coexistence and shared-behavior policy
 - `docs/development/architecture.md` - Design decisions and module descriptions
 - `docs/development/findings-report.md` - Issue backlog with identified bugs and improvements (check Status field before fixing)
 - `lib/constants.py` - All magic strings centralized here (Python)
+- `ansible_collections/tomazb/acm_switchover/plugins/module_utils/constants.py` - All collection-side constants centralized here
 - `scripts/constants.sh` - All magic strings centralized here (Bash)
 - `setup.cfg` - pytest, flake8, mypy configuration
 - `.claude/skills/` - Claude SKILLS for switchover procedures (keep in sync with runbook)

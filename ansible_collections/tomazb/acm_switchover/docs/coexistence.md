@@ -4,6 +4,8 @@
 
 Parity is tracked by shared scenarios and the parity matrix, not by internal implementation shape.
 
+Intentional divergence from a `dual-supported` capability requires explicit operator approval before implementation and must be documented in the parity matrix plus the relevant mapping/support docs in the same change.
+
 ## Dual-Bug-Fix Policy
 
 Safety and correctness defects in dual-supported features must be evaluated for both implementations.

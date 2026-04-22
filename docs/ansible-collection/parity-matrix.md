@@ -3,6 +3,8 @@
 Date: 2026-04-10 (Phase 6 complete)
 Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`
 
+Intentional parity changes require explicit operator approval before implementation. When a capability's support status changes, or approved work intentionally leaves a `dual-supported` capability divergent, record that decision here and update the related mapping/coexistence docs in the same change.
+
 ## Current Migration Baseline
 
 | Capability | Status | Target Milestone | Notes |
@@ -28,7 +30,7 @@ Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecate
 4. Python read-only
 5. Python retirement
 
-The matrix is the migration control document. Do not invent alternate status vocabularies in follow-on plans.
+The matrix is the migration control document. Do not invent alternate status vocabularies in follow-on plans or leave approved status changes undocumented here.
 
 ## Phase 2 Preflight Check Coverage
 
