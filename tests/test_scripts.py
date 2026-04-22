@@ -12,8 +12,10 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -334,8 +336,14 @@ exit 1
     )
 
     assert code == 0, out
-    assert "https://explicit.example:6443" in out
-    assert "cluster-explicit" in out
+    yaml_start = out.find("apiVersion:")
+    assert yaml_start != -1, out
+    rendered_kubeconfig = yaml.safe_load(out[yaml_start:])
+    cluster_entry = rendered_kubeconfig["clusters"][0]
+    assert cluster_entry["name"] == "cluster-explicit"
+    parsed_server = urlparse(cluster_entry["cluster"]["server"])
+    assert parsed_server.hostname == "explicit.example"
+    assert parsed_server.port == 6443
     assert f"--kubeconfig={expected_kubeconfig}" in log_file.read_text(encoding="utf-8")
 
 

@@ -908,9 +908,7 @@ class PostActivationVerification:
                 else:
                     # Log only status/reason to avoid leaking sensitive data from exception body
                     logger.debug(
-                        "Error applying %s/%s: status=%s reason=%s",
-                        kind,
-                        name,
+                        "Error applying managed-cluster import resource: status=%s reason=%s",
                         getattr(e, "status", None),
                         getattr(e, "reason", None),
                     )
