@@ -31,6 +31,11 @@ def test_validator_role_returns_base_assets():
     assert "deploy/rbac/serviceaccount.yaml" in assets
 
 
+def test_validator_role_rejects_decommission_assets():
+    with pytest.raises(ValueError, match="include_decommission"):
+        select_rbac_assets(role="validator", include_decommission=True)
+
+
 def test_invalid_role_is_rejected():
     with pytest.raises(ValueError, match="Invalid RBAC role"):
         select_rbac_assets(role="admin", include_decommission=False)

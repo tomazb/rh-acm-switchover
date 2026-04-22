@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Collection RBAC parity**: Collection preflight RBAC validation now mirrors Python hub validation more closely. It derives Argo CD RBAC mode from `skip_gitops_check` / `argocd.manage`, distinguishes `applications.argoproj.io` absence from vanilla/operator installs, stops requiring managed-cluster `open-cluster-management-agent` permissions during hub preflight, and now rejects `validator` + decommission combinations consistently in both `acm_rbac_validate` and `rbac_bootstrap`.
 - **Bash argument parsing**: `preflight-check.sh`, `postflight-check.sh`, and `discover-hub.sh` now reject missing option values with a clear invalid-arguments error instead of crashing under `set -u`.
 - **Python auto-import management**: `activation.py` now fails closed when explicit `--manage-auto-import-strategy` updates cannot be read or patched, while detect-only mode remains warning-only.
 - **Collection metadata drift**: Bumped collection version to `1.7.1` and aligned role metadata licenses to `MIT` to match the repository license and release version.

@@ -58,6 +58,11 @@ def test_preflight_validate_rbac_detects_argocd_install_type():
     assert "argocd_install_type: unknown" not in text, (
         "validate_rbac.yml must stop widening permissions with a hardcoded unknown install type"
     )
+    assert "applications.argoproj.io" in text, (
+        "validate_rbac.yml must probe applications.argoproj.io to distinguish vanilla Argo CD from no install"
+    )
+    assert "'check'" in text, "validate_rbac.yml must support the read-only Argo CD RBAC check mode"
+    assert "skip_gitops_check" in text, "validate_rbac.yml must derive Argo CD RBAC mode from skip_gitops_check"
 
 
 def test_decommission_validates_rbac_before_destructive_steps():

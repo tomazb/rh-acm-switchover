@@ -1,5 +1,7 @@
 """Tests for the acm_rbac_validate collection module."""
 
+import pytest
+
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate import (
     expand_rbac_requirements,
     summarize_rbac_results,
@@ -15,6 +17,38 @@ def test_manage_mode_adds_application_patch_permission():
         argocd_install_type="operator",
     )
     assert ("argoproj.io", "applications", "patch", None) in permissions
+
+
+def test_check_mode_adds_argocd_read_permissions_only():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="check",
+        argocd_install_type="operator",
+    )
+
+    assert ("argoproj.io", "applications", "get", None) in permissions
+    assert ("argoproj.io", "applications", "list", None) in permissions
+    assert ("argoproj.io", "argocds", "get", None) in permissions
+    assert ("argoproj.io", "argocds", "list", None) in permissions
+    assert ("apiextensions.k8s.io", "customresourcedefinitions", "get", None) in permissions
+    assert ("argoproj.io", "applications", "patch", None) not in permissions
+
+
+def test_argocd_none_install_type_skips_all_argocd_permissions():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="check",
+        argocd_install_type="none",
+    )
+
+    assert ("argoproj.io", "applications", "get", None) not in permissions
+    assert ("argoproj.io", "applications", "list", None) not in permissions
+    assert ("argoproj.io", "argocds", "get", None) not in permissions
+    assert ("apiextensions.k8s.io", "customresourcedefinitions", "get", None) not in permissions
 
 
 def test_decommission_adds_delete_permissions():
@@ -93,6 +127,19 @@ def test_validator_role_has_readonly_managedcluster_permission():
     assert ("cluster.open-cluster-management.io", "managedclusters", "list", None) in permissions
 
 
+def test_hub_validation_surface_excludes_managed_cluster_namespace_permissions():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+
+    managed_cluster_perms = [p for p in permissions if p[3] == "open-cluster-management-agent"]
+    assert managed_cluster_perms == []
+
+
 def test_validator_role_no_write_on_backupschedules():
     """Validator role should not have create/patch/delete on backupschedules."""
     permissions = expand_rbac_requirements(
@@ -110,6 +157,17 @@ def test_validator_role_no_write_on_backupschedules():
     assert "create" not in verbs
     assert "patch" not in verbs
     assert "delete" not in verbs
+
+
+def test_validator_role_rejects_decommission_permissions():
+    with pytest.raises(ValueError, match="include_decommission"):
+        expand_rbac_requirements(
+            role="validator",
+            include_decommission=True,
+            skip_observability=False,
+            argocd_mode="none",
+            argocd_install_type="unknown",
+        )
 
 
 def test_operator_role_has_patch_on_managedclusters():

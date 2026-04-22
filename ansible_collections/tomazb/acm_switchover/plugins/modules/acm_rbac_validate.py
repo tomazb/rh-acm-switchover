@@ -263,13 +263,11 @@ def expand_rbac_requirements(
 
         return permissions
 
+    if include_decommission and role != "operator":
+        raise ValueError("include_decommission is only valid for the operator role")
+
     cluster_perms = OPERATOR_CLUSTER_PERMISSIONS if role == "operator" else VALIDATOR_CLUSTER_PERMISSIONS
     hub_ns_perms = OPERATOR_HUB_NAMESPACE_PERMISSIONS if role == "operator" else VALIDATOR_HUB_NAMESPACE_PERMISSIONS
-    managed_ns_perms = (
-        OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
-        if role == "operator"
-        else VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
-    )
 
     permissions: list[tuple[str, str, str, str | None]] = []
 
@@ -287,17 +285,14 @@ def expand_rbac_requirements(
             continue
         permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
 
-    # Managed-cluster namespace-scoped
-    for namespace, ns_perms in managed_ns_perms.items():
-        permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
-
     # Argo CD
     if argocd_mode in {"check", "manage"}:
-        permissions.extend(_expand_permission_list(ARGOCD_BASE_CLUSTER_PERMISSIONS))
-        if argocd_install_type != "vanilla":
-            permissions.extend(_expand_permission_list(ARGOCD_OPERATOR_CLUSTER_PERMISSIONS))
-        if argocd_mode == "manage" and role == "operator":
-            permissions.extend(_expand_permission_list(ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS))
+        if argocd_install_type != "none":
+            permissions.extend(_expand_permission_list(ARGOCD_BASE_CLUSTER_PERMISSIONS))
+            if argocd_install_type != "vanilla":
+                permissions.extend(_expand_permission_list(ARGOCD_OPERATOR_CLUSTER_PERMISSIONS))
+            if argocd_mode == "manage" and role == "operator":
+                permissions.extend(_expand_permission_list(ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS))
 
     # Decommission extras
     if include_decommission:

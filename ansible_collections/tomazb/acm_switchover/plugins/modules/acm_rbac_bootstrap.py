@@ -87,6 +87,8 @@ def select_rbac_assets(role: str, include_decommission: bool) -> list[str]:
     """Return an ordered list of RBAC manifest paths for the requested profile."""
     if role not in VALID_ROLES:
         raise ValueError(f"Invalid RBAC role '{role}'. Expected one of: {', '.join(VALID_ROLES)}.")
+    if include_decommission and role != "operator":
+        raise ValueError("include_decommission is only valid for the operator role.")
     assets = list(_BASE_ASSETS)
     if include_decommission:
         assets.extend(_DECOMMISSION_ASSETS)
