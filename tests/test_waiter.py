@@ -32,7 +32,7 @@ class TestWaitForCondition:
         result = wait_for_condition(description="test wait", condition_fn=condition, logger=mock_logger)
 
         assert result is True
-        mock_logger.info.assert_any_call("Condition complete")
+        mock_logger.info.assert_not_called()
         mock_time.sleep.assert_not_called()
 
     @patch("lib.waiter.time")
@@ -75,7 +75,7 @@ class TestWaitForCondition:
         )
 
         assert result is False
-        mock_logger.debug.assert_called_once_with("Condition in progress (elapsed: %ss)", 10)
+        mock_logger.debug.assert_not_called()
 
     @patch("lib.waiter.time")
     def test_wait_timeout(self, mock_time, mock_logger):
@@ -96,9 +96,7 @@ class TestWaitForCondition:
         )
 
         assert result is False
-        # Should log warning on timeout
-        assert mock_logger.warning.called
-        assert "timeout" in mock_logger.warning.call_args[0][0]
+        mock_logger.warning.assert_not_called()
 
     @patch("lib.waiter.time")
     def test_wait_success_on_last_check(self, mock_time, mock_logger):
@@ -118,7 +116,7 @@ class TestWaitForCondition:
         )
 
         assert result is True
-        mock_logger.info.assert_any_call("Condition complete")
+        mock_logger.info.assert_not_called()
 
     @patch("lib.waiter.time")
     def test_wait_timeout_no_last_chance(self, mock_time, mock_logger):

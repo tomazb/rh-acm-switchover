@@ -23,17 +23,14 @@ def wait_for_condition(
     """Poll until a condition succeeds or timeout expires."""
 
     start_time = time.time()
-    logger.info("Waiting for condition (timeout: %ss)...", timeout)
 
     while time.time() - start_time < timeout:
         done, _detail = condition_fn()
 
         if done:
-            logger.info("Condition complete")
             return True
 
         elapsed = int(time.time() - start_time)
-        logger.debug("Condition in progress (elapsed: %ss)", elapsed)
 
         sleep_interval = interval
         if fast_interval:
@@ -44,8 +41,6 @@ def wait_for_condition(
     if allow_success_after_timeout:
         done, _detail = condition_fn()
         if done:
-            logger.info("Condition complete")
             return True
 
-    logger.warning("Condition not complete after %ss timeout", timeout)
     return False
