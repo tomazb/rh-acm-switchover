@@ -1,6 +1,6 @@
 # Parity Matrix
 
-Date: 2026-04-10 (Phase 6 complete)
+Date: 2026-04-22 (Phase 6 complete)
 Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`
 
 Intentional parity changes require explicit operator approval before implementation. When a capability's support status changes, or approved work intentionally leaves a `dual-supported` capability divergent, record that decision here and update the related mapping/coexistence docs in the same change.
@@ -31,6 +31,18 @@ Intentional parity changes require explicit operator approval before implementat
 5. Python retirement
 
 The matrix is the migration control document. Do not invent alternate status vocabularies in follow-on plans or leave approved status changes undocumented here.
+
+## Parity Enforcement
+
+Cross-implementation contracts are enforced by automated parity tests in `tests/`:
+
+| Test File | Contract Enforced |
+| --- | --- |
+| `tests/test_constants_parity.py` | ~18 shared constants match between `lib/constants.py` and `plugins/module_utils/constants.py` |
+| `tests/test_rbac_collection_parity.py` | Python `RBACValidator` permission matrix matches collection `acm_rbac_validate` expansion |
+| `tests/test_argocd_constants_parity.py` | `ACM_KINDS`, `ACM_NAMESPACES`, and `build_pause_patch` match between Python and collection |
+
+These tests run in CI and must remain green. Add a new test or assertion whenever a new shared constant or behavioral contract is added.
 
 ## Phase 2 Preflight Check Coverage
 

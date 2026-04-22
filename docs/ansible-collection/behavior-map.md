@@ -1,6 +1,6 @@
 # ACM Switchover Behavior Map
 
-Date: 2026-04-10
+Date: 2026-04-22
 Source: `lib/`, `modules/`, `scripts/`
 
 ## Mapping Rules
@@ -27,6 +27,7 @@ Source: `lib/`, `modules/`, `scripts/`
 | `lib/utils.py` checkpoint semantics | documented checkpoint contract only | 1, runtime in 4 |
 | `lib/argocd.py` | `roles/argocd_manage/` and deferred playbook | 5 |
 | `lib/gitops_detector.py` | preflight detection and warnings | 5 |
+| `lib/waiter.py` (`WaitConditionResult`, `wait_for_condition`) | no direct equivalent — collection roles use Ansible's native `until`/`retries` loop construct; architectural difference, not a gap to close | coexistence |
 | `scripts/discover-hub.sh` | supported migration bridge, not rewritten in Phase 1 | coexistence |
 | `scripts/setup-rbac.sh` | `rbac_bootstrap` later | 6 |
 
