@@ -567,7 +567,9 @@ class TestSecondaryActivation:
         with patch("modules.activation.wait_for_condition") as mock_wait:
 
             def side_effect(desc, callback, **kwargs):
-                return callback().done
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                return result.done
 
             mock_wait.side_effect = side_effect
 
