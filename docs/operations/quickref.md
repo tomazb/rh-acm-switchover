@@ -280,7 +280,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--reset-state` | Reset state file and start fresh |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Skip Observability steps even if detected |
-| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
+| `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--skip-gitops-check` | Disable all GitOps detection including Argo CD deep dive |
 | `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; with `--validate-only` it is ignored with a warning; not valid with `--argocd-resume-only`) |
@@ -448,7 +448,7 @@ podman run -it --rm \
 | `--activation-method {patch,restore}` | Activation option for passive method |
 | `--min-managed-clusters N` | Enforce a non-negative minimum restored non-local `ManagedCluster` count (`0` = informational only) |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
-| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
+| `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--verbose` | Enable debug logging |
 
 ### Container Aliases (Optional)

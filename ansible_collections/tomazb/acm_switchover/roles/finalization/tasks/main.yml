@@ -59,10 +59,9 @@
         (acm_switchover_features.manage_auto_import_strategy | default(false))
         or (_auto_import_strategy_changed | default(false) | bool)
 
-    - name: Disable observability on the old hub when requested
+    - name: Disable observability on the old hub for secondary disposition
       ansible.builtin.include_tasks: disable_old_hub_observability.yml
       when:
-        - acm_switchover_features.disable_observability_on_secondary | default(false)
         - not (acm_switchover_operation.restore_only | default(false))
         - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
 

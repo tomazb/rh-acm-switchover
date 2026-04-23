@@ -89,12 +89,12 @@
 
 | ID | Test | Command | Expected | Result | Notes |
 |----|------|---------|----------|--------|-------|
-| R1 | Passive Option B (restore) mgmt1→mgmt2 | `python acm_switchover.py --primary-context mgmt1 --secondary-context mgmt2 --method passive --old-hub-action secondary --activation-method restore --manage-auto-import-strategy --min-managed-clusters 3 --disable-observability-on-secondary --verbose` | Deletes passive-sync, creates new activation restore, clusters reconnect | ✅ PASS | ~11 min |
-| R1r | Reverse mgmt2→mgmt1 | `python acm_switchover.py --primary-context mgmt2 --secondary-context mgmt1 --method passive --old-hub-action secondary --manage-auto-import-strategy --min-managed-clusters 3 --disable-observability-on-secondary --verbose` | Restores original state | ✅ PASS | ~6 min |
-| R2 | Passive + ArgoCD mgmt1→mgmt2 | `python acm_switchover.py --primary-context mgmt1 --secondary-context mgmt2 --method passive --old-hub-action secondary --manage-auto-import-strategy --min-managed-clusters 3 --argocd-manage --disable-observability-on-secondary --verbose` | ArgoCD apps paused before switchover, advisory to resume after Git retarget | ✅ PASS | ~13 min, 10 apps paused; resume via --argocd-resume-only |
+| R1 | Passive Option B (restore) mgmt1→mgmt2 | `python acm_switchover.py --primary-context mgmt1 --secondary-context mgmt2 --method passive --old-hub-action secondary --activation-method restore --manage-auto-import-strategy --min-managed-clusters 3 --verbose` | Deletes passive-sync, creates new activation restore, deletes old-hub MCO automatically, clusters reconnect | ✅ PASS | ~11 min |
+| R1r | Reverse mgmt2→mgmt1 | `python acm_switchover.py --primary-context mgmt2 --secondary-context mgmt1 --method passive --old-hub-action secondary --manage-auto-import-strategy --min-managed-clusters 3 --verbose` | Restores original state and deletes old-hub MCO automatically | ✅ PASS | ~6 min |
+| R2 | Passive + ArgoCD mgmt1→mgmt2 | `python acm_switchover.py --primary-context mgmt1 --secondary-context mgmt2 --method passive --old-hub-action secondary --manage-auto-import-strategy --min-managed-clusters 3 --argocd-manage --verbose` | ArgoCD apps paused before switchover, old-hub MCO deleted automatically, advisory to resume after Git retarget | ✅ PASS | ~13 min, 10 apps paused; resume via --argocd-resume-only |
 | R2r | Reverse mgmt2→mgmt1 | Same as R1r (reverse passive) | Restores original state | ✅ PASS | ~7 min |
-| R3 | Passive WITHOUT --disable-obs mgmt1→mgmt2 | `python acm_switchover.py --primary-context mgmt1 --secondary-context mgmt2 --method passive --old-hub-action secondary --manage-auto-import-strategy --min-managed-clusters 3 --verbose` | Completes; observability scaled down but MCO not deleted | ✅ PASS | ~1 min, scales down obs |
-| R3r | Reverse WITH --disable-obs mgmt2→mgmt1 | Reverse passive with --disable-observability-on-secondary | Restores original state | ✅ PASS | ~11 min, deletes MCO |
+| R3 | Passive secondary default mgmt1→mgmt2 | `python acm_switchover.py --primary-context mgmt1 --secondary-context mgmt2 --method passive --old-hub-action secondary --manage-auto-import-strategy --min-managed-clusters 3 --verbose` | Completes with automatic old-hub MCO deletion; deprecated flag not required | ✅ PASS | ~11 min |
+| R3r | Reverse passive default mgmt2→mgmt1 | Same as R1r; `--disable-observability-on-secondary` remains accepted but redundant | Restores original state | ✅ PASS | ~11 min |
 
 ### Category 7: State & Resume (S1)
 

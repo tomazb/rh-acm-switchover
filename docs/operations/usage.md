@@ -239,22 +239,23 @@ python acm_switchover.py \
 
 **Use case:** Observability issues shouldn't block cluster migration.
 
-### Scenario 3: Disable Observability on Old Hub (Non-Decommission)
+### Scenario 3: Old Hub Kept as Secondary (Observability Disabled Automatically)
 
-If you are keeping the old hub as a secondary and want Observability disabled there,
-you can request deletion of the MultiClusterObservability resource:
+When `--old-hub-action secondary` is used, finalization now deletes
+`MultiClusterObservability` on the old hub automatically so the long-lived
+secondary does not keep running ACM Observability.
 
 ```bash
 python acm_switchover.py \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
   --method passive \
-  --old-hub-action secondary \
-  --disable-observability-on-secondary
+  --old-hub-action secondary
 ```
 
 **Notes:**
-- Only valid when `--old-hub-action secondary` (not for decommission).
+- `--disable-observability-on-secondary` is still accepted for compatibility,
+  but it is now redundant and deprecated.
 - If the MCO is managed by GitOps (ArgoCD/Flux), coordinate deletion to avoid drift.
 
 ### Scenario 4: Different ACM Versions (2.11 vs 2.12+)

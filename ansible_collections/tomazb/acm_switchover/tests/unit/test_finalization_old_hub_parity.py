@@ -26,14 +26,28 @@ def test_finalization_main_includes_old_hub_support_tasks():
     assert includes.index("verify_old_hub_state.yml") > includes.index("handle_old_hub.yml")
 
 
-def test_disable_old_hub_observability_scales_real_workloads():
-    """disable_old_hub_observability.yml must scale the real observability workloads."""
+def test_finalization_main_disables_old_hub_observability_automatically_for_secondary():
+    """Old-hub observability disablement must no longer depend on the feature flag."""
+    disable_task = next(
+        task
+        for task in _main_block_tasks()
+        if task.get("ansible.builtin.include_tasks") == "disable_old_hub_observability.yml"
+    )
+    when_text = "\n".join(disable_task.get("when", []))
+
+    assert "disable_observability_on_secondary" not in when_text
+    assert "(acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'" in when_text
+
+
+def test_disable_old_hub_observability_deletes_mco_and_waits_for_termination():
+    """disable_old_hub_observability.yml must delete MCO, not scale workloads to zero."""
     text = (FINALIZATION_TASKS / "disable_old_hub_observability.yml").read_text()
 
-    assert "kubernetes.core.k8s_scale" in text
-    assert "observability-observatorium-api" in text
-    assert "observability-thanos-compact" in text
-    assert "replicas: 0" in text
+    assert "kind: MultiClusterObservability" in text
+    assert "state: absent" in text
+    assert "deleted_mcos" in text
+    assert "kind: Pod" in text
+    assert "kubernetes.core.k8s_scale" not in text
 
 
 def test_verify_old_hub_state_checks_clusters_and_backup_schedule():

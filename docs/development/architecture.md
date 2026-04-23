@@ -276,7 +276,7 @@ Important activation-related flags:
 Important finalization-related flags:
 
 - `--old-hub-action`
-- `--disable-observability-on-secondary`
+- `--disable-observability-on-secondary` (deprecated compatibility flag)
 
 ### Decommission
 

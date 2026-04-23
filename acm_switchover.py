@@ -266,7 +266,10 @@ Examples:
     parser.add_argument(
         "--disable-observability-on-secondary",
         action="store_true",
-        help="Delete MultiClusterObservability on the old hub when keeping it as secondary (not for decommission)",
+        help=(
+            "Deprecated compatibility flag: old-hub secondary flows now delete "
+            "MultiClusterObservability automatically (not for decommission)"
+        ),
     )
     parser.add_argument(
         "--skip-gitops-check",

@@ -8,6 +8,7 @@ import base64
 import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
@@ -400,17 +401,11 @@ class PostActivationVerification:
                 logger.info("[DRY-RUN] Skipping wait for observatorium-api pods")
                 return
 
-            # Wait for pods to be ready
-            logger.info("Waiting for observatorium-api pods to be ready...")
-            ready = self.secondary.wait_for_pods_ready(
-                namespace=OBSERVABILITY_NAMESPACE,
-                label_selector="app.kubernetes.io/name=observatorium-api",
-                timeout=OBSERVABILITY_POD_TIMEOUT,
-                expected_count=1,
-            )
+            logger.info("Waiting for observatorium-api Deployment rollout to stabilize...")
+            ready = self._wait_for_observatorium_api_rollout()
 
             if ready:
-                logger.info("observatorium-api pods are ready")
+                logger.info("observatorium-api deployment rollout is ready")
                 pods = self.secondary.get_pods(
                     namespace=OBSERVABILITY_NAMESPACE,
                     label_selector="app.kubernetes.io/name=observatorium-api",
@@ -424,7 +419,7 @@ class PostActivationVerification:
                         ", ".join(start_times),
                     )
             else:
-                logger.warning("observatorium-api pods did not become ready in time")
+                logger.warning("observatorium-api deployment rollout did not become ready in time")
 
         except ApiException as e:
             logger.error("Failed to restart observatorium-api: %s", e)
@@ -435,6 +430,46 @@ class PostActivationVerification:
         except Exception as e:
             logger.error("Failed to restart observatorium-api: %s", e)
             raise
+
+    def _wait_for_observatorium_api_rollout(self) -> bool:
+        """Wait for the full observatorium-api Deployment rollout to recover after restart."""
+        deadline = time.time() + OBSERVABILITY_POD_TIMEOUT
+        poll_interval = 5
+
+        while time.time() < deadline:
+            deployment = self.secondary.get_deployment(
+                name=OBSERVATORIUM_API_DEPLOYMENT,
+                namespace=OBSERVABILITY_NAMESPACE,
+            )
+
+            if deployment:
+                metadata = deployment.get("metadata", {})
+                spec = deployment.get("spec", {})
+                status = deployment.get("status", {})
+                generation = int(metadata.get("generation", 0) or 0)
+                observed_generation = int(status.get("observedGeneration", 0) or 0)
+                desired_replicas = int(spec.get("replicas", 1) or 0)
+                ready_replicas = int(status.get("readyReplicas", 0) or 0)
+
+                if observed_generation >= generation and ready_replicas >= desired_replicas:
+                    return True
+
+                logger.debug(
+                    "Waiting for observatorium-api rollout: observedGeneration=%s/%s readyReplicas=%s/%s",
+                    observed_generation,
+                    generation,
+                    ready_replicas,
+                    desired_replicas,
+                )
+            else:
+                logger.debug("Waiting for observatorium-api rollout: deployment not found yet")
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            time.sleep(min(poll_interval, remaining))
+
+        return False
 
     def _verify_observability_pods(self):
         """Verify all Observability pods are running and ready."""

@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Runbook-aligned secondary observability handling**: Python finalization and collection finalization now delete `MultiClusterObservability` automatically when the old hub is kept as `secondary`; old-hub verification no longer scales observability workloads to zero, and the legacy `--disable-observability-on-secondary` switch is now a deprecated compatibility flag.
+- **Python post-activation observability rollout gate**: Restart verification for `observatorium-api` now waits for the full Deployment rollout (`readyReplicas >= spec.replicas`) instead of accepting a single ready pod on HA deployments.
+- **Python old-hub passive restore recreation**: Finalization now always deletes and recreates `restore-acm-passive-sync` on the old hub so stale controller state cannot leave failback with an unusable passive-sync restore.
 - **Ansible report artifact path validation**: Collection report writes now enforce the shared safe-path policy for `preflight-report.json`, `switchover-report.json`, and `restore-only-report.json`, preventing unsafe `report_dir` values from creating controller-side artifacts after validation failures.
 - **Collection RBAC parity**: Collection preflight RBAC validation now mirrors Python hub validation more closely. It derives Argo CD RBAC mode from `skip_gitops_check` / `argocd.manage`, distinguishes `applications.argoproj.io` absence from vanilla/operator installs, stops requiring managed-cluster `open-cluster-management-agent` permissions during hub preflight, and now rejects `validator` + decommission combinations consistently in both `acm_rbac_validate` and `rbac_bootstrap`.
 - **Bash argument parsing**: `preflight-check.sh`, `postflight-check.sh`, and `discover-hub.sh` now reject missing option values with a clear invalid-arguments error instead of crashing under `set -u`.

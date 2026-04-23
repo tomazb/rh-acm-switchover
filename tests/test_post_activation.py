@@ -175,6 +175,11 @@ class TestPostActivationVerification:
             [{"metadata": {"name": "metrics-pod"}}],
         ]
 
+        mock_secondary_client.get_deployment.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 2},
+            "status": {"observedGeneration": 1, "readyReplicas": 2},
+        }
         mock_secondary_client.rollout_restart_deployment.return_value = {"status": "ok"}
 
         result = post_verify_with_obs.verify()
@@ -363,9 +368,23 @@ class TestPostActivationVerification:
 
         mock_wait.assert_called_once()
 
-    def test_restart_observatorium_api(self, post_verify_with_obs, mock_secondary_client):
-        """Test restarting observatorium API deployment."""
-        mock_secondary_client.wait_for_pods_ready.return_value = True
+    @patch("modules.post_activation.time.sleep")
+    def test_restart_observatorium_api_waits_for_full_deployment_rollout(
+        self, mock_sleep, post_verify_with_obs, mock_secondary_client
+    ):
+        """Restart gate must wait for the full Deployment replica target, not just one ready pod."""
+        mock_secondary_client.get_deployment.side_effect = [
+            {
+                "metadata": {"generation": 2},
+                "spec": {"replicas": 2},
+                "status": {"observedGeneration": 1, "readyReplicas": 1},
+            },
+            {
+                "metadata": {"generation": 2},
+                "spec": {"replicas": 2},
+                "status": {"observedGeneration": 2, "readyReplicas": 2},
+            },
+        ]
         mock_secondary_client.get_pods.return_value = [
             {
                 "metadata": {"name": "api"},
@@ -380,7 +399,10 @@ class TestPostActivationVerification:
             namespace=OBSERVABILITY_NAMESPACE,
             name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT,
         )
+        assert mock_secondary_client.get_deployment.call_count == 2
+        mock_secondary_client.wait_for_pods_ready.assert_not_called()
         mock_secondary_client.get_pods.assert_called()
+        mock_sleep.assert_called_once()
 
     def test_restart_observatorium_api_404_without_reason_is_graceful(
         self, post_verify_with_obs, mock_secondary_client
@@ -748,6 +770,11 @@ class TestPostActivationVerificationIntegration:
             }
         ]
         mock_secondary_client.get_pods.return_value = [{"metadata": {"name": "pod1"}, "status": {"phase": "Running"}}]
+        mock_secondary_client.get_deployment.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"observedGeneration": 1, "readyReplicas": 1},
+        }
         mock_secondary_client.rollout_restart_deployment.return_value = {"status": "ok"}
 
         result = verify.verify()

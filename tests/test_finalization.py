@@ -1336,7 +1336,7 @@ class TestFinalization:
         finalization._verify_multiclusterhub_health(timeout=300)
 
     def test_verify_old_hub_state(self, finalization_with_primary, mock_secondary_client):
-        """Old hub checks should inspect clusters, backups, and observability pods."""
+        """Old hub checks should inspect clusters and backups without mutating observability."""
         fin, primary = finalization_with_primary
         primary.list_custom_resources.side_effect = [
             [
@@ -1359,115 +1359,53 @@ class TestFinalization:
         fin._verify_old_hub_state()
 
         assert primary.list_custom_resources.call_count == 2
-        # get_pods is called for both thanos-compact and observatorium-api checks
-        assert primary.get_pods.call_count == 2
-
-    @patch("modules.finalization.time")
-    def test_old_hub_observability_reports_success_when_all_pods_gone(self, mock_time, finalization_with_primary):
-        """Observability shutdown should report success when old-hub pods terminate."""
-        fin, primary = finalization_with_primary
-        compactor_pods = [{"metadata": {"name": "compact-0"}}]
-        api_pods = [{"metadata": {"name": "api-0"}}]
-        primary.get_pods.side_effect = [[], []]
-        mock_time.time.side_effect = [0, 0]
-
-        with patch.object(finalization_module, "logger") as logger:
-            compactor_pods_after, api_pods_after = fin._wait_for_observability_scale_down(
-                compactor_pods=compactor_pods,
-                api_pods=api_pods,
-            )
-            fin._report_observability_scale_down_status(
-                compactor_pods=compactor_pods,
-                api_pods=api_pods,
-                compactor_pods_after=compactor_pods_after,
-                api_pods_after=api_pods_after,
-            )
-
-        assert compactor_pods_after == []
-        assert api_pods_after == []
-        assert primary.get_pods.call_args_list == [
-            call(
-                namespace=finalization_module.OBSERVABILITY_NAMESPACE,
-                label_selector="app.kubernetes.io/name=thanos-compact",
-            ),
-            call(
-                namespace=finalization_module.OBSERVABILITY_NAMESPACE,
-                label_selector="app.kubernetes.io/name=observatorium-api",
-            ),
-        ]
-        mock_time.sleep.assert_not_called()
-        logger.info.assert_any_call("%s is scaled down on old hub", "Thanos compactor")
-        logger.info.assert_any_call("%s is scaled down on old hub", "Observatorium API")
-        logger.info.assert_any_call("All observability components scaled down on old hub")
-        logger.warning.assert_not_called()
-
-    @patch("modules.finalization.time")
-    def test_old_hub_observability_warns_when_pods_remain(self, mock_time, finalization_with_primary):
-        """Observability shutdown should warn when old-hub pods remain after waiting."""
-        fin, primary = finalization_with_primary
-        compactor_pods = [{"metadata": {"name": "compact-0"}}]
-        primary.get_pods.side_effect = [[{"metadata": {"name": "compact-0"}}]]
-        mock_time.time.side_effect = [0, 0, finalization_module.OBSERVABILITY_TERMINATE_TIMEOUT + 1]
-        mock_time.sleep.return_value = None
-
-        with patch.object(finalization_module, "logger") as logger:
-            compactor_pods_after, api_pods_after = fin._wait_for_observability_scale_down(
-                compactor_pods=compactor_pods,
-                api_pods=[],
-            )
-            fin._report_observability_scale_down_status(
-                compactor_pods=compactor_pods,
-                api_pods=[],
-                compactor_pods_after=compactor_pods_after,
-                api_pods_after=api_pods_after,
-            )
-
-        assert compactor_pods_after == [{"metadata": {"name": "compact-0"}}]
-        assert api_pods_after == []
-        primary.get_pods.assert_called_once_with(
-            namespace=finalization_module.OBSERVABILITY_NAMESPACE,
-            label_selector="app.kubernetes.io/name=thanos-compact",
-        )
-        mock_time.sleep.assert_called_once_with(finalization_module.OBSERVABILITY_TERMINATE_INTERVAL)
-        logger.warning.assert_any_call(
-            "%s still running on old hub (%s pod(s)) after waiting",
-            "Thanos compactor",
-            1,
-        )
-        logger.warning.assert_any_call(
-            "Old hub: MultiClusterObservability is still active (%s). Scale both to 0 or remove MCO.",
-            "thanos-compact=1, observatorium-api=0",
-        )
-        assert call("All observability components scaled down on old hub") not in logger.info.call_args_list
-
-    def test_old_hub_observability_dry_run_only_reports_intent(self, finalization_with_primary):
-        """Dry-run observability shutdown should only log what would be scaled down."""
-        fin, primary = finalization_with_primary
-        fin.dry_run = True
-        compactor_pods = [{"metadata": {"name": "compact-0"}}]
-        api_pods = [{"metadata": {"name": "api-0"}}]
-
-        with patch.object(finalization_module, "logger") as logger:
-            compactor_pods_after, api_pods_after = fin._wait_for_observability_scale_down(
-                compactor_pods=compactor_pods,
-                api_pods=api_pods,
-            )
-            fin._report_observability_scale_down_status(
-                compactor_pods=compactor_pods,
-                api_pods=api_pods,
-                compactor_pods_after=compactor_pods_after,
-                api_pods_after=api_pods_after,
-            )
-
         primary.get_pods.assert_not_called()
-        assert compactor_pods_after == []
-        assert api_pods_after == []
-        assert logger.info.call_args_list == [
-            call("[DRY-RUN] Would scale down thanos-compact on old hub"),
-            call("[DRY-RUN] Would scale down observatorium-api on old hub"),
-        ]
-        logger.warning.assert_not_called()
-        assert call("All observability components scaled down on old hub") not in logger.info.call_args_list
+
+    @patch("modules.finalization.wait_for_condition", return_value=False)
+    def test_disable_observability_on_old_hub_warns_when_pods_remain_after_mco_deletion(
+        self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
+    ):
+        """MCO deletion should warn when observability pods remain after the wait window."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+            primary_client=primary,
+            old_hub_action="secondary",
+            disable_observability_on_secondary=True,
+        )
+        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
+        primary.get_pods.return_value = [{"metadata": {"name": "obs-pod"}}]
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            fin._disable_observability_on_old_hub()
+
+        mock_wait.assert_called_once()
+        assert "Observability pods still running after MCO deletion" in caplog.text
+
+    def test_disable_observability_on_old_hub_dry_run_only_reports_delete_intent(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Dry-run observability disablement should report MCO deletion intent without mutating the cluster."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+            primary_client=primary,
+            old_hub_action="secondary",
+            disable_observability_on_secondary=True,
+            dry_run=True,
+        )
+        primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
+
+        with patch.object(finalization_module, "logger") as logger:
+            fin._disable_observability_on_old_hub()
+
+        primary.delete_custom_resource.assert_not_called()
+        primary.get_pods.assert_not_called()
+        logger.info.assert_any_call("[DRY-RUN] Would delete MultiClusterObservability: %s", "observability")
 
     @patch("modules.finalization.time")
     def test_finalize_skips_verify_old_hub_state_when_action_none(
@@ -1619,12 +1557,14 @@ class TestFinalization:
         ]
         mock_secondary_client.get_pods.return_value = []
 
-        with patch.object(fin, "_verify_old_hub_state") as mock_verify:
-            result = fin.finalize()
+        with patch.object(fin, "_disable_observability_on_old_hub") as mock_disable:
+            with patch.object(fin, "_verify_old_hub_state") as mock_verify:
+                result = fin.finalize()
 
-            assert result is True
-            # _verify_old_hub_state SHOULD be called when old_hub_action is 'secondary'
-            mock_verify.assert_called_once()
+                assert result is True
+                # Secondary disposition should both disable MCO and verify the old hub.
+                mock_disable.assert_called_once()
+                mock_verify.assert_called_once()
 
     def test_handle_old_hub_raises_on_unknown_old_hub_action(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
@@ -1701,12 +1641,16 @@ class TestFinalization:
         created_spec = primary.create_custom_resource.call_args.kwargs["body"]["spec"]
         assert created_spec["veleroManagedClustersBackupName"] == "skip"
 
-    def test_setup_old_hub_as_secondary_skips_when_already_passive(
+    def test_setup_old_hub_as_secondary_recreates_existing_passive_restore_even_when_spec_is_skip(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
-        """Existing restore already in passive mode must not be deleted or recreated."""
+        """Existing passive-sync restore must be recreated so stale controller state cannot be reused."""
         primary = Mock()
-        primary.get_custom_resource.return_value = {"spec": {"veleroManagedClustersBackupName": "skip"}}
+        primary.dry_run = False
+        primary.get_custom_resource.side_effect = [
+            {"spec": {"veleroManagedClustersBackupName": "skip", "syncRestoreWithNewBackups": True}},
+            None,
+        ]
 
         fin = Finalization(
             secondary_client=mock_secondary_client,
@@ -1717,8 +1661,11 @@ class TestFinalization:
         )
         fin._setup_old_hub_as_secondary()
 
-        primary.delete_custom_resource.assert_not_called()
-        primary.create_custom_resource.assert_not_called()
+        primary.delete_custom_resource.assert_called_once()
+        assert primary.get_custom_resource.call_count >= 2
+        primary.create_custom_resource.assert_called_once()
+        created_spec = primary.create_custom_resource.call_args.kwargs["body"]["spec"]
+        assert created_spec["veleroManagedClustersBackupName"] == "skip"
 
     def test_setup_old_hub_as_secondary_raises_on_delete_failure(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager

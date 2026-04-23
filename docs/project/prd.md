@@ -180,7 +180,7 @@ The product must complete the switchover and make the requested old-hub outcome 
 - Re-enable or recreate `BackupSchedule` on the new primary
 - Verify that post-switchover backups resume correctly
 - Support `--old-hub-action secondary`, `decommission`, and `none`
-- Optionally delete `MultiClusterObservability` on the old hub when keeping it as a secondary via `--disable-observability-on-secondary`
+- Delete `MultiClusterObservability` on the old hub automatically when keeping it as a secondary; `--disable-observability-on-secondary` remains as a deprecated compatibility flag
 - Advise operator to resume Argo CD auto-sync after retargeting Git (via `--argocd-resume-only`)
 - Provide a completion summary with next-step guidance
 
@@ -268,7 +268,7 @@ The Ansible Collection design maps these flags to grouped collection variables; 
 - `--argocd-resume-only`
 - `--setup`
 - `--include-decommission`
-- `--disable-observability-on-secondary`
+- `--disable-observability-on-secondary` (deprecated compatibility flag)
 
 ## Constraints and Caveats
 

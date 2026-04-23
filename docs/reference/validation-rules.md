@@ -162,7 +162,7 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - `--activation-method=restore` is only valid with `--method passive`
 - `--secondary-context` is required for switchover operations (unless `--decommission` or `--setup`)
 - `--non-interactive` is only valid with `--decommission`
-- `--disable-observability-on-secondary` requires `--old-hub-action secondary` and is not valid with `--decommission`
+- `--disable-observability-on-secondary` is deprecated/redundant, but if supplied it still requires `--old-hub-action secondary` and is not valid with `--decommission`
 - `--argocd-resume-only` requires `--secondary-context` (used to resolve the state file for restoring Argo CD auto-sync)
 - `--argocd-resume-only` cannot be used with `--validate-only` (resume performs changes)
 - `--argocd-resume-only` cannot be used with `--decommission`
