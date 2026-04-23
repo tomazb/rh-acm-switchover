@@ -15,6 +15,7 @@ The framework must support:
 - mandatory Argo CD-managed validation
 - profile-driven environment configuration without hardcoded context names in code
 - automatic diagnosis and bounded recovery after failures
+- pytest-native execution with explicit lifecycle orchestration inside the release harness
 
 ## Problem
 
@@ -27,6 +28,7 @@ Current gaps:
 - no unified way to certify ordinary and Argo CD-managed environments together
 - no explicit baseline convergence model before and after mutating scenarios
 - no normalized release output that answers whether parity-sensitive capabilities passed across streams
+- no explicit distinction between existing static parity tests and required real-cluster runtime parity checks
 
 ## Goals
 
@@ -36,6 +38,7 @@ Current gaps:
 - treat Argo CD support as a mandatory release gate
 - support repeated switchover cycles with automatic baseline recovery
 - emit unified artifacts and a release summary suitable for go/no-go decisions
+- keep existing static parity tests as a separate fast gate while adding runtime parity certification on real clusters
 
 ## Non-Goals
 
@@ -54,6 +57,20 @@ Why this approach:
 - it keeps release certification artifacts and semantics separate from ordinary development E2E runs
 - it provides one place to define the lab contract, baseline recovery, stream adapters, and release reporting
 - it scales better than separate real-cluster harnesses for Bash, Python, and Ansible
+
+## Execution Model
+
+The execution model is pytest-native.
+
+- `tests/release/` is implemented as a pytest suite with release-specific fixtures, markers, and orchestration helpers.
+- The term "release runner" refers to Python library code invoked by pytest tests, not a separate standalone lifecycle owner.
+- If a shell convenience wrapper is added later, it must delegate to pytest rather than introduce a second execution model.
+
+Why this choice:
+
+- the repository already uses pytest as the dominant test entrypoint
+- `tests/e2e/` already proves long-running real-cluster flows can be orchestrated inside pytest
+- fixture reuse, markers, and existing CI/test ergonomics matter more than inventing a new standalone control plane
 
 ## High-Level Architecture
 
@@ -97,6 +114,14 @@ Responsibilities:
 
 Existing `tests/e2e/` modules remain reusable implementation details, especially for orchestration, helpers, monitoring, and cluster inspection.
 
+Load-bearing existing helpers for the Python adapter are expected to include:
+
+- `tests/e2e/orchestrator.py`
+- `tests/e2e/phase_handlers.py`
+- `tests/e2e/failure_injection.py`
+- `tests/e2e/monitoring.py`
+- `tests/e2e/full_validation_helpers.py`
+
 ## Profile Contract
 
 Each release run must load a repo-owned profile file from `tests/release/profiles/`. Profiles are the source of truth for lab-specific values and expected release behavior.
@@ -135,6 +160,8 @@ Each profile defines:
 - recovery policy
   - actions the framework may auto-heal
   - actions that must be treated as a hard stop
+  - explicit RBAC recovery vocabulary
+  - explicit Argo CD resume failure policy
 
 Important boundary:
 
@@ -162,6 +189,12 @@ The baseline must be enforced:
 - after any failed mutating scenario
 - before soak loops continue
 - at end of run, to prove the lab was left in a safe reusable state
+
+Pre-run baseline failure policy:
+
+- if discovery shows the lab is out of contract before any certification scenario runs, the framework performs one bounded pre-run heal pass using the same allowlisted recovery vocabulary
+- if the lab is still out of contract after that pre-run heal pass, the release run hard-fails before any real-cluster certification scenarios start
+- this path marks the lab as unsafe for certification and still emits diagnostics and environment fingerprint artifacts
 
 ## Scenario Model
 
@@ -205,7 +238,17 @@ The Ansible adapter certifies collection playbooks and role orchestration on the
 
 ### Cross-Stream Assertions
 
-Parity-sensitive areas must be checked across streams where dual support is required:
+Static parity tests already exist and remain separate fast gates:
+
+- `tests/test_constants_parity.py`
+- `tests/test_rbac_collection_parity.py`
+- `tests/test_argocd_constants_parity.py`
+
+Those tests cover static contract parity. The release framework adds runtime behavioral parity on real clusters.
+
+Runtime parity assertions apply only to capabilities documented as `dual-supported` in `docs/ansible-collection/parity-matrix.md`. Bash is part of release certification, but Bash is not treated as a strict parity peer for the Python/Ansible coexistence contract unless a scenario explicitly defines a structured comparison.
+
+Parity-sensitive runtime areas are:
 
 - preflight behavior
 - activation and finalization outcomes
@@ -215,23 +258,41 @@ Parity-sensitive areas must be checked across streams where dual support is requ
 - machine-readable report contracts
 - decommission semantics where dual-supported
 
+Comparison mechanics:
+
+- Python and Ansible adapters produce normalized assertion records for each dual-supported capability
+- normalized assertion records are built from shared machine-readable reports where available, and from post-run cluster-state checks where a shared report field is not sufficient
+- comparisons use stable fields only:
+  - capability status
+  - decision flags
+  - normalized role outcomes
+  - normalized resource names or sets
+  - pause/resume state
+  - validation result categories and counts
+- comparisons explicitly exclude unstable fields such as timestamps, durations, file paths, temporary artifact locations, and raw stderr text
+- default comparison mode is strict equality on normalized required fields
+- subset checks are allowed only where one stream intentionally emits additive metadata outside the shared contract
+- Bash validation uses scenario-level contract checks against cluster outcomes and script-specific expected output; it is not required to emit the same report schema as Python and Ansible in the initial design
+
 ## Execution Flow
 
 Each release run follows this flow:
 
 1. Load and validate the selected profile.
-2. Discover current lab state across both hubs and managed clusters.
-3. Converge the lab to the declared baseline.
-4. Run fast static gates first:
+2. Run fast static gates first:
    - relevant unit tests
    - integration tests
    - scenario tests
-   - parity tests
-5. Run the real-cluster certification matrix across Bash, Python, and Ansible according to the selected profile.
-6. Execute cross-stream assertions for parity-sensitive capabilities.
-7. On failure, capture diagnostics, classify the failure, run bounded recovery, and continue or stop according to policy.
-8. Run repeated switchover or soak cycles as declared by the profile.
-9. Emit final release summary and confirm whether the lab ended in baseline-compliant state.
+   - existing static parity tests
+3. Discover current lab state across both hubs and managed clusters and capture environment fingerprint data.
+4. Verify the baseline contract.
+5. If baseline verification fails, run one bounded pre-run heal pass.
+6. If the lab is still out of contract, hard-fail before real-cluster certification.
+7. Run the real-cluster certification matrix across Bash, Python, and Ansible according to the selected profile.
+8. Execute runtime cross-stream assertions for dual-supported capabilities.
+9. On scenario failure, capture diagnostics, classify the failure, run bounded recovery, and continue or stop according to policy.
+10. Run repeated switchover or soak cycles as declared by the profile.
+11. Emit final release summary and confirm whether the lab ended in baseline-compliant state.
 
 This creates a certification pipeline instead of a single monolithic command with implicit operator judgment.
 
@@ -254,6 +315,8 @@ Failure classification categories:
 - RBAC/bootstrap issue
 - unrecoverable environmental fault
 
+Recovery vocabulary must be profile-declared rather than ad hoc.
+
 Allowed bounded recovery actions include:
 
 - cleaning stale role-conflicting `BackupSchedule` or `Restore` resources allowed by profile policy
@@ -262,6 +325,21 @@ Allowed bounded recovery actions include:
 - restoring required Argo CD pause/resume expectations
 - revalidating managed-cluster presence and observability posture
 - rerunning discovery and preflight checks to prove the lab is back inside contract
+
+RBAC recovery actions are limited to this vocabulary:
+
+- `validate_only`
+- `bootstrap_hub_rbac`
+- `bootstrap_managed_cluster_rbac`
+- `revalidate`
+
+Each RBAC recovery action must also declare scope: `primary`, `secondary`, `both`, or an explicit managed-cluster target set. Recovery may invoke only repo-supported bootstrap assets, scripts, or playbooks. It must never patch arbitrary RBAC rules directly.
+
+Argo CD recovery policy must declare a hard-stop condition. At minimum, the run hard-stops when:
+
+- required ACM-touching applications cannot be returned to the profile-declared paused or resumed state within the recovery budget
+- required sync-policy shape or `paused-by` annotations remain inconsistent after one cleanup pass and one bounded retry window
+- role-conflicting resources continue to be recreated by Argo CD after the allowlisted cleanup steps complete
 
 Safety constraints:
 
@@ -275,7 +353,11 @@ Safety constraints:
 
 The release framework emits:
 
-- run manifest with git SHA, tool version, selected profile, and environment facts
+- run manifest with git SHA, tool version, selected profile, and environment fingerprint
+  - ACM version on both hubs
+  - OCP/Kubernetes version on both hubs
+  - managed-cluster platform or version facts captured by the profile contract
+  - key discovered capability flags such as observability and Argo CD presence
 - per-scenario artifacts
   - stdout and stderr
   - machine-readable reports
@@ -310,7 +392,7 @@ Recommended implementation sequence:
 1. Add profile schema, loader, and normalized contract model.
 2. Add baseline discovery and convergence.
 3. Add the release runner and shared artifact model.
-4. Reuse existing Python E2E helpers to power Python release scenarios first.
+4. Reuse `tests/e2e/orchestrator.py`, `phase_handlers.py`, `failure_injection.py`, `monitoring.py`, and `full_validation_helpers.py` to power Python release scenarios first.
 5. Add Ansible stream adapters and parity assertions.
 6. Add Bash real-lab adapters for release-relevant script flows.
 7. Add bounded recovery automation and soak controls.
@@ -321,9 +403,11 @@ This order gets value quickly without blocking on full cross-stream completion b
 ## Design Decisions
 
 - Use a dedicated `tests/release/` layer rather than expanding `tests/e2e/` into the release control plane.
+- Use pytest as the only execution model for the release framework.
 - Keep environment-specific names and expectations in repo-owned profile files.
 - Treat Argo CD support as a mandatory release gate.
 - Use a full lab baseline contract, not only switchover role checks.
+- Distinguish existing static parity tests from new real-cluster runtime parity certification.
 - Perform automatic diagnosis and bounded recovery after failures.
 - Reuse existing E2E helpers as implementation details, but keep release policy separate.
 
@@ -336,4 +420,3 @@ This design is successful when the repository can:
 - validate both ordinary and Argo CD-managed behavior as part of release gating
 - recover from bounded failures back to declared baseline
 - emit enough structured evidence for a confident release decision
-
