@@ -1,6 +1,6 @@
 # ACM Hub Switchover Automation
 
-**Version 1.7.2** (2026-04-20)
+**Version 1.7.3** (2026-04-23)
 
 Automated, idempotent tool for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster. Available in two form factors:
 
@@ -256,7 +256,7 @@ python acm_switchover.py --restore-only \
 | `--restore-only` | Restore managed clusters from S3 backups onto a single hub (no primary needed; implies `--method full`) |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
 | `--skip-observability-checks` | Skip Observability-related steps even if detected |
-| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
+| `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--skip-rbac-validation` | Skip RBAC permission validation during pre-flight checks |
 | `--argocd-manage` | Pause ACM-touching ArgoCD Applications during switchover (left paused by default) |
 | `--argocd-resume-only` | Resume previously paused ArgoCD Applications (standalone; after updating Git for the new hub) |
@@ -300,7 +300,7 @@ python acm_switchover.py --restore-only \
      - `secondary`: Set up passive sync restore (**recommended** - enables reverse switchover)
      - `decommission`: Remove ACM components automatically
      - `none`: Leave unchanged for manual handling
-   - Optional: delete MultiClusterObservability on old hub when keeping it as secondary
+   - When `--old-hub-action secondary` is used, delete MultiClusterObservability on the old hub automatically
    - Generate completion report
 
 ### Restore-Only Flow

@@ -45,7 +45,7 @@ rh-acm-switchover/
 │   ├── preflight_validators.py    # Deprecated compatibility shim
 │   └── primary_prep.py            # Old-primary preparation logic
 ├── scripts/
-│   ├── argocd-manage.sh           # Standalone Argo CD pause/resume helper
+│   ├── argocd-manage.sh           # Deprecated standalone Argo CD helper
 │   ├── discover-hub.sh            # Hub discovery and preflight launcher
 │   ├── generate-merged-kubeconfig.sh
 │   ├── generate-sa-kubeconfig.sh
@@ -305,7 +305,7 @@ sequenceDiagram
     Mods->>S: patch restore or create full restore
     CLI->>Mods: run post-activation verification
     CLI->>Mods: run finalization
-    Mods->>Argo: optionally resume recorded Applications
+    Mods->>P: delete MultiClusterObservability when old hub remains secondary
     Mods->>State: persist completion and config
 ```
 
@@ -363,7 +363,7 @@ The shell scripts are not alternate implementations of the full Python workflow.
 - `preflight-check.sh` / `postflight-check.sh`: standalone operational checks
 - `setup-rbac.sh`: RBAC deployment and kubeconfig generation wrapper
 - `generate-sa-kubeconfig.sh` / `generate-merged-kubeconfig.sh`: credential packaging helpers
-- `argocd-manage.sh`: standalone pause/resume control for Argo CD Applications
+- `argocd-manage.sh`: deprecated standalone Argo CD helper; prefer Python/Ansible workflows
 
 This split keeps the Python CLI focused on orchestration while leaving smaller operator tasks available as composable shell utilities.
 

@@ -29,7 +29,7 @@ All scripts display their version number in the output header for troubleshootin
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                    ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.7.0 (2026-04-10)
+preflight-check.sh v1.7.3 (2026-04-23)
 ```
 
 The version is defined in `constants.sh` and follows [Semantic Versioning](https://semver.org/):
@@ -124,7 +124,7 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Hub Discovery                                        ║
 ╚════════════════════════════════════════════════════════════╝
-discover-hub.sh v1.7.0 (2026-04-10)
+discover-hub.sh v1.7.3 (2026-04-23)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts
@@ -236,7 +236,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 11. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
 12. **Observability** - If observability is installed on the primary:
   - Confirms required CRs/secrets exist
-  - **Fails if the secondary hub has an active MCO** unless **Thanos compactor** and **observatorium-api** are scaled to `0`
+  - **Fails if the secondary hub has an active MCO** unless **Thanos compactor** and **observatorium-api** are scaled to `0` for a temporary/manual switchover window
   - **Warns** if the secondary has observability pods but no MCO CR (likely incomplete decommission)
 13. **Secondary Hub Managed Clusters** - Checks for pre-existing clusters on secondary:
     - Shows available/total count (e.g., "0/8 available")
@@ -254,7 +254,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                     ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.7.0 (2026-04-10)
+preflight-check.sh v1.7.3 (2026-04-23)
 
 Primary Hub:    primary-hub
 Secondary Hub:  secondary-hub
@@ -414,7 +414,7 @@ Verifies that the ACM switchover completed successfully by validating all critic
 5b. **BackupStorageLocation** - Verifies BSL is in "Available" phase (storage accessible for backups)
 6. **ACM Hub Components** - Verifies MultiClusterHub and ACM pods are healthy
 7. **Old Hub Comparison** (if `--old-hub-context` provided) - Checks old hub clusters are disconnected and that the old hub is not still acting as an active observability hub:
-  - Passes if **MCO is absent**, or if **Thanos compactor** and **observatorium-api** are scaled to `0`
+  - Passes if **MCO is absent**, or if **Thanos compactor** and **observatorium-api** are scaled to `0` as a transitional/manual state
 8. **Auto-Import Status** - Verifies no lingering disable-auto-import annotations
 9. **Auto-Import Strategy** (ACM 2.14+) - Ensures `autoImportStrategy` is reset to default post-switchover:
     - Warns if non-default strategy remains configured
@@ -1086,7 +1086,7 @@ Provides shared helper functions and utilities used by both `preflight-check.sh`
 | **Color Variables** | `RED`, `GREEN`, `YELLOW`, `BLUE`, `NC` for formatted output |
 | **Counter Variables** | `TOTAL_CHECKS`, `PASSED_CHECKS`, `FAILED_CHECKS`, `WARNING_CHECKS` |
 | **Message Arrays** | `FAILED_MESSAGES`, `WARNING_MESSAGES` for summary reporting |
-| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.5.0 (2026-01-28)`) |
+| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.7.3 (2026-04-23)`) |
 | **`check_pass`** | Record a passing check with green checkmark |
 | **`check_fail`** | Record a failing check with red X, adds to failed messages |
 | **`check_warn`** | Record a warning with yellow triangle, adds to warning messages |

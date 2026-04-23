@@ -190,7 +190,7 @@ Validation Summary: 15/15 checks passed
 1. Enable BackupSchedule on secondary hub
 2. Verify new backups being created
 3. Handle old hub based on `--old-hub-action`:
-   - `secondary`: Set up passive sync restore for reverse switchover
+   - `secondary`: Set up passive sync restore for reverse switchover and delete `MultiClusterObservability`
    - `decommission`: Remove ACM components automatically
    - `none`: Leave unchanged for manual handling
 4. Generate completion report

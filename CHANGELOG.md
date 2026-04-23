@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-04-23
+
 ### Added
 
 - **ArgoCD resume-on-failure**: New `--argocd-resume-on-failure` CLI flag (Python) and `acm_switchover_features.argocd.resume_on_failure` variable (Ansible) to attempt best-effort resume of paused ArgoCD Applications when a switchover fails. Prevents apps from being left indefinitely paused after failures. Resume errors are logged but do not compound the original failure.
