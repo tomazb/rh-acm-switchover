@@ -13,15 +13,44 @@
       for observability pods to terminate.
   when: acm_switchover_execution.mode | default('execute') == 'dry_run'
 
-- name: Read old hub MultiClusterObservability resources
-  kubernetes.core.k8s_info:
-    api_version: observability.open-cluster-management.io/v1beta2
-    kind: MultiClusterObservability
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context }}"
-  register: _acm_old_hub_mco_info
-  failed_when: false
+- name: Read old hub MultiClusterObservability resources safely
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+  block:
+    - name: Read old hub MultiClusterObservability resources
+      kubernetes.core.k8s_info:
+        api_version: observability.open-cluster-management.io/v1beta2
+        kind: MultiClusterObservability
+        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.primary.context }}"
+      register: _acm_old_hub_mco_info
+  rescue:
+    - name: Capture old hub MCO read error
+      ansible.builtin.set_fact:
+        _acm_old_hub_mco_read_error: >-
+          {{ ansible_failed_result.msg | default(ansible_failed_result | string) | default('') }}
+
+    - name: Treat absent old hub MCO API as no resources
+      ansible.builtin.set_fact:
+        _acm_old_hub_mco_info:
+          resources: []
+      when: >-
+        'the server doesn\'t have a resource type' in (_acm_old_hub_mco_read_error | lower)
+        or 'could not find the requested resource' in (_acm_old_hub_mco_read_error | lower)
+        or
+        'no matches for kind "multiclusterobservability" in group "observability.open-cluster-management.io"'
+        in (_acm_old_hub_mco_read_error | lower)
+
+    - name: Fail on unexpected old hub MCO read error
+      ansible.builtin.fail:
+        msg: >-
+          Unable to inspect MultiClusterObservability resources on the old hub during finalization:
+          {{ _acm_old_hub_mco_read_error }}
+      when: >-
+        'the server doesn\'t have a resource type' not in (_acm_old_hub_mco_read_error | lower)
+        and 'could not find the requested resource' not in (_acm_old_hub_mco_read_error | lower)
+        and
+        'no matches for kind "multiclusterobservability" in group "observability.open-cluster-management.io"'
+        not in (_acm_old_hub_mco_read_error | lower)
 
 - name: Warn that GitOps-managed MCO deletion must be coordinated
   ansible.builtin.debug:

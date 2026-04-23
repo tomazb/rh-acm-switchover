@@ -397,7 +397,6 @@ When doing similar refactoring work:
 - `docs/ansible-collection/behavior-map.md` - Python-to-collection behavior mapping
 - `ansible_collections/tomazb/acm_switchover/docs/coexistence.md` - Coexistence and shared-behavior policy
 - `docs/development/architecture.md` - Design decisions and module descriptions
-- `docs/development/findings-report.md` - Issue backlog with identified bugs and improvements (check Status field before fixing)
 - `lib/constants.py` - All magic strings centralized here (Python)
 - `ansible_collections/tomazb/acm_switchover/plugins/module_utils/constants.py` - All collection-side constants centralized here
 - `scripts/constants.sh` - All magic strings centralized here (Bash)

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ansible finalization old-hub read safety**: Collection finalization now fails closed when unexpected old-hub `MultiClusterObservability`, `ManagedCluster`, or `BackupSchedule` reads fail during finalization, while still treating absent MCO API resources as a no-op.
+
 ## [1.7.3] - 2026-04-23
 
 ### Added

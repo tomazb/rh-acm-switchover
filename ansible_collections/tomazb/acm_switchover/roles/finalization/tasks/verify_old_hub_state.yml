@@ -6,7 +6,6 @@
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
   register: _acm_old_hub_managed_clusters_info
-  failed_when: false
 
 - name: Read old hub BackupSchedules for regression verification
   kubernetes.core.k8s_info:
@@ -16,7 +15,6 @@
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
   register: _acm_old_hub_backup_schedules_info
-  failed_when: false
 
 - name: Collect old hub ManagedClusters that still report Available=True
   ansible.builtin.set_fact:
