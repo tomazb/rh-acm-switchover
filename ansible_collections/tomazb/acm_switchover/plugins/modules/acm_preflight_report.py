@@ -41,11 +41,14 @@ EXAMPLES = r"""
   register: report_result
 """
 
-import json
 from datetime import datetime, timezone
-from pathlib import Path
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts import (
+    ArtifactWriteError,
+    write_json_artifact,
+)
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import ValidationError
 
 
 def summarize_preflight_results(results: list[dict]) -> dict:
@@ -82,13 +85,11 @@ def write_report(report: dict, destination: str) -> tuple[str, str | None]:
     Returns:
         Tuple of (path, error_message). error_message is None on success.
     """
-    path = Path(destination)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    except OSError as e:
-        return str(path), f"Cannot write preflight report to '{path}': {e}"
-    return str(path), None
+        path = write_json_artifact(report=report, destination=destination)
+    except (ArtifactWriteError, ValidationError) as exc:
+        return destination, str(exc)
+    return path, None
 
 
 def main() -> None:
@@ -113,6 +114,7 @@ def main() -> None:
         output_path, write_error = write_report(report, module.params["path"])
         if write_error:
             module.fail_json(msg=write_error, report=report, path=output_path)
+            return
 
     module.exit_json(changed=bool(output_path), report=report, path=output_path)
 

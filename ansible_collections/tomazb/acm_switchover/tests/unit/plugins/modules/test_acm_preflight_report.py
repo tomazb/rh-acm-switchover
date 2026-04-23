@@ -2,6 +2,7 @@
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report import (
     build_preflight_report,
+    main,
     summarize_preflight_results,
 )
 
@@ -54,3 +55,33 @@ def test_summary_counts_failures_by_severity():
     assert summary["critical_failures"] == 1
     assert summary["warning_failures"] == 1
     assert summary["passed"] is False
+
+
+def test_run_module_rejects_unsafe_report_path(monkeypatch):
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "phase": "preflight",
+                "results": [],
+                "hubs": {"secondary": {"context": "secondary-hub"}},
+                "path": "./artifacts/../outside/preflight-report.json",
+            }
+            self.check_mode = False
+
+        def exit_json(self, **kwargs):
+            raise AssertionError(f"unexpected exit_json: {kwargs}")
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report.AnsibleModule",
+        FakeModule,
+    )
+
+    main()
+
+    assert "Path traversal attempt" in captured["fail"]["msg"]
+    assert captured["fail"]["path"] == "./artifacts/../outside/preflight-report.json"

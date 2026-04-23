@@ -44,3 +44,10 @@ def test_finalization_reports_no_change_when_backup_enable_is_already_satisfied(
     assert report["phases"]["finalization"]["status"] == "pass"
     assert report["phases"]["finalization"]["enable_backups"]["operation"]["action"] == "none"
     assert report["phases"]["finalization"]["changed"] is False
+
+
+def test_switchover_invalid_report_dir_fails_without_writing_report(run_switchover_fixture):
+    completed, report = run_switchover_fixture("invalid_report_dir.yml")
+    assert completed.returncode != 0
+    assert report == {}
+    assert "Path traversal attempt" in completed.stdout or "Path traversal attempt" in completed.stderr

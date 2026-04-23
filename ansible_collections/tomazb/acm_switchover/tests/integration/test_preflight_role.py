@@ -43,3 +43,10 @@ def test_preflight_fixture_without_execution_block_uses_defaults(run_preflight_f
     completed, report = run_preflight_fixture("missing_execution_block.yml")
     assert completed.returncode == 0
     assert report["status"] == "pass"
+
+
+def test_preflight_invalid_report_dir_fails_without_writing_report(run_preflight_fixture):
+    completed, report = run_preflight_fixture("invalid_report_dir.yml")
+    assert completed.returncode != 0
+    assert report == {}
+    assert "Path traversal attempt" in completed.stdout or "Path traversal attempt" in completed.stderr

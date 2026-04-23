@@ -21,6 +21,22 @@ def _find_repo_root() -> Path:
     raise RuntimeError("Could not find repository root from %s" % Path(__file__))
 
 
+def _materialize_report_dir(report_dir: str, tmp_path: Path) -> Path:
+    return Path(report_dir.replace("__TMP_PATH__", str(tmp_path)))
+
+
+def _prepare_execution_vars(vars_payload: dict, tmp_path: Path) -> Path:
+    execution = vars_payload.setdefault("acm_switchover_execution", {})
+    report_dir = execution.get("report_dir")
+    if report_dir:
+        effective_report_dir = _materialize_report_dir(str(report_dir), tmp_path)
+        execution["report_dir"] = str(effective_report_dir)
+    else:
+        effective_report_dir = tmp_path / "artifacts"
+        execution["report_dir"] = str(effective_report_dir)
+    return effective_report_dir
+
+
 @pytest.fixture
 def run_preflight_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
@@ -29,7 +45,7 @@ def run_preflight_fixture(tmp_path):
             repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
-        vars_payload.setdefault("acm_switchover_execution", {})["report_dir"] = str(tmp_path / "artifacts")
+        report_dir = _prepare_execution_vars(vars_payload, tmp_path)
 
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
@@ -63,7 +79,7 @@ def run_preflight_fixture(tmp_path):
             timeout=300,
         )
 
-        report_path = tmp_path / "artifacts" / "preflight-report.json"
+        report_path = report_dir / "preflight-report.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
         return completed, report
 

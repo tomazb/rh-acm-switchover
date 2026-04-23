@@ -78,11 +78,31 @@ def test_switchover_report_persists_argocd_run_id():
     assert "run_id" in text, "switchover.yml report must carry the generated Argo CD run_id"
 
 
+def test_switchover_report_uses_validated_report_writer():
+    """switchover.yml must route the final report through the validated writer module."""
+    text = (PLAYBOOKS / "switchover.yml").read_text()
+    assert "tomazb.acm_switchover.acm_report_artifact" in text, (
+        "switchover.yml must use acm_report_artifact for the final report write"
+    )
+    assert "ansible.builtin.copy" not in text, "switchover.yml should not use raw copy for final report artifacts"
+    assert "ansible.builtin.file" not in text, "switchover.yml should not mkdir final report artifacts directly"
+
+
 def test_restore_only_report_persists_argocd_run_id():
     """restore-only-report.json must include Argo CD pause metadata for later explicit resume."""
     text = (PLAYBOOKS / "restore_only.yml").read_text()
     assert "argocd:" in text, "restore_only.yml must publish Argo CD metadata into the report contract"
     assert "run_id" in text, "restore_only.yml report must carry the generated Argo CD run_id"
+
+
+def test_restore_only_report_uses_validated_report_writer():
+    """restore_only.yml must route the final report through the validated writer module."""
+    text = (PLAYBOOKS / "restore_only.yml").read_text()
+    assert "tomazb.acm_switchover.acm_report_artifact" in text, (
+        "restore_only.yml must use acm_report_artifact for the final report write"
+    )
+    assert "ansible.builtin.copy" not in text, "restore_only.yml should not use raw copy for final report artifacts"
+    assert "ansible.builtin.file" not in text, "restore_only.yml should not mkdir final report artifacts directly"
 
 
 def test_restore_only_persists_argocd_run_id_in_checkpoint_after_pause():

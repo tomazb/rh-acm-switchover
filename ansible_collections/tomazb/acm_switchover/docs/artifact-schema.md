@@ -4,6 +4,7 @@
 
 - Path: `{{ acm_switchover_execution.report_dir }}/preflight-report.json`
 - Written before the role fails on critical findings
+- Path is validated with the collection safe-path policy before any controller-side file write
 - `status=pass` means no critical findings failed
 - Warning-only failures remain visible in `results` but do not fail the role
 - Each result entry uses the stable schema:
@@ -18,6 +19,7 @@
 
 - Path: `{{ acm_switchover_execution.report_dir }}/switchover-report.json`
 - Written in an `always` block — present even when the play fails on post-activation
+- Path is validated with the collection safe-path policy before any controller-side file write
 - `schema_version: "1.0"`, `source: tomazb.acm_switchover`
 
 ```json
