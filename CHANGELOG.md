@@ -1174,7 +1174,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.3...HEAD
+[1.7.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.10...v1.7.3
+[1.6.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.0...v1.6.10
+[1.7.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.3...v1.7.0
+[1.6.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.16...v1.6.0

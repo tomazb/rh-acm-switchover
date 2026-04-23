@@ -463,6 +463,7 @@ Location: `CHANGELOG.md`
 1. For new releases, create a new section: `## [X.Y.Z] - YYYY-MM-DD`
 2. For ongoing work, add entries under `## [Unreleased]`
 3. Group changes by: `### Added`, `### Changed`, `### Fixed`, `### Removed`
+4. Keep the reference-link block at the bottom current: update `[Unreleased]` to compare from the new release tag to `HEAD`, add a link for the new release heading, and backfill any missing link references for headings added since the last release-link update.
 
 ### Version Update Checklist
 
@@ -473,8 +474,9 @@ When making script changes:
 4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
 5. [ ] Update version in `README.md` (top of file)
 6. [ ] Add changelog entry in `CHANGELOG.md`
-7. [ ] Update `scripts/README.md` if new features/checks added
-8. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+7. [ ] Update the CHANGELOG reference-link block (`[Unreleased]` and the new `[X.Y.Z]` link, plus any missing recent release links)
+8. [ ] Update `scripts/README.md` if new features/checks added
+9. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
 
 When making Python code changes:
 1. [ ] Update `__version__` in `lib/__init__.py`
@@ -483,8 +485,9 @@ When making Python code changes:
 4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
 5. [ ] Update version in `README.md` (top of file)
 6. [ ] Add changelog entry in `CHANGELOG.md`
-7. [ ] Keep Python and Bash versions in sync if changes affect both
-8. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+7. [ ] Update the CHANGELOG reference-link block (`[Unreleased]` and the new `[X.Y.Z]` link, plus any missing recent release links)
+8. [ ] Keep Python and Bash versions in sync if changes affect both
+9. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
 
 ## Claude SKILLS
 
