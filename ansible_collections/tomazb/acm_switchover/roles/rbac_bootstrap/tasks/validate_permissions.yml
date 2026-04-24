@@ -1,4 +1,22 @@
 ---
+- name: Determine RBAC bootstrap validation subject
+  ansible.builtin.set_fact:
+    _rbac_bootstrap_service_account_name: >-
+      {{
+        'acm-switchover-operator'
+        if acm_switchover_rbac_bootstrap.role == 'operator'
+        else 'acm-switchover-validator'
+      }}
+    _rbac_bootstrap_subject: >-
+      {{
+        'system:serviceaccount:acm-switchover:'
+        ~ (
+          'acm-switchover-operator'
+          if acm_switchover_rbac_bootstrap.role == 'operator'
+          else 'acm-switchover-validator'
+        )
+      }}
+
 - name: Expand expected RBAC permissions via collection module
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
@@ -7,12 +25,39 @@
     denied_permissions: []
   register: _rbac_validation_plan
 
-- name: Run SelfSubjectAccessReview checks for bootstrap RBAC
-  ansible.builtin.include_role:
-    name: tomazb.acm_switchover.preflight
-    tasks_from: run_ssar.yml
-  vars:
-    acm_rbac_permissions: "{{ _rbac_validation_plan.permissions }}"
+- name: Run SubjectAccessReview checks for bootstrap service account
+  kubernetes.core.k8s:
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+    state: present
+    definition:
+      apiVersion: authorization.k8s.io/v1
+      kind: SubjectAccessReview
+      spec:
+        user: "{{ _rbac_bootstrap_subject }}"
+        resourceAttributes:
+          verb: "{{ item.2 }}"
+          group: "{{ item.0 | default('', true) }}"
+          resource: "{{ item.1.split('/')[0] }}"
+          subresource: "{{ item.1.split('/')[1] | default(omit, true) }}"
+          namespace: "{{ item.3 | default(omit, true) }}"
+  register: _rbac_sar_results
+  loop: "{{ _rbac_validation_plan.permissions }}"
+  loop_control:
+    label: "{{ _rbac_bootstrap_subject }} can {{ item.2 }} {{ item.0 }}/{{ item.1 }}{{ ' in ' + item.3 if item.3 else '' }}"
+  changed_when: false
+  failed_when: false
+
+- name: Collect denied permissions for bootstrap service account
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions: >-
+      {%- set denied = [] -%}
+      {%- for result in _rbac_sar_results.results | default([]) -%}
+        {%- if result.result is defined and result.result.status is defined and not result.result.status.allowed -%}
+          {%- set _ = denied.append({"api_group": result.item.0, "resource": result.item.1, "verb": result.item.2, "namespace": result.item.3 | default(none)}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ denied }}
 
 - name: Summarize bootstrap RBAC validation results
   tomazb.acm_switchover.acm_rbac_validate:
@@ -25,5 +70,6 @@
 - name: Fail when RBAC validation finds denied permissions
   ansible.builtin.fail:
     msg: >-
-      RBAC validation failed: {{ _rbac_validation.results[0].details.denied_permissions | default([]) | to_json }}
+      RBAC validation failed for {{ _rbac_bootstrap_subject }}:
+      {{ _rbac_validation.results[0].details.denied_permissions | default([]) | to_json }}
   when: not (_rbac_validation.passed | default(true) | bool)

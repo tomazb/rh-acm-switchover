@@ -62,6 +62,8 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | `include_decommission` | bool | `false` | Append decommission-scoped ClusterRole manifests |
 | `generate_kubeconfigs` | bool | `false` | Generate kubeconfigs after manifest apply |
 | `validate_permissions` | bool | `false` | Run `acm_rbac_validate` after apply |
+| `token_duration` | str | `48h` | Token validity duration for generated service account kubeconfigs |
+| `output_dir` | str | `./kubeconfigs` | Directory for generated service account kubeconfigs |
 
 ### `acm_switchover_discovery` / input facts
 
@@ -76,4 +78,4 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 |----------|----------|------------|
 | `acm_switchover_discovery_result` | discovery | `playbook`, `hub_role`, `status` |
 | `acm_switchover_decommission_result` | decommission | `phase`, `mode`, `status` |
-| `acm_switchover_rbac_bootstrap_result` | rbac_bootstrap | `phase`, `mode`, `role`, `assets_applied`, `status` |
+| `acm_switchover_rbac_bootstrap_result` | rbac_bootstrap | `phase`, `mode`, `role`, `assets_applied`, `generated_kubeconfig`, `status` |

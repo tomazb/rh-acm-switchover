@@ -191,7 +191,7 @@ class Finalization:
 
         try:
             # When the old hub remains as a secondary, the runbook requires MCO deletion.
-            if self.primary and self.old_hub_action == "secondary":
+            if self.primary and self.old_hub_action == "secondary" and self.primary_has_observability:
                 with self.state.step("disable_observability_on_secondary", logger) as should_run:
                     if should_run:
                         self._disable_observability_on_old_hub()

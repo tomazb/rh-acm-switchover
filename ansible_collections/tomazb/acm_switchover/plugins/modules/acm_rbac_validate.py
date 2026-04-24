@@ -87,7 +87,7 @@ VALID_ARGOCD_MODES = ("none", "check", "manage")
 
 # Cluster-scoped permissions for operator role
 OPERATOR_CLUSTER_PERMISSIONS = [
-    ("", "namespaces", ["get"]),
+    ("", "namespaces", ["get", "list"]),
     ("", "nodes", ["get", "list"]),
     (CONFIG_OPENSHIFT_IO, "clusteroperators", ["get", "list"]),
     (CONFIG_OPENSHIFT_IO, "clusterversions", ["get", "list"]),
@@ -99,7 +99,7 @@ OPERATOR_CLUSTER_PERMISSIONS = [
 
 # Cluster-scoped permissions for validator role (read-only)
 VALIDATOR_CLUSTER_PERMISSIONS = [
-    ("", "namespaces", ["get"]),
+    ("", "namespaces", ["get", "list"]),
     ("", "nodes", ["get", "list"]),
     (CONFIG_OPENSHIFT_IO, "clusteroperators", ["get", "list"]),
     (CONFIG_OPENSHIFT_IO, "clusterversions", ["get", "list"]),

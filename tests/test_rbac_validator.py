@@ -84,6 +84,20 @@ class TestRBACValidator:
         assert all_valid is True
         assert len(errors) == 0
 
+    @pytest.mark.parametrize(
+        "permissions",
+        [
+            RBACValidator.OPERATOR_CLUSTER_PERMISSIONS,
+            RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS,
+        ],
+    )
+    def test_cluster_permissions_require_namespace_list_for_preflight_discovery(self, permissions):
+        """Preflight lists Namespace objects, so RBAC validation must require list."""
+        namespace_rule = next(rule for rule in permissions if rule[0] == "" and rule[1] == "namespaces")
+
+        assert "get" in namespace_rule[2]
+        assert "list" in namespace_rule[2]
+
     def test_validate_cluster_permissions_failure(self, validator):
         """Test validate_cluster_permissions when some permissions missing."""
 

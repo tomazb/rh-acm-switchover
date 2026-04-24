@@ -62,6 +62,20 @@ def test_decommission_adds_delete_permissions():
     assert ("cluster.open-cluster-management.io", "managedclusters", "delete", None) in permissions
 
 
+@pytest.mark.parametrize("role", ["operator", "validator"])
+def test_hub_validation_requires_namespace_list_for_preflight_discovery(role):
+    permissions = expand_rbac_requirements(
+        role=role,
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+
+    assert ("", "namespaces", "get", None) in permissions
+    assert ("", "namespaces", "list", None) in permissions
+
+
 def test_decommission_only_excludes_switchover_permissions():
     permissions = expand_rbac_requirements(
         role="operator",

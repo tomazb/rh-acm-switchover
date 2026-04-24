@@ -43,7 +43,7 @@ class RBACValidator:
 
     # Required cluster-scoped permissions for OPERATOR role
     OPERATOR_CLUSTER_PERMISSIONS = [
-        ("", "namespaces", ["get"]),
+        ("", "namespaces", ["get", "list"]),
         ("", "nodes", ["get", "list"]),  # For cluster health validation per runbook
         (
             "config.openshift.io",
@@ -71,7 +71,7 @@ class RBACValidator:
 
     # Required cluster-scoped permissions for VALIDATOR role (read-only)
     VALIDATOR_CLUSTER_PERMISSIONS = [
-        ("", "namespaces", ["get"]),
+        ("", "namespaces", ["get", "list"]),
         ("", "nodes", ["get", "list"]),
         ("config.openshift.io", "clusteroperators", ["get", "list"]),
         ("config.openshift.io", "clusterversions", ["get", "list"]),

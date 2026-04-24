@@ -63,6 +63,7 @@
       ansible.builtin.include_tasks: disable_old_hub_observability.yml
       when:
         - not (acm_switchover_operation.restore_only | default(false))
+        - not (acm_switchover_features.skip_observability_checks | default(false) | bool)
         - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
 
     - name: Clean up secondary restore resources before enabling backups

@@ -101,12 +101,14 @@ class TestRBACPermissionCoverage:
     @pytest.mark.parametrize(
         "resource, expected_api_group, expected_verbs",
         [
+            ("namespaces", "", ["get", "list"]),
             ("managedclusters", None, ["get", "list", "patch"]),
             ("nodes", "", ["get", "list"]),
             ("clusteroperators", "config.openshift.io", ["get", "list"]),
             ("clusterversions", "config.openshift.io", ["get", "list"]),
         ],
         ids=[
+            "namespaces-for-preflight-discovery",
             "managedclusters-core-functionality",
             "nodes-cluster-health-validation",
             "clusteroperators-openshift-health",
@@ -314,6 +316,14 @@ class TestRBACManifestConsistency:
         content = self._read_clusterrole(variant)
         for snippet in self.ARGOCD_SNIPPETS:
             assert snippet in content, f"Missing Argo CD snippet in {variant} clusterrole: {snippet}"
+
+    @pytest.mark.parametrize("variant", ["kustomize", "helm"])
+    def test_clusterrole_namespace_discovery_rule_allows_list(self, variant):
+        """ClusterRole manifests must allow listing namespaces for preflight discovery."""
+        content = self._read_clusterrole(variant)
+        snippet = 'resources: ["namespaces"]\n    verbs: ["get", "list"]'
+
+        assert snippet in content, f"Missing namespace list permission in {variant} clusterrole"
 
     @pytest.mark.parametrize("variant", ["kustomize", "helm"])
     def test_operator_clusterrole_omits_decommission_delete_verbs(self, variant):

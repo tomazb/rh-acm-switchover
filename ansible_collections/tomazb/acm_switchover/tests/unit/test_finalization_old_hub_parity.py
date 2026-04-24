@@ -26,8 +26,8 @@ def test_finalization_main_includes_old_hub_support_tasks():
     assert includes.index("verify_old_hub_state.yml") > includes.index("handle_old_hub.yml")
 
 
-def test_finalization_main_disables_old_hub_observability_automatically_for_secondary():
-    """Old-hub observability disablement must no longer depend on the feature flag."""
+def test_finalization_main_disables_old_hub_observability_only_when_observability_enabled():
+    """Old-hub observability disablement must honor observability skip state."""
     disable_task = next(
         task
         for task in _main_block_tasks()
@@ -36,6 +36,7 @@ def test_finalization_main_disables_old_hub_observability_automatically_for_seco
     when_text = "\n".join(disable_task.get("when", []))
 
     assert "disable_observability_on_secondary" not in when_text
+    assert "skip_observability_checks" in when_text
     assert "(acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'" in when_text
 
 

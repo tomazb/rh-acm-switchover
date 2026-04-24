@@ -1481,7 +1481,7 @@ class TestFinalization:
 
     @patch("time.sleep")
     @patch("time.time")
-    def test_finalize_calls_verify_old_hub_state_when_action_secondary(
+    def test_finalize_skips_old_hub_observability_delete_when_preflight_skipped_observability(
         self,
         mock_time_time,
         mock_time_sleep,
@@ -1489,7 +1489,7 @@ class TestFinalization:
         mock_state_manager,
         mock_backup_manager,
     ):
-        """Test that _verify_old_hub_state IS called when old_hub_action is 'secondary'."""
+        """Skipped observability preflight must prevent destructive old-hub MCO deletion."""
         # Mock time to avoid real waits
         mock_time_time.return_value = 0
         mock_time_sleep.return_value = None
@@ -1562,8 +1562,7 @@ class TestFinalization:
                 result = fin.finalize()
 
                 assert result is True
-                # Secondary disposition should both disable MCO and verify the old hub.
-                mock_disable.assert_called_once()
+                mock_disable.assert_not_called()
                 mock_verify.assert_called_once()
 
     def test_handle_old_hub_raises_on_unknown_old_hub_action(
