@@ -1,0 +1,108 @@
+---
+- name: Skip MultiClusterHub verification in dry-run mode
+  ansible.builtin.set_fact:
+    acm_switchover_verify_mch_result:
+      changed: false
+      status: skipped
+      reason: dry_run
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Wait for MultiClusterHub to report Running on the secondary hub
+  kubernetes.core.k8s_info:
+    api_version: operator.open-cluster-management.io/v1
+    kind: MultiClusterHub
+    namespace: open-cluster-management
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_verify_mch_info
+  retries: 60
+  delay: 10
+  until: >-
+    {{
+      (_acm_secondary_verify_mch_info.resources | default([]) | length) > 0
+      and (
+        ((_acm_secondary_verify_mch_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown'))
+        == 'Running'
+      )
+    }}
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Wait for ACM pods to become healthy on the secondary hub
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: open-cluster-management
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_mch_pods_info
+  retries: 60
+  delay: 10
+  until: >-
+    {%- set ns = namespace(unhealthy=[]) -%}
+    {%- for pod in (_acm_secondary_mch_pods_info.resources | default([])) -%}
+    {%- set status = pod.get('status', {}) -%}
+    {%- set pod_state = namespace(ready=false, waiting_reason='') -%}
+    {%- for condition in status.get('conditions', []) or [] -%}
+    {%- if condition.get('type') == 'Ready' and condition.get('status') == 'True' -%}
+    {%- set pod_state.ready = true -%}
+    {%- endif -%}
+    {%- endfor -%}
+    {%- for container_status in status.get('containerStatuses', []) or [] -%}
+    {%- set waiting = container_status.get('state', {}).get('waiting', {}) or {} -%}
+    {%- if waiting.get('reason', '') | length > 0 -%}
+    {%- set pod_state.waiting_reason = waiting.get('reason', '') -%}
+    {%- endif -%}
+    {%- endfor -%}
+    {%- if status.get('phase') == 'Succeeded' -%}
+    {%- elif
+      status.get('phase') != 'Running'
+      or not pod_state.ready
+      or pod_state.waiting_reason in ['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerConfigError']
+    -%}
+    {%- set _ = ns.unhealthy.append(pod.get('metadata', {}).get('name', 'unknown')) -%}
+    {%- endif -%}
+    {%- endfor -%}
+    {{ (_acm_secondary_mch_pods_info.resources | default([]) | length) > 0 and (ns.unhealthy | length) == 0 }}
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Summarize unhealthy ACM pods
+  ansible.builtin.set_fact:
+    _acm_secondary_unhealthy_mch_pods: >-
+      {%- set unhealthy = [] -%}
+      {%- for pod in (_acm_secondary_mch_pods_info.resources | default([])) -%}
+      {%- set status = pod.get('status', {}) -%}
+      {%- set pod_state = namespace(ready=false, waiting_reason='') -%}
+      {%- for condition in status.get('conditions', []) or [] -%}
+      {%- if condition.get('type') == 'Ready' and condition.get('status') == 'True' -%}
+      {%- set pod_state.ready = true -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- for container_status in status.get('containerStatuses', []) or [] -%}
+      {%- set waiting = container_status.get('state', {}).get('waiting', {}) or {} -%}
+      {%- if waiting.get('reason', '') | length > 0 -%}
+      {%- set pod_state.waiting_reason = waiting.get('reason', '') -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if
+        status.get('phase') != 'Succeeded'
+        and (
+          status.get('phase') != 'Running'
+          or not pod_state.ready
+          or pod_state.waiting_reason in ['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerConfigError']
+        )
+      -%}
+      {%- set _ = unhealthy.append(pod.get('metadata', {}).get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ unhealthy }}
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Publish MultiClusterHub verification result
+  ansible.builtin.set_fact:
+    acm_switchover_verify_mch_result:
+      changed: false
+      status: pass
+      phase: "{{ (_acm_secondary_verify_mch_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}"
+      version: "{{ (_acm_secondary_verify_mch_info.resources | first | default({})).get('status', {}).get('currentVersion', 'unknown') }}"
+      unhealthy_pods: "{{ _acm_secondary_unhealthy_mch_pods }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'

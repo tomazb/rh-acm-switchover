@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: preflight
+  author: Tomaz B
+  description: Pre-flight validation of ACM hub readiness for switchover.
+  license: MIT
+  min_ansible_version: "2.15"
+dependencies: []

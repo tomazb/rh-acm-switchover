@@ -96,6 +96,41 @@ class TestStateManager:
         reloaded = StateManager(str(state_path))
         assert reloaded.is_step_completed("step1") is True
 
+    def test_clear_step_completed_persists_immediately(self, tmp_path):
+        """Cleared completed steps should be persisted for retryable cleanup."""
+        state_path = tmp_path / "state-clear-step.json"
+        sm = StateManager(str(state_path))
+        sm.mark_step_completed("pause_argocd_apps")
+
+        sm.clear_step_completed("pause_argocd_apps")
+
+        assert sm.is_step_completed("pause_argocd_apps") is False
+        reloaded = StateManager(str(state_path))
+        assert reloaded.is_step_completed("pause_argocd_apps") is False
+
+    def test_restore_runtime_checkpoint_restores_errors_deep_copy(self, tmp_path):
+        """Validate-only checkpoint restore must discard transient errors."""
+        state_path = tmp_path / "state-runtime-checkpoint.json"
+        sm = StateManager(str(state_path))
+        sm.set_phase(Phase.POST_ACTIVATION)
+        sm.add_error("original failure", Phase.POST_ACTIVATION.value)
+        checkpoint = sm.capture_runtime_checkpoint()
+        assert "errors" in checkpoint
+        assert checkpoint["errors"] is not sm.state["errors"]
+
+        # Mutate runtime state after capture to prove the checkpoint kept an
+        # independent copy of the durable error list.
+        sm.set_phase(Phase.PREFLIGHT)
+        sm.add_error("validate-only preflight failure", Phase.PREFLIGHT.value)
+
+        sm.restore_runtime_checkpoint(checkpoint)
+
+        assert sm.get_current_phase() == Phase.POST_ACTIVATION
+        errors = sm.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["phase"] == Phase.POST_ACTIVATION.value
+        assert errors[0]["error"] == "original failure"
+
     def test_set_get_config(self, state_manager):
         """Test configuration storage."""
         state_manager.set_config("acm_version", "2.12.0")
@@ -549,7 +584,11 @@ class TestStateManagerExitRegistration:
 
         assert sm._run_lock_path == os.path.realpath(str(state_path)) + ".run.lock"
         registered = [call.args[0].__name__ for call in register.call_args_list]
-        assert registered == ["_release_run_lock", "_flush_on_exit", "_cleanup_temp_files"]
+        assert registered == [
+            "_release_run_lock",
+            "_flush_on_exit",
+            "_cleanup_temp_files",
+        ]
 
     def test_fail_phase_helper_reuses_existing_same_phase_and_message_error(self, tmp_path):
         """_fail_phase should not append another error when the last entry matches phase and message."""
@@ -600,7 +639,7 @@ class TestStateManagerExitRegistration:
         sm = StateManager(str(tmp_path / "state.json"))
         sm.set_phase(Phase.ACTIVATION)
         sm.add_error("stale prior failure", phase=Phase.ACTIVATION.value)
-        sm._retry_error_baseline = {"phase": Phase.ACTIVATION.value, "count": 1}
+        sm.record_retry_error_baseline(Phase.ACTIVATION, 1)
         sm.add_error("specific root cause", phase=Phase.ACTIVATION.value)
 
         logger = logging.getLogger("test")
@@ -611,6 +650,20 @@ class TestStateManagerExitRegistration:
         errors = sm.get_errors()
         assert len(errors) == 2
         assert errors[-1]["error"] == "specific root cause"
+
+    def test_retry_error_baseline_accessor_returns_copy(self, tmp_path):
+        """Reading the retry baseline should not expose mutable internal state."""
+        sm = StateManager(str(tmp_path / "state.json"))
+
+        sm.record_retry_error_baseline(Phase.ACTIVATION, 2)
+        baseline = sm.get_retry_error_baseline()
+
+        assert baseline == {"phase": Phase.ACTIVATION.value, "count": 2}
+        baseline["count"] = 999
+        assert sm.get_retry_error_baseline() == {
+            "phase": Phase.ACTIVATION.value,
+            "count": 2,
+        }
 
     def test_resume_after_failure_uses_recorded_phase(self, tmp_path):
         """After a phase failure, get_last_error_phase returns the phase to retry."""
@@ -808,7 +861,7 @@ class TestDryRunSkipDecorator:
         assert obj2.executed is True
 
     def test_decorator_with_missing_attribute(self):
-        """Test decorator gracefully handles missing attribute."""
+        """When dry_run attribute doesn't exist at all, skip safely."""
 
         class TestClass:
             def __init__(self):
@@ -823,9 +876,9 @@ class TestDryRunSkipDecorator:
         obj = TestClass()
         result = obj.test_method()
 
-        # Should execute since attribute is missing (falsy)
-        assert result == "executed"
-        assert obj.executed is True
+        # Should skip since attribute is missing (safe default)
+        assert result == "skipped"
+        assert obj.executed is False
 
     def test_decorator_with_arguments(self):
         """Test decorator preserves function arguments."""
@@ -906,6 +959,24 @@ class TestDryRunSkipDecorator:
 
         mock_get_logger.assert_called_with("acm_switchover")
         mock_logger.info.assert_called_with("[DRY-RUN] %s", "Custom skip message")
+
+    def test_decorator_skips_when_intermediate_attribute_is_none(self):
+        """When an intermediate in the dot-path is None, default to skipping (safe)."""
+
+        class Outer:
+            client = None  # intermediate is None
+
+        @dry_run_skip(
+            message="Should skip safely",
+            return_value="skipped",
+            dry_run_attr="client.dry_run",
+        )
+        def guarded_method(self):
+            return "executed"
+
+        obj = Outer()
+        result = guarded_method(obj)
+        assert result == "skipped"
 
 
 @pytest.mark.unit

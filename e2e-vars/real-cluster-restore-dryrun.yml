@@ -1,0 +1,26 @@
+# D3: Dry-run with activation-method restore
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+  secondary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+
+acm_switchover_operation:
+  method: passive
+  activation_method: restore
+  old_hub_action: secondary
+
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_rbac_validation: true
+  skip_observability_checks: false
+  skip_gitops_check: false
+  disable_observability_on_secondary: false
+  argocd:
+    manage: false
+
+acm_switchover_execution:
+  mode: dry_run
+  report_dir: ./artifacts

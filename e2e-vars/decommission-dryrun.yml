@@ -1,0 +1,11 @@
+# N3: Decommission dry-run — primary=mgmt2
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+acm_switchover_decommission:
+  confirmed: false
+  interactive: false
+  has_observability: true
+acm_switchover_execution:
+  mode: dry_run

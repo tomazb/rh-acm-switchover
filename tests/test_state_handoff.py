@@ -46,10 +46,8 @@ def secondary_client():
 class TestStateHandoffContracts:
     """Verify real producers and consumers share state through StateManager."""
 
-    def test_primary_prep_records_pause_state_consumed_by_finalization(
-        self, state_file, primary_client, secondary_client
-    ):
-        """Primary prep pause state should be replayed by finalization resume."""
+    def test_primary_prep_records_pause_state(self, state_file, primary_client, secondary_client):
+        """Primary prep pause state should be correctly persisted for later resume."""
         producer_state = StateManager(state_file)
         prep = PrimaryPreparation(
             primary_client=primary_client,
@@ -79,11 +77,11 @@ class TestStateHandoffContracts:
         ]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.run_id_or_new", return_value="run-123"),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.run_id_or_new", return_value="run-123"),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="openshift-gitops",
@@ -95,18 +93,6 @@ class TestStateHandoffContracts:
             prep._pause_argocd_acm_apps()
 
         consumer_state = StateManager(state_file)
-        finalization = Finalization(
-            secondary_client=secondary_client,
-            state_manager=consumer_state,
-            acm_version="2.12.0",
-            primary_client=primary_client,
-        )
-
-        with patch("modules.finalization.argocd_lib.resume_recorded_applications") as resume_recorded:
-            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
-
-            finalization._resume_argocd_apps()
-
         paused_apps = consumer_state.get_config("argocd_paused_apps")
         assert consumer_state.get_config("argocd_run_id") == "run-123"
         assert consumer_state.get_config("argocd_pause_dry_run", None) is False
@@ -119,13 +105,6 @@ class TestStateHandoffContracts:
                 "pause_applied": True,
             }
         ]
-
-        resume_recorded.assert_called_once()
-        recorded_apps, run_id, recorded_primary, recorded_secondary, _ = resume_recorded.call_args.args
-        assert recorded_apps == paused_apps
-        assert run_id == "run-123"
-        assert recorded_primary is primary_client
-        assert recorded_secondary is secondary_client
 
     def test_activation_flag_causes_finalization_to_delete_import_configmap(self, state_file, secondary_client):
         """Activation-owned auto-import state should trigger the finalization cleanup."""

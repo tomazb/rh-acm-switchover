@@ -96,7 +96,7 @@ python acm_switchover.py \
 > Both hubs share the same object storage backend; re-enabling on the old hub can cause data corruption and split-brain.
 > Only re-enable on the old hub if you are switching back and have shut down these components on the current primary first.
 
-**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused by default; resume only after updating Git/desired state for the new hub, using `--argocd-resume-after-switchover` during finalization or `--argocd-resume-only` as a standalone step. Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
+**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused after switchover; resume only after updating Git/desired state for the new hub, using `--argocd-resume-only` as a standalone step. Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
 
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
@@ -239,22 +239,23 @@ python acm_switchover.py \
 
 **Use case:** Observability issues shouldn't block cluster migration.
 
-### Scenario 3: Disable Observability on Old Hub (Non-Decommission)
+### Scenario 3: Old Hub Kept as Secondary (Observability Disabled Automatically)
 
-If you are keeping the old hub as a secondary and want Observability disabled there,
-you can request deletion of the MultiClusterObservability resource:
+When `--old-hub-action secondary` is used, finalization now deletes
+`MultiClusterObservability` on the old hub automatically so the long-lived
+secondary does not keep running ACM Observability.
 
 ```bash
 python acm_switchover.py \
   --primary-context primary-acm-hub \
   --secondary-context secondary-acm-hub \
   --method passive \
-  --old-hub-action secondary \
-  --disable-observability-on-secondary
+  --old-hub-action secondary
 ```
 
 **Notes:**
-- Only valid when `--old-hub-action secondary` (not for decommission).
+- `--disable-observability-on-secondary` is still accepted for compatibility,
+  but it is now redundant and deprecated.
 - If the MCO is managed by GitOps (ArgoCD/Flux), coordinate deletion to avoid drift.
 
 ### Scenario 4: Different ACM Versions (2.11 vs 2.12+)
@@ -315,6 +316,46 @@ oc get managedclusters -o custom-columns=NAME:.metadata.name,AVAILABLE:.status.c
 ```
 
 > **Tip:** The same validate → dry-run → execute workflow applies to reverse switchovers.
+
+## Restore-Only Mode (Single Hub)
+
+When the original hub is gone (destroyed, decommissioned, or unreachable) and you need to restore managed clusters from existing S3 backups onto a new hub:
+
+```bash
+# Validate the new hub is ready for restore
+python acm_switchover.py \
+  --restore-only \
+  --validate-only \
+  --secondary-context new-hub
+
+# Dry-run to preview planned actions
+python acm_switchover.py \
+  --restore-only \
+  --dry-run \
+  --secondary-context new-hub
+
+# Execute the restore
+python acm_switchover.py \
+  --restore-only \
+  --secondary-context new-hub
+```
+
+**What happens:**
+1. **Preflight** — validates the target hub only (ACM version, BSL credentials, namespaces)
+2. **Activation** — creates a one-time full Restore from the latest backup in S3
+3. **Post-Activation** — waits for ManagedClusters to connect and verifies klusterlet agents
+4. **Finalization** — attempts to enable BackupSchedule on the new hub; if none is found (ACM excludes BackupSchedule from Velero backups to avoid circular backup-of-backup), a warning is emitted and the operator must create one manually after restore
+
+**Key differences from normal switchover:**
+- No `--primary-context` needed (there is no primary hub)
+- `--method full` is implied and enforced
+- `--old-hub-action` is not accepted (no old hub to manage)
+- PRIMARY_PREP phase is entirely skipped
+- Cannot be combined with `--decommission` or `--method passive`
+
+**Prerequisites:**
+- The new hub must have ACM installed and a BackupStorageLocation (BSL) pointing to the same S3 bucket as the old hub's backups
+- A valid backup must exist in the S3 bucket
 
 ## Decommission Old Hub
 
@@ -445,15 +486,16 @@ python acm_switchover.py \
 Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and left paused by default. State is stored in the switchover state file.
 
 **Resume auto-sync after updating Git for the new hub:**
-- During finalization (opt-in): add `--argocd-resume-after-switchover` to the same run.
-- Standalone later: `--argocd-resume-only` with `--primary-context` and `--secondary-context` to restore from state.
+- Standalone: `--argocd-resume-only` with `--primary-context` and `--secondary-context` to restore from state.
 - Resume-only auto-discovers the original state file when the swapped-context match is unambiguous. If both context orderings have state files, pass the original file explicitly with `--state-file`.
 
-Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-after-switchover` and `--argocd-resume-only` are not compatible with `--validate-only`. `--argocd-resume-only` is also not compatible with `--decommission` or `--setup`. `--argocd-resume-after-switchover` is not valid with `--old-hub-action decommission`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
+Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-only` is not compatible with `--validate-only`, `--decommission`, or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 
-**Bash alternative:** Use `./scripts/preflight-check.sh` (Argo CD detection is automatic) and `./scripts/argocd-manage.sh` for pause/resume with a state file. See [scripts/README.md](../../scripts/README.md).
+**Resume on failure:** Add `--argocd-resume-on-failure` alongside `--argocd-manage` to automatically attempt ArgoCD resume if the switchover fails. This is safe because Git repos have not been updated yet, so ArgoCD syncing back to the original desired state helps restore pre-switchover state. Resume errors are logged but do not compound the original failure. For Ansible, set `acm_switchover_features.argocd.resume_on_failure: true` in your vars file.
+
+**Bash alternative (deprecated):** `./scripts/argocd-manage.sh` is deprecated and will be removed in a future release. Use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
 
 ### Issue: Script Hangs During Restore
 

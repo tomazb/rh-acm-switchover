@@ -1,0 +1,12 @@
+# N2: RBAC bootstrap dry-run — primary=mgmt2
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+acm_switchover_rbac_bootstrap:
+  role: operator
+  include_decommission: false
+  generate_kubeconfigs: false
+  validate_permissions: false
+acm_switchover_execution:
+  mode: dry_run

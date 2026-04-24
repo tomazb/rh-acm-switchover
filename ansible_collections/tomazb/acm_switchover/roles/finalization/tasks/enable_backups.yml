@@ -1,0 +1,83 @@
+---
+- name: Derive secondary ACM version safely
+  ansible.builtin.set_fact:
+    _acm_secondary_version: >-
+      {{
+        (
+          (acm_secondary_mch_info.resources | default([]) | first | default({}))
+          .get('status', {})
+          .get('currentVersion', '2.12.0')
+        )
+      }}
+
+- name: Plan backup schedule enable operation
+  tomazb.acm_switchover.acm_backup_schedule:
+    acm_version: "{{ _acm_secondary_version }}"
+    intent: enable
+    schedules: "{{ acm_secondary_backup_schedules_info.resources | default([]) }}"
+    saved_schedule: "{{ acm_switchover_saved_backup_schedule | default({}) }}"
+  register: acm_enable_backup_schedule_operation
+
+- name: Patch BackupSchedule to enabled state
+  kubernetes.core.k8s:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace | default('open-cluster-management-backup') }}"
+    definition: "{{ acm_enable_backup_schedule_operation.operation.patch }}"
+  loop: "{{ acm_secondary_backup_schedules_info.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: _enable_backup_patch_results
+  when:
+    - acm_enable_backup_schedule_operation.operation.action == 'patch'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Create BackupSchedule from saved state
+  kubernetes.core.k8s:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: present
+    definition: "{{ acm_enable_backup_schedule_operation.operation.body }}"
+  register: _enable_backup_create_result
+  when:
+    - acm_enable_backup_schedule_operation.operation.action == 'create'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Refresh BackupSchedule facts after enable or recreation
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_backup_schedules_info
+  when:
+    - acm_enable_backup_schedule_operation.operation.action in ['patch', 'create']
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Record backup verification baseline timestamp
+  ansible.builtin.set_fact:
+    acm_switchover_backup_schedule_enabled_at: >-
+      {{
+        acm_switchover_backup_schedule_enabled_at
+        | default(now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'), true)
+      }}
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Publish enable backups result
+  ansible.builtin.set_fact:
+    acm_switchover_enable_backups_result:
+      changed: >-
+        {{
+          (_enable_backup_patch_results.changed | default(false))
+          or (_enable_backup_create_result.changed | default(false))
+          or (
+            acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+            and acm_enable_backup_schedule_operation.operation.action != 'none'
+          )
+        }}
+      operation: "{{ acm_enable_backup_schedule_operation.operation }}"

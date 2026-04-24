@@ -1,7 +1,7 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.5.10  
-**Last Updated**: 2026-03-09
+**Version**: 1.6.3  
+**Last Updated**: 2026-04-10
 
 ## Overview
 
@@ -45,7 +45,7 @@ rh-acm-switchover/
 │   ├── preflight_validators.py    # Deprecated compatibility shim
 │   └── primary_prep.py            # Old-primary preparation logic
 ├── scripts/
-│   ├── argocd-manage.sh           # Standalone Argo CD pause/resume helper
+│   ├── argocd-manage.sh           # Deprecated standalone Argo CD helper
 │   ├── discover-hub.sh            # Hub discovery and preflight launcher
 │   ├── generate-merged-kubeconfig.sh
 │   ├── generate-sa-kubeconfig.sh
@@ -55,12 +55,20 @@ rh-acm-switchover/
 │   └── lib-common.sh
 ├── deploy/                        # RBAC, kustomize, Helm, ACM policies
 ├── tests/                         # Unit, integration, and E2E-oriented pytest coverage
+├── ansible_collections/tomazb/acm_switchover/  # Ansible Collection (second form factor)
+│   ├── playbooks/                 # Operator entrypoints (switchover, preflight, decommission, …)
+│   ├── roles/                     # Phase modules (preflight, primary_prep, activation, …)
+│   ├── plugins/
+│   │   ├── modules/               # Custom Ansible modules
+│   │   ├── module_utils/          # Shared utilities (constants, argocd, gitops, …)
+│   │   └── action/                # Action plugins (checkpoint_phase)
+│   └── tests/unit/                # pytest-based unit tests for the collection
 └── docs/
 ```
 
 ## Runtime Branches
 
-The entrypoint exposes four distinct execution branches:
+The entrypoint exposes five distinct execution branches:
 
 1. **Standard switchover path**
    - Uses state tracking, two `KubeClient` instances, phased execution, and optional Argo CD management.
@@ -70,6 +78,8 @@ The entrypoint exposes four distinct execution branches:
    - Bypasses the phased switchover workflow and runs the old-hub teardown flow directly.
 4. **Argo CD resume-only path (`--argocd-resume-only`)**
    - Loads recorded pause state and resumes Application auto-sync without running switchover phases.
+5. **Restore-only path (`--restore-only`)**
+   - Single-hub restore from S3 backups. No primary hub needed. Skips PRIMARY_PREP, runs secondary-only preflight.
 
 ```mermaid
 flowchart TD
@@ -77,10 +87,20 @@ flowchart TD
     B -->|--setup| C[Run setup-rbac.sh wrapper]
     B -->|--decommission| D[Run decommission flow]
     B -->|--argocd-resume-only| E[Load state and resume recorded Argo CD apps]
+    B -->|--restore-only| R[Initialize state and secondary client]
     B -->|standard switchover| F[Initialize state and clients]
     D --> D1{Success?}
     D1 -->|yes| D2[Exit 0]
     D1 -->|no| D3[Exit 1]
+    R --> RG[PREFLIGHT secondary-only]
+    RG --> RI[ACTIVATION full restore]
+    RI --> RJ[POST_ACTIVATION]
+    RJ --> RM[FINALIZATION backups-only]
+    RM --> RK[COMPLETED]
+    RG --> RL[FAILED]
+    RI --> RL
+    RJ --> RL
+    RM --> RL
     F --> G[PREFLIGHT]
     G --> H[PRIMARY_PREP]
     H --> I[ACTIVATION]
@@ -252,13 +272,11 @@ Important activation-related flags:
 - re-enabling or recreating `BackupSchedule`
 - verifying new backups after promotion
 - handling old-hub-as-secondary or old-hub decommission prep
-- optionally resuming Argo CD auto-sync
 
 Important finalization-related flags:
 
 - `--old-hub-action`
-- `--disable-observability-on-secondary`
-- `--argocd-resume-after-switchover`
+- `--disable-observability-on-secondary` (deprecated compatibility flag)
 
 ### Decommission
 
@@ -287,7 +305,7 @@ sequenceDiagram
     Mods->>S: patch restore or create full restore
     CLI->>Mods: run post-activation verification
     CLI->>Mods: run finalization
-    Mods->>Argo: optionally resume recorded Applications
+    Mods->>P: delete MultiClusterObservability when old hub remains secondary
     Mods->>State: persist completion and config
 ```
 
@@ -345,7 +363,7 @@ The shell scripts are not alternate implementations of the full Python workflow.
 - `preflight-check.sh` / `postflight-check.sh`: standalone operational checks
 - `setup-rbac.sh`: RBAC deployment and kubeconfig generation wrapper
 - `generate-sa-kubeconfig.sh` / `generate-merged-kubeconfig.sh`: credential packaging helpers
-- `argocd-manage.sh`: standalone pause/resume control for Argo CD Applications
+- `argocd-manage.sh`: deprecated standalone Argo CD helper; prefer Python/Ansible workflows
 
 This split keeps the Python CLI focused on orchestration while leaving smaller operator tasks available as composable shell utilities.
 
@@ -381,3 +399,18 @@ Important test themes include:
 - The runbook remains the authoritative manual/operational fallback
 - GitOps support is advisory plus targeted Argo CD coordination, not full drift reconciliation
 - `modules/preflight_validators.py` remains in the tree for compatibility and should not be treated as the main implementation
+
+## Ansible Collection
+
+The Ansible Collection (`tomazb.acm_switchover`) lives at `ansible_collections/tomazb/acm_switchover/` and is a production-ready second form factor of the same switchover automation, targeting both `ansible-core` CLI and Ansible Automation Platform (AAP).
+
+The collection uses a fundamentally different architecture from the Python CLI:
+
+- **Roles** replace Python phase modules: `preflight`, `primary_prep`, `activation`, `post_activation`, `finalization`, `decommission`, `argocd_manage`, `discovery`, `rbac_bootstrap`
+- **Thin custom plugins** (`modules/`, `action/`, `module_utils/`) handle operations that need retry semantics, structured polling, or checkpoint persistence beyond what stock `kubernetes.core` modules provide
+- **Playbooks** (`switchover.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints
+- **Grouped variables** (`acm_switchover_hubs`, `acm_switchover_operation`, `acm_switchover_features`) replace CLI flags as the primary operator interface
+- **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
+- **Constants isolation**: `plugins/module_utils/constants.py` is the collection's constants file — it cannot import from `lib/constants.py`
+
+The collection architecture is fully detailed in the [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md). Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.

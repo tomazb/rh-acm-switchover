@@ -1,0 +1,20 @@
+---
+- name: Attempt klusterlet auto-remediation
+  ansible.builtin.include_tasks: fix_klusterlet.yml
+  when:
+    - (acm_cluster_verify_result.pending | default([]) | length) > 0
+    - (acm_switchover_managed_clusters | default({}) | length) > 0
+
+- name: Record that klusterlet remediation was attempted
+  ansible.builtin.set_fact:
+    _klusterlet_remediation_attempted: true
+  when:
+    - (acm_cluster_verify_result.pending | default([]) | length) > 0
+    - (acm_switchover_managed_clusters | default({}) | length) > 0
+
+- name: Note klusterlet remediation candidates
+  ansible.builtin.set_fact:
+    acm_klusterlet_remediation_note:
+      warning: "Klusterlet verification requires manual review - check klusterlet pod logs on managed clusters if clusters fail to connect"
+      pending: "{{ acm_cluster_verify_result.pending | default([]) }}"
+  when: (acm_cluster_verify_result.pending | default([]) | length) > 0

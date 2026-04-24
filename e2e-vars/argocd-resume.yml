@@ -1,0 +1,14 @@
+# A2: ArgoCD resume-only — cleans up apps paused on mgmt1 (secondary after R3)
+# secondary=mgmt1 because resume.yml targets secondary hub
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+  secondary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+acm_switchover_argocd:
+  namespace: openshift-gitops
+acm_switchover_execution:
+  mode: execute
+  run_id: "e2e-argocd-test-001"

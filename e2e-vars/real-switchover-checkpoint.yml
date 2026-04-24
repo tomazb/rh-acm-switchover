@@ -1,0 +1,32 @@
+# C1: Checkpoint resume test — primary=mgmt2, secondary=mgmt1
+# Uses dry_run mode to avoid actual cluster modifications
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+  secondary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+
+acm_switchover_operation:
+  method: passive
+  activation_method: patch
+  old_hub_action: secondary
+  min_managed_clusters: 3
+
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_rbac_validation: true
+  skip_observability_checks: true
+  skip_gitops_check: true
+  disable_observability_on_secondary: false
+  argocd:
+    manage: false
+
+acm_switchover_execution:
+  mode: dry_run
+  report_dir: ./artifacts
+  checkpoint:
+    enabled: true
+    path: ./artifacts/checkpoint.json
+    reset: false

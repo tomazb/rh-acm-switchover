@@ -19,16 +19,27 @@ _acm_switchover_complete() {
             _acm_complete_from_list "passive full"
             return
             ;;
+        --activation-method)
+            _acm_complete_from_list "patch restore"
+            return
+            ;;
         --old-hub-action)
             _acm_complete_from_list "secondary decommission none"
+            return
+            ;;
+        --role)
+            _acm_complete_from_list "operator validator both"
             return
             ;;
         --log-format)
             _acm_complete_from_list "text json"
             return
             ;;
-        --state-file)
+        --state-file|--admin-kubeconfig|--output-dir)
             _acm_complete_files
+            return
+            ;;
+        --min-managed-clusters|--token-duration)
             return
             ;;
     esac
@@ -52,9 +63,21 @@ _acm_switchover_complete() {
         COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
         return
     fi
+    if [[ "$cur" == --activation-method=* ]]; then
+        local value="${cur#*=}" prefix="--activation-method="
+        COMPREPLY=( $(compgen -W "patch restore" -- "$value") )
+        COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
+        return
+    fi
     if [[ "$cur" == --old-hub-action=* ]]; then
         local value="${cur#*=}" prefix="--old-hub-action="
         COMPREPLY=( $(compgen -W "secondary decommission none" -- "$value") )
+        COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
+        return
+    fi
+    if [[ "$cur" == --role=* ]]; then
+        local value="${cur#*=}" prefix="--role="
+        COMPREPLY=( $(compgen -W "operator validator both" -- "$value") )
         COMPREPLY=( "${COMPREPLY[@]/#/${prefix}}" )
         return
     fi
@@ -67,7 +90,7 @@ _acm_switchover_complete() {
 
     # Option list completion
     if [[ "$cur" == -* ]]; then
-        local opts="--primary-context --secondary-context --validate-only --dry-run --decommission --method --manage-auto-import-strategy --state-file --reset-state --old-hub-action --skip-observability-checks --skip-rbac-validation --non-interactive --verbose -v --log-format --help -h"
+        local opts="--primary-context --secondary-context --validate-only --dry-run --decommission --setup --argocd-resume-only --restore-only --method --manage-auto-import-strategy --activation-method --min-managed-clusters --state-file --reset-state --old-hub-action --admin-kubeconfig --role --token-duration --output-dir --skip-kubeconfig-generation --include-decommission --skip-observability-checks --disable-observability-on-secondary --skip-gitops-check --skip-rbac-validation --argocd-manage --argocd-resume-on-failure --non-interactive --verbose -v --force --log-format --help -h"
         _acm_complete_from_list "$opts"
         return
     fi

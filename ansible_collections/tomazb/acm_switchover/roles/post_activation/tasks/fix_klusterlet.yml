@@ -1,0 +1,28 @@
+---
+# Mirrors Python _force_klusterlet_reconnect() in modules/post_activation.py.
+# For each pending cluster with a managed cluster kubeconfig,
+# fetch the import secret from the new hub, delete the bootstrap secret
+# on the managed cluster, re-apply the import manifest, and restart
+# the klusterlet deployment.
+
+- name: Identify clusters eligible for remediation
+  ansible.builtin.set_fact:
+    _klusterlet_fix_candidates: >-
+      {{ (acm_cluster_verify_result.pending | default([]))
+         | select('in', acm_switchover_managed_clusters.keys() | list)
+         | list }}
+
+- name: Skip klusterlet fix when no remediation candidates have kubeconfigs
+  ansible.builtin.debug:
+    msg: >-
+      No klusterlet remediation possible — pending clusters
+      {{ acm_cluster_verify_result.pending | default([]) | join(', ') }}
+      do not have entries in acm_switchover_managed_clusters
+  when: _klusterlet_fix_candidates | length == 0
+
+- name: Fix klusterlet for each eligible cluster
+  ansible.builtin.include_tasks: fix_klusterlet_single.yml
+  loop: "{{ _klusterlet_fix_candidates }}"
+  loop_control:
+    loop_var: _fix_cluster_name
+  when: _klusterlet_fix_candidates | length > 0

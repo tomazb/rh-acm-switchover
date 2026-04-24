@@ -18,11 +18,14 @@ from kubernetes.client.rest import ApiException
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from acm_switchover import (
+    _attempt_argocd_resume_on_failure,
     _fail_phase,
     _report_argocd_acm_impact,
+    _run_phase_finalization,
     _run_phase_preflight,
     main,
     parse_args,
+    run_restore_only,
     run_switchover,
     validate_args,
 )
@@ -161,6 +164,22 @@ class TestArgParsing:
             assert args.method is None
             assert args.old_hub_action is None
 
+    def test_argocd_resume_only_parses_without_primary_context(self):
+        """Standalone resume-only mode must allow restore-only follow-up without a dummy primary context."""
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--secondary-context",
+                "p2",
+                "--argocd-resume-only",
+            ],
+        ):
+            args = parse_args()
+            assert args.argocd_resume_only is True
+            assert args.primary_context is None
+            assert args.secondary_context == "p2"
+
     def test_setup_parses_without_method_or_old_hub_action(self):
         """Setup mode must not require switchover-only flags."""
         with patch(
@@ -196,7 +215,9 @@ class TestArgParsing:
             with pytest.raises(SystemExit):
                 parse_args()
 
-    def test_validate_args_warns_when_argocd_manage_has_no_effect_in_validate_only(self):
+    def test_validate_args_warns_when_argocd_manage_has_no_effect_in_validate_only(
+        self,
+    ):
         """validate_args should warn instead of rejecting argocd-manage with validate-only."""
         args = SimpleNamespace(
             primary_context="primary-hub",
@@ -210,7 +231,6 @@ class TestArgParsing:
             validate_only=True,
             argocd_manage=True,
             argocd_resume_only=False,
-            argocd_resume_after_switchover=False,
             non_interactive=False,
         )
         logger = Mock()
@@ -922,6 +942,37 @@ class TestSwitchoverPhaseFlow:
         assert state.get_current_phase() == Phase.FAILED
         assert len(state.get_errors()) == 1
 
+    def test_run_switchover_validate_only_preflight_failure_preserves_failed_retry_phase(self, tmp_path):
+        """A validate-only failure from FAILED state must not replace the durable retry phase."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.POST_ACTIVATION)
+        state.add_error("post activation failed", Phase.POST_ACTIVATION.value)
+        state.set_phase(Phase.FAILED)
+        original_errors = list(state.get_errors())
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_manage=False,
+        )
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (False, {})
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is False
+        assert state.get_current_phase() == Phase.FAILED
+        assert state.get_errors() == original_errors
+        assert state.get_last_error_phase() == Phase.POST_ACTIVATION
+
     def test_run_switchover_force_validate_only_preserves_failed_state(self, tmp_path):
         """--force --validate-only must NOT reset/wipe state when the phase is FAILED."""
         from lib.utils import Phase, StateManager
@@ -992,7 +1043,9 @@ class TestSwitchoverPhaseFlow:
         state.add_error.assert_not_called()
         state.set_phase.assert_called_once()
 
-    def test_fail_phase_skips_generic_when_module_already_recorded_same_phase_error(self):
+    def test_fail_phase_skips_generic_when_module_already_recorded_same_phase_error(
+        self,
+    ):
         """F8: When the module already added a specific error for the current phase,
         _fail_phase should NOT overwrite it with a generic wrapper message."""
         state = Mock()
@@ -1019,11 +1072,13 @@ class TestSwitchoverPhaseFlow:
         state.add_error.assert_called_once_with("current failure", phase="finalization")
         state.set_phase.assert_called_once()
 
-    def test_fail_phase_appends_wrapper_after_retry_when_last_error_is_stale_same_phase(self):
+    def test_fail_phase_appends_wrapper_after_retry_when_last_error_is_stale_same_phase(
+        self,
+    ):
         state = Mock()
         state.get_current_phase.return_value = SimpleNamespace(value="preflight_validation")
         state.get_errors.return_value = [{"phase": "preflight_validation", "error": "old failure"}]
-        state._retry_error_baseline = {
+        state.get_retry_error_baseline.return_value = {
             "phase": "preflight_validation",
             "count": 1,
         }
@@ -1326,6 +1381,39 @@ class TestMainGitOpsReporting:
         state_manager.assert_called_once_with(str(reversed_path))
         assert args.state_file == str(reversed_path)
 
+    def test_main_resume_only_uses_unique_secondary_matched_state_file_without_primary_context(
+        self, tmp_path, monkeypatch
+    ):
+        args = self._base_args()
+        args.argocd_resume_only = True
+        args.state_file = None
+        args.primary_context = None
+        args.secondary_context = "secondary-b"
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+        state_path = tmp_path / "switchover-primary-a__secondary-b.json"
+        state_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover.StateManager", return_value=state
+        ) as state_manager, patch(
+            "acm_switchover._initialize_clients", return_value=(None, Mock())
+        ), patch(
+            "acm_switchover._run_argocd_resume_only", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        state_manager.assert_called_once_with(str(state_path))
+        assert args.state_file == str(state_path)
+
     def test_main_resume_only_missing_state_file_exits_before_state_manager(self, tmp_path):
         args = self._base_args()
         args.argocd_resume_only = True
@@ -1352,6 +1440,23 @@ class TestMainGitOpsReporting:
         initialize_clients.assert_not_called()
         assert not missing_state_file.exists()
         collector.print_report.assert_not_called()
+
+    def test_resolve_state_file_resume_only_without_primary_context_rejects_ambiguous_candidates(
+        self, tmp_path, monkeypatch
+    ):
+        from acm_switchover import _resolve_state_file
+
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+        (tmp_path / "switchover-primary-a__secondary-b.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "switchover-restore-only__secondary-b.json").write_text("{}", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Multiple candidate state files found"):
+            _resolve_state_file(
+                requested_path=None,
+                primary_ctx=None,
+                secondary_ctx="secondary-b",
+                argocd_resume_only=True,
+            )
 
     def test_main_enforces_contexts_for_normal_operation(self):
         args = self._base_args()
@@ -1615,6 +1720,7 @@ class TestPreflightPhase:
             include_decommission=False,
             argocd_manage=True,
             skip_gitops_check=False,
+            restore_only=False,
         )
         report_argocd_impact.assert_called_once_with(primary, secondary, logger, argocd_manage=True)
 
@@ -1657,6 +1763,7 @@ class TestPreflightPhase:
             include_decommission=True,
             argocd_manage=False,
             skip_gitops_check=False,
+            restore_only=False,
         )
 
     def test_report_argocd_impact_warns_instead_of_raising_on_list_failure(self):
@@ -1887,6 +1994,51 @@ class TestPreflightPhase:
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
+    def test_resume_only_builds_primary_client_from_recorded_state_when_primary_context_omitted(
+        self,
+    ):
+        from acm_switchover import _run_argocd_resume_only
+
+        paused_apps = [
+            {
+                "hub": "primary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+            }
+        ]
+        state = Mock()
+        state.state = {
+            "contexts": {
+                "primary": "hub-a",
+                "secondary": "hub-b",
+            }
+        }
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        args = SimpleNamespace(primary_context=None, secondary_context="hub-b", dry_run=False)
+        secondary = Mock(name="secondary-client")
+        created_primary = Mock(name="primary-client")
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.KubeClient", return_value=created_primary) as kube_client, patch(
+            "acm_switchover.argocd_lib.resume_recorded_applications"
+        ) as resume_recorded:
+            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+
+            assert _run_argocd_resume_only(args, state, None, secondary, logger) is True
+
+        kube_client.assert_called_once_with("hub-a", dry_run=False)
+        resume_recorded.assert_called_once_with(
+            paused_apps,
+            "run-1",
+            created_primary,
+            secondary,
+            logger,
+        )
+
     def test_resume_only_swaps_clients_when_contexts_are_reversed(self):
         from acm_switchover import _run_argocd_resume_only
 
@@ -2160,13 +2312,21 @@ class TestPhaseFlowIntegration:
         call_order = []
         args = self._make_args(state_file=str(state_file))
 
-        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
-            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=self._make_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=self._make_stub("activation", call_order),
+        ), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
-            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
         ):
             result = run_switchover(args, state, Mock(), Mock(), Mock())
 
@@ -2191,8 +2351,12 @@ class TestPhaseFlowIntegration:
         call_order = []
         args = self._make_args(state_file=str(state_file))
 
-        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
-            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=self._make_stub("primary_prep", call_order),
         ), patch(
             "acm_switchover._run_phase_activation",
             side_effect=self._make_stub("activation", call_order, succeeds=False),
@@ -2200,7 +2364,8 @@ class TestPhaseFlowIntegration:
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
-            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
         ):
             result = run_switchover(args, state, Mock(), Mock(), Mock())
 
@@ -2219,13 +2384,21 @@ class TestPhaseFlowIntegration:
         call_order = []
         args = self._make_args(state_file=str(state_file))
 
-        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
-            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=self._make_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=self._make_stub("activation", call_order),
+        ), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
-            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
         ):
             result = run_switchover(args, state, Mock(), Mock(), Mock())
 
@@ -2245,13 +2418,21 @@ class TestPhaseFlowIntegration:
         call_order = []
         args = self._make_args(state_file=str(state_file))
 
-        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
-            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=self._make_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=self._make_stub("activation", call_order),
+        ), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
-            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
         ):
             result = run_switchover(args, state, Mock(), Mock(), Mock())
 
@@ -2314,13 +2495,21 @@ class TestResumeFromFailedState:
         call_order = []
         args = self._make_args(state_file=str(state_file))
 
-        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
-            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=self._make_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=self._make_stub("activation", call_order),
+        ), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
-            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
         ):
             result = run_switchover(args, state, Mock(), Mock(), Mock())
 
@@ -2342,13 +2531,21 @@ class TestResumeFromFailedState:
         call_order = []
         args = self._make_args(state_file=str(state_file))
 
-        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
-            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=self._make_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=self._make_stub("activation", call_order),
+        ), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
-            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
         ):
             result = run_switchover(args, state, Mock(), Mock(), Mock())
 
@@ -2371,13 +2568,21 @@ class TestResumeFromFailedState:
         call_order = []
         args = self._make_args(state_file=str(state_file))
 
-        with patch("acm_switchover._run_phase_preflight", side_effect=self._make_stub("preflight", call_order)), patch(
-            "acm_switchover._run_phase_primary_prep", side_effect=self._make_stub("primary_prep", call_order)
-        ), patch("acm_switchover._run_phase_activation", side_effect=self._make_stub("activation", call_order)), patch(
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=self._make_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=self._make_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=self._make_stub("activation", call_order),
+        ), patch(
             "acm_switchover._run_phase_post_activation",
             side_effect=self._make_stub("post_activation", call_order),
         ), patch(
-            "acm_switchover._run_phase_finalization", side_effect=self._make_stub("finalization", call_order)
+            "acm_switchover._run_phase_finalization",
+            side_effect=self._make_stub("finalization", call_order),
         ):
             result = run_switchover(args, state, Mock(), Mock(), Mock())
 
@@ -2386,8 +2591,7 @@ class TestResumeFromFailedState:
         assert call_order == ["finalization"]
 
     def test_failed_state_records_retry_error_baseline(self, tmp_path):
-        """Resuming from FAILED should set _retry_error_baseline on the state,
-        so that _fail_phase can detect duplicate errors vs new ones."""
+        """Resuming from FAILED should record a retry error baseline on the state."""
         from lib.utils import Phase, StateManager
 
         state_file = tmp_path / "state.json"
@@ -2408,9 +2612,10 @@ class TestResumeFromFailedState:
         ):
             run_switchover(args, state, Mock(), Mock(), Mock())
 
-        assert hasattr(state, "_retry_error_baseline")
-        assert state._retry_error_baseline["phase"] == Phase.POST_ACTIVATION.value
-        assert state._retry_error_baseline["count"] == 1
+        assert state.get_retry_error_baseline() == {
+            "phase": Phase.POST_ACTIVATION.value,
+            "count": 1,
+        }
 
 
 @pytest.mark.unit
@@ -2760,3 +2965,428 @@ class TestPhaseHandlerFailure:
 
         with pytest.raises(ValueError, match="Secondary client is required"):
             run_switchover(args, Mock(), Mock(), None, Mock())
+
+
+class TestRestoreOnlyFlow:
+    """Tests for --restore-only single-hub restore workflow."""
+
+    def _make_restore_only_args(self, **overrides):
+        defaults = dict(
+            restore_only=True,
+            primary_context=None,
+            secondary_context="new-hub",
+            method=None,
+            old_hub_action=None,
+            validate_only=False,
+            dry_run=False,
+            force=False,
+            state_file="state.json",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            skip_gitops_check=True,
+            argocd_manage=False,
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    def test_restore_only_defaults_method_to_full(self):
+        """run_restore_only sets method=full when not specified."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, patch(
+            "acm_switchover._run_phase_activation", return_value=True
+        ), patch("acm_switchover._run_phase_post_activation", return_value=True), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ):
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        assert args.method == "full"
+        assert args.old_hub_action == "none"
+
+    def test_restore_only_skips_primary_prep(self):
+        """Restore-only flow does NOT call _run_phase_primary_prep."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, patch(
+            "acm_switchover._run_phase_primary_prep"
+        ) as pp, patch("acm_switchover._run_phase_activation", return_value=True), patch(
+            "acm_switchover._run_phase_post_activation", return_value=True
+        ), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ):
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        pp.assert_not_called()
+
+    def test_restore_only_passes_none_primary_to_handlers(self):
+        """Phase handlers receive primary=None in restore-only mode."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        # Return INIT first, then follow each phase transition via set_phase
+        current = [Phase.INIT]
+
+        def track_phase(p):
+            current[0] = p
+
+        state.get_current_phase.side_effect = lambda: current[0]
+        state.set_phase.side_effect = track_phase
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        called_with_primary = []
+        # Map handler name to the phase it should advance to
+        phase_transitions = {
+            "preflight": Phase.PREFLIGHT,
+            "activation": Phase.ACTIVATION,
+            "post_activation": Phase.POST_ACTIVATION,
+            "finalization": Phase.FINALIZATION,
+        }
+
+        def capture_primary(name):
+            def handler(a, s, primary, sec, log):
+                called_with_primary.append((name, primary))
+                current[0] = phase_transitions[name]
+                return True
+
+            return handler
+
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=capture_primary("preflight"),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=capture_primary("activation"),
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=capture_primary("post_activation"),
+        ), patch(
+            "acm_switchover._run_phase_finalization",
+            side_effect=capture_primary("finalization"),
+        ):
+            run_restore_only(args, state, secondary, Mock())
+
+        assert len(called_with_primary) == 4
+        for name, primary_val in called_with_primary:
+            assert primary_val is None, f"{name} should receive primary=None"
+
+    def test_restore_only_phase_transitions(self):
+        """Restore-only flow transitions through correct phases."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True), patch(
+            "acm_switchover._run_phase_activation", return_value=True
+        ), patch("acm_switchover._run_phase_post_activation", return_value=True), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ):
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        state.set_phase.assert_any_call(Phase.COMPLETED)
+
+    def test_restore_only_validate_only_runs_preflight_only(self):
+        """--restore-only --validate-only only runs preflight."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args(validate_only=True)
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True) as pf, patch(
+            "acm_switchover._run_phase_activation"
+        ) as act:
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is True
+        pf.assert_called_once()
+        act.assert_not_called()
+
+    def test_restore_only_preflight_failure_stops_flow(self):
+        """Restore-only flow stops if preflight fails."""
+        from lib.utils import Phase, StateManager
+
+        args = self._make_restore_only_args()
+        state = Mock(spec=StateManager)
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=False) as pf, patch(
+            "acm_switchover._run_phase_activation"
+        ) as act:
+            result = run_restore_only(args, state, secondary, Mock())
+
+        assert result is False
+        act.assert_not_called()
+
+    def test_restore_only_preflight_sets_restore_only_flag(self):
+        """Preflight in restore-only mode passes restore_only=True to PreflightValidator."""
+        from lib.utils import Phase
+
+        args = self._make_restore_only_args()
+        state = Mock()
+        state.get_current_phase.return_value = Phase.PREFLIGHT
+        state.get_config.return_value = False
+        secondary = Mock()
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (
+                True,
+                {
+                    "primary_version": "unknown",
+                    "secondary_version": "2.14.0",
+                    "primary_observability_detected": False,
+                    "secondary_observability_detected": False,
+                    "has_observability": False,
+                },
+            )
+            _run_phase_preflight(args, state, None, secondary, Mock())
+
+        call_kwargs = validator_class.call_args[1]
+        assert call_kwargs["restore_only"] is True
+
+    def test_restore_only_finalization_uses_none_old_hub_action(self):
+        """Finalization in restore-only mode uses old_hub_action='none'."""
+        from lib.utils import Phase
+
+        args = self._make_restore_only_args()
+        # Explicitly verify old_hub_action is set to "none" by run_restore_only
+        args.method = "full"
+        state = Mock()
+        state.get_current_phase.return_value = Phase.INIT
+        state.get_state_age.return_value = None
+        secondary = Mock()
+
+        with patch("acm_switchover._run_phase_preflight", return_value=True), patch(
+            "acm_switchover._run_phase_activation", return_value=True
+        ), patch("acm_switchover._run_phase_post_activation", return_value=True), patch(
+            "acm_switchover._run_phase_finalization", return_value=True
+        ) as fin:
+            run_restore_only(args, state, secondary, Mock())
+
+        assert args.old_hub_action == "none"
+
+    def test_restore_only_phase_finalization_passes_restore_only_flag(self):
+        """_run_phase_finalization must wire restore_only through to Finalization."""
+        from lib.utils import Phase
+
+        args = self._make_restore_only_args()
+        args.method = "full"
+        state = Mock()
+        state.get_current_phase.return_value = Phase.POST_ACTIVATION
+        state.get_config.side_effect = lambda key, default=None: default
+        secondary = Mock()
+
+        with patch("acm_switchover.Finalization") as finalization_class:
+            finalization_class.return_value.finalize.return_value = True
+            assert _run_phase_finalization(args, state, None, secondary, Mock()) is True
+
+        call_kwargs = finalization_class.call_args.kwargs
+        assert call_kwargs["restore_only"] is True
+
+    def test_restore_only_completed_noop_banner_says_restore(self, tmp_path, caplog):
+        """Noop banner for a recent completed restore-only run must say 'RESTORE', not 'SWITCHOVER'.
+
+        Bug: _log_completed_noop always logs 'SWITCHOVER ALREADY COMPLETED' regardless of
+        operation type. A restore-only rerun must log 'RESTORE ALREADY COMPLETED' to avoid
+        misleading operators.
+        """
+        from datetime import timedelta
+
+        from lib.constants import STALE_STATE_THRESHOLD
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.state["current_phase"] = Phase.COMPLETED.value
+        # Set last_updated to a recent timestamp so it is NOT stale (age < threshold)
+        recent_age = timedelta(seconds=STALE_STATE_THRESHOLD - 60)
+        recent_ts = (datetime.now(timezone.utc) - recent_age).isoformat()
+        state.state["last_updated"] = recent_ts
+        state._write_state(state.state)
+
+        reloaded = StateManager(str(state_file))
+        args = self._make_restore_only_args()
+        real_logger = logging.getLogger("acm_switchover")
+
+        with caplog.at_level(logging.INFO, logger="acm_switchover"):
+            result = run_restore_only(args, reloaded, Mock(), real_logger)
+
+        assert result is True
+        assert "RESTORE ALREADY COMPLETED" in caplog.text, (
+            "Expected 'RESTORE ALREADY COMPLETED' in log output; got: " + caplog.text
+        )
+        assert "SWITCHOVER ALREADY COMPLETED" not in caplog.text
+
+
+@pytest.mark.unit
+class TestAttemptArgoCDResumeOnFailure:
+    """Tests for _attempt_argocd_resume_on_failure best-effort cleanup."""
+
+    def _make_args(self, *, argocd_resume_on_failure=True):
+        return SimpleNamespace(argocd_resume_on_failure=argocd_resume_on_failure)
+
+    def _make_state(self, *, run_id="abc123", paused_apps=None):
+        state = Mock()
+        if paused_apps is None:
+            paused_apps = [
+                {
+                    "hub": "primary",
+                    "namespace": "argocd",
+                    "name": "app1",
+                    "original_sync_policy": {"automated": {}},
+                    "pause_applied": True,
+                }
+            ]
+        state.get_config.side_effect = lambda key, *a: {
+            "argocd_run_id": run_id,
+            "argocd_paused_apps": paused_apps,
+        }.get(key, a[0] if a else None)
+        return state
+
+    def test_resume_called_when_flag_set_and_apps_paused(self):
+        """Resume is attempted when flag is set and paused apps exist in state."""
+        args = self._make_args()
+        state = self._make_state()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = Mock(restored=1, already_resumed=0, failed=0)
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        mock_resume.assert_called_once()
+
+    def test_resume_success_clears_durable_pause_state(self, tmp_path):
+        """Successful resume-on-failure must clear Argo CD pause state for retry."""
+        from lib.utils import StateManager
+
+        paused_apps = [
+            {"hub": "primary", "namespace": "argocd", "name": "app1"},
+            {"hub": "secondary", "namespace": "argocd", "name": "app2"},
+        ]
+        state_path = tmp_path / "state.json"
+        state = StateManager(str(state_path))
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", paused_apps)
+        state.set_config("argocd_pause_dry_run", False)
+        state.mark_step_completed("pause_argocd_apps")
+        args = self._make_args()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=1, failed=0)
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_config("argocd_paused_apps") == []
+        assert reloaded.get_config("argocd_run_id") is None
+        assert reloaded.get_config("argocd_pause_dry_run") is False
+        assert reloaded.is_step_completed("pause_argocd_apps") is False
+
+    def test_resume_success_keeps_state_when_not_all_apps_accounted_for(self, tmp_path):
+        """Resume-on-failure must preserve pause state if the summary misses recorded apps."""
+        from lib.utils import StateManager
+
+        paused_apps = [
+            {"hub": "primary", "namespace": "argocd", "name": "app1"},
+            {"hub": "secondary", "namespace": "argocd", "name": "app2"},
+        ]
+        state_path = tmp_path / "state.json"
+        state = StateManager(str(state_path))
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", paused_apps)
+        state.set_config("argocd_pause_dry_run", False)
+        state.mark_step_completed("pause_argocd_apps")
+        args = self._make_args()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_config("argocd_paused_apps") == paused_apps
+        assert reloaded.get_config("argocd_run_id") == "run-1"
+        assert reloaded.is_step_completed("pause_argocd_apps") is True
+
+    def test_no_resume_when_flag_not_set(self):
+        """Resume is NOT attempted when flag is not set."""
+        args = self._make_args(argocd_resume_on_failure=False)
+        state = self._make_state()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        mock_resume.assert_not_called()
+
+    def test_no_resume_when_no_paused_apps(self):
+        """Resume is skipped gracefully when no paused apps in state."""
+        args = self._make_args()
+        state = self._make_state(paused_apps=[])
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        mock_resume.assert_not_called()
+
+    def test_no_resume_when_no_run_id(self):
+        """Resume is skipped gracefully when run_id is missing."""
+        args = self._make_args()
+        state = self._make_state(run_id=None)
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        mock_resume.assert_not_called()
+
+    def test_resume_failure_does_not_raise(self):
+        """If resume itself fails, the exception is caught and logged (best-effort)."""
+        args = self._make_args()
+        state = self._make_state()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.side_effect = RuntimeError("API unreachable")
+            # Must not raise
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+    def test_resume_partial_failure_logs_warning(self, caplog):
+        """Partial resume failure is logged but doesn't raise."""
+        args = self._make_args()
+        state = self._make_state()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = Mock(restored=0, already_resumed=0, failed=1)
+            with caplog.at_level(logging.WARNING):
+                _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        assert "could not be resumed" in caplog.text
+        state.set_config.assert_not_called()
+        state.clear_step_completed.assert_not_called()

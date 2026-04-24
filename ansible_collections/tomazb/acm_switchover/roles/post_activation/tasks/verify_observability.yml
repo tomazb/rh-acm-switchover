@@ -1,0 +1,234 @@
+---
+- name: Skip observability verification in dry-run mode
+  ansible.builtin.set_fact:
+    acm_observability_check_result:
+      changed: false
+      status: skipped
+      reason: dry_run
+  when: acm_switchover_execution.mode | default('execute') == 'dry_run'
+
+- name: Read observatorium-api Deployment on the secondary hub
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: observability-observatorium-api
+    namespace: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_observatorium_api_info
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Read thanos-compact StatefulSet on the secondary hub
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: StatefulSet
+    name: observability-thanos-compact
+    namespace: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_thanos_compact_info
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Fail when critical observability workloads are missing
+  ansible.builtin.assert:
+    that:
+      - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
+      - (_acm_secondary_thanos_compact_info.resources | default([]) | length) > 0
+    fail_msg: >-
+      Missing critical observability workloads on the secondary hub.
+      observatorium-api present={{ (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0 }},
+      thanos-compact present={{ (_acm_secondary_thanos_compact_info.resources | default([]) | length) > 0 }}.
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Scale observatorium-api to its active default replica count
+  kubernetes.core.k8s:
+    api_version: apps/v1
+    kind: Deployment
+    name: observability-observatorium-api
+    namespace: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    definition:
+      spec:
+        replicas: 2
+  register: _acm_secondary_observatorium_scale_result
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - >-
+      (((_acm_secondary_observatorium_api_info.resources | first | default({})).get('spec', {}).get('replicas', 0)) | int)
+      == 0
+
+- name: Scale thanos-compact to its active default replica count
+  kubernetes.core.k8s:
+    api_version: apps/v1
+    kind: StatefulSet
+    name: observability-thanos-compact
+    namespace: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    definition:
+      spec:
+        replicas: 1
+  register: _acm_secondary_thanos_scale_result
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - >-
+      (((_acm_secondary_thanos_compact_info.resources | first | default({})).get('spec', {}).get('replicas', 0)) | int)
+      == 0
+
+- name: Restart observatorium-api rollout
+  kubernetes.core.k8s:
+    api_version: apps/v1
+    kind: Deployment
+    name: observability-observatorium-api
+    namespace: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    definition:
+      spec:
+        template:
+          metadata:
+            annotations:
+              acm-switchover/restartedAt: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+  register: _acm_secondary_observatorium_restart_result
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Wait for observatorium-api Deployment rollout to stabilize
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: observability-observatorium-api
+    namespace: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_observatorium_api_ready_info
+  retries: 60
+  delay: 10
+  until: >-
+    {{
+      (_acm_secondary_observatorium_api_ready_info.resources | default([]) | length) > 0
+      and (
+        (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('observedGeneration', 0)) | int)
+        >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('metadata', {}).get('generation', 0)) | int)
+      )
+      and (
+        (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('updatedReplicas', 0)) | int)
+        >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)) | int)
+      )
+      and (
+        (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('availableReplicas', 0)) | int)
+        >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)) | int)
+      )
+      and (
+        (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('readyReplicas', 0)) | int)
+        >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)) | int)
+      )
+      and (
+        (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('replicas', (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)))) | int)
+        <= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('updatedReplicas', 0)) | int)
+      )
+      and (
+        (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('unavailableReplicas', 0)) | int)
+        == 0
+      )
+    }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Wait for critical observability Pods to become healthy
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: open-cluster-management-observability
+    label_selectors:
+      - "observability.open-cluster-management.io/name=observability"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_observability_pods_info
+  retries: 60
+  delay: 10
+  until: >-
+    {%- set ns = namespace(unhealthy=[]) -%}
+    {%- for pod in (_acm_secondary_observability_pods_info.resources | default([])) -%}
+    {%- set status = pod.get('status', {}) -%}
+    {%- set pod_state = namespace(ready=false, waiting_reason='') -%}
+    {%- for condition in status.get('conditions', []) or [] -%}
+    {%- if condition.get('type') == 'Ready' and condition.get('status') == 'True' -%}
+    {%- set pod_state.ready = true -%}
+    {%- endif -%}
+    {%- endfor -%}
+    {%- for container_status in status.get('containerStatuses', []) or [] -%}
+    {%- set waiting = container_status.get('state', {}).get('waiting', {}) or {} -%}
+    {%- if waiting.get('reason', '') | length > 0 -%}
+    {%- set pod_state.waiting_reason = waiting.get('reason', '') -%}
+    {%- endif -%}
+    {%- endfor -%}
+    {%- if
+      status.get('phase') != 'Running'
+      or not pod_state.ready
+      or pod_state.waiting_reason in ['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerConfigError']
+    -%}
+    {%- set _ = ns.unhealthy.append(pod.get('metadata', {}).get('name', 'unknown')) -%}
+    {%- endif -%}
+    {%- endfor -%}
+    {{ (_acm_secondary_observability_pods_info.resources | default([]) | length) > 0 and (ns.unhealthy | length) == 0 }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Summarize unhealthy observability Pods
+  ansible.builtin.set_fact:
+    _acm_secondary_unhealthy_observability_pods: >-
+      {%- set unhealthy = [] -%}
+      {%- for pod in (_acm_secondary_observability_pods_info.resources | default([])) -%}
+      {%- set status = pod.get('status', {}) -%}
+      {%- set pod_state = namespace(ready=false, waiting_reason='') -%}
+      {%- for condition in status.get('conditions', []) or [] -%}
+      {%- if condition.get('type') == 'Ready' and condition.get('status') == 'True' -%}
+      {%- set pod_state.ready = true -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- for container_status in status.get('containerStatuses', []) or [] -%}
+      {%- set waiting = container_status.get('state', {}).get('waiting', {}) or {} -%}
+      {%- if waiting.get('reason', '') | length > 0 -%}
+      {%- set pod_state.waiting_reason = waiting.get('reason', '') -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if
+        status.get('phase') != 'Running'
+        or not pod_state.ready
+        or pod_state.waiting_reason in ['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerConfigError']
+      -%}
+      {%- set _ = unhealthy.append(pod.get('metadata', {}).get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ unhealthy }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Fail when critical observability Pods remain unhealthy
+  ansible.builtin.assert:
+    that:
+      - (_acm_secondary_unhealthy_observability_pods | default([]) | length) == 0
+    fail_msg: >-
+      Critical observability pods are unhealthy:
+      {{ _acm_secondary_unhealthy_observability_pods | default([]) | join(', ') }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Publish observability verification result
+  ansible.builtin.set_fact:
+    acm_observability_check_result:
+      changed: >-
+        {{
+          (_acm_secondary_observatorium_scale_result.changed | default(false))
+          or (_acm_secondary_thanos_scale_result.changed | default(false))
+          or (_acm_secondary_observatorium_restart_result.changed | default(false))
+        }}
+      status: pass
+      observatorium_ready_replicas: >-
+        {{
+          ((_acm_secondary_observatorium_api_ready_info.resources | first | default({}))
+          .get('status', {})
+          .get('readyReplicas', 0))
+        }}
+      unhealthy_pods: "{{ _acm_secondary_unhealthy_observability_pods | default([]) }}"
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'

@@ -1,0 +1,18 @@
+---
+- name: Apply filtered RBAC resources from manifest file
+  kubernetes.core.k8s:
+    definition: "{{ item }}"
+    state: present
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+  loop: "{{ lookup('ansible.builtin.file', role_path ~ '/files/' ~ _rbac_manifest_file) | from_yaml_all | select | list }}"
+  loop_control:
+    label: >-
+      {{
+        (item.kind | default('Unknown')) ~ '/' ~
+        (item.metadata.name if item.metadata is defined else 'unnamed')
+      }}
+  when: >-
+    item.metadata is not defined
+    or item.metadata.labels is not defined
+    or (item.metadata.labels['app.kubernetes.io/role'] | default('')) in ['', _rbac_plan.role]

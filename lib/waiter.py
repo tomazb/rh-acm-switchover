@@ -2,28 +2,40 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import time
-from typing import Callable, Optional, Tuple
-
-ConditionFn = Callable[[], Tuple[bool, str]]
+from typing import Callable, Optional
 
 
-def _sanitize_detail(detail: str, max_length: int = 256) -> str:
-    """Sanitize a condition detail string for logging.
+@dataclass(frozen=True)
+class WaitConditionResult:
+    """Explicit polling result with operator-safe public detail."""
 
-    This helper trims whitespace/newlines and truncates overly long
-    messages to avoid logging large payloads or secrets verbatim.
-    Callers should still avoid passing raw secrets as detail strings.
-    """
+    done: bool
+    public_detail: str = ""
 
-    if not detail:
-        return ""
+    @classmethod
+    def complete(cls, public_detail: str = "") -> "WaitConditionResult":
+        """Build a successful wait result."""
+        return cls(done=True, public_detail=public_detail)
 
-    safe = " ".join(str(detail).splitlines()).strip()
-    if len(safe) > max_length:
-        return safe[:max_length] + "... (truncated)"
-    return safe
+    @classmethod
+    def pending(cls, public_detail: str = "") -> "WaitConditionResult":
+        """Build an in-progress wait result."""
+        return cls(done=False, public_detail=public_detail)
+
+
+ConditionFn = Callable[[], WaitConditionResult]
+
+
+def _require_wait_condition_result(result: object) -> WaitConditionResult:
+    """Validate that polling callbacks return the explicit wait contract."""
+
+    if isinstance(result, WaitConditionResult):
+        return result
+
+    raise TypeError("condition_fn must return WaitConditionResult")
 
 
 def wait_for_condition(
@@ -40,22 +52,23 @@ def wait_for_condition(
     """Poll until a condition succeeds or timeout expires."""
 
     start_time = time.time()
+    last_result: Optional[WaitConditionResult] = None
     logger.info("Waiting for %s (timeout: %ss)...", description, timeout)
 
     while time.time() - start_time < timeout:
-        done, detail = condition_fn()
-        safe_detail = _sanitize_detail(detail)
+        result = _require_wait_condition_result(condition_fn())
+        last_result = result
 
-        if done:
-            if safe_detail:
-                logger.info("%s complete: %s", description, safe_detail)
+        if result.done:
+            if result.public_detail:
+                logger.info("%s complete: %s", description, result.public_detail)
             else:
                 logger.info("%s complete", description)
             return True
 
         elapsed = int(time.time() - start_time)
-        if safe_detail:
-            logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
+        if result.public_detail:
+            logger.debug("%s in progress: %s (elapsed: %ss)", description, result.public_detail, elapsed)
         else:
             logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 
@@ -66,17 +79,17 @@ def wait_for_condition(
         time.sleep(sleep_interval)
 
     if allow_success_after_timeout:
-        done, detail = condition_fn()
-        safe_detail = _sanitize_detail(detail)
-        if done:
-            if safe_detail:
-                logger.info("%s complete: %s", description, safe_detail)
+        result = _require_wait_condition_result(condition_fn())
+        last_result = result
+        if result.done:
+            if result.public_detail:
+                logger.info("%s complete: %s", description, result.public_detail)
             else:
                 logger.info("%s complete", description)
             return True
-        elif safe_detail:
-            elapsed = int(time.time() - start_time)
-            logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 
-    logger.warning("%s not complete after %ss timeout", description, timeout)
+    if last_result and last_result.public_detail:
+        logger.warning("%s not complete after %ss timeout: %s", description, timeout, last_result.public_detail)
+    else:
+        logger.warning("%s not complete after %ss timeout", description, timeout)
     return False

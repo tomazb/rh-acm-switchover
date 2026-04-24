@@ -1,0 +1,14 @@
+# Base vars: primary=mgmt2 (BackupSchedule active), secondary=mgmt1 (passive-sync)
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+  secondary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+
+acm_switchover_features:
+  skip_rbac_validation: false
+  skip_observability_checks: false
+  argocd:
+    manage: false

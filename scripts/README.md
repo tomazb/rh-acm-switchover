@@ -9,17 +9,17 @@ These scripts automate the validation process before and after switchover, ensur
 > ⚠️ **Safety note:** Some utilities mutate cluster state. Review usage and required credentials/state files before running in production.
 > **Shell requirement:** These scripts require Bash 4 or newer because shared helpers use associative arrays.
 
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary |
-| [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure |
-| [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes |
-| [`argocd-manage.sh`](argocd-manage.sh) | ⚠️ **Mutating / requires state file**: Pause or resume Argo CD auto-sync for ACM-touching Applications ([usage](#argo-cd-management-script)) | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume |
-| [`setup-rbac.sh`](setup-rbac.sh) | ⚠️ **Mutating (initial setup)**: Deploy RBAC and generate kubeconfigs ([usage](#rbac-bootstrap-script)) | Initial setup of switchover access |
-| [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication |
-| [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access |
-| [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts |
-| [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts |
+| Script | Purpose | When to Use | Collection Status |
+|--------|---------|-------------|-------------------|
+| [`discover-hub.sh`](discover-hub.sh) | Auto-discover ACM hubs and propose checks | When unsure which hub is primary/secondary | **Supported bridge** — use until `playbooks/discovery.yml` covers all context-enumeration needs |
+| [`preflight-check.sh`](preflight-check.sh) | Validate prerequisites before switchover | Before starting switchover procedure | dual-supported |
+| [`postflight-check.sh`](postflight-check.sh) | Verify switchover completed successfully | After switchover activation completes | dual-supported |
+| [`argocd-manage.sh`](argocd-manage.sh) | ⚠️ **Mutating / requires state file**: Pause or resume Argo CD auto-sync for ACM-touching Applications ([usage](#argo-cd-management-script)) | When GitOps (Argo CD) manages ACM resources; use with a state file for reversible pause/resume | **Deprecated** — prefer `playbooks/argocd_resume.yml` (Phase 5) |
+| [`setup-rbac.sh`](setup-rbac.sh) | ⚠️ **Mutating (initial setup)**: Deploy RBAC and generate kubeconfigs ([usage](#rbac-bootstrap-script)) | Initial setup of switchover access | **Deprecated** — prefer `playbooks/rbac_bootstrap.yml` (Phase 6) |
+| [`generate-sa-kubeconfig.sh`](generate-sa-kubeconfig.sh) | Generate kubeconfig from service account | For service account authentication | bridge (called by `rbac_bootstrap` role during transition) |
+| [`generate-merged-kubeconfig.sh`](generate-merged-kubeconfig.sh) | Merge kubeconfigs for multi-hub ops | Setting up multi-hub access | bridge |
+| [`lib-common.sh`](lib-common.sh) | Shared helper functions and utilities | Sourced by other scripts | internal |
+| [`constants.sh`](constants.sh) | Shared configuration constants | Sourced by other scripts | internal |
 
 ## Version Tracking
 
@@ -29,7 +29,7 @@ All scripts display their version number in the output header for troubleshootin
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                    ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.5.3 (2026-01-29)
+preflight-check.sh v1.7.4 (2026-04-24)
 ```
 
 The version is defined in `constants.sh` and follows [Semantic Versioning](https://semver.org/):
@@ -124,7 +124,7 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Hub Discovery                                        ║
 ╚════════════════════════════════════════════════════════════╝
-discover-hub.sh v1.5.3 (2026-01-29)
+discover-hub.sh v1.7.4 (2026-04-24)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts
@@ -206,6 +206,15 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 
 > **Note:** Argo CD detection runs automatically when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable.
 
+> **Restore-only mode:** `preflight-check.sh` requires both a primary and secondary hub context.
+> For single-hub restore scenarios (no primary hub available), use the Python tool's built-in
+> validation instead:
+> ```bash
+> python acm_switchover.py --restore-only --secondary-context <target-hub> --validate-only
+> ```
+> This runs secondary-only preflight checks (ACM version, namespaces, BSL, OADP) without
+> requiring a primary hub connection. See [Restore-Only Mode](../docs/operations/usage.md#restore-only-mode-single-hub-restore) for details.
+
 ### What It Checks
 
 1. **CLI Tools** - Verifies `oc`/`kubectl` and `jq` are installed (jq is required)
@@ -227,7 +236,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 11. **Passive Sync** (Method 1 only) - Validates passive restore is running and up-to-date (dynamically finds latest restore)
 12. **Observability** - If observability is installed on the primary:
   - Confirms required CRs/secrets exist
-  - **Fails if the secondary hub has an active MCO** unless **Thanos compactor** and **observatorium-api** are scaled to `0`
+  - **Fails if the secondary hub has an active MCO** unless **Thanos compactor** and **observatorium-api** are scaled to `0` for a temporary/manual switchover window
   - **Warns** if the secondary has observability pods but no MCO CR (likely incomplete decommission)
 13. **Secondary Hub Managed Clusters** - Checks for pre-existing clusters on secondary:
     - Shows available/total count (e.g., "0/8 available")
@@ -245,7 +254,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                     ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.5.3 (2026-01-29)
+preflight-check.sh v1.7.4 (2026-04-24)
 
 Primary Hub:    primary-hub
 Secondary Hub:  secondary-hub
@@ -405,7 +414,7 @@ Verifies that the ACM switchover completed successfully by validating all critic
 5b. **BackupStorageLocation** - Verifies BSL is in "Available" phase (storage accessible for backups)
 6. **ACM Hub Components** - Verifies MultiClusterHub and ACM pods are healthy
 7. **Old Hub Comparison** (if `--old-hub-context` provided) - Checks old hub clusters are disconnected and that the old hub is not still acting as an active observability hub:
-  - Passes if **MCO is absent**, or if **Thanos compactor** and **observatorium-api** are scaled to `0`
+  - Passes if **MCO is absent**, or if **Thanos compactor** and **observatorium-api** are scaled to `0` as a transitional/manual state
 8. **Auto-Import Status** - Verifies no lingering disable-auto-import annotations
 9. **Auto-Import Strategy** (ACM 2.14+) - Ensures `autoImportStrategy` is reset to default post-switchover:
     - Warns if non-default strategy remains configured
@@ -920,7 +929,7 @@ Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io
 3. Run switchover (Python tool or manual runbook steps)
 4. After updating Git/desired state for the new hub, resume: `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause-state.json`
 
-The Python tool can perform pause/resume during switchover when using `--argocd-manage` and optionally `--argocd-resume-after-switchover` or `--argocd-resume-only`; see [usage.md](../docs/operations/usage.md).
+The Python tool can perform pause/resume during switchover when using `--argocd-manage`; resume explicitly after updating Git for the new hub with `--argocd-resume-only`. See [usage.md](../docs/operations/usage.md).
 
 ---
 
@@ -968,6 +977,33 @@ graph TD
 > done during initial deployment, not part of the operational switchover workflow. 
 > See [RBAC Deployment Guide](../docs/deployment/rbac-deployment.md) for setup instructions.
 
+### Restore-Only (Single-Hub) Workflow
+
+When the original hub is unavailable and you need to restore managed clusters from S3 backups
+onto a new hub, the Python tool handles validation and orchestration directly — the bash
+`preflight-check.sh` is not used in this flow:
+
+```mermaid
+graph TD
+    A[Start: Plan Restore] --> B["Run Restore-Only Preflight<br/>(python acm_switchover.py --restore-only --validate-only)"]
+    B --> C{Preflight<br/>Passed?}
+    C -->|No| D[Fix Issues<br/>BSL, OADP, namespaces]
+    D --> B
+    C -->|Yes| E["Execute Restore<br/>(python acm_switchover.py --restore-only --secondary-context target-hub)"]
+    E --> F[ACTIVATION: Create Restore from S3]
+    F --> G[POST_ACTIVATION: Wait for Clusters]
+    G --> H[FINALIZATION: Enable BackupSchedule]
+    H --> I[Run Post-flight Check<br/>./scripts/postflight-check.sh --new-hub-context target-hub]
+    I --> J{Post-flight<br/>Passed?}
+    J -->|No| K[Troubleshoot & Retry]
+    K --> I
+    J -->|Yes| L[Restore Complete]
+
+    style C fill:#ffd43b
+    style J fill:#ffd43b
+    style L fill:#51cf66
+```
+
 ---
 
 ## Best Practices
@@ -986,6 +1022,13 @@ graph TD
 3. **Check Grafana metrics** manually after 10-15 minutes
 4. **Keep old hub accessible** for at least 24 hours in case reverse switchover is needed
 5. **Save post-flight output** for documentation and compliance
+
+### Restore-Only (Single-Hub)
+
+1. **Verify S3 backup access** before starting — the target hub must have a working BSL (BackupStorageLocation)
+2. **Use `--validate-only` first** to run preflight checks without making changes
+3. **Use `--dry-run`** to preview what would be created before committing
+4. **Run `postflight-check.sh`** after restore completes to verify cluster connectivity
 
 ### Troubleshooting
 
@@ -1043,7 +1086,7 @@ Provides shared helper functions and utilities used by both `preflight-check.sh`
 | **Color Variables** | `RED`, `GREEN`, `YELLOW`, `BLUE`, `NC` for formatted output |
 | **Counter Variables** | `TOTAL_CHECKS`, `PASSED_CHECKS`, `FAILED_CHECKS`, `WARNING_CHECKS` |
 | **Message Arrays** | `FAILED_MESSAGES`, `WARNING_MESSAGES` for summary reporting |
-| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.5.0 (2026-01-28)`) |
+| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.7.4 (2026-04-24)`) |
 | **`check_pass`** | Record a passing check with green checkmark |
 | **`check_fail`** | Record a failing check with red X, adds to failed messages |
 | **`check_warn`** | Record a warning with yellow triangle, adds to warning messages |

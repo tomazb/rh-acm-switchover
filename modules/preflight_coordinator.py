@@ -3,7 +3,7 @@
 # Runbook: Step 0 (pre-flight validation)
 
 import logging
-from typing import Tuple, TypedDict
+from typing import Optional, Tuple, TypedDict
 
 from kubernetes.client.rest import ApiException
 
@@ -47,13 +47,14 @@ class PreflightValidator:
 
     def __init__(
         self,
-        primary_client: KubeClient,
+        primary_client: Optional[KubeClient],
         secondary_client: KubeClient,
         method: str = "passive",
         skip_rbac_validation: bool = False,
         include_decommission: bool = False,
         argocd_manage: bool = False,
         skip_gitops_check: bool = False,
+        restore_only: bool = False,
     ) -> None:
         self.primary = primary_client
         self.secondary = secondary_client
@@ -62,6 +63,7 @@ class PreflightValidator:
         self.include_decommission = include_decommission
         self.argocd_manage = argocd_manage
         self.skip_gitops_check = skip_gitops_check
+        self.restore_only = restore_only
 
         self.reporter = ValidationReporter()
         self.kubeconfig_validator = KubeconfigValidator(self.reporter)
@@ -139,7 +141,10 @@ class PreflightValidator:
 
         # RBAC validation (unless explicitly skipped)
         if not self.skip_rbac_validation:
-            logger.info("Validating RBAC permissions...")
+            if self.restore_only:
+                logger.info("Restore-only mode: validating RBAC on secondary hub only")
+            else:
+                logger.info("Validating RBAC permissions...")
             try:
                 # F6 fix: Wrap the entire RBAC block so routine API failures
                 # (from namespace_exists, Argo CD discovery, or RBAC checks)
@@ -147,7 +152,7 @@ class PreflightValidator:
                 # escaping as uncaught exceptions.
                 # Check if observability namespace exists on either hub
                 # If not installed, skip observability permission checks
-                primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
+                primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.primary else False
                 secondary_has_obs = (
                     self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.secondary else False
                 )
@@ -223,17 +228,29 @@ class PreflightValidator:
             secondary_version,
         )
 
-        for label, client in (("primary", self.primary), ("secondary", self.secondary)):
-            self.hub_component_validator.run(client, label)
+        if self.restore_only:
+            # Restore-only: only validate secondary hub components
+            self.hub_component_validator.run(self.secondary, "secondary")
+        else:
+            for label, client in (("primary", self.primary), ("secondary", self.secondary)):
+                self.hub_component_validator.run(client, label)
 
-        self.backup_validator.run(self.primary)
-        self.backup_schedule_validator.run(self.primary)
-        self.backup_storage_location_validator.run(self.primary, "primary")
+        if self.restore_only:
+            # Restore-only still needs proof that backup artifacts exist on the
+            # destination hub before activation asks ACM to restore "latest".
+            self.backup_validator.run(self.secondary)
+        else:
+            # Primary-only validators: skip entirely in restore-only mode
+            self.backup_validator.run(self.primary)
+            self.backup_schedule_validator.run(self.primary)
+            self.backup_storage_location_validator.run(self.primary, "primary")
+            self.cluster_deployment_validator.run(self.primary)
+            self.managed_cluster_backup_validator.run(self.primary)
+
+        # BSL on secondary is always checked (required for restore)
         self.backup_storage_location_validator.run(self.secondary, "secondary")
-        self.cluster_deployment_validator.run(self.primary)
-        self.managed_cluster_backup_validator.run(self.primary)
 
-        if self.method == "passive":
+        if self.method == "passive" and not self.restore_only:
             self.passive_sync_validator.run(self.secondary)
 
         primary_observability, secondary_observability = self.observability_detector.detect(

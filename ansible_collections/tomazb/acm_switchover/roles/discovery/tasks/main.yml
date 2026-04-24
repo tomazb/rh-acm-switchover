@@ -1,0 +1,37 @@
+---
+# Discovery role: read-only hub state classification.
+#
+# Callers supply observed facts via acm_switchover_discovery_restore_state and
+# acm_switchover_discovery_managed_clusters. For full context enumeration
+# (kubeconfig resolution, multi-hub detection), use the supported bridge:
+#   scripts/discover-hub.sh --auto --run
+
+- name: Classify hub role from observed facts
+  tomazb.acm_switchover.acm_discovery:
+    restore_state: "{{ acm_switchover_discovery_restore_state }}"
+    managed_clusters: "{{ acm_switchover_discovery_managed_clusters | int }}"
+  register: _discovery_result
+
+- name: Publish discovery summary
+  ansible.builtin.set_fact:
+    acm_switchover_discovery_result:
+      playbook: discovery
+      hub_role: "{{ _discovery_result.hub_role }}"
+      status: pass
+
+- name: Resolve summary path to absolute
+  ansible.builtin.set_fact:
+    _acm_summary_path_abs: >-
+      {{
+        summary_path
+        if summary_path.startswith('/')
+        else (lookup('env', 'PWD') ~ '/' ~ summary_path)
+      }}
+  when: summary_path is defined
+
+- name: Write summary when requested
+  ansible.builtin.copy:
+    content: "{{ acm_switchover_discovery_result | to_json }}"
+    dest: "{{ _acm_summary_path_abs }}"
+    mode: "0644"
+  when: summary_path is defined

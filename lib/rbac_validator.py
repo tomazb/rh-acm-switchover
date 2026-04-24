@@ -15,6 +15,13 @@ from typing import Dict, List, Optional, Tuple
 from kubernetes.client.rest import ApiException
 
 from lib import KubeClient
+from lib.constants import (
+    ACM_NAMESPACE,
+    BACKUP_NAMESPACE,
+    MANAGED_CLUSTER_AGENT_NAMESPACE,
+    MCE_NAMESPACE,
+    OBSERVABILITY_NAMESPACE,
+)
 from lib.exceptions import ValidationError
 
 logger = logging.getLogger("acm_switchover")
@@ -36,7 +43,7 @@ class RBACValidator:
 
     # Required cluster-scoped permissions for OPERATOR role
     OPERATOR_CLUSTER_PERMISSIONS = [
-        ("", "namespaces", ["get"]),
+        ("", "namespaces", ["get", "list"]),
         ("", "nodes", ["get", "list"]),  # For cluster health validation per runbook
         (
             "config.openshift.io",
@@ -64,7 +71,7 @@ class RBACValidator:
 
     # Required cluster-scoped permissions for VALIDATOR role (read-only)
     VALIDATOR_CLUSTER_PERMISSIONS = [
-        ("", "namespaces", ["get"]),
+        ("", "namespaces", ["get", "list"]),
         ("", "nodes", ["get", "list"]),
         ("config.openshift.io", "clusteroperators", ["get", "list"]),
         ("config.openshift.io", "clusterversions", ["get", "list"]),
@@ -87,7 +94,7 @@ class RBACValidator:
 
     # Required namespace-scoped permissions for OPERATOR role on HUB clusters
     OPERATOR_HUB_NAMESPACE_PERMISSIONS = {
-        "open-cluster-management-backup": [
+        BACKUP_NAMESPACE: [
             ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
             ("", "secrets", ["get"]),
             ("", "pods", ["get", "list"]),  # For Velero pod health checks
@@ -110,10 +117,10 @@ class RBACValidator:
             ),  # For storage health check
             ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
         ],
-        "open-cluster-management": [
+        ACM_NAMESPACE: [
             ("", "pods", ["get", "list"]),  # For ACM pod health checks
         ],
-        "open-cluster-management-observability": [
+        OBSERVABILITY_NAMESPACE: [
             ("", "pods", ["get", "list"]),
             ("", "secrets", ["get"]),  # For Thanos object storage config
             ("apps", "deployments", ["get", "patch"]),
@@ -125,14 +132,14 @@ class RBACValidator:
             ),  # For Thanos compactor scaling
             ("route.openshift.io", "routes", ["get"]),  # For Grafana route access
         ],
-        "multicluster-engine": [
+        MCE_NAMESPACE: [
             ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
         ],
     }
 
     # Required namespace-scoped permissions for VALIDATOR role on HUB clusters (read-only)
     VALIDATOR_HUB_NAMESPACE_PERMISSIONS = {
-        "open-cluster-management-backup": [
+        BACKUP_NAMESPACE: [
             ("", "configmaps", ["get", "list"]),
             ("", "secrets", ["get"]),  # For Thanos config validation
             ("", "pods", ["get", "list"]),
@@ -143,17 +150,17 @@ class RBACValidator:
             ("velero.io", "backupstoragelocations", ["get", "list"]),
             ("oadp.openshift.io", "dataprotectionapplications", ["get", "list"]),
         ],
-        "open-cluster-management": [
+        ACM_NAMESPACE: [
             ("", "pods", ["get", "list"]),
         ],
-        "open-cluster-management-observability": [
+        OBSERVABILITY_NAMESPACE: [
             ("", "pods", ["get", "list"]),
             ("", "secrets", ["get"]),
             ("apps", "deployments", ["get", "list"]),  # No patch for validator
             ("apps", "statefulsets", ["get", "list"]),  # No patch for validator
             ("route.openshift.io", "routes", ["get"]),
         ],
-        "multicluster-engine": [
+        MCE_NAMESPACE: [
             ("", "configmaps", ["get", "list"]),  # No create/patch/delete for validator
         ],
     }
@@ -161,7 +168,7 @@ class RBACValidator:
     # Required namespace-scoped permissions for OPERATOR role on MANAGED clusters
     # These are only needed when connecting to managed clusters for klusterlet operations
     OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS = {
-        "open-cluster-management-agent": [
+        MANAGED_CLUSTER_AGENT_NAMESPACE: [
             ("", "secrets", ["get", "create", "delete"]),  # For klusterlet reconnection
             ("apps", "deployments", ["get", "patch"]),  # For klusterlet restart
         ],
@@ -169,7 +176,7 @@ class RBACValidator:
 
     # Required namespace-scoped permissions for VALIDATOR role on MANAGED clusters (read-only)
     VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS = {
-        "open-cluster-management-agent": [
+        MANAGED_CLUSTER_AGENT_NAMESPACE: [
             ("", "secrets", ["get"]),  # Read-only for validation
             ("apps", "deployments", ["get"]),  # Read-only for validation
         ],
@@ -189,6 +196,27 @@ class RBACValidator:
             ["delete"],
         ),
     ]
+
+    # Standalone decommission only needs the teardown surface used by modules/decommission.py.
+    DECOMMISSION_CLUSTER_PERMISSIONS = [
+        ("", "namespaces", ["get"]),
+        ("cluster.open-cluster-management.io", "managedclusters", ["list", "delete"]),
+        (
+            "observability.open-cluster-management.io",
+            "multiclusterobservabilities",
+            ["list", "delete"],
+        ),
+    ]
+
+    DECOMMISSION_NAMESPACE_PERMISSIONS = {
+        ACM_NAMESPACE: [
+            ("", "pods", ["get", "list"]),
+            ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
+        ],
+        OBSERVABILITY_NAMESPACE: [
+            ("", "pods", ["get", "list"]),
+        ],
+    }
 
     # F9 fix: Argo CD RBAC is split into base permissions (always needed)
     # and operator-install-only permissions (argocds get/list).
@@ -457,7 +485,7 @@ class RBACValidator:
                 continue
 
             # Skip agent namespace on hubs (it exists on managed clusters)
-            if skip_agent_namespace and namespace == "open-cluster-management-agent":
+            if skip_agent_namespace and namespace == MANAGED_CLUSTER_AGENT_NAMESPACE:
                 logger.info(
                     "Skipping agent namespace: %s (exists on managed clusters only)",
                     namespace,
@@ -593,6 +621,95 @@ class RBACValidator:
 
         return all_valid, all_errors
 
+    def validate_decommission_permissions(
+        self,
+        skip_observability: bool = False,
+    ) -> Tuple[bool, Dict[str, List[str]]]:
+        """Validate only the permissions exercised by standalone decommission."""
+        if self.role != "operator":
+            raise ValueError("Decommission permissions are only applicable to the operator role.")
+
+        all_valid = True
+        all_errors: Dict[str, List[str]] = {}
+        cluster_errors: List[str] = []
+        namespace_errors: List[str] = []
+
+        logger.info("Validating standalone decommission RBAC permissions for role: %s", self.role)
+
+        check_observability = not skip_observability
+        if check_observability and not self.client.namespace_exists(OBSERVABILITY_NAMESPACE):
+            logger.info(
+                "Namespace %s does not exist - skipping observability decommission permission checks",
+                OBSERVABILITY_NAMESPACE,
+            )
+            check_observability = False
+
+        for api_group, resource, verbs in self.DECOMMISSION_CLUSTER_PERMISSIONS:
+            if not check_observability and "observability" in api_group:
+                logger.info("Skipping observability permission: %s/%s", api_group, resource)
+                continue
+
+            for verb in verbs:
+                has_perm, error = self.check_permission(api_group, resource, verb, None)
+                if not has_perm:
+                    all_valid = False
+                    group_name = api_group if api_group else "core"
+                    error_msg = f"Missing decommission permission: {verb} {group_name}/{resource}"
+                    if error:
+                        error_msg += f" - {error}"
+                    cluster_errors.append(error_msg)
+                    logger.error(error_msg)
+
+        if cluster_errors:
+            all_errors["cluster"] = cluster_errors
+
+        for namespace, permissions in self.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+            if namespace == OBSERVABILITY_NAMESPACE and not check_observability:
+                continue
+
+            if not self.client.namespace_exists(namespace):
+                if namespace == ACM_NAMESPACE:
+                    # ACM namespace removal is expected after successful decommission.
+                    # Treat as success to allow idempotent reruns.
+                    logger.info(
+                        "Namespace %s does not exist — ACM already removed, "
+                        "skipping decommission permission checks for this namespace",
+                        namespace,
+                    )
+                    continue
+                warning = f"Namespace {namespace} does not exist - skipping decommission permission checks"
+                logger.warning(warning)
+                namespace_errors.append(warning)
+                all_valid = False
+                continue
+
+            logger.info("Checking decommission permissions in namespace: %s", namespace)
+
+            for api_group, resource, verbs in permissions:
+                for verb in verbs:
+                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                    if not has_perm:
+                        all_valid = False
+                        group_name = api_group if api_group else "core"
+                        error_msg = f"Missing decommission permission in {namespace}: {verb} {group_name}/{resource}"
+                        if error:
+                            error_msg += f" - {error}"
+                        namespace_errors.append(error_msg)
+                        logger.error(error_msg)
+
+        if namespace_errors:
+            all_errors["namespaces"] = namespace_errors
+
+        if all_valid:
+            logger.info("✓ Standalone decommission RBAC permissions validated successfully")
+        else:
+            logger.error("✗ Standalone decommission RBAC permission validation failed")
+            logger.error("Error summary:")
+            for category, error_list in all_errors.items():
+                logger.error("  %s: %d errors", category, len(error_list))
+
+        return all_valid, all_errors
+
     def generate_permission_report(
         self,
         include_decommission: bool = False,
@@ -662,7 +779,7 @@ class RBACValidator:
 
 
 def validate_rbac_permissions(
-    primary_client: KubeClient,
+    primary_client: Optional[KubeClient] = None,
     secondary_client: Optional[KubeClient] = None,
     include_decommission: bool = False,
     skip_observability: bool = False,
@@ -671,12 +788,16 @@ def validate_rbac_permissions(
     secondary_argocd_install_type: Optional[str] = None,
 ) -> None:
     """
-    Validate RBAC permissions on primary and optionally secondary hub.
+    Validate RBAC permissions on primary and/or secondary hub.
+
+    At least one of primary_client or secondary_client must be provided.
+    When primary_client is None (e.g. restore-only mode), only secondary
+    hub permissions are validated.
 
     Args:
-        primary_client: KubeClient for primary hub
+        primary_client: Optional KubeClient for primary hub
         secondary_client: Optional KubeClient for secondary hub
-        include_decommission: Whether to check decommission permissions
+        include_decommission: Whether to check decommission permissions (requires primary_client)
         skip_observability: Whether to skip observability checks
         argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
         argocd_install_type: 'vanilla', 'operator', or 'unknown'
@@ -685,32 +806,41 @@ def validate_rbac_permissions(
 
     Raises:
         ValidationError: If RBAC validation fails
+        ValueError: If both clients are None or include_decommission used without primary
     """
+    if primary_client is None and secondary_client is None:
+        raise ValueError("At least one of primary_client or secondary_client must be provided")
+    if include_decommission and primary_client is None:
+        raise ValueError("include_decommission requires primary_client")
+
     logger.info("Starting RBAC permission validation...")
     _validate_argocd_mode(argocd_mode)
 
-    # Validate primary hub
-    logger.info("Validating RBAC permissions on primary hub...")
-    primary_validator = RBACValidator(primary_client)
-    try:
-        primary_valid, primary_errors = primary_validator.validate_all_permissions(
-            include_decommission=include_decommission,
-            skip_observability=skip_observability,
-            argocd_mode=argocd_mode,
-            argocd_install_type=argocd_install_type,
-        )
-    except ValidationError as exc:
-        raise ValidationError(f"RBAC permission validation could not be completed on primary hub: {exc}") from exc
+    # Validate primary hub (when available)
+    if primary_client is not None:
+        logger.info("Validating RBAC permissions on primary hub...")
+        primary_validator = RBACValidator(primary_client)
+        try:
+            primary_valid, primary_errors = primary_validator.validate_all_permissions(
+                include_decommission=include_decommission,
+                skip_observability=skip_observability,
+                argocd_mode=argocd_mode,
+                argocd_install_type=argocd_install_type,
+            )
+        except ValidationError as exc:
+            raise ValidationError(f"RBAC permission validation could not be completed on primary hub: {exc}") from exc
 
-    if not primary_valid:
-        report = primary_validator.generate_permission_report(
-            include_decommission=include_decommission,
-            skip_observability=skip_observability,
-            argocd_mode=argocd_mode,
-            argocd_install_type=argocd_install_type,
-        )
-        logger.error("\n%s", report)
-        raise ValidationError("RBAC permission validation failed on primary hub. " "See report above for details.")
+        if not primary_valid:
+            report = primary_validator.generate_permission_report(
+                include_decommission=include_decommission,
+                skip_observability=skip_observability,
+                argocd_mode=argocd_mode,
+                argocd_install_type=argocd_install_type,
+            )
+            logger.error("\n%s", report)
+            raise ValidationError("RBAC permission validation failed on primary hub. " "See report above for details.")
+    else:
+        logger.info("Primary hub not available; skipping primary RBAC validation")
 
     # Validate secondary hub if provided
     if secondary_client:
@@ -754,16 +884,13 @@ def validate_decommission_permissions(
 
     validator = RBACValidator(primary_client)
     try:
-        cluster_valid, cluster_errors = validator.validate_cluster_permissions(
-            include_decommission=True,
+        all_valid, all_errors = validator.validate_decommission_permissions(
             skip_observability=skip_observability,
-            argocd_mode="none",
-            argocd_install_type="unknown",
         )
     except ValidationError as exc:
         raise ValidationError(f"Decommission RBAC validation could not be completed on primary hub: {exc}") from exc
 
-    if not cluster_valid:
+    if not all_valid:
         report = ["=" * 80]
         report.append("DECOMMISSION RBAC PERMISSION VALIDATION REPORT")
         report.append("=" * 80)
@@ -772,9 +899,11 @@ def validate_decommission_permissions(
         report.append("")
         report.append("The following decommission permissions are missing:")
         report.append("")
-        for error in cluster_errors:
-            report.append(f"  - {error}")
-        report.append("")
+        for category, error_list in all_errors.items():
+            report.append(f"{category.upper()} PERMISSIONS:")
+            for error in error_list:
+                report.append(f"  - {error}")
+            report.append("")
         report.append("REMEDIATION:")
         report.append("")
         report.append("  1. Apply the opt-in decommission extension under deploy/rbac/extensions/decommission/")

@@ -1,0 +1,112 @@
+---
+acm_switchover_hubs:
+  primary:
+    context: primary-hub
+    kubeconfig: ./kubeconfigs/primary
+  secondary:
+    context: secondary-hub
+    kubeconfig: ./kubeconfigs/secondary
+
+acm_switchover_operation:
+  method: full
+  activation_method: patch
+  old_hub_action: secondary
+
+acm_switchover_execution:
+  mode: dry_run
+  report_dir: ./artifacts
+
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_rbac_validation: true
+  skip_observability_checks: true
+  argocd:
+    manage: false
+
+acm_primary_mch_info:
+  resources:
+    - metadata:
+        name: multiclusterhub
+      status:
+        currentVersion: 2.14.3
+
+acm_secondary_mch_info:
+  resources:
+    - metadata:
+        name: multiclusterhub
+      status:
+        currentVersion: 2.14.1
+
+acm_primary_namespace_info:
+  resources:
+    - metadata:
+        name: open-cluster-management
+    - metadata:
+        name: open-cluster-management-backup
+
+acm_secondary_namespace_info:
+  resources:
+    - metadata:
+        name: open-cluster-management
+    - metadata:
+        name: open-cluster-management-backup
+
+acm_primary_cluster_deployments_info:
+  resources:
+    - metadata:
+        name: cluster-a
+
+acm_primary_managed_cluster_backups_info:
+  resources:
+    - metadata:
+        name: cluster-a-backup
+
+acm_primary_backups_info:
+  resources:
+    - metadata:
+        name: acm-backup-20240101
+
+acm_primary_backup_schedules_info:
+  resources:
+    - metadata:
+        name: acm-hub-backup
+      spec:
+        paused: false
+
+acm_primary_bsl_info:
+  resources:
+    - metadata:
+        name: acm-bsl
+      status:
+        phase: Available
+
+acm_secondary_bsl_info:
+  resources:
+    - metadata:
+        name: acm-bsl
+      status:
+        phase: Available
+
+acm_secondary_restore_info:
+  resources: []
+
+acm_secondary_restores_info:
+  resources: []
+
+acm_secondary_managed_clusters_info:
+  resources:
+    - metadata:
+        name: cluster-a
+      status:
+        conditions:
+          - type: ManagedClusterJoined
+            status: "True"
+          - type: ManagedClusterConditionAvailable
+            status: "True"
+
+acm_secondary_backup_schedules_info:
+  resources:
+    - metadata:
+        name: acm-hub-backup
+      spec:
+        paused: true

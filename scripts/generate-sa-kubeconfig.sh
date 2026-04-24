@@ -201,6 +201,11 @@ if [[ -z "$SERVER" ]]; then
     exit 1
 fi
 
+if [[ -z "$CA_DATA" ]]; then
+    echo "Error: Could not determine cluster certificate-authority-data from context or kubeconfig" >&2
+    exit 1
+fi
+
 # Resolve user name: use provided --user, or default to <context>-<sa-name> pattern
 # This pattern ensures unique user names when merging kubeconfigs from multiple clusters
 if [[ -z "$USER_NAME" ]]; then

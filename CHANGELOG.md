@@ -9,7 +9,193 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **RBAC kubeconfig generation**: Service-account kubeconfig generators now fail fast when cluster `certificate-authority-data` cannot be read instead of emitting an invalid kubeconfig with an empty CA field.
+- **Review regression hardening**: Finalization now honors skipped observability before deleting old-hub `MultiClusterObservability`, RBAC validators require namespace `list` for preflight discovery, and collection RBAC bootstrap now generates durable service-account kubeconfigs and validates the bootstrapped service account rather than the admin credential.
+- **Collection review regressions**: Fixed collection finalization debug/runtime failures, preserved restore-only backup verification skips, made Argo CD pause patches actually remove automated sync, paused Argo CD before primary_prep ACM mutations, and excluded `local-cluster` from managed-cluster readiness accounting.
+- **Ansible finalization old-hub read safety**: Collection finalization now fails closed when unexpected old-hub `MultiClusterObservability`, `ManagedCluster`, or `BackupSchedule` reads fail during finalization, while still treating absent MCO API resources as a no-op.
+- **Argo CD resume-on-failure retry safety**: Python resume-on-failure now clears durable Argo CD pause state only after every recorded Application is restored or already resumed, and the collection resets the `primary_prep` checkpoint after best-effort resume so retries re-pause GitOps before continuing.
+- **Validate-only FAILED-state preservation**: Python validate-only checkpoint restore now preserves durable error history, preventing transient preflight failures from changing the later retry phase.
+- **Observatorium rollout readiness**: Python and collection post-activation checks now require updated, available, ready, current, and unavailable replica counters to confirm the new `observatorium-api` ReplicaSet has rolled out before reporting ready.
+- **Collection checkpoint reset**: The `checkpoint_phase` action plugin now supports `status: reset` to remove a phase from `completed_phases` without appending an error.
+
+## [1.7.3] - 2026-04-23
+
+### Added
+
+- **ArgoCD resume-on-failure**: New `--argocd-resume-on-failure` CLI flag (Python) and `acm_switchover_features.argocd.resume_on_failure` variable (Ansible) to attempt best-effort resume of paused ArgoCD Applications when a switchover fails. Prevents apps from being left indefinitely paused after failures. Resume errors are logged but do not compound the original failure.
+- **Ansible activation**: Auto-import strategy management (`manage_auto_import.yml` / `reset_auto_import.yml`) — disables auto-import before activation and re-enables afterward, matching Python CLI behavior (ACM 2.14+)
+- **Ansible post_activation**: Klusterlet auto-remediation (`fix_klusterlet.yml`) — automatically patches degraded klusterlet agents after switchover, matching Python CLI behavior
+- **Support-surface guardrails**: Added completion parity tests and documentation regression checks to catch stale shell completions, incomplete completion installs, and active operator docs that drift back to deprecated Argo CD guidance.
+- **Controller-side safe-path module**: Added `acm_safe_path_validate` to apply the collection safe-path policy before playbooks read local files such as persisted checkpoints.
+
+### Fixed
+
+- **Runbook-aligned secondary observability handling**: Python finalization and collection finalization now delete `MultiClusterObservability` automatically when the old hub is kept as `secondary`; old-hub verification no longer scales observability workloads to zero, and the legacy `--disable-observability-on-secondary` switch is now a deprecated compatibility flag.
+- **Python post-activation observability rollout gate**: Restart verification for `observatorium-api` now waits for the full Deployment rollout (`readyReplicas >= spec.replicas`) instead of accepting a single ready pod on HA deployments.
+- **Python old-hub passive restore recreation**: Finalization now always deletes and recreates `restore-acm-passive-sync` on the old hub so stale controller state cannot leave failback with an unusable passive-sync restore.
+- **Ansible report artifact path validation**: Collection report writes now enforce the shared safe-path policy for `preflight-report.json`, `switchover-report.json`, and `restore-only-report.json`, preventing unsafe `report_dir` values from creating controller-side artifacts after validation failures.
+- **Collection RBAC parity**: Collection preflight RBAC validation now mirrors Python hub validation more closely. It derives Argo CD RBAC mode from `skip_gitops_check` / `argocd.manage`, distinguishes `applications.argoproj.io` absence from vanilla/operator installs, stops requiring managed-cluster `open-cluster-management-agent` permissions during hub preflight, and now rejects `validator` + decommission combinations consistently in both `acm_rbac_validate` and `rbac_bootstrap`.
+- **Bash argument parsing**: `preflight-check.sh`, `postflight-check.sh`, and `discover-hub.sh` now reject missing option values with a clear invalid-arguments error instead of crashing under `set -u`.
+- **Python auto-import management**: `activation.py` now fails closed when explicit `--manage-auto-import-strategy` updates cannot be read or patched, while detect-only mode remains warning-only.
+- **Collection metadata drift**: Bumped collection version to `1.7.1` and aligned role metadata licenses to `MIT` to match the repository license and release version.
+- **Ansible ArgoCD namespace parity**: Collection ArgoCD filtering now treats `open-cluster-management-*` sub-namespaces as ACM-managed, matching the Python and Bash implementations.
+- **Ansible path validation parity**: Collection `validate_safe_path()` now resolves symlinks, rejects absolute paths with missing parent directories, and allows only `/tmp`, `/var`, workspace, and home-rooted absolute paths.
+- **Checkpoint phase validation**: `checkpoint_phase` now rejects unknown phase names instead of silently persisting invalid checkpoint state.
+- **Finalization and test-playbook cleanup**: Finalization now uses the shared backup schedule default name in fallback errors, phase error recording uses `Phase.*.value`, and `argocd_manage_test.yml` only writes summary output when `summary_path` is supplied.
+
+- **Python CLI getattr defaults**: Fixed wrong `getattr` fallback (`True` → `False`) for `manage_auto_import_strategy` in activation and finalization phase runners. While argparse always sets the attribute making the fallback unreachable, the semantic intent was wrong and created latent risk.
+- **Constants parity test**: Added explicit contract map test (`tests/test_constants_parity.py`) covering ~18 shared constants between `lib/constants.py` and Ansible `module_utils/constants.py` to detect drift. Previously only `ACM_KINDS` and `ACM_NAMESPACES` had parity coverage.
+- **CI workflow env var**: Fixed `ANSIBLE_COLLECTIONS_PATH` in GitHub Actions workflow — `${{ env.HOME }}` doesn't resolve system env vars in `env:` blocks; moved to shell `$HOME` in `run:` block.
+- **Integration test Path.cwd()**: Replaced fragile `Path.cwd()` with `_find_repo_root()` helper that walks upward from `__file__` to find `.git`, so integration tests work from any directory.
+- **Integration test subprocess timeout**: Added `timeout=300` to all `subprocess.run()` calls in integration conftest to prevent stuck `ansible-playbook` processes from hanging CI.
+- **Collection validate_safe_path**: Added absolute path validation with allowed prefixes (`/tmp/`, `/var/`, home dir), matching the Python CLI's `validate_safe_filesystem_path` approach. Previously `/etc/passwd` passed validation.
+- **Post-activation zero-pods**: Added explicit `expected_count` to all `wait_for_pods_ready()` callers in post-activation observability scale-up, using actual target replica counts from `scaled_components` instead of relying on zero-pods-is-ready semantics.
+- **E2E stale flag references**: Removed all E2E test references to `--argocd-resume-after-switchover` (removed flag). Phase 8 now tests the recommended workflow: `--argocd-manage` + separate `--argocd-resume-only`.
+- **Ansible ArgoCD resume safety**: `resume.yml` now requires a non-empty `run_id` before resuming any Applications. Previously, an empty `run_id` acted as a wildcard that would unpause all Applications carrying the pause annotation — including those paused by other switchover runs or maintenance windows.
+- **Ansible ArgoCD discovery safety**: `discover.yml` rescue block now distinguishes CRD-absent errors from other failures (RBAC denial, transient API errors). Only a missing Application CRD is treated as "Argo CD not installed"; other errors fail the play so GitOps protection is not silently skipped.
+- **Ansible checkpoint path hardening**: `checkpoint_phase` now validates `checkpoint.path` before any controller-side read/write, preflight validates inputs before entering checkpointed execution, and standalone `argocd_resume.yml` validates the checkpoint path before `stat`/`slurp`.
+- **Ansible input validation**: `validate_operation_inputs()` now validates enum values for `method` (passive/full), `old_hub_action` (secondary/decommission/none), and `activation_method` (patch/restore). Previously, typos like `method: pasive` passed preflight and only failed during activation after primary_prep had already paused backups.
+- **Ansible restore_only playbook**: `restore_only.yml` now pins `restore_only: true`, `method: full`, `old_hub_action: none` via `pre_tasks`, preventing role defaults from silently overriding restore-only semantics.
+- **Ansible preflight/activation alignment**: Preflight passive restore validation now uses `acm_restore_info` module (checking `sync_enabled_count`) instead of raw restore count, matching activation's filter logic. Previously, preflight could pass with non-sync restores that activation would reject.
+- **Passive restore stale-activation guard**: `verify_passive_sync.yml` now requires `sync_enabled_count > 0`, so a leftover `restore-acm-activate` no longer satisfies the passive switchover prerequisite when no sync-enabled passive restore exists.
+- **Restore-only backup validation**: Python preflight now validates backup presence on the secondary hub in `--restore-only` mode, and the collection now discovers and checks secondary backup artifacts before allowing restore-only activation. Previously, a reachable BackupStorageLocation with an empty or wrong bucket could still pass validate-only.
+- **Argo CD resume recovery**: `--argocd-resume-only` no longer requires a dummy `--primary-context` after restore-only runs, collection activation resume now honors `activation_method: restore`, the collection persists the generated Argo CD `run_id` into report/checkpoint data, and `argocd_resume.yml` now reloads `operational_data.argocd_run_id` from the checkpoint before standalone resume.
+- **Ansible post-activation polling**: Rewrote `verify_managed_clusters.yml` polling `until` clause to use totality model (all clusters both Available AND Joined) matching the Python CLI. Additionally added a top-level `resources.length > 0` guard so an empty resource list (no ManagedClusters discovered yet) keeps the loop polling instead of trivially satisfying `0 == 0` totality, which was the remaining short-circuit after the initial fix.
+- **Ansible klusterlet re-verification**: After klusterlet remediation in `verify_klusterlet.yml`, the role now re-runs `verify_managed_clusters.yml` to refresh the cluster status snapshot. Previously, a successful fix still left the playbook using the stale pre-remediation result, causing false failures.
+- **Ansible auto-import reset timing**: Moved `reset_auto_import.yml` from activation to finalization, matching Python CLI behavior (`modules/finalization.py`). The reset now runs after `cleanup_auto_import_annotations.yml` in post_activation closes the mutation window, so ManagedClusters retrying import during post_activation benefit from the `ImportAndSync` strategy throughout.
+- **Ansible negative threshold validation**: `validate_operation_inputs()` now rejects `min_managed_clusters < 0`. The `acm_cluster_verify` module also guards against negative values as defense-in-depth. Previously, negative thresholds silently disabled the cluster readiness safeguard.
+- **Ansible ArgoCD resume**: `discover.yml` no longer generates a fresh `run_id` in resume mode, allowing the safety fallback in `resume.yml` to resume all paused applications when no explicit `run_id` is provided.
+- **Python finalization**: `--restore-only` finalization now treats a missing `BackupSchedule` as expected, warning instead of failing backup enable/continuity/integrity checks until operators create a new schedule manually.
+- **Python activation**: restore wait no longer treats the non-existent `FailedWithErrors` phase as terminal failure; real ACM terminal failures remain unchanged.
+- **Python state handling**: `StateManager` now exposes retry-baseline accessors so resume logic no longer reaches into private state internals.
+- **Python kube client**: `wait_for_pods_ready()` now treats zero pods as ready when no explicit `expected_count` is required, avoiding false hangs on empty namespaces.
+- **Python RBAC**: namespace permission maps now use centralized namespace constants instead of duplicated literals.
+- **Bash security**: `generate-merged-kubeconfig.sh` now writes merged kubeconfig output with owner-only permissions.
+- **Completion parity**: Refreshed bash completions for `acm_switchover.py`, `check_rbac.py`, pre/postflight helpers, and kubeconfig generators; added the missing `generate-merged-kubeconfig.sh` completion and tightened `install-completions.sh` verification to cover the shipped completion set.
+- **Stale support docs**: Refreshed contributor, test, docs-index, and Kustomize deployment docs to match the current Python CLI, Ansible collection, and RBAC extension layout.
+- **Deprecated Argo CD guidance**: The protected runbook and synced preflight skill no longer present `scripts/argocd-manage.sh` as an active operator workflow, steering operators to the supported Python and Ansible paths instead.
+- **Ansible safety defaults**: destructive roles now fall back to `dry_run` when `acm_switchover_execution.mode` is missing instead of evaluating as live execution.
+- **Ansible activation**: immediate-import task failures are no longer swallowed; patch errors now fail the phase visibly.
+- **Ansible backup continuity**: primary prep now persists full `BackupSchedule` state so finalization can recreate a missing schedule, including ACM 2.11 delete/recreate paths.
+- **Ansible finalization**: restore-only runs now skip backup verification cleanly when no `BackupSchedule` exists yet instead of failing.
+- **Ansible preflight**: kubeconfig reachability now uses a direct API probe instead of depending on `MultiClusterHub` discovery, preflight now warns or fails on kubeconfig token expiry via static auth inspection, and it enforces `useManagedServiceAccount`, `preserveOnDelete`, OADP/Velero presence, DPA `Reconciled=True`, and joined clusters imported after the latest managed-clusters backup.
+- **Ansible old-hub handling**: `primary_prep` now adds real `disable-auto-import` annotations before activation, and finalization now wires `disable_observability_on_secondary` / old-hub verification into concrete task files.
+
+- **Python error handling**: Replace redundant `except (ApiException, Exception)` with `except Exception` in best-effort paths in `post_activation.py` (C1)
+- **Python not-found detection**: Fix string-based `"not found" in str(e).lower()` check in `_restart_observatorium_api` — now uses `e.status == 404` (C2). Previously `ApiException(status=404)` without a reason was incorrectly re-raised; `ApiException(status=403)` with "not found" in reason text was incorrectly swallowed.
+- **Python asserts replaced**: Remove dead `assert` statements in `activation.py`, `finalization.py`, and `post_activation.py`. In `finalization.py`, two asserts protecting `_scale_down_old_hub_observability` and `_wait_for_observability_scale_down` are replaced with `raise FatalError(...)` for explicit diagnostics (C3).
+- **Restore-only noop banner**: `_log_completed_noop()` now accepts `operation_label` parameter; restore-only reruns now log `RESTORE ALREADY COMPLETED` instead of `SWITCHOVER ALREADY COMPLETED` (L1).
+- **Preflight temp file cleanup**: Add `trap 'rm -f "${IN_PROGRESS_ERR_FILE:-}"' EXIT` after `mktemp` in `preflight-check.sh` to ensure cleanup on unexpected exit.
+
+### Changed
+
+- **`scripts/setup-rbac.sh` deprecation warning**: Script now emits a runtime `WARNING` to stderr pointing operators to `playbooks/rbac_bootstrap.yml`.
+- **`scripts/README.md` version refresh**: Example output in README now shows current script version (`v1.7.0`) instead of stale `v1.5.3`.
+- **`lib/argocd.py` comment**: Updated annotation key comment to reference the Ansible `argocd_manage` role instead of the deprecated `scripts/argocd-manage.sh`.
+- **`postflight-check.sh` variable rename**: `BACKUP_SCHEDULE_ENABLED` renamed to `BACKUP_SCHEDULE_PAUSED` to accurately reflect that it stores the `spec.paused` field value.
+- **pytest filterwarnings**: Added `ignore::DeprecationWarning:modules.preflight_validators` in `setup.cfg` to suppress expected deprecation noise from the compatibility shim during test runs.
+
+- **RBAC decommission rerun**: `validate_decommission_permissions` now succeeds when ACM namespace is already deleted — allows idempotent decommission reruns without false RBAC failures
+- **Ansible ArgoCD primary resume guard**: `argocd_resume.yml` and `switchover.yml` rescue block now check kubeconfig/context are non-empty strings (not just `is defined`) — prevents `kubectl` errors when primary hub vars exist but are blank
+- **dry_run_skip null-safety**: Decorator now skips (safe) instead of executing when intermediate attribute path is broken (e.g., `self.client` is None)
+- **Ansible ArgoCD**: Fix hub hardcoding in `pause.yml`/`resume.yml` — now uses parameterized `_argocd_discover_hub` lookup matching `discover.yml` pattern (broken in restore-only mode)
+- **Ansible ArgoCD**: Expand `ACM_KINDS` from 6 to 14 entries (matching Python) — Applications touching Policy, Placement, ManagedClusterSet, etc. were not detected
+- **Ansible ArgoCD**: Fix empty `run_id` default causing blank `paused-by` annotations — now generates UUID when not provided
+- **Ansible ArgoCD**: Add clobber guard to pause task — prevents overwriting `original-sync-policy` on retry
+- **Ansible ArgoCD**: Pause/resume ArgoCD on both hubs during switchover (matching Python behavior)
+- **Ansible finalization**: `handle_old_hub.yml` now uses delete+wait+create cycle instead of patch (`state: present, apply: true`) when setting up passive sync restore on old hub — matches Python `_setup_old_hub_as_secondary()` behavior and prevents stale status fields from blocking ACM backup controller re-processing
+
+### Changed
+
+- **Bash**: Deprecated `argocd-manage.sh` — use Python CLI (`--argocd-manage`) or Ansible collection (`argocd_manage` role) instead
+- Removed unused `restore_only` parameter from `_resolve_state_file()` — dead code cleanup
+
+### Removed
+
+- **`--argocd-resume-after-switchover` flag removed** — automatic ArgoCD resume during finalization was problematic because it could fight with recent switchover changes before Git/desired state is updated. Operators must now resume explicitly with `--argocd-resume-only` (Python CLI) or `ansible-playbook tomazb.acm_switchover.argocd_resume` (Ansible) after updating Git repos/paths for the new hub.
+- **Ansible `resume_after_switchover` variable removed** — `acm_switchover_features.argocd.resume_after_switchover` is no longer recognized; finalization emits an advisory message instead of auto-resuming.
+
+### Fixed (Ansible ArgoCD)
+
+- **Ansible ArgoCD resume**: Now checks `run_id` marker before resuming — only resumes apps paused by the same run, warns about apps paused by a different run
+
+### Added
+
+- Cross-form-factor parity tests for `ACM_KINDS` and `ACM_NAMESPACES` between Python and Ansible
+- `has_applicationset_owner()` helper in Ansible `module_utils/argocd.py` for ApplicationSet detection
+- Debug logging for empty `status.resources` in Python `find_acm_touching_apps`
+- Patch divergence equivalence test (`build_pause_patch` vs Jinja logic)
+- Integration test fixtures for restore-only and re-pause clobber scenarios
+- **Ansible Collection restore-only support** — full `restore_only` mode for the Ansible collection (`tomazb.acm_switchover`):
+  - New `restore_only.yml` playbook: preflight → ArgoCD pause (optional) → activation → post_activation → finalization
+  - Validation rules in `validation.py` and `acm_input_validate.py`: forces method=full, old_hub_action=none, allows `argocd.manage`
+  - Preflight guards: all primary-hub-only discovery and validation tasks are skipped in restore-only mode; secondary-only checks remain active
+  - Finalization guards: old hub disposition and ArgoCD auto-resume are skipped
+  - Role defaults: `restore_only: false` added to preflight, activation, and finalization roles
+  - E2E vars: `restore-only.yml` and `restore-only-argocd.yml` for dry-run testing
+
+### Changed
+
+- **Python CLI: `--argocd-manage` now allowed with `--restore-only`** — pauses ACM-touching ArgoCD Applications on the secondary hub before restore activation, preventing ArgoCD from reverting restored resources. Operators must retarget git repos/paths then resume manually via `--argocd-resume-only`.
+
+## [1.6.10] - 2026-04-13
+
+### Added
+
+- **Single-Hub Restore Mode (`--restore-only`)** — a new operational mode for restoring managed clusters from S3 backups onto a fresh ACM hub when the original hub is permanently unavailable (disaster recovery, decommissioned, or unreachable). Key capabilities:
+  - Runs a reduced phase flow: `PREFLIGHT → ACTIVATION → POST_ACTIVATION → FINALIZATION` (skips `PRIMARY_PREP` entirely since there is no source hub)
+  - Secondary-only preflight validates ACM version, OADP/Velero, BackupStorageLocation (BSL) connectivity, and required namespaces — without needing a primary hub connection
+  - Creates a one-time full Restore from the latest S3 backup to import all managed clusters
+  - Automatically enables BackupSchedule on the restored hub so it becomes the new primary
+  - Compatible with `--dry-run` and `--validate-only` for safe pre-execution checks
+  - Implies `--method full`; rejects incompatible flags (`--primary-context`, `--method passive`, `--old-hub-action`, `--decommission`, `--setup`, `--argocd-resume-only`)
+  - New Claude SKILL (`.claude/skills/operations/restore-only.skill.md`) for interactive operator guidance
+  - Updated README with usage examples and Mermaid flow diagram
+  - Updated `discover-hub.sh` to suggest `--restore-only` when no secondary hub is detected
+  - Updated `scripts/README.md` with restore-only workflow diagram and best practices
+
+### Fixed
+
+- **Restore-only RBAC preflight regression**: `--restore-only` no longer skips RBAC validation entirely; secondary hub write permissions (Restore, BackupSchedule, ManagedCluster) are now validated during preflight, so `--validate-only` catches missing permissions early instead of failing at activation.
+- **Restore-only ArgoCD safety**: `--argocd-manage` is supported with `--restore-only` for pausing ACM-touching Applications. A restore-only-specific advisory warns when ACM-touching Argo CD Applications with auto-sync are detected on the target hub.
 - Container release workflow now skips Quay publishing cleanly when `QUAY_USERNAME` / `QUAY_PASSWORD` secrets are absent and continues with GHCR-only publishing.
+- Standalone decommission RBAC validation now checks the actual teardown permission surface, including namespaced MultiClusterHub and pod-read access, without requiring full switchover namespace permissions.
+
+## [1.7.0] - 2026-04-10
+
+### Added
+
+- **`tomazb.acm_switchover` Ansible Collection** — full ACM hub switchover automation for `ansible-core` CLI and Ansible Automation Platform (AAP), with feature parity to the Python CLI.
+- **Roles** (9): `preflight`, `primary_prep`, `activation`, `post_activation`, `finalization`, `decommission`, `argocd_manage`, `rbac_bootstrap`, `discovery` — each corresponding to a Python CLI phase module.
+- **Playbooks** (7): `switchover.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`, `argocd_manage_test.yml`.
+- **Custom modules** (11): `acm_backup_schedule`, `acm_checkpoint`, `acm_cluster_verify`, `acm_discovery`, `acm_input_validate`, `acm_managedcluster_status`, `acm_preflight_report`, `acm_rbac_bootstrap`, `acm_rbac_validate`, `acm_restore_info`, `acm_argocd_filter`.
+- **Checkpoint and resume**: `acm_checkpoint` module and action plugin provide phase-level idempotency; interrupted playbook runs resume from the last completed phase.
+- **Structured preflight report**: `acm_preflight_report` module writes a go/no-go preflight report to disk.
+- **Argo CD management**: `argocd_manage` role and `argocd_resume.yml` playbook detect and pause/resume Argo CD auto-sync during switchover.
+- **RBAC bootstrap**: `rbac_bootstrap` role and playbook automate service account, ClusterRole, and kubeconfig creation for both hubs.
+- **Discovery playbook**: standalone resource discovery across both hubs without running switchover phases.
+
+### Fixed
+
+- **Preflight**: namespace discovery added; Hive CRD and ManagedClusterBackup checks downgraded from required to advisory.
+- **Preflight**: validate mode now stops after preflight without continuing into switchover phases.
+- **Activation**: passive restore wait now accepts `Finished` and `Completed` as terminal success phases (matches ACM 2.14 behavior).
+- **Activation**: default guard added for `activation_method` in the immediate-import path to prevent task failure on undefined variable.
+- **Activation**: Velero restore wait result guarded against tasks skipped in dry-run mode.
+- **Finalization**: old hub restore patched to passive mode in-place instead of delete-and-recreate, avoiding MCH reconciliation race.
+- **Finalization**: stale active restore on old hub reset to passive before finalization proceeds.
+- **Finalization**: MCH refresh task guarded with `is not defined` check to prevent redundant re-discovery.
+- **Post-activation**: cluster readiness check retries with backoff instead of failing on a single probe.
+- **Post-activation**: pre-pause inserted before cluster verification to clear stale Velero data from the previous restore.
+- **RBAC**: `namespaces:list` added to operator and validator ClusterRoles (required for namespace-scoped resource enumeration).
+- **Reports**: `report_dir` and `summary_path` resolved to absolute paths relative to the invocation working directory.
+- **Argo CD**: mode routing and hub-context corrected in `argocd_manage` role.
+- **Input validation**: kubeconfig paths with leading `~/` are now accepted.
+- **Checkpoint**: corrupted checkpoint files, disk-full errors, and unknown status values handled gracefully.
+- **BackupSchedule module**: malformed ACM version strings now produce a clear error instead of a raw exception.
+- **Preflight report module**: I/O errors during report write produce `fail_json` instead of an unhandled exception.
+- **Restore info module**: diagnostic counts returned when no passive sync restore is found.
+- **License**: collection module headers and `galaxy.yml` aligned to MIT.
 
 ## [1.6.3] - 2026-04-07
 
@@ -28,7 +214,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `--argocd-resume-only` now reuses the reversed default state file when swapped contexts match exactly one existing state file
-- `--argocd-resume-after-switchover` is now rejected when combined with `--old-hub-action decommission`, and finalization fails closed if the combination reaches runtime
 - Retried phase failures now record a fresh wrapper error when no new same-attempt phase error was added
 - `FinishedWithErrors` restore phase now treated as success when all messages indicate managed clusters are "already available" (expected for consecutive switchovers)
 - Bandit now uses a repo-level `.bandit` config in CI/local tooling, avoiding `.venv` scan noise and malformed `# nosec` warning output
@@ -1000,7 +1185,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.3...HEAD
+[1.7.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.10...v1.7.3
+[1.6.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.0...v1.6.10
+[1.7.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.3...v1.7.0
+[1.6.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.5.16...v1.6.0

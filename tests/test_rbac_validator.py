@@ -2,12 +2,12 @@
 Unit tests for RBAC validator module.
 """
 
-from types import MethodType
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
 
+from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.exceptions import ValidationError
 from lib.rbac_validator import RBACValidator, validate_decommission_permissions, validate_rbac_permissions
 
@@ -83,6 +83,20 @@ class TestRBACValidator:
 
         assert all_valid is True
         assert len(errors) == 0
+
+    @pytest.mark.parametrize(
+        "permissions",
+        [
+            RBACValidator.OPERATOR_CLUSTER_PERMISSIONS,
+            RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS,
+        ],
+    )
+    def test_cluster_permissions_require_namespace_list_for_preflight_discovery(self, permissions):
+        """Preflight lists Namespace objects, so RBAC validation must require list."""
+        namespace_rule = next(rule for rule in permissions if rule[0] == "" and rule[1] == "namespaces")
+
+        assert "get" in namespace_rule[2]
+        assert "list" in namespace_rule[2]
 
     def test_validate_cluster_permissions_failure(self, validator):
         """Test validate_cluster_permissions when some permissions missing."""
@@ -553,6 +567,42 @@ class TestValidateRBACPermissions:
             validate_rbac_permissions(mock_primary_client, argocd_mode="invalid")
         mock_validator_class.assert_not_called()
 
+    def test_validate_both_clients_none_raises(self):
+        """Test validate_rbac_permissions raises ValueError when both clients are None."""
+        with pytest.raises(ValueError, match="At least one of primary_client or secondary_client"):
+            validate_rbac_permissions(None, None)
+
+    def test_validate_decommission_without_primary_raises(self, mock_secondary_client):
+        """Test validate_rbac_permissions raises ValueError for decommission without primary."""
+        with pytest.raises(ValueError, match="include_decommission requires primary_client"):
+            validate_rbac_permissions(None, mock_secondary_client, include_decommission=True)
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_secondary_only_success(self, mock_validator_class, mock_secondary_client):
+        """Test validate_rbac_permissions with only secondary hub (restore-only mode)."""
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (True, {})
+        mock_validator_class.return_value = mock_validator
+
+        validate_rbac_permissions(None, mock_secondary_client)
+
+        # Should only create one validator (for secondary)
+        mock_validator_class.assert_called_once_with(mock_secondary_client)
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_secondary_only_failure(self, mock_validator_class, mock_secondary_client):
+        """Test validate_rbac_permissions fails when secondary-only RBAC check fails."""
+        mock_validator = MagicMock()
+        mock_validator.validate_all_permissions.return_value = (
+            False,
+            {"cluster": ["Missing permission: create restores"]},
+        )
+        mock_validator.generate_permission_report.return_value = "Error report"
+        mock_validator_class.return_value = mock_validator
+
+        with pytest.raises(ValidationError, match="secondary hub"):
+            validate_rbac_permissions(None, mock_secondary_client)
+
 
 class TestValidateDecommissionPermissions:
     """Tests for standalone decommission RBAC validation."""
@@ -565,25 +615,70 @@ class TestValidateDecommissionPermissions:
         return client
 
     @patch("lib.rbac_validator.RBACValidator")
-    def test_validate_decommission_permissions_skips_namespace_validation(
+    def test_validate_decommission_permissions_uses_dedicated_validation_path(
         self, mock_validator_class, mock_primary_client
     ):
-        """Standalone decommission must not require full switchover namespace access."""
+        """Standalone decommission should use its dedicated RBAC surface."""
         validator = RBACValidator(mock_primary_client)
-        validator.validate_cluster_permissions = MagicMock(return_value=(True, {}))
-
-        def _unexpected_namespace_validation(self, skip_observability=False, skip_agent_namespace=True):
-            raise AssertionError("namespace validation should not run for standalone decommission")
-
-        validator.validate_namespace_permissions = MethodType(_unexpected_namespace_validation, validator)
-        validator.generate_permission_report = MagicMock(return_value="Error report")
+        validator.validate_decommission_permissions = MagicMock(return_value=(True, {}))
         mock_validator_class.return_value = validator
 
         validate_decommission_permissions(mock_primary_client, skip_observability=True)
 
-        validator.validate_cluster_permissions.assert_called_once_with(
-            include_decommission=True,
+        validator.validate_decommission_permissions.assert_called_once_with(
             skip_observability=True,
-            argocd_mode="none",
-            argocd_install_type="unknown",
         )
+
+    def test_validate_decommission_permissions_fails_when_teardown_namespace_permission_missing(
+        self, mock_primary_client
+    ):
+        validator = RBACValidator(mock_primary_client)
+
+        def check_permission(api_group, resource, verb, namespace=None):
+            if namespace == ACM_NAMESPACE and api_group == "" and resource == "pods" and verb == "get":
+                return (False, "Permission denied")
+            return (True, "")
+
+        validator.check_permission = MagicMock(side_effect=check_permission)
+
+        with patch("lib.rbac_validator.RBACValidator", return_value=validator):
+            with pytest.raises(ValidationError, match="Decommission RBAC permission validation failed"):
+                validate_decommission_permissions(mock_primary_client, skip_observability=True)
+
+    def test_validate_decommission_permissions_checks_only_teardown_surface(self, mock_primary_client):
+        validator = RBACValidator(mock_primary_client)
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        def namespace_exists(namespace):
+            if namespace in {"open-cluster-management-backup", "multicluster-engine"}:
+                raise AssertionError(f"unexpected namespace probe: {namespace}")
+            return True
+
+        mock_primary_client.namespace_exists.side_effect = namespace_exists
+
+        with patch("lib.rbac_validator.RBACValidator", return_value=validator):
+            validate_decommission_permissions(mock_primary_client, skip_observability=False)
+
+        assert (
+            call("cluster.open-cluster-management.io", "managedclusters", "delete", None)
+            in validator.check_permission.call_args_list
+        )
+        assert (
+            call("operator.open-cluster-management.io", "multiclusterhubs", "list", ACM_NAMESPACE)
+            in validator.check_permission.call_args_list
+        )
+        assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in validator.check_permission.call_args_list
+
+    def test_validate_decommission_rbac_succeeds_when_acm_namespace_missing(self, mock_primary_client):
+        """Missing ACM namespace on rerun should NOT fail validation (idempotent)."""
+        mock_primary_client.namespace_exists.side_effect = lambda ns: {
+            "open-cluster-management": False,
+            "open-cluster-management-observability": True,
+        }.get(ns, False)
+        mock_primary_client.check_permission.return_value = (True, None)
+
+        validator = RBACValidator(client=mock_primary_client, role="operator")
+        all_valid, errors = validator.validate_decommission_permissions()
+
+        assert all_valid is True
+        assert not errors.get("namespaces", [])

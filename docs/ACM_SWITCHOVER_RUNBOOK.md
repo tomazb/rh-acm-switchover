@@ -264,17 +264,11 @@ Note: GitOps marker detection is heuristic. The generic label `app.kubernetes.io
 
 **Pause (before starting switchover steps):**
 - **Automated (Python):** Run switchover with `--argocd-manage`; the tool pauses ACM-touching Applications on primary (and optionally secondary) during primary prep.
-- **Manual (Bash):** Use the Argo CD management script with a state file:
-  ```bash
-  ./scripts/argocd-manage.sh --context <primary> --mode pause --state-file .state/argocd-pause.json
-  # Optionally on secondary if GitOps there could mutate Restore/BackupSchedule before activation:
-  ./scripts/argocd-manage.sh --context <secondary> --mode pause --state-file .state/argocd-pause.json
-  ```
+- **Ansible:** Enable Argo CD management in the collection workflow so `argocd_manage` runs during `switchover.yml` or `restore_only.yml` before activation.
 
 **Resume (only after Git/desired state reflects the new hub):**
-- **During finalization (Python):** Add `--argocd-resume-after-switchover` to the switchover run.
 - **Standalone (Python):** `python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>`
-- **Bash:** `./scripts/argocd-manage.sh --context <new-hub> --mode resume --state-file .state/argocd-pause.json`
+- **Ansible:** `ansible-playbook tomazb.acm_switchover.argocd_resume`
 
 If you do not pause, GitOps may re-apply Git state and undo pause-backup, disable-auto-import, or activation changes. Do not resume until Git is updated for the new primary; otherwise Argo CD can revert the switchover.
 

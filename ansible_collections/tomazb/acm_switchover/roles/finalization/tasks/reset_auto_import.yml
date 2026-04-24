@@ -1,0 +1,23 @@
+---
+# Reset autoImportStrategy to ImportOnly after the full post_activation window.
+#
+# This mirrors the Python CLI: modules/finalization.py resets autoImportStrategy
+# after _verify_auto_import_cleanup_step() has run in post_activation.  The
+# cleanup_auto_import_annotations.yml task (which removes disable-auto-import
+# annotations and re-reads ManagedClusters) runs during post_activation, so any
+# import retries triggered by that mutation window still benefit from the
+# ImportAndSync strategy.  Only after that window closes — here in finalization —
+# is it safe to revert to the default.
+- name: Reset autoImportStrategy to ImportOnly
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ConfigMap
+    name: import-controller-config
+    namespace: multicluster-engine
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    definition:
+      data:
+        autoImportStrategy: ImportOnly
+  when: _auto_import_strategy_changed | default(false) | bool

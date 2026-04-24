@@ -1,0 +1,18 @@
+---
+- name: Record generic GitOps drift warning
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-gitops-warning",
+            "severity": "warning",
+            "status": "pass",
+            "message": "GitOps marker detection is informational only in the collection",
+            "details": {"skip_gitops_check": acm_switchover_features.skip_gitops_check | default(false)},
+            "recommended_action": "Coordinate with GitOps before mutation if ACM resources are managed declaratively"
+          }
+        ]
+      }}
+  when: not (acm_switchover_features.skip_gitops_check | default(false))

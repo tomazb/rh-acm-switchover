@@ -1,0 +1,243 @@
+---
+- name: Derive requested Argo CD RBAC mode
+  ansible.builtin.set_fact:
+    _rbac_requested_argocd_mode: >-
+      {{
+        'none'
+        if acm_switchover_features.skip_gitops_check | default(false)
+        else (
+          'manage'
+          if acm_switchover_features.argocd.manage | default(false)
+          else 'check'
+        )
+      }}
+
+- name: Default Argo CD install type for primary hub when checks are disabled
+  ansible.builtin.set_fact:
+    _rbac_argocd_install_type_primary: unknown
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - _rbac_requested_argocd_mode == 'none'
+
+- name: Detect Argo CD Applications CRD on primary hub
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: applications.argoproj.io
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _rbac_argocd_app_crd_primary
+  failed_when: false
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - _rbac_requested_argocd_mode != 'none'
+
+- name: Detect Argo CD operator CRD on primary hub
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: argocds.argoproj.io
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _rbac_argocd_instance_crd_primary
+  failed_when: false
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - _rbac_requested_argocd_mode != 'none'
+    - not (_rbac_argocd_app_crd_primary.failed | default(false))
+    - (_rbac_argocd_app_crd_primary.resources | default([]) | length) > 0
+
+- name: Fail on unexpected Argo CD Applications CRD discovery error for primary hub
+  ansible.builtin.fail:
+    msg: >-
+      Unable to inspect applications.argoproj.io on the primary hub during RBAC preflight:
+      {{ _rbac_argocd_app_crd_primary.msg | default(_rbac_argocd_app_crd_primary | string) }}
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - _rbac_requested_argocd_mode != 'none'
+    - _rbac_argocd_app_crd_primary.failed | default(false)
+    - "'401' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
+    - "'403' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
+    - "'unauthorized' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
+    - "'forbidden' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
+
+- name: Record Argo CD install type for primary hub
+  ansible.builtin.set_fact:
+    _rbac_argocd_install_type_primary: >-
+      {%- set app_msg = (_rbac_argocd_app_crd_primary.msg | default('')) | lower -%}
+      {%- if _rbac_argocd_app_crd_primary.failed | default(false) -%}
+      unknown
+      {%- elif (_rbac_argocd_app_crd_primary.resources | default([]) | length) == 0 -%}
+      none
+      {%- elif _rbac_argocd_instance_crd_primary.failed | default(false) -%}
+      unknown
+      {%- elif (_rbac_argocd_instance_crd_primary.resources | default([]) | length) > 0 -%}
+      operator
+      {%- else -%}
+      vanilla
+      {%- endif -%}
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - _rbac_requested_argocd_mode != 'none'
+
+- name: Expand required RBAC permissions for primary hub
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: primary
+    include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
+    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    argocd_mode: "{{ _rbac_requested_argocd_mode }}"
+    argocd_install_type: "{{ _rbac_argocd_install_type_primary | default('unknown') }}"
+  register: _rbac_expanded_primary
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Run SelfSubjectAccessReview checks for primary hub
+  ansible.builtin.include_tasks: run_ssar.yml
+  vars:
+    acm_rbac_permissions: "{{ _rbac_expanded_primary.permissions }}"
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Collect denied permissions for primary hub
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions_primary: "{{ _rbac_denied_permissions }}"
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Set empty denied list in dry-run mode for primary
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions_primary: []
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Summarize RBAC validation results for primary hub
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: primary
+    include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
+    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    argocd_mode: "{{ _rbac_requested_argocd_mode }}"
+    argocd_install_type: "{{ _rbac_argocd_install_type_primary | default('unknown') }}"
+    denied_permissions: "{{ _rbac_denied_permissions_primary | default([]) }}"
+  register: acm_primary_rbac_validation
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Default Argo CD install type for secondary hub when checks are disabled
+  ansible.builtin.set_fact:
+    _rbac_argocd_install_type_secondary: unknown
+  when: _rbac_requested_argocd_mode == 'none'
+
+- name: Detect Argo CD Applications CRD on secondary hub
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: applications.argoproj.io
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _rbac_argocd_app_crd_secondary
+  failed_when: false
+  when: _rbac_requested_argocd_mode != 'none'
+
+- name: Detect Argo CD operator CRD on secondary hub
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: argocds.argoproj.io
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _rbac_argocd_instance_crd_secondary
+  failed_when: false
+  when:
+    - _rbac_requested_argocd_mode != 'none'
+    - not (_rbac_argocd_app_crd_secondary.failed | default(false))
+    - (_rbac_argocd_app_crd_secondary.resources | default([]) | length) > 0
+
+- name: Fail on unexpected Argo CD Applications CRD discovery error for secondary hub
+  ansible.builtin.fail:
+    msg: >-
+      Unable to inspect applications.argoproj.io on the secondary hub during RBAC preflight:
+      {{ _rbac_argocd_app_crd_secondary.msg | default(_rbac_argocd_app_crd_secondary | string) }}
+  when:
+    - _rbac_requested_argocd_mode != 'none'
+    - _rbac_argocd_app_crd_secondary.failed | default(false)
+    - "'401' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
+    - "'403' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
+    - "'unauthorized' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
+    - "'forbidden' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
+
+- name: Record Argo CD install type for secondary hub
+  ansible.builtin.set_fact:
+    _rbac_argocd_install_type_secondary: >-
+      {%- if _rbac_argocd_app_crd_secondary.failed | default(false) -%}
+      unknown
+      {%- elif (_rbac_argocd_app_crd_secondary.resources | default([]) | length) == 0 -%}
+      none
+      {%- elif _rbac_argocd_instance_crd_secondary.failed | default(false) -%}
+      unknown
+      {%- elif (_rbac_argocd_instance_crd_secondary.resources | default([]) | length) > 0 -%}
+      operator
+      {%- else -%}
+      vanilla
+      {%- endif -%}
+  when: _rbac_requested_argocd_mode != 'none'
+
+- name: Expand required RBAC permissions for secondary hub
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: secondary
+    include_decommission: false  # secondary hub never runs decommission
+    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    argocd_mode: "{{ _rbac_requested_argocd_mode }}"
+    argocd_install_type: "{{ _rbac_argocd_install_type_secondary | default('unknown') }}"
+  register: _rbac_expanded_secondary
+
+- name: Run SelfSubjectAccessReview checks for secondary hub
+  ansible.builtin.include_tasks: run_ssar.yml
+  vars:
+    acm_rbac_permissions: "{{ _rbac_expanded_secondary.permissions }}"
+    _ssar_target_kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    _ssar_target_context: "{{ acm_switchover_hubs.secondary.context }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Collect denied permissions for secondary hub
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions_secondary: "{{ _rbac_denied_permissions }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Set empty denied list in dry-run mode for secondary
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions_secondary: []
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Summarize RBAC validation results for secondary hub
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: secondary
+    include_decommission: false
+    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    argocd_mode: "{{ _rbac_requested_argocd_mode }}"
+    argocd_install_type: "{{ _rbac_argocd_install_type_secondary | default('unknown') }}"
+    denied_permissions: "{{ _rbac_denied_permissions_secondary | default([]) }}"
+  register: acm_secondary_rbac_validation
+
+- name: Merge RBAC results into preflight accumulator
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        (acm_switchover_validation_results | default([]))
+        + (acm_primary_rbac_validation.results | default([]))
+        + acm_secondary_rbac_validation.results
+      }}
+    acm_switchover_preflight_summary:
+      passed: >-
+        {{
+          (acm_switchover_preflight_summary.passed | default(true))
+          and (acm_primary_rbac_validation.passed | default(true))
+          and acm_secondary_rbac_validation.passed
+        }}
+      critical_failures: >-
+        {{
+          (acm_switchover_preflight_summary.critical_failures | default(0))
+          + (0 if (acm_primary_rbac_validation.passed | default(true)) else 1)
+          + (0 if acm_secondary_rbac_validation.passed else 1)
+        }}
+      warning_failures: "{{ acm_switchover_preflight_summary.warning_failures | default(0) }}"

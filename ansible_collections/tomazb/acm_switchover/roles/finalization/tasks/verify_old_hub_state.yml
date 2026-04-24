@@ -1,0 +1,50 @@
+---
+- name: Read old hub ManagedClusters for regression verification
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_old_hub_managed_clusters_info
+
+- name: Read old hub BackupSchedules for regression verification
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_old_hub_backup_schedules_info
+
+- name: Collect old hub ManagedClusters that still report Available=True
+  ansible.builtin.set_fact:
+    _acm_old_hub_available_clusters: >-
+      {%- set available = [] -%}
+      {%- for cluster in (_acm_old_hub_managed_clusters_info.resources | default([])) -%}
+      {%- set metadata = cluster.get('metadata', {}) -%}
+      {%- set name = metadata.get('name', '') -%}
+      {%- set conditions = cluster.get('status', {}).get('conditions', []) or [] -%}
+      {%- set cluster_available = namespace(value=false) -%}
+      {%- for condition in conditions -%}
+      {%- if condition.get('type') == 'ManagedClusterConditionAvailable' and condition.get('status') == 'True' -%}
+      {%- set cluster_available.value = true -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if name | length > 0 and name != 'local-cluster' and cluster_available.value -%}
+      {%- set _ = available.append(name) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ available }}
+
+- name: Publish old hub regression verification result
+  ansible.builtin.set_fact:
+    acm_switchover_verify_old_hub_state_result:
+      changed: false
+      status: pass
+      available_clusters: "{{ _acm_old_hub_available_clusters | default([]) }}"
+      backup_schedule_paused: >-
+        {{
+          ((_acm_old_hub_backup_schedules_info.resources | first | default({}))
+          .get('spec', {})
+          .get('paused', false) | bool)
+        }}

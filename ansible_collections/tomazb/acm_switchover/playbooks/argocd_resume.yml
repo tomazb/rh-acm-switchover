@@ -1,0 +1,92 @@
+---
+- name: Resume Argo CD auto-sync after switchover
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Resolve checkpoint path to absolute path (controller-side)
+      ansible.builtin.set_fact:
+        _argocd_resume_checkpoint_path: "{{ (acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '') }}"
+        _argocd_resume_checkpoint_path_abs: >-
+          {{
+            _argocd_resume_checkpoint_path
+            if (_argocd_resume_checkpoint_path | default('')).startswith('/')
+            else (lookup('env', 'PWD') ~ '/' ~ _argocd_resume_checkpoint_path)
+          }}
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - ((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length > 0
+
+    - name: Validate persisted checkpoint path
+      tomazb.acm_switchover.acm_safe_path_validate:
+        path: "{{ _argocd_resume_checkpoint_path_abs }}"
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - (_argocd_resume_checkpoint_path_abs | default('')) | length > 0
+
+    - name: Check for persisted checkpoint with Argo CD run_id
+      ansible.builtin.stat:
+        path: "{{ _argocd_resume_checkpoint_path_abs }}"
+      register: _argocd_resume_checkpoint_stat
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - (_argocd_resume_checkpoint_path_abs | default('')) | length > 0
+
+    - name: Read persisted checkpoint file
+      ansible.builtin.slurp:
+        src: "{{ _argocd_resume_checkpoint_path_abs }}"
+      register: _argocd_resume_checkpoint_slurp
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - (_argocd_resume_checkpoint_stat.stat.exists | default(false))
+
+    - name: Parse persisted checkpoint JSON
+      ansible.builtin.set_fact:
+        _argocd_resume_checkpoint: "{{ _argocd_resume_checkpoint_slurp.content | b64decode | from_json }}"
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - (_argocd_resume_checkpoint_stat.stat.exists | default(false))
+
+    - name: Seed Argo CD run_id from checkpoint
+      ansible.builtin.set_fact:
+        acm_switchover_argocd: >-
+          {{
+            acm_switchover_argocd | default({})
+            | combine({
+                'run_id': (_argocd_resume_checkpoint.get('operational_data', {}).get('argocd_run_id'))
+              })
+          }}
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - _argocd_resume_checkpoint is defined
+        - (_argocd_resume_checkpoint.get('operational_data', {}).get('argocd_run_id', '')) | length > 0
+
+  tasks:
+    - name: Resume autosync on secondary hub
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+      vars:
+        acm_switchover_argocd_mode_override: resume
+        _argocd_discover_hub: secondary
+
+    - name: Resume autosync on primary hub
+      ansible.builtin.include_role:
+        name: tomazb.acm_switchover.argocd_manage
+      vars:
+        acm_switchover_argocd_mode_override: resume
+        _argocd_discover_hub: primary
+      when:
+        - acm_switchover_hubs.primary is defined
+        - (acm_switchover_hubs.primary.kubeconfig | default('')) | length > 0
+        - (acm_switchover_hubs.primary.context | default('')) | length > 0

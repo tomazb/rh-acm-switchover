@@ -1,0 +1,26 @@
+---
+- name: Initialize observability scale result
+  ansible.builtin.set_fact:
+    acm_switchover_observability_scale_result:
+      changed: false
+      scaled: false
+
+- name: Scale thanos-compactor when a fixture or discovery result provides it
+  kubernetes.core.k8s_scale:
+    api_version: apps/v1
+    kind: StatefulSet
+    name: "{{ acm_primary_compactor_info.resources[0].metadata.name }}"
+    namespace: open-cluster-management-observability
+    replicas: 0
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_compactor_scale
+  when:
+    - (acm_primary_compactor_info.resources | default([]) | length) > 0
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Publish observability scale result
+  ansible.builtin.set_fact:
+    acm_switchover_observability_scale_result:
+      changed: "{{ acm_primary_compactor_scale.changed | default(false) }}"
+      scaled: "{{ (acm_primary_compactor_info.resources | default([]) | length) > 0 }}"

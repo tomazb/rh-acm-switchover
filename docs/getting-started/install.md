@@ -300,7 +300,10 @@ kubectl config set-context acm-switchover-context \
 ### Quick Test
 
 ```bash
-# Activate virtual environment (if using venv)
+# Activate the virtual environment you created earlier (if using one)
+# If you created `.venv`:
+source .venv/bin/activate
+# OR, if you created `venv`:
 source venv/bin/activate
 
 # Run help command
@@ -311,7 +314,7 @@ python acm_switchover.py --help
 
 ### Enable Bash Completions (oc/kubectl)
 
-We ship bash completions for all executables (Python entry points and scripts under `scripts/`).
+We ship bash completions for the main supported entry points and operator scripts, including the Python CLIs, discovery/pre-postflight helpers, and kubeconfig generators.
 
 ```bash
 # Install completions (auto-detects system vs user install)

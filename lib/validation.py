@@ -381,15 +381,30 @@ class InputValidator:
 
         is_decommission = hasattr(args, "decommission") and args.decommission
         is_setup = hasattr(args, "setup") and args.setup
+        is_restore_only = hasattr(args, "restore_only") and args.restore_only
         has_argocd_manage = hasattr(args, "argocd_manage") and args.argocd_manage
-        has_argocd_resume_after = (
-            hasattr(args, "argocd_resume_after_switchover") and args.argocd_resume_after_switchover
-        )
         has_argocd_resume_only = hasattr(args, "argocd_resume_only") and args.argocd_resume_only
         has_validate_only = hasattr(args, "validate_only") and args.validate_only
 
+        # --restore-only validation rules
+        if is_restore_only:
+            if hasattr(args, "primary_context") and args.primary_context:
+                raise ValidationError("--restore-only cannot be used with --primary-context (no primary hub needed)")
+            if not (hasattr(args, "secondary_context") and args.secondary_context):
+                raise ValidationError("--restore-only requires --secondary-context (the restore target hub)")
+            if hasattr(args, "method") and args.method and args.method != "full":
+                raise ValidationError("--restore-only requires --method full (passive sync needs a live primary)")
+            if hasattr(args, "old_hub_action") and args.old_hub_action:
+                raise ValidationError("--restore-only cannot be used with --old-hub-action (no old hub)")
+            if is_decommission:
+                raise ValidationError("--restore-only cannot be used with --decommission")
+            if is_setup:
+                raise ValidationError("--restore-only cannot be used with --setup")
+            if has_argocd_resume_only:
+                raise ValidationError("--restore-only cannot be used with --argocd-resume-only")
+
         # Validate that secondary context is provided when not in decommission or setup mode
-        if not is_decommission and not is_setup and not has_argocd_resume_only:
+        if not is_decommission and not is_setup and not has_argocd_resume_only and not is_restore_only:
             if hasattr(args, "secondary_context") and not args.secondary_context:
                 raise ValidationError("secondary-context is required for switchover operations")
 
@@ -414,21 +429,20 @@ class InputValidator:
 
         # Validate Argo CD argument combinations
 
-        if has_argocd_resume_after:
-            if has_argocd_resume_only:
-                raise ValidationError("--argocd-resume-after-switchover cannot be used with --argocd-resume-only")
-            if has_validate_only:
-                raise ValidationError("--argocd-resume-after-switchover cannot be used with --validate-only")
-            if not has_argocd_manage:
-                raise ValidationError("--argocd-resume-after-switchover requires --argocd-manage")
-            if getattr(args, "old_hub_action", None) == "decommission":
-                raise ValidationError(
-                    "--argocd-resume-after-switchover cannot be used with --old-hub-action decommission"
-                )
+        has_argocd_resume_on_failure = hasattr(args, "argocd_resume_on_failure") and args.argocd_resume_on_failure
 
         if has_argocd_manage:
             if has_argocd_resume_only:
                 raise ValidationError("--argocd-manage cannot be used with --argocd-resume-only")
+
+        # --argocd-resume-on-failure requires --argocd-manage and conflicts with resume-only/validate-only
+        if has_argocd_resume_on_failure:
+            if not has_argocd_manage:
+                raise ValidationError("--argocd-resume-on-failure requires --argocd-manage")
+            if has_argocd_resume_only:
+                raise ValidationError("--argocd-resume-on-failure cannot be used with --argocd-resume-only")
+            if has_validate_only:
+                raise ValidationError("--argocd-resume-on-failure cannot be used with --validate-only")
 
         # --argocd-resume-only needs state file (primary + secondary context) to restore from
         if has_argocd_resume_only:
