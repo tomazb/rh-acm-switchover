@@ -83,6 +83,7 @@ All release-certification tests live under `tests/release/` and must be marked w
 - `--release-stream STREAM`: repeatable stream filter. Allowed values are `bash`, `python`, and `ansible`.
 - `--release-resume-from-artifacts DIR`: resume or focused rerun context from a previous release artifact directory.
 - `--release-artifact-dir DIR`: optional artifact root. Default is profile `artifacts.root`, or `artifacts/release` when the profile does not override it.
+- `--allow-dirty`: allow a certification-impacting run to proceed when the current git checkout has uncommitted changes. This must be explicit and recorded in the emitted artifacts.
 
 Normal developer test runs must not execute release tests accidentally:
 
@@ -121,7 +122,9 @@ Required compatibility checks:
 
 If the previous run failed before `environment_fingerprint` was captured, the artifact directory is diagnostic context only. It is not eligible for mutation resume.
 
-Git commit or dirty-state differences do not block a focused rerun because the normal workflow is to fix code and rerun against the same lab contract. They must be recorded as warnings in the new manifest and summary.
+Git commit differences from the previous artifact do not block a focused rerun because the normal workflow is to fix code and rerun against the same lab contract. They must be recorded as warnings in the new manifest and summary.
+
+Current checkout dirty state is stricter. A run is certification-impacting when it runs the full certification set or selects any scenario or stream that is required by the active profile. For certification-impacting runs, `git.dirty: true` is a blocking validation error unless the operator supplies `--allow-dirty`. The same resume compatibility validator that emits manifest and summary warnings owns this gate. Without `--allow-dirty`, it writes a failed manifest and summary with the dirty-state failure reason and exits before any real-cluster mutation. With `--allow-dirty`, the run may proceed, the manifest records `git.allow_dirty: true`, and both the manifest and summary retain a warning that release certification was forced from an unclean checkout.
 
 ### CI Posture
 
@@ -231,6 +234,10 @@ Profile storage and secret policy:
 - If the implementation supports local in-repo profiles, it must use a gitignored path such as `tests/release/profiles/local/`.
 - Profile files must reference kubeconfig paths; they must not embed kubeconfig contents, tokens, certificates, or cluster credentials.
 - Artifact manifests record the profile path and hash for reproducibility, but release reports must not copy credential material from referenced files.
+
+The profile loader enforces this policy, not just the documentation. `load_profile()` must parse YAML, validate the V1 schema, and then call a schema-level content validator such as `ProfileSchema.validate_contents()` or `validate_profile_contents()` before returning a profile model. The content validator recursively scans every string value and rejects credential-like material, including PEM headers such as `-----BEGIN CERTIFICATE-----` and private-key headers, kubeconfig keys such as `token:`, `client-key-data:`, `client-certificate-data:`, and `certificate-authority-data:`, and long base64 certificate or key payloads associated with credential-looking field names. Validation errors must include the profile path, dotted field path, and matched credential class so artifact generation and release reporting refuse unsafe profiles before any cluster access.
+
+If a caller needs a non-failing inspection path, the contracts package may expose `sanitize_profile()` to return a masked copy plus warnings. Certification execution must not use that sanitized warning path as a bypass for invalid profile contents.
 
 ## Profile Schema V1
 
@@ -763,6 +770,28 @@ Common JSON requirements:
 - Paths are relative to the run artifact directory unless explicitly marked as absolute source paths.
 - Files must remain machine-readable even when the run fails before mutation starts.
 
+### Schema Versioning And Migration
+
+Schema V1 is the only version accepted by this design until a later release introduces V2. Missing or unknown future `schema_version` values are rejected by the artifact validator before loading and before any real-cluster mutation.
+
+When a new schema version is introduced, the framework keeps the current version and the immediately previous version readable for at least two minor releases or 180 days, whichever is longer. Deprecated versions must be announced in `CHANGELOG.md` and release documentation with the removal version and migration command. Artifacts are never mutated in place by default.
+
+Version handling is split by component:
+
+- the artifact validator checks that `schema_version` exists, is an integer, and is either the current version or a supported older version
+- the artifact loader owns version dispatch and calls migration functions to produce the current normalized model
+- stream adapters and release comparison code consume only the normalized current model and do not perform schema migration themselves
+
+Runtime behavior is fail-closed. Unsupported versions are rejected with a clear error naming the file path, observed `schema_version`, supported versions, and upgrade command. Supported older versions are migrated in memory by the loader, validated again against the current schema, and recorded as migration warnings in the new manifest and summary.
+
+The implementation must provide an artifact upgrade command before deprecating a readable version, for example:
+
+```bash
+python -m tests.release.contracts.migrate_artifacts artifacts/release/<run_id> --to-schema 2 --output artifacts/release/<run_id>-schema2
+```
+
+Example V1 to V2 flow: a release introduces `schema_version: 2`, adds V2 validators, and plugs `migrate_manifest_v1_to_v2()` and matching per-file migrations into `tests/release/contracts/loader.py` or a dedicated `tests/release/contracts/migrations.py`. During the deprecation window, artifact validation accepts V1 and V2, loading V1 calls the migration code before resume compatibility checks, and the release process publishes the upgrade command. After the documented removal version, validation rejects V1 artifacts and instructs authors to run the migration command first.
+
 `manifest.json` required fields:
 
 - `schema_version`
@@ -777,10 +806,13 @@ Common JSON requirements:
 - `git.commit`
 - `git.branch`
 - `git.dirty`
+- `git.allow_dirty`
 - `tool_version`
 - `selected_scenarios`
 - `selected_streams`
 - `environment_fingerprint`
+- `warnings`
+- `failure_reasons`
 
 `environment_fingerprint` required fields:
 
@@ -816,7 +848,17 @@ Common JSON requirements:
 - `capabilities.rbac_bootstrap`
 - `capabilities.decommission`
 
-`environment_fingerprint` may include additive discovered metadata, but the fields above are the stable compatibility contract for artifact resume and release comparison.
+`environment_fingerprint` may include additive discovered metadata, but strict compatibility ignores unknown additive fields by default. Artifact-resume compatibility is determined only by these stable lab-contract fields:
+
+- `hubs.primary.context`
+- `hubs.primary.acm_namespace`
+- `hubs.secondary.context`
+- `hubs.secondary.acm_namespace`
+- `managed_clusters.expectation_type`
+- `managed_clusters.expected_names`
+- `managed_clusters.expected_count`
+
+Release comparison uses the same stable lab-contract fields unless a comparison explicitly declares additional required fields in `runtime-parity.json.required_fields`. Additive metadata must be surfaced under `environment_fingerprint.discovered.<producer>.*` so consumers can opt into non-strict comparisons without changing the default contract. Comparison code normalizes fingerprints by stripping unknown keys, canonicalizing scalar types, and sorting fields whose contract requires sorted lists before evaluating compatibility.
 
 `scenario-results.json` required fields:
 
