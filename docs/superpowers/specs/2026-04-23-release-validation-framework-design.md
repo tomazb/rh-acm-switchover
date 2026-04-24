@@ -79,9 +79,10 @@ All release-certification tests live under `tests/release/` and must be marked w
 `tests/release/conftest.py` owns the release-specific pytest options:
 
 - `--release-profile PATH`: YAML profile path. If omitted, `ACM_RELEASE_PROFILE` is used when present.
-- `--release-scenario ID`: repeatable scenario filter. When supplied, only matching scenario IDs run.
+- `--release-scenario ID`: repeatable scenario filter. When supplied, requested IDs narrow the selected scenario set, but non-filterable prerequisites and required post-mutation checks are still added according to the scenario selection rules below.
 - `--release-stream STREAM`: repeatable stream filter. Allowed values are `bash`, `python`, and `ansible`.
-- `--release-resume-from-artifacts DIR`: resume or focused rerun context from a previous release artifact directory.
+- `--release-resume-from-artifacts DIR`: resume a partial release run from a compatible previous release artifact directory.
+- `--release-rerun-from-artifacts DIR`: start a fresh focused rerun while using a compatible previous release artifact directory only for lab identity and compatibility checks.
 - `--release-artifact-dir DIR`: optional artifact root. Default is profile `artifacts.root`, or `artifacts/release` when the profile does not override it.
 - `--allow-dirty`: allow a certification-impacting run to proceed when the current git checkout has uncommitted changes. This must be explicit and recorded in the emitted artifacts.
 
@@ -90,7 +91,7 @@ Normal developer test runs must not execute release tests accidentally:
 - `pytest tests/` skips all tests marked `release` unless `--release-profile` or `ACM_RELEASE_PROFILE` is set.
 - The skip reason must state that release tests require an explicit release profile.
 - Supplying `--release-profile` allows release tests to run when selected by path, marker, or normal pytest discovery.
-- Supplying an unknown scenario, unknown stream, unreadable profile, invalid profile, or artifact resume directory without a compatible manifest is a pytest failure before any real-cluster mutation.
+- Supplying an unknown scenario, unknown stream, unreadable profile, invalid profile, or artifact reuse directory without a compatible manifest is a pytest failure before any real-cluster mutation.
 
 Full release-certification invocation:
 
@@ -98,12 +99,13 @@ Full release-certification invocation:
 pytest -m release tests/release --release-profile tests/release/profiles/<name>.yaml
 ```
 
-Focused rerun examples:
+Focused rerun and resume examples:
 
 ```bash
 pytest -m release tests/release --release-profile tests/release/profiles/<name>.yaml --release-scenario python-passive-switchover
 pytest -m release tests/release --release-profile tests/release/profiles/<name>.yaml --release-stream ansible
 pytest -m release tests/release --release-profile tests/release/profiles/<name>.yaml --release-resume-from-artifacts artifacts/release/<run_id>
+pytest -m release tests/release --release-profile tests/release/profiles/<name>.yaml --release-rerun-from-artifacts artifacts/release/<run_id> --release-scenario python-passive-switchover
 ```
 
 The release harness may run static gates through pytest subprocesses, but it must not recursively invoke the active `tests/release/` run. Static gate commands must explicitly exclude the release marker unless they intentionally target release tests.
@@ -131,7 +133,7 @@ Scenario execution order:
 5. `runtime-parity`
 6. `final-baseline-check`
 
-The scenario catalog, not pytest dependency plugins, enforces this order. A scenario that depends on earlier failed state is marked `skipped` with a message explaining the blocking prerequisite according to the final aggregation rules, while the pytest test itself continues only when the recovery policy allows it.
+The scenario catalog, not pytest dependency plugins, enforces this order. `static-gates` and `baseline-check` are non-filterable prerequisites for every mutating scenario. When any mutating scenario is selected, the selected matrix must also append `runtime-parity` and `final-baseline-check` so mutation is always followed by parity evaluation and proof that the lab returned to baseline. A scenario that depends on earlier failed state is marked `skipped` with a message explaining the blocking prerequisite according to the final aggregation rules, while the pytest test itself continues only when the recovery policy allows it.
 
 `--release-stream` filters only stream adapters (`bash`, `python`, `ansible`). It does not disable `local` static gates or harness-owned baseline/parity/finalization checks. Profiles may make individual static gate groups optional only through the static gate contract below.
 
@@ -143,19 +145,26 @@ The scenario catalog, not pytest dependency plugins, enforces this order. A scen
 | --- | --- | --- | --- |
 | `release_options` | session | pytest config and `ACM_RELEASE_PROFILE` | Resolves raw CLI/env options. Does not read clusters or mutate artifacts. |
 | `release_profile` | session | `release_options` | Loads, validates, and content-scans the profile. Immutable after creation. |
-| `selected_release_matrix` | session | `release_profile`, `release_options` | Applies scenario and stream filters, validates unknown IDs, and freezes execution order. |
+| `selected_release_matrix` | session | `release_profile`, `release_options` | Applies scenario and stream filters, adds non-filterable prerequisites and post-mutation checks, validates unknown IDs, and freezes execution order. |
 | `release_artifacts` | session | `release_profile`, `release_options`, git state | Creates the run artifact directory, writes early failed manifests when validation fails, and owns path normalization. |
-| `resume_context` | session | `release_artifacts`, `release_profile`, `release_options` | Validates artifact resume compatibility and dirty-checkout policy before any cluster access. |
+| `artifact_reuse_context` | session | `release_artifacts`, `release_profile`, `release_options` | Validates artifact resume or rerun compatibility and dirty-checkout policy before any cluster access. |
 | `baseline_manager` | session | `release_profile`, `release_artifacts` | Owns discovery, baseline assertions, convergence, and final baseline checks. Mutable only through explicit baseline/recovery methods. |
 | `recovery_budget` | session | `release_profile`, `release_artifacts` | Tracks total recovery budget and per-scenario recovery attempts. |
 | `adapter_factory` | session | `release_profile`, `release_artifacts` | Builds stream adapters from immutable profile data. Adapters are instantiated per scenario execution to avoid stale command/result state. |
 | `release_run_context` | session | all fixtures above | Passed to `test_release_certification`; exposes only orchestrator-level methods and immutable configuration. |
 
-Profile and option validation failures use `pytest.UsageError` during configuration or session setup after writing a failed manifest when the artifact root can be resolved safely. Missing release profile is different: collected `@pytest.mark.release` tests are skipped with the documented skip reason when no profile path and no `ACM_RELEASE_PROFILE` are present.
+`pytest.UsageError` is reserved for pytest configuration or session-start option validation failures, after writing a failed manifest when the artifact root can be resolved safely. Missing release profile is different: collected `@pytest.mark.release` tests are skipped with the documented skip reason when no profile path and no `ACM_RELEASE_PROFILE` are present.
 
-### Artifact Resume Compatibility
+Runtime fixture failures, including cluster discovery, baseline validation, artifact writes after setup, and adapter preparation, must write the appropriate failed manifest or partial artifact first and then fail through an explicit fixture or test failure. They must not be reported as `pytest.UsageError`, because those failures describe release execution state rather than invalid pytest invocation.
 
-`--release-resume-from-artifacts DIR` may resume or focus a rerun only when `DIR/manifest.json` is compatible with the current invocation. Compatibility is checked before any real-cluster mutation.
+### Artifact Reuse Compatibility
+
+Artifact reuse has two modes with different semantics:
+
+- `--release-resume-from-artifacts DIR` is true partial-run resume. It may skip scenarios already recorded as completed in `DIR/scenario-results.json`, carries forward consumed recovery budget from the previous run, and continues the same release certification attempt from the next eligible scenario.
+- `--release-rerun-from-artifacts DIR` is a fresh run. It never skips completed scenarios and never carries forward recovery budget. The previous artifact directory is used only to validate profile compatibility and stable lab identity for focused debugging reruns.
+
+Both modes require `DIR/manifest.json` to be compatible with the current invocation before any real-cluster mutation.
 
 Required compatibility checks:
 
@@ -165,11 +174,13 @@ Required compatibility checks:
 - the artifact directory contains `scenario-results.json` unless the previous run failed before scenario execution
 - the stable lab identity in `environment_fingerprint` matches the current profile's hub contexts, ACM namespaces, and managed-cluster expectation contract
 
-If the previous run failed before `environment_fingerprint` was captured, the artifact directory is diagnostic context only. It is not eligible for mutation resume.
+Resume mode additionally requires enough scenario status evidence to determine completed scenario skip behavior and enough recovery evidence to compute the remaining recovery budget. Rerun mode does not use previous scenario status or recovery budget for execution, but it still requires compatibility evidence before mutation.
 
-Git commit differences from the previous artifact do not block a focused rerun because the normal workflow is to fix code and rerun against the same lab contract. They must be recorded as warnings in the new manifest and summary.
+If the previous run failed before `environment_fingerprint` was captured, the artifact directory is diagnostic context only. It is not eligible for mutation resume or artifact-backed rerun.
 
-Current checkout dirty state is stricter. A run is certification-impacting when it runs the full certification set or selects any scenario or stream that is required by the active profile. For certification-impacting runs, `git.dirty: true` is a blocking validation error unless the operator supplies `--allow-dirty`. The same resume compatibility validator that emits manifest and summary warnings owns this gate. Without `--allow-dirty`, it writes a failed manifest and summary with the dirty-state failure reason and exits before any real-cluster mutation. With `--allow-dirty`, the run may proceed, the manifest records `git.allow_dirty: true`, and both the manifest and summary retain a warning that release certification was forced from an unclean checkout.
+Git commit differences from the previous artifact do not block resume or rerun because the normal workflow is to fix code and continue against the same lab contract. They must be recorded as warnings in the new manifest and summary.
+
+Current checkout dirty state is stricter. A run is certification-impacting when it runs the full certification set or selects any scenario or stream that is required by the active profile. For certification-impacting runs, including both artifact resume and artifact rerun modes, `git.dirty: true` is a blocking validation error unless the operator supplies `--allow-dirty`. The same artifact compatibility validator that emits manifest and summary warnings owns this gate. Without `--allow-dirty`, it writes a failed manifest and summary with the dirty-state failure reason and exits before any real-cluster mutation. With `--allow-dirty`, the run may proceed, the manifest records `git.allow_dirty: true`, and both the manifest and summary retain a warning that release certification was forced from an unclean checkout.
 
 ### CI Posture
 
@@ -276,7 +287,7 @@ Profile storage and secret policy:
 
 - `tests/release/profiles/` contains checked-in examples and sanitized templates only.
 - Concrete lab profiles that include operator-specific kubeconfig paths, context names, or private lab topology live outside the repo by default.
-- If the implementation supports local in-repo profiles, it must use a gitignored path such as `tests/release/profiles/local/`.
+- If the implementation supports local in-repo profiles, `tests/release/profiles/local/` must be gitignored before profile loading support ships.
 - Profile files must reference kubeconfig paths; they must not embed kubeconfig contents, tokens, certificates, or cluster credentials.
 - Artifact manifests record the profile path and hash for reproducibility, but release reports must not copy credential material from referenced files.
 
@@ -287,6 +298,8 @@ If a caller needs a non-failing inspection path, the contracts package may expos
 ## Profile Schema V1
 
 Profiles are YAML mappings validated before any static gate or real-cluster scenario runs. Schema V1 rejects unknown top-level keys and malformed known fields so that typos fail fast. Validation errors include the profile path, dotted field path, invalid value, and expected type or enum.
+
+Profile `profile_version` governs the YAML profile contract. It is intentionally separate from release artifact `schema_version`, which governs generated files such as `manifest.json` and `runtime-parity.json`.
 
 Required top-level keys:
 
@@ -343,6 +356,7 @@ Top-level fields:
 - Optional `env` is a mapping of additional environment variables for that stream.
 - Optional `extra_args` is a list of argv tokens appended only to that stream's command.
 - `local` is not a profile stream. It is reserved for harness-owned static gate results recorded in `scenario-results.json`.
+- Stream requiredness gates scenarios that include that stream after scenario-level stream narrowing is applied. A scenario-level `streams` list may exclude a profile-required stream from that scenario, and that excluded stream is then not required for that scenario.
 
 `scenarios` schema:
 
@@ -389,7 +403,7 @@ Top-level fields:
 - Optional `post_failure_passes_per_mutating_scenario` defaults to `1` and must be `0` or `1`.
 - Optional `total_budget_minutes` defaults to `30`. Profiles may set a lower or higher value.
 - Optional `allowed_destructive_cleanup.resources` defaults to an empty list and may contain only `BackupSchedule`, `Restore`, and `ArgoCDManagedConflict`.
-- Optional `rbac_actions` defaults to `["validate_only", "revalidate"]`. Allowed values are `validate_only`, `bootstrap_hub_rbac`, `bootstrap_managed_cluster_rbac`, and `revalidate`.
+- Optional `rbac_actions` defaults to `["no_bootstrap", "revalidate"]`. Allowed values are `no_bootstrap`, `bootstrap_hub_rbac`, `bootstrap_managed_cluster_rbac`, and `revalidate`.
 - Optional `hard_stop_on` defaults to `["hub_role_restore_unproven", "argocd_resume_unproven", "rbac_bootstrap_unproven", "final_baseline_unproven"]`.
 
 `artifacts` schema:
@@ -431,43 +445,13 @@ scenarios:
   - id: runtime-parity
   - id: final-baseline-check
 argocd:
-  mandatory: true
   namespaces:
     - openshift-gitops
-  application_selectors:
-    - match_labels:
-        app.kubernetes.io/part-of: acm-release-lab
 baseline:
   initial_primary: primary
-  backup_schedule:
-    required: true
-  restore:
-    required: true
-  observability:
-    required: true
-  rbac:
-    required: true
-limits:
-  max_cycles: 1
-  default_timeout_minutes: 120
-  cooldown_seconds: 0
-  soak_duration_minutes: 0
-  max_tolerated_failures: 0
-  artifact_retention_days: 30
-recovery:
-  pre_run_heal_passes: 1
-  post_failure_passes_per_mutating_scenario: 1
-  total_budget_minutes: 30
-  allowed_destructive_cleanup:
-    resources:
-      - BackupSchedule
-      - Restore
-      - ArgoCDManagedConflict
-artifacts:
-  root: artifacts/release
-  capture_stdout: true
-  capture_stderr: true
-  capture_cluster_snapshots: false
+limits: {}
+recovery: {}
+artifacts: {}
 ```
 
 ## Baseline Contract
@@ -566,18 +550,18 @@ The V1 matrix is the release profile's scenario vocabulary. Required release-gat
 
 `static-gates` runs before discovery, baseline convergence, or real-cluster mutation. It records results as `StreamResult` entries with `stream: local` and `scenario_id: static-gates`.
 
-Default V1 static gate groups:
+Default V1 static gate groups are scope contracts. The implementation owns the exact pytest or tooling command for each gate, and those commands must stay scoped to tracked repository paths and must exclude the active release run unless a gate explicitly targets release contract unit tests.
 
 The `Required when` column applies when `baseline.static_gates.required` is true. When `baseline.static_gates.required` is false, the harness may still run the default gate groups, but their failures are warnings and the profile is not valid for full release sign-off.
 
-| Gate ID | Required when | Command |
+| Gate ID | Required when | Scope contract |
 | --- | --- | --- |
-| `root-non-e2e-tests` | always when `baseline.static_gates.required` is true | `python -m pytest tests/ -m "not e2e and not release" -q` |
-| `static-parity-tests` | always when Python and Ansible streams are both enabled | `python -m pytest tests/test_constants_parity.py tests/test_rbac_collection_parity.py tests/test_argocd_constants_parity.py -q` |
-| `collection-unit-tests` | Ansible stream is enabled | `PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` |
-| `collection-integration-scenario-tests` | Ansible stream is enabled and the gate ID is not listed in `baseline.static_gates.optional_gate_ids` | `PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/ ansible_collections/tomazb/acm_switchover/tests/scenario/ -q` |
+| `root-non-e2e-tests` | always when `baseline.static_gates.required` is true | Run the root non-E2E, non-release pytest suite that validates ordinary local behavior without real-cluster release lifecycle ownership. |
+| `static-parity-tests` | always when Python and Ansible streams are both enabled | Run the existing static Python/collection parity tests for shared constants, RBAC contracts, and Argo CD contracts. |
+| `collection-unit-tests` | Ansible stream is enabled | Run collection unit tests without mutating a real lab. |
+| `collection-integration-scenario-tests` | Ansible stream is enabled and the gate ID is not listed in `baseline.static_gates.optional_gate_ids` | Run collection integration and scenario tests that are safe as static release prerequisites and do not own the release lifecycle. |
 
-The release harness runs each command as a subprocess with the current checkout as working directory, captures stdout and stderr to artifact files, and records one `AssertionRecord` per gate:
+The release harness runs each gate implementation as a subprocess with the current checkout as working directory, captures stdout and stderr to artifact files, and records one `AssertionRecord` per gate:
 
 - `capability`: `static-gates`
 - `name`: gate ID
@@ -669,6 +653,7 @@ Adapter invocation contracts:
 - Bash adapter invokes supported scripts such as `scripts/discover-hub.sh`, `scripts/preflight-check.sh`, `scripts/postflight-check.sh`, and RBAC or setup scripts only when those scripts remain release-relevant for the selected scenario.
 - Adapters must treat profile values as input data and must not hardcode lab context names, namespaces, managed-cluster names, or artifact locations.
 - Adapters must write stdout and stderr to files before returning, even on failure, unless the process could not be spawned.
+- Scenario state must be isolated. Every Python scenario invocation gets a unique `--state-file` path under that scenario's artifact directory. Every Ansible collection scenario gets a unique checkpoint path under that scenario's artifact directory through the collection's checkpoint variables. No scenario may reuse another scenario's state or checkpoint file unless the scenario explicitly tests resume behavior and records the source state file in its artifacts.
 
 ### Cross-Stream Assertions
 
@@ -717,14 +702,14 @@ V1 normalized comparison table:
 
 | Capability | Normalized fields | Python source | Ansible source | Comparison mode |
 | --- | --- | --- | --- | --- |
-| preflight validation | `status`, `critical_failure_count`, `warning_failure_count`, `check_ids`, `failed_check_ids` | `ValidationReporter.results`, validate-only output, and adapter post-processing | `preflight-report.json.summary` and `preflight-report.json.results` | Strict equality after mapping Python `critical: true/false` to collection `severity`. |
+| preflight validation | `status`, `critical_failure_count`, `warning_failure_count`, `check_ids`, `failed_check_ids` | `ValidationReporter.results[*].check`, validate-only output, and adapter post-processing | `preflight-report.json.summary` and `preflight-report.json.results[*].id` | Strict equality after mapping Python `critical: true/false` to collection `severity`. |
 | primary prep | `backup_schedule_paused`, `auto_import_disabled_clusters`, `thanos_scaled_down`, `skipped_observability` | Python state plus post-run cluster-state discovery | Role result facts plus post-run cluster-state discovery | Strict equality on cluster-state outcomes. |
 | activation | `restore_name`, `restore_phase_category`, `sync_restore_enabled`, `managed_cluster_activation_requested` | Python report/state where available plus secondary hub cluster-state discovery | Role facts/checkpoint data plus secondary hub cluster-state discovery | Strict equality on normalized restore and activation outcomes. |
 | post-activation verification | `connected_managed_clusters`, `unavailable_managed_clusters`, `klusterlet_remediation_count`, `observability_status` | Python post-activation output plus active hub cluster-state discovery | Role facts plus active hub cluster-state discovery | Strict equality on names and counts, with sorted sets for resource names. |
 | finalization | `backup_schedule_present`, `backup_schedule_paused`, `post_enable_backup_observed`, `old_hub_action_result` | Python finalization state/output plus cluster-state discovery | Role facts/checkpoint data plus cluster-state discovery | Strict equality, except optional old-hub actions may be `not_applicable` when profile disables them. |
 | RBAC self-validation | `scope`, `subject`, `missing_permissions`, `validation_status` | `RBACValidator` result expansion | `acm_rbac_validate` result expansion | Strict equality on missing permission sets for matching scopes. |
 | RBAC bootstrap | `scope`, `created_or_verified_subjects`, `applied_manifest_set`, `bootstrap_status` | Python/bootstrap script or CLI output when selected | `acm_rbac_bootstrap` and `rbac_bootstrap` role results | Strict equality on required subjects and manifest identities. |
-| Argo CD management | `selected_applications`, `paused_applications`, `resumed_applications`, `resume_failures`, `conflict_allowlist_used` | Python Argo CD state and post-run Application discovery | `argocd_manage` role facts and post-run Application discovery | Strict equality on selected and final Application state sets. |
+| Argo CD management | `selected_applications`, `paused_applications`, `resumed_applications`, `resume_failures`, `conflict_allowlist_used` | Python `argocd.run_id` plus post-run Application discovery keyed by `acm-switchover.argoproj.io/paused-by` and run ID; Python summaries provide counts only | Collection `acm_switchover_argocd.run_id` plus post-run Application discovery keyed by `acm-switchover.argoproj.io/paused-by` and run ID; role summary facts provide counts only | Strict equality on discovered Application name sets and final pause/resume state. |
 | discovery | `hub_roles`, `acm_versions`, `managed_cluster_names_or_count`, `observability_present`, `argocd_present`, `capability_flags` | Python discovery/preflight output plus cluster-state discovery | `acm_discovery` result and role discovery facts | Strict equality on profile-required fields; additive discovered metadata is ignored unless promoted to required. |
 | machine-readable reports | `required_artifacts_present`, `schema_versions`, `top_level_status`, `required_assertion_count` | Python artifact paths and parsed JSON | Collection artifact paths and parsed JSON | Schema-contract comparison, not field-for-field report equality. |
 | optional checkpoints | `completed_phases`, `resume_start_phase`, `skipped_phases`, `checkpoint_errors`, `final_lab_state` | Python `StateManager` state plus resume execution output and post-run cluster-state discovery | Collection checkpoint JSON, `checkpoint_phase` transitions, playbook output, and post-run cluster-state discovery | Behavioral equality. Checkpoint file formats are intentionally not field-for-field comparable. |
@@ -736,6 +721,8 @@ Normalization rules:
 - Missing source evidence for a required normalized field is a failed comparison, not a skipped comparison.
 - Resource name sets are sorted before comparison.
 - Counts may be compared instead of names only when the profile uses `managed_clusters.expected_count`.
+- Preflight `check_ids` and `failed_check_ids` are normalized sets. Python values are derived from `results[*].check`; collection values are derived from `results[*].id`. Failed IDs include only checks whose normalized status is failed or error.
+- Argo CD Application name sets are normalized from post-run Kubernetes Application discovery, not from stream summary facts. Discovery is limited to Applications carrying `acm-switchover.argoproj.io/paused-by` for the relevant run ID plus any profile-selected ACM-touching Applications that should have been managed during the scenario.
 - Normalizers must emit a concise `AssertionRecord.message` explaining every failed or `not_applicable` comparison.
 - Adding a new normalized field for a dual-supported capability requires updating this table or its implemented schema equivalent in the same change.
 
@@ -796,12 +783,12 @@ Allowed bounded recovery actions include:
 
 RBAC recovery actions are limited to this vocabulary:
 
-- `validate_only`
+- `no_bootstrap`
 - `bootstrap_hub_rbac`
 - `bootstrap_managed_cluster_rbac`
 - `revalidate`
 
-Each RBAC recovery action must also declare scope: `primary`, `secondary`, `both`, or an explicit managed-cluster target set. Recovery may invoke only repo-supported bootstrap assets, scripts, or playbooks. It must never patch arbitrary RBAC rules directly.
+`no_bootstrap` records that the recovery attempt intentionally does not apply RBAC assets before checking the current state. `revalidate` remains the read-only diagnostic action used to prove the current RBAC state after any action. Each RBAC recovery action must also declare scope: `primary`, `secondary`, `both`, or an explicit managed-cluster target set. Recovery may invoke only repo-supported bootstrap assets, scripts, or playbooks. It must never patch arbitrary RBAC rules directly.
 
 Argo CD recovery policy must declare a hard-stop condition. At minimum, the run hard-stops when:
 
@@ -819,14 +806,13 @@ Safety constraints:
 
 ## Recovery Policy Defaults
 
-Unless a profile overrides them, release recovery uses these defaults:
+Recovery defaults are defined once in the Profile Schema V1 `recovery` fields above. The implementation must derive defaults from that schema model rather than duplicating a second default table in recovery code.
 
-- exactly one pre-run heal pass before certification scenarios begin
-- exactly one post-failure recovery pass per mutating scenario
-- total recovery budget of 30 minutes for the run
-- no destructive cleanup unless the profile allowlists the resource class and scenario context
-- destructive cleanup limited to stale or conflicting `BackupSchedule`, `Restore`, and Argo CD-managed conflicting resources represented by the profile contract
-- RBAC recovery limited to `validate_only`, `bootstrap_hub_rbac`, `bootstrap_managed_cluster_rbac`, and `revalidate`
+Default recovery semantics are intentionally conservative:
+
+- no destructive cleanup runs unless the profile allowlists the resource class and scenario context
+- destructive cleanup is limited to stale or conflicting `BackupSchedule`, `Restore`, and Argo CD-managed conflicting resources represented by the profile contract
+- RBAC recovery is limited to `no_bootstrap`, `bootstrap_hub_rbac`, `bootstrap_managed_cluster_rbac`, and `revalidate`
 
 Profiles may lower or raise the total recovery budget, but they cannot authorize cleanup outside the schema enum. A profile may disable pre-run or post-failure recovery by setting the corresponding pass count to `0`; doing so makes baseline or scenario failures hard failures without healing.
 
@@ -893,7 +879,7 @@ Ansible source report paths and required fields used by V1 normalizers:
 | `acm_switchover_preflight_result` fact | `phase`, `status`, `changed`, `report`, `path` | Preflight report artifact discovery and checkpoint report references. |
 | `switchover-report.json` | `schema_version`, `source`, `argocd.run_id`, `argocd.summary`, `phases.primary_prep.status`, `phases.activation.status`, `phases.post_activation.status`, `phases.finalization.status` | Switchover, Argo CD, phase outcome, and machine-readable report comparisons. |
 | `restore-only-report.json` | `schema_version`, `source`, `operation`, `argocd.run_id`, `argocd.summary`, `phases.activation.status`, `phases.post_activation.status`, `phases.finalization.status` | Restore-only, Argo CD, phase outcome, and machine-readable report comparisons. |
-| `argocd_manage` role facts | `acm_switchover_argocd_summary.paused`, `acm_switchover_argocd_summary.restored`, `acm_switchover_argocd_summary_by_hub.*.paused`, `acm_switchover_argocd_summary_by_hub.*.restored`, `acm_switchover_argocd.run_id` | Argo CD pause/resume normalization. |
+| `argocd_manage` role facts | `acm_switchover_argocd_summary.paused`, `acm_switchover_argocd_summary.restored`, `acm_switchover_argocd_summary_by_hub.*.paused`, `acm_switchover_argocd_summary_by_hub.*.restored`, `acm_switchover_argocd.run_id` | Argo CD pause/resume count checks and run ID extraction. Application name sets come from release harness Application discovery. |
 | `acm_rbac_validate` module result | `permissions`, `passed`, `critical_failures`, `results[].id`, `results[].status`, `results[].details.denied_permissions` | RBAC self-validation normalization. |
 | `acm_rbac_bootstrap` module and `rbac_bootstrap` role results | created or verified service account subjects, applied manifest identities, bootstrap status | RBAC bootstrap normalization. Implementation must pin concrete field paths when the adapter is added. |
 | `acm_discovery` result and discovery role facts | `hub_role`, `status` | Discovery role classification. Full environment fingerprint fields still come from release harness cluster-state discovery because the current discovery role is intentionally minimal. |
@@ -901,27 +887,15 @@ Ansible source report paths and required fields used by V1 normalizers:
 
 The implementation must add collection-side schema stability tests for every source field path consumed by release normalizers. If the collection changes a source report path, the same change must update this appendix or the implemented schema equivalent, the normalizer, and the schema stability test.
 
+For Argo CD source reports and role facts, summary fields are count evidence only. The authoritative `selected_applications`, `paused_applications`, and `resumed_applications` name sets are produced by release harness post-run Application discovery keyed by `acm-switchover.argoproj.io/paused-by` and the source run ID.
+
 ### Schema Versioning And Migration
 
-Schema V1 is the only version accepted by this design until a later release introduces V2. Missing or unknown future `schema_version` values are rejected by the artifact validator before loading and before any real-cluster mutation.
+Schema V1 is the only version accepted by this design until a later release introduces another artifact schema version. Missing or unknown future `schema_version` values are rejected by the artifact validator before loading and before any real-cluster mutation.
 
-When a new schema version is introduced, the framework keeps the current version and the immediately previous version readable for at least two minor releases or 180 days, whichever is longer. Deprecated versions must be announced in `CHANGELOG.md` and release documentation with the removal version and migration command. Artifacts are never mutated in place by default.
+Future schema-version support is deferred until a concrete artifact compatibility need exists. That future design must define the readable version window, loader behavior, operator migration path, deprecation timeline, and changelog requirements before accepting more than one release artifact schema version. Artifacts must never be mutated in place by default.
 
-Version handling is split by component:
-
-- the artifact validator checks that `schema_version` exists, is an integer, and is either the current version or a supported older version
-- the artifact loader owns version dispatch and calls migration functions to produce the current normalized model
-- stream adapters and release comparison code consume only the normalized current model and do not perform schema migration themselves
-
-Runtime behavior is fail-closed. Unsupported versions are rejected with a clear error naming the file path, observed `schema_version`, supported versions, and upgrade command. Supported older versions are migrated in memory by the loader, validated again against the current schema, and recorded as migration warnings in the new manifest and summary.
-
-The implementation must provide an artifact upgrade command before deprecating a readable version, for example:
-
-```bash
-python -m tests.release.contracts.migrate_artifacts artifacts/release/<run_id> --to-schema 2 --output artifacts/release/<run_id>-schema2
-```
-
-Example V1 to V2 flow: a release introduces `schema_version: 2`, adds V2 validators, and plugs `migrate_manifest_v1_to_v2()` and matching per-file migrations into `tests/release/contracts/loader.py` or a dedicated `tests/release/contracts/migrations.py`. During the deprecation window, artifact validation accepts V1 and V2, loading V1 calls the migration code before resume compatibility checks, and the release process publishes the upgrade command. After the documented removal version, validation rejects V1 artifacts and instructs authors to run the migration command first.
+Runtime behavior is fail-closed. Unsupported versions are rejected with a clear error naming the file path, observed `schema_version`, and supported versions.
 
 `manifest.json` required fields:
 
@@ -998,7 +972,7 @@ Environment fingerprint producer contract:
 
 Partial discovery failures are allowed only for pre-mutation diagnostics. A release run may emit a failed fingerprint with unavailable fields marked `unknown`, but it must not start a mutating scenario unless all profile-required stable identity and baseline fields are populated and pass validation.
 
-`environment_fingerprint` may include additive discovered metadata, but strict compatibility ignores unknown additive fields by default. Artifact-resume compatibility is determined only by these stable lab-contract fields:
+`environment_fingerprint` may include additive discovered metadata, but strict compatibility ignores unknown additive fields by default. Artifact reuse compatibility is determined only by these stable lab-contract fields:
 
 - `hubs.primary.context`
 - `hubs.primary.acm_namespace`
