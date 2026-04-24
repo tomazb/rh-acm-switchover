@@ -174,4 +174,6 @@
       backup_count: "{{ _acm_secondary_fresh_backups | default([]) | length }}"
       backup_name: "{{ _acm_secondary_verified_backup_name }}"
       backup_phase: "{{ (_acm_secondary_verified_backup_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}"
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_verify_backups_result is not defined

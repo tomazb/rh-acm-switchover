@@ -66,7 +66,12 @@
 
 - name: Summarize managed cluster conditions
   tomazb.acm_switchover.acm_managedcluster_status:
-    clusters: "{{ acm_secondary_managed_clusters_info.resources | default([]) }}"
+    clusters: >-
+      {{
+        acm_secondary_managed_clusters_info.resources | default([])
+        | selectattr('metadata.name', 'ne', 'local-cluster')
+        | list
+      }}
   register: cluster_status_result
 
 - name: Verify managed cluster group readiness

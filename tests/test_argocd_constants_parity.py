@@ -3,7 +3,9 @@
 
 def test_acm_kinds_parity():
     """Ansible and Python ACM_KINDS must contain the same entries."""
-    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import ACM_KINDS
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
+        ACM_KINDS,
+    )
     from lib.argocd import ARGOCD_ACM_KINDS
 
     python_kinds = set(ARGOCD_ACM_KINDS)
@@ -16,23 +18,31 @@ def test_acm_kinds_parity():
 
 def test_acm_namespaces_parity():
     """Ansible and Python ACM namespaces must cover the same set."""
-    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import ACM_NAMESPACES
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
+        ACM_NAMESPACES,
+    )
     from lib.argocd import ARGOCD_ACM_NS_REGEX
 
     for ns in ACM_NAMESPACES:
-        assert ARGOCD_ACM_NS_REGEX.match(ns), f"Ansible namespace '{ns}' not matched by Python regex"
+        assert ARGOCD_ACM_NS_REGEX.match(
+            ns
+        ), f"Ansible namespace '{ns}' not matched by Python regex"
 
     sub_ns_samples = [
         "open-cluster-management-agent",
         "open-cluster-management-agent-addon",
     ]
     for ns in sub_ns_samples:
-        assert ARGOCD_ACM_NS_REGEX.match(ns), f"Python regex should match ACM sub-namespace '{ns}'"
+        assert ARGOCD_ACM_NS_REGEX.match(
+            ns
+        ), f"Python regex should match ACM sub-namespace '{ns}'"
 
 
 def test_ansible_argocd_filters_match_acm_sub_namespaces():
     """Ansible Argo CD filtering should match the same ACM sub-namespaces as Python/Bash."""
-    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import is_acm_touching_application
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
+        is_acm_touching_application,
+    )
 
     app = {
         "status": {
@@ -48,11 +58,13 @@ def test_ansible_argocd_filters_match_acm_sub_namespaces():
 def test_build_pause_patch_matches_jinja_logic():
     """Verify build_pause_patch produces same result as pause.yml Jinja template.
 
-    pause.yml Jinja: dict2items | rejectattr('key','equalto','automated') | items2dict
-    build_pause_patch: dict(syncPolicy); syncPolicy.pop('automated', None)
-    Both should produce the same sync policy.
+    pause.yml Jinja and build_pause_patch both keep existing syncPolicy keys
+    but set automated to null when automated sync is present so merge patch
+    semantics delete the CRD map key.
     """
-    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import build_pause_patch
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
+        build_pause_patch,
+    )
 
     test_cases = [
         {"automated": {"prune": True}, "syncOptions": ["CreateNamespace=true"]},
@@ -65,11 +77,15 @@ def test_build_pause_patch_matches_jinja_logic():
     for sync_policy in test_cases:
         patch = build_pause_patch(sync_policy, run_id)
 
-        # Simulate Jinja: dict2items | reject 'automated' | items2dict
-        jinja_sync = {k: v for k, v in sync_policy.items() if k != "automated"}
+        jinja_sync = dict(sync_policy)
+        if "automated" in jinja_sync:
+            jinja_sync["automated"] = None
 
         assert patch["spec"]["syncPolicy"] == jinja_sync, (
             f"Divergence for input {sync_policy}: "
             f"build_pause_patch={patch['spec']['syncPolicy']}, jinja={jinja_sync}"
         )
-        assert patch["metadata"]["annotations"]["acm-switchover.argoproj.io/paused-by"] == run_id
+        assert (
+            patch["metadata"]["annotations"]["acm-switchover.argoproj.io/paused-by"]
+            == run_id
+        )

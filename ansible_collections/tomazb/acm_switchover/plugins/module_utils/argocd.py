@@ -37,7 +37,9 @@ def is_acm_touching_application(app: dict) -> bool:
     """Return True if any resource in the Application's status touches an ACM namespace or kind."""
     for resource in app.get("status", {}).get("resources", []):
         namespace = resource.get("namespace")
-        if namespace in ACM_NAMESPACES or (namespace and ACM_NAMESPACE_REGEX.match(namespace)):
+        if namespace in ACM_NAMESPACES or (
+            namespace and ACM_NAMESPACE_REGEX.match(namespace)
+        ):
             return True
         if resource.get("kind") in ACM_KINDS:
             return True
@@ -52,7 +54,8 @@ def filter_acm_applications(applications: list[dict]) -> list[dict]:
 def build_pause_patch(sync_policy: dict, run_id: str) -> dict:
     """Build a patch that removes automated sync and marks the app as paused."""
     sync_policy = dict(sync_policy or {})
-    sync_policy.pop("automated", None)
+    if "automated" in sync_policy:
+        sync_policy["automated"] = None
     return {
         "metadata": {"annotations": {"acm-switchover.argoproj.io/paused-by": run_id}},
         "spec": {"syncPolicy": sync_policy},

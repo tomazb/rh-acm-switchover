@@ -49,9 +49,7 @@
             syncPolicy: >-
               {{
                 (item.spec.syncPolicy | default({}))
-                | dict2items
-                | rejectattr('key', 'equalto', 'automated')
-                | items2dict
+                | combine({'automated': none})
               }}
       loop: "{{ acm_switchover_argocd_acm_apps }}"
       loop_control:
@@ -59,6 +57,7 @@
       register: acm_argocd_pause_results
       when:
         - acm_switchover_argocd_mock_apps is not defined
+        - "'automated' in (item.spec.syncPolicy | default({}))"
         - "'acm-switchover.argoproj.io/paused-by' not in (item.metadata.annotations | default({}))"
 
     - name: Record pause summary

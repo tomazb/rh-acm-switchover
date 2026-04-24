@@ -13,16 +13,6 @@
     - name: Discover primary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
 
-    - name: Pause BackupSchedule on primary hub
-      ansible.builtin.include_tasks: pause_backups.yml
-
-    - name: Manage import-controller strategy and disable-auto-import markers
-      ansible.builtin.include_tasks: manage_auto_import.yml
-
-    - name: Scale observability components when enabled
-      ansible.builtin.include_tasks: scale_observability.yml
-      when: not (acm_switchover_features.skip_observability_checks | default(false))
-
     - name: Pause Argo CD auto-sync on primary hub when enabled
       ansible.builtin.include_role:
         name: tomazb.acm_switchover.argocd_manage
@@ -40,6 +30,16 @@
       when:
         - acm_switchover_features.argocd.manage | default(false)
         - acm_switchover_hubs.secondary is defined
+
+    - name: Pause BackupSchedule on primary hub
+      ansible.builtin.include_tasks: pause_backups.yml
+
+    - name: Manage import-controller strategy and disable-auto-import markers
+      ansible.builtin.include_tasks: manage_auto_import.yml
+
+    - name: Scale observability components when enabled
+      ansible.builtin.include_tasks: scale_observability.yml
+      when: not (acm_switchover_features.skip_observability_checks | default(false))
 
     - name: Publish primary_prep result contract
       ansible.builtin.set_fact:

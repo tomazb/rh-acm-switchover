@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Collection review regressions**: Fixed collection finalization debug/runtime failures, preserved restore-only backup verification skips, made Argo CD pause patches actually remove automated sync, paused Argo CD before primary_prep ACM mutations, and excluded `local-cluster` from managed-cluster readiness accounting.
 - **Ansible finalization old-hub read safety**: Collection finalization now fails closed when unexpected old-hub `MultiClusterObservability`, `ManagedCluster`, or `BackupSchedule` reads fail during finalization, while still treating absent MCO API resources as a no-op.
 - **Argo CD resume-on-failure retry safety**: Python resume-on-failure now clears durable Argo CD pause state only after every recorded Application is restored or already resumed, and the collection resets the `primary_prep` checkpoint after best-effort resume so retries re-pause GitOps before continuing.
 - **Validate-only FAILED-state preservation**: Python validate-only checkpoint restore now preserves durable error history, preventing transient preflight failures from changing the later retry phase.

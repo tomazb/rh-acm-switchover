@@ -58,7 +58,6 @@
       MultiClusterObservability {{ item.metadata.name | default('observability') }}
       may be managed declaratively. Coordinate deletion to avoid GitOps drift if
       Argo CD or Flux recreates it on the old secondary hub.
-    warn: true
   loop: "{{ _acm_old_hub_mco_info.resources | default([]) }}"
   loop_control:
     label: "{{ item.metadata.name | default('observability') }}"
@@ -103,7 +102,6 @@
       Observability pods are still running on the old hub after deleting
       MultiClusterObservability. If GitOps is not recreating MCO, this may
       indicate a product bug.
-    warn: true
   when:
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
     - (_acm_old_hub_observability_pods_info.resources | default([]) | length) > 0

@@ -22,7 +22,17 @@ def _find_mco_read_block(tasks: list[dict]) -> dict:
             module = nested.get("kubernetes.core.k8s_info", {})
             if module.get("kind") == "MultiClusterObservability":
                 return task
-    raise AssertionError("disable_old_hub_observability.yml must wrap the MCO read in a block")
+    raise AssertionError(
+        "disable_old_hub_observability.yml must wrap the MCO read in a block"
+    )
+
+
+def _walk_tasks(tasks: list[dict]):
+    for task in tasks:
+        yield task
+        for nested_key in ("block", "rescue", "always"):
+            nested_tasks = task.get(nested_key, []) or []
+            yield from _walk_tasks(nested_tasks)
 
 
 def test_disable_old_hub_observability_handles_absent_resource_separately_from_other_errors():
@@ -41,7 +51,9 @@ def test_disable_old_hub_observability_handles_absent_resource_separately_from_o
         ),
         None,
     )
-    assert error_capture is not None, "Rescue must capture the MCO read error before classifying it"
+    assert (
+        error_capture is not None
+    ), "Rescue must capture the MCO read error before classifying it"
 
     normalize_task = next(
         (
@@ -51,7 +63,9 @@ def test_disable_old_hub_observability_handles_absent_resource_separately_from_o
         ),
         None,
     )
-    assert normalize_task is not None, "Rescue must normalize absent-resource cases to an empty MCO list"
+    assert (
+        normalize_task is not None
+    ), "Rescue must normalize absent-resource cases to an empty MCO list"
 
     normalize_when = _stringify(normalize_task.get("when", ""))
     assert "_acm_old_hub_mco_read_error" in normalize_when
@@ -60,9 +74,24 @@ def test_disable_old_hub_observability_handles_absent_resource_separately_from_o
     assert 'no matches for kind "multiclusterobservability"' in normalize_when
 
     fail_task = next((task for task in rescue if "ansible.builtin.fail" in task), None)
-    assert fail_task is not None, "Rescue must fail on unexpected old-hub MCO read errors"
+    assert (
+        fail_task is not None
+    ), "Rescue must fail on unexpected old-hub MCO read errors"
     fail_text = _stringify(fail_task["ansible.builtin.fail"].get("msg", ""))
     assert "_acm_old_hub_mco_read_error" in fail_text
+
+
+def test_disable_old_hub_observability_debug_tasks_do_not_use_unsupported_warn_parameter():
+    """ansible.builtin.debug does not accept warn, so finalization must not pass it."""
+    tasks = _load_yaml("disable_old_hub_observability.yml")
+
+    offenders = [
+        task.get("name", "<unnamed>")
+        for task in _walk_tasks(tasks)
+        if "warn" in (task.get("ansible.builtin.debug") or {})
+    ]
+
+    assert offenders == []
 
 
 def test_verify_old_hub_state_does_not_suppress_read_failures():
