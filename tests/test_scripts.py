@@ -31,6 +31,11 @@ def run_script(script_name: str, *args: str, env=None):
     """Run a bash script with optional environment override."""
     script_path = SCRIPTS_DIR / script_name
     assert script_path.exists(), f"Script not found: {script_path}"
+    return run_script_path(script_path, *args, env=env)
+
+
+def run_script_path(script_path: Path, *args: str, env=None):
+    """Run a bash script path with optional environment override."""
     cmd = ["bash", str(script_path), *args]
 
     use_env = os.environ.copy()
@@ -345,6 +350,69 @@ exit 1
     assert parsed_server.hostname == "explicit.example"
     assert parsed_server.port == 6443
     assert f"--kubeconfig={expected_kubeconfig}" in log_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "script_path",
+    [
+        SCRIPTS_DIR / "generate-sa-kubeconfig.sh",
+        REPO_ROOT
+        / "ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/files/scripts/generate-sa-kubeconfig.sh",
+    ],
+    ids=["root-script", "collection-packaged-script"],
+)
+def test_generate_sa_kubeconfig_rejects_missing_ca_data(script_path, tmp_path):
+    """Generator should fail before emitting kubeconfig when cluster CA data is absent."""
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    log_file = tmp_path / "kubectl.log"
+
+    kubectl_script = mock_bin / "kubectl"
+    kubectl_script.write_text(
+        """#!/bin/bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${MOCK_LOG}"
+if [[ "$*" == get\\ serviceaccount\\ * || "$*" == *" get serviceaccount "* ]]; then
+    exit 0
+fi
+if [[ "$*" == create\\ token\\ * || "$*" == *" create token "* ]]; then
+    echo "token should not be requested when CA data is missing" >&2
+    exit 99
+fi
+if [[ "$*" == config\\ view\\ * || "$*" == *" config view "* ]]; then
+    case "$*" in
+        *".clusters[0].name"*)
+            printf 'cluster-missing-ca'
+            ;;
+        *".cluster.server"*)
+            printf 'https://missing-ca.example:6443'
+            ;;
+        *".certificate-authority-data"*)
+            ;;
+    esac
+    exit 0
+fi
+echo "unexpected kubectl args: $*" >&2
+exit 1
+""",
+        encoding="utf-8",
+    )
+    kubectl_script.chmod(0o755)
+
+    code, out = run_script_path(
+        script_path,
+        "acm-switchover",
+        "acm-switchover-operator",
+        env={
+            "PATH": f"{mock_bin}:{os.environ.get('PATH', '')}",
+            "MOCK_LOG": str(log_file),
+        },
+    )
+
+    assert code == 1, out
+    assert "Could not determine cluster certificate-authority-data" in out
+    assert "apiVersion:" not in out
+    assert "create token" not in log_file.read_text(encoding="utf-8")
 
 
 # ============================================================================

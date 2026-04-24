@@ -115,6 +115,11 @@ if [[ -z "$SERVER" ]]; then
     exit 1
 fi
 
+if [[ -z "$CA_DATA" ]]; then
+    echo "Error: Could not determine cluster certificate-authority-data from context or kubeconfig" >&2
+    exit 1
+fi
+
 if [[ -z "$USER_NAME" ]]; then
     if [[ -n "$CONTEXT" ]]; then
         USER_NAME="${CONTEXT}-${SA_NAME}"
