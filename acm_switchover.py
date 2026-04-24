@@ -729,6 +729,23 @@ def _attempt_argocd_resume_on_failure(
                 "Use --argocd-resume-only to retry manually.",
                 summary.failed,
             )
+            return
+
+        accounted_for = int(summary.restored or 0) + int(summary.already_resumed or 0)
+        if accounted_for < len(paused_apps):
+            logger.warning(
+                "Argo CD resume-on-failure accounted for %d of %d recorded Application(s). "
+                "Preserving pause state for --argocd-resume-only retry.",
+                accounted_for,
+                len(paused_apps),
+            )
+            return
+
+        state.clear_step_completed("pause_argocd_apps")
+        state.set_config("argocd_paused_apps", [])
+        state.set_config("argocd_run_id", None)
+        state.set_config("argocd_pause_dry_run", False)
+        logger.info("Argo CD resume-on-failure cleanup completed; durable pause state cleared.")
     except Exception as exc:
         logger.warning(
             "Argo CD resume-on-failure failed: %s. " "Use --argocd-resume-only to resume manually.",
@@ -817,7 +834,12 @@ def _run_phase_preflight(
     )
 
     if not getattr(args, "skip_gitops_check", False):
-        _report_argocd_acm_impact(primary, secondary, logger, argocd_manage=getattr(args, "argocd_manage", False))
+        _report_argocd_acm_impact(
+            primary,
+            secondary,
+            logger,
+            argocd_manage=getattr(args, "argocd_manage", False),
+        )
 
     if args.validate_only:
         logger.info("\n✓ Validation complete. Exiting (--validate-only mode)")

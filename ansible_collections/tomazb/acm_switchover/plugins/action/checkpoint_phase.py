@@ -24,7 +24,8 @@ def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
     """Return a *partial* update dict reflecting a phase transition.
 
     Appends *phase* to ``completed_phases`` when *status* is ``"pass"`` and the
-    phase has not already been recorded.
+    phase has not already been recorded. Removes *phase* when *status* is
+    ``"reset"`` so a later retry can execute the phase again.
 
     .. warning::
         This returns only ``completed_phases`` and ``phase_status``. Callers are
@@ -35,6 +36,8 @@ def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
     completed = list(checkpoint.get("completed_phases", []))
     if status == "pass" and phase not in completed:
         completed.append(phase)
+    elif status == "reset":
+        completed = [completed_phase for completed_phase in completed if completed_phase != phase]
     return {
         "completed_phases": completed,
         "phase_status": status,
@@ -48,7 +51,7 @@ class ActionModule(ActionBase):
         phase (str): switchover phase name
         checkpoint (dict): checkpoint config from ``acm_switchover_execution.checkpoint``
             (keys: ``enabled``, ``backend``, ``path``, ``reset``)
-        status (str): one of ``enter``, ``pass``, ``fail``
+        status (str): one of ``enter``, ``pass``, ``fail``, ``reset``
         error (str, optional): error message to record on ``status: fail``
         report_ref (str, optional): artifact path to record on ``status: pass``
     """
@@ -69,10 +72,10 @@ class ActionModule(ActionBase):
         backend = checkpoint_config.get("backend", "file")
         path = checkpoint_config.get("path", ".state/checkpoint.json")
 
-        if status not in {"enter", "pass", "fail"}:
+        if status not in {"enter", "pass", "fail", "reset"}:
             return {
                 "failed": True,
-                "msg": f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail.",
+                "msg": f"Invalid checkpoint status '{status}'. Expected one of: enter, pass, fail, reset.",
             }
 
         if not phase:
@@ -117,7 +120,11 @@ class ActionModule(ActionBase):
 
         if status == "enter":
             already_done = not should_resume_phase(checkpoint_data, phase)
-            return {"changed": False, "checkpoint": checkpoint_data, "skipped_phase": already_done}
+            return {
+                "changed": False,
+                "checkpoint": checkpoint_data,
+                "skipped_phase": already_done,
+            }
 
         transition = build_phase_transition(checkpoint_data, phase, status)
         checkpoint_data["completed_phases"] = transition["completed_phases"]
@@ -126,7 +133,7 @@ class ActionModule(ActionBase):
         sanitized_operational_data = {key: value for key, value in operational_data.items() if value not in (None, "")}
         checkpoint_data.setdefault("operational_data", {}).update(sanitized_operational_data)
 
-        if error:
+        if error and status == "fail":
             checkpoint_data.setdefault("errors", []).append({"phase": phase, "error": error})
         if report_ref:
             checkpoint_data.setdefault("report_refs", []).append(

@@ -29,7 +29,7 @@ All scripts display their version number in the output header for troubleshootin
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                    ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.7.3 (2026-04-23)
+preflight-check.sh v1.7.4 (2026-04-24)
 ```
 
 The version is defined in `constants.sh` and follows [Semantic Versioning](https://semver.org/):
@@ -124,7 +124,7 @@ This resolves ambiguity during the transition period when the old hub hasn't yet
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Hub Discovery                                        ║
 ╚════════════════════════════════════════════════════════════╝
-discover-hub.sh v1.7.3 (2026-04-23)
+discover-hub.sh v1.7.4 (2026-04-24)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Analyzing Contexts
@@ -254,7 +254,7 @@ Automates all prerequisite checks before starting an ACM switchover to catch con
 ╔════════════════════════════════════════════════════════════╗
 ║   ACM Switchover Pre-flight Validation                     ║
 ╚════════════════════════════════════════════════════════════╝
-preflight-check.sh v1.7.3 (2026-04-23)
+preflight-check.sh v1.7.4 (2026-04-24)
 
 Primary Hub:    primary-hub
 Secondary Hub:  secondary-hub
@@ -1086,7 +1086,7 @@ Provides shared helper functions and utilities used by both `preflight-check.sh`
 | **Color Variables** | `RED`, `GREEN`, `YELLOW`, `BLUE`, `NC` for formatted output |
 | **Counter Variables** | `TOTAL_CHECKS`, `PASSED_CHECKS`, `FAILED_CHECKS`, `WARNING_CHECKS` |
 | **Message Arrays** | `FAILED_MESSAGES`, `WARNING_MESSAGES` for summary reporting |
-| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.7.3 (2026-04-23)`) |
+| **`print_script_version`** | Print version line (e.g., `preflight-check.sh v1.7.4 (2026-04-24)`) |
 | **`check_pass`** | Record a passing check with green checkmark |
 | **`check_fail`** | Record a failing check with red X, adds to failed messages |
 | **`check_warn`** | Record a warning with yellow triangle, adds to warning messages |

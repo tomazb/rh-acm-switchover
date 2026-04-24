@@ -106,6 +106,29 @@ def test_switchover_rescue_has_resume_on_failure_guard():
         assert "resume_on_failure" in when_text, f"Resume task must be guarded by resume_on_failure flag. when: {when}"
 
 
+def test_switchover_rescue_resets_primary_prep_checkpoint_after_resume_on_failure():
+    """After best-effort resume, retry must rerun primary_prep and re-pause GitOps."""
+    playbook = _load_playbook("switchover.yml")
+    task_block = _get_task_block(playbook)
+    rescue_tasks = task_block["rescue"]
+
+    reset_tasks = [
+        task for task in rescue_tasks if task.get("tomazb.acm_switchover.checkpoint_phase", {}).get("status") == "reset"
+    ]
+    assert reset_tasks, "switchover.yml rescue must reset a checkpoint phase after resume-on-failure"
+
+    reset_task = reset_tasks[0]
+    checkpoint_args = reset_task.get("tomazb.acm_switchover.checkpoint_phase", {})
+    assert checkpoint_args.get("phase") == "primary_prep"
+    assert checkpoint_args.get("checkpoint") == "{{ acm_switchover_execution.checkpoint }}"
+
+    when = reset_task.get("when", [])
+    when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
+    assert "argocd.manage" in when_text
+    assert "resume_on_failure" in when_text
+    assert "checkpoint.enabled" in when_text
+
+
 def test_switchover_rescue_uses_ignore_errors():
     """switchover.yml rescue resume tasks must use ignore_errors to prevent compounding failures."""
     playbook = _load_playbook("switchover.yml")

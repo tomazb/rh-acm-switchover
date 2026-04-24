@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Ansible finalization old-hub read safety**: Collection finalization now fails closed when unexpected old-hub `MultiClusterObservability`, `ManagedCluster`, or `BackupSchedule` reads fail during finalization, while still treating absent MCO API resources as a no-op.
+- **Argo CD resume-on-failure retry safety**: Python resume-on-failure now clears durable Argo CD pause state only after every recorded Application is restored or already resumed, and the collection resets the `primary_prep` checkpoint after best-effort resume so retries re-pause GitOps before continuing.
+- **Validate-only FAILED-state preservation**: Python validate-only checkpoint restore now preserves durable error history, preventing transient preflight failures from changing the later retry phase.
+- **Observatorium rollout readiness**: Python and collection post-activation checks now require updated, available, ready, current, and unavailable replica counters to confirm the new `observatorium-api` ReplicaSet has rolled out before reporting ready.
+- **Collection checkpoint reset**: The `checkpoint_phase` action plugin now supports `status: reset` to remove a phase from `completed_phases` without appending an error.
 
 ## [1.7.3] - 2026-04-23
 

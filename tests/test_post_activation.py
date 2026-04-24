@@ -107,7 +107,10 @@ class TestPostActivationVerification:
         core_v1 = Mock(name="core_v1")
         apps_v1 = Mock(name="apps_v1")
 
-        with patch("modules.post_activation.config.new_client_from_config", return_value=api_client) as new_client:
+        with patch(
+            "modules.post_activation.config.new_client_from_config",
+            return_value=api_client,
+        ) as new_client:
             with patch("modules.post_activation.client.CoreV1Api", return_value=core_v1) as core_ctor:
                 with patch("modules.post_activation.client.AppsV1Api", return_value=apps_v1) as apps_ctor:
                     result = verify._build_managed_cluster_clients("managed-context")
@@ -178,7 +181,14 @@ class TestPostActivationVerification:
         mock_secondary_client.get_deployment.return_value = {
             "metadata": {"generation": 1},
             "spec": {"replicas": 2},
-            "status": {"observedGeneration": 1, "readyReplicas": 2},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 2,
+                "updatedReplicas": 2,
+                "availableReplicas": 2,
+                "readyReplicas": 2,
+                "unavailableReplicas": 0,
+            },
         }
         mock_secondary_client.rollout_restart_deployment.return_value = {"status": "ok"}
 
@@ -377,12 +387,38 @@ class TestPostActivationVerification:
             {
                 "metadata": {"generation": 2},
                 "spec": {"replicas": 2},
-                "status": {"observedGeneration": 1, "readyReplicas": 1},
+                "status": {
+                    "observedGeneration": 1,
+                    "replicas": 2,
+                    "updatedReplicas": 1,
+                    "availableReplicas": 1,
+                    "readyReplicas": 1,
+                    "unavailableReplicas": 1,
+                },
             },
             {
                 "metadata": {"generation": 2},
                 "spec": {"replicas": 2},
-                "status": {"observedGeneration": 2, "readyReplicas": 2},
+                "status": {
+                    "observedGeneration": 2,
+                    "replicas": 2,
+                    "updatedReplicas": 0,
+                    "availableReplicas": 2,
+                    "readyReplicas": 2,
+                    "unavailableReplicas": 0,
+                },
+            },
+            {
+                "metadata": {"generation": 2},
+                "spec": {"replicas": 2},
+                "status": {
+                    "observedGeneration": 2,
+                    "replicas": 2,
+                    "updatedReplicas": 2,
+                    "availableReplicas": 2,
+                    "readyReplicas": 2,
+                    "unavailableReplicas": 0,
+                },
             },
         ]
         mock_secondary_client.get_pods.return_value = [
@@ -399,10 +435,10 @@ class TestPostActivationVerification:
             namespace=OBSERVABILITY_NAMESPACE,
             name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT,
         )
-        assert mock_secondary_client.get_deployment.call_count == 2
+        assert mock_secondary_client.get_deployment.call_count == 3
         mock_secondary_client.wait_for_pods_ready.assert_not_called()
         mock_secondary_client.get_pods.assert_called()
-        mock_sleep.assert_called_once()
+        assert mock_sleep.call_count == 2
 
     def test_restart_observatorium_api_404_without_reason_is_graceful(
         self, post_verify_with_obs, mock_secondary_client
@@ -773,7 +809,14 @@ class TestPostActivationVerificationIntegration:
         mock_secondary_client.get_deployment.return_value = {
             "metadata": {"generation": 1},
             "spec": {"replicas": 1},
-            "status": {"observedGeneration": 1, "readyReplicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "availableReplicas": 1,
+                "readyReplicas": 1,
+                "unavailableReplicas": 0,
+            },
         }
         mock_secondary_client.rollout_restart_deployment.return_value = {"status": "ok"}
 
@@ -931,7 +974,12 @@ def _make_pav(secondary, state, obs=False, dry_run=False):
 
 def _kubeconfig_yaml(clusters=None, contexts=None):
     """Build a minimal kubeconfig YAML string."""
-    data = {"apiVersion": "v1", "clusters": clusters or [], "contexts": contexts or [], "users": []}
+    data = {
+        "apiVersion": "v1",
+        "clusters": clusters or [],
+        "contexts": contexts or [],
+        "users": [],
+    }
     return yaml.dump(data)
 
 
@@ -954,7 +1002,11 @@ class TestKlusterletParallelVerification:
         ]
 
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
-            with patch.object(pav, "_load_kubeconfig_data", return_value={"contexts": [], "clusters": []}):
+            with patch.object(
+                pav,
+                "_load_kubeconfig_data",
+                return_value={"contexts": [], "clusters": []},
+            ):
                 with patch.object(pav, "_check_klusterlet_connection") as mock_check:
                     pav._verify_klusterlet_connections()
 
@@ -1063,7 +1115,11 @@ class TestKlusterletParallelVerification:
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(pav, "_find_context_by_api_url", return_value="ctx-c1"):
-                    with patch.object(pav, "_check_klusterlet_connection", side_effect=RuntimeError("boom")):
+                    with patch.object(
+                        pav,
+                        "_check_klusterlet_connection",
+                        side_effect=RuntimeError("boom"),
+                    ):
                         # Should not raise; c1 lands in unreachable bucket
                         pav._verify_klusterlet_connections()
 
@@ -1263,7 +1319,10 @@ class TestFindContextByApiUrl:
 
         kube_data = {
             "clusters": [
-                {"name": "kc-prod", "cluster": {"server": "https://api.prod.example.com:6443"}},
+                {
+                    "name": "kc-prod",
+                    "cluster": {"server": "https://api.prod.example.com:6443"},
+                },
             ],
             "contexts": [
                 {"name": "admin@prod", "context": {"cluster": "kc-prod"}},
@@ -1279,7 +1338,10 @@ class TestFindContextByApiUrl:
 
         kube_data = {
             "clusters": [
-                {"name": "kc-a", "cluster": {"server": "https://api.a.example.com:6443"}},
+                {
+                    "name": "kc-a",
+                    "cluster": {"server": "https://api.a.example.com:6443"},
+                },
             ],
             "contexts": [
                 {"name": "ctx-a", "context": {"cluster": "kc-a"}},
@@ -1295,7 +1357,10 @@ class TestFindContextByApiUrl:
 
         kube_data = {
             "clusters": [
-                {"name": "kc-x", "cluster": {"server": "https://api.x.example.com:6443"}},
+                {
+                    "name": "kc-x",
+                    "cluster": {"server": "https://api.x.example.com:6443"},
+                },
             ],
             "contexts": [
                 {"name": "ctx-x", "context": {"cluster": "kc-x"}},
@@ -1310,7 +1375,10 @@ class TestFindContextByApiUrl:
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         with patch("modules.post_activation.config.list_kube_config_contexts") as mock_list:
-            mock_list.return_value = ([{"name": "prod-cluster"}], {"name": "prod-cluster"})
+            mock_list.return_value = (
+                [{"name": "prod-cluster"}],
+                {"name": "prod-cluster"},
+            )
             result = pav._find_context_by_api_url({}, "", "prod-cluster")
 
         assert result == "prod-cluster"
@@ -1343,7 +1411,10 @@ class TestFindContextByApiUrl:
 
         kube_data = {
             "clusters": [
-                {"name": "orphan-cluster", "cluster": {"server": "https://api.orphan:6443"}},
+                {
+                    "name": "orphan-cluster",
+                    "cluster": {"server": "https://api.orphan:6443"},
+                },
             ],
             "contexts": [
                 {"name": "ctx-other", "context": {"cluster": "different-cluster"}},
@@ -1841,7 +1912,10 @@ class TestGetHubApiServer:
                 {"name": "secondary-ctx", "context": {"cluster": "hub-cluster"}},
             ],
             "clusters": [
-                {"name": "hub-cluster", "cluster": {"server": "https://api.hub.example.com:6443"}},
+                {
+                    "name": "hub-cluster",
+                    "cluster": {"server": "https://api.hub.example.com:6443"},
+                },
             ],
         }
 

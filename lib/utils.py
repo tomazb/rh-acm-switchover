@@ -3,6 +3,7 @@ Common utilities for ACM switchover automation.
 """
 
 import atexit
+import copy
 import functools
 import inspect
 import json
@@ -159,7 +160,10 @@ class StateManager:
                 except ValueError:
                     # signal.signal() raises ValueError when called from non-main thread
                     # This is expected in test environments or when StateManager is used in workers
-                    logging.debug("Cannot register signal handler for %s (not in main thread)", sig)
+                    logging.debug(
+                        "Cannot register signal handler for %s (not in main thread)",
+                        sig,
+                    )
             self.state = self._load_state()
         except Exception:
             self._release_run_lock()
@@ -173,7 +177,10 @@ class StateManager:
         Multiple StateManager instances in the same process reuse the same lock.
         """
         if not fcntl:  # pragma: no cover - platform-specific
-            logging.debug("fcntl unavailable; process-level state lock disabled for %s", self.state_file)
+            logging.debug(
+                "fcntl unavailable; process-level state lock disabled for %s",
+                self.state_file,
+            )
             return
 
         registry_entry = _RUN_LOCK_REGISTRY.get(self._run_lock_path)
@@ -440,16 +447,18 @@ class StateManager:
         """Return the current retry error baseline, if any."""
         return dict(self._retry_error_baseline) if self._retry_error_baseline is not None else None
 
-    def capture_runtime_checkpoint(self) -> Dict[str, Optional[str]]:
+    def capture_runtime_checkpoint(self) -> Dict[str, Any]:
         """Capture the durable state fields that validate-only must preserve."""
         return {
             "current_phase": self.state.get("current_phase", Phase.INIT.value),
+            "errors": copy.deepcopy(self.state.get("errors", [])),
             "last_updated": self.state.get("last_updated"),
         }
 
-    def restore_runtime_checkpoint(self, checkpoint: Dict[str, Optional[str]]) -> None:
+    def restore_runtime_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Restore a previously captured runtime checkpoint without touching other state."""
         self.state["current_phase"] = checkpoint.get("current_phase", Phase.INIT.value)
+        self.state["errors"] = copy.deepcopy(checkpoint.get("errors", []))
 
         last_updated = checkpoint.get("last_updated")
         if last_updated is None:
@@ -466,6 +475,15 @@ class StateManager:
         """Mark a step as completed."""
         if not self.is_step_completed(step_name):
             self.state["completed_steps"].append({"name": step_name, "timestamp": _utc_timestamp()})
+            self._dirty = True
+            self.save_state()
+
+    def clear_step_completed(self, step_name: str) -> None:
+        """Clear a completed step marker so the step can run again."""
+        completed_steps = self.state.get("completed_steps", [])
+        filtered_steps = [step for step in completed_steps if step.get("name") != step_name]
+        if len(filtered_steps) != len(completed_steps):
+            self.state["completed_steps"] = filtered_steps
             self._dirty = True
             self.save_state()
 
@@ -542,7 +560,10 @@ class StateManager:
         try:
             return Phase(phase_str)
         except ValueError:
-            logging.warning("Unknown phase '%s' in last error, cannot determine resume point", phase_str)
+            logging.warning(
+                "Unknown phase '%s' in last error, cannot determine resume point",
+                phase_str,
+            )
             return None
 
     def reset(self) -> None:

@@ -60,6 +60,24 @@ def test_verify_observability_performs_real_health_checks():
     ), "verify_observability.yml must fail when critical observability health checks do not pass"
 
 
+def test_observatorium_rollout_gate_requires_updated_replicas():
+    """Deployment rollout gate must reject stale ready replicas from the old ReplicaSet."""
+    tasks = _load_yaml("verify_observability.yml")
+    rollout_tasks = [
+        task for task in tasks if task.get("name") == "Wait for observatorium-api Deployment rollout to stabilize"
+    ]
+    assert rollout_tasks, "verify_observability.yml must wait for observatorium-api rollout"
+
+    until = str(rollout_tasks[0].get("until", ""))
+    assert "observedGeneration" in until
+    assert "updatedReplicas" in until
+    assert "availableReplicas" in until
+    assert "readyReplicas" in until
+    assert "unavailableReplicas" in until
+    assert ".get('status', {}).get('replicas'" in until
+    assert ".get('spec', {}).get('replicas'" in until
+
+
 def test_cleanup_auto_import_annotations_patches_managed_clusters():
     """cleanup task must remove disable-auto-import from non-local ManagedClusters."""
     tasks = _load_yaml("cleanup_auto_import_annotations.yml")

@@ -449,17 +449,36 @@ class PostActivationVerification:
                 generation = int(metadata.get("generation", 0) or 0)
                 observed_generation = int(status.get("observedGeneration", 0) or 0)
                 desired_replicas = int(spec.get("replicas", 1) or 0)
+                current_replicas = int(status.get("replicas", desired_replicas) or 0)
+                updated_replicas = int(status.get("updatedReplicas", 0) or 0)
+                available_replicas = int(status.get("availableReplicas", 0) or 0)
                 ready_replicas = int(status.get("readyReplicas", 0) or 0)
+                unavailable_replicas = int(status.get("unavailableReplicas", 0) or 0)
 
-                if observed_generation >= generation and ready_replicas >= desired_replicas:
+                if (
+                    observed_generation >= generation
+                    and updated_replicas >= desired_replicas
+                    and available_replicas >= desired_replicas
+                    and ready_replicas >= desired_replicas
+                    and current_replicas <= updated_replicas
+                    and unavailable_replicas == 0
+                ):
                     return True
 
                 logger.debug(
-                    "Waiting for observatorium-api rollout: observedGeneration=%s/%s readyReplicas=%s/%s",
+                    "Waiting for observatorium-api rollout: "
+                    "observedGeneration=%s/%s replicas=%s updatedReplicas=%s/%s "
+                    "availableReplicas=%s/%s readyReplicas=%s/%s unavailableReplicas=%s",
                     observed_generation,
                     generation,
+                    current_replicas,
+                    updated_replicas,
+                    desired_replicas,
+                    available_replicas,
+                    desired_replicas,
                     ready_replicas,
                     desired_replicas,
+                    unavailable_replicas,
                 )
             else:
                 logger.debug("Waiting for observatorium-api rollout: deployment not found yet")
@@ -725,7 +744,10 @@ class PostActivationVerification:
                 logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
                 return (cluster_name, "unreachable", None)
 
-        logger.info("Checking klusterlet connections for %d cluster(s) in parallel...", len(cluster_info))
+        logger.info(
+            "Checking klusterlet connections for %d cluster(s) in parallel...",
+            len(cluster_info),
+        )
 
         # Collect results from futures to avoid shared mutable state
         verified = []
@@ -979,7 +1001,10 @@ class PostActivationVerification:
         )
 
         if not secret_ready:
-            logger.warning("bootstrap-hub-kubeconfig secret not visible on %s after timeout", cluster_name)
+            logger.warning(
+                "bootstrap-hub-kubeconfig secret not visible on %s after timeout",
+                cluster_name,
+            )
 
     def _restart_klusterlet(self, apps_v1: client.AppsV1Api, cluster_name: str) -> None:
         """Restart the klusterlet deployment on the managed cluster.
@@ -1099,7 +1124,10 @@ class PostActivationVerification:
             for path in paths:
                 expanded_path = os.path.expanduser(path)
                 if not os.path.exists(expanded_path):
-                    logger.debug("Kubeconfig path does not exist: %s", os.path.basename(expanded_path))
+                    logger.debug(
+                        "Kubeconfig path does not exist: %s",
+                        os.path.basename(expanded_path),
+                    )
                     continue
 
                 try:
@@ -1135,7 +1163,11 @@ class PostActivationVerification:
                         merged["clusters"].extend(data.get("clusters", []))
                         merged["users"].extend(data.get("users", []))
                 except (OSError, yaml.YAMLError) as e:
-                    logger.debug("Error loading kubeconfig %s: %s", os.path.basename(expanded_path), e)
+                    logger.debug(
+                        "Error loading kubeconfig %s: %s",
+                        os.path.basename(expanded_path),
+                        e,
+                    )
                     continue
 
             # Update cache with loaded data and file modification times
@@ -1176,7 +1208,11 @@ class PostActivationVerification:
                         return cluster_name
             except (config.ConfigException, Exception) as e:
                 # Failed to match context by name; returning empty string as fallback
-                logger.debug("Exception during name-based context matching for %s: %s", cluster_name, e)
+                logger.debug(
+                    "Exception during name-based context matching for %s: %s",
+                    cluster_name,
+                    e,
+                )
             return ""
 
         # Normalize the API URL for comparison (extract host)
@@ -1284,11 +1320,15 @@ class PostActivationVerification:
             klusterlet_host = re.sub(r"https://([^:/]+).*", r"\1", klusterlet_hub)
 
             if expected_host == klusterlet_host:
-                logger.debug("Cluster %s klusterlet verified (API server endpoint matched expected)", cluster_name)
+                logger.debug(
+                    "Cluster %s klusterlet verified (API server endpoint matched expected)",
+                    cluster_name,
+                )
                 return "verified"
             else:
                 logger.debug(
-                    "Cluster %s klusterlet not verified (API server endpoint did not match expected)", cluster_name
+                    "Cluster %s klusterlet not verified (API server endpoint did not match expected)",
+                    cluster_name,
                 )
                 return "wrong_hub"
 

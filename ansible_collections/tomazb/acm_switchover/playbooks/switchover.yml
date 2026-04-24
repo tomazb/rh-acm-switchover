@@ -57,6 +57,17 @@
             - (acm_switchover_hubs.primary.context | default('')) | length > 0
           ignore_errors: true  # noqa: ignore-errors
 
+        - name: Reset primary prep checkpoint after Argo CD resume on failure
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: primary_prep
+            checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+            status: reset
+          when:
+            - acm_switchover_features.argocd.manage | default(false)
+            - acm_switchover_features.argocd.resume_on_failure | default(false)
+            - acm_switchover_execution.checkpoint.enabled | default(false)
+          ignore_errors: true  # noqa: ignore-errors
+
         - name: Re-raise original switchover failure
           ansible.builtin.fail:
             msg: "{{ ansible_failed_result.msg | default('Switchover failed') }}"
