@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Collection artifact and decommission summaries**: Report artifact paths now allow new directories below an existing allowed ancestor, and decommission now honors the shared `summary_path` summary-output variable while retaining the legacy prefixed variable.
 - **RBAC kubeconfig generation**: Service-account kubeconfig generators now fail fast when cluster `certificate-authority-data` cannot be read instead of emitting an invalid kubeconfig with an empty CA field.
 - **Review regression hardening**: Finalization now honors skipped observability before deleting old-hub `MultiClusterObservability`, RBAC validators require namespace `list` for preflight discovery, and collection RBAC bootstrap now generates durable service-account kubeconfigs and validates the bootstrapped service account rather than the admin credential.
 - **Collection review regressions**: Fixed collection finalization debug/runtime failures, preserved restore-only backup verification skips, made Argo CD pause patches actually remove automated sync, paused Argo CD before primary_prep ACM mutations, and excluded `local-cluster` from managed-cluster readiness accounting.

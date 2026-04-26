@@ -10,7 +10,6 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_report_artifa
 def test_run_module_writes_report_json(tmp_path, monkeypatch):
     captured = {}
     destination = tmp_path / "artifacts" / "report.json"
-    destination.parent.mkdir()
 
     class FakeModule:
         def __init__(self, *args, **kwargs):

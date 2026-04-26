@@ -75,14 +75,17 @@ def validate_safe_path(path: str) -> None:
         if os.path.exists(path):
             resolved_path = os.path.realpath(path)
         else:
-            parent = os.path.dirname(path)
-            if parent and os.path.exists(parent):
-                resolved_path = os.path.join(os.path.realpath(parent), os.path.basename(path))
-            else:
-                raise ValidationError(
-                    f"Absolute path '{path}' has a non-existent parent directory. "
-                    "Create the parent directory in an allowed location before using this path."
-                )
+            ancestor = path
+            missing_parts: list[str] = []
+            while ancestor and not os.path.exists(ancestor):
+                ancestor, name = os.path.split(ancestor)
+                if name:
+                    missing_parts.insert(0, name)
+
+            if not ancestor or not os.path.exists(ancestor):
+                raise ValidationError(f"Absolute path '{path}' cannot be resolved against an existing directory.")
+
+            resolved_path = os.path.join(os.path.realpath(ancestor), *missing_parts)
 
         home_dir = os.path.expanduser("~")
         allowed_prefixes = ["/tmp/", "/var/", os.path.realpath(home_dir) + "/"]
