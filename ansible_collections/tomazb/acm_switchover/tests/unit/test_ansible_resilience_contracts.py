@@ -147,6 +147,7 @@ def test_collection_mutation_tasks_default_missing_execution_mode_to_dry_run():
     """Missing execution.mode must not trigger live pause, import, or reset mutations."""
     files = [
         ARGOCD_TASKS / "pause.yml",
+        ARGOCD_TASKS / "resume.yml",
         ACTIVATION_TASKS / "manage_auto_import.yml",
         ACTIVATION_TASKS / "apply_immediate_import.yml",
         FINALIZATION_TASKS / "reset_auto_import.yml",

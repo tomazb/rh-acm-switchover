@@ -78,6 +78,7 @@
         label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
       when:
         - acm_switchover_argocd_mock_apps is not defined
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - "'acm-switchover.argoproj.io/paused-by' in item.metadata.annotations"
         - item.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == _argocd_expected_run_id
       register: acm_argocd_resume_results

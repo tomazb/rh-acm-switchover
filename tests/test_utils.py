@@ -315,6 +315,37 @@ class TestStateManager:
         assert reloaded.get_config("primary_version") == "2.14.0"
         assert reloaded.state["last_updated"] == original_timestamp
 
+    def test_restore_state_snapshot_rolls_back_full_durable_state(self, tmp_path):
+        """Dry-run snapshots should restore phase, errors, completed steps, and config."""
+        state_path = tmp_path / "dry-run-snapshot.json"
+        sm = StateManager(str(state_path))
+        sm.set_phase(Phase.POST_ACTIVATION)
+        sm.mark_step_completed("original_step")
+        sm.set_config("original_key", {"nested": ["value"]})
+        sm.add_error("original failure", Phase.POST_ACTIVATION.value)
+        original_timestamp = sm.state["last_updated"]
+
+        snapshot = sm.capture_state_snapshot()
+
+        sm.set_phase(Phase.FINALIZATION)
+        sm.mark_step_completed("dry_run_step")
+        sm.set_config("original_key", {"nested": ["changed"]})
+        sm.set_config("dry_run_key", "discard")
+        sm.add_error("dry-run failure", Phase.FINALIZATION.value)
+
+        sm.restore_state_snapshot(snapshot)
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_current_phase() == Phase.POST_ACTIVATION
+        assert [step["name"] for step in reloaded.state["completed_steps"]] == ["original_step"]
+        assert reloaded.get_config("original_key") == {"nested": ["value"]}
+        assert reloaded.get_config("dry_run_key") is None
+        assert reloaded.state["last_updated"] == original_timestamp
+        errors = reloaded.get_errors()
+        assert len(errors) == 1
+        assert errors[0]["error"] == "original failure"
+        assert errors[0]["phase"] == Phase.POST_ACTIVATION.value
+
     def test_ensure_contexts_stores_values(self, tmp_path):
         """Contexts should be persisted and reloaded."""
         state_path = tmp_path / "ctx.json"

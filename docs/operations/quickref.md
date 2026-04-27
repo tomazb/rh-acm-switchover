@@ -271,7 +271,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--activation-method {patch,restore}` | Activation method for passive restores (default: patch) |
 | `--min-managed-clusters N` | Require at least `N` non-local `ManagedCluster` resources after restore; `N` must be non-negative and `0` keeps the check informational |
 | `--validate-only` | Run validation checks only, no changes |
-| `--dry-run` | Show planned actions without executing |
+| `--dry-run` | Show planned actions without executing or advancing resume state |
 | `--decommission` | Decommission old hub (interactive) |
 | `--restore-only` | Restore managed clusters from S3 backups onto a single hub (no primary needed; implies `--method full`) |
 | `--setup` | Deploy RBAC resources and optionally generate kubeconfigs |

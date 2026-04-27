@@ -143,6 +143,7 @@ The architecture distinguishes validation failures, recoverable API issues, and 
 ### Minimize hidden side effects
 
 - `--dry-run` logs intended operations instead of mutating cluster resources
+- `--dry-run` restores the pre-run state file after rehearsal so resume/checkpoint state is not advanced
 - `--validate-only` runs checks without entering mutation phases
 - Setup mode and resume-only mode are isolated from the main switchover control flow
 
@@ -181,6 +182,9 @@ Provides the operational scaffolding:
 - error history
 
 Critical checkpoints call `flush_state()`. Non-critical changes call `save_state()`.
+Dry-run orchestration captures and restores a full `StateManager` snapshot after the run; this is separate from
+validate-only runtime checkpoints, which intentionally preserve discovered config while restoring phase and error
+state.
 
 ### `lib/kube_client.py`
 
@@ -294,6 +298,9 @@ sequenceDiagram
     participant Argo as lib.argocd / gitops_detector
 
     CLI->>State: load or initialize state
+    opt --dry-run
+        CLI->>State: capture full state snapshot
+    end
     CLI->>P: create client for primary context
     CLI->>S: create client for secondary context
     CLI->>Mods: run preflight coordinator
@@ -307,6 +314,9 @@ sequenceDiagram
     CLI->>Mods: run finalization
     Mods->>P: delete MultiClusterObservability when old hub remains secondary
     Mods->>State: persist completion and config
+    opt --dry-run
+        CLI->>State: restore pre-run state snapshot
+    end
 ```
 
 ## GitOps and Argo CD Architecture

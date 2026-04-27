@@ -57,6 +57,7 @@ python acm_switchover.py \
 **What you'll see:**
 - All planned actions (patch, create, delete operations)
 - No actual changes will be made
+- The state file is restored to its pre-run content, so dry-run cannot advance resume state
 - Gives confidence in what will happen
 
 **Sample dry-run output:**

@@ -751,6 +751,112 @@ class TestSwitchoverPhaseFlow:
         assert result is False
         assert state.get_current_phase() == Phase.POST_ACTIVATION
 
+    def test_run_switchover_dry_run_restores_original_state(self, tmp_path):
+        """Dry-run full switchover must not persist resume/checkpoint progress."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_config("operator_note", "keep")
+        original_timestamp = state.state["last_updated"]
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            dry_run=True,
+            state_file=str(state_file),
+            method="passive",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="secondary",
+            argocd_manage=False,
+        )
+
+        def _complete_phase(next_phase, step_name):
+            def _handler(_args, phase_state, *_rest):
+                phase_state.set_phase(next_phase)
+                phase_state.mark_step_completed(step_name)
+                phase_state.set_config("dry_run_only", step_name)
+                return True
+
+            return _handler
+
+        with patch(
+            "acm_switchover._run_phase_preflight", side_effect=_complete_phase(Phase.PREFLIGHT, "dry_preflight")
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=_complete_phase(Phase.PRIMARY_PREP, "dry_primary_prep"),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=_complete_phase(Phase.ACTIVATION, "dry_activation"),
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=_complete_phase(Phase.POST_ACTIVATION, "dry_post_activation"),
+        ), patch(
+            "acm_switchover._run_phase_finalization",
+            side_effect=_complete_phase(Phase.FINALIZATION, "dry_finalization"),
+        ):
+            assert run_switchover(args, state, Mock(), Mock(), Mock()) is True
+
+        reloaded = StateManager(str(state_file))
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.get_config("operator_note") == "keep"
+        assert reloaded.get_config("dry_run_only") is None
+        assert reloaded.state["completed_steps"] == []
+        assert reloaded.state["last_updated"] == original_timestamp
+
+    def test_run_restore_only_dry_run_restores_original_state(self, tmp_path):
+        """Dry-run restore-only must not persist resume/checkpoint progress."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_config("restore_note", "keep")
+        original_timestamp = state.state["last_updated"]
+
+        args = SimpleNamespace(
+            force=False,
+            validate_only=False,
+            dry_run=True,
+            state_file=str(state_file),
+            method="full",
+            skip_rbac_validation=True,
+            skip_observability_checks=False,
+            old_hub_action="none",
+            argocd_manage=False,
+            restore_only=True,
+        )
+
+        def _complete_phase(next_phase, step_name):
+            def _handler(_args, phase_state, *_rest):
+                phase_state.set_phase(next_phase)
+                phase_state.mark_step_completed(step_name)
+                phase_state.set_config("dry_run_only", step_name)
+                return True
+
+            return _handler
+
+        with patch(
+            "acm_switchover._run_phase_preflight", side_effect=_complete_phase(Phase.PREFLIGHT, "dry_preflight")
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=_complete_phase(Phase.ACTIVATION, "dry_activation"),
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=_complete_phase(Phase.POST_ACTIVATION, "dry_post_activation"),
+        ), patch(
+            "acm_switchover._run_phase_finalization",
+            side_effect=_complete_phase(Phase.FINALIZATION, "dry_finalization"),
+        ):
+            assert run_restore_only(args, state, Mock(), Mock()) is True
+
+        reloaded = StateManager(str(state_file))
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.get_config("restore_note") == "keep"
+        assert reloaded.get_config("dry_run_only") is None
+        assert reloaded.state["completed_steps"] == []
+        assert reloaded.state["last_updated"] == original_timestamp
+
     def test_run_switchover_resume_from_failed_state_retries_failed_phase(self, tmp_path):
         """Verify that run_switchover resumes from the phase that failed when state is FAILED."""
         from lib.utils import Phase, StateManager

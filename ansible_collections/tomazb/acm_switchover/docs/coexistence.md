@@ -40,6 +40,8 @@ When a collection checkpoint exists at `acm_switchover_execution.checkpoint.path
 `checkpoint_phase` action plugin skips any phase listed in `completed_phases` on resume.
 A fresh run (or `checkpoint.reset: true`) starts from the beginning regardless of any
 pre-existing checkpoint file.
+Dry-run collection runs do not write pass/fail/reset checkpoint transitions, so they cannot make a later live run skip
+phases.
 
 ## GitOps Integration Boundary
 

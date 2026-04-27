@@ -471,6 +471,16 @@ class StateManager:
         self._dirty = False
         self._write_state(self.state)
 
+    def capture_state_snapshot(self) -> Dict[str, Any]:
+        """Capture the complete durable state for dry-run rollback."""
+        return copy.deepcopy(self.state)
+
+    def restore_state_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        """Restore a complete durable state snapshot without refreshing timestamps."""
+        self.state = copy.deepcopy(snapshot)
+        self._dirty = False
+        self._write_state(self.state)
+
     def mark_step_completed(self, step_name: str) -> None:
         """Mark a step as completed."""
         if not self.is_step_completed(step_name):

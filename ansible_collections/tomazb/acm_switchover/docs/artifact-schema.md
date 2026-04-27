@@ -78,7 +78,9 @@ Each result entry must support:
 
 Implemented in Phase 4. Path: controlled by `acm_switchover_execution.checkpoint.path`.
 
-Written by the `tomazb.acm_switchover.checkpoint_phase` action plugin after each phase.
+Written by the `tomazb.acm_switchover.checkpoint_phase` action plugin after each phase during live execution.
+When `acm_switchover_execution.mode` is `dry_run`, the plugin reports the simulated transition without writing the
+checkpoint file or appending `completed_phases`.
 
 ```json
 {

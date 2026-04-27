@@ -61,6 +61,7 @@ class ActionModule(ActionBase):
 
     def run(self, tmp=None, task_vars=None):
         super().run(tmp, task_vars)
+        task_vars = task_vars or {}
 
         phase = self._task.args.get("phase", "")
         checkpoint_config = self._task.args.get("checkpoint", {})
@@ -68,6 +69,9 @@ class ActionModule(ActionBase):
         error = self._task.args.get("error")
         report_ref = self._task.args.get("report_ref")
         operational_data = self._task.args.get("operational_data") or {}
+        execution = task_vars.get("acm_switchover_execution") or {}
+        execution_mode = execution.get("mode", "dry_run")
+        is_dry_run = execution_mode == "dry_run"
 
         backend = checkpoint_config.get("backend", "file")
         path = checkpoint_config.get("path", ".state/checkpoint.json")
@@ -113,7 +117,7 @@ class ActionModule(ActionBase):
 
         checkpoint_data["phase"] = phase
 
-        if should_reset and backend == "file":
+        if should_reset and backend == "file" and not is_dry_run:
             save_result = self._save_checkpoint(path, checkpoint_data)
             if save_result is not None and save_result.get("failed"):
                 return save_result
@@ -124,6 +128,13 @@ class ActionModule(ActionBase):
                 "changed": False,
                 "checkpoint": checkpoint_data,
                 "skipped_phase": already_done,
+            }
+
+        if is_dry_run:
+            return {
+                "changed": False,
+                "checkpoint": checkpoint_data,
+                "dry_run": True,
             }
 
         transition = build_phase_transition(checkpoint_data, phase, status)

@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-04-27
+
 ### Fixed
 
+- **Dry-run state safety**: Python full switchover and restore-only dry-runs now restore the complete pre-run state after rehearsal, collection checkpoints no longer persist pass/fail/reset transitions in dry-run mode, and Argo CD live resume patches are guarded against dry-run execution.
 - **Resume and dry-run safety regressions**: Python Argo CD resume-on-failure now rewinds retries to re-run the pause step, and the collection restores passive Restore fallback parity, checkpoint activation rediscovery, benign `FinishedWithErrors` handling, and dry-run guards around live Argo CD, auto-import, ManagedCluster, and post-activation mutations.
 - **Collection artifact and decommission summaries**: Report artifact paths now allow new directories below an existing allowed ancestor, and decommission now honors the shared `summary_path` summary-output variable while retaining the legacy prefixed variable.
 - **RBAC kubeconfig generation**: Service-account kubeconfig generators now fail fast when cluster `certificate-authority-data` cannot be read instead of emitting an invalid kubeconfig with an empty CA field.
@@ -1187,7 +1190,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.3...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.6...HEAD
+[1.7.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.3...v1.7.6
 [1.7.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.10...v1.7.3
 [1.6.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.0...v1.6.10
 [1.7.0]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.3...v1.7.0

@@ -357,6 +357,22 @@ def run_switchover(
     logger: logging.Logger,
 ):
     """Execute the main switchover workflow."""
+    dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    try:
+        return _run_switchover_impl(args, state, primary, secondary, logger)
+    finally:
+        if dry_run_snapshot is not None:
+            state.restore_state_snapshot(dry_run_snapshot)
+
+
+def _run_switchover_impl(
+    args: argparse.Namespace,
+    state: StateManager,
+    primary: KubeClient,
+    secondary: KubeClient,
+    logger: logging.Logger,
+):
+    """Execute the main switchover workflow."""
 
     if secondary is None:
         raise ValueError("Secondary client is required for switchover")
@@ -539,6 +555,21 @@ def _run_restore_only_argocd_pause(
 
 
 def run_restore_only(
+    args: argparse.Namespace,
+    state: StateManager,
+    secondary: KubeClient,
+    logger: logging.Logger,
+) -> bool:
+    """Execute restore-only workflow for single-hub restore from backup."""
+    dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    try:
+        return _run_restore_only_impl(args, state, secondary, logger)
+    finally:
+        if dry_run_snapshot is not None:
+            state.restore_state_snapshot(dry_run_snapshot)
+
+
+def _run_restore_only_impl(
     args: argparse.Namespace,
     state: StateManager,
     secondary: KubeClient,
