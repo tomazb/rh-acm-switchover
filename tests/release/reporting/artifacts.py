@@ -1,6 +1,7 @@
 # tests/release/reporting/artifacts.py
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,8 @@ REQUIRED_JSON_ARTIFACTS = {
 
 @dataclass(frozen=True)
 class ReleaseArtifacts:
+    """Persistent container for a single release validation run's output files."""
+
     root: Path
     run_id: str
     run_dir: Path
@@ -29,11 +32,12 @@ class ReleaseArtifacts:
         run_dir.mkdir(parents=True, exist_ok=False)
         artifacts = cls(root=root, run_id=run_id, run_dir=run_dir)
         for filename, payload in REQUIRED_JSON_ARTIFACTS.items():
-            artifacts.write_json(filename, payload)
+            artifacts.write_json(filename, copy.deepcopy(payload))
         (run_dir / "release-report.md").write_text("# Release Report\n\nStatus: created\n", encoding="utf-8")
         return artifacts
 
-    def write_json(self, relative_path: str, payload: dict[str, Any]) -> Path:
+    def write_json(self, relative_path: str | Path, payload: dict[str, Any]) -> Path:
+        """Serialize payload as indented JSON under run_dir and return the written path."""
         path = self.run_dir / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
