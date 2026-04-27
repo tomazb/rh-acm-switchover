@@ -396,6 +396,7 @@ When doing similar refactoring work:
 - `docs/ansible-collection/parity-matrix.md` - Source of truth for parity/support status
 - `docs/ansible-collection/behavior-map.md` - Python-to-collection behavior mapping
 - `ansible_collections/tomazb/acm_switchover/docs/coexistence.md` - Coexistence and shared-behavior policy
+- `docs/superpowers/plans/2026-04-27-release-validation-progress.md` - Track release validation framework implementation progress here until every plan row is complete and verified
 - `docs/development/architecture.md` - Design decisions and module descriptions
 - `lib/constants.py` - All magic strings centralized here (Python)
 - `ansible_collections/tomazb/acm_switchover/plugins/module_utils/constants.py` - All collection-side constants centralized here
