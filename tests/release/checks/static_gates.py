@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class GateCommand:
+    gate_id: str
+    label: str
+    command: list[str]
+    cwd: Path
+    required: bool = True
+
+
+@dataclass(frozen=True)
+class GateResult:
+    gate_id: str
+    label: str
+    command: list[str]
+    returncode: int
+    status: str
+    stdout_path: str
+    stderr_path: str
+    required: bool
+
+
+def run_gate_command(command: GateCommand, artifact_dir: Path) -> GateResult:
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(command.command, cwd=command.cwd, text=True, capture_output=True, check=False)
+    stdout_path = artifact_dir / f"{command.gate_id}-{command.label}.stdout"
+    stderr_path = artifact_dir / f"{command.gate_id}-{command.label}.stderr"
+    stdout_path.write_text(completed.stdout, encoding="utf-8")
+    stderr_path.write_text(completed.stderr, encoding="utf-8")
+    return GateResult(
+        gate_id=command.gate_id,
+        label=command.label,
+        command=command.command,
+        returncode=completed.returncode,
+        status="passed" if completed.returncode == 0 else "failed",
+        stdout_path=str(stdout_path),
+        stderr_path=str(stderr_path),
+        required=command.required,
+    )
+
+
+def build_default_gate_commands(*, enabled_streams: tuple[str, ...], repo_root: Path) -> list[GateCommand]:
+    gates = [
+        GateCommand(
+            gate_id="root-non-e2e-tests",
+            label="pytest-root",
+            command=["python", "-m", "pytest", "tests/", "-m", "not e2e and not release"],
+            cwd=repo_root,
+        )
+    ]
+    if {"python", "ansible"}.issubset(set(enabled_streams)):
+        gates.append(
+            GateCommand(
+                gate_id="static-parity-tests",
+                label="pytest-parity",
+                command=[
+                    "python",
+                    "-m",
+                    "pytest",
+                    "tests/test_constants_parity.py",
+                    "tests/test_rbac_collection_parity.py",
+                    "tests/test_argocd_constants_parity.py",
+                ],
+                cwd=repo_root,
+            )
+        )
+    if "python" in enabled_streams:
+        gates.extend(
+            [
+                GateCommand("python-style-security-gates", "black", ["black", "--check", "--line-length", "120", "acm_switchover.py", "lib/", "modules/"], repo_root),
+                GateCommand("python-style-security-gates", "isort", ["isort", "--check-only", "--profile", "black", "--line-length", "120", "acm_switchover.py", "lib/", "modules/"], repo_root),
+                GateCommand("python-cli-smoke", "help", ["python", "acm_switchover.py", "--help"], repo_root),
+            ]
+        )
+    if "ansible" in enabled_streams:
+        collection_root = repo_root / "ansible_collections/tomazb/acm_switchover"
+        gates.extend(
+            [
+                GateCommand("collection-ansible-test-sanity", "ansible-test-sanity", ["ansible-test", "sanity", "--docker", "default", "-v"], collection_root),
+                GateCommand("collection-unit-tests", "pytest-collection-unit", ["python", "-m", "pytest", "tests/unit", "-q"], collection_root),
+                GateCommand("collection-build-install", "ansible-galaxy-build", ["ansible-galaxy", "collection", "build", "--force"], collection_root),
+                GateCommand("collection-playbook-syntax", "preflight", ["ansible-playbook", "--syntax-check", "playbooks/preflight.yml"], collection_root),
+            ]
+        )
+    return gates
