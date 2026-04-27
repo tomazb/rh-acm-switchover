@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 from tests.release.checks.static_gates import GateCommand, build_default_gate_commands, run_gate_command
@@ -23,6 +24,30 @@ def test_run_gate_command_fails_on_nonzero_return(tmp_path: Path) -> None:
 
     assert result.status == "failed"
     assert result.returncode == 7
+
+
+def test_run_gate_command_records_timeout_as_failed_result(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=["python", "-c", "print('slow')"],
+            timeout=300,
+            output="partial stdout\n",
+            stderr="partial stderr\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = run_gate_command(
+        GateCommand(gate_id="sample", label="timeout", command=["python", "-c", "print('slow')"], cwd=Path.cwd()),
+        artifact_dir=tmp_path,
+    )
+
+    assert result.status == "failed"
+    assert result.returncode == -1
+    assert Path(result.stdout_path).read_text(encoding="utf-8") == "partial stdout\n"
+    stderr_text = Path(result.stderr_path).read_text(encoding="utf-8")
+    assert "timed out after 300 seconds" in stderr_text
+    assert "partial stderr" in stderr_text
 
 
 def test_python_and_ansible_streams_enable_expected_gate_ids() -> None:

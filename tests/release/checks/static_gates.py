@@ -4,6 +4,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+GATE_COMMAND_TIMEOUT_SECONDS = 300
+TIMEOUT_RETURN_CODE = -1
+
 
 @dataclass(frozen=True)
 class GateCommand:
@@ -26,19 +29,47 @@ class GateResult:
     required: bool
 
 
+def _text_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def run_gate_command(command: GateCommand, artifact_dir: Path) -> GateResult:
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(command.command, cwd=command.cwd, text=True, capture_output=True, check=False)
     stdout_path = artifact_dir / f"{command.gate_id}-{command.label}.stdout"
     stderr_path = artifact_dir / f"{command.gate_id}-{command.label}.stderr"
-    stdout_path.write_text(completed.stdout, encoding="utf-8")
-    stderr_path.write_text(completed.stderr, encoding="utf-8")
+
+    try:
+        completed = subprocess.run(
+            command.command,
+            cwd=command.cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=GATE_COMMAND_TIMEOUT_SECONDS,
+        )
+        stdout_text = completed.stdout
+        stderr_text = completed.stderr
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout_text = _text_output(exc.output)
+        stderr_text = _text_output(exc.stderr)
+        if stderr_text and not stderr_text.endswith("\n"):
+            stderr_text = f"{stderr_text}\n"
+        stderr_text = f"{stderr_text}Command timed out after {exc.timeout} seconds\n"
+        returncode = TIMEOUT_RETURN_CODE
+
+    stdout_path.write_text(stdout_text, encoding="utf-8")
+    stderr_path.write_text(stderr_text, encoding="utf-8")
     return GateResult(
         gate_id=command.gate_id,
         label=command.label,
         command=command.command,
-        returncode=completed.returncode,
-        status="passed" if completed.returncode == 0 else "failed",
+        returncode=returncode,
+        status="passed" if returncode == 0 else "failed",
         stdout_path=str(stdout_path),
         stderr_path=str(stderr_path),
         required=command.required,
