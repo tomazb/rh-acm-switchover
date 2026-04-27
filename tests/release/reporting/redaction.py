@@ -1,12 +1,18 @@
 # tests/release/reporting/redaction.py
 from __future__ import annotations
 
+"""Redaction scanner and sanitized text types for release artifact persistence."""
+
 import re
 from dataclasses import dataclass
 
 
 class RedactionError(ValueError):
     """Raised when sensitive material must be rejected instead of redacted."""
+
+    def __init__(self, rejected_class: str) -> None:
+        super().__init__(rejected_class)
+        self.rejected_class = rejected_class
 
 
 @dataclass(frozen=True)
