@@ -17,7 +17,7 @@ Purpose: Track planning and implementation state across the release validation f
 
 | Plan | File | Depends on | Status | Owner/session | Branch or commit | Verification command | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 01 | `docs/superpowers/plans/2026-04-27-release-validation-01-profile-contract-foundation.md` | Source spec | `ready` |  |  | `python -m pytest tests/release/contracts -q` | Establishes profile model, loader, defaults, examples, and secret scanning. |
+| 01 | `docs/superpowers/plans/2026-04-27-release-validation-01-profile-contract-foundation.md` | Source spec | `verified` | session `800ac011-0e47-49a5-a2b8-4ece8eb426fd` | `release-validation-01-profile-contract-foundation` | `python -m pytest tests/release/contracts -q` | Implemented in `.worktrees/release-validation-01`; `tests/release -q` currently exercises contract tests only, so lifecycle collection gating remains for Plan 02. |
 | 02 | `docs/superpowers/plans/2026-04-27-release-validation-02-release-selection-static-gates.md` | Plan 01 | `ready` |  |  | `python -m pytest tests/release -k "options or matrix or static_gates or metadata" -q` | Adds pytest options, release modes, matrix selection, metadata checks, and static gates. |
 | 03 | `docs/superpowers/plans/2026-04-27-release-validation-03-artifacts-redaction.md` | Plans 01-02 | `ready` |  |  | `python -m pytest tests/release/reporting -q` | Adds artifact writing, schema validators, sanitizer, and early failure files. |
 | 04 | `docs/superpowers/plans/2026-04-27-release-validation-04-lab-readiness-baseline-discovery.md` | Plans 01-03 | `ready` |  |  | `python -m pytest tests/release/baseline tests/release/checks -q` | Adds mocked discovery, readiness, environment fingerprints, and baseline assertions. |
@@ -51,3 +51,7 @@ Purpose: Track planning and implementation state across the release validation f
 | --- | --- | --- | --- | --- |
 | 2026-04-27 | planning package | `python - <<'PY' ... PY` using runtime-built rejected phrases | Passed | No rejected planning phrases found. |
 | 2026-04-27 | planning package | Structural header check for nine plan files and progress tracker | Passed | All nine plan files include required headers, file maps, and final verification sections. |
+| 2026-04-27 | 01 | `python -m pytest tests/release/contracts -q` | Passed | `11 passed` after adding the profile contract package, loader/schema validation, defaults, and example profiles. |
+| 2026-04-27 | 01 | `python -m pytest tests/release -q` | Passed | `11 passed`; release lifecycle guard behavior is still pending Plan 02 because only contract tests exist under `tests/release/`. |
+| 2026-04-27 | 01 | `python -m pytest tests/ -q` | Passed | Full repository suite stayed green with `1215 passed, 26 skipped`. |
+| 2026-04-27 | 01 | `python - <<'PY' ... PY` using runtime-built rejected phrases | Passed | Planning placeholder scan remained clean after updating the progress tracker. |
