@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .redaction import sanitize_text
+
 
 REQUIRED_JSON_ARTIFACTS = {
     "manifest.json": {"schema_version": 1, "status": "created", "warnings": [], "failure_reasons": []},
@@ -41,4 +43,12 @@ class ReleaseArtifacts:
         path = self.run_dir / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
+
+    def write_sanitized_text(self, relative_path: str | Path, content: str) -> Path:
+        """Sanitize content, reject if sensitive material is found, then write to run_dir."""
+        sanitized = sanitize_text(content)
+        path = self.run_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(sanitized.text, encoding="utf-8")
         return path
