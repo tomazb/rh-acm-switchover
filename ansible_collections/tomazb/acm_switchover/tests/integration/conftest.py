@@ -10,6 +10,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+from ansible_collections.tomazb.acm_switchover.tests.conftest import (
+    _materialize_fixture_kubeconfigs,
+    _seed_fixture_defaults,
+)
+
 
 def _find_repo_root() -> Path:
     """Walk upward from this file to find the repository root (contains .git)."""
@@ -22,7 +27,10 @@ def _find_repo_root() -> Path:
 
 
 def _materialize_report_dir(report_dir: str, tmp_path: Path) -> Path:
-    return Path(report_dir.replace("__TMP_PATH__", str(tmp_path)))
+    materialized = Path(report_dir.replace("__TMP_PATH__", str(tmp_path)))
+    if "__TMP_PATH__" not in report_dir and not materialized.is_absolute():
+        return tmp_path / materialized
+    return materialized
 
 
 def _prepare_execution_vars(vars_payload: dict, tmp_path: Path) -> Path:
@@ -34,6 +42,7 @@ def _prepare_execution_vars(vars_payload: dict, tmp_path: Path) -> Path:
     else:
         effective_report_dir = tmp_path / "artifacts"
         execution["report_dir"] = str(effective_report_dir)
+    _materialize_fixture_kubeconfigs(vars_payload, tmp_path)
     return effective_report_dir
 
 
@@ -45,6 +54,7 @@ def run_preflight_fixture(tmp_path):
             repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
+        _seed_fixture_defaults(vars_payload)
         report_dir = _prepare_execution_vars(vars_payload, tmp_path)
 
         vars_file = tmp_path / "vars.yml"

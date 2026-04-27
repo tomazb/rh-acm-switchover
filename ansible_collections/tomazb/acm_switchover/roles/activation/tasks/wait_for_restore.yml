@@ -25,16 +25,36 @@
     - acm_switchover_restore_activation_result.wait_target is defined
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
+- name: Classify benign FinishedWithErrors Restore status
+  ansible.builtin.set_fact:
+    _restore_wait_phase: >-
+      {{ (_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}
+    _restore_wait_messages: >-
+      {{ (_restore_wait_info.resources | first | default({})).get('status', {}).get('messages', []) }}
+    _restore_wait_benign_finished_with_errors: >-
+      {{
+        ((_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown')) == 'FinishedWithErrors'
+        and ((_restore_wait_info.resources | first | default({})).get('status', {}).get('messages', []) | length) > 0
+        and (
+          ((_restore_wait_info.resources | first | default({})).get('status', {}).get('messages', [])
+          | reject('search', 'already available') | list | length) == 0
+        )
+      }}
+  when:
+    - acm_switchover_restore_activation_result.wait_target is defined
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
 - name: Fail when Restore reaches an error phase
   ansible.builtin.assert:
     that:
       - >-
-        ((_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown'))
+        (_restore_wait_phase | default('Unknown'))
         in (acm_switchover_restore_activation_result.wait_target.success_phases | default([]))
+        or (_restore_wait_benign_finished_with_errors | default(false) | bool)
     fail_msg: >-
       Restore {{ acm_switchover_restore_activation_result.wait_target.name }}
       reached terminal phase
-      {{ (_restore_wait_info.resources | first | default({})).get('status', {}).get('phase', 'Unknown') }}
+      {{ _restore_wait_phase | default('Unknown') }}
       with message
       {{ (_restore_wait_info.resources | first | default({})).get('status', {}).get('lastMessage', '') }}.
   when:

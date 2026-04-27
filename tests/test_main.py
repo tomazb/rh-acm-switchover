@@ -3246,8 +3246,8 @@ class TestRestoreOnlyFlow:
 class TestAttemptArgoCDResumeOnFailure:
     """Tests for _attempt_argocd_resume_on_failure best-effort cleanup."""
 
-    def _make_args(self, *, argocd_resume_on_failure=True):
-        return SimpleNamespace(argocd_resume_on_failure=argocd_resume_on_failure)
+    def _make_args(self, *, argocd_resume_on_failure=True, restore_only=False):
+        return SimpleNamespace(argocd_resume_on_failure=argocd_resume_on_failure, restore_only=restore_only)
 
     def _make_state(self, *, run_id="abc123", paused_apps=None):
         state = Mock()
@@ -3305,6 +3305,54 @@ class TestAttemptArgoCDResumeOnFailure:
         assert reloaded.get_config("argocd_run_id") is None
         assert reloaded.get_config("argocd_pause_dry_run") is False
         assert reloaded.is_step_completed("pause_argocd_apps") is False
+
+    def test_resume_success_rewinds_switchover_retry_to_primary_prep(self, tmp_path):
+        """After successful resume-on-failure, the next FAILED retry must re-run primary_prep."""
+        from lib.utils import Phase, StateManager
+
+        paused_apps = [{"hub": "primary", "namespace": "argocd", "name": "app1"}]
+        state_path = tmp_path / "state.json"
+        state = StateManager(str(state_path))
+        state.set_phase(Phase.POST_ACTIVATION)
+        state.add_error("post activation failed", Phase.POST_ACTIVATION.value)
+        state.set_phase(Phase.FAILED)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", paused_apps)
+        state.mark_step_completed("pause_argocd_apps")
+        args = self._make_args()
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
+            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_current_phase() == Phase.FAILED
+        assert reloaded.get_last_error_phase() == Phase.PRIMARY_PREP
+
+    def test_resume_success_rewinds_restore_only_retry_to_preflight(self, tmp_path):
+        """Restore-only retry must re-run the preflight-slot Argo CD pause after resume-on-failure."""
+        from lib.utils import Phase, StateManager
+
+        paused_apps = [{"hub": "secondary", "namespace": "argocd", "name": "app1"}]
+        state_path = tmp_path / "state.json"
+        state = StateManager(str(state_path))
+        state.set_phase(Phase.POST_ACTIVATION)
+        state.add_error("post activation failed", Phase.POST_ACTIVATION.value)
+        state.set_phase(Phase.FAILED)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config("argocd_paused_apps", paused_apps)
+        state.mark_step_completed("pause_argocd_apps")
+        args = self._make_args(restore_only=True)
+        logger = logging.getLogger("test")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
+            _attempt_argocd_resume_on_failure(args, state, None, Mock(), logger)
+
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_current_phase() == Phase.FAILED
+        assert reloaded.get_last_error_phase() == Phase.PREFLIGHT
 
     def test_resume_success_keeps_state_when_not_all_apps_accounted_for(self, tmp_path):
         """Resume-on-failure must preserve pause state if the summary misses recorded apps."""

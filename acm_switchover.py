@@ -745,6 +745,11 @@ def _attempt_argocd_resume_on_failure(
         state.set_config("argocd_paused_apps", [])
         state.set_config("argocd_run_id", None)
         state.set_config("argocd_pause_dry_run", False)
+        retry_phase = Phase.PREFLIGHT if getattr(args, "restore_only", False) else Phase.PRIMARY_PREP
+        state.add_error(
+            "Argo CD resume-on-failure completed; retry must re-run Argo CD pause before continuing.",
+            phase=retry_phase.value,
+        )
         logger.info("Argo CD resume-on-failure cleanup completed; durable pause state cleared.")
     except Exception as exc:
         logger.warning(

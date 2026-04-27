@@ -88,12 +88,23 @@ def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict
         diagnostics["reason"] = "no_restores_found"
         return None, diagnostics
 
-    if not candidates:
-        diagnostics["reason"] = "no_sync_restore"
-        return None, diagnostics
+    if candidates:
+        candidates.sort(
+            key=lambda item: item.get("metadata", {}).get("creationTimestamp") or "",
+            reverse=True,
+        )
+        return candidates[0], diagnostics
 
-    candidates.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp") or "", reverse=True)
-    return candidates[0], diagnostics
+    conventional_restore = next(
+        (item for item in restores if item.get("metadata", {}).get("name") == PASSIVE_SYNC_RESTORE_NAME),
+        None,
+    )
+    if conventional_restore is not None:
+        diagnostics["reason"] = "conventional_name_fallback"
+        return conventional_restore, diagnostics
+
+    diagnostics["reason"] = "no_sync_restore"
+    return None, diagnostics
 
 
 def build_activation_patch(backup_name: str) -> dict:
@@ -255,7 +266,7 @@ def build_restore_activation_plan(
     return {
         "changed": operation["action"] != "none",
         "restore": restore,
-        "patch": patch if method == "passive" and activation_method == "patch" else None,
+        "patch": (patch if method == "passive" and activation_method == "patch" else None),
         "operation": operation,
         "wait_target": wait_target,
         "restore_count": diagnostics["restore_count"],
@@ -268,8 +279,16 @@ def main() -> None:
     module = AnsibleModule(
         argument_spec={
             "restores": {"type": "list", "elements": "dict", "default": []},
-            "method": {"type": "str", "choices": ["passive", "full"], "default": "passive"},
-            "activation_method": {"type": "str", "choices": ["patch", "restore"], "default": "patch"},
+            "method": {
+                "type": "str",
+                "choices": ["passive", "full"],
+                "default": "passive",
+            },
+            "activation_method": {
+                "type": "str",
+                "choices": ["patch", "restore"],
+                "default": "patch",
+            },
             "backup_name": {"type": "str", "required": False, "default": None},
         },
         supports_check_mode=True,

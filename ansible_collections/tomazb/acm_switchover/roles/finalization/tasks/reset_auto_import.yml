@@ -20,4 +20,6 @@
     definition:
       data:
         autoImportStrategy: ImportOnly
-  when: _auto_import_strategy_changed | default(false) | bool
+  when:
+    - _auto_import_strategy_changed | default(false) | bool
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'

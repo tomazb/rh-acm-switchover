@@ -10,25 +10,45 @@
 - name: Run post_activation phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    - name: Publish dry-run post activation result
+      ansible.builtin.set_fact:
+        acm_switchover_post_activation_result:
+          phase: post_activation
+          status: skipped
+          changed: false
+          reason: dry_run
+          summary:
+            passed: true
+            pending: []
+      when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
+      when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
     - name: Verify managed clusters
       ansible.builtin.include_tasks: verify_managed_clusters.yml
+      when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
     - name: Verify klusterlet status
       ansible.builtin.include_tasks: verify_klusterlet.yml
+      when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
     - name: Re-verify managed clusters after klusterlet remediation
       ansible.builtin.include_tasks: verify_managed_clusters.yml
-      when: _klusterlet_remediation_attempted | default(false)
+      when:
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - _klusterlet_remediation_attempted | default(false)
 
     - name: Clean stale disable-auto-import annotations
       ansible.builtin.include_tasks: cleanup_auto_import_annotations.yml
+      when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
     - name: Verify observability
       ansible.builtin.include_tasks: verify_observability.yml
-      when: not (acm_switchover_features.skip_observability_checks | default(false))
+      when:
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - not (acm_switchover_features.skip_observability_checks | default(false))
 
     - name: Publish post activation result
       ansible.builtin.set_fact:
@@ -42,11 +62,14 @@
       tags:
         - post_activation
         - verify
+      when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
     - name: Fail if post activation checks did not pass
       ansible.builtin.fail:
         msg: "Post activation verification failed: {{ acm_cluster_verify_result.pending | join(', ') }} cluster(s) not ready"
-      when: not acm_cluster_verify_result.passed
+      when:
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - not acm_cluster_verify_result.passed
   rescue:
     - name: Mark checkpoint failure
       tomazb.acm_switchover.checkpoint_phase:

@@ -10,6 +10,9 @@
 - name: Run activation phase
   when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
+    - name: Discover secondary hub resources
+      ansible.builtin.include_tasks: discover_resources.yml
+
     - name: Manage auto-import strategy for ACM 2.14+
       ansible.builtin.include_tasks: manage_auto_import.yml
       when: acm_switchover_features.manage_auto_import_strategy | default(false)

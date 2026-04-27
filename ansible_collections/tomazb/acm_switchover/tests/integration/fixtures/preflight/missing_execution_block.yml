@@ -86,4 +86,4 @@ acm_secondary_bsl_info:
 acm_secondary_restore_info:
   resources:
     - metadata:
-        name: restore-passive
+        name: restore-acm-passive-sync

@@ -1,6 +1,6 @@
 namespace: tomazb
 name: acm_switchover
-version: 1.7.4
+version: 1.7.5
 readme: README.md
 authors:
   - Tomaz B

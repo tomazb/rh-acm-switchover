@@ -8,8 +8,13 @@
 - name: Require passive sync restore on the secondary hub
   ansible.builtin.assert:
     that:
-      - (acm_passive_restore_selection.sync_enabled_count | default(0) | int) > 0
-    fail_msg: Passive switchover requires a sync-enabled secondary passive Restore resource.
+      - acm_passive_restore_selection.restore is not none
+      - >-
+        (acm_passive_restore_selection.sync_enabled_count | default(0) | int) > 0
+        or (acm_passive_restore_selection.reason | default('')) == 'conventional_name_fallback'
+    fail_msg: >-
+      Passive switchover requires a secondary passive Restore resource with
+      syncRestoreWithNewBackups=true or named restore-acm-passive-sync.
 
 - name: Publish passive restore selection
   ansible.builtin.set_fact:

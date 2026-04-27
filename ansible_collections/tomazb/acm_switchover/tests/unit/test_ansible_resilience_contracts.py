@@ -8,8 +8,11 @@ COLLECTION_DIR = pathlib.Path(__file__).resolve().parents[2]
 ROLES_DIR = COLLECTION_DIR / "roles"
 PLAYBOOKS_DIR = COLLECTION_DIR / "playbooks"
 
+ARGOCD_TASKS = ROLES_DIR / "argocd_manage" / "tasks"
 ACTIVATION_TASKS = ROLES_DIR / "activation" / "tasks"
 PREFLIGHT_TASKS = ROLES_DIR / "preflight" / "tasks"
+POST_ACTIVATION_TASKS = ROLES_DIR / "post_activation" / "tasks"
+FINALIZATION_TASKS = ROLES_DIR / "finalization" / "tasks"
 DECOMMISSION_TASKS = ROLES_DIR / "decommission" / "tasks"
 
 
@@ -120,3 +123,66 @@ def test_rbac_bootstrap_defaults_missing_execution_mode_to_dry_run_for_mutations
         assert "default('') != 'dry_run'" not in text
         assert "default('') == 'dry_run'" not in text
         assert "default('dry_run')" in text, f"{path.name} must treat missing execution.mode as dry_run"
+
+
+def test_activation_rediscovers_restore_facts_before_passive_selection():
+    """Checkpoint resume can skip preflight, so activation must discover Restore facts itself."""
+    assert (ACTIVATION_TASKS / "discover_resources.yml").exists()
+    main_tasks = _load_yaml(ACTIVATION_TASKS / "main.yml")
+    block_tasks = next(task["block"] for task in main_tasks if "block" in task)
+    includes = [task.get("ansible.builtin.include_tasks", "") for task in block_tasks]
+
+    assert includes[0] == "discover_resources.yml"
+    assert includes.index("discover_resources.yml") < includes.index("verify_passive_sync.yml")
+
+
+def test_restore_wait_accepts_only_benign_finished_with_errors():
+    """FinishedWithErrors is successful only for consecutive-switchover already-available messages."""
+    text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
+    assert "FinishedWithErrors" in text
+    assert "already available" in text
+
+
+def test_collection_mutation_tasks_default_missing_execution_mode_to_dry_run():
+    """Missing execution.mode must not trigger live pause, import, or reset mutations."""
+    files = [
+        ARGOCD_TASKS / "pause.yml",
+        ACTIVATION_TASKS / "manage_auto_import.yml",
+        ACTIVATION_TASKS / "apply_immediate_import.yml",
+        FINALIZATION_TASKS / "reset_auto_import.yml",
+    ]
+
+    for path in files:
+        text = path.read_text()
+        assert "default('') != 'dry_run'" not in text
+        assert "default('') == 'dry_run'" not in text
+        assert (
+            "acm_switchover_execution.mode | default('dry_run') != 'dry_run'" in text
+        ), f"{path.name} must guard live mutations with dry_run-safe default"
+
+
+def test_post_activation_main_skips_live_checks_in_dry_run():
+    """Dry-run activation creates no Restore, so post_activation must not perform live waits/remediation."""
+    text = (POST_ACTIVATION_TASKS / "main.yml").read_text()
+    assert "reason: dry_run" in text
+    assert "acm_switchover_execution.mode | default('dry_run') != 'dry_run'" in text
+
+
+def test_argocd_resume_splits_checkpoint_path_facts():
+    """Ansible evaluates set_fact values before assigning them, so dependent facts must be split."""
+    playbook = _load_yaml(PLAYBOOKS_DIR / "argocd_resume.yml")
+    pre_tasks = playbook[0].get("pre_tasks", [])
+    path_fact_tasks = [
+        task for task in pre_tasks if "_argocd_resume_checkpoint_path" in task.get("ansible.builtin.set_fact", {})
+    ]
+    abs_fact_tasks = [
+        task for task in pre_tasks if "_argocd_resume_checkpoint_path_abs" in task.get("ansible.builtin.set_fact", {})
+    ]
+
+    assert path_fact_tasks
+    assert abs_fact_tasks
+    for task in pre_tasks:
+        facts = task.get("ansible.builtin.set_fact", {})
+        assert not (
+            "_argocd_resume_checkpoint_path" in facts and "_argocd_resume_checkpoint_path_abs" in facts
+        ), "checkpoint path and absolute path facts must be assigned in separate tasks"

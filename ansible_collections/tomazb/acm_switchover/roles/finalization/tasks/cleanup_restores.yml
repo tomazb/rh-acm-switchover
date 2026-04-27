@@ -1,4 +1,9 @@
 ---
+- name: Use discovered secondary Restore resources in dry-run mode
+  ansible.builtin.set_fact:
+    _acm_secondary_restores_to_cleanup: "{{ acm_secondary_restores_info | default(acm_secondary_restore_info | default({'resources': []})) }}"
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
 - name: Read Restore resources on the secondary hub
   kubernetes.core.k8s_info:
     api_version: cluster.open-cluster-management.io/v1beta1
@@ -7,6 +12,7 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _acm_secondary_restores_to_cleanup
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Delete Restore resources before enabling backups
   kubernetes.core.k8s:

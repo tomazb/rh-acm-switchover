@@ -1,4 +1,14 @@
 ---
+- name: Skip old hub regression verification in dry-run mode
+  ansible.builtin.set_fact:
+    acm_switchover_verify_old_hub_state_result:
+      changed: false
+      status: skipped
+      reason: dry_run
+      available_clusters: []
+      backup_schedule_paused: false
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
 - name: Read old hub ManagedClusters for regression verification
   kubernetes.core.k8s_info:
     api_version: cluster.open-cluster-management.io/v1
@@ -6,6 +16,7 @@
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
   register: _acm_old_hub_managed_clusters_info
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Read old hub BackupSchedules for regression verification
   kubernetes.core.k8s_info:
@@ -15,6 +26,7 @@
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context }}"
   register: _acm_old_hub_backup_schedules_info
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Collect old hub ManagedClusters that still report Available=True
   ansible.builtin.set_fact:
@@ -35,6 +47,7 @@
       {%- endif -%}
       {%- endfor -%}
       {{ available }}
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Publish old hub regression verification result
   ansible.builtin.set_fact:
@@ -48,3 +61,4 @@
           .get('spec', {})
           .get('paused', false) | bool)
         }}
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'

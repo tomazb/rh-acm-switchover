@@ -10,9 +10,18 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_restore_info 
 def test_select_passive_sync_restore_prefers_sync_enabled_resource():
     restore, diagnostics = select_passive_sync_restore(
         [
-            {"metadata": {"name": "restore-old", "creationTimestamp": "2026-04-10T10:00:00Z"}, "spec": {}},
             {
-                "metadata": {"name": "restore-passive", "creationTimestamp": "2026-04-10T11:00:00Z"},
+                "metadata": {
+                    "name": "restore-old",
+                    "creationTimestamp": "2026-04-10T10:00:00Z",
+                },
+                "spec": {},
+            },
+            {
+                "metadata": {
+                    "name": "restore-passive",
+                    "creationTimestamp": "2026-04-10T11:00:00Z",
+                },
                 "spec": {"syncRestoreWithNewBackups": True},
             },
         ]
@@ -33,12 +42,35 @@ def test_select_passive_sync_restore_empty_list():
 
 def test_select_passive_sync_restore_no_sync_enabled():
     restore, diagnostics = select_passive_sync_restore(
-        [{"metadata": {"name": "r1", "creationTimestamp": "2026-04-10T10:00:00Z"}, "spec": {}}]
+        [
+            {
+                "metadata": {"name": "r1", "creationTimestamp": "2026-04-10T10:00:00Z"},
+                "spec": {},
+            }
+        ]
     )
     assert restore is None
     assert diagnostics["restore_count"] == 1
     assert diagnostics["sync_enabled_count"] == 0
     assert diagnostics["reason"] == "no_sync_restore"
+
+
+def test_select_passive_sync_restore_falls_back_to_conventional_name():
+    restore, diagnostics = select_passive_sync_restore(
+        [
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "creationTimestamp": "2026-04-10T10:00:00Z",
+                },
+                "spec": {},
+            }
+        ]
+    )
+    assert restore["metadata"]["name"] == "restore-acm-passive-sync"
+    assert diagnostics["restore_count"] == 1
+    assert diagnostics["sync_enabled_count"] == 0
+    assert diagnostics["reason"] == "conventional_name_fallback"
 
 
 def test_select_passive_sync_restore_handles_null_creation_timestamp():
@@ -49,7 +81,10 @@ def test_select_passive_sync_restore_handles_null_creation_timestamp():
                 "spec": {"syncRestoreWithNewBackups": True},
             },
             {
-                "metadata": {"name": "restore-new", "creationTimestamp": "2026-04-10T11:00:00Z"},
+                "metadata": {
+                    "name": "restore-new",
+                    "creationTimestamp": "2026-04-10T11:00:00Z",
+                },
                 "spec": {"syncRestoreWithNewBackups": True},
             },
         ]
@@ -69,7 +104,10 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
         activation_method="patch",
         restores=[
             {
-                "metadata": {"name": "restore-acm-passive-sync", "namespace": "open-cluster-management-backup"},
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                },
                 "spec": {"syncRestoreWithNewBackups": True},
                 "status": {"phase": "Enabled"},
             }
@@ -93,8 +131,14 @@ def test_build_restore_activation_plan_passive_patch_already_applied():
         activation_method="patch",
         restores=[
             {
-                "metadata": {"name": "restore-acm-passive-sync", "namespace": "open-cluster-management-backup"},
-                "spec": {"syncRestoreWithNewBackups": True, "veleroManagedClustersBackupName": "latest"},
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                },
+                "spec": {
+                    "syncRestoreWithNewBackups": True,
+                    "veleroManagedClustersBackupName": "latest",
+                },
                 "status": {"phase": "Finished"},
             }
         ],

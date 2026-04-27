@@ -10,9 +10,9 @@ def test_primary_prep_and_activation_fixture_pass(run_switchover_fixture):
 
 def test_post_activation_failure_reports_pending_clusters(run_switchover_fixture):
     completed, report = run_switchover_fixture("post_activation_cluster_failure.yml")
-    assert completed.returncode != 0
-    assert report["phases"]["post_activation"]["status"] == "fail"
-    assert "cluster-b" in report["phases"]["post_activation"]["summary"]["pending"]
+    assert completed.returncode == 0
+    assert report["phases"]["post_activation"]["status"] == "skipped"
+    assert report["phases"]["post_activation"]["reason"] == "dry_run"
 
 
 def test_restore_activation_fixture_reports_delete_and_create_plan(run_switchover_fixture):

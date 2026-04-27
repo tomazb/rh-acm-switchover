@@ -2,6 +2,11 @@
 # Mirrors Python _maybe_set_auto_import_strategy() in modules/activation.py.
 # For ACM 2.14+, temporarily set autoImportStrategy=ImportAndSync so
 # clusters restored from backup are immediately re-imported by the hub.
+- name: Skip auto-import strategy management in dry-run mode
+  ansible.builtin.set_fact:
+    _auto_import_strategy_changed: false
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
 - name: Read import-controller-config ConfigMap
   kubernetes.core.k8s_info:
     api_version: v1
@@ -11,12 +16,14 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _import_controller_cm
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Determine current autoImportStrategy
   ansible.builtin.set_fact:
     _auto_import_current_strategy: >-
       {{ (_import_controller_cm.resources | default([]) | first | default({}))
          .get('data', {}).get('autoImportStrategy', 'default') }}
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Set autoImportStrategy to ImportAndSync
   kubernetes.core.k8s:
@@ -33,6 +40,7 @@
   register: _auto_import_patched
   when:
     - _auto_import_current_strategy != 'ImportAndSync'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Record strategy change for later reset
   ansible.builtin.set_fact:

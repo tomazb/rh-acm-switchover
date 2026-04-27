@@ -206,24 +206,25 @@
             "status": "pass"
               if (
                 acm_switchover_operation.method == 'full'
-                or (acm_preflight_passive_restore_analysis.sync_enabled_count | default(0)) > 0
+                or acm_preflight_passive_restore_analysis.restore is not none
               )
               else "fail",
             "message": "secondary hub passive sync restore is present"
               if (
                 acm_switchover_operation.method == 'full'
-                or (acm_preflight_passive_restore_analysis.sync_enabled_count | default(0)) > 0
+                or acm_preflight_passive_restore_analysis.restore is not none
               )
               else "secondary hub has no sync-enabled passive restore",
             "details": {
               "method": acm_switchover_operation.method,
               "restore_count": acm_secondary_restore_info.resources | default([]) | length,
-              "sync_enabled_count": acm_preflight_passive_restore_analysis.sync_enabled_count | default(0)
+              "sync_enabled_count": acm_preflight_passive_restore_analysis.sync_enabled_count | default(0),
+              "selected_restore": ((acm_preflight_passive_restore_analysis | default({})).get('restore', {}) or {}).get('metadata', {}).get('name')
             },
             "recommended_action": "Verify a Restore with syncRestoreWithNewBackups=true exists on the secondary hub"
               if (
                 acm_switchover_operation.method != 'full'
-                and (acm_preflight_passive_restore_analysis.sync_enabled_count | default(0)) == 0
+                and acm_preflight_passive_restore_analysis.restore is none
               )
               else None
           }

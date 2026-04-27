@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Resume and dry-run safety regressions**: Python Argo CD resume-on-failure now rewinds retries to re-run the pause step, and the collection restores passive Restore fallback parity, checkpoint activation rediscovery, benign `FinishedWithErrors` handling, and dry-run guards around live Argo CD, auto-import, ManagedCluster, and post-activation mutations.
 - **Collection artifact and decommission summaries**: Report artifact paths now allow new directories below an existing allowed ancestor, and decommission now honors the shared `summary_path` summary-output variable while retaining the legacy prefixed variable.
 - **RBAC kubeconfig generation**: Service-account kubeconfig generators now fail fast when cluster `certificate-authority-data` cannot be read instead of emitting an invalid kubeconfig with an empty CA field.
 - **Review regression hardening**: Finalization now honors skipped observability before deleting old-hub `MultiClusterObservability`, RBAC validators require namespace `list` for preflight discovery, and collection RBAC bootstrap now generates durable service-account kubeconfigs and validates the bootstrapped service account rather than the admin credential.

@@ -3,9 +3,17 @@
   hosts: localhost
   gather_facts: false
   pre_tasks:
-    - name: Resolve checkpoint path to absolute path (controller-side)
+    - name: Resolve checkpoint path value
       ansible.builtin.set_fact:
         _argocd_resume_checkpoint_path: "{{ (acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '') }}"
+      when:
+        - (acm_switchover_argocd.run_id | default('')) | length == 0
+        - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0
+        - acm_switchover_execution.checkpoint.enabled | default(false)
+        - ((acm_switchover_execution | default({})).get('checkpoint', {}).get('path', '')) | length > 0
+
+    - name: Resolve checkpoint path to absolute path (controller-side)
+      ansible.builtin.set_fact:
         _argocd_resume_checkpoint_path_abs: >-
           {{
             _argocd_resume_checkpoint_path

@@ -31,3 +31,11 @@ def test_validate_backups_passive_check_uses_sync_enabled_count():
     assert (
         "sync_enabled_count" in text
     ), "validate_backups.yml passive restore check must use sync_enabled_count from acm_restore_info"
+
+
+def test_validate_backups_accepts_conventional_passive_restore_fallback():
+    """Preflight must accept the same conventional passive Restore fallback as activation."""
+    text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
+    assert (
+        "acm_preflight_passive_restore_analysis.restore is not none" in text
+    ), "validate_backups.yml must treat acm_restore_info.restore as the passive restore authority"
