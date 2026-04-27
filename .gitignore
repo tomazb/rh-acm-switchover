@@ -33,6 +33,7 @@ coverage.xml
 .worktrees/
 kubeconfigs/
 e2e-soak-24h/
+tests/release/profiles/local/
 
 e2e-15-switchover/
 artifacts/

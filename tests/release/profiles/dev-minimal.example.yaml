@@ -1,0 +1,31 @@
+profile_version: 1
+name: dev-minimal-release
+hubs:
+  primary:
+    kubeconfig: /path/to/primary-kubeconfig
+    context: lab-primary-context
+  secondary:
+    kubeconfig: /path/to/secondary-kubeconfig
+    context: lab-secondary-context
+managed_clusters:
+  expected_count: 2
+streams:
+  - id: python
+  - id: ansible
+scenarios:
+  - id: static-gates
+  - id: lab-readiness
+  - id: baseline-check
+  - id: preflight
+  - id: final-baseline-check
+argocd:
+  mandatory: false
+baseline:
+  initial_primary: primary
+  static_gates:
+    required: false
+limits: {}
+recovery: {}
+artifacts:
+  redaction:
+    required: true
