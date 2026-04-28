@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .common import AssertionRecord, StreamResult
+from .common import AssertionRecord, ReportArtifact, StreamResult
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+REPORT_NAMES: dict[str, tuple[str, str]] = {
+    "preflight": ("preflight", "preflight-report.json"),
+    "python-passive-switchover": ("switchover", "switchover-report.json"),
+    "python-restore-only": ("restore", "restore-only-report.json"),
+    "argocd-managed-switchover": ("switchover", "switchover-report.json"),
+}
 
 
 @dataclass(frozen=True)
@@ -66,6 +75,16 @@ class PythonCliAdapter:
             return base + ["--argocd-manage"]
         return base
 
+    def discover_reports(self, scenario_id: str) -> list[ReportArtifact]:
+        if scenario_id not in REPORT_NAMES:
+            return []
+        report_type, filename = REPORT_NAMES[scenario_id]
+        path = self.scenario_dir(scenario_id) / filename
+        if not path.exists():
+            return []
+        schema_version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+        return [ReportArtifact(type=report_type, path=str(path), schema_version=schema_version, required=True)]
+
     def execute(self, scenario_id: str) -> StreamResult:
         output_dir = self.scenario_dir(scenario_id)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -89,7 +108,7 @@ class PythonCliAdapter:
                 returncode=-1,
                 stdout_path=str(stdout_path),
                 stderr_path=str(stderr_path),
-                reports=[],
+                reports=self.discover_reports(scenario_id),
                 assertions=[
                     AssertionRecord(
                         capability=scenario_id,
@@ -116,7 +135,7 @@ class PythonCliAdapter:
             returncode=completed.returncode,
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
-            reports=[],
+            reports=self.discover_reports(scenario_id),
             assertions=[
                 AssertionRecord(
                     capability=scenario_id,

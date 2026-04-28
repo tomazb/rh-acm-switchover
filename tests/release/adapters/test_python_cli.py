@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from tests.release.adapters.python_cli import PythonCliAdapter
+from tests.release.adapters.common import ReportArtifact  # noqa: F401 (used in test)
 
 
 def test_python_preflight_command_uses_profile_contexts(tmp_path: Path) -> None:
@@ -80,3 +81,15 @@ def test_python_adapter_execute_reports_failure_on_nonzero_returncode(monkeypatc
     assert result.assertions[0].actual == "1"
     assert Path(result.stderr_path).read_text(encoding="utf-8") == "fatal: cluster unreachable\n"
     assert result.assertions[0].evidence_path == result.stderr_path
+
+
+def test_python_adapter_discovers_required_reports(tmp_path: Path) -> None:
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+    scenario_dir = adapter.scenario_dir("preflight")
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "preflight-report.json").write_text('{"schema_version": 1, "status": "passed"}', encoding="utf-8")
+
+    reports = adapter.discover_reports("preflight")
+
+    assert reports[0].type == "preflight"
+    assert reports[0].required is True
