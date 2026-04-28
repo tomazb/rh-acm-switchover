@@ -218,3 +218,53 @@ def test_discover_reports_handles_malformed_json(tmp_path: Path) -> None:
 
     assert len(reports) == 1
     assert reports[0].schema_version is None
+
+
+def test_discover_reports_handles_oserror_on_read(monkeypatch, tmp_path: Path) -> None:
+    adapter = PythonCliAdapter(Path("/repo"), "p", "s", "/k/p", "/k/s", tmp_path)
+    scenario_dir = adapter.scenario_dir("preflight")
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "preflight-report.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(Path, "read_text", lambda *a, **kw: (_ for _ in ()).throw(OSError("Permission denied")))
+
+    reports = adapter.discover_reports("preflight")
+
+    assert len(reports) == 1
+    assert reports[0].schema_version is None
+
+
+def test_python_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_path: Path) -> None:
+    from tests.release.reporting.redaction import RedactionError
+
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
+        return subprocess.CompletedProcess(command, 0, stdout="output", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("tests.release.adapters.python_cli.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive")))
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    result = adapter.execute("preflight")
+
+    assert result.status == "failed"
+    assert any(a.name == "artifact-redaction" for a in result.assertions)
+
+
+def test_python_decommission_command_uses_decommission_flag(tmp_path: Path) -> None:
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    command = adapter.build_command("decommission")
+
+    assert "--decommission" in command
+    assert "--non-interactive" in command
+    assert "--secondary-context" not in command
+    assert "--primary-context" in command
+
+
+def test_python_full_restore_command_forces_method_full(tmp_path: Path) -> None:
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    command = adapter.build_command("full-restore")
+
+    method_idx = command.index("--method")
+    assert command[method_idx + 1] == "full"

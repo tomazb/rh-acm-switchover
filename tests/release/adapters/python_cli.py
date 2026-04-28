@@ -41,6 +41,11 @@ REPORT_NAMES: dict[str, tuple[str, str]] = {
     "python-passive-switchover": ("switchover", "switchover-report.json"),
     "python-restore-only": ("restore", "restore-only-report.json"),
     "argocd-managed-switchover": ("switchover", "switchover-report.json"),
+    "full-restore": ("switchover", "switchover-report.json"),
+    "checkpoint-resume": ("switchover", "switchover-report.json"),
+    "decommission": ("decommission", "decommission-report.json"),
+    "failure-injection": ("switchover", "switchover-report.json"),
+    "soak": ("switchover", "switchover-report.json"),
 }
 
 
@@ -81,16 +86,31 @@ class PythonCliAdapter:
 
         if scenario_id == "python-restore-only":
             # restore-only is standalone; method and old-hub-action are not required
-            base_restore = [
+            return [
                 sys.executable,
                 "acm_switchover.py",
                 "--secondary-context",
                 self.secondary_context,
                 "--state-file",
                 str(state_file),
+                "--restore-only",
             ]
-            return base_restore + ["--restore-only"]
 
+        if scenario_id == "decommission":
+            # decommission targets the primary hub only; --non-interactive for automation
+            return [
+                sys.executable,
+                "acm_switchover.py",
+                "--primary-context",
+                self.primary_context,
+                "--state-file",
+                str(state_file),
+                "--decommission",
+                "--non-interactive",
+            ]
+
+        # full-restore forces --method full regardless of the adapter method field
+        method = "full" if scenario_id == "full-restore" else self.method
         base = [
             sys.executable,
             "acm_switchover.py",
@@ -99,7 +119,7 @@ class PythonCliAdapter:
             "--secondary-context",
             self.secondary_context,
             "--method",
-            self.method,
+            method,
             "--old-hub-action",
             self.old_hub_action,
             "--state-file",
@@ -109,6 +129,7 @@ class PythonCliAdapter:
             return base + ["--validate-only"]
         if scenario_id == "argocd-managed-switchover":
             return base + ["--argocd-manage"]
+        # python-passive-switchover, full-restore, checkpoint-resume, failure-injection, soak
         return base
 
     def discover_reports(self, scenario_id: str) -> list[ReportArtifact]:

@@ -4,14 +4,16 @@ from collections.abc import Sequence
 
 import pytest
 
-# Explicitly enumerated Python scenarios supported by PythonCliAdapter.build_command().
-# To add a scenario, also update build_command() and REPORT_NAMES in python_cli.py.
-PYTHON_SCENARIOS = frozenset({
-    "preflight",
-    "python-passive-switchover",
-    "python-restore-only",
-    "argocd-managed-switchover",
-})
+from tests.release.scenarios.catalog import SCENARIOS_BY_ID
+
+# Derived from catalog.py — automatically in sync with the Python stream.
+# When adding a new Python scenario, update build_command() and REPORT_NAMES
+# in tests/release/adapters/python_cli.py.
+PYTHON_SCENARIOS = frozenset(
+    scenario_id
+    for scenario_id, defn in SCENARIOS_BY_ID.items()
+    if "python" in defn.streams
+)
 
 
 def execute_python_scenarios(*, adapter, scenario_ids: Sequence[str]) -> list[dict]:
