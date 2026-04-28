@@ -4,26 +4,46 @@ from __future__ import annotations
 
 from typing import Any
 
-
 REQUIRED_FIELDS = {
     "manifest.json": ("schema_version", "status", "warnings", "failure_reasons"),
     "scenario-results.json": ("schema_version", "results", "scenario_statuses"),
     "runtime-parity.json": ("schema_version", "comparisons", "status"),
     "recovery.json": (
-        "schema_version", "budget_minutes", "budget_consumed_seconds",
-        "pre_run", "post_failure", "hard_stops", "status",
+        "schema_version",
+        "budget_minutes",
+        "budget_consumed_seconds",
+        "pre_run",
+        "post_failure",
+        "hard_stops",
+        "status",
     ),
     "redaction.json": (
-        "schema_version", "status", "scanned_artifacts",
-        "redacted_counts_by_class", "rejected_artifacts", "warnings",
+        "schema_version",
+        "status",
+        "scanned_artifacts",
+        "redacted_counts_by_class",
+        "rejected_artifacts",
+        "warnings",
     ),
-    "summary.json": ("schema_version", "status", "certification_eligible", "warnings", "failure_reasons"),
+    "summary.json": (
+        "schema_version",
+        "status",
+        "certification_eligible",
+        "warnings",
+        "failure_reasons",
+    ),
 }
 LIST_FIELDS = {
-    "results", "scenario_statuses", "comparisons",
-    "pre_run", "post_failure",
-    "hard_stops", "scanned_artifacts",
-    "rejected_artifacts", "warnings", "failure_reasons",
+    "results",
+    "scenario_statuses",
+    "comparisons",
+    "pre_run",
+    "post_failure",
+    "hard_stops",
+    "scanned_artifacts",
+    "rejected_artifacts",
+    "warnings",
+    "failure_reasons",
 }
 
 

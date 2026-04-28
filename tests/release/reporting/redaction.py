@@ -26,8 +26,16 @@ REDACT_PATTERNS = [
         re.compile(r"Authorization:\s*Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
         "Authorization: Bearer [REDACTED]",
     ),
-    ("api-token", re.compile(r"(?i)(api[_-]?token=)[A-Za-z0-9._~+/=-]+"), r"\1[REDACTED]"),
-    ("pem-block", re.compile(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", re.DOTALL), "[REDACTED PEM BLOCK]"),
+    (
+        "api-token",
+        re.compile(r"(?i)(api[_-]?token=)[A-Za-z0-9._~+/=-]+"),
+        r"\1[REDACTED]",
+    ),
+    (
+        "pem-block",
+        re.compile(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", re.DOTALL),
+        "[REDACTED PEM BLOCK]",
+    ),
 ]
 REJECT_PATTERNS = [
     ("kubeconfig-client-key", re.compile(r"client-key-data\s*:")),

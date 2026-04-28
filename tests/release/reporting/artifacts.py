@@ -74,9 +74,18 @@ class ReleaseArtifacts:
         )
         return artifacts
 
+    def _safe_path(self, relative_path: str | Path) -> Path:
+        """Resolve *relative_path* under run_dir and raise if it escapes."""
+        resolved = (self.run_dir / relative_path).resolve()
+        try:
+            resolved.relative_to(self.run_dir.resolve())
+        except ValueError:
+            raise ValueError(f"Path {relative_path!r} escapes the artifact directory")
+        return resolved
+
     def write_json(self, relative_path: str | Path, payload: dict[str, Any]) -> Path:
         """Serialize payload as indented JSON under run_dir and return the written path."""
-        path = self.run_dir / relative_path
+        path = self._safe_path(relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -86,12 +95,12 @@ class ReleaseArtifacts:
     def write_sanitized_text(self, relative_path: str | Path, content: str) -> Path:
         """Sanitize content, update redaction audit log, then write to run_dir."""
         relative_path = Path(relative_path)
+        path = self._safe_path(relative_path)
         try:
             sanitized = sanitize_text(content)
         except RedactionError:
             self._update_redaction_record(str(relative_path), {}, rejected=True)
             raise
-        path = self.run_dir / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(sanitized.text, encoding="utf-8")
         self._update_redaction_record(

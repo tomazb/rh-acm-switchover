@@ -77,3 +77,22 @@ def test_sanitized_write_records_rejection_in_redaction_json(tmp_path: Path) -> 
         (artifacts.run_dir / "redaction.json").read_text(encoding="utf-8")
     )
     assert "logs/secrets.txt" in redaction["rejected_artifacts"]
+
+
+def test_write_json_rejects_path_traversal(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    with pytest.raises(ValueError, match="escapes"):
+        artifacts.write_json("../escaped.json", {"schema_version": 1})
+
+
+def test_write_json_rejects_absolute_path(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    outside = str(tmp_path / "other" / "file.json")
+    with pytest.raises(ValueError, match="escapes"):
+        artifacts.write_json(outside, {"schema_version": 1})
+
+
+def test_write_sanitized_text_rejects_path_traversal(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    with pytest.raises(ValueError, match="escapes"):
+        artifacts.write_sanitized_text("../escaped.txt", "safe content")
