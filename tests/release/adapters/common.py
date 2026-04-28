@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+"""Stream-neutral result model for release adapter records."""
+
 from dataclasses import asdict, dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -36,5 +39,5 @@ class StreamResult:
     started_at: str
     ended_at: str
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
