@@ -1,3 +1,4 @@
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,3 +46,19 @@ def test_python_passive_switchover_command_includes_required_flags(tmp_path: Pat
     assert "--old-hub-action" in command
     assert "--validate-only" not in command
     assert "--restore-only" not in command
+
+
+def test_python_adapter_execute_captures_stdout_and_stderr(monkeypatch, tmp_path: Path) -> None:
+    def fake_run(command, cwd, text, capture_output, check):
+        assert cwd == Path("/repo")
+        return subprocess.CompletedProcess(command, 0, stdout="done\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    result = adapter.execute("preflight")
+
+    assert result.status == "passed"
+    assert result.returncode == 0
+    assert Path(result.stdout_path).read_text(encoding="utf-8") == "done\n"
+    assert result.assertions[0].name == "exit-code"
