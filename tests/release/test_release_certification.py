@@ -4,6 +4,10 @@ from collections.abc import Sequence
 
 import pytest
 
+from tests.release.scenarios.runtime_parity import (
+    CAPABILITY_REQUIRED_FIELDS,
+    compare_normalized_records,
+)
 from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 
 # Derived from catalog.py — automatically in sync with the Python stream.
@@ -37,6 +41,21 @@ def execute_python_scenarios(*, adapter, scenario_ids: Sequence[str]) -> list[di
             result = adapter.execute(scenario_id)
             results.append(result.to_dict() if hasattr(result, "to_dict") else result)
     return results
+
+
+def execute_runtime_parity(*, normalized_sources: dict) -> list:
+    comparisons = []
+    for capability, by_stream in normalized_sources.items():
+        comparisons.append(
+            compare_normalized_records(
+                capability=capability,
+                scenario_id="runtime-parity",
+                python=by_stream["python"],
+                ansible=by_stream["ansible"],
+                required_fields=CAPABILITY_REQUIRED_FIELDS[capability],
+            )
+        )
+    return comparisons
 
 
 @pytest.mark.release

@@ -11,6 +11,7 @@ from tests.release.scenarios.runtime_parity import (
     normalize_preflight,
     write_runtime_parity_artifact,
 )
+from tests.release.test_release_certification import execute_runtime_parity
 
 
 def test_comparison_record_serializes_required_fields() -> None:
@@ -105,3 +106,28 @@ def test_write_runtime_parity_artifact_sets_failed_status(tmp_path: Path) -> Non
     )
     assert payload["status"] == "failed"
     assert payload["comparisons"][0]["capability"] == "activation"
+
+
+def test_execute_runtime_parity_compares_matching_sources(tmp_path: Path) -> None:
+    comparisons = execute_runtime_parity(
+        normalized_sources={
+            "preflight validation": {
+                "python": {
+                    "status": "passed",
+                    "critical_failure_count": 0,
+                    "warning_failure_count": 0,
+                    "check_ids": ["a"],
+                    "failed_check_ids": [],
+                },
+                "ansible": {
+                    "status": "passed",
+                    "critical_failure_count": 0,
+                    "warning_failure_count": 0,
+                    "check_ids": ["a"],
+                    "failed_check_ids": [],
+                },
+            }
+        }
+    )
+
+    assert comparisons[0].status == "passed"
