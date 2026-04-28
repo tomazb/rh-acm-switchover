@@ -72,3 +72,15 @@ class RecoveryBudget:
             "hard_stops": self.hard_stops,
             "status": "failed" if failed else "passed",
         }
+
+
+def plan_recovery_actions(*, drift: dict[str, Any], policy: RecoveryPolicy) -> list[dict[str, Any]]:
+    candidates = []
+    if drift.get("stale_restore"):
+        candidates.append({"action": "cleanup", "resource": "Restore"})
+    if drift.get("stale_backup_schedule"):
+        candidates.append({"action": "cleanup", "resource": "BackupSchedule"})
+    planned = []
+    for candidate in candidates:
+        planned.append({**candidate, "allowed_by_profile": candidate["resource"] in policy.allowed_resources})
+    return planned
