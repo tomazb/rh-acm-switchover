@@ -27,3 +27,20 @@ def test_create_raises_if_run_id_exists(tmp_path: Path) -> None:
     ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
     with pytest.raises(FileExistsError):
         ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+
+
+def test_write_failed_manifest_records_reason(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    artifacts.write_failed_manifest(
+        reason="dirty checkout", command=["pytest", "-m", "release"]
+    )
+
+    manifest = json.loads(
+        (artifacts.run_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (artifacts.run_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert manifest["status"] == "failed"
+    assert "dirty checkout" in manifest["failure_reasons"]
+    assert summary["status"] == "failed"
