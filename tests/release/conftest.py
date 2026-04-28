@@ -140,10 +140,6 @@ def selected_release_matrix(release_profile, release_options: ReleaseOptions):
 
 @pytest.fixture(scope="session")
 def release_artifacts(release_profile, release_options: ReleaseOptions):
-    root = release_options.artifact_dir or Path(
-        release_profile.profile.raw.get("artifacts", {}).get(
-            "root", "artifacts/release"
-        )
-    )
+    root = release_options.artifact_dir or Path(release_profile.profile.artifacts.root)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return ReleaseArtifacts.create(root=root, run_id=run_id)

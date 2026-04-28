@@ -108,6 +108,7 @@ class ReleaseArtifacts:
             "summary.json",
             {
                 "schema_version": 1,
+                "run_id": self.run_id,
                 "status": "failed",
                 "certification_eligible": False,
                 "warnings": [],

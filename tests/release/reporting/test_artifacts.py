@@ -43,4 +43,9 @@ def test_write_failed_manifest_records_reason(tmp_path: Path) -> None:
     )
     assert manifest["status"] == "failed"
     assert "dirty checkout" in manifest["failure_reasons"]
+    assert manifest["run_id"] == "run-1"
+    assert manifest["command"] == ["pytest", "-m", "release"]
+    assert manifest["certification_eligible"] is False
     assert summary["status"] == "failed"
+    assert "dirty checkout" in summary["failure_reasons"]
+    assert summary["certification_eligible"] is False
