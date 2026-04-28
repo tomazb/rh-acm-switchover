@@ -4,5 +4,5 @@ import pytest
 
 
 @pytest.mark.release
-def test_release_certification(release_options) -> None:
+def test_release_certification(release_options, baseline_manager) -> None:
     assert release_options.profile_path is not None

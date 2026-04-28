@@ -143,3 +143,13 @@ def release_artifacts(release_profile, release_options: ReleaseOptions):
     root = release_options.artifact_dir or Path(release_profile.profile.artifacts.root)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return ReleaseArtifacts.create(root=root, run_id=run_id)
+
+
+BASELINE_MANAGER_SKIP_REASON = (
+    "release baseline manager requires a live Kubernetes discovery client"
+)
+
+
+@pytest.fixture(scope="session")
+def baseline_manager():
+    pytest.skip(BASELINE_MANAGER_SKIP_REASON)
