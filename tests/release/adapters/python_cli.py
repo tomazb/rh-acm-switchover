@@ -82,7 +82,10 @@ class PythonCliAdapter:
         path = self.scenario_dir(scenario_id) / filename
         if not path.exists():
             return []
-        schema_version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+        try:
+            schema_version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+        except (json.JSONDecodeError, OSError):
+            schema_version = None
         return [ReportArtifact(type=report_type, path=str(path), schema_version=schema_version, required=True)]
 
     def execute(self, scenario_id: str) -> StreamResult:

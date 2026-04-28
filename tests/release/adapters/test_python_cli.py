@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 from tests.release.adapters.python_cli import PythonCliAdapter
-from tests.release.adapters.common import ReportArtifact  # noqa: F401 (used in test)
+from tests.release.adapters.common import ReportArtifact
 
 
 def test_python_preflight_command_uses_profile_contexts(tmp_path: Path) -> None:
@@ -83,6 +83,11 @@ def test_python_adapter_execute_reports_failure_on_nonzero_returncode(monkeypatc
     assert result.assertions[0].evidence_path == result.stderr_path
 
 
+def test_discover_reports_returns_empty_when_file_absent(tmp_path: Path) -> None:
+    adapter = PythonCliAdapter(Path("/repo"), "p", "s", "/k/p", "/k/s", tmp_path)
+    assert adapter.discover_reports("preflight") == []
+
+
 def test_python_adapter_discovers_required_reports(tmp_path: Path) -> None:
     adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
     scenario_dir = adapter.scenario_dir("preflight")
@@ -91,5 +96,7 @@ def test_python_adapter_discovers_required_reports(tmp_path: Path) -> None:
 
     reports = adapter.discover_reports("preflight")
 
+    assert isinstance(reports[0], ReportArtifact)
     assert reports[0].type == "preflight"
     assert reports[0].required is True
+    assert reports[0].schema_version == 1
