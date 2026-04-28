@@ -23,6 +23,7 @@ PYTHON_SCENARIOS = frozenset(
 # When adding a new Ansible scenario, update PLAYBOOKS and REPORT_NAMES
 # in tests/release/adapters/ansible.py.
 ANSIBLE_SCENARIOS = {"preflight", "ansible-passive-switchover", "ansible-restore-only", "argocd-managed-switchover"}
+BASH_SCENARIOS = {"preflight", "bash-discovery", "bash-postflight"}
 
 
 def execute_ansible_scenarios(*, adapter, scenario_ids: Sequence[str]) -> list:
@@ -38,6 +39,15 @@ def execute_python_scenarios(*, adapter, scenario_ids: Sequence[str]) -> list[di
     results = []
     for scenario_id in scenario_ids:
         if scenario_id in PYTHON_SCENARIOS:
+            result = adapter.execute(scenario_id)
+            results.append(result.to_dict() if hasattr(result, "to_dict") else result)
+    return results
+
+
+def execute_bash_scenarios(*, adapter, scenario_ids: Sequence[str]) -> list:
+    results = []
+    for scenario_id in scenario_ids:
+        if scenario_id in BASH_SCENARIOS:
             result = adapter.execute(scenario_id)
             results.append(result.to_dict() if hasattr(result, "to_dict") else result)
     return results

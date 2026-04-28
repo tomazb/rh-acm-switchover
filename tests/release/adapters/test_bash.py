@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 
 from tests.release.adapters.bash import BashAdapter
+from tests.release.test_release_certification import execute_bash_scenarios
 
 
 def test_bash_preflight_command_uses_profile_contexts(tmp_path: Path) -> None:
@@ -44,3 +45,17 @@ def test_bash_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_path
 
     assert result.status == "failed"
     assert any(a.name == "artifact-redaction" for a in result.assertions)
+
+
+class FakeBashAdapter:
+    def execute(self, scenario_id: str):
+        return {"scenario_id": scenario_id, "stream": "bash", "status": "passed"}
+
+
+def test_execute_bash_scenarios_runs_only_bash_supported_ids() -> None:
+    results = execute_bash_scenarios(
+        adapter=FakeBashAdapter(),
+        scenario_ids=("preflight", "python-passive-switchover"),
+    )
+
+    assert [item["scenario_id"] for item in results] == ["preflight"]
