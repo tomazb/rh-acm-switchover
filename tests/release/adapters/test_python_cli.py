@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tests.release.adapters.python_cli import PythonCliAdapter
 from tests.release.adapters.common import ReportArtifact
+from tests.release.test_release_certification import execute_python_scenarios
 
 
 def test_python_preflight_command_uses_profile_contexts(tmp_path: Path) -> None:
@@ -101,8 +102,6 @@ def test_python_adapter_discovers_required_reports(tmp_path: Path) -> None:
     assert reports[0].required is True
     assert reports[0].schema_version == 1
 
-
-from tests.release.test_release_certification import execute_python_scenarios
 
 
 class FakePythonAdapter:
