@@ -110,3 +110,22 @@ def normalize_argocd_management(source: dict[str, Any]) -> dict[str, Any]:
         "resume_failures": _sorted_list(source["resume_failures"]),
         "conflict_allowlist_used": bool(source["conflict_allowlist_used"]),
     }
+
+
+def write_runtime_parity_artifact(*, artifacts, comparisons: list[ComparisonRecord]) -> None:
+    status = (
+        "passed"
+        if comparisons
+        and all(item.status in {"passed", "not_applicable"} for item in comparisons)
+        else "failed"
+    )
+    if not comparisons:
+        status = "not_applicable"
+    artifacts.write_json(
+        "runtime-parity.json",
+        {
+            "schema_version": 1,
+            "comparisons": [item.to_dict() for item in comparisons],
+            "status": status,
+        },
+    )

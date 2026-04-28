@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+from tests.release.reporting.artifacts import ReleaseArtifacts
 from tests.release.scenarios.runtime_parity import (
     ComparisonRecord,
     compare_normalized_records,
     normalize_argocd_management,
     normalize_preflight,
+    write_runtime_parity_artifact,
 )
 
 
@@ -79,3 +84,24 @@ def test_normalize_argocd_management_uses_discovered_application_sets() -> None:
     )
 
     assert normalized["selected_applications"] == ["app-a", "app-b"]
+
+
+def test_write_runtime_parity_artifact_sets_failed_status(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    failed = ComparisonRecord(
+        "activation",
+        "python-passive-switchover",
+        ("python", "ansible"),
+        "failed",
+        ("status",),
+        [{"field": "status"}],
+        (),
+    )
+
+    write_runtime_parity_artifact(artifacts=artifacts, comparisons=[failed])
+
+    payload = json.loads(
+        (artifacts.run_dir / "runtime-parity.json").read_text(encoding="utf-8")
+    )
+    assert payload["status"] == "failed"
+    assert payload["comparisons"][0]["capability"] == "activation"
