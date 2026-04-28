@@ -1,53 +1,77 @@
 """Schema stability tests for collection report fields consumed by release normalizers.
 
-These tests pin the field shapes that release normalizers depend on.
-If a collection module changes its report schema, these tests catch the drift.
+These tests import actual collection module functions to verify field shapes do not
+drift undetected. Tests that require ansible-core skip automatically when it is absent.
 """
 
 from __future__ import annotations
 
+import pytest
 
-def test_preflight_report_fields_consumed_by_release_normalizer_are_stable() -> None:
-    report = {
-        "schema_version": "1.0",
-        "status": "passed",
-        "summary": {"passed": 10, "critical_failures": 0, "warning_failures": 0},
-        "results": [{"id": "acm-version", "severity": "critical", "status": "passed", "message": "ok"}],
-        "hubs": {},
-    }
-
-    assert report["schema_version"]
-    assert isinstance(report["summary"]["critical_failures"], int)
-    assert report["results"][0]["id"] == "acm-version"
-
-
-def test_switchover_report_fields_consumed_by_release_normalizer_are_stable() -> None:
-    report = {
-        "schema_version": "1.0",
-        "source": "ansible",
-        "argocd": {"run_id": "run-1", "summary": {"paused": 1, "restored": 1}},
-        "phases": {
-            "primary_prep": {"status": "passed"},
-            "activation": {"status": "passed"},
-            "post_activation": {"status": "passed"},
-            "finalization": {"status": "passed"},
-        },
-    }
-
-    assert report["argocd"]["run_id"] == "run-1"
-    assert report["phases"]["activation"]["status"] == "passed"
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
+    build_checkpoint_record,
+)
 
 
 def test_checkpoint_fields_consumed_by_release_normalizer_are_stable() -> None:
-    checkpoint = {
-        "schema_version": "1.0",
-        "completed_phases": ["preflight"],
-        "phase_status": {"preflight": "completed"},
-        "operational_data": {},
-        "errors": [],
-        "report_refs": [],
-        "updated_at": "2026-04-27T00:00:00+00:00",
-    }
+    checkpoint = build_checkpoint_record(phase="preflight", operational_data={})
 
-    assert checkpoint["completed_phases"] == ["preflight"]
-    assert checkpoint["phase_status"]["preflight"] == "completed"
+    assert checkpoint["schema_version"] == "1.0"
+    assert checkpoint["phase"] == "preflight"
+    assert checkpoint["completed_phases"] == []
+    assert checkpoint["errors"] == []
+    assert checkpoint["report_refs"] == []
+    assert "updated_at" in checkpoint
+    assert "created_at" in checkpoint
+
+
+def test_preflight_report_fields_consumed_by_release_normalizer_are_stable() -> None:
+    acm_preflight_report = pytest.importorskip(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report",
+        reason="ansible-core not installed; skipping ansible-dependent schema test",
+    )
+    build_preflight_report = acm_preflight_report.build_preflight_report
+
+    results = [{"id": "acm-version", "severity": "critical", "status": "pass", "message": "ok"}]
+    report = build_preflight_report(phase="preflight", results=results, hubs={})
+
+    assert report["schema_version"] == "1.0"
+    assert report["status"] == "pass"
+    assert isinstance(report["summary"]["critical_failures"], int)
+    assert isinstance(report["summary"]["warning_failures"], int)
+    assert report["results"][0]["id"] == "acm-version"
+    assert "generated_at" in report
+    assert "hubs" in report
+
+
+def test_preflight_report_status_is_fail_when_critical_results_present() -> None:
+    acm_preflight_report = pytest.importorskip(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report",
+        reason="ansible-core not installed; skipping ansible-dependent schema test",
+    )
+    build_preflight_report = acm_preflight_report.build_preflight_report
+
+    results = [{"id": "acm-version", "severity": "critical", "status": "fail", "message": "mismatch"}]
+    report = build_preflight_report(phase="preflight", results=results, hubs={})
+
+    assert report["status"] == "fail"
+    assert report["summary"]["critical_failures"] == 1
+
+
+def test_summarize_preflight_results_counts_by_severity() -> None:
+    acm_preflight_report = pytest.importorskip(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report",
+        reason="ansible-core not installed; skipping ansible-dependent schema test",
+    )
+    summarize_preflight_results = acm_preflight_report.summarize_preflight_results
+
+    results = [
+        {"id": "c1", "severity": "critical", "status": "fail", "message": ""},
+        {"id": "w1", "severity": "warning", "status": "fail", "message": ""},
+        {"id": "p1", "severity": "critical", "status": "pass", "message": ""},
+    ]
+    summary = summarize_preflight_results(results)
+
+    assert summary["critical_failures"] == 1
+    assert summary["warning_failures"] == 1
+    assert summary["passed"] is False

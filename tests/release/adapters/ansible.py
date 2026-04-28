@@ -54,11 +54,26 @@ class AnsibleAdapter:
                 "restore_only": scenario_id == "ansible-restore-only",
                 "dry_run": False,
             },
-            "acm_switchover_checkpoint_path": str(self.scenario_dir(scenario_id) / "checkpoint.json"),
-            "acm_switchover_report_dir": str(self.scenario_dir(scenario_id)),
+            "acm_switchover_execution": {
+                "mode": "execute",
+                "report_dir": str(self.scenario_dir(scenario_id)),
+                "checkpoint": {
+                    "enabled": True,
+                    "backend": "file",
+                    "path": str(self.scenario_dir(scenario_id) / "checkpoint.json"),
+                },
+            },
+            "acm_switchover_features": {
+                "argocd": {
+                    "manage": scenario_id == "argocd-managed-switchover",
+                    "resume_on_failure": False,
+                },
+            },
         }
 
     def build_command(self, scenario_id: str) -> list[str]:
+        if scenario_id not in PLAYBOOKS:
+            raise ValueError(f"Unknown scenario: {scenario_id!r}. Known scenarios: {sorted(PLAYBOOKS)}")
         return [
             "ansible-playbook",
             PLAYBOOKS[scenario_id],
@@ -73,7 +88,10 @@ class AnsibleAdapter:
         path = self.scenario_dir(scenario_id) / filename
         if not path.exists():
             return []
-        schema_version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+        try:
+            schema_version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+        except (json.JSONDecodeError, OSError):
+            schema_version = None
         return [ReportArtifact(type=report_type, path=str(path), schema_version=schema_version, required=True)]
 
     def execute(self, scenario_id: str) -> StreamResult:
@@ -87,6 +105,7 @@ class AnsibleAdapter:
             text=True,
             capture_output=True,
             check=False,
+            timeout=3600,
         )
         ended_at = _now()
         stdout_path = scenario_dir / "stdout.txt"

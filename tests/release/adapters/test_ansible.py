@@ -55,13 +55,50 @@ def test_ansible_restore_only_uses_checkpoint_path(tmp_path: Path) -> None:
     assert "checkpoint.json" in " ".join(command)
 
 
+def test_build_extra_vars_uses_execution_nested_structure(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("preflight")
+
+    assert "acm_switchover_execution" in extra_vars
+    assert "report_dir" in extra_vars["acm_switchover_execution"]
+    assert "checkpoint" in extra_vars["acm_switchover_execution"]
+    assert "path" in extra_vars["acm_switchover_execution"]["checkpoint"]
+    assert "checkpoint.json" in extra_vars["acm_switchover_execution"]["checkpoint"]["path"]
+    assert "acm_switchover_report_dir" not in extra_vars
+    assert "acm_switchover_checkpoint_path" not in extra_vars
+
+
+def test_build_extra_vars_argocd_managed_sets_manage_flag(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("argocd-managed-switchover")
+
+    assert extra_vars["acm_switchover_features"]["argocd"]["manage"] is True
+
+
+def test_build_extra_vars_other_scenarios_do_not_set_manage_flag(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("preflight")
+
+    assert extra_vars["acm_switchover_features"]["argocd"]["manage"] is False
+
+
+def test_build_command_raises_for_unknown_scenario(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    with pytest.raises(ValueError, match="Unknown scenario"):
+        adapter.build_command("not-a-real-scenario")
+
+
 # ---------------------------------------------------------------------------
 # Task 2: execution capture and report discovery
 # ---------------------------------------------------------------------------
 
 
 def test_ansible_adapter_execute_captures_output(monkeypatch, tmp_path: Path) -> None:
-    def fake_run(command, cwd, text, capture_output, check):
+    def fake_run(command, cwd, text, capture_output, check, timeout):
         assert cwd == Path("/repo/collection")
         return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
 
@@ -88,7 +125,7 @@ def test_ansible_adapter_discovers_preflight_report(tmp_path: Path) -> None:
 
 
 def test_ansible_adapter_failed_command_sets_failed_status(monkeypatch, tmp_path: Path) -> None:
-    def fake_run(command, cwd, text, capture_output, check):
+    def fake_run(command, cwd, text, capture_output, check, timeout):
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="error output\n")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -114,6 +151,18 @@ def test_ansible_adapter_discover_reports_returns_empty_for_unknown_scenario(tmp
     reports = adapter.discover_reports("unknown-scenario")
 
     assert reports == []
+
+
+def test_ansible_adapter_discover_reports_handles_malformed_json(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+    scenario_dir = adapter.scenario_dir("preflight")
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "preflight-report.json").write_text("not valid json", encoding="utf-8")
+
+    reports = adapter.discover_reports("preflight")
+
+    assert len(reports) == 1
+    assert reports[0].schema_version is None
 
 
 # ---------------------------------------------------------------------------
