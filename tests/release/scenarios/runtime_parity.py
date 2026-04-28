@@ -5,6 +5,35 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+CAPABILITY_REQUIRED_FIELDS = {
+    "preflight validation": (
+        "status",
+        "critical_failure_count",
+        "warning_failure_count",
+        "check_ids",
+        "failed_check_ids",
+    ),
+    "Argo CD management": (
+        "selected_applications",
+        "paused_applications",
+        "resumed_applications",
+        "resume_failures",
+        "conflict_allowlist_used",
+    ),
+    "activation": (
+        "restore_name",
+        "restore_phase_category",
+        "sync_restore_enabled",
+        "managed_cluster_activation_requested",
+    ),
+    "finalization": (
+        "backup_schedule_present",
+        "backup_schedule_paused",
+        "post_enable_backup_observed",
+        "old_hub_action_result",
+    ),
+}
+
 
 @dataclass(frozen=True)
 class ComparisonRecord:
@@ -57,3 +86,27 @@ def compare_normalized_records(
         differences=differences,
         evidence_paths=evidence_paths,
     )
+
+
+def _sorted_list(value: Any) -> list:
+    return sorted(value or [])
+
+
+def normalize_preflight(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": source["status"],
+        "critical_failure_count": int(source["critical_failure_count"]),
+        "warning_failure_count": int(source["warning_failure_count"]),
+        "check_ids": _sorted_list(source["check_ids"]),
+        "failed_check_ids": _sorted_list(source["failed_check_ids"]),
+    }
+
+
+def normalize_argocd_management(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "selected_applications": _sorted_list(source["selected_applications"]),
+        "paused_applications": _sorted_list(source["paused_applications"]),
+        "resumed_applications": _sorted_list(source["resumed_applications"]),
+        "resume_failures": _sorted_list(source["resume_failures"]),
+        "conflict_allowlist_used": bool(source["conflict_allowlist_used"]),
+    }
