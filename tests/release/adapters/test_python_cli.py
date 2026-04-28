@@ -100,3 +100,20 @@ def test_python_adapter_discovers_required_reports(tmp_path: Path) -> None:
     assert reports[0].type == "preflight"
     assert reports[0].required is True
     assert reports[0].schema_version == 1
+
+
+from tests.release.test_release_certification import execute_python_scenarios
+
+
+class FakePythonAdapter:
+    def execute(self, scenario_id: str):
+        return {"scenario_id": scenario_id, "stream": "python", "status": "passed"}
+
+
+def test_execute_python_scenarios_filters_python_ids() -> None:
+    results = execute_python_scenarios(
+        adapter=FakePythonAdapter(),
+        scenario_ids=("preflight", "python-passive-switchover", "ansible-passive-switchover"),
+    )
+
+    assert [item["scenario_id"] for item in results] == ["preflight", "python-passive-switchover"]
