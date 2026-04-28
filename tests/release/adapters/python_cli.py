@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Python CLI adapter for release stream execution."""
+
+from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
