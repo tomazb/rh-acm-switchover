@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tests.release.reporting.redaction import RedactionError, sanitize_text
+
 from .common import AssertionRecord, ReportArtifact, StreamResult
 
+_COLLECTION_PLAYBOOKS_PREFIX = "ansible_collections/tomazb/acm_switchover/playbooks"
 
 PLAYBOOKS: dict[str, str] = {
-    "preflight": "playbooks/preflight.yml",
-    "ansible-passive-switchover": "playbooks/switchover.yml",
-    "ansible-restore-only": "playbooks/restore_only.yml",
-    "argocd-managed-switchover": "playbooks/switchover.yml",
-    "decommission": "playbooks/decommission.yml",
+    "preflight": f"{_COLLECTION_PLAYBOOKS_PREFIX}/preflight.yml",
+    "ansible-passive-switchover": f"{_COLLECTION_PLAYBOOKS_PREFIX}/switchover.yml",
+    "ansible-restore-only": f"{_COLLECTION_PLAYBOOKS_PREFIX}/restore_only.yml",
+    "argocd-managed-switchover": f"{_COLLECTION_PLAYBOOKS_PREFIX}/switchover.yml",
+    "decommission": f"{_COLLECTION_PLAYBOOKS_PREFIX}/decommission.yml",
 }
 
 REPORT_NAMES: dict[str, tuple[str, str]] = {
@@ -29,6 +33,23 @@ REPORT_NAMES: dict[str, tuple[str, str]] = {
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _decode(data: str | bytes | None) -> str:
+    """Decode partial subprocess capture, handling bytes or None from TimeoutExpired."""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data or ""
+
+
+def _sanitized_write(path: Path, content: str) -> bool:
+    """Sanitize *content* and write to *path*. Returns False if content was rejected."""
+    try:
+        sanitized = sanitize_text(content)
+        path.write_text(sanitized.text, encoding="utf-8")
+        return True
+    except RedactionError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -44,6 +65,17 @@ class AnsibleAdapter:
     def scenario_dir(self, scenario_id: str) -> Path:
         return self.artifact_dir / "scenarios" / scenario_id / "ansible"
 
+    def _build_env(self) -> dict[str, str]:
+        """Build subprocess environment with ANSIBLE_COLLECTIONS_PATH pointing to repo root."""
+        env = dict(os.environ)
+        env["ANSIBLE_COLLECTIONS_PATH"] = ":".join([
+            str(self.repo_root),
+            os.path.expanduser("~/.ansible/collections"),
+        ])
+        env.setdefault("ANSIBLE_LOCAL_TEMP", "/tmp/ansible-local")
+        env.setdefault("ANSIBLE_REMOTE_TMP", "/tmp/ansible-remote")
+        return env
+
     def build_extra_vars(self, scenario_id: str) -> dict:
         return {
             "acm_switchover_hubs": {
@@ -52,6 +84,10 @@ class AnsibleAdapter:
             },
             "acm_switchover_operation": {
                 "restore_only": scenario_id == "ansible-restore-only",
+                "method": "full" if scenario_id == "ansible-restore-only" else "passive",
+                "old_hub_action": "secondary",
+                "activation_method": "patch",
+                "min_managed_clusters": 0,
                 "dry_run": False,
             },
             "acm_switchover_execution": {
@@ -64,6 +100,12 @@ class AnsibleAdapter:
                 },
             },
             "acm_switchover_features": {
+                "manage_auto_import_strategy": False,
+                "token_expiry_warning_hours": 4,
+                "skip_observability_checks": False,
+                "skip_gitops_check": False,
+                "skip_rbac_validation": False,
+                "disable_observability_on_secondary": False,
                 "argocd": {
                     "manage": scenario_id == "argocd-managed-switchover",
                     "resume_on_failure": False,
@@ -98,21 +140,87 @@ class AnsibleAdapter:
         scenario_dir = self.scenario_dir(scenario_id)
         scenario_dir.mkdir(parents=True, exist_ok=True)
         command = self.build_command(scenario_id)
-        started_at = _now()
-        completed = subprocess.run(
-            command,
-            cwd=self.collection_root,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=3600,
-        )
-        ended_at = _now()
         stdout_path = scenario_dir / "stdout.txt"
         stderr_path = scenario_dir / "stderr.txt"
-        stdout_path.write_text(completed.stdout, encoding="utf-8")
-        stderr_path.write_text(completed.stderr, encoding="utf-8")
+        started_at = _now()
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.repo_root,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=3600,
+                env=self._build_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            ended_at = _now()
+            stdout_written = _sanitized_write(stdout_path, _decode(exc.stdout))
+            stderr_written = _sanitized_write(stderr_path, _decode(exc.stderr))
+            timeout_assertions: list[AssertionRecord] = [
+                AssertionRecord(
+                    capability=scenario_id,
+                    name="exit-code",
+                    status="failed",
+                    expected="0",
+                    actual="timeout",
+                    evidence_path=str(stderr_path),
+                    message="Ansible command timed out after 3600 seconds",
+                )
+            ]
+            if not stdout_written or not stderr_written:
+                timeout_assertions.append(
+                    AssertionRecord(
+                        capability=scenario_id,
+                        name="artifact-redaction",
+                        status="failed",
+                        expected="clean",
+                        actual="rejected",
+                        evidence_path="",
+                        message="Captured output was rejected by the sanitizer",
+                    )
+                )
+            return StreamResult(
+                stream="ansible",
+                scenario_id=scenario_id,
+                status="failed",
+                command=command,
+                returncode=-1,
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                reports=self.discover_reports(scenario_id),
+                assertions=timeout_assertions,
+                started_at=started_at,
+                ended_at=ended_at,
+            )
+        ended_at = _now()
+        stdout_written = _sanitized_write(stdout_path, completed.stdout)
+        stderr_written = _sanitized_write(stderr_path, completed.stderr)
         status = "passed" if completed.returncode == 0 else "failed"
+        assertions: list[AssertionRecord] = [
+            AssertionRecord(
+                capability=scenario_id,
+                name="exit-code",
+                status=status,
+                expected="0",
+                actual=str(completed.returncode),
+                evidence_path=str(stderr_path) if status == "failed" else str(stdout_path),
+                message="Ansible command completed" if status == "passed" else "Ansible command returned a non-zero exit code",
+            )
+        ]
+        if not stdout_written or not stderr_written:
+            status = "failed"
+            assertions.append(
+                AssertionRecord(
+                    capability=scenario_id,
+                    name="artifact-redaction",
+                    status="failed",
+                    expected="clean",
+                    actual="rejected",
+                    evidence_path="",
+                    message="Captured output was rejected by the sanitizer",
+                )
+            )
         return StreamResult(
             stream="ansible",
             scenario_id=scenario_id,
@@ -122,17 +230,7 @@ class AnsibleAdapter:
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
             reports=self.discover_reports(scenario_id),
-            assertions=[
-                AssertionRecord(
-                    capability=scenario_id,
-                    name="exit-code",
-                    status=status,
-                    expected="0",
-                    actual=str(completed.returncode),
-                    evidence_path=str(stderr_path) if status == "failed" else str(stdout_path),
-                    message="Ansible command completed" if status == "passed" else "Ansible command returned a non-zero exit code",
-                )
-            ],
+            assertions=assertions,
             started_at=started_at,
             ended_at=ended_at,
         )
