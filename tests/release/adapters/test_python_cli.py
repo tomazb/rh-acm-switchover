@@ -103,10 +103,22 @@ def test_python_adapter_discovers_required_reports(tmp_path: Path) -> None:
     assert reports[0].schema_version == 1
 
 
-
 class FakePythonAdapter:
-    def execute(self, scenario_id: str):
+    def execute(self, scenario_id: str) -> dict:
         return {"scenario_id": scenario_id, "stream": "python", "status": "passed"}
+
+
+class FakeStreamResult:
+    def __init__(self, scenario_id: str) -> None:
+        self._d = {"scenario_id": scenario_id, "stream": "python", "status": "passed"}
+
+    def to_dict(self) -> dict:
+        return self._d
+
+
+class FakePythonAdapterWithToDict:
+    def execute(self, scenario_id: str) -> FakeStreamResult:
+        return FakeStreamResult(scenario_id)
 
 
 def test_execute_python_scenarios_filters_python_ids() -> None:
@@ -116,3 +128,12 @@ def test_execute_python_scenarios_filters_python_ids() -> None:
     )
 
     assert [item["scenario_id"] for item in results] == ["preflight", "python-passive-switchover"]
+
+
+def test_execute_python_scenarios_calls_to_dict_when_available() -> None:
+    results = execute_python_scenarios(
+        adapter=FakePythonAdapterWithToDict(),
+        scenario_ids=("preflight",),
+    )
+
+    assert results[0]["scenario_id"] == "preflight"
