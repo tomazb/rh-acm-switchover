@@ -70,11 +70,41 @@ class PythonCliAdapter:
         output_dir = self.scenario_dir(scenario_id)
         output_dir.mkdir(parents=True, exist_ok=True)
         command = self.build_command(scenario_id)
-        started_at = _now()
-        completed = subprocess.run(command, cwd=self.repo_root, text=True, capture_output=True, check=False)
-        ended_at = _now()
         stdout_path = output_dir / "stdout.txt"
         stderr_path = output_dir / "stderr.txt"
+        started_at = _now()
+        try:
+            completed = subprocess.run(
+                command, cwd=self.repo_root, text=True, capture_output=True, check=False, timeout=3600
+            )
+        except subprocess.TimeoutExpired as exc:
+            ended_at = _now()
+            stdout_path.write_text(exc.stdout or "", encoding="utf-8")
+            stderr_path.write_text(exc.stderr or "", encoding="utf-8")
+            return StreamResult(
+                stream="python",
+                scenario_id=scenario_id,
+                status="failed",
+                command=command,
+                returncode=-1,
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                reports=[],
+                assertions=[
+                    AssertionRecord(
+                        capability=scenario_id,
+                        name="exit-code",
+                        status="failed",
+                        expected="0",
+                        actual="timeout",
+                        evidence_path=str(stderr_path),
+                        message="Python CLI timed out after 3600 seconds",
+                    )
+                ],
+                started_at=started_at,
+                ended_at=ended_at,
+            )
+        ended_at = _now()
         stdout_path.write_text(completed.stdout, encoding="utf-8")
         stderr_path.write_text(completed.stderr, encoding="utf-8")
         status = "passed" if completed.returncode == 0 else "failed"
@@ -94,7 +124,7 @@ class PythonCliAdapter:
                     status=status,
                     expected="0",
                     actual=str(completed.returncode),
-                    evidence_path=str(stdout_path),
+                    evidence_path=str(stderr_path) if status == "failed" else str(stdout_path),
                     message="Python CLI exited with expected code" if status == "passed" else "Python CLI returned a non-zero exit code",
                 )
             ],

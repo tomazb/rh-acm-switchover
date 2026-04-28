@@ -49,7 +49,7 @@ def test_python_passive_switchover_command_includes_required_flags(tmp_path: Pat
 
 
 def test_python_adapter_execute_captures_stdout_and_stderr(monkeypatch, tmp_path: Path) -> None:
-    def fake_run(command, cwd, text, capture_output, check):
+    def fake_run(command, cwd, text, capture_output, check, timeout):
         assert cwd == Path("/repo")
         return subprocess.CompletedProcess(command, 0, stdout="done\n", stderr="")
 
@@ -61,4 +61,22 @@ def test_python_adapter_execute_captures_stdout_and_stderr(monkeypatch, tmp_path
     assert result.status == "passed"
     assert result.returncode == 0
     assert Path(result.stdout_path).read_text(encoding="utf-8") == "done\n"
+    assert Path(result.stderr_path).read_text(encoding="utf-8") == ""
     assert result.assertions[0].name == "exit-code"
+
+
+def test_python_adapter_execute_reports_failure_on_nonzero_returncode(monkeypatch, tmp_path: Path) -> None:
+    def fake_run(command, cwd, text, capture_output, check, timeout):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="fatal: cluster unreachable\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    result = adapter.execute("preflight")
+
+    assert result.status == "failed"
+    assert result.returncode == 1
+    assert result.assertions[0].status == "failed"
+    assert result.assertions[0].actual == "1"
+    assert Path(result.stderr_path).read_text(encoding="utf-8") == "fatal: cluster unreachable\n"
+    assert result.assertions[0].evidence_path == result.stderr_path
