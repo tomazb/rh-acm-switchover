@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -51,7 +52,7 @@ def test_python_passive_switchover_command_includes_required_flags(tmp_path: Pat
 
 
 def test_python_adapter_execute_captures_stdout_and_stderr(monkeypatch, tmp_path: Path) -> None:
-    def fake_run(command, cwd, text, capture_output, check, timeout):
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
         assert cwd == Path("/repo")
         return subprocess.CompletedProcess(command, 0, stdout="done\n", stderr="")
 
@@ -68,7 +69,7 @@ def test_python_adapter_execute_captures_stdout_and_stderr(monkeypatch, tmp_path
 
 
 def test_python_adapter_execute_reports_failure_on_nonzero_returncode(monkeypatch, tmp_path: Path) -> None:
-    def fake_run(command, cwd, text, capture_output, check, timeout):
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="fatal: cluster unreachable\n")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -137,3 +138,83 @@ def test_execute_python_scenarios_calls_to_dict_when_available() -> None:
     )
 
     assert results[0]["scenario_id"] == "preflight"
+
+
+def test_python_adapter_execute_sets_kubeconfig_env(monkeypatch, tmp_path: Path) -> None:
+    captured_env: dict[str, str] = {}
+
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
+        captured_env.update(env)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.delenv("KUBECONFIG", raising=False)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    adapter.execute("preflight")
+
+    assert captured_env.get("KUBECONFIG") == os.pathsep.join(["/kube/primary", "/kube/secondary"])
+
+
+def test_python_adapter_restore_only_uses_secondary_kubeconfig_only(monkeypatch, tmp_path: Path) -> None:
+    captured_env: dict[str, str] = {}
+
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
+        captured_env.update(env)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.delenv("KUBECONFIG", raising=False)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    adapter.execute("python-restore-only")
+
+    assert captured_env.get("KUBECONFIG") == "/kube/secondary"
+
+
+def test_python_adapter_execute_overrides_inherited_kubeconfig(monkeypatch, tmp_path: Path) -> None:
+    captured_env: dict[str, str] = {}
+
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
+        captured_env.update(env)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("KUBECONFIG", "/inherited/kubeconfig")
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    adapter.execute("preflight")
+
+    assert captured_env.get("KUBECONFIG") != "/inherited/kubeconfig"
+    assert "/kube/primary" in captured_env.get("KUBECONFIG", "")
+
+
+def test_python_adapter_execute_handles_timeout_with_bytes_capture(monkeypatch, tmp_path: Path) -> None:
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
+        exc = subprocess.TimeoutExpired(command, 3600)
+        exc.stdout = b"partial output bytes"
+        exc.stderr = b"partial error bytes"
+        raise exc
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    result = adapter.execute("preflight")
+
+    assert result.status == "failed"
+    assert result.returncode == -1
+    assert result.assertions[0].actual == "timeout"
+    assert Path(result.stdout_path).read_text(encoding="utf-8") == "partial output bytes"
+    assert Path(result.stderr_path).read_text(encoding="utf-8") == "partial error bytes"
+
+
+def test_discover_reports_handles_malformed_json(tmp_path: Path) -> None:
+    adapter = PythonCliAdapter(Path("/repo"), "p", "s", "/k/p", "/k/s", tmp_path)
+    scenario_dir = adapter.scenario_dir("preflight")
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "preflight-report.json").write_text("{invalid json}", encoding="utf-8")
+
+    reports = adapter.discover_reports("preflight")
+
+    assert len(reports) == 1
+    assert reports[0].schema_version is None
