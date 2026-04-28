@@ -20,7 +20,7 @@ class PythonCliAdapter:
     repo_root: Path
     primary_context: str
     secondary_context: str
-    # NOTE: primary_kubeconfig / secondary_kubeconfig are used in execute() for KUBECONFIG env setup
+    # NOTE: primary_kubeconfig / secondary_kubeconfig are reserved for future KUBECONFIG env setup
     primary_kubeconfig: str
     secondary_kubeconfig: str
     artifact_dir: Path
