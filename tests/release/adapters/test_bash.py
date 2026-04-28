@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 from tests.release.adapters.bash import BashAdapter
 from tests.release.test_release_certification import execute_bash_scenarios
@@ -38,7 +38,9 @@ def test_bash_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_path
         return subprocess.CompletedProcess(command, 0, stdout="output", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr("tests.release.adapters.bash.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive")))
+    monkeypatch.setattr(
+        "tests.release.adapters.bash.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive"))
+    )
     adapter = BashAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
 
     result = adapter.execute("preflight")

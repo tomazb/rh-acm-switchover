@@ -4,7 +4,9 @@ from tests.release.baseline.recovery import RecoveryBudget, RecoveryPolicy, plan
 
 
 def test_recovery_budget_records_allowed_action() -> None:
-    budget = RecoveryBudget(policy=RecoveryPolicy(total_budget_minutes=30, allowed_resources=("Restore",), rbac_actions=("revalidate",)))
+    budget = RecoveryBudget(
+        policy=RecoveryPolicy(total_budget_minutes=30, allowed_resources=("Restore",), rbac_actions=("revalidate",))
+    )
 
     attempt = budget.record_attempt(
         action="cleanup",
@@ -19,7 +21,9 @@ def test_recovery_budget_records_allowed_action() -> None:
 
 
 def test_recovery_budget_rejects_disallowed_resource() -> None:
-    budget = RecoveryBudget(policy=RecoveryPolicy(total_budget_minutes=30, allowed_resources=(), rbac_actions=("revalidate",)))
+    budget = RecoveryBudget(
+        policy=RecoveryPolicy(total_budget_minutes=30, allowed_resources=(), rbac_actions=("revalidate",))
+    )
 
     attempt = budget.record_attempt(
         action="cleanup",

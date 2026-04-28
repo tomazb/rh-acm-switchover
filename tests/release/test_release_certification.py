@@ -4,20 +4,16 @@ from collections.abc import Sequence
 
 import pytest
 
+from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 from tests.release.scenarios.runtime_parity import (
     CAPABILITY_REQUIRED_FIELDS,
     compare_normalized_records,
 )
-from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 
 # Derived from catalog.py — automatically in sync with the Python stream.
 # When adding a new Python scenario, update build_command() and REPORT_NAMES
 # in tests/release/adapters/python_cli.py.
-PYTHON_SCENARIOS = frozenset(
-    scenario_id
-    for scenario_id, defn in SCENARIOS_BY_ID.items()
-    if "python" in defn.streams
-)
+PYTHON_SCENARIOS = frozenset(scenario_id for scenario_id, defn in SCENARIOS_BY_ID.items() if "python" in defn.streams)
 
 # V1 Ansible scenarios executed by AnsibleAdapter.
 # When adding a new Ansible scenario, update PLAYBOOKS and REPORT_NAMES
