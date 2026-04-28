@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from tests.release.reporting.artifacts import ReleaseArtifacts
+from tests.release.reporting.redaction import RedactionError
 
 
 def test_release_artifacts_create_required_files(tmp_path: Path) -> None:
@@ -31,10 +32,12 @@ def test_create_raises_if_run_id_exists(tmp_path: Path) -> None:
 
 def test_write_failed_manifest_records_reason(tmp_path: Path) -> None:
     artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
-    artifacts.write_failed_manifest(
+    manifest_path, summary_path = artifacts.write_failed_manifest(
         reason="dirty checkout", command=["pytest", "-m", "release"]
     )
 
+    assert manifest_path == artifacts.run_dir / "manifest.json"
+    assert summary_path == artifacts.run_dir / "summary.json"
     manifest = json.loads(
         (artifacts.run_dir / "manifest.json").read_text(encoding="utf-8")
     )
@@ -49,3 +52,28 @@ def test_write_failed_manifest_records_reason(tmp_path: Path) -> None:
     assert summary["status"] == "failed"
     assert "dirty checkout" in summary["failure_reasons"]
     assert summary["certification_eligible"] is False
+
+
+def test_sanitized_write_updates_redaction_record(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    artifacts.write_sanitized_text(
+        "logs/output.txt", "Authorization: Bearer secret-token-xyz"
+    )
+
+    redaction = json.loads(
+        (artifacts.run_dir / "redaction.json").read_text(encoding="utf-8")
+    )
+    assert "logs/output.txt" in redaction["scanned_artifacts"]
+    assert redaction["redacted_counts_by_class"].get("authorization-header", 0) >= 1
+    assert redaction["status"] == "redacted"
+
+
+def test_sanitized_write_records_rejection_in_redaction_json(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    with pytest.raises(RedactionError):
+        artifacts.write_sanitized_text("logs/secrets.txt", "token: abc123")
+
+    redaction = json.loads(
+        (artifacts.run_dir / "redaction.json").read_text(encoding="utf-8")
+    )
+    assert "logs/secrets.txt" in redaction["rejected_artifacts"]

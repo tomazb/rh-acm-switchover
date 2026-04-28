@@ -1,4 +1,5 @@
-# tests/release/reporting/artifacts.py
+"""Artifact directory management and sanitized persistence for release validation runs."""
+
 from __future__ import annotations
 
 import copy
@@ -7,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .redaction import sanitize_text
+from .redaction import RedactionError, sanitize_text
 
 REQUIRED_JSON_ARTIFACTS = {
     "manifest.json": {
@@ -83,16 +84,47 @@ class ReleaseArtifacts:
         return path
 
     def write_sanitized_text(self, relative_path: str | Path, content: str) -> Path:
-        """Sanitize content, reject if sensitive material is found, then write to run_dir."""
-        sanitized = sanitize_text(content)
+        """Sanitize content, update redaction audit log, then write to run_dir."""
+        relative_path = Path(relative_path)
+        try:
+            sanitized = sanitize_text(content)
+        except RedactionError:
+            self._update_redaction_record(str(relative_path), {}, rejected=True)
+            raise
         path = self.run_dir / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(sanitized.text, encoding="utf-8")
+        self._update_redaction_record(
+            str(relative_path), sanitized.redacted_counts_by_class, rejected=False
+        )
         return path
 
-    def write_failed_manifest(self, *, reason: str, command: list[str]) -> None:
+    def _update_redaction_record(
+        self, artifact_path: str, counts: dict[str, int], *, rejected: bool
+    ) -> None:
+        """Merge a scan result into redaction.json for audit-trail tracking."""
+        redaction_file = self.run_dir / "redaction.json"
+        redaction: dict[str, Any] = json.loads(
+            redaction_file.read_text(encoding="utf-8")
+        )
+        if rejected:
+            redaction.setdefault("rejected_artifacts", []).append(artifact_path)
+        else:
+            redaction.setdefault("scanned_artifacts", []).append(artifact_path)
+            existing = redaction.setdefault("redacted_counts_by_class", {})
+            for klass, count in counts.items():
+                existing[klass] = existing.get(klass, 0) + count
+            if counts:
+                redaction["status"] = "redacted"
+            elif redaction.get("status") == "not_applicable":
+                redaction["status"] = "ok"
+        self.write_json("redaction.json", redaction)
+
+    def write_failed_manifest(
+        self, *, reason: str, command: list[str]
+    ) -> tuple[Path, Path]:
         """Write manifest.json and summary.json with failed status and failure reason."""
-        self.write_json(
+        manifest_path = self.write_json(
             "manifest.json",
             {
                 "schema_version": 1,
@@ -104,7 +136,7 @@ class ReleaseArtifacts:
                 "failure_reasons": [reason],
             },
         )
-        self.write_json(
+        summary_path = self.write_json(
             "summary.json",
             {
                 "schema_version": 1,
@@ -115,3 +147,4 @@ class ReleaseArtifacts:
                 "failure_reasons": [reason],
             },
         )
+        return manifest_path, summary_path

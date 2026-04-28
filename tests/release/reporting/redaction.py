@@ -1,7 +1,6 @@
-# tests/release/reporting/redaction.py
-from __future__ import annotations
-
 """Redaction scanner and sanitized text types for release artifact persistence."""
+
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass
@@ -22,7 +21,11 @@ class SanitizedText:
 
 
 REDACT_PATTERNS = [
-    ("authorization-header", re.compile(r"Authorization:\s*Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE), "Authorization: Bearer [REDACTED]"),
+    (
+        "authorization-header",
+        re.compile(r"Authorization:\s*Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+        "Authorization: Bearer [REDACTED]",
+    ),
     ("api-token", re.compile(r"(?i)(api[_-]?token=)[A-Za-z0-9._~+/=-]+"), r"\1[REDACTED]"),
     ("pem-block", re.compile(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", re.DOTALL), "[REDACTED PEM BLOCK]"),
 ]
