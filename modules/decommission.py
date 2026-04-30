@@ -206,9 +206,7 @@ class Decommission:
                 if not non_local:
                     return WaitConditionResult.complete("all ManagedClusters removed (except local-cluster)")
                 names = [mc.get("metadata", {}).get("name") for mc in non_local]
-                return WaitConditionResult.pending(
-                    f"{len(non_local)} ManagedCluster(s) remaining: {', '.join(names)}"
-                )
+                return WaitConditionResult.pending(f"{len(non_local)} ManagedCluster(s) remaining: {', '.join(names)}")
 
             success = wait_for_condition(
                 "ManagedCluster removal",

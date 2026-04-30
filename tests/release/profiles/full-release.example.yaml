@@ -1,7 +1,7 @@
 profile_version: 1
 name: lab-passive-release
 release:
-  expected_version: 1.7.6
+  expected_version: 1.7.7
   metadata_files:
     - README.md
     - CHANGELOG.md

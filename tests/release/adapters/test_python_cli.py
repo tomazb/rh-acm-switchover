@@ -3,8 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.release.adapters.python_cli import PythonCliAdapter
 from tests.release.adapters.common import ReportArtifact
+from tests.release.adapters.python_cli import PythonCliAdapter
 from tests.release.test_release_certification import execute_python_scenarios
 
 
@@ -241,7 +241,9 @@ def test_python_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_pa
         return subprocess.CompletedProcess(command, 0, stdout="output", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr("tests.release.adapters.python_cli.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive")))
+    monkeypatch.setattr(
+        "tests.release.adapters.python_cli.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive"))
+    )
     adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
 
     result = adapter.execute("preflight")

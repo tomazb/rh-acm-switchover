@@ -5,9 +5,7 @@ from typing import Protocol
 
 
 class HubDiscoveryClient(Protocol):
-    def list_resources(
-        self, resource: str, namespace: str | None = None
-    ) -> list[dict]: ...
+    def list_resources(self, resource: str, namespace: str | None = None) -> list[dict]: ...
 
 
 @dataclass(frozen=True)
@@ -51,9 +49,7 @@ def discover_hub_facts(
 
     applications: list[dict] = []
     for namespace in argocd_namespaces:
-        applications.extend(
-            client.list_resources("applications.argoproj.io", namespace)
-        )
+        applications.extend(client.list_resources("applications.argoproj.io", namespace))
 
     backup_present = backup is not None
     restore_present = restore is not None
@@ -78,17 +74,11 @@ def discover_hub_facts(
             "present": restore_present,
             "name": restore.get("metadata", {}).get("name") if restore else None,
             "phase": restore.get("status", {}).get("phase") if restore else None,
-            "sync_restore_enabled": (
-                restore.get("spec", {}).get("syncRestoreWithNewBackups")
-                if restore
-                else None
-            ),
+            "sync_restore_enabled": (restore.get("spec", {}).get("syncRestoreWithNewBackups") if restore else None),
         },
         managed_cluster_names=_managed_cluster_names(managed_clusters),
         observability={
-            "present": bool(
-                client.list_resources("multiclusterobservabilities", acm_namespace)
-            ),
+            "present": bool(client.list_resources("multiclusterobservabilities", acm_namespace)),
             "status": "unknown",
         },
         argocd={

@@ -26,13 +26,9 @@ def test_bash_preflight_command_uses_profile_contexts(tmp_path: Path) -> None:
     assert "secondary" in command
 
 
-def test_bash_adapter_execute_returns_stream_result(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_bash_adapter_execute_returns_stream_result(monkeypatch, tmp_path: Path) -> None:
     def fake_run(command, cwd, text, capture_output, check, timeout):
-        return subprocess.CompletedProcess(
-            command, 0, stdout="Summary: 0 failed checks\n", stderr=""
-        )
+        return subprocess.CompletedProcess(command, 0, stdout="Summary: 0 failed checks\n", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     adapter = BashAdapter(
@@ -51,9 +47,7 @@ def test_bash_adapter_execute_returns_stream_result(
     assert result.assertions[0].capability == "bash-preflight"
 
 
-def test_bash_adapter_execute_surfaces_redaction_rejection(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_bash_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_path: Path) -> None:
     from tests.release.reporting.redaction import RedactionError
 
     def fake_run(command, cwd, text, capture_output, check, timeout):

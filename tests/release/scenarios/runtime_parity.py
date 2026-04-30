@@ -74,9 +74,7 @@ def compare_normalized_records(
             )
             continue
         if python[field] != ansible[field]:
-            differences.append(
-                {"field": field, "python": python[field], "ansible": ansible[field]}
-            )
+            differences.append({"field": field, "python": python[field], "ansible": ansible[field]})
     return ComparisonRecord(
         capability=capability,
         scenario_id=scenario_id,
@@ -115,8 +113,7 @@ def normalize_argocd_management(source: dict[str, Any]) -> dict[str, Any]:
 def write_runtime_parity_artifact(*, artifacts, comparisons: list[ComparisonRecord]) -> None:
     status = (
         "passed"
-        if comparisons
-        and all(item.status in {"passed", "not_applicable"} for item in comparisons)
+        if comparisons and all(item.status in {"passed", "not_applicable"} for item in comparisons)
         else "failed"
     )
     if not comparisons:

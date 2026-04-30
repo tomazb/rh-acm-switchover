@@ -85,61 +85,41 @@ BASELINE_PRIMARY_VALUES = {"primary", "secondary"}
 
 def require_mapping(value: Any, field_path: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
-        raise ProfileValidationError(
-            f"{field_path}: expected mapping, got {type(value).__name__}"
-        )
+        raise ProfileValidationError(f"{field_path}: expected mapping, got {type(value).__name__}")
     return value
 
 
 def require_sequence(value: Any, field_path: str) -> Sequence[Any]:
     if not isinstance(value, list):
-        raise ProfileValidationError(
-            f"{field_path}: expected list, got {type(value).__name__}"
-        )
+        raise ProfileValidationError(f"{field_path}: expected list, got {type(value).__name__}")
     return value
 
 
 def validate_top_level(raw: Mapping[str, Any], profile_path: str) -> None:
     missing = sorted(REQUIRED_TOP_LEVEL_KEYS - raw.keys())
     if missing:
-        raise ProfileValidationError(
-            f"{profile_path}: missing required top-level keys: {', '.join(missing)}"
-        )
+        raise ProfileValidationError(f"{profile_path}: missing required top-level keys: {', '.join(missing)}")
     unknown = sorted(raw.keys() - ALLOWED_TOP_LEVEL_KEYS)
     if unknown:
-        raise ProfileValidationError(
-            f"{profile_path}: unknown top-level key: {unknown[0]}"
-        )
+        raise ProfileValidationError(f"{profile_path}: unknown top-level key: {unknown[0]}")
     if raw["profile_version"] != 1:
-        raise ProfileValidationError(
-            f"{profile_path}: profile_version: expected 1, got {raw['profile_version']!r}"
-        )
+        raise ProfileValidationError(f"{profile_path}: profile_version: expected 1, got {raw['profile_version']!r}")
     name = raw["name"]
     if not isinstance(name, str) or not PROFILE_NAME_RE.match(name):
-        raise ProfileValidationError(
-            f"{profile_path}: name: expected /^[A-Za-z0-9_.-]+$/"
-        )
+        raise ProfileValidationError(f"{profile_path}: name: expected /^[A-Za-z0-9_.-]+$/")
 
 
 def validate_managed_clusters(raw: Mapping[str, Any]) -> None:
     has_names = bool(raw.get("expected_names"))
     has_count = raw.get("expected_count") is not None
     if has_names == has_count:
-        raise ProfileValidationError(
-            "managed_clusters: expected exactly one of expected_names or expected_count"
-        )
+        raise ProfileValidationError("managed_clusters: expected exactly one of expected_names or expected_count")
     if has_names:
-        names = require_sequence(
-            raw["expected_names"], "managed_clusters.expected_names"
-        )
+        names = require_sequence(raw["expected_names"], "managed_clusters.expected_names")
         if not names or not all(isinstance(name, str) and name for name in names):
-            raise ProfileValidationError(
-                "managed_clusters.expected_names: expected non-empty list of strings"
-            )
+            raise ProfileValidationError("managed_clusters.expected_names: expected non-empty list of strings")
     if has_count and int(raw["expected_count"]) < 1:
-        raise ProfileValidationError(
-            "managed_clusters.expected_count: expected integer >= 1"
-        )
+        raise ProfileValidationError("managed_clusters.expected_count: expected integer >= 1")
     contexts = raw.get("contexts", {})
     if contexts is not None:
         require_mapping(contexts, "managed_clusters.contexts")
@@ -148,23 +128,17 @@ def validate_managed_clusters(raw: Mapping[str, Any]) -> None:
 def validate_hubs(raw: Mapping[str, Any], profile_path: str) -> None:
     for hub_name in ("primary", "secondary"):
         if hub_name not in raw:
-            raise ProfileValidationError(
-                f"{profile_path}: hubs.{hub_name}: missing required hub entry"
-            )
+            raise ProfileValidationError(f"{profile_path}: hubs.{hub_name}: missing required hub entry")
         hub = require_mapping(raw[hub_name], f"hubs.{hub_name}")
         for field_name in ("kubeconfig", "context"):
             if not hub.get(field_name):
-                raise ProfileValidationError(
-                    f"{profile_path}: hubs.{hub_name}.{field_name}: required"
-                )
+                raise ProfileValidationError(f"{profile_path}: hubs.{hub_name}.{field_name}: required")
 
 
 def validate_stream(raw: Mapping[str, Any], index: int) -> None:
     stream_id = raw.get("id")
     if stream_id not in KNOWN_STREAMS:
-        raise ProfileValidationError(
-            f"streams[{index}].id: expected one of bash, python, ansible"
-        )
+        raise ProfileValidationError(f"streams[{index}].id: expected one of bash, python, ansible")
 
 
 def validate_scenario(
@@ -175,31 +149,23 @@ def validate_scenario(
 ) -> None:
     scenario_id = raw.get("id")
     if scenario_id not in KNOWN_SCENARIOS:
-        raise ProfileValidationError(
-            f"scenarios[{index}].id: unknown scenario {scenario_id!r}"
-        )
+        raise ProfileValidationError(f"scenarios[{index}].id: unknown scenario {scenario_id!r}")
 
     required = raw.get("required")
     if required is None:
         required = scenario_id in REQUIRED_FULL_RELEASE_SCENARIOS
 
     if raw.get("skip_reason") and required:
-        raise ProfileValidationError(
-            f"scenarios[{index}].skip_reason: allowed only when required is false"
-        )
+        raise ProfileValidationError(f"scenarios[{index}].skip_reason: allowed only when required is false")
 
     narrowed = set(raw.get("streams") or ())
     if not narrowed.issubset(enabled_streams):
         unknown = sorted(narrowed - enabled_streams)
-        raise ProfileValidationError(
-            f"scenarios[{index}].streams: stream is not enabled: {unknown[0]}"
-        )
+        raise ProfileValidationError(f"scenarios[{index}].streams: stream is not enabled: {unknown[0]}")
 
     cycles = int(raw.get("cycles", 1))
     if cycles < 1 or cycles > max_cycles:
-        raise ProfileValidationError(
-            f"scenarios[{index}].cycles: expected integer between 1 and {max_cycles}"
-        )
+        raise ProfileValidationError(f"scenarios[{index}].cycles: expected integer between 1 and {max_cycles}")
 
 
 def validate_release(raw: Mapping[str, Any], profile_path: str) -> None:
@@ -217,29 +183,21 @@ def validate_argocd(raw: Mapping[str, Any], profile_path: str) -> None:
     mandatory = bool(raw.get("mandatory", True))
     namespaces = raw.get("namespaces", ())
     if mandatory and not namespaces:
-        raise ProfileValidationError(
-            f"{profile_path}: argocd.namespaces: required when argocd.mandatory is true"
-        )
+        raise ProfileValidationError(f"{profile_path}: argocd.namespaces: required when argocd.mandatory is true")
     if namespaces:
         require_sequence(namespaces, "argocd.namespaces")
     for entry in raw.get("application_selectors", ()):
         selector = require_mapping(entry, "argocd.application_selectors[]")
         if "match_labels" in selector:
-            require_mapping(
-                selector["match_labels"], "argocd.application_selectors[].match_labels"
-            )
+            require_mapping(selector["match_labels"], "argocd.application_selectors[].match_labels")
 
 
 def validate_baseline(raw: Mapping[str, Any], profile_path: str) -> None:
     if raw.get("initial_primary") not in BASELINE_PRIMARY_VALUES:
-        raise ProfileValidationError(
-            f"{profile_path}: baseline.initial_primary: expected primary or secondary"
-        )
+        raise ProfileValidationError(f"{profile_path}: baseline.initial_primary: expected primary or secondary")
     final_primary = raw.get("final_primary", raw.get("initial_primary"))
     if final_primary not in BASELINE_PRIMARY_VALUES:
-        raise ProfileValidationError(
-            f"{profile_path}: baseline.final_primary: expected primary or secondary"
-        )
+        raise ProfileValidationError(f"{profile_path}: baseline.final_primary: expected primary or secondary")
 
 
 def validate_limits(raw: Mapping[str, Any], profile_path: str) -> None:
@@ -252,17 +210,11 @@ def validate_limits(raw: Mapping[str, Any], profile_path: str) -> None:
         "artifact_retention_days",
     ):
         if field_name in raw and int(raw[field_name]) < 0:
-            raise ProfileValidationError(
-                f"{profile_path}: limits.{field_name}: expected integer >= 0"
-            )
+            raise ProfileValidationError(f"{profile_path}: limits.{field_name}: expected integer >= 0")
     if "max_cycles" in raw and int(raw["max_cycles"]) < 1:
-        raise ProfileValidationError(
-            f"{profile_path}: limits.max_cycles: expected integer >= 1"
-        )
+        raise ProfileValidationError(f"{profile_path}: limits.max_cycles: expected integer >= 1")
     if "default_timeout_minutes" in raw and int(raw["default_timeout_minutes"]) < 1:
-        raise ProfileValidationError(
-            f"{profile_path}: limits.default_timeout_minutes: expected integer >= 1"
-        )
+        raise ProfileValidationError(f"{profile_path}: limits.default_timeout_minutes: expected integer >= 1")
 
 
 def validate_recovery(raw: Mapping[str, Any], profile_path: str) -> None:
@@ -271,14 +223,10 @@ def validate_recovery(raw: Mapping[str, Any], profile_path: str) -> None:
         "post_failure_passes_per_mutating_scenario",
     ):
         if field_name in raw and int(raw[field_name]) not in {0, 1}:
-            raise ProfileValidationError(
-                f"{profile_path}: recovery.{field_name}: expected 0 or 1"
-            )
+            raise ProfileValidationError(f"{profile_path}: recovery.{field_name}: expected 0 or 1")
 
     if "total_budget_minutes" in raw and int(raw["total_budget_minutes"]) < 0:
-        raise ProfileValidationError(
-            f"{profile_path}: recovery.total_budget_minutes: expected integer >= 0"
-        )
+        raise ProfileValidationError(f"{profile_path}: recovery.total_budget_minutes: expected integer >= 0")
 
     cleanup = require_mapping(
         raw.get("allowed_destructive_cleanup", {}),
@@ -293,22 +241,16 @@ def validate_recovery(raw: Mapping[str, Any], profile_path: str) -> None:
 
     for action in raw.get("rbac_actions", ()):
         if action not in ALLOWED_RBAC_ACTIONS:
-            raise ProfileValidationError(
-                f"{profile_path}: recovery.rbac_actions: unsupported action {action!r}"
-            )
+            raise ProfileValidationError(f"{profile_path}: recovery.rbac_actions: unsupported action {action!r}")
 
 
 def validate_artifacts(raw: Mapping[str, Any], profile_path: str) -> None:
     redaction = require_mapping(raw.get("redaction", {}), "artifacts.redaction")
     if "required" in redaction and not bool(redaction["required"]):
-        raise ProfileValidationError(
-            f"{profile_path}: artifacts.redaction.required: expected true"
-        )
+        raise ProfileValidationError(f"{profile_path}: artifacts.redaction.required: expected true")
 
 
-def validate_profile_contents(
-    value: Any, profile_path: str, field_path: str = ""
-) -> None:
+def validate_profile_contents(value: Any, profile_path: str, field_path: str = "") -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             child_path = f"{field_path}.{key}" if field_path else str(key)

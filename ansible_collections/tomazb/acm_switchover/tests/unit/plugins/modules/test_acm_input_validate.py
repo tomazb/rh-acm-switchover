@@ -22,6 +22,30 @@ def test_missing_secondary_context_fails_execute_mode():
     assert any(item["status"] == "fail" for item in results)
 
 
+def test_missing_required_kubeconfigs_fail_execute_mode():
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": ""},
+                "secondary": {"context": "secondary-hub", "kubeconfig": ""},
+            },
+            "operation": {"method": "passive", "activation_method": "patch"},
+            "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+
+    primary_result = next(item for item in results if item["id"] == "preflight-input-primary-kubeconfig")
+    secondary_result = next(item for item in results if item["id"] == "preflight-input-secondary-kubeconfig")
+
+    assert primary_result["status"] == "fail"
+    assert primary_result["message"] == "primary kubeconfig is required for collection preflight and switchover runs"
+    assert secondary_result["status"] == "fail"
+    assert (
+        secondary_result["message"] == "secondary kubeconfig is required for collection preflight and switchover runs"
+    )
+
+
 def test_restore_requires_passive_method():
     results = build_input_validation_results(
         {

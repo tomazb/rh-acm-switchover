@@ -24,6 +24,11 @@
         acm_switchover_argocd_mode_override: resume
         _argocd_discover_hub: secondary
 
+    - name: Validate summary path
+      tomazb.acm_switchover.acm_safe_path_validate:
+        path: "{{ summary_path }}"
+      when: summary_path is defined
+
     - name: Resolve summary path to absolute
       ansible.builtin.set_fact:
         _acm_summary_path_abs: >-

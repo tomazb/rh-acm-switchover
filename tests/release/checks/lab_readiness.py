@@ -31,9 +31,7 @@ def _int_or_zero(value: object) -> int:
     return 0
 
 
-def assert_lab_readiness(
-    *, fingerprint: dict, require_argocd: bool, require_backup_storage: bool
-) -> ReadinessResult:
+def assert_lab_readiness(*, fingerprint: dict, require_argocd: bool, require_backup_storage: bool) -> ReadinessResult:
     assertions: list[dict] = []
     hubs = _mapping(fingerprint.get("hubs"))
     for role in ("primary", "secondary"):
@@ -59,28 +57,18 @@ def assert_lab_readiness(
             assertions.append(
                 _assertion(
                     f"{role}-backup-storage",
-                    bool(bsl.get("present"))
-                    and bsl.get("health") in {"Available", "Ready"},
+                    bool(bsl.get("present")) and bsl.get("health") in {"Available", "Ready"},
                     "Backup storage is acceptable",
                 )
             )
     assertions.append(
         _assertion(
             "managed-clusters-present",
-            _int_or_zero(
-                _mapping(fingerprint.get("managed_clusters")).get(
-                    "observed_active_count"
-                )
-            )
-            > 0,
+            _int_or_zero(_mapping(fingerprint.get("managed_clusters")).get("observed_active_count")) > 0,
             "Managed clusters observed on active hub",
         )
     )
     return ReadinessResult(
-        status=(
-            "passed"
-            if all(item["status"] == "passed" for item in assertions)
-            else "failed"
-        ),
+        status=("passed" if all(item["status"] == "passed" for item in assertions) else "failed"),
         assertions=assertions,
     )

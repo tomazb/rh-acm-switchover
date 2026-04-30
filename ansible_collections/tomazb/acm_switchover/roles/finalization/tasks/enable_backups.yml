@@ -6,7 +6,7 @@
         (
           (acm_secondary_mch_info.resources | default([]) | first | default({}))
           .get('status', {})
-          .get('currentVersion', '2.12.0')
+          .get('currentVersion', '')
         )
       }}
 

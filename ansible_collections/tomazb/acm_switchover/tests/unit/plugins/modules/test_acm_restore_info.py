@@ -122,6 +122,30 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
     assert plan["wait_target"]["velero_restore_required"] is True
     assert plan["wait_target"]["velero_restore_status_field"] == "veleroManagedClustersRestoreName"
     assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
+    assert plan["restore_ready"] is True
+    assert plan["restore_phase"] == "Enabled"
+
+
+def test_build_restore_activation_plan_marks_unknown_passive_restore_not_ready():
+    plan = build_restore_activation_plan(
+        method="passive",
+        activation_method="patch",
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                },
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {"phase": "Unknown"},
+            }
+        ],
+        backup_name="latest",
+    )
+
+    assert plan["restore"] is not None
+    assert plan["restore_phase"] == "Unknown"
+    assert plan["restore_ready"] is False
 
 
 def test_build_restore_activation_plan_passive_patch_already_applied():

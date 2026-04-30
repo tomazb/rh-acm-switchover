@@ -77,9 +77,7 @@ def test_load_profile_returns_hash_and_normalized_model(tmp_path: Path) -> None:
 
 
 def test_load_profile_rejects_unknown_top_level_key(tmp_path: Path) -> None:
-    profile_path = write_profile(
-        tmp_path / "profile.yaml", VALID_PROFILE + "\nunknown: true\n"
-    )
+    profile_path = write_profile(tmp_path / "profile.yaml", VALID_PROFILE + "\nunknown: true\n")
 
     with pytest.raises(ProfileValidationError, match="unknown top-level key.*unknown"):
         load_profile(profile_path)
@@ -88,21 +86,15 @@ def test_load_profile_rejects_unknown_top_level_key(tmp_path: Path) -> None:
 def test_managed_clusters_requires_names_or_count(tmp_path: Path) -> None:
     profile_path = write_profile(
         tmp_path / "profile.yaml",
-        VALID_PROFILE.replace(
-            "managed_clusters:\n  expected_count: 2", "managed_clusters: {}"
-        ),
+        VALID_PROFILE.replace("managed_clusters:\n  expected_count: 2", "managed_clusters: {}"),
     )
 
-    with pytest.raises(
-        ProfileValidationError, match="managed_clusters: expected exactly one"
-    ):
+    with pytest.raises(ProfileValidationError, match="managed_clusters: expected exactly one"):
         load_profile(profile_path)
 
 
 def test_stream_id_must_be_known(tmp_path: Path) -> None:
-    profile_path = write_profile(
-        tmp_path / "profile.yaml", VALID_PROFILE.replace("- id: python", "- id: ruby")
-    )
+    profile_path = write_profile(tmp_path / "profile.yaml", VALID_PROFILE.replace("- id: python", "- id: ruby"))
 
     with pytest.raises(ProfileValidationError, match="streams\\[0\\].id"):
         load_profile(profile_path)
@@ -111,9 +103,7 @@ def test_stream_id_must_be_known(tmp_path: Path) -> None:
 def test_skip_reason_requires_optional_scenario(tmp_path: Path) -> None:
     profile_path = write_profile(
         tmp_path / "profile.yaml",
-        VALID_PROFILE.replace(
-            "- id: preflight", "- id: preflight\n    skip_reason: local-only"
-        ),
+        VALID_PROFILE.replace("- id: preflight", "- id: preflight\n    skip_reason: local-only"),
     )
 
     with pytest.raises(ProfileValidationError, match="skip_reason"):
@@ -123,9 +113,7 @@ def test_skip_reason_requires_optional_scenario(tmp_path: Path) -> None:
 def test_profile_rejects_embedded_token(tmp_path: Path) -> None:
     profile_path = write_profile(
         tmp_path / "profile.yaml",
-        VALID_PROFILE.replace(
-            "context: primary", "context: primary\n    token: sha256~secret"
-        ),
+        VALID_PROFILE.replace("context: primary", "context: primary\n    token: sha256~secret"),
     )
 
     with pytest.raises(ProfileValidationError, match="hubs.primary.token.*token"):

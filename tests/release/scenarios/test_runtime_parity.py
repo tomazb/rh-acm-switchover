@@ -101,9 +101,7 @@ def test_write_runtime_parity_artifact_sets_failed_status(tmp_path: Path) -> Non
 
     write_runtime_parity_artifact(artifacts=artifacts, comparisons=[failed])
 
-    payload = json.loads(
-        (artifacts.run_dir / "runtime-parity.json").read_text(encoding="utf-8")
-    )
+    payload = json.loads((artifacts.run_dir / "runtime-parity.json").read_text(encoding="utf-8"))
     assert payload["status"] == "failed"
     assert payload["comparisons"][0]["capability"] == "activation"
 

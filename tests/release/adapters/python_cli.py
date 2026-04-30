@@ -214,7 +214,11 @@ class PythonCliAdapter:
                 expected="0",
                 actual=str(completed.returncode),
                 evidence_path=str(stderr_path) if status == "failed" else str(stdout_path),
-                message="Python CLI exited with expected code" if status == "passed" else "Python CLI returned a non-zero exit code",
+                message=(
+                    "Python CLI exited with expected code"
+                    if status == "passed"
+                    else "Python CLI returned a non-zero exit code"
+                ),
             )
         ]
         if not stdout_written or not stderr_written:

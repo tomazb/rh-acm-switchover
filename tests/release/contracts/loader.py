@@ -57,9 +57,7 @@ def _read_yaml(path: Path) -> tuple[Mapping[str, Any], str]:
     return parsed, hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def _required_flag(
-    raw: Mapping[str, Any] | None, default: bool = True
-) -> RequiredFlagProfile:
+def _required_flag(raw: Mapping[str, Any] | None, default: bool = True) -> RequiredFlagProfile:
     payload = raw or {}
     return RequiredFlagProfile(required=bool(payload.get("required", default)))
 
@@ -87,30 +85,17 @@ def _hub(raw: Mapping[str, Any], default_timeout_minutes: int) -> HubProfile:
         acm_namespace=str(raw.get("acm_namespace", "open-cluster-management")),
         role_label_selector=raw.get("role_label_selector"),
         timeout_minutes=(
-            int(raw["timeout_minutes"])
-            if raw.get("timeout_minutes") is not None
-            else default_timeout_minutes
+            int(raw["timeout_minutes"]) if raw.get("timeout_minutes") is not None else default_timeout_minutes
         ),
     )
 
 
-def _managed_clusters(
-    raw: Mapping[str, Any], require_observability: bool
-) -> ManagedClustersProfile:
+def _managed_clusters(raw: Mapping[str, Any], require_observability: bool) -> ManagedClustersProfile:
     return ManagedClustersProfile(
         expected_names=tuple(str(name) for name in raw.get("expected_names") or ()),
-        expected_count=(
-            int(raw["expected_count"])
-            if raw.get("expected_count") is not None
-            else None
-        ),
-        contexts={
-            str(name): str(context)
-            for name, context in (raw.get("contexts") or {}).items()
-        },
-        require_observability=bool(
-            raw.get("require_observability", require_observability)
-        ),
+        expected_count=(int(raw["expected_count"]) if raw.get("expected_count") is not None else None),
+        contexts={str(name): str(context) for name, context in (raw.get("contexts") or {}).items()},
+        require_observability=bool(raw.get("require_observability", require_observability)),
     )
 
 
@@ -133,9 +118,7 @@ def _scenario(raw: Mapping[str, Any], default_timeout_minutes: int) -> ScenarioP
         streams=tuple(str(item) for item in raw.get("streams", ())),
         cycles=int(raw.get("cycles", 1)),
         timeout_minutes=(
-            int(raw["timeout_minutes"])
-            if raw.get("timeout_minutes") is not None
-            else default_timeout_minutes
+            int(raw["timeout_minutes"]) if raw.get("timeout_minutes") is not None else default_timeout_minutes
         ),
         skip_reason=raw.get("skip_reason"),
     )
@@ -144,10 +127,7 @@ def _scenario(raw: Mapping[str, Any], default_timeout_minutes: int) -> ScenarioP
 def _argocd_selector(raw: Mapping[str, Any]) -> ArgoCDApplicationSelector:
     return ArgoCDApplicationSelector(
         match_labels={
-            str(key): str(value)
-            for key, value in require_mapping(
-                raw.get("match_labels", {}), "match_labels"
-            ).items()
+            str(key): str(value) for key, value in require_mapping(raw.get("match_labels", {}), "match_labels").items()
         }
     )
 
@@ -162,15 +142,11 @@ def _argocd(raw: Mapping[str, Any]) -> ArgoCDProfile:
         ),
         expected_pause=bool(raw.get("expected_pause", True)),
         expected_resume=bool(raw.get("expected_resume", True)),
-        managed_conflict_allowlist=tuple(
-            str(item) for item in raw.get("managed_conflict_allowlist", ())
-        ),
+        managed_conflict_allowlist=tuple(str(item) for item in raw.get("managed_conflict_allowlist", ())),
     )
 
 
-def _lab_readiness(
-    raw: Mapping[str, Any], argocd_mandatory: bool
-) -> BaselineLabReadinessProfile:
+def _lab_readiness(raw: Mapping[str, Any], argocd_mandatory: bool) -> BaselineLabReadinessProfile:
     return BaselineLabReadinessProfile(
         required=bool(raw.get("required", True)),
         required_crds=tuple(str(item) for item in raw.get("required_crds", ())),
@@ -181,9 +157,7 @@ def _lab_readiness(
             )
         ),
         argocd_fixture=_required_flag(
-            require_mapping(
-                raw.get("argocd_fixture", {}), "baseline.lab_readiness.argocd_fixture"
-            ),
+            require_mapping(raw.get("argocd_fixture", {}), "baseline.lab_readiness.argocd_fixture"),
             default=argocd_mandatory,
         ),
     )
@@ -197,27 +171,19 @@ def _static_gates(raw: Mapping[str, Any]) -> BaselineStaticGatesProfile:
 
 
 def _baseline(raw: Mapping[str, Any], argocd_mandatory: bool) -> BaselineProfile:
-    observability = _required_flag(
-        require_mapping(raw.get("observability", {}), "baseline.observability")
-    )
+    observability = _required_flag(require_mapping(raw.get("observability", {}), "baseline.observability"))
     return BaselineProfile(
         initial_primary=str(raw["initial_primary"]),
         final_primary=str(raw.get("final_primary", raw["initial_primary"])),
-        backup_schedule=_required_flag(
-            require_mapping(raw.get("backup_schedule", {}), "baseline.backup_schedule")
-        ),
-        restore=_required_flag(
-            require_mapping(raw.get("restore", {}), "baseline.restore")
-        ),
+        backup_schedule=_required_flag(require_mapping(raw.get("backup_schedule", {}), "baseline.backup_schedule")),
+        restore=_required_flag(require_mapping(raw.get("restore", {}), "baseline.restore")),
         observability=observability,
         rbac=_required_flag(require_mapping(raw.get("rbac", {}), "baseline.rbac")),
         lab_readiness=_lab_readiness(
             require_mapping(raw.get("lab_readiness", {}), "baseline.lab_readiness"),
             argocd_mandatory,
         ),
-        static_gates=_static_gates(
-            require_mapping(raw.get("static_gates", {}), "baseline.static_gates")
-        ),
+        static_gates=_static_gates(require_mapping(raw.get("static_gates", {}), "baseline.static_gates")),
     )
 
 
@@ -239,17 +205,12 @@ def _recovery(raw: Mapping[str, Any]) -> RecoveryProfile:
     )
     return RecoveryProfile(
         pre_run_heal_passes=int(raw.get("pre_run_heal_passes", 1)),
-        post_failure_passes_per_mutating_scenario=int(
-            raw.get("post_failure_passes_per_mutating_scenario", 1)
-        ),
+        post_failure_passes_per_mutating_scenario=int(raw.get("post_failure_passes_per_mutating_scenario", 1)),
         total_budget_minutes=int(raw.get("total_budget_minutes", 30)),
         allowed_destructive_cleanup=RecoveryCleanupProfile(
             resources=tuple(str(item) for item in cleanup.get("resources", ()))
         ),
-        rbac_actions=tuple(
-            str(item)
-            for item in raw.get("rbac_actions", ("no_bootstrap", "revalidate"))
-        ),
+        rbac_actions=tuple(str(item) for item in raw.get("rbac_actions", ("no_bootstrap", "revalidate"))),
         hard_stop_on=tuple(
             str(item)
             for item in raw.get(
@@ -275,9 +236,7 @@ def _artifacts(raw: Mapping[str, Any], limits: LimitsProfile) -> ArtifactsProfil
         cluster_snapshot_mode=str(raw.get("cluster_snapshot_mode", "allowlist")),
         redaction=RedactionProfile(
             required=bool(redaction.get("required", True)),
-            fail_on_unredacted_secret=bool(
-                redaction.get("fail_on_unredacted_secret", True)
-            ),
+            fail_on_unredacted_secret=bool(redaction.get("fail_on_unredacted_secret", True)),
         ),
         compress_after_run=bool(raw.get("compress_after_run", False)),
         retention_days=int(raw.get("retention_days", limits.artifact_retention_days)),
@@ -290,9 +249,7 @@ def load_profile(path: str | Path) -> LoadProfileResult:
     validate_top_level(raw, str(profile_path))
     validate_profile_contents(raw, str(profile_path))
 
-    release_raw = (
-        require_mapping(raw["release"], "release") if "release" in raw else None
-    )
+    release_raw = require_mapping(raw["release"], "release") if "release" in raw else None
     if release_raw is not None:
         validate_release(release_raw, str(profile_path))
 
@@ -318,24 +275,16 @@ def load_profile(path: str | Path) -> LoadProfileResult:
 
     hubs_raw = require_mapping(raw["hubs"], "hubs")
     validate_hubs(hubs_raw, str(profile_path))
-    stream_items = [
-        require_mapping(item, "streams[]")
-        for item in require_sequence(raw["streams"], "streams")
-    ]
+    stream_items = [require_mapping(item, "streams[]") for item in require_sequence(raw["streams"], "streams")]
     for index, item in enumerate(stream_items):
         validate_stream(item, index)
-    enabled_streams = {
-        str(item["id"]) for item in stream_items if item.get("enabled", True)
-    }
+    enabled_streams = {str(item["id"]) for item in stream_items if item.get("enabled", True)}
 
     managed_raw = require_mapping(raw["managed_clusters"], "managed_clusters")
     validate_managed_clusters(managed_raw)
     managed_clusters = _managed_clusters(managed_raw, baseline.observability.required)
 
-    scenario_items = [
-        require_mapping(item, "scenarios[]")
-        for item in require_sequence(raw["scenarios"], "scenarios")
-    ]
+    scenario_items = [require_mapping(item, "scenarios[]") for item in require_sequence(raw["scenarios"], "scenarios")]
     for index, item in enumerate(scenario_items):
         validate_scenario(item, index, enabled_streams, limits.max_cycles)
 
@@ -356,9 +305,7 @@ def load_profile(path: str | Path) -> LoadProfileResult:
         },
         managed_clusters=managed_clusters,
         streams=tuple(_stream(item) for item in stream_items),
-        scenarios=tuple(
-            _scenario(item, limits.default_timeout_minutes) for item in scenario_items
-        ),
+        scenarios=tuple(_scenario(item, limits.default_timeout_minutes) for item in scenario_items),
         argocd=argocd,
         baseline=baseline,
         limits=limits,

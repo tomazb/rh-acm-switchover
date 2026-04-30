@@ -90,9 +90,7 @@ class RequiredFlagProfile:
 class BaselineLabReadinessProfile:
     required: bool = True
     required_crds: tuple[str, ...] = ()
-    backup_storage_location: RequiredFlagProfile = field(
-        default_factory=RequiredFlagProfile
-    )
+    backup_storage_location: RequiredFlagProfile = field(default_factory=RequiredFlagProfile)
     argocd_fixture: RequiredFlagProfile = field(default_factory=RequiredFlagProfile)
 
 
@@ -110,12 +108,8 @@ class BaselineProfile:
     restore: RequiredFlagProfile = field(default_factory=RequiredFlagProfile)
     observability: RequiredFlagProfile = field(default_factory=RequiredFlagProfile)
     rbac: RequiredFlagProfile = field(default_factory=RequiredFlagProfile)
-    lab_readiness: BaselineLabReadinessProfile = field(
-        default_factory=BaselineLabReadinessProfile
-    )
-    static_gates: BaselineStaticGatesProfile = field(
-        default_factory=BaselineStaticGatesProfile
-    )
+    lab_readiness: BaselineLabReadinessProfile = field(default_factory=BaselineLabReadinessProfile)
+    static_gates: BaselineStaticGatesProfile = field(default_factory=BaselineStaticGatesProfile)
 
 
 @dataclass(frozen=True)
@@ -138,9 +132,7 @@ class RecoveryProfile:
     pre_run_heal_passes: int = 1
     post_failure_passes_per_mutating_scenario: int = 1
     total_budget_minutes: int = 30
-    allowed_destructive_cleanup: RecoveryCleanupProfile = field(
-        default_factory=RecoveryCleanupProfile
-    )
+    allowed_destructive_cleanup: RecoveryCleanupProfile = field(default_factory=RecoveryCleanupProfile)
     rbac_actions: tuple[str, ...] = ("no_bootstrap", "revalidate")
     hard_stop_on: tuple[str, ...] = (
         "hub_role_restore_unproven",

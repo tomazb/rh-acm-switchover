@@ -44,6 +44,7 @@ EXAMPLES = r"""
 from datetime import datetime, timezone
 
 from ansible.module_utils.basic import AnsibleModule
+
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts import (
     ArtifactWriteError,
     write_json_artifact,

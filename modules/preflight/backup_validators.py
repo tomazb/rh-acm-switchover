@@ -476,8 +476,7 @@ class PassiveSyncValidator(BaseValidator):
             # "Enabled" = continuous sync running
             # "Finished"/"Completed" = initial sync completed successfully (valid for switchover)
             # "Running" = actively syncing a new backup (transient, valid for passive-sync)
-            # "Unknown" = Velero restore in intermediate state during sync (transient)
-            if phase in ("Enabled", "Finished", "Completed", "Running", "Unknown"):
+            if phase in ("Enabled", "Finished", "Completed", "Running"):
                 self.add_result(
                     "Passive sync restore",
                     True,
@@ -557,6 +556,7 @@ class PassiveSyncValidator(BaseValidator):
             error_message += f" {velero_details.strip()}"
         if bsl_details:
             error_message += f"{bsl_details}"
+        error_message += " Wait for the Restore to reach Enabled, Finished, Completed, or Running before activation."
         error_message += (
             " (check ACM restore + Velero restore for details). "
             f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get "

@@ -4,6 +4,7 @@ import pytest
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate import (
     expand_rbac_requirements,
+    main,
     summarize_rbac_results,
 )
 
@@ -123,6 +124,38 @@ def test_summary_reports_pass_when_all_permissions_allowed():
     assert summary["passed"] is True
     assert summary["critical_failures"] == 0
     assert summary["results"][0]["status"] == "pass"
+
+
+def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "hub": "primary",
+                "role": "validator",
+                "include_decommission": True,
+                "decommission_only": False,
+                "skip_observability": False,
+                "argocd_mode": "none",
+                "argocd_install_type": "unknown",
+                "denied_permissions": [],
+            }
+
+        def exit_json(self, **kwargs):
+            raise AssertionError(f"unexpected exit_json: {kwargs}")
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate.AnsibleModule",
+        FakeModule,
+    )
+
+    main()
+
+    assert captured["fail"] == {"msg": "include_decommission is only valid for the operator role"}
 
 
 def test_validator_role_has_readonly_managedcluster_permission():

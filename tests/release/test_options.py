@@ -1,6 +1,11 @@
 import pytest
 
-from tests.release.conftest import RELEASE_PROFILE_SKIP_REASON, ReleaseOptions, resolve_release_mode, should_skip_release_items
+from tests.release.conftest import (
+    RELEASE_PROFILE_SKIP_REASON,
+    ReleaseOptions,
+    resolve_release_mode,
+    should_skip_release_items,
+)
 
 
 def test_should_skip_release_items_without_profile() -> None:
@@ -17,7 +22,9 @@ def test_resolve_release_mode_defaults_to_certification_without_filters() -> Non
 
 
 def test_resolve_release_mode_defaults_to_focused_rerun_with_filters() -> None:
-    assert resolve_release_mode(explicit_mode=None, scenario_filters=("preflight",), stream_filters=()) == "focused-rerun"
+    assert (
+        resolve_release_mode(explicit_mode=None, scenario_filters=("preflight",), stream_filters=()) == "focused-rerun"
+    )
 
 
 def test_release_options_registered(pytestconfig: pytest.Config) -> None:

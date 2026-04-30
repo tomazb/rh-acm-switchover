@@ -206,25 +206,44 @@
             "status": "pass"
               if (
                 acm_switchover_operation.method == 'full'
-                or acm_preflight_passive_restore_analysis.restore is not none
+                or (
+                  acm_preflight_passive_restore_analysis.restore is not none
+                  and (acm_preflight_passive_restore_analysis.restore_ready | default(false) | bool)
+                )
               )
               else "fail",
-            "message": "secondary hub passive sync restore is present"
+            "message": "secondary hub passive sync restore is activation-ready"
               if (
                 acm_switchover_operation.method == 'full'
-                or acm_preflight_passive_restore_analysis.restore is not none
+                or (
+                  acm_preflight_passive_restore_analysis.restore is not none
+                  and (acm_preflight_passive_restore_analysis.restore_ready | default(false) | bool)
+                )
               )
-              else "secondary hub has no sync-enabled passive restore",
+              else (
+                "secondary hub passive sync restore is not activation-ready"
+                if acm_preflight_passive_restore_analysis.restore is not none
+                else "secondary hub has no sync-enabled passive restore"
+              ),
             "details": {
               "method": acm_switchover_operation.method,
               "restore_count": acm_secondary_restore_info.resources | default([]) | length,
               "sync_enabled_count": acm_preflight_passive_restore_analysis.sync_enabled_count | default(0),
-              "selected_restore": ((acm_preflight_passive_restore_analysis | default({})).get('restore', {}) or {}).get('metadata', {}).get('name')
+              "selected_restore": ((acm_preflight_passive_restore_analysis | default({})).get('restore', {}) or {}).get('metadata', {}).get('name'),
+              "restore_phase": acm_preflight_passive_restore_analysis.restore_phase | default(none),
+              "restore_ready": acm_preflight_passive_restore_analysis.restore_ready | default(false)
             },
-            "recommended_action": "Verify a Restore with syncRestoreWithNewBackups=true exists on the secondary hub"
+            "recommended_action": (
+              "Wait for the Restore to reach Enabled, Finished, Completed, or Running before activation"
+              if acm_preflight_passive_restore_analysis.restore is not none
+              else "Verify a Restore with syncRestoreWithNewBackups=true exists on the secondary hub"
+            )
               if (
                 acm_switchover_operation.method != 'full'
-                and acm_preflight_passive_restore_analysis.restore is none
+                and (
+                  acm_preflight_passive_restore_analysis.restore is none
+                  or not (acm_preflight_passive_restore_analysis.restore_ready | default(false) | bool)
+                )
               )
               else None
           }

@@ -93,3 +93,7 @@ acm_secondary_restore_info:
   resources:
     - metadata:
         name: restore-acm-passive-sync
+      spec:
+        syncRestoreWithNewBackups: true
+      status:
+        phase: Enabled

@@ -50,9 +50,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers", "release: real-cluster release certification tests"
-    )
+    config.addinivalue_line("markers", "release: real-cluster release certification tests")
 
 
 def _profile_path(config: pytest.Config) -> Path | None:
@@ -75,9 +73,7 @@ def resolve_release_mode(
     return "focused-rerun" if scenario_filters or stream_filters else "certification"
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: Sequence[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: Sequence[pytest.Item]) -> None:
     if not should_skip_release_items(profile_path=_profile_path(config)):
         return
     skip_release = pytest.mark.skip(reason=RELEASE_PROFILE_SKIP_REASON)
@@ -128,9 +124,7 @@ def release_profile(release_options: ReleaseOptions):
 
 @pytest.fixture(scope="session")
 def selected_release_matrix(release_profile, release_options: ReleaseOptions):
-    enabled_streams = tuple(
-        stream.id for stream in release_profile.profile.streams if stream.enabled
-    )
+    enabled_streams = tuple(stream.id for stream in release_profile.profile.streams if stream.enabled)
     return select_release_matrix(
         enabled_streams=enabled_streams,
         scenario_filters=release_options.scenarios,
@@ -145,9 +139,7 @@ def release_artifacts(release_profile, release_options: ReleaseOptions):
     return ReleaseArtifacts.create(root=root, run_id=run_id)
 
 
-BASELINE_MANAGER_SKIP_REASON = (
-    "release baseline manager requires a live Kubernetes discovery client"
-)
+BASELINE_MANAGER_SKIP_REASON = "release baseline manager requires a live Kubernetes discovery client"
 
 
 @pytest.fixture(scope="session")

@@ -12,9 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def test_release_lifecycle_skips_without_live_baseline_manager() -> None:
     env = os.environ.copy()
-    env["ACM_RELEASE_PROFILE"] = str(
-        REPO_ROOT / "tests/release/profiles/dev-minimal.example.yaml"
-    )
+    env["ACM_RELEASE_PROFILE"] = str(REPO_ROOT / "tests/release/profiles/dev-minimal.example.yaml")
 
     completed = subprocess.run(
         [

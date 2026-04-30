@@ -55,9 +55,7 @@ class BashAdapter:
 
     def build_command(self, scenario_id: str) -> list[str]:
         if scenario_id not in SCRIPT_BY_SCENARIO:
-            raise ValueError(
-                f"Unknown scenario: {scenario_id!r}. Known scenarios: {sorted(SCRIPT_BY_SCENARIO)}"
-            )
+            raise ValueError(f"Unknown scenario: {scenario_id!r}. Known scenarios: {sorted(SCRIPT_BY_SCENARIO)}")
         script = SCRIPT_BY_SCENARIO[scenario_id]
         return [
             script,
@@ -138,13 +136,9 @@ class BashAdapter:
                 status=status,
                 expected="0",
                 actual=str(completed.returncode),
-                evidence_path=(
-                    str(stdout_path) if status == "passed" else str(stderr_path)
-                ),
+                evidence_path=(str(stdout_path) if status == "passed" else str(stderr_path)),
                 message=(
-                    "Bash script completed"
-                    if status == "passed"
-                    else "Bash script returned a non-zero exit code"
+                    "Bash script completed" if status == "passed" else "Bash script returned a non-zero exit code"
                 ),
             )
         ]

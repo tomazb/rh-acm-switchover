@@ -50,7 +50,9 @@ def test_ansible_preflight_command_uses_collection_playbook_and_profile_vars(tmp
 
 
 def test_ansible_restore_only_uses_checkpoint_path(tmp_path: Path) -> None:
-    adapter = AnsibleAdapter(Path("/repo"), Path("/repo/collection"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+    adapter = AnsibleAdapter(
+        Path("/repo"), Path("/repo/collection"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path
+    )
 
     command = adapter.build_command("ansible-restore-only")
 
@@ -139,7 +141,9 @@ def test_ansible_adapter_execute_captures_output(monkeypatch, tmp_path: Path) ->
         return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    adapter = AnsibleAdapter(Path("/repo"), Path("/repo/collection"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+    adapter = AnsibleAdapter(
+        Path("/repo"), Path("/repo/collection"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path
+    )
 
     result = adapter.execute("preflight")
 
@@ -149,10 +153,14 @@ def test_ansible_adapter_execute_captures_output(monkeypatch, tmp_path: Path) ->
 
 
 def test_ansible_adapter_discovers_preflight_report(tmp_path: Path) -> None:
-    adapter = AnsibleAdapter(Path("/repo"), Path("/repo/collection"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+    adapter = AnsibleAdapter(
+        Path("/repo"), Path("/repo/collection"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path
+    )
     scenario_dir = adapter.scenario_dir("preflight")
     scenario_dir.mkdir(parents=True)
-    (scenario_dir / "preflight-report.json").write_text('{"schema_version": "1.0", "status": "passed"}', encoding="utf-8")
+    (scenario_dir / "preflight-report.json").write_text(
+        '{"schema_version": "1.0", "status": "passed"}', encoding="utf-8"
+    )
 
     reports = adapter.discover_reports("preflight")
 
@@ -199,7 +207,9 @@ def test_ansible_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_p
         return subprocess.CompletedProcess(command, 0, stdout="output", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr("tests.release.adapters.ansible.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive")))
+    monkeypatch.setattr(
+        "tests.release.adapters.ansible.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive"))
+    )
     adapter = _make_adapter(tmp_path)
 
     result = adapter.execute("preflight")

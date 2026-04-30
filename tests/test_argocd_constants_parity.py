@@ -24,18 +24,14 @@ def test_acm_namespaces_parity():
     from lib.argocd import ARGOCD_ACM_NS_REGEX
 
     for ns in ACM_NAMESPACES:
-        assert ARGOCD_ACM_NS_REGEX.match(
-            ns
-        ), f"Ansible namespace '{ns}' not matched by Python regex"
+        assert ARGOCD_ACM_NS_REGEX.match(ns), f"Ansible namespace '{ns}' not matched by Python regex"
 
     sub_ns_samples = [
         "open-cluster-management-agent",
         "open-cluster-management-agent-addon",
     ]
     for ns in sub_ns_samples:
-        assert ARGOCD_ACM_NS_REGEX.match(
-            ns
-        ), f"Python regex should match ACM sub-namespace '{ns}'"
+        assert ARGOCD_ACM_NS_REGEX.match(ns), f"Python regex should match ACM sub-namespace '{ns}'"
 
 
 def test_ansible_argocd_filters_match_acm_sub_namespaces():
@@ -85,7 +81,4 @@ def test_build_pause_patch_matches_jinja_logic():
             f"Divergence for input {sync_policy}: "
             f"build_pause_patch={patch['spec']['syncPolicy']}, jinja={jinja_sync}"
         )
-        assert (
-            patch["metadata"]["annotations"]["acm-switchover.argoproj.io/paused-by"]
-            == run_id
-        )
+        assert patch["metadata"]["annotations"]["acm-switchover.argoproj.io/paused-by"] == run_id

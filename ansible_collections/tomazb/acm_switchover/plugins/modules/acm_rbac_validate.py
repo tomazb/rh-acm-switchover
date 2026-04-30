@@ -337,14 +337,19 @@ def main() -> None:
         supports_check_mode=True,
     )
 
-    permissions = expand_rbac_requirements(
-        role=module.params["role"],
-        include_decommission=module.params["include_decommission"],
-        skip_observability=module.params["skip_observability"],
-        argocd_mode=module.params["argocd_mode"],
-        argocd_install_type=module.params["argocd_install_type"],
-        decommission_only=module.params["decommission_only"],
-    )
+    try:
+        permissions = expand_rbac_requirements(
+            role=module.params["role"],
+            include_decommission=module.params["include_decommission"],
+            skip_observability=module.params["skip_observability"],
+            argocd_mode=module.params["argocd_mode"],
+            argocd_install_type=module.params["argocd_install_type"],
+            decommission_only=module.params["decommission_only"],
+        )
+    except ValueError as exc:
+        module.fail_json(msg=str(exc))
+        return
+
     summary = summarize_rbac_results(module.params["hub"], module.params["denied_permissions"])
     module.exit_json(changed=False, permissions=permissions, **summary)
 

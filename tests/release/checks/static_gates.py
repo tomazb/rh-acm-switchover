@@ -104,19 +104,90 @@ def build_default_gate_commands(*, enabled_streams: tuple[str, ...], repo_root: 
     if "python" in enabled_streams:
         gates.extend(
             [
-                GateCommand("python-style-security-gates", "black", ["black", "--check", "--line-length", "120", "acm_switchover.py", "lib/", "modules/"], repo_root),
-                GateCommand("python-style-security-gates", "isort", ["isort", "--check-only", "--profile", "black", "--line-length", "120", "acm_switchover.py", "lib/", "modules/"], repo_root),
+                GateCommand(
+                    "python-style-security-gates",
+                    "black",
+                    ["black", "--check", "--line-length", "120", "acm_switchover.py", "lib/", "modules/"],
+                    repo_root,
+                ),
+                GateCommand(
+                    "python-style-security-gates",
+                    "isort",
+                    [
+                        "isort",
+                        "--check-only",
+                        "--profile",
+                        "black",
+                        "--line-length",
+                        "120",
+                        "acm_switchover.py",
+                        "lib/",
+                        "modules/",
+                    ],
+                    repo_root,
+                ),
                 GateCommand("python-cli-smoke", "help", ["python", "acm_switchover.py", "--help"], repo_root),
             ]
         )
     if "ansible" in enabled_streams:
         collection_root = repo_root / "ansible_collections/tomazb/acm_switchover"
+        collection_path = "ansible_collections/tomazb/acm_switchover"
         gates.extend(
             [
-                GateCommand("collection-ansible-test-sanity", "ansible-test-sanity", ["ansible-test", "sanity", "--docker", "default", "-v"], collection_root),
-                GateCommand("collection-unit-tests", "pytest-collection-unit", ["python", "-m", "pytest", "tests/unit", "-q"], collection_root),
-                GateCommand("collection-build-install", "ansible-galaxy-build", ["ansible-galaxy", "collection", "build", "--force"], collection_root),
-                GateCommand("collection-playbook-syntax", "preflight", ["ansible-playbook", "--syntax-check", "playbooks/preflight.yml"], collection_root),
+                GateCommand(
+                    "collection-ansible-test-sanity",
+                    "ansible-test-sanity",
+                    ["ansible-test", "sanity", "--docker", "default", "-v"],
+                    collection_root,
+                ),
+                GateCommand(
+                    "collection-unit-tests",
+                    "pytest-collection-unit",
+                    ["env", "PYTHONPATH=.", "python", "-m", "pytest", f"{collection_path}/tests/unit", "-q"],
+                    repo_root,
+                ),
+                GateCommand(
+                    "collection-integration-tests",
+                    "pytest-collection-integration",
+                    ["env", "PYTHONPATH=.", "python", "-m", "pytest", f"{collection_path}/tests/integration", "-q"],
+                    repo_root,
+                ),
+                GateCommand(
+                    "collection-scenario-tests",
+                    "pytest-collection-scenario",
+                    ["env", "PYTHONPATH=.", "python", "-m", "pytest", f"{collection_path}/tests/scenario", "-q"],
+                    repo_root,
+                ),
+                GateCommand(
+                    "collection-build-install",
+                    "ansible-galaxy-build",
+                    ["ansible-galaxy", "collection", "build", "--force"],
+                    collection_root,
+                ),
+                GateCommand(
+                    "collection-playbook-syntax",
+                    "preflight",
+                    [
+                        "env",
+                        f"ANSIBLE_COLLECTIONS_PATH={repo_root}",
+                        "ansible-playbook",
+                        "--syntax-check",
+                        f"{collection_path}/playbooks/preflight.yml",
+                    ],
+                    repo_root,
+                ),
+                GateCommand(
+                    "collection-playbook-syntax",
+                    "restore-only",
+                    [
+                        "env",
+                        f"ANSIBLE_COLLECTIONS_PATH={repo_root}",
+                        "ansible-playbook",
+                        "--syntax-check",
+                        f"{collection_path}/playbooks/restore_only.yml",
+                    ],
+                    repo_root,
+                ),
             ]
         )
     return gates

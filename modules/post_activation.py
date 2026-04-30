@@ -970,6 +970,11 @@ class PostActivationVerification:
                         getattr(e, "status", None),
                         getattr(e, "reason", None),
                     )
+                    raise SwitchoverError(
+                        "Failed to create bootstrap-hub-kubeconfig secret on "
+                        f"{cluster_name}: status={getattr(e, 'status', None)} "
+                        f"reason={getattr(e, 'reason', None)}"
+                    ) from e
 
     def _wait_for_secret_visibility(self, v1: client.CoreV1Api, cluster_name: str) -> None:
         """Wait for the bootstrap-hub-kubeconfig secret to be visible.
@@ -1004,6 +1009,9 @@ class PostActivationVerification:
             logger.warning(
                 "bootstrap-hub-kubeconfig secret not visible on %s after timeout",
                 cluster_name,
+            )
+            raise SwitchoverError(
+                "bootstrap-hub-kubeconfig secret not visible on " f"{cluster_name} after {SECRET_VISIBILITY_TIMEOUT}s"
             )
 
     def _restart_klusterlet(self, apps_v1: client.AppsV1Api, cluster_name: str) -> None:

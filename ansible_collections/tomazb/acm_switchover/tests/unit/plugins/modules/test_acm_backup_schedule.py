@@ -1,5 +1,7 @@
 """Tests for the acm_backup_schedule collection module."""
 
+import pytest
+
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_backup_schedule import (
     backup_schedule_pause_mode,
     build_backup_schedule_operation,
@@ -22,6 +24,18 @@ def test_build_pause_operation_for_spec_paused_mode():
     )
     assert operation["action"] == "patch"
     assert operation["patch"]["spec"]["paused"] is True
+
+
+def test_build_rejects_multiple_backup_schedules():
+    with pytest.raises(ValueError, match="Multiple BackupSchedules"):
+        build_backup_schedule_operation(
+            acm_version="2.13.2",
+            intent="pause",
+            schedules=[
+                {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
+                {"metadata": {"name": "schedule-b"}, "spec": {"paused": True}},
+            ],
+        )
 
 
 def test_build_returns_none_when_schedules_empty():
@@ -91,23 +105,17 @@ def test_build_pause_delete_mode_for_acm_211():
 
 def test_pause_mode_raises_on_prerelease_version():
     """Pre-release versions like 2.14.3-rc1 should raise ValueError."""
-    import pytest
-
     with pytest.raises(ValueError, match="Invalid ACM version format"):
         backup_schedule_pause_mode("2.14.3-rc1")
 
 
 def test_pause_mode_raises_on_single_segment_version():
     """Single segment versions should raise ValueError."""
-    import pytest
-
     with pytest.raises(ValueError, match="Invalid ACM version format"):
         backup_schedule_pause_mode("2")
 
 
 def test_pause_mode_raises_on_empty_version():
     """Empty version should raise ValueError."""
-    import pytest
-
     with pytest.raises(ValueError, match="Invalid ACM version format"):
         backup_schedule_pause_mode("")

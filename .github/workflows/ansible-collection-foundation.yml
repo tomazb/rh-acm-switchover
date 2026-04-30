@@ -23,11 +23,20 @@ jobs:
       - name: Run collection unit tests
         run: |
           PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+      - name: Run collection integration tests
+        run: |
+          export ANSIBLE_COLLECTIONS_PATH="${GITHUB_WORKSPACE}:${HOME}/.ansible/collections"
+          PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/integration/ -q
+      - name: Run collection scenario tests
+        run: |
+          export ANSIBLE_COLLECTIONS_PATH="${GITHUB_WORKSPACE}:${HOME}/.ansible/collections"
+          PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/scenario/ -q
       - name: Syntax check playbooks
         run: |
           export ANSIBLE_COLLECTIONS_PATH="${GITHUB_WORKSPACE}:${HOME}/.ansible/collections"
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/preflight.yml --syntax-check
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/restore_only.yml --syntax-check
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/decommission.yml --syntax-check
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/discovery.yml --syntax-check
           ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/rbac_bootstrap.yml --syntax-check

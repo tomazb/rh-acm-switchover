@@ -67,6 +67,8 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     WAIT_FAILURE_PHASES,
 )
 
+PASSIVE_PREFLIGHT_READY_PHASES = ("Enabled", "Finished", "Completed", "Running")
+
 
 def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict]:
     """Select the best passive sync restore and return diagnostics.
@@ -105,6 +107,16 @@ def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict
 
     diagnostics["reason"] = "no_sync_restore"
     return None, diagnostics
+
+
+def passive_restore_phase(restore: dict | None) -> str | None:
+    if restore is None:
+        return None
+    return restore.get("status", {}).get("phase", "unknown")
+
+
+def passive_restore_ready_for_preflight(restore: dict | None) -> bool:
+    return passive_restore_phase(restore) in PASSIVE_PREFLIGHT_READY_PHASES
 
 
 def build_activation_patch(backup_name: str) -> dict:
@@ -266,6 +278,8 @@ def build_restore_activation_plan(
     return {
         "changed": operation["action"] != "none",
         "restore": restore,
+        "restore_phase": passive_restore_phase(passive_restore),
+        "restore_ready": passive_restore_ready_for_preflight(passive_restore),
         "patch": (patch if method == "passive" and activation_method == "patch" else None),
         "operation": operation,
         "wait_target": wait_target,

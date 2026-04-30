@@ -133,6 +133,19 @@ class TestPrimaryPreparation:
         # Should not scale Thanos since no observability
         mock_primary_client.scale_statefulset.assert_not_called()
 
+    def test_pause_backup_schedule_fails_when_multiple_schedules_exist(self, primary_prep_no_obs, mock_primary_client):
+        """Multiple BackupSchedules are ambiguous and must not be silently first-selected."""
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
+            {"metadata": {"name": "schedule-b"}, "spec": {"paused": False}},
+        ]
+
+        with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
+            primary_prep_no_obs._pause_backup_schedule()
+
+        mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
+
     def test_prepare_steps_already_completed(self, primary_prep_with_obs, mock_state_manager):
         """Test skipping already completed steps."""
         mock_state_manager.is_step_completed.return_value = True

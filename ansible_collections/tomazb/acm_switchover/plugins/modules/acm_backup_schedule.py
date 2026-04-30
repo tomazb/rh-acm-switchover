@@ -104,10 +104,20 @@ def _build_saved_schedule_body(saved_schedule: dict) -> dict:
     return body
 
 
+def _backup_schedule_names(schedules: list[dict]) -> str:
+    names = [schedule.get("metadata", {}).get("name") or "<unnamed>" for schedule in schedules]
+    return ", ".join(names)
+
+
 def build_backup_schedule_operation(
     acm_version: str, intent: str, schedules: list[dict], saved_schedule: dict | None = None
 ) -> dict:
     mode = backup_schedule_pause_mode(acm_version)
+    if len(schedules) > 1:
+        raise ValueError(
+            "Multiple BackupSchedules found: "
+            f"{_backup_schedule_names(schedules)}. Refusing to choose one automatically."
+        )
     if not schedules:
         if intent == "enable" and saved_schedule:
             return {

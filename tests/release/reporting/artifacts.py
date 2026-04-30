@@ -69,9 +69,7 @@ class ReleaseArtifacts:
         artifacts = cls(root=root, run_id=run_id, run_dir=run_dir)
         for filename, payload in REQUIRED_JSON_ARTIFACTS.items():
             artifacts.write_json(filename, copy.deepcopy(payload))
-        (run_dir / "release-report.md").write_text(
-            "# Release Report\n\nStatus: created\n", encoding="utf-8"
-        )
+        (run_dir / "release-report.md").write_text("# Release Report\n\nStatus: created\n", encoding="utf-8")
         return artifacts
 
     def _safe_path(self, relative_path: str | Path) -> Path:
@@ -87,9 +85,7 @@ class ReleaseArtifacts:
         """Serialize payload as indented JSON under run_dir and return the written path."""
         path = self._safe_path(relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return path
 
     def write_sanitized_text(self, relative_path: str | Path, content: str) -> Path:
@@ -103,19 +99,13 @@ class ReleaseArtifacts:
             raise
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(sanitized.text, encoding="utf-8")
-        self._update_redaction_record(
-            str(relative_path), sanitized.redacted_counts_by_class, rejected=False
-        )
+        self._update_redaction_record(str(relative_path), sanitized.redacted_counts_by_class, rejected=False)
         return path
 
-    def _update_redaction_record(
-        self, artifact_path: str, counts: dict[str, int], *, rejected: bool
-    ) -> None:
+    def _update_redaction_record(self, artifact_path: str, counts: dict[str, int], *, rejected: bool) -> None:
         """Merge a scan result into redaction.json for audit-trail tracking."""
         redaction_file = self.run_dir / "redaction.json"
-        redaction: dict[str, Any] = json.loads(
-            redaction_file.read_text(encoding="utf-8")
-        )
+        redaction: dict[str, Any] = json.loads(redaction_file.read_text(encoding="utf-8"))
         if rejected:
             redaction.setdefault("rejected_artifacts", []).append(artifact_path)
         else:
@@ -129,9 +119,7 @@ class ReleaseArtifacts:
                 redaction["status"] = "ok"
         self.write_json("redaction.json", redaction)
 
-    def write_failed_manifest(
-        self, *, reason: str, command: list[str]
-    ) -> tuple[Path, Path]:
+    def write_failed_manifest(self, *, reason: str, command: list[str]) -> tuple[Path, Path]:
         """Write manifest.json and summary.json with failed status and failure reason."""
         manifest_path = self.write_json(
             "manifest.json",

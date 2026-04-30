@@ -444,6 +444,15 @@ class TestFinalization:
         ):
             finalization._verify_backup_schedule_enabled()
 
+    def test_verify_backup_schedule_enabled_raises_when_multiple_schedules_exist(self, finalization):
+        finalization._cached_schedules = [
+            {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
+            {"metadata": {"name": "schedule-b"}, "spec": {"paused": False}},
+        ]
+
+        with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
+            finalization._verify_backup_schedule_enabled()
+
     def test_verify_backup_schedule_enabled_warns_when_missing_in_restore_only(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
     ):
@@ -822,6 +831,12 @@ class TestFinalization:
         ]
         mock_secondary_client.get_pods.return_value = []
         finalization.state.get_config.return_value = None
+        finalization._cached_schedules = [
+            {
+                "metadata": {"name": "acm-hub-backup"},
+                "spec": {"veleroSchedule": "*/30 * * * *"},
+            }
+        ]
 
         finalization._verify_backup_integrity(max_age_seconds=600)
 

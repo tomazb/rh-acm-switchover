@@ -994,8 +994,8 @@ class TestPassiveSyncValidator:
         assert results[0]["passed"] is True
         assert "Running" in results[0]["message"]
 
-    def test_passive_sync_unknown(self, reporter, mock_kube_client):
-        """Test success when passive sync is in Unknown state (transient during Velero sync)."""
+    def test_passive_sync_unknown_is_not_activation_ready(self, reporter, mock_kube_client):
+        """Unknown is not activation-ready and must not pass preflight."""
         validator = PassiveSyncValidator(reporter)
         mock_kube_client.list_custom_resources.return_value = []
         mock_kube_client.get_custom_resource.return_value = {
@@ -1006,8 +1006,9 @@ class TestPassiveSyncValidator:
 
         results = reporter.results
         assert len(results) == 1
-        assert results[0]["passed"] is True
+        assert results[0]["passed"] is False
         assert "Unknown" in results[0]["message"]
+        assert "Wait for the Restore to reach" in results[0]["message"]
 
     def test_passive_restore_finished_with_errors_already_available_is_benign(self, reporter, mock_kube_client):
         """Test benign FinishedWithErrors restore messages are treated as ready."""

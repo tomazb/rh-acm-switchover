@@ -73,9 +73,7 @@ def assert_baseline(*, fingerprint: dict, initial_primary: str) -> BaselineResul
         assertions.append(
             _record(
                 "managed-cluster-count",
-                _valid_int(expected_count)
-                and _valid_int(observed_count)
-                and observed_count == expected_count,
+                _valid_int(expected_count) and _valid_int(observed_count) and observed_count == expected_count,
                 "Managed cluster count matches profile",
             )
         )
@@ -85,9 +83,7 @@ def assert_baseline(*, fingerprint: dict, initial_primary: str) -> BaselineResul
         assertions.append(
             _record(
                 "managed-cluster-names",
-                expected_names is not None
-                and observed_names is not None
-                and observed_names == expected_names,
+                expected_names is not None and observed_names is not None and observed_names == expected_names,
                 "Managed cluster names match profile",
             )
         )
@@ -101,10 +97,6 @@ def assert_baseline(*, fingerprint: dict, initial_primary: str) -> BaselineResul
         )
 
     return BaselineResult(
-        status=(
-            "passed"
-            if all(item["status"] == "passed" for item in assertions)
-            else "failed"
-        ),
+        status=("passed" if all(item["status"] == "passed" for item in assertions) else "failed"),
         assertions=assertions,
     )

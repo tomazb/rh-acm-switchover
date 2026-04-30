@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.7] - 2026-04-30
+
 ### Added
 
 - Added a pytest-native release validation framework for profile-driven ACM switchover certification across Python, Ansible, and Bash surfaces.
+
+### Changed
+
+- Local `run_tests.sh` now separates strict and advisory quality gates with `STRICT_QUALITY=1`, while keeping formatter checks scoped to tracked source trees.
+- CI now skips E2E tests in the root unit-test job, syntax-checks `restore_only.yml`, and runs collection integration and scenario tests in the collection foundation workflow.
+
+### Fixed
+
+- Passive-sync preflight now treats `Restore` phase `Unknown` as not activation-ready in both Python and collection paths, with explicit wait guidance.
+- Python klusterlet remediation now fails visibly on bootstrap secret create errors and secret visibility timeouts instead of restarting agents after a failed re-import.
+- Python and collection BackupSchedule planning now fail fast when multiple `BackupSchedule` resources are present instead of choosing an arbitrary first item.
+- Collection input validation now reports missing required kubeconfig paths, and `acm_rbac_validate` converts invalid role combinations to Ansible `fail_json` responses.
+- Collection summary-path and BackupSchedule version handling now use the safe-path validator for optional Argo CD test summaries and fail on missing MCH versions instead of assuming ACM 2.12 behavior.
+- CI version display checks now use runtime package metadata rather than a stale hard-coded version grep.
 
 ## [1.7.6] - 2026-04-27
 
@@ -1194,7 +1210,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.6...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.7...HEAD
+[1.7.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.6...v1.7.7
 [1.7.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.3...v1.7.6
 [1.7.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.10...v1.7.3
 [1.6.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.0...v1.6.10

@@ -59,6 +59,19 @@ def test_python_and_ansible_streams_enable_expected_gate_ids() -> None:
     assert "python-cli-smoke" in gate_ids
     assert "collection-build-install" in gate_ids
     assert "collection-playbook-syntax" in gate_ids
+    assert "collection-integration-tests" in gate_ids
+    assert "collection-scenario-tests" in gate_ids
+
+
+def test_ansible_stream_includes_restore_only_syntax_gate() -> None:
+    gates = build_default_gate_commands(enabled_streams=("ansible",), repo_root=Path("/repo"))
+    restore_only_gates = [
+        gate
+        for gate in gates
+        if gate.gate_id == "collection-playbook-syntax" and any("restore_only.yml" in part for part in gate.command)
+    ]
+
+    assert restore_only_gates
 
 
 def test_bash_only_profile_still_runs_local_root_gate() -> None:

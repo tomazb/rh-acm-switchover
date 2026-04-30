@@ -37,9 +37,7 @@ def is_acm_touching_application(app: dict) -> bool:
     """Return True if any resource in the Application's status touches an ACM namespace or kind."""
     for resource in app.get("status", {}).get("resources", []):
         namespace = resource.get("namespace")
-        if namespace in ACM_NAMESPACES or (
-            namespace and ACM_NAMESPACE_REGEX.match(namespace)
-        ):
+        if namespace in ACM_NAMESPACES or (namespace and ACM_NAMESPACE_REGEX.match(namespace)):
             return True
         if resource.get("kind") in ACM_KINDS:
             return True

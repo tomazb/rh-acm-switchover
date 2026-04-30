@@ -52,9 +52,7 @@ def build_environment_fingerprint(
             "expectation_type": "names" if expected_names else "count",
             "expected_names": list(expected_names),
             "expected_count": expected_count,
-            "observed_active_names": (
-                list(active.managed_cluster_names) if expected_names and active else []
-            ),
+            "observed_active_names": (list(active.managed_cluster_names) if expected_names and active else []),
             "observed_active_count": len(active.managed_cluster_names) if active else 0,
             "contexts_available": [],
         },

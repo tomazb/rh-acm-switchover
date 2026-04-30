@@ -111,6 +111,26 @@ class TestDecommission:
 
         assert result is True
 
+    @patch("modules.decommission.confirm_action")
+    @patch("modules.decommission.wait_for_condition")
+    def test_decommission_requires_extra_mch_confirmation_when_managed_clusters_skipped(
+        self, mock_wait, mock_confirm, decommission_no_obs, mock_primary_client
+    ):
+        """Skipping ManagedCluster deletion requires a second MCH confirmation."""
+        mock_wait.return_value = True
+        mock_confirm.side_effect = [
+            True,  # proceed with decommission
+            False,  # skip ManagedCluster deletion
+            False,  # decline extra unsafe MCH confirmation
+        ]
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "multiclusterhub"}}]
+
+        result = decommission_no_obs.decommission(interactive=True)
+
+        assert result is True
+        mock_primary_client.delete_custom_resource.assert_not_called()
+        assert mock_confirm.call_count == 3
+
     @patch("modules.decommission.wait_for_condition")
     def test_delete_observability_with_resources(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test deleting observability resources."""
@@ -282,9 +302,9 @@ class TestDecommissionIntegration:
                     result = condition_fn()
                     assert isinstance(result, WaitConditionResult)
                     assert result.done is True, f"Expected success but got: {result.public_detail}"
-                    assert "operator" in result.public_detail.lower(), (
-                        f"Expected operator mention in: {result.public_detail}"
-                    )
+                    assert (
+                        "operator" in result.public_detail.lower()
+                    ), f"Expected operator mention in: {result.public_detail}"
                 return True
 
             mock_wait.side_effect = capture_condition_call

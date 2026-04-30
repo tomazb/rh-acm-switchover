@@ -374,7 +374,8 @@ class TestPostActivationVerification:
 
         mock_wait.side_effect = capture_wait
 
-        post_verify_no_obs._wait_for_secret_visibility(mock_v1, "cluster-a")
+        with pytest.raises(SwitchoverError, match="bootstrap-hub-kubeconfig secret not visible"):
+            post_verify_no_obs._wait_for_secret_visibility(mock_v1, "cluster-a")
 
         mock_wait.assert_called_once()
 
@@ -719,6 +720,64 @@ data:
         result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
 
         assert result is False
+
+    def test_force_klusterlet_reconnect_fails_on_bootstrap_secret_create_error(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Non-conflict bootstrap secret creation failures must fail remediation clearly."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        mock_v1.create_namespaced_secret.side_effect = ApiException(status=403, reason="Forbidden")
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is False
+        mock_apps_v1.patch_namespaced_deployment.assert_not_called()
+
+    def test_force_klusterlet_reconnect_fails_when_bootstrap_secret_never_visible(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """A secret visibility timeout must fail remediation instead of continuing to restart."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=False):
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is False
+        mock_apps_v1.patch_namespaced_deployment.assert_not_called()
 
     def test_parallel_workers_use_isolated_clients(self, mock_secondary_client, mock_state_manager):
         """Each parallel worker must receive its own ApiClient; no global context mutation."""

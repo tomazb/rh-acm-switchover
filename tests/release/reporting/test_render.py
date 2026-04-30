@@ -31,9 +31,7 @@ def test_render_release_report_contains_required_sections() -> None:
 
 def test_release_validation_operator_doc_mentions_profile_and_modes() -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    doc = (
-        repo_root / "docs" / "development" / "release-validation-framework.md"
-    ).read_text(encoding="utf-8")
+    doc = (repo_root / "docs" / "development" / "release-validation-framework.md").read_text(encoding="utf-8")
 
     assert "--release-profile" in doc
     assert "certification" in doc

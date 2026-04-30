@@ -22,9 +22,7 @@ def _find_mco_read_block(tasks: list[dict]) -> dict:
             module = nested.get("kubernetes.core.k8s_info", {})
             if module.get("kind") == "MultiClusterObservability":
                 return task
-    raise AssertionError(
-        "disable_old_hub_observability.yml must wrap the MCO read in a block"
-    )
+    raise AssertionError("disable_old_hub_observability.yml must wrap the MCO read in a block")
 
 
 def _walk_tasks(tasks: list[dict]):
@@ -44,28 +42,16 @@ def test_disable_old_hub_observability_handles_absent_resource_separately_from_o
     assert rescue is not None, "MCO discovery must have a rescue block"
 
     error_capture = next(
-        (
-            task
-            for task in rescue
-            if "_acm_old_hub_mco_read_error" in task.get("ansible.builtin.set_fact", {})
-        ),
+        (task for task in rescue if "_acm_old_hub_mco_read_error" in task.get("ansible.builtin.set_fact", {})),
         None,
     )
-    assert (
-        error_capture is not None
-    ), "Rescue must capture the MCO read error before classifying it"
+    assert error_capture is not None, "Rescue must capture the MCO read error before classifying it"
 
     normalize_task = next(
-        (
-            task
-            for task in rescue
-            if "_acm_old_hub_mco_info" in task.get("ansible.builtin.set_fact", {})
-        ),
+        (task for task in rescue if "_acm_old_hub_mco_info" in task.get("ansible.builtin.set_fact", {})),
         None,
     )
-    assert (
-        normalize_task is not None
-    ), "Rescue must normalize absent-resource cases to an empty MCO list"
+    assert normalize_task is not None, "Rescue must normalize absent-resource cases to an empty MCO list"
 
     normalize_when = _stringify(normalize_task.get("when", ""))
     assert "_acm_old_hub_mco_read_error" in normalize_when
@@ -74,9 +60,7 @@ def test_disable_old_hub_observability_handles_absent_resource_separately_from_o
     assert 'no matches for kind "multiclusterobservability"' in normalize_when
 
     fail_task = next((task for task in rescue if "ansible.builtin.fail" in task), None)
-    assert (
-        fail_task is not None
-    ), "Rescue must fail on unexpected old-hub MCO read errors"
+    assert fail_task is not None, "Rescue must fail on unexpected old-hub MCO read errors"
     fail_text = _stringify(fail_task["ansible.builtin.fail"].get("msg", ""))
     assert "_acm_old_hub_mco_read_error" in fail_text
 

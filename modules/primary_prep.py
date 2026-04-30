@@ -24,6 +24,8 @@ from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import Phase, StateManager, is_acm_version_ge
 
+from .backup_schedule import fail_on_multiple_backup_schedules
+
 logger = logging.getLogger("acm_switchover")
 
 
@@ -130,14 +132,14 @@ class PrimaryPreparation:
             version="v1beta1",
             plural="backupschedules",
             namespace=BACKUP_NAMESPACE,
-            max_items=1,
+            max_items=2,
         )
+        fail_on_multiple_backup_schedules(backup_schedules, "primary hub")
 
         if not backup_schedules:
             logger.warning("No BackupSchedule found to pause")
             return
 
-        # Assume first BackupSchedule (typically only one exists)
         bs = backup_schedules[0]
         bs_name = bs.get("metadata", {}).get("name")
 

@@ -133,9 +133,7 @@ class ResumeSummary:
 
 def is_resume_noop(result: ResumeResult) -> bool:
     """Return True when resume did not patch because app is already resumed."""
-    return (not result.restored) and (
-        result.skip_reason == RESUME_SKIP_REASON_MARKER_MISSING
-    )
+    return (not result.restored) and (result.skip_reason == RESUME_SKIP_REASON_MARKER_MISSING)
 
 
 def _format_exception_detail(exc: Exception) -> str:
@@ -210,15 +208,11 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
         ArgocdDiscoveryResult with CRD presence and instance list.
     """
     has_app = _get_crd_presence(client, "applications.argoproj.io", required=True)
-    has_argocds_present = _get_crd_presence(
-        client, "argocds.argoproj.io", required=False
-    )
+    has_argocds_present = _get_crd_presence(client, "argocds.argoproj.io", required=False)
     has_argocds = bool(has_argocds_present)
     install_type_override = None
     if has_argocds_present is None:
-        logger.warning(
-            "Could not determine ArgoCD CRDs presence; install type will be 'unknown'"
-        )
+        logger.warning("Could not determine ArgoCD CRDs presence; install type will be 'unknown'")
         install_type_override = "unknown"
     instances: List[Dict[str, str]] = []
     if not has_app:
@@ -269,9 +263,7 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     )
 
 
-def _list_argocd_applications_once(
-    client: KubeClient, namespace: Optional[str]
-) -> List[Dict[str, Any]]:
+def _list_argocd_applications_once(client: KubeClient, namespace: Optional[str]) -> List[Dict[str, Any]]:
     """List Argo CD Applications for one namespace scope and surface real errors."""
     scope_label = namespace or "cluster-wide scope"
     try:
@@ -358,13 +350,9 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
                     name,
                 )
             continue
-        acm_count = sum(
-            1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r)
-        )
+        acm_count = sum(1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r))
         if acm_count > 0:
-            result.append(
-                AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app)
-            )
+            result.append(AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app))
     return result
 
 
@@ -394,9 +382,7 @@ def resume_recorded_applications(
             continue
         if not entry.get("pause_applied", True):
             summary.failed += 1
-            logger.warning(
-                "  Skip %s/%s (pause state was recorded but not confirmed)", ns, name
-            )
+            logger.warning("  Skip %s/%s (pause state was recorded but not confirmed)", ns, name)
             continue
         if not all([hub, ns, name, original_sync_policy is not None]):
             summary.failed += 1
@@ -431,9 +417,7 @@ def resume_recorded_applications(
             logger.info("  Already resumed %s/%s on %s", ns, name, hub)
         else:
             summary.failed += 1
-            logger.warning(
-                "  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored"
-            )
+            logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
 
     return summary
 
@@ -506,9 +490,7 @@ def pause_autosync(
             patched=False,
             error=detail,
         )
-    return PauseResult(
-        namespace=ns, name=name, original_sync_policy=original, patched=True
-    )
+    return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=True)
 
 
 # NOTE: same dry_run_skip / KubeClient-as-self pattern as pause_autosync above.
@@ -551,9 +533,7 @@ def resume_autosync(
     except ApiException as e:
         if e.status == 404:
             logger.debug("Application %s/%s not found: %s", namespace, name, e)
-            return ResumeResult(
-                namespace=namespace, name=name, restored=False, skip_reason="not found"
-            )
+            return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
         logger.warning(
             "API error fetching Application %s/%s (status=%s); leaving paused",
             namespace,
@@ -567,9 +547,7 @@ def resume_autosync(
             skip_reason=f"fetch error: {e.status}",
         )
     except Exception as e:
-        logger.warning(
-            "Unexpected error fetching Application %s/%s: %s", namespace, name, e
-        )
+        logger.warning("Unexpected error fetching Application %s/%s: %s", namespace, name, e)
         return ResumeResult(
             namespace=namespace,
             name=name,
@@ -577,9 +555,7 @@ def resume_autosync(
             skip_reason=f"fetch error: {e}",
         )
     if not current:
-        return ResumeResult(
-            namespace=namespace, name=name, restored=False, skip_reason="not found"
-        )
+        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
     ann = (current.get("metadata") or {}).get("annotations") or {}
     marker = ann.get(ARGOCD_PAUSED_BY_ANNOTATION)
     if marker != run_id:
@@ -596,8 +572,7 @@ def resume_autosync(
         current_policy = (current.get("spec") or {}).get("syncPolicy") or {}
         if "automated" in current_policy:
             logger.info(
-                "Application %s/%s has stale marker %s (expected %s) "
-                "but auto-sync is already enabled; cleaning up",
+                "Application %s/%s has stale marker %s (expected %s) " "but auto-sync is already enabled; cleaning up",
                 namespace,
                 name,
                 marker,

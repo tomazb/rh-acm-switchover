@@ -68,10 +68,12 @@ class AnsibleAdapter:
     def _build_env(self) -> dict[str, str]:
         """Build subprocess environment with ANSIBLE_COLLECTIONS_PATH pointing to repo root."""
         env = dict(os.environ)
-        env["ANSIBLE_COLLECTIONS_PATH"] = ":".join([
-            str(self.repo_root),
-            os.path.expanduser("~/.ansible/collections"),
-        ])
+        env["ANSIBLE_COLLECTIONS_PATH"] = ":".join(
+            [
+                str(self.repo_root),
+                os.path.expanduser("~/.ansible/collections"),
+            ]
+        )
         env.setdefault("ANSIBLE_LOCAL_TEMP", "/tmp/ansible-local")
         env.setdefault("ANSIBLE_REMOTE_TMP", "/tmp/ansible-remote")
         return env
@@ -205,7 +207,11 @@ class AnsibleAdapter:
                 expected="0",
                 actual=str(completed.returncode),
                 evidence_path=str(stderr_path) if status == "failed" else str(stdout_path),
-                message="Ansible command completed" if status == "passed" else "Ansible command returned a non-zero exit code",
+                message=(
+                    "Ansible command completed"
+                    if status == "passed"
+                    else "Ansible command returned a non-zero exit code"
+                ),
             )
         ]
         if not stdout_written or not stderr_written:

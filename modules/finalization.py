@@ -49,7 +49,7 @@ from lib.kube_client import KubeClient, is_retryable_error
 from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge
 from lib.waiter import WaitConditionResult, wait_for_condition
 
-from .backup_schedule import BackupScheduleManager
+from .backup_schedule import BackupScheduleManager, fail_on_multiple_backup_schedules
 from .decommission import Decommission
 
 logger = logging.getLogger("acm_switchover")
@@ -867,8 +867,9 @@ class Finalization:
                 version="v1beta1",
                 plural="backupschedules",
                 namespace=BACKUP_NAMESPACE,
-                max_items=1,
+                max_items=2,
             )
+        fail_on_multiple_backup_schedules(self._cached_schedules, "secondary hub")
         return self._cached_schedules
 
     def _restore_only_missing_backup_schedule(self, schedules: Optional[List[Dict]] = None) -> bool:

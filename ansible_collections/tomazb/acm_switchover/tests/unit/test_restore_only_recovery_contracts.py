@@ -125,3 +125,14 @@ def test_argocd_manage_test_only_writes_summary_when_requested():
         "argocd_manage_test.yml should guard summary-path resolution and file write "
         "so the playbook still runs when summary_path is omitted"
     )
+
+
+def test_argocd_manage_test_validates_summary_path_before_write():
+    """The optional Argo CD test summary path must use the collection safe-path validator."""
+    tasks = _load_playbook("argocd_manage_test.yml")[0]["tasks"]
+    validate_indices = [idx for idx, task in enumerate(tasks) if "tomazb.acm_switchover.acm_safe_path_validate" in task]
+    write_indices = [idx for idx, task in enumerate(tasks) if task.get("name") == "Write summary file"]
+
+    assert validate_indices, "argocd_manage_test.yml must validate summary_path before writing it"
+    assert write_indices, "argocd_manage_test.yml must still write the requested summary file"
+    assert validate_indices[0] < write_indices[0]

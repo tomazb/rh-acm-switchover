@@ -75,9 +75,7 @@ def test_baseline_fails_without_backup_and_restore_evidence() -> None:
     )
 
     assert result.status == "failed"
-    assert any(
-        item["name"] == "initial-primary-backup-schedule" for item in result.assertions
-    )
+    assert any(item["name"] == "initial-primary-backup-schedule" for item in result.assertions)
     assert any(item["name"] == "secondary-restore" for item in result.assertions)
 
 

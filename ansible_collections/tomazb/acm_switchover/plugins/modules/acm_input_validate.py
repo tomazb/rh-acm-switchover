@@ -128,16 +128,39 @@ def build_input_validation_results(params: dict) -> list[dict]:
             results.append(_fail_result("preflight-input-secondary-context", str(exc), "Set a valid secondary context"))
 
     # --- Path validation (skip primary kubeconfig in restore-only) ---
-    path_checks = [("preflight-input-secondary-kubeconfig", secondary_kubeconfig)]
+    path_checks = [
+        (
+            "preflight-input-secondary-kubeconfig",
+            "secondary",
+            secondary_kubeconfig,
+            True,
+        )
+    ]
     if not restore_only:
-        path_checks.insert(0, ("preflight-input-primary-kubeconfig", primary_kubeconfig))
+        path_checks.insert(
+            0,
+            (
+                "preflight-input-primary-kubeconfig",
+                "primary",
+                primary_kubeconfig,
+                True,
+            ),
+        )
     if report_dir:
-        path_checks.append(("preflight-input-report-dir", report_dir))
+        path_checks.append(("preflight-input-report-dir", "report", report_dir, False))
     if checkpoint_path:
-        path_checks.append(("preflight-input-checkpoint-path", checkpoint_path))
+        path_checks.append(("preflight-input-checkpoint-path", "checkpoint", checkpoint_path, False))
 
-    for result_id, path_value in path_checks:
+    for result_id, path_label, path_value, required in path_checks:
         if not path_value:
+            if required:
+                results.append(
+                    _fail_result(
+                        result_id,
+                        f"{path_label} kubeconfig is required for collection preflight and switchover runs",
+                        f"Set acm_switchover_hubs.{path_label}.kubeconfig",
+                    )
+                )
             continue
         try:
             validate_safe_path(path_value)
