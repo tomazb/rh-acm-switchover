@@ -10,3 +10,13 @@
   when:
     - acm_secondary_restores_info is not defined
     - acm_secondary_restore_info is not defined
+
+- name: Read secondary MultiClusterHub when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: operator.open-cluster-management.io/v1
+    kind: MultiClusterHub
+    namespace: open-cluster-management
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_mch_info
+  when: acm_secondary_mch_info is not defined

@@ -13,6 +13,41 @@
       reason: dry_run
   when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 
+- name: Derive secondary ACM version for immediate-import annotations
+  ansible.builtin.set_fact:
+    _acm_secondary_version: >-
+      {{
+        acm_secondary_version
+        | default(
+            (
+              (acm_secondary_mch_info.resources | default([]) | first | default({}))
+              .get('status', {})
+              .get('currentVersion', '')
+            ),
+            true
+          )
+      }}
+
+- name: Determine whether secondary ACM supports immediate-import annotations
+  ansible.builtin.set_fact:
+    _acm_secondary_supports_auto_import: >-
+      {{
+        (_acm_secondary_version | length > 0)
+        and (_acm_secondary_version is version('2.14.0', '>='))
+      }}
+
+- name: Publish immediate import skip result for older ACM versions
+  ansible.builtin.set_fact:
+    _apply_immediate_import: false
+    acm_switchover_immediate_import_result:
+      changed: false
+      mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
+      skipped: true
+      reason: "ACM {{ _acm_secondary_version | default('unknown') }} does not support immediate-import annotations"
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - not (_acm_secondary_supports_auto_import | bool)
+
 - name: Get current autoImportStrategy
   kubernetes.core.k8s_info:
     api_version: v1
@@ -22,7 +57,9 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _import_cm_for_annotation
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_secondary_supports_auto_import | bool
 
 - name: Determine if immediate-import annotations are needed
   ansible.builtin.set_fact:
@@ -30,7 +67,9 @@
       {{ (_import_cm_for_annotation.resources | default([]) | first | default({}))
          .get('data', {}).get('autoImportStrategy', 'ImportOnly')
          in ['ImportOnly', 'default', ''] }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_secondary_supports_auto_import | bool
 
 - name: Get ManagedClusters on secondary hub
   kubernetes.core.k8s_info:
@@ -40,8 +79,9 @@
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _mc_for_import
   when:
-    - _apply_immediate_import | bool
+    - _apply_immediate_import | default(false) | bool
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_secondary_supports_auto_import | bool
 
 - name: Apply immediate-import annotation to non-local clusters
   kubernetes.core.k8s:
@@ -63,12 +103,15 @@
     label: "{{ item.metadata.name }}"
   register: acm_apply_immediate_import_results
   when:
-    - _apply_immediate_import | bool
+    - _apply_immediate_import | default(false) | bool
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_secondary_supports_auto_import | bool
 
 - name: Publish immediate import result
   ansible.builtin.set_fact:
     acm_switchover_immediate_import_result:
       changed: "{{ acm_apply_immediate_import_results.changed | default(false) }}"
       mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_secondary_supports_auto_import | bool

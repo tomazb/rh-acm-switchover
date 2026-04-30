@@ -23,8 +23,8 @@ def test_reset_auto_import_in_finalization():
     )
 
 
-def test_main_includes_manage_before_activation():
-    """activation/main.yml must include manage_auto_import before activate_restore."""
+def test_main_includes_manage_after_passive_verification_before_activation():
+    """activation/main.yml must verify passive sync before temporary ImportAndSync management."""
     main = yaml.safe_load((ACTIVATION_TASKS / "main.yml").read_text())
     block_tasks = None
     for item in main:
@@ -36,17 +36,22 @@ def test_main_includes_manage_before_activation():
     includes = [t.get("ansible.builtin.include_tasks", "") for t in block_tasks]
 
     manage_idx = None
+    verify_idx = None
     activate_idx = None
     reset_idx = None
     for i, inc in enumerate(includes):
         if inc == "manage_auto_import.yml":
             manage_idx = i
+        elif inc == "verify_passive_sync.yml":
+            verify_idx = i
         elif inc == "activate_restore.yml":
             activate_idx = i
         elif inc == "reset_auto_import.yml":
             reset_idx = i
 
     assert manage_idx is not None, "manage_auto_import.yml must be included in activation"
+    assert verify_idx is not None, "verify_passive_sync.yml must be included in activation"
+    assert verify_idx < manage_idx, "passive sync must be verified before ImportAndSync management"
     assert manage_idx < activate_idx, "manage_auto_import must come before activate_restore"
     assert reset_idx is None, (
         "reset_auto_import.yml must NOT be in activation/tasks/main.yml — "
@@ -113,6 +118,29 @@ def test_apply_immediate_import_does_not_swallow_patch_failures():
     assert (
         "ignore_errors: true" not in content
     ), "apply_immediate_import.yml must not ignore ManagedCluster patch failures"
+
+
+def test_manage_auto_import_preserves_python_guards_and_detect_only_mode():
+    """Activation auto-import management must mirror Python _maybe_set_auto_import_strategy()."""
+    content = (ACTIVATION_TASKS / "manage_auto_import.yml").read_text()
+
+    assert "acm_secondary_version" in content
+    assert "version('2.14.0', '>=')" in content
+    assert "old_hub_action" in content
+    assert "local-cluster" in content
+    assert "rejectattr('metadata.name', 'equalto', 'local-cluster')" in content
+    assert "manage_auto_import_strategy" in content
+    assert "Detect-only" in content
+    assert "ImportAndSync" in content
+
+
+def test_apply_immediate_import_requires_acm_214_or_newer():
+    """Immediate-import annotations are an ACM 2.14+ behavior and must be version-gated."""
+    content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
+
+    assert "acm_secondary_version" in content
+    assert "version('2.14.0', '>=')" in content
+    assert "_acm_secondary_supports_auto_import" in content
 
 
 def test_constants_include_auto_import():

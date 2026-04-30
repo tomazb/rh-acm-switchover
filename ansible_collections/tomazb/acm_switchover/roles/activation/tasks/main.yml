@@ -13,13 +13,12 @@
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
 
-    - name: Manage auto-import strategy for ACM 2.14+
-      ansible.builtin.include_tasks: manage_auto_import.yml
-      when: acm_switchover_features.manage_auto_import_strategy | default(false)
-
     - name: Verify passive sync when method is passive
       ansible.builtin.include_tasks: verify_passive_sync.yml
       when: acm_switchover_operation.method == 'passive'
+
+    - name: Manage auto-import strategy for ACM 2.14+
+      ansible.builtin.include_tasks: manage_auto_import.yml
 
     - name: Activate restore
       ansible.builtin.include_tasks: activate_restore.yml
