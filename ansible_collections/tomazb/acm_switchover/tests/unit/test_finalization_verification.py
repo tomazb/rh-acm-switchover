@@ -36,6 +36,18 @@ def test_main_cleans_restores_before_enabling_backups():
     ), "cleanup_restores.yml must run before enable_backups.yml"
 
 
+def test_main_resets_auto_import_after_backup_and_mch_verification():
+    """Finalization auto-import reset must match Python's post-verification ordering."""
+    includes = [task.get("ansible.builtin.include_tasks", "") for task in _main_block_tasks()]
+
+    assert "verify_backups.yml" in includes, "main.yml must verify backups"
+    assert "verify_mch.yml" in includes, "main.yml must verify MCH health"
+    assert "reset_auto_import.yml" in includes, "main.yml must reset auto-import strategy"
+    assert includes.index("verify_backups.yml") < includes.index("reset_auto_import.yml")
+    assert includes.index("verify_mch.yml") < includes.index("reset_auto_import.yml")
+    assert includes.index("reset_auto_import.yml") < includes.index("handle_old_hub.yml")
+
+
 def test_main_restores_backup_baseline_from_checkpoint():
     """finalization/main.yml must reload persisted backup baseline on resume."""
     text = (FINALIZATION_TASKS / "main.yml").read_text()
@@ -149,6 +161,26 @@ def test_verify_backups_publish_preserves_existing_skip_result():
     when_text = " ".join(str(item) for item in when)
 
     assert "acm_switchover_verify_backups_result is not defined" in when_text
+
+
+def test_reset_auto_import_deletes_import_controller_configmap_when_sync_was_set():
+    """Reset must remove the temporary ConfigMap instead of patching ImportOnly."""
+    tasks = _load_yaml("reset_auto_import.yml")
+    text = (FINALIZATION_TASKS / "reset_auto_import.yml").read_text()
+
+    read_tasks = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ConfigMap"]
+    delete_tasks = [task for task in tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "ConfigMap"]
+
+    assert read_tasks, "reset_auto_import.yml must read current autoImportStrategy before deleting"
+    assert delete_tasks, "reset_auto_import.yml must delete import-controller-config when reset is needed"
+    delete_task = delete_tasks[0]
+    module_args = delete_task["kubernetes.core.k8s"]
+    assert module_args["name"] == "import-controller-config"
+    assert module_args["namespace"] == "multicluster-engine"
+    assert module_args["state"] == "absent"
+    assert "ImportAndSync" in str(delete_task.get("when", ""))
+    assert "autoImportStrategy: ImportOnly" not in text
+    assert "state: patched" not in text
 
 
 def test_verify_mch_requires_running_phase_and_healthy_pods():

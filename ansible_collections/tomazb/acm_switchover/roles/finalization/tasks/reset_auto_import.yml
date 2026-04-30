@@ -1,14 +1,24 @@
 ---
-# Reset autoImportStrategy to ImportOnly after the full post_activation window.
+# Reset autoImportStrategy to the controller default after backup/MCH verification.
 #
-# This mirrors the Python CLI: modules/finalization.py resets autoImportStrategy
-# after _verify_auto_import_cleanup_step() has run in post_activation.  The
-# cleanup_auto_import_annotations.yml task (which removes disable-auto-import
-# annotations and re-reads ManagedClusters) runs during post_activation, so any
-# import retries triggered by that mutation window still benefit from the
-# ImportAndSync strategy.  Only after that window closes — here in finalization —
-# is it safe to revert to the default.
-- name: Reset autoImportStrategy to ImportOnly
+# This mirrors the Python CLI: modules/finalization.py deletes
+# multicluster-engine/import-controller-config after backup enable/verify,
+# backup integrity, and MCH health checks complete.  Deleting the temporary
+# ConfigMap restores the import controller default.
+- name: Read import-controller-config before reset
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: import-controller-config
+    namespace: multicluster-engine
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _auto_import_reset_cm
+  when:
+    - _auto_import_strategy_changed | default(false) | bool
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Delete import-controller-config to restore default autoImportStrategy
   kubernetes.core.k8s:
     api_version: v1
     kind: ConfigMap
@@ -16,10 +26,17 @@
     namespace: multicluster-engine
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-    state: patched
-    definition:
-      data:
-        autoImportStrategy: ImportOnly
+    state: absent
+  register: acm_switchover_reset_auto_import_result
   when:
     - _auto_import_strategy_changed | default(false) | bool
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - >-
+      {{
+        (
+          _auto_import_reset_cm.resources
+          | default([])
+          | first
+          | default({})
+        ).get('data', {}).get('autoImportStrategy', 'default') == 'ImportAndSync'
+      }}

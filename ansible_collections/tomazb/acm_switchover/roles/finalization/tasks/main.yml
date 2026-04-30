@@ -53,12 +53,6 @@
     - name: Discover secondary hub resources
       ansible.builtin.include_tasks: discover_resources.yml
 
-    - name: Reset auto-import strategy to default after post-activation window
-      ansible.builtin.include_tasks: reset_auto_import.yml
-      when: >-
-        (acm_switchover_features.manage_auto_import_strategy | default(false))
-        or (_auto_import_strategy_changed | default(false) | bool)
-
     - name: Disable observability on the old hub for secondary disposition
       ansible.builtin.include_tasks: disable_old_hub_observability.yml
       when:
@@ -77,6 +71,12 @@
 
     - name: Verify MultiClusterHub health
       ansible.builtin.include_tasks: verify_mch.yml
+
+    - name: Reset auto-import strategy to default after backup and MCH verification
+      ansible.builtin.include_tasks: reset_auto_import.yml
+      when: >-
+        (acm_switchover_features.manage_auto_import_strategy | default(false))
+        or (_auto_import_strategy_changed | default(false) | bool)
 
     - name: Handle old hub disposition
       ansible.builtin.include_tasks: handle_old_hub.yml
@@ -109,6 +109,7 @@
               or (acm_switchover_enable_backups_result.changed | default(false))
               or (acm_switchover_verify_backups_result.changed | default(false))
               or (acm_switchover_verify_mch_result.changed | default(false))
+              or (acm_switchover_reset_auto_import_result.changed | default(false))
               or (acm_switchover_old_hub_disposition.changed | default(false))
               or (acm_switchover_verify_old_hub_state_result.changed | default(false))
               or (_argocd_resume_result.changed | default(false))
@@ -119,6 +120,7 @@
           enable_backups: "{{ acm_switchover_enable_backups_result | default({}) }}"
           verify_backups: "{{ acm_switchover_verify_backups_result | default({}) }}"
           verify_mch: "{{ acm_switchover_verify_mch_result | default({}) }}"
+          reset_auto_import: "{{ acm_switchover_reset_auto_import_result | default({}) }}"
           verify_old_hub_state: "{{ acm_switchover_verify_old_hub_state_result | default({}) }}"
       tags:
         - finalization
