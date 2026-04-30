@@ -266,6 +266,9 @@ def expand_rbac_requirements(
     if include_decommission and role != "operator":
         raise ValueError("include_decommission is only valid for the operator role")
 
+    if role == "validator" and argocd_mode == "manage":
+        raise ValueError("validator role cannot use argocd_mode=manage")
+
     cluster_perms = OPERATOR_CLUSTER_PERMISSIONS if role == "operator" else VALIDATOR_CLUSTER_PERMISSIONS
     hub_ns_perms = OPERATOR_HUB_NAMESPACE_PERMISSIONS if role == "operator" else VALIDATOR_HUB_NAMESPACE_PERMISSIONS
 

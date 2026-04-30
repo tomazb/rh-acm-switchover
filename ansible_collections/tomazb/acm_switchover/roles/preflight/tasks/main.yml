@@ -37,8 +37,16 @@
       ansible.builtin.include_tasks: validate_kubeconfigs.yml
       when: acm_switchover_preflight_summary.passed
 
+    - name: Record controller tooling advisory
+      ansible.builtin.include_tasks: validate_tooling.yml
+      when: acm_switchover_preflight_summary.passed
+
     - name: Validate ACM version compatibility
       ansible.builtin.include_tasks: validate_versions.yml
+      when: acm_switchover_preflight_summary.passed
+
+    - name: Validate auto-import strategy advisory
+      ansible.builtin.include_tasks: validate_auto_import.yml
       when: acm_switchover_preflight_summary.passed
 
     - name: Validate required namespaces and base hub components

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Aligned collection decommission, activation, finalization, post-activation, preflight, RBAC, and Thanos-selector behavior with the Python CLI parity contract.
+
 ## [1.7.7] - 2026-04-30
 
 ### Added

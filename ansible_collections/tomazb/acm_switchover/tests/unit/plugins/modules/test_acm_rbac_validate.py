@@ -217,6 +217,17 @@ def test_validator_role_rejects_decommission_permissions():
         )
 
 
+def test_validator_role_rejects_argocd_manage_permissions():
+    with pytest.raises(ValueError, match="validator.*manage"):
+        expand_rbac_requirements(
+            role="validator",
+            include_decommission=False,
+            skip_observability=False,
+            argocd_mode="manage",
+            argocd_install_type="operator",
+        )
+
+
 def test_operator_role_has_patch_on_managedclusters():
     """Operator role should have patch on managedclusters for activation."""
     permissions = expand_rbac_requirements(

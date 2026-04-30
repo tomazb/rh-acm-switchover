@@ -2,10 +2,28 @@
 
 import pathlib
 
+import yaml
 from jinja2 import Environment
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 PREFLIGHT_TASKS = ROLES_DIR / "preflight" / "tasks"
+
+
+def _load_yaml(name: str) -> list[dict]:
+    return yaml.safe_load((PREFLIGHT_TASKS / name).read_text())
+
+
+def _include_task_names(tasks: list[dict]) -> list[str]:
+    includes = []
+    for task in tasks:
+        include = task.get("ansible.builtin.include_tasks")
+        if include:
+            includes.append(include)
+        if "block" in task:
+            includes.extend(_include_task_names(task["block"]))
+        if "rescue" in task:
+            includes.extend(_include_task_names(task["rescue"]))
+    return includes
 
 
 def test_validate_kubeconfigs_uses_direct_api_probe():
@@ -25,6 +43,42 @@ def test_preflight_discovers_dpa_velero_and_managed_clusters():
     assert "kind: DataProtectionApplication" in text, "discover_resources.yml must query DataProtectionApplications"
     assert "app.kubernetes.io/name=velero" in text, "discover_resources.yml must query Velero pods"
     assert "kind: ManagedCluster" in text, "discover_resources.yml must query ManagedClusters"
+
+
+def test_preflight_runs_auto_import_strategy_validator_after_version_checks():
+    """Collection preflight must keep Python's ACM 2.14+ auto-import advisory."""
+    main = _load_yaml("main.yml")
+    include_names = _include_task_names(main)
+
+    assert "validate_versions.yml" in include_names
+    assert "validate_auto_import.yml" in include_names
+    assert include_names.index("validate_versions.yml") < include_names.index("validate_auto_import.yml")
+
+    tasks = _load_yaml("validate_auto_import.yml")
+    text = (PREFLIGHT_TASKS / "validate_auto_import.yml").read_text()
+    assert tasks, "validate_auto_import.yml must be parseable YAML with tasks"
+    assert "autoImportStrategy" in text
+    assert "ImportAndSync" in text
+    assert "ImportOnly" in text
+    assert "local-cluster" in text
+    assert "2.14.0" in text
+    assert '"severity": "warning"' in text
+
+
+def test_preflight_runs_controller_tooling_advisory():
+    """Collection preflight should surface Python-equivalent tooling guidance without failing."""
+    main = _load_yaml("main.yml")
+    include_names = _include_task_names(main)
+
+    assert "validate_tooling.yml" in include_names
+
+    tasks = _load_yaml("validate_tooling.yml")
+    text = (PREFLIGHT_TASKS / "validate_tooling.yml").read_text()
+    assert tasks, "validate_tooling.yml must be parseable YAML with tasks"
+    assert "command -v oc" in text
+    assert "command -v kubectl" in text
+    assert "command -v jq" in text
+    assert '"severity": "warning"' in text
 
 
 def test_validate_backups_enforces_backup_and_cluster_parity_checks():

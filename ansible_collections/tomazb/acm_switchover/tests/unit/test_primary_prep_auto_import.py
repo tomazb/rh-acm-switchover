@@ -26,3 +26,10 @@ def test_primary_prep_manage_auto_import_patches_managed_clusters():
     assert patch_tasks, "manage_auto_import.yml must patch ManagedClusters"
     assert "disable-auto-import" in text, "manage_auto_import.yml must add the disable-auto-import annotation"
     assert "local-cluster" in text, "manage_auto_import.yml must exclude local-cluster"
+
+
+def test_primary_prep_uses_python_thanos_compactor_selector():
+    text = (PRIMARY_PREP_TASKS / "discover_resources.yml").read_text()
+
+    assert "app.kubernetes.io/name=thanos-compact" in text
+    assert "app.kubernetes.io/name=thanos-compactor" not in text

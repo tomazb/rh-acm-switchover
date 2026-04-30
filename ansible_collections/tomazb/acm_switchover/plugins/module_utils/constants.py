@@ -41,3 +41,4 @@ LOCAL_CLUSTER_NAME = "local-cluster"
 # Observability component names
 OBSERVATORIUM_API_DEPLOYMENT = "observability-observatorium-api"
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
+THANOS_COMPACTOR_LABEL_SELECTOR = "app.kubernetes.io/name=thanos-compact"

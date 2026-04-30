@@ -150,6 +150,17 @@ def test_collection_rejects_validator_decommission_like_python():
         )
 
 
+def test_collection_rejects_validator_argocd_manage_like_python():
+    with pytest.raises(ValueError, match="validator.*manage"):
+        expand_rbac_requirements(
+            role="validator",
+            include_decommission=False,
+            skip_observability=False,
+            argocd_mode="manage",
+            argocd_install_type="operator",
+        )
+
+
 def test_collection_decommission_only_expansion_matches_python():
     collection_permissions = sorted(
         expand_rbac_requirements(
