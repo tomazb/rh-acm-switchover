@@ -110,6 +110,48 @@ def test_decommission_defaults_missing_execution_mode_to_dry_run_for_destructive
         assert "default('dry_run')" in text, f"{path.name} must treat missing execution.mode as dry_run"
 
 
+def test_decommission_waits_for_non_local_managed_clusters_before_mch_delete():
+    """ManagedCluster finalizers must drain before MultiClusterHub deletion starts."""
+    tasks = _load_yaml(DECOMMISSION_TASKS / "delete_managed_clusters.yml")
+    text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
+
+    wait_tasks = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster" and "until" in task
+    ]
+
+    assert wait_tasks, "delete_managed_clusters.yml must poll ManagedClusters after delete requests"
+    wait_task = wait_tasks[-1]
+    assert "retries" in wait_task and "delay" in wait_task
+    until = str(wait_task.get("until", ""))
+    assert "local-cluster" in until
+    assert "| length" in until
+    assert "== 0" in until
+    assert text.index("Delete non-local ManagedClusters") < text.index(wait_task["name"])
+
+
+def test_decommission_deletes_all_discovered_observability_and_mch_resources():
+    """Decommission must enumerate CRs instead of assuming conventional resource names."""
+    for filename, kind, fixed_name in (
+        ("delete_observability.yml", "MultiClusterObservability", "observability"),
+        ("delete_multiclusterhub.yml", "MultiClusterHub", "multiclusterhub"),
+    ):
+        tasks = _load_yaml(DECOMMISSION_TASKS / filename)
+        text = (DECOMMISSION_TASKS / filename).read_text()
+
+        discovery_tasks = [
+            task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == kind
+        ]
+        delete_tasks = [task for task in tasks if task.get("kubernetes.core.k8s", {}).get("kind") == kind]
+
+        assert discovery_tasks, f"{filename} must list {kind} resources before deletion"
+        assert delete_tasks, f"{filename} must delete discovered {kind} resources"
+        assert "{{ item.metadata.name }}" in str(delete_tasks[0].get("kubernetes.core.k8s", {}).get("name"))
+        assert "loop" in delete_tasks[0]
+        assert f"name: {fixed_name}" not in text
+
+
 def test_rbac_bootstrap_defaults_missing_execution_mode_to_dry_run_for_mutations():
     """Missing execution.mode must not trigger bootstrap mutations implicitly."""
     files = [
