@@ -3,6 +3,10 @@
   ansible.builtin.set_fact:
     _klusterlet_current_hub_kubeconfig: ""
     _klusterlet_expected_hub_kubeconfig: ""
+    _klusterlet_current_hub_server: ""
+    _klusterlet_expected_hub_server: ""
+    _klusterlet_current_hub_host: ""
+    _klusterlet_expected_hub_host: ""
     _klusterlet_import_docs: []
     _klusterlet_probe_wrong_hub: false
     _klusterlet_hub_kubeconfig_secret:
@@ -62,7 +66,7 @@
     name: "{{ _probe_cluster_name }}-import"
     namespace: "{{ _probe_cluster_name }}"
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
+    context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
   register: _klusterlet_new_hub_import_secret
   failed_when: false
 
@@ -82,13 +86,11 @@
   when:
     - (_klusterlet_new_hub_import_secret.resources | default([]) | length) > 0
     - >-
-      {{
-        (
-          _klusterlet_new_hub_import_secret.resources
-          | first
-          | default({})
-        ).get('data', {}).get('import.yaml', '') | length > 0
-      }}
+      (
+        _klusterlet_new_hub_import_secret.resources
+        | first
+        | default({})
+      ).get('data', {}).get('import.yaml', '') | length > 0
 
 - name: "{{ _probe_cluster_name }} - Capture expected new hub bootstrap kubeconfig"
   ansible.builtin.set_fact:
@@ -104,14 +106,70 @@
         ).get('data', {}).get('kubeconfig', '')
       }}
 
+- name: "{{ _probe_cluster_name }} - Parse current klusterlet hub server"
+  block:
+    - name: "{{ _probe_cluster_name }} - Extract current klusterlet hub server"
+      ansible.builtin.set_fact:
+        _klusterlet_current_hub_server: >-
+          {{
+            (
+              (
+                (_klusterlet_current_hub_kubeconfig | b64decode | from_yaml)
+                or {}
+              ).get('clusters', [])
+              | first
+              | default({})
+            ).get('cluster', {}).get('server', '')
+          }}
+  rescue:
+    - name: "{{ _probe_cluster_name }} - Keep current klusterlet hub server unknown"
+      ansible.builtin.debug:
+        msg: "Unable to parse current klusterlet hub kubeconfig for {{ _probe_cluster_name }}; skipping wrong-hub remediation."
+  when: (_klusterlet_current_hub_kubeconfig | length) > 0
+
+- name: "{{ _probe_cluster_name }} - Parse expected new hub server"
+  block:
+    - name: "{{ _probe_cluster_name }} - Extract expected new hub server"
+      ansible.builtin.set_fact:
+        _klusterlet_expected_hub_server: >-
+          {{
+            (
+              (
+                (_klusterlet_expected_hub_kubeconfig | b64decode | from_yaml)
+                or {}
+              ).get('clusters', [])
+              | first
+              | default({})
+            ).get('cluster', {}).get('server', '')
+          }}
+  rescue:
+    - name: "{{ _probe_cluster_name }} - Keep expected new hub server unknown"
+      ansible.builtin.debug:
+        msg: "Unable to parse expected new hub kubeconfig for {{ _probe_cluster_name }}; skipping wrong-hub remediation."
+  when: (_klusterlet_expected_hub_kubeconfig | length) > 0
+
+- name: "{{ _probe_cluster_name }} - Normalize klusterlet hub server hosts"
+  ansible.builtin.set_fact:
+    _klusterlet_current_hub_host: "{{ _klusterlet_current_hub_server | regex_replace('^https?://([^:/]+).*$', '\\1') }}"
+    _klusterlet_expected_hub_host: "{{ _klusterlet_expected_hub_server | regex_replace('^https?://([^:/]+).*$', '\\1') }}"
+
 - name: "{{ _probe_cluster_name }} - Detect klusterlet connected to old hub"
   ansible.builtin.set_fact:
     _klusterlet_probe_wrong_hub: >-
       {{
-        (_klusterlet_current_hub_kubeconfig | length) > 0
-        and (_klusterlet_expected_hub_kubeconfig | length) > 0
-        and _klusterlet_current_hub_kubeconfig != _klusterlet_expected_hub_kubeconfig
+        (_klusterlet_current_hub_host | length) > 0
+        and (_klusterlet_expected_hub_host | length) > 0
+        and _klusterlet_current_hub_host != _klusterlet_expected_hub_host
       }}
+
+- name: "{{ _probe_cluster_name }} - Warn when klusterlet hub comparison is unavailable"
+  ansible.builtin.debug:
+    msg: >-
+      Unable to compare klusterlet hub server for {{ _probe_cluster_name }};
+      skipping wrong-hub remediation.
+  when:
+    - (_klusterlet_current_hub_kubeconfig | length) > 0 or (_klusterlet_expected_hub_kubeconfig | length) > 0
+    - (_klusterlet_current_hub_host | length) == 0 or (_klusterlet_expected_hub_host | length) == 0
 
 - name: "{{ _probe_cluster_name }} - Warn about wrong-hub klusterlet"
   ansible.builtin.debug:

@@ -56,5 +56,6 @@
         | length
       ) == 0
     }}
-  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-    and (_managed_cluster_delete_targets | default([]) | length) > 0
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - (_managed_cluster_delete_targets | default([]) | length) > 0

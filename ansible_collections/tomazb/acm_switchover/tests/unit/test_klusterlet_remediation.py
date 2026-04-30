@@ -9,6 +9,13 @@ POST_ACTIVATION_TASKS = ROLES_DIR / "post_activation" / "tasks"
 POST_ACTIVATION_DEFAULTS = ROLES_DIR / "post_activation" / "defaults"
 
 
+def _when_text(task: dict) -> str:
+    when = task.get("when", [])
+    if isinstance(when, str):
+        return when
+    return " ".join(str(item) for item in when)
+
+
 def test_fix_klusterlet_file_exists():
     """fix_klusterlet.yml must exist in post_activation tasks."""
     assert (POST_ACTIVATION_TASKS / "fix_klusterlet.yml").exists()
@@ -36,7 +43,7 @@ def test_verify_klusterlet_probes_connections_even_when_cluster_status_is_green(
         if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml"
     ]
     assert probe_tasks, "verify_klusterlet.yml must include the green-path klusterlet probe"
-    probe_when = " ".join(str(item) for item in probe_tasks[0].get("when", []))
+    probe_when = _when_text(probe_tasks[0])
     assert "acm_switchover_managed_clusters" in probe_when
     assert "pending" not in probe_when, "green-path probe must not be gated by pending cluster status"
 
@@ -53,6 +60,24 @@ def test_verify_klusterlet_connection_probe_can_remediate_wrong_hub_secret():
     assert "bootstrap-hub-kubeconfig" in content
     assert "import.yaml" in content
     assert "fix_klusterlet_single.yml" in content
+    assert "from_yaml" in content
+    assert "regex_replace" in content
+    assert "server" in content
+    assert "_klusterlet_current_hub_kubeconfig != _klusterlet_expected_hub_kubeconfig" not in content
+
+
+def test_verify_klusterlet_connection_probe_omits_missing_secondary_context():
+    """Hub import-secret reads must not require an explicit secondary context."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet_connection_single.yml").read_text())
+    import_secret_task = next(
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("name") == "{{ _probe_cluster_name }}-import"
+    )
+
+    assert import_secret_task["kubernetes.core.k8s_info"]["context"] == (
+        "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+    )
 
 
 def test_defaults_include_managed_clusters():

@@ -57,9 +57,23 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _import_cm_for_annotation
+  failed_when: false
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
+
+- name: Publish immediate import skip result when autoImportStrategy is unavailable
+  ansible.builtin.set_fact:
+    _apply_immediate_import: false
+    acm_switchover_immediate_import_result:
+      changed: false
+      mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
+      skipped: true
+      reason: autoImportStrategy_unavailable
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_secondary_supports_auto_import | bool
+    - _import_cm_for_annotation.resources is not defined
 
 - name: Determine if immediate-import annotations are needed
   ansible.builtin.set_fact:
@@ -70,6 +84,7 @@
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
+    - _import_cm_for_annotation.resources is defined
 
 - name: Get ManagedClusters on secondary hub
   kubernetes.core.k8s_info:
@@ -82,6 +97,31 @@
     - _apply_immediate_import | default(false) | bool
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
+
+- name: Clear stale non-empty immediate-import annotations on non-local clusters
+  kubernetes.core.k8s:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    name: "{{ item.metadata.name }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    definition:
+      metadata:
+        annotations:
+          import.open-cluster-management.io/immediate-import: null
+  loop: >-
+    {{ (_mc_for_import.resources | default([]))
+       | rejectattr('metadata.name', 'equalto', 'local-cluster')
+       | list }}
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: acm_clear_immediate_import_results
+  when:
+    - _apply_immediate_import | default(false) | bool
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_secondary_supports_auto_import | bool
+    - (item.metadata.annotations | default({})).get('import.open-cluster-management.io/immediate-import', '') | length > 0
 
 - name: Apply immediate-import annotation to non-local clusters
   kubernetes.core.k8s:
@@ -110,8 +150,13 @@
 - name: Publish immediate import result
   ansible.builtin.set_fact:
     acm_switchover_immediate_import_result:
-      changed: "{{ acm_apply_immediate_import_results.changed | default(false) }}"
+      changed: >-
+        {{
+          (acm_clear_immediate_import_results.changed | default(false))
+          or (acm_apply_immediate_import_results.changed | default(false))
+        }}
       mode: "{{ acm_switchover_operation.activation_method | default('patch') }}"
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - _acm_secondary_supports_auto_import | bool
+    - _import_cm_for_annotation.resources is defined

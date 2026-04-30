@@ -129,6 +129,8 @@ def test_decommission_waits_for_non_local_managed_clusters_before_mch_delete():
     assert "| length" in until
     assert "== 0" in until
     assert text.index("Delete non-local ManagedClusters") < text.index(wait_task["name"])
+    assert isinstance(wait_task.get("when"), list)
+    assert any("_managed_cluster_delete_targets" in str(condition) for condition in wait_task["when"])
 
 
 def test_decommission_deletes_all_discovered_observability_and_mch_resources():

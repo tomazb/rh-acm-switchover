@@ -179,6 +179,7 @@ def test_reset_auto_import_deletes_import_controller_configmap_when_sync_was_set
     assert module_args["namespace"] == "multicluster-engine"
     assert module_args["state"] == "absent"
     assert "ImportAndSync" in str(delete_task.get("when", ""))
+    assert "{{" not in str(delete_task.get("when", ""))
     assert "autoImportStrategy: ImportOnly" not in text
     assert "state: patched" not in text
 

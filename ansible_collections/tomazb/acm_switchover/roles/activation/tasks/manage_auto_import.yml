@@ -106,8 +106,13 @@
     namespace: multicluster-engine
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-    state: patched
+    state: present
     definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: import-controller-config
+        namespace: multicluster-engine
       data:
         autoImportStrategy: ImportAndSync
   register: _auto_import_patched

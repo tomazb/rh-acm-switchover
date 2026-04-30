@@ -12,7 +12,7 @@
     name: import-controller-config
     namespace: multicluster-engine
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
+    context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
   register: _auto_import_reset_cm
   when:
     - _auto_import_strategy_changed | default(false) | bool
@@ -25,18 +25,16 @@
     name: import-controller-config
     namespace: multicluster-engine
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
+    context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
     state: absent
   register: acm_switchover_reset_auto_import_result
   when:
     - _auto_import_strategy_changed | default(false) | bool
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - >-
-      {{
-        (
-          _auto_import_reset_cm.resources
-          | default([])
-          | first
-          | default({})
-        ).get('data', {}).get('autoImportStrategy', 'default') == 'ImportAndSync'
-      }}
+      (
+        _auto_import_reset_cm.resources
+        | default([])
+        | first
+        | default({})
+      ).get('data', {}).get('autoImportStrategy', 'default') == 'ImportAndSync'

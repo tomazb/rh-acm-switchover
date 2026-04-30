@@ -134,6 +134,18 @@ def test_manage_auto_import_preserves_python_guards_and_detect_only_mode():
     assert "ImportAndSync" in content
 
 
+def test_manage_auto_import_creates_missing_configmap_like_python():
+    """Default strategy is represented by an absent ConfigMap, so manage mode must create it."""
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
+    strategy_task = next(task for task in tasks if task.get("name") == "Set autoImportStrategy to ImportAndSync")
+    module_args = strategy_task["kubernetes.core.k8s"]
+
+    assert module_args["state"] == "present"
+    assert module_args["definition"]["metadata"]["name"] == "import-controller-config"
+    assert module_args["definition"]["metadata"]["namespace"] == "multicluster-engine"
+    assert module_args["definition"]["data"]["autoImportStrategy"] == "ImportAndSync"
+
+
 def test_apply_immediate_import_requires_acm_214_or_newer():
     """Immediate-import annotations are an ACM 2.14+ behavior and must be version-gated."""
     content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
@@ -141,6 +153,44 @@ def test_apply_immediate_import_requires_acm_214_or_newer():
     assert "acm_secondary_version" in content
     assert "version('2.14.0', '>=')" in content
     assert "_acm_secondary_supports_auto_import" in content
+
+
+def test_apply_immediate_import_treats_strategy_read_errors_as_warning_skip():
+    """Python warns and skips immediate-import annotations when strategy lookup is unavailable."""
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "apply_immediate_import.yml").read_text())
+    config_task = next(task for task in tasks if task.get("name") == "Get current autoImportStrategy")
+    content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
+
+    assert config_task.get("failed_when") is False
+    assert "autoImportStrategy_unavailable" in content
+    assert "_import_cm_for_annotation.resources is not defined" in content
+
+
+def test_apply_immediate_import_retriggers_non_empty_annotations_like_python():
+    """Python removes non-empty immediate-import markers before setting the empty trigger."""
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "apply_immediate_import.yml").read_text())
+    patch_tasks = [task for task in tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "ManagedCluster"]
+
+    null_tasks = [
+        task
+        for task in patch_tasks
+        if task["kubernetes.core.k8s"]["definition"]["metadata"]["annotations"].get(
+            "import.open-cluster-management.io/immediate-import"
+        )
+        is None
+    ]
+    empty_tasks = [
+        task
+        for task in patch_tasks
+        if task["kubernetes.core.k8s"]["definition"]["metadata"]["annotations"].get(
+            "import.open-cluster-management.io/immediate-import"
+        )
+        == ""
+    ]
+
+    assert null_tasks, "apply_immediate_import.yml must clear stale non-empty markers first"
+    assert empty_tasks, "apply_immediate_import.yml must then set the empty immediate-import trigger"
+    assert tasks.index(null_tasks[0]) < tasks.index(empty_tasks[0])
 
 
 def test_constants_include_auto_import():
