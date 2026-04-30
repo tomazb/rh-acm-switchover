@@ -40,7 +40,7 @@ def test_main_cleans_auto_import_annotations_before_observability():
 
 
 def test_verify_observability_performs_real_health_checks():
-    """verify_observability.yml must query Kubernetes health, not publish a manual stub."""
+    """verify_observability.yml must query Kubernetes health without failing the phase."""
     tasks = _load_yaml("verify_observability.yml")
     text = (POST_ACTIVATION_TASKS / "verify_observability.yml").read_text()
 
@@ -55,9 +55,17 @@ def test_verify_observability_performs_real_health_checks():
     assert any(
         "retries" in task and "delay" in task for task in deployment_checks + pod_checks
     ), "verify_observability.yml must poll until workloads recover"
-    assert any(
+    assert not any(
         "ansible.builtin.assert" in task or "ansible.builtin.fail" in task for task in tasks
-    ), "verify_observability.yml must fail when critical observability health checks do not pass"
+    ), "verify_observability.yml must warn instead of failing the phase"
+    assert "status:" in text and "'warning'" in text, (
+        "verify_observability.yml must publish warning status for unhealthy observability"
+    )
+    wait_tasks = [task for task in deployment_checks + pod_checks if "retries" in task and "delay" in task]
+    assert wait_tasks, "verify_observability.yml must retain bounded waits before warning"
+    assert all(task.get("failed_when") is False for task in wait_tasks), (
+        "observability wait timeouts must not fail post_activation"
+    )
 
 
 def test_observatorium_rollout_gate_requires_updated_replicas():

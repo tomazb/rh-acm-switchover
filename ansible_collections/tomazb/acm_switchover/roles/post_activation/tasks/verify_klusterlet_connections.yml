@@ -1,0 +1,23 @@
+---
+- name: Build klusterlet connection probe candidates
+  ansible.builtin.set_fact:
+    _klusterlet_probe_candidates: >-
+      {{
+        (
+          acm_secondary_managed_clusters_info.resources
+          | default([])
+          | rejectattr('metadata.name', 'equalto', 'local-cluster')
+          | map(attribute='metadata.name')
+          | select('in', acm_switchover_managed_clusters.keys() | list)
+          | list
+        )
+        if acm_secondary_managed_clusters_info is defined
+        else (acm_switchover_managed_clusters.keys() | list)
+      }}
+
+- name: Probe each managed cluster klusterlet hub secret
+  ansible.builtin.include_tasks: verify_klusterlet_connection_single.yml
+  loop: "{{ _klusterlet_probe_candidates | default([]) }}"
+  loop_control:
+    loop_var: _probe_cluster_name
+  when: (_klusterlet_probe_candidates | default([]) | length) > 0

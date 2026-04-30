@@ -29,15 +29,14 @@
   register: _acm_secondary_thanos_compact_info
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
-- name: Fail when critical observability workloads are missing
-  ansible.builtin.assert:
-    that:
-      - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
-      - (_acm_secondary_thanos_compact_info.resources | default([]) | length) > 0
-    fail_msg: >-
-      Missing critical observability workloads on the secondary hub.
-      observatorium-api present={{ (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0 }},
-      thanos-compact present={{ (_acm_secondary_thanos_compact_info.resources | default([]) | length) > 0 }}.
+- name: Record missing observability workloads as warnings
+  ansible.builtin.set_fact:
+    _acm_observability_missing_workloads: >-
+      {{
+        []
+        + (['observatorium-api'] if (_acm_secondary_observatorium_api_info.resources | default([]) | length) == 0 else [])
+        + (['thanos-compact'] if (_acm_secondary_thanos_compact_info.resources | default([]) | length) == 0 else [])
+      }}
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
 - name: Scale observatorium-api to its active default replica count
@@ -55,6 +54,7 @@
   register: _acm_secondary_observatorium_scale_result
   when:
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
     - >-
       (((_acm_secondary_observatorium_api_info.resources | first | default({})).get('spec', {}).get('replicas', 0)) | int)
       == 0
@@ -74,6 +74,7 @@
   register: _acm_secondary_thanos_scale_result
   when:
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_secondary_thanos_compact_info.resources | default([]) | length) > 0
     - >-
       (((_acm_secondary_thanos_compact_info.resources | first | default({})).get('spec', {}).get('replicas', 0)) | int)
       == 0
@@ -94,7 +95,9 @@
             annotations:
               acm-switchover/restartedAt: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
   register: _acm_secondary_observatorium_restart_result
-  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
 
 - name: Wait for observatorium-api Deployment rollout to stabilize
   kubernetes.core.k8s_info:
@@ -135,7 +138,10 @@
         == 0
       )
     }}
-  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+  failed_when: false
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
 
 - name: Wait for critical observability Pods to become healthy
   kubernetes.core.k8s_info:
@@ -174,6 +180,7 @@
     {%- endif -%}
     {%- endfor -%}
     {{ (_acm_secondary_observability_pods_info.resources | default([]) | length) > 0 and (ns.unhealthy | length) == 0 }}
+  failed_when: false
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
 - name: Summarize unhealthy observability Pods
@@ -205,14 +212,18 @@
       {{ unhealthy }}
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
-- name: Fail when critical observability Pods remain unhealthy
-  ansible.builtin.assert:
-    that:
-      - (_acm_secondary_unhealthy_observability_pods | default([]) | length) == 0
-    fail_msg: >-
-      Critical observability pods are unhealthy:
-      {{ _acm_secondary_unhealthy_observability_pods | default([]) | join(', ') }}
-  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+- name: Warn when observability checks did not fully pass
+  ansible.builtin.debug:
+    msg: >-
+      Observability verification warning. Missing workloads={{ _acm_observability_missing_workloads | default([]) | join(', ') }};
+      unhealthy pods={{ _acm_secondary_unhealthy_observability_pods | default([]) | join(', ') }}.
+      Verify metrics manually after switchover.
+  when: >-
+    acm_switchover_execution.mode | default('execute') != 'dry_run'
+    and (
+      (_acm_observability_missing_workloads | default([]) | length) > 0
+      or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
+    )
 
 - name: Publish observability verification result
   ansible.builtin.set_fact:
@@ -223,10 +234,21 @@
           or (_acm_secondary_thanos_scale_result.changed | default(false))
           or (_acm_secondary_observatorium_restart_result.changed | default(false))
         }}
-      status: pass
+      status: >-
+        {{
+          'warning'
+          if (
+            (_acm_observability_missing_workloads | default([]) | length) > 0
+            or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
+          )
+          else 'pass'
+        }}
+      warnings:
+        missing_workloads: "{{ _acm_observability_missing_workloads | default([]) }}"
+        unhealthy_pods: "{{ _acm_secondary_unhealthy_observability_pods | default([]) }}"
       observatorium_ready_replicas: >-
         {{
-          ((_acm_secondary_observatorium_api_ready_info.resources | first | default({}))
+          ((_acm_secondary_observatorium_api_ready_info.resources | default([]) | first | default({}))
           .get('status', {})
           .get('readyReplicas', 0))
         }}

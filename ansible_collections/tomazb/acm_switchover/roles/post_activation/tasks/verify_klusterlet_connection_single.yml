@@ -1,0 +1,127 @@
+---
+- name: "{{ _probe_cluster_name }} - Clear klusterlet probe state"
+  ansible.builtin.set_fact:
+    _klusterlet_current_hub_kubeconfig: ""
+    _klusterlet_expected_hub_kubeconfig: ""
+    _klusterlet_import_docs: []
+    _klusterlet_probe_wrong_hub: false
+    _klusterlet_hub_kubeconfig_secret:
+      resources: []
+    _klusterlet_bootstrap_hub_kubeconfig_secret:
+      resources: []
+    _klusterlet_new_hub_import_secret:
+      resources: []
+
+- name: "{{ _probe_cluster_name }} - Read hub-kubeconfig-secret from managed cluster"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: hub-kubeconfig-secret
+    namespace: open-cluster-management-agent
+    kubeconfig: "{{ acm_switchover_managed_clusters[_probe_cluster_name].kubeconfig }}"
+    context: "{{ acm_switchover_managed_clusters[_probe_cluster_name].context | default(omit) }}"
+  register: _klusterlet_hub_kubeconfig_secret
+  failed_when: false
+
+- name: "{{ _probe_cluster_name }} - Read bootstrap-hub-kubeconfig fallback from managed cluster"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: bootstrap-hub-kubeconfig
+    namespace: open-cluster-management-agent
+    kubeconfig: "{{ acm_switchover_managed_clusters[_probe_cluster_name].kubeconfig }}"
+    context: "{{ acm_switchover_managed_clusters[_probe_cluster_name].context | default(omit) }}"
+  register: _klusterlet_bootstrap_hub_kubeconfig_secret
+  failed_when: false
+  when: (_klusterlet_hub_kubeconfig_secret.resources | default([]) | length) == 0
+
+- name: "{{ _probe_cluster_name }} - Capture current klusterlet hub kubeconfig"
+  ansible.builtin.set_fact:
+    _klusterlet_current_hub_kubeconfig: >-
+      {{
+        (
+          _klusterlet_hub_kubeconfig_secret.resources
+          | default([])
+          | first
+          | default({})
+        ).get('data', {}).get(
+          'kubeconfig',
+          (
+            _klusterlet_bootstrap_hub_kubeconfig_secret.resources
+            | default([])
+            | first
+            | default({})
+          ).get('data', {}).get('kubeconfig', '')
+        )
+      }}
+
+- name: "{{ _probe_cluster_name }} - Read import secret from new hub"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ _probe_cluster_name }}-import"
+    namespace: "{{ _probe_cluster_name }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _klusterlet_new_hub_import_secret
+  failed_when: false
+
+- name: "{{ _probe_cluster_name }} - Decode new hub import manifest"
+  ansible.builtin.set_fact:
+    _klusterlet_import_docs: >-
+      {{
+        (
+          (_klusterlet_new_hub_import_secret.resources | first | default({}))
+          .get('data', {})
+          .get('import.yaml', '')
+          | b64decode
+          | from_yaml_all
+          | list
+        )
+      }}
+  when:
+    - (_klusterlet_new_hub_import_secret.resources | default([]) | length) > 0
+    - >-
+      {{
+        (
+          _klusterlet_new_hub_import_secret.resources
+          | first
+          | default({})
+        ).get('data', {}).get('import.yaml', '') | length > 0
+      }}
+
+- name: "{{ _probe_cluster_name }} - Capture expected new hub bootstrap kubeconfig"
+  ansible.builtin.set_fact:
+    _klusterlet_expected_hub_kubeconfig: >-
+      {{
+        (
+          _klusterlet_import_docs
+          | selectattr('kind', 'equalto', 'Secret')
+          | selectattr('metadata.name', 'equalto', 'bootstrap-hub-kubeconfig')
+          | list
+          | first
+          | default({})
+        ).get('data', {}).get('kubeconfig', '')
+      }}
+
+- name: "{{ _probe_cluster_name }} - Detect klusterlet connected to old hub"
+  ansible.builtin.set_fact:
+    _klusterlet_probe_wrong_hub: >-
+      {{
+        (_klusterlet_current_hub_kubeconfig | length) > 0
+        and (_klusterlet_expected_hub_kubeconfig | length) > 0
+        and _klusterlet_current_hub_kubeconfig != _klusterlet_expected_hub_kubeconfig
+      }}
+
+- name: "{{ _probe_cluster_name }} - Warn about wrong-hub klusterlet"
+  ansible.builtin.debug:
+    msg: >-
+      Klusterlet hub kubeconfig on {{ _probe_cluster_name }} does not match the new hub import secret;
+      attempting automatic remediation.
+  when: _klusterlet_probe_wrong_hub | bool
+
+- name: "{{ _probe_cluster_name }} - Remediate wrong-hub klusterlet"
+  ansible.builtin.include_tasks: fix_klusterlet_single.yml
+  vars:
+    _fix_cluster_name: "{{ _probe_cluster_name }}"
+  when: _klusterlet_probe_wrong_hub | bool

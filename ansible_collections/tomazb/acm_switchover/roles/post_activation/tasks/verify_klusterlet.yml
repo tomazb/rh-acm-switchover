@@ -1,4 +1,9 @@
 ---
+- name: Probe klusterlet hub connections
+  ansible.builtin.include_tasks: verify_klusterlet_connections.yml
+  when:
+    - (acm_switchover_managed_clusters | default({}) | length) > 0
+
 - name: Attempt klusterlet auto-remediation
   ansible.builtin.include_tasks: fix_klusterlet.yml
   when:
