@@ -38,7 +38,7 @@
     api_version: cluster.open-cluster-management.io/v1
     kind: ManagedCluster
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
+    context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
   register: _auto_import_managed_clusters
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
@@ -66,7 +66,7 @@
     name: import-controller-config
     namespace: multicluster-engine
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
+    context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
   register: _import_controller_cm
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
@@ -105,7 +105,7 @@
     name: import-controller-config
     namespace: multicluster-engine
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.secondary.context }}"
+    context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
     state: present
     definition:
       apiVersion: v1

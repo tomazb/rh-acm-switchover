@@ -146,6 +146,24 @@ def test_manage_auto_import_creates_missing_configmap_like_python():
     assert module_args["definition"]["data"]["autoImportStrategy"] == "ImportAndSync"
 
 
+def test_manage_auto_import_omits_missing_secondary_context():
+    """Secondary hub context is optional and should be omitted when unset."""
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
+    kube_tasks = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("kubeconfig")
+        == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+        or task.get("kubernetes.core.k8s", {}).get("kubeconfig")
+        == "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    ]
+
+    assert kube_tasks
+    for task in kube_tasks:
+        module_args = task.get("kubernetes.core.k8s_info", {}) or task.get("kubernetes.core.k8s", {})
+        assert module_args["context"] == "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+
+
 def test_apply_immediate_import_requires_acm_214_or_newer():
     """Immediate-import annotations are an ACM 2.14+ behavior and must be version-gated."""
     content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
