@@ -66,48 +66,44 @@ role:
 
 from ansible.module_utils.basic import AnsibleModule
 
-VALID_ROLES = ("operator", "validator")
-
-_BASE_ASSETS = [
-    "deploy/rbac/namespace.yaml",
-    "deploy/rbac/serviceaccount.yaml",
-    "deploy/rbac/role.yaml",
-    "deploy/rbac/rolebinding.yaml",
-    "deploy/rbac/clusterrole.yaml",
-    "deploy/rbac/clusterrolebinding.yaml",
-]
-
-_DECOMMISSION_ASSETS = [
-    "deploy/rbac/extensions/decommission/clusterrole.yaml",
-    "deploy/rbac/extensions/decommission/clusterrolebinding.yaml",
-]
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    RBAC_BASE_ASSETS,
+    RBAC_DECOMMISSION_ASSETS,
+    RBAC_VALID_ROLES,
+)
 
 
 def select_rbac_assets(role: str, include_decommission: bool) -> list[str]:
     """Return an ordered list of RBAC manifest paths for the requested profile."""
-    if role not in VALID_ROLES:
-        raise ValueError(f"Invalid RBAC role '{role}'. Expected one of: {', '.join(VALID_ROLES)}.")
+    if role not in RBAC_VALID_ROLES:
+        raise ValueError(
+            f"Invalid RBAC role '{role}'. Expected one of: {', '.join(RBAC_VALID_ROLES)}."
+        )
     if include_decommission and role != "operator":
         raise ValueError("include_decommission is only valid for the operator role.")
-    assets = list(_BASE_ASSETS)
+    assets = list(RBAC_BASE_ASSETS)
     if include_decommission:
-        assets.extend(_DECOMMISSION_ASSETS)
+        assets.extend(RBAC_DECOMMISSION_ASSETS)
     return assets
 
 
 def main() -> None:
     module = AnsibleModule(
         argument_spec=dict(
-            role=dict(type="str", default="operator", choices=list(VALID_ROLES)),
+            role=dict(type="str", default="operator", choices=list(RBAC_VALID_ROLES)),
             include_decommission=dict(type="bool", default=False),
             generate_kubeconfigs=dict(type="bool", default=False),
         ),
         supports_check_mode=True,
     )
-    assets = select_rbac_assets(
-        role=module.params["role"],
-        include_decommission=module.params["include_decommission"],
-    )
+    try:
+        assets = select_rbac_assets(
+            role=module.params["role"],
+            include_decommission=module.params["include_decommission"],
+        )
+    except ValueError as exc:
+        module.fail_json(msg=str(exc))
+        return
     module.exit_json(
         changed=False,
         assets=assets,

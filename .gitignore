@@ -27,6 +27,7 @@ coverage.xml
 # Local environment files
 .env
 .cursor/
+.kilo/
 .remember
 .planning/
 .validation/

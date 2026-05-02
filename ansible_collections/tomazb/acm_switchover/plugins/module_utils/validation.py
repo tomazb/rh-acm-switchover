@@ -10,7 +10,9 @@ import os
 import re
 
 CONTEXT_NAME_MAX_LENGTH = 128
-CONTEXT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/@]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
+CONTEXT_NAME_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:\-/@]*[A-Za-z0-9]$|^[A-Za-z0-9]$"
+)
 
 UNSAFE_PATH_CHARS = ["$", "{", "}", "|", "&", ";", "<", ">", "`"]
 
@@ -55,19 +57,23 @@ def validate_safe_path(path: str) -> None:
         raise ValidationError("Path cannot be empty")
 
     if ".." in path.split("/"):
-        raise ValidationError(f"Path traversal attempt detected in '{path}'. The '..' sequence is not allowed.")
+        raise ValidationError(
+            f"Path traversal attempt detected in '{path}'. The '..' sequence is not allowed."
+        )
 
     # Strip a leading ~/ before the metacharacter scan so that the common
     # ~/.kube/config idiom is accepted, but ~/foo~bar or mid-path ~ is not.
     scan_path = path[2:] if path.startswith("~/") else path
     if "~" in scan_path:
         raise ValidationError(
-            f"Path '{path}' contains unsafe characters. " f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
+            f"Path '{path}' contains unsafe characters. "
+            f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
         )
 
     if any(char in path for char in UNSAFE_PATH_CHARS):
         raise ValidationError(
-            f"Path '{path}' contains unsafe characters. " f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
+            f"Path '{path}' contains unsafe characters. "
+            f"Disallowed: ~, {', '.join(UNSAFE_PATH_CHARS)}"
         )
 
     # Validate absolute paths against allowed prefixes with symlink-aware resolution
@@ -83,7 +89,9 @@ def validate_safe_path(path: str) -> None:
                     missing_parts.insert(0, name)
 
             if not ancestor or not os.path.exists(ancestor):
-                raise ValidationError(f"Absolute path '{path}' cannot be resolved against an existing directory.")
+                raise ValidationError(
+                    f"Absolute path '{path}' cannot be resolved against an existing directory."
+                )
 
             resolved_path = os.path.join(os.path.realpath(ancestor), *missing_parts)
 
@@ -108,7 +116,9 @@ def _validate_choice(value: str, valid_choices: list[str], field_name: str) -> N
     """
     if value not in valid_choices:
         choices_str = ", ".join(valid_choices)
-        raise ValidationError(f"Invalid {field_name} '{value}'. Must be one of: {choices_str}")
+        raise ValidationError(
+            f"Invalid {field_name} '{value}'. Must be one of: {choices_str}"
+        )
 
 
 def validate_operation_inputs(operation: dict, features: dict) -> dict:
@@ -120,6 +130,11 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
     Raises:
         ValidationError: If the combination is not supported.
     """
+    if not isinstance(operation, dict):
+        raise ValidationError("operation must be a dictionary")
+    if not isinstance(features, dict):
+        raise ValidationError("features must be a dictionary")
+
     min_mc = operation.get("min_managed_clusters")
     if min_mc is not None:
         try:
@@ -132,8 +147,14 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
     restore_only = operation.get("restore_only", False)
     activation_method = operation.get("activation_method", "patch")
     old_hub_action = operation.get("old_hub_action", "secondary")
-    disable_observability_on_secondary = features.get("disable_observability_on_secondary", False)
+    disable_observability_on_secondary = features.get(
+        "disable_observability_on_secondary", False
+    )
     argocd = features.get("argocd", {})
+    if argocd is None:
+        argocd = {}
+    if not isinstance(argocd, dict):
+        raise ValidationError("features.argocd must be a dictionary")
     argocd_manage = argocd.get("manage", False)
 
     _validate_choice(activation_method, ["patch", "restore"], "activation_method")
@@ -148,9 +169,13 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
         old_hub_action = operation.get("old_hub_action", "none")
 
         if method != "full":
-            raise ValidationError("restore_only requires method=full (passive sync needs a live primary hub)")
+            raise ValidationError(
+                "restore_only requires method=full (passive sync needs a live primary hub)"
+            )
         if old_hub_action != "none":
-            raise ValidationError("restore_only requires old_hub_action=none (no old hub to manage)")
+            raise ValidationError(
+                "restore_only requires old_hub_action=none (no old hub to manage)"
+            )
 
         return {
             "restore_only": True,
@@ -163,7 +188,9 @@ def validate_operation_inputs(operation: dict, features: dict) -> dict:
     method = operation.get("method", "passive")
 
     _validate_choice(method, ["passive", "full"], "method")
-    _validate_choice(old_hub_action, ["secondary", "decommission", "none"], "old_hub_action")
+    _validate_choice(
+        old_hub_action, ["secondary", "decommission", "none"], "old_hub_action"
+    )
 
     if method != "passive" and activation_method == "restore":
         raise ValidationError(

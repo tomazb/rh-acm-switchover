@@ -39,9 +39,23 @@
   ansible.builtin.set_fact:
     _rbac_denied_permissions: >-
       {%- set denied = [] -%}
-      {%- for result in _ssar_results.results -%}
-        {%- if result.result is defined and result.result.status is defined and not result.result.status.allowed -%}
-          {%- set _ = denied.append({"api_group": result.item.0, "resource": result.item.1, "verb": result.item.2, "namespace": result.item.3 | default(none)}) -%}
+      {%- for result in _ssar_results.results | default([]) -%}
+        {%- if result.failed | default(false) or result.result is not defined or result.result.status is not defined -%}
+          {%- set _ = denied.append({
+            "api_group": result.item.0,
+            "resource": result.item.1,
+            "verb": result.item.2,
+            "namespace": result.item.3 | default(none),
+            "reason": result.msg | default("SelfSubjectAccessReview did not return a status")
+          }) -%}
+        {%- elif not (result.result.status.allowed | default(false)) -%}
+          {%- set _ = denied.append({
+            "api_group": result.item.0,
+            "resource": result.item.1,
+            "verb": result.item.2,
+            "namespace": result.item.3 | default(none),
+            "reason": result.result.status.reason | default(result.result.status.evaluationError | default("denied"))
+          }) -%}
         {%- endif -%}
       {%- endfor -%}
       {{ denied }}

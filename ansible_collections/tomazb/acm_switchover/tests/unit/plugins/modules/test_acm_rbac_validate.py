@@ -33,7 +33,12 @@ def test_check_mode_adds_argocd_read_permissions_only():
     assert ("argoproj.io", "applications", "list", None) in permissions
     assert ("argoproj.io", "argocds", "get", None) in permissions
     assert ("argoproj.io", "argocds", "list", None) in permissions
-    assert ("apiextensions.k8s.io", "customresourcedefinitions", "get", None) in permissions
+    assert (
+        "apiextensions.k8s.io",
+        "customresourcedefinitions",
+        "get",
+        None,
+    ) in permissions
     assert ("argoproj.io", "applications", "patch", None) not in permissions
 
 
@@ -49,7 +54,12 @@ def test_argocd_none_install_type_skips_all_argocd_permissions():
     assert ("argoproj.io", "applications", "get", None) not in permissions
     assert ("argoproj.io", "applications", "list", None) not in permissions
     assert ("argoproj.io", "argocds", "get", None) not in permissions
-    assert ("apiextensions.k8s.io", "customresourcedefinitions", "get", None) not in permissions
+    assert (
+        "apiextensions.k8s.io",
+        "customresourcedefinitions",
+        "get",
+        None,
+    ) not in permissions
 
 
 def test_decommission_adds_delete_permissions():
@@ -60,7 +70,12 @@ def test_decommission_adds_delete_permissions():
         argocd_mode="none",
         argocd_install_type="unknown",
     )
-    assert ("cluster.open-cluster-management.io", "managedclusters", "delete", None) in permissions
+    assert (
+        "cluster.open-cluster-management.io",
+        "managedclusters",
+        "delete",
+        None,
+    ) in permissions
 
 
 @pytest.mark.parametrize("role", ["operator", "validator"])
@@ -87,8 +102,18 @@ def test_decommission_only_excludes_switchover_permissions():
         decommission_only=True,
     )
 
-    assert ("cluster.open-cluster-management.io", "managedclusters", "delete", None) in permissions
-    assert ("cluster.open-cluster-management.io", "managedclusters", "patch", None) not in permissions
+    assert (
+        "cluster.open-cluster-management.io",
+        "managedclusters",
+        "delete",
+        None,
+    ) in permissions
+    assert (
+        "cluster.open-cluster-management.io",
+        "managedclusters",
+        "patch",
+        None,
+    ) not in permissions
     assert (
         "cluster.open-cluster-management.io",
         "backupschedules",
@@ -117,6 +142,56 @@ def test_summary_reports_failure_when_permission_missing():
     assert summary["passed"] is False
     assert any(item["id"] == "preflight-rbac-primary" for item in summary["results"])
     assert summary["critical_failures"] == 1
+
+
+def test_summary_counts_each_denied_permission_as_critical_failure():
+    summary = summarize_rbac_results(
+        hub="primary",
+        denied_permissions=[
+            {
+                "permission": "patch argoproj.io/applications",
+                "scope": "cluster",
+                "reason": "Forbidden",
+            },
+            {
+                "permission": "delete operator.open-cluster-management.io/multiclusterhubs",
+                "scope": "namespace",
+            },
+        ],
+    )
+
+    assert summary["passed"] is False
+    assert summary["critical_failures"] == 2
+
+
+def test_summary_accepts_workflow_specific_metadata():
+    summary = summarize_rbac_results(
+        hub="primary",
+        denied_permissions=[
+            {
+                "api_group": "operator.open-cluster-management.io",
+                "resource": "multiclusterhubs",
+                "verb": "delete",
+                "namespace": "open-cluster-management",
+                "reason": "Forbidden",
+            }
+        ],
+        result_id="rbac-bootstrap-primary",
+        failure_message="RBAC bootstrap cannot verify required permissions on primary hub",
+        success_message="RBAC bootstrap permissions validated on primary hub",
+        recommended_action="Run rbac_bootstrap with an account that can grant the documented role",
+    )
+
+    result = summary["results"][0]
+    assert result["id"] == "rbac-bootstrap-primary"
+    assert (
+        result["message"]
+        == "RBAC bootstrap cannot verify required permissions on primary hub"
+    )
+    assert (
+        result["recommended_action"]
+        == "Run rbac_bootstrap with an account that can grant the documented role"
+    )
 
 
 def test_summary_reports_pass_when_all_permissions_allowed():
@@ -155,7 +230,9 @@ def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
 
     main()
 
-    assert captured["fail"] == {"msg": "include_decommission is only valid for the operator role"}
+    assert captured["fail"] == {
+        "msg": "include_decommission is only valid for the operator role"
+    }
 
 
 def test_validator_role_has_readonly_managedcluster_permission():
@@ -168,10 +245,25 @@ def test_validator_role_has_readonly_managedcluster_permission():
         argocd_install_type="unknown",
     )
     # Validator should NOT have patch on managedclusters
-    assert ("cluster.open-cluster-management.io", "managedclusters", "patch", None) not in permissions
+    assert (
+        "cluster.open-cluster-management.io",
+        "managedclusters",
+        "patch",
+        None,
+    ) not in permissions
     # Validator should have get/list on managedclusters
-    assert ("cluster.open-cluster-management.io", "managedclusters", "get", None) in permissions
-    assert ("cluster.open-cluster-management.io", "managedclusters", "list", None) in permissions
+    assert (
+        "cluster.open-cluster-management.io",
+        "managedclusters",
+        "get",
+        None,
+    ) in permissions
+    assert (
+        "cluster.open-cluster-management.io",
+        "managedclusters",
+        "list",
+        None,
+    ) in permissions
 
 
 def test_hub_validation_surface_excludes_managed_cluster_namespace_permissions():
@@ -183,7 +275,9 @@ def test_hub_validation_surface_excludes_managed_cluster_namespace_permissions()
         argocd_install_type="unknown",
     )
 
-    managed_cluster_perms = [p for p in permissions if p[3] == "open-cluster-management-agent"]
+    managed_cluster_perms = [
+        p for p in permissions if p[3] == "open-cluster-management-agent"
+    ]
     assert managed_cluster_perms == []
 
 
@@ -197,7 +291,11 @@ def test_validator_role_no_write_on_backupschedules():
         argocd_install_type="unknown",
     )
     # Filter to backup namespace permissions
-    backup_perms = [p for p in permissions if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"]
+    backup_perms = [
+        p
+        for p in permissions
+        if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"
+    ]
     # Should only have get/list, no write operations
     verbs = {p[2] for p in backup_perms}
     assert verbs == {"get", "list"}
@@ -237,7 +335,12 @@ def test_operator_role_has_patch_on_managedclusters():
         argocd_mode="none",
         argocd_install_type="unknown",
     )
-    assert ("cluster.open-cluster-management.io", "managedclusters", "patch", None) in permissions
+    assert (
+        "cluster.open-cluster-management.io",
+        "managedclusters",
+        "patch",
+        None,
+    ) in permissions
 
 
 def test_operator_role_has_write_on_backupschedules():
@@ -250,7 +353,11 @@ def test_operator_role_has_write_on_backupschedules():
         argocd_install_type="unknown",
     )
     # Filter to backup namespace permissions
-    backup_perms = [p for p in permissions if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"]
+    backup_perms = [
+        p
+        for p in permissions
+        if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"
+    ]
     verbs = {p[2] for p in backup_perms}
     assert "create" in verbs
     assert "patch" in verbs

@@ -35,14 +35,22 @@ def test_missing_required_kubeconfigs_fail_execute_mode():
         }
     )
 
-    primary_result = next(item for item in results if item["id"] == "preflight-input-primary-kubeconfig")
-    secondary_result = next(item for item in results if item["id"] == "preflight-input-secondary-kubeconfig")
+    primary_result = next(
+        item for item in results if item["id"] == "preflight-input-primary-kubeconfig"
+    )
+    secondary_result = next(
+        item for item in results if item["id"] == "preflight-input-secondary-kubeconfig"
+    )
 
     assert primary_result["status"] == "fail"
-    assert primary_result["message"] == "primary kubeconfig is required for collection preflight and switchover runs"
+    assert (
+        primary_result["message"]
+        == "primary kubeconfig is required for collection preflight and switchover runs"
+    )
     assert secondary_result["status"] == "fail"
     assert (
-        secondary_result["message"] == "secondary kubeconfig is required for collection preflight and switchover runs"
+        secondary_result["message"]
+        == "secondary kubeconfig is required for collection preflight and switchover runs"
     )
 
 
@@ -51,7 +59,10 @@ def test_restore_requires_passive_method():
         {
             "hubs": {
                 "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
-                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "~/.kube/config",
+                },
             },
             "operation": {"method": "full", "activation_method": "restore"},
             "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
@@ -66,8 +77,14 @@ def test_safe_paths_and_valid_contexts_pass():
     results = build_input_validation_results(
         {
             "hubs": {
-                "primary": {"context": "admin/api.cluster.local:6443", "kubeconfig": "./kubeconfigs/primary"},
-                "secondary": {"context": "secondary-hub", "kubeconfig": "./kubeconfigs/secondary"},
+                "primary": {
+                    "context": "admin/api.cluster.local:6443",
+                    "kubeconfig": "./kubeconfigs/primary",
+                },
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "./kubeconfigs/secondary",
+                },
             },
             "operation": {"method": "passive", "activation_method": "patch"},
             "execution": {"mode": "dry_run", "checkpoint": {"path": ".state/run.json"}},
@@ -102,15 +119,49 @@ def test_missing_secondary_context_uses_actionable_message_for_nonstandard_modes
                 "secondary": {"context": "", "kubeconfig": "~/.kube/config"},
             },
             "operation": {"method": "passive", "activation_method": "patch"},
-            "execution": {"mode": "report_only", "checkpoint": {"path": ".state/run.json"}},
+            "execution": {
+                "mode": "report_only",
+                "checkpoint": {"path": ".state/run.json"},
+            },
             "features": {"argocd": {"manage": False}},
         }
     )
 
-    secondary_result = next(item for item in results if item["id"] == "preflight-input-secondary-context")
+    secondary_result = next(
+        item for item in results if item["id"] == "preflight-input-secondary-context"
+    )
     assert secondary_result["status"] == "fail"
-    assert secondary_result["message"] == "secondary context is required for collection preflight and switchover runs"
-    assert secondary_result["recommended_action"] == "Set acm_switchover_hubs.secondary.context"
+    assert (
+        secondary_result["message"]
+        == "secondary context is required for collection preflight and switchover runs"
+    )
+    assert (
+        secondary_result["recommended_action"]
+        == "Set acm_switchover_hubs.secondary.context"
+    )
+
+
+def test_non_mapping_argocd_features_fail_structured_validation():
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "~/.kube/config",
+                },
+            },
+            "operation": {"method": "passive", "activation_method": "patch"},
+            "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": True},
+        }
+    )
+
+    op_result = next(
+        item for item in results if item["id"] == "preflight-input-operation"
+    )
+    assert op_result["status"] == "fail"
+    assert op_result["message"] == "features.argocd must be a dictionary"
 
 
 # ---------------------------------------------------------------------------
@@ -154,22 +205,32 @@ def test_restore_only_valid_inputs_pass():
 
 def test_restore_only_rejects_primary_context():
     """Primary context must be empty in restore-only mode."""
-    results = build_input_validation_results(_restore_only_params(**{"hubs.primary.context": "old-hub"}))
-    primary_result = next(r for r in results if r["id"] == "preflight-input-primary-context")
+    results = build_input_validation_results(
+        _restore_only_params(**{"hubs.primary.context": "old-hub"})
+    )
+    primary_result = next(
+        r for r in results if r["id"] == "preflight-input-primary-context"
+    )
     assert primary_result["status"] == "fail"
     assert "restore_only" in primary_result["message"]
 
 
 def test_restore_only_rejects_missing_secondary_context():
     """Secondary context is required in restore-only mode."""
-    results = build_input_validation_results(_restore_only_params(**{"hubs.secondary.context": ""}))
-    secondary_result = next(r for r in results if r["id"] == "preflight-input-secondary-context")
+    results = build_input_validation_results(
+        _restore_only_params(**{"hubs.secondary.context": ""})
+    )
+    secondary_result = next(
+        r for r in results if r["id"] == "preflight-input-secondary-context"
+    )
     assert secondary_result["status"] == "fail"
 
 
 def test_restore_only_rejects_method_passive():
     """Passive method requires a live primary — incompatible with restore-only."""
-    results = build_input_validation_results(_restore_only_params(**{"operation.method": "passive"}))
+    results = build_input_validation_results(
+        _restore_only_params(**{"operation.method": "passive"})
+    )
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "fail"
     assert "method" in op_result["message"]
@@ -177,7 +238,9 @@ def test_restore_only_rejects_method_passive():
 
 def test_restore_only_accepts_method_full_explicit():
     """Explicitly setting method=full is fine in restore-only mode."""
-    results = build_input_validation_results(_restore_only_params(**{"operation.method": "full"}))
+    results = build_input_validation_results(
+        _restore_only_params(**{"operation.method": "full"})
+    )
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "pass"
     assert op_result["details"]["method"] == "full"
@@ -185,7 +248,9 @@ def test_restore_only_accepts_method_full_explicit():
 
 def test_restore_only_rejects_old_hub_action_secondary():
     """old_hub_action must be none — no old hub to manage."""
-    results = build_input_validation_results(_restore_only_params(**{"operation.old_hub_action": "secondary"}))
+    results = build_input_validation_results(
+        _restore_only_params(**{"operation.old_hub_action": "secondary"})
+    )
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "fail"
     assert "old_hub_action" in op_result["message"]
@@ -193,7 +258,9 @@ def test_restore_only_rejects_old_hub_action_secondary():
 
 def test_restore_only_rejects_old_hub_action_decommission():
     """old_hub_action=decommission is also rejected in restore-only."""
-    results = build_input_validation_results(_restore_only_params(**{"operation.old_hub_action": "decommission"}))
+    results = build_input_validation_results(
+        _restore_only_params(**{"operation.old_hub_action": "decommission"})
+    )
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "fail"
     assert "old_hub_action" in op_result["message"]
@@ -201,7 +268,9 @@ def test_restore_only_rejects_old_hub_action_decommission():
 
 def test_restore_only_accepts_old_hub_action_none_explicit():
     """Explicitly setting old_hub_action=none is fine."""
-    results = build_input_validation_results(_restore_only_params(**{"operation.old_hub_action": "none"}))
+    results = build_input_validation_results(
+        _restore_only_params(**{"operation.old_hub_action": "none"})
+    )
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "pass"
     assert op_result["details"]["old_hub_action"] == "none"
@@ -209,7 +278,9 @@ def test_restore_only_accepts_old_hub_action_none_explicit():
 
 def test_restore_only_allows_argocd_manage():
     """ArgoCD pause on secondary is allowed — protects against auto-sync during restore."""
-    results = build_input_validation_results(_restore_only_params(**{"features.argocd.manage": True}))
+    results = build_input_validation_results(
+        _restore_only_params(**{"features.argocd.manage": True})
+    )
     op_result = next(r for r in results if r["id"] == "preflight-input-operation")
     assert op_result["status"] == "pass"
     assert op_result["details"]["argocd_manage"] is True
@@ -221,10 +292,21 @@ def test_disable_observability_on_secondary_requires_secondary_old_hub_action():
         {
             "hubs": {
                 "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
-                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "~/.kube/config",
+                },
             },
-            "operation": {"method": "passive", "activation_method": "patch", "old_hub_action": "decommission"},
-            "execution": {"mode": "execute", "report_dir": "./artifacts", "checkpoint": {"path": ".state/run.json"}},
+            "operation": {
+                "method": "passive",
+                "activation_method": "patch",
+                "old_hub_action": "decommission",
+            },
+            "execution": {
+                "mode": "execute",
+                "report_dir": "./artifacts",
+                "checkpoint": {"path": ".state/run.json"},
+            },
             "features": {
                 "disable_observability_on_secondary": True,
                 "argocd": {"manage": False},
@@ -243,7 +325,10 @@ def test_report_dir_must_be_a_safe_path():
         {
             "hubs": {
                 "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
-                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "~/.kube/config",
+                },
             },
             "operation": {"method": "passive", "activation_method": "patch"},
             "execution": {
@@ -255,7 +340,9 @@ def test_report_dir_must_be_a_safe_path():
         }
     )
 
-    report_dir_result = next(r for r in results if r["id"] == "preflight-input-report-dir")
+    report_dir_result = next(
+        r for r in results if r["id"] == "preflight-input-report-dir"
+    )
     assert report_dir_result["status"] == "fail"
     assert "Path traversal attempt" in report_dir_result["message"]
 
@@ -266,15 +353,23 @@ def test_checkpoint_enabled_requires_a_checkpoint_path():
         {
             "hubs": {
                 "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
-                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "~/.kube/config",
+                },
             },
             "operation": {"method": "passive", "activation_method": "patch"},
-            "execution": {"mode": "execute", "checkpoint": {"enabled": True, "path": ""}},
+            "execution": {
+                "mode": "execute",
+                "checkpoint": {"enabled": True, "path": ""},
+            },
             "features": {"argocd": {"manage": False}},
         }
     )
 
-    checkpoint_result = next(r for r in results if r["id"] == "preflight-input-checkpoint-path")
+    checkpoint_result = next(
+        r for r in results if r["id"] == "preflight-input-checkpoint-path"
+    )
     assert checkpoint_result["status"] == "fail"
     assert "checkpoint.path is required" in checkpoint_result["message"]
 
@@ -290,14 +385,20 @@ def test_invalid_method_rejected():
         {
             "hubs": {
                 "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
-                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "~/.kube/config",
+                },
             },
             "operation": {"method": "pasive", "activation_method": "patch"},
             "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
             "features": {"argocd": {"manage": False}},
         }
     )
-    assert any(item["id"] == "preflight-input-operation" and item["status"] == "fail" for item in results)
+    assert any(
+        item["id"] == "preflight-input-operation" and item["status"] == "fail"
+        for item in results
+    )
     assert any("pasive" in item["message"] for item in results)
 
 
@@ -307,14 +408,24 @@ def test_invalid_old_hub_action_rejected():
         {
             "hubs": {
                 "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
-                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "~/.kube/config",
+                },
             },
-            "operation": {"method": "passive", "activation_method": "patch", "old_hub_action": "secodnary"},
+            "operation": {
+                "method": "passive",
+                "activation_method": "patch",
+                "old_hub_action": "secodnary",
+            },
             "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
             "features": {"argocd": {"manage": False}},
         }
     )
-    assert any(item["id"] == "preflight-input-operation" and item["status"] == "fail" for item in results)
+    assert any(
+        item["id"] == "preflight-input-operation" and item["status"] == "fail"
+        for item in results
+    )
     assert any("secodnary" in item["message"] for item in results)
 
 
@@ -324,12 +435,18 @@ def test_invalid_activation_method_rejected():
         {
             "hubs": {
                 "primary": {"context": "primary-hub", "kubeconfig": "~/.kube/config"},
-                "secondary": {"context": "secondary-hub", "kubeconfig": "~/.kube/config"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "~/.kube/config",
+                },
             },
             "operation": {"method": "passive", "activation_method": "restor"},
             "execution": {"mode": "execute", "checkpoint": {"path": ".state/run.json"}},
             "features": {"argocd": {"manage": False}},
         }
     )
-    assert any(item["id"] == "preflight-input-operation" and item["status"] == "fail" for item in results)
+    assert any(
+        item["id"] == "preflight-input-operation" and item["status"] == "fail"
+        for item in results
+    )
     assert any("restor" in item["message"] for item in results)

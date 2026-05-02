@@ -237,7 +237,7 @@
       critical_failures: >-
         {{
           (acm_switchover_preflight_summary.critical_failures | default(0))
-          + (0 if (acm_primary_rbac_validation.passed | default(true)) else 1)
-          + (0 if acm_secondary_rbac_validation.passed else 1)
+          + (acm_primary_rbac_validation.critical_failures | default(0))
+          + (acm_secondary_rbac_validation.critical_failures | default(0))
         }}
       warning_failures: "{{ acm_switchover_preflight_summary.warning_failures | default(0) }}"

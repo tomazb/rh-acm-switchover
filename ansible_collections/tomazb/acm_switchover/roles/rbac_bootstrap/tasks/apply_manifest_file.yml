@@ -10,7 +10,7 @@
     label: >-
       {{
         (item.kind | default('Unknown')) ~ '/' ~
-        (item.metadata.name if item.metadata is defined else 'unnamed')
+        (item.metadata.name | default('unnamed') if item.metadata is defined else 'unnamed')
       }}
   when: >-
     item.metadata is not defined

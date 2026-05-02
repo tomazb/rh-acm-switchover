@@ -95,7 +95,9 @@ def _materialize_fixture_kubeconfigs(vars_payload: dict, tmp_path: Path) -> None
 
 
 def _seed_fixture_defaults(vars_payload: dict) -> None:
-    vars_payload.setdefault("acm_switchover_features", {}).setdefault("token_expiry_warning_hours", 4)
+    vars_payload.setdefault("acm_switchover_features", {}).setdefault(
+        "token_expiry_warning_hours", 4
+    )
     vars_payload.setdefault("acm_secondary_backups_info", {"resources": []})
     vars_payload.setdefault("acm_secondary_backup_schedules_info", {"resources": []})
     velero_pods = {"resources": [{"metadata": {"name": "velero"}}]}
@@ -114,10 +116,32 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
     vars_payload.setdefault("acm_secondary_dpa_info", reconciled_dpa)
     vars_payload.setdefault("acm_primary_managed_clusters_info", {"resources": []})
 
-    for schedule in vars_payload.get("acm_primary_backup_schedules_info", {}).get("resources", []):
+    for schedule in vars_payload.get("acm_primary_backup_schedules_info", {}).get(
+        "resources", []
+    ):
         schedule.setdefault("spec", {}).setdefault("useManagedServiceAccount", True)
-    for cluster_deployment in vars_payload.get("acm_primary_cluster_deployments_info", {}).get("resources", []):
+    for cluster_deployment in vars_payload.get(
+        "acm_primary_cluster_deployments_info", {}
+    ).get("resources", []):
         cluster_deployment.setdefault("spec", {}).setdefault("preserveOnDelete", True)
+
+
+def _ansible_env(repo_root: Path, tmp_path: Path) -> dict:
+    local_tmp = tmp_path / "ansible-local"
+    remote_tmp = tmp_path / "ansible-remote"
+    local_tmp.mkdir(parents=True, exist_ok=True)
+    remote_tmp.mkdir(parents=True, exist_ok=True)
+    return {
+        **os.environ,
+        "ANSIBLE_COLLECTIONS_PATH": ":".join(
+            [
+                str(repo_root),
+                os.path.expanduser("~/.ansible/collections"),
+            ]
+        ),
+        "ANSIBLE_LOCAL_TEMP": str(local_tmp),
+        "ANSIBLE_REMOTE_TMP": str(remote_tmp),
+    }
 
 
 @pytest.fixture
@@ -125,7 +149,9 @@ def run_switchover_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _REPO_ROOT
         fixture_path = (
-            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover" / fixture_name
+            repo_root
+            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover"
+            / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
@@ -134,17 +160,7 @@ def run_switchover_fixture(tmp_path):
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
-        env = {
-            **os.environ,
-            "ANSIBLE_COLLECTIONS_PATH": ":".join(
-                [
-                    str(repo_root),
-                    os.path.expanduser("~/.ansible/collections"),
-                ]
-            ),
-            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
-            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
-        }
+        env = _ansible_env(repo_root, tmp_path)
 
         try:
             completed = subprocess.run(
@@ -189,17 +205,7 @@ def run_restore_only_fixture(tmp_path):
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
-        env = {
-            **os.environ,
-            "ANSIBLE_COLLECTIONS_PATH": ":".join(
-                [
-                    str(repo_root),
-                    os.path.expanduser("~/.ansible/collections"),
-                ]
-            ),
-            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
-            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
-        }
+        env = _ansible_env(repo_root, tmp_path)
 
         try:
             completed = subprocess.run(
@@ -236,7 +242,9 @@ def run_checkpoint_fixture(tmp_path):
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _REPO_ROOT
         fixture_path = (
-            repo_root / "ansible_collections/tomazb/acm_switchover/tests/scenario/fixtures/checkpoint" / fixture_name
+            repo_root
+            / "ansible_collections/tomazb/acm_switchover/tests/scenario/fixtures/checkpoint"
+            / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
@@ -244,18 +252,21 @@ def run_checkpoint_fixture(tmp_path):
         checkpoint_path = tmp_path / "checkpoint.json"
         report_dir = _prepare_execution_vars(vars_payload, tmp_path)
         vars_payload["acm_switchover_execution"].setdefault("checkpoint", {})
-        vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(checkpoint_path)
+        vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(
+            checkpoint_path
+        )
 
         if pre_completed_phases:
             checkpoint_path.write_text(
                 json.dumps(
                     {
                         "schema_version": "1.0",
+                        "phase": pre_completed_phases[-1],
                         "completed_phases": pre_completed_phases,
-                        "phase_status": "pass",
                         "operational_data": {},
                         "errors": [],
                         "report_refs": [],
+                        "created_at": "2026-01-01T00:00:00+00:00",
                         "updated_at": "2026-01-01T00:00:00+00:00",
                     },
                     indent=2,
@@ -265,17 +276,7 @@ def run_checkpoint_fixture(tmp_path):
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
-        env = {
-            **os.environ,
-            "ANSIBLE_COLLECTIONS_PATH": ":".join(
-                [
-                    str(repo_root),
-                    os.path.expanduser("~/.ansible/collections"),
-                ]
-            ),
-            "ANSIBLE_LOCAL_TEMP": "/tmp/ansible-local",
-            "ANSIBLE_REMOTE_TMP": "/tmp/ansible-remote",
-        }
+        env = _ansible_env(repo_root, tmp_path)
 
         try:
             completed = subprocess.run(
@@ -297,7 +298,9 @@ def run_checkpoint_fixture(tmp_path):
         except subprocess.TimeoutExpired as exc:
             pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
 
-        checkpoint = json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
+        checkpoint = (
+            json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
+        )
         return completed, checkpoint
 
     return _run

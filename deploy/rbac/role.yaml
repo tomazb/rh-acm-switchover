@@ -112,6 +112,11 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list"]
 
+  # ACM Operator API - namespace-scoped MultiClusterHub teardown
+  - apiGroups: ["operator.open-cluster-management.io"]
+    resources: ["multiclusterhubs"]
+    verbs: ["list", "delete"]
+
 ---
 # Role for ACM Switchover Operator in multicluster-engine namespace
 apiVersion: rbac.authorization.k8s.io/v1

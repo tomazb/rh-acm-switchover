@@ -49,6 +49,22 @@ options:
     type: list
     elements: dict
     default: []
+  result_id:
+    description: Optional validation result ID override for workflow-specific summaries.
+    type: str
+    required: false
+  failure_message:
+    description: Optional failure message override for workflow-specific summaries.
+    type: str
+    required: false
+  success_message:
+    description: Optional success message override for workflow-specific summaries.
+    type: str
+    required: false
+  recommended_action:
+    description: Optional remediation text override for workflow-specific summaries.
+    type: str
+    required: false
 """
 
 EXAMPLES = r"""
@@ -80,7 +96,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     ROUTE_OPENSHIFT_IO,
     VELERO_IO,
 )
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.result import ValidationResult
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.result import (
+    ValidationResult,
+)
 
 VALID_ROLES = ("operator", "validator")
 VALID_ARGOCD_MODES = ("none", "check", "manage")
@@ -94,7 +112,11 @@ OPERATOR_CLUSTER_PERMISSIONS = [
     (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["get", "list", "patch"]),
     (HIVE_OPENSHIFT_IO, "clusterdeployments", ["get", "list"]),
     (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["get", "list"]),
-    (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["get", "list"]),
+    (
+        OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,
+        "multiclusterobservabilities",
+        ["get", "list"],
+    ),
 ]
 
 # Cluster-scoped permissions for validator role (read-only)
@@ -106,7 +128,11 @@ VALIDATOR_CLUSTER_PERMISSIONS = [
     (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["get", "list"]),
     (HIVE_OPENSHIFT_IO, "clusterdeployments", ["get", "list"]),
     (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["get", "list"]),
-    (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["get", "list"]),
+    (
+        OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,
+        "multiclusterobservabilities",
+        ["get", "list"],
+    ),
 ]
 
 # Hub namespace-scoped permissions for operator role
@@ -115,8 +141,16 @@ OPERATOR_HUB_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] 
         ("", "configmaps", ["get", "list", "create", "patch", "delete"]),
         ("", "secrets", ["get"]),
         ("", "pods", ["get", "list"]),
-        (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "backupschedules", ["get", "list", "create", "patch", "delete"]),
-        (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "restores", ["get", "list", "create", "patch", "delete"]),
+        (
+            CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO,
+            "backupschedules",
+            ["get", "list", "create", "patch", "delete"],
+        ),
+        (
+            CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO,
+            "restores",
+            ["get", "list", "create", "patch", "delete"],
+        ),
         (VELERO_IO, "backups", ["get", "list"]),
         (VELERO_IO, "restores", ["get", "list"]),
         (VELERO_IO, "backupstoragelocations", ["get", "list"]),
@@ -167,7 +201,9 @@ VALIDATOR_HUB_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]]
 }
 
 # Managed-cluster namespace permissions for operator role
-OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
+OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[
+    str, list[tuple[str, str, list[str]]]
+] = {
     MANAGED_CLUSTER_AGENT_NAMESPACE: [
         ("", "secrets", ["get", "create", "delete"]),
         (APPS, "deployments", ["get", "patch"]),
@@ -175,7 +211,9 @@ OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, l
 }
 
 # Managed-cluster namespace permissions for validator role (read-only)
-VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
+VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[
+    str, list[tuple[str, str, list[str]]]
+] = {
     MANAGED_CLUSTER_AGENT_NAMESPACE: [
         ("", "secrets", ["get"]),
         (APPS, "deployments", ["get"]),
@@ -185,13 +223,21 @@ VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, 
 DECOMMISSION_PERMISSIONS = [
     (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["delete"]),
     (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["delete"]),
-    (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["delete"]),
+    (
+        OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,
+        "multiclusterobservabilities",
+        ["delete"],
+    ),
 ]
 
 DECOMMISSION_CLUSTER_PERMISSIONS = [
     ("", "namespaces", ["get"]),
     (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["list", "delete"]),
-    (OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterobservabilities", ["list", "delete"]),
+    (
+        OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,
+        "multiclusterobservabilities",
+        ["list", "delete"],
+    ),
 ]
 
 DECOMMISSION_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
@@ -252,7 +298,9 @@ def expand_rbac_requirements(
         filtered_cluster = [
             (g, r, v)
             for g, r, v in DECOMMISSION_CLUSTER_PERMISSIONS
-            if not (skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO)
+            if not (
+                skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO
+            )
         ]
         permissions.extend(_expand_permission_list(filtered_cluster))
 
@@ -269,8 +317,16 @@ def expand_rbac_requirements(
     if role == "validator" and argocd_mode == "manage":
         raise ValueError("validator role cannot use argocd_mode=manage")
 
-    cluster_perms = OPERATOR_CLUSTER_PERMISSIONS if role == "operator" else VALIDATOR_CLUSTER_PERMISSIONS
-    hub_ns_perms = OPERATOR_HUB_NAMESPACE_PERMISSIONS if role == "operator" else VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+    cluster_perms = (
+        OPERATOR_CLUSTER_PERMISSIONS
+        if role == "operator"
+        else VALIDATOR_CLUSTER_PERMISSIONS
+    )
+    hub_ns_perms = (
+        OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        if role == "operator"
+        else VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+    )
 
     permissions: list[tuple[str, str, str, str | None]] = []
 
@@ -293,9 +349,13 @@ def expand_rbac_requirements(
         if argocd_install_type != "none":
             permissions.extend(_expand_permission_list(ARGOCD_BASE_CLUSTER_PERMISSIONS))
             if argocd_install_type != "vanilla":
-                permissions.extend(_expand_permission_list(ARGOCD_OPERATOR_CLUSTER_PERMISSIONS))
+                permissions.extend(
+                    _expand_permission_list(ARGOCD_OPERATOR_CLUSTER_PERMISSIONS)
+                )
             if argocd_mode == "manage" and role == "operator":
-                permissions.extend(_expand_permission_list(ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS))
+                permissions.extend(
+                    _expand_permission_list(ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS)
+                )
 
     # Decommission extras
     if include_decommission:
@@ -304,23 +364,46 @@ def expand_rbac_requirements(
     return permissions
 
 
-def summarize_rbac_results(hub: str, denied_permissions: list[dict]) -> dict:
+def summarize_rbac_results(
+    hub: str,
+    denied_permissions: list[dict],
+    result_id: str | None = None,
+    failure_message: str | None = None,
+    success_message: str | None = None,
+    recommended_action: str | None = None,
+) -> dict:
+    result_id = result_id or f"preflight-rbac-{hub}"
+    failure_message = (
+        failure_message or f"missing required RBAC permissions on {hub} hub"
+    )
+    success_message = (
+        success_message or f"all required RBAC permissions validated on {hub} hub"
+    )
+    recommended_action = (
+        recommended_action
+        or "Grant the documented collection RBAC role before running preflight again"
+    )
+
     if denied_permissions:
         result = ValidationResult(
-            id=f"preflight-rbac-{hub}",
+            id=result_id,
             severity="critical",
             status="fail",
-            message=f"missing required RBAC permissions on {hub} hub",
+            message=failure_message,
             details={"denied_permissions": denied_permissions},
-            recommended_action="Grant the documented collection RBAC role before running preflight again",
+            recommended_action=recommended_action,
         ).to_dict()
-        return {"passed": False, "critical_failures": 1, "results": [result]}
+        return {
+            "passed": False,
+            "critical_failures": len(denied_permissions),
+            "results": [result],
+        }
 
     result = ValidationResult(
-        id=f"preflight-rbac-{hub}",
+        id=result_id,
         severity="info",
         status="pass",
-        message=f"all required RBAC permissions validated on {hub} hub",
+        message=success_message,
     ).to_dict()
     return {"passed": True, "critical_failures": 0, "results": [result]}
 
@@ -329,13 +412,25 @@ def main() -> None:
     module = AnsibleModule(
         argument_spec={
             "hub": {"type": "str", "required": True},
-            "role": {"type": "str", "default": "operator", "choices": list(VALID_ROLES)},
+            "role": {
+                "type": "str",
+                "default": "operator",
+                "choices": list(VALID_ROLES),
+            },
             "include_decommission": {"type": "bool", "default": False},
             "decommission_only": {"type": "bool", "default": False},
             "skip_observability": {"type": "bool", "default": False},
-            "argocd_mode": {"type": "str", "default": "none", "choices": list(VALID_ARGOCD_MODES)},
+            "argocd_mode": {
+                "type": "str",
+                "default": "none",
+                "choices": list(VALID_ARGOCD_MODES),
+            },
             "argocd_install_type": {"type": "str", "default": "unknown"},
             "denied_permissions": {"type": "list", "elements": "dict", "default": []},
+            "result_id": {"type": "str", "required": False, "default": None},
+            "failure_message": {"type": "str", "required": False, "default": None},
+            "success_message": {"type": "str", "required": False, "default": None},
+            "recommended_action": {"type": "str", "required": False, "default": None},
         },
         supports_check_mode=True,
     )
@@ -353,7 +448,14 @@ def main() -> None:
         module.fail_json(msg=str(exc))
         return
 
-    summary = summarize_rbac_results(module.params["hub"], module.params["denied_permissions"])
+    summary = summarize_rbac_results(
+        hub=module.params["hub"],
+        denied_permissions=module.params["denied_permissions"],
+        result_id=module.params["result_id"],
+        failure_message=module.params["failure_message"],
+        success_message=module.params["success_message"],
+        recommended_action=module.params["recommended_action"],
+    )
     module.exit_json(changed=False, permissions=permissions, **summary)
 
 
