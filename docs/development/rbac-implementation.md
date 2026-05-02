@@ -22,6 +22,7 @@ This document summarizes the comprehensive RBAC (Role-Based Access Control) impl
 - **ClusterRoles**: Cluster-wide permissions for both operator and validator
 - **Roles**: Namespace-scoped permissions in:
   - `open-cluster-management-backup`
+  - `open-cluster-management`
   - `open-cluster-management-observability`
   - `multicluster-engine`
 - **Bindings**: ClusterRoleBindings and RoleBindings to link roles to service accounts
@@ -117,6 +118,7 @@ Users can choose from multiple deployment methods based on their requirements:
 - Separate service accounts for operator (read/write) and validator (read-only)
 - No wildcard permissions
 - Namespace-scoped permissions where possible
+- Namespaced `MultiClusterHub` delete is kept in the `open-cluster-management` Role, while cluster-scoped decommission deletes remain in the optional extension
 - Explicit enumeration of all required verbs
 
 ### Risk Mitigation

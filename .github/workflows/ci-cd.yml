@@ -42,7 +42,7 @@ jobs:
         
     - name: Run unit tests with coverage
       run: |
-        python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=html --cov-report=term
+        python -m pytest tests/ -v -m "not e2e" --cov=. --cov-report=xml --cov-report=html --cov-report=term
         
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
@@ -91,11 +91,11 @@ jobs:
         
     - name: Check code formatting with black
       run: |
-        black --check --line-length 120 --diff . --exclude '(^|/)completions(/|$)'
+        black --check --line-length 120 --diff acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests
         
     - name: Check import sorting with isort
       run: |
-        isort --check-only --profile black --line-length 120 .
+        isort --check-only --profile black --line-length 120 acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests
         
     - name: Run type checking with mypy
       run: |
@@ -272,7 +272,7 @@ jobs:
         
     - name: Test version display
       run: |
-        grep -q "version.*1.0.0" acm_switchover.py || echo "Warning: Version string check"
+        python -c "from lib import __version__, __version_date__; print(f'ACM Switchover {__version__} ({__version_date__})')"
         
     - name: Validate state file structure
       run: |

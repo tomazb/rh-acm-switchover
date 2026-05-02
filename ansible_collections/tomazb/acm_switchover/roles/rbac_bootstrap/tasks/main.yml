@@ -1,0 +1,45 @@
+---
+- name: Plan RBAC manifest selection
+  tomazb.acm_switchover.acm_rbac_bootstrap:
+    role: "{{ acm_switchover_rbac_bootstrap.role }}"
+    include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
+    generate_kubeconfigs: "{{ acm_switchover_rbac_bootstrap.generate_kubeconfigs }}"
+  register: _rbac_plan
+
+- name: Apply RBAC manifests
+  ansible.builtin.include_tasks: deploy_manifests.yml
+
+- name: Generate kubeconfigs
+  ansible.builtin.include_tasks: generate_kubeconfigs.yml
+  when: acm_switchover_rbac_bootstrap.generate_kubeconfigs | bool
+
+- name: Validate permissions
+  ansible.builtin.include_tasks: validate_permissions.yml
+  when: acm_switchover_rbac_bootstrap.validate_permissions | bool
+
+- name: Publish rbac_bootstrap result
+  ansible.builtin.set_fact:
+    acm_switchover_rbac_bootstrap_result:
+      phase: rbac_bootstrap
+      mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
+      role: "{{ acm_switchover_rbac_bootstrap.role }}"
+      assets_applied: "{{ _rbac_plan.assets }}"
+      generated_kubeconfig: "{{ acm_switchover_rbac_bootstrap_generated_kubeconfig | default('') }}"
+      status: pass
+
+- name: Resolve summary path to absolute
+  ansible.builtin.set_fact:
+    _acm_summary_path_abs: >-
+      {{
+        summary_path
+        if summary_path.startswith('/')
+        else (lookup('env', 'PWD') ~ '/' ~ summary_path)
+      }}
+  when: summary_path is defined
+
+- name: Write summary when requested
+  ansible.builtin.copy:
+    content: "{{ acm_switchover_rbac_bootstrap_result | to_json }}"
+    dest: "{{ _acm_summary_path_abs }}"
+    mode: "0644"
+  when: summary_path is defined

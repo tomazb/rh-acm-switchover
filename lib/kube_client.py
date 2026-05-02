@@ -1227,7 +1227,7 @@ class KubeClient:
                         break
 
             if expected_count is None:
-                if ready_count == len(pods) and len(pods) > 0:
+                if ready_count == len(pods):
                     logger.info("All %s pods ready in %s", ready_count, namespace)
                     return True
             else:

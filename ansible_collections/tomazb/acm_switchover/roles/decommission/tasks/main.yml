@@ -1,0 +1,51 @@
+---
+- name: Require confirmation gate unless dry_run
+  ansible.builtin.fail:
+    msg: >-
+      Decommission requires explicit confirmation.
+      Set acm_switchover_decommission.confirmed: true to proceed.
+  when: >-
+    not (acm_switchover_decommission.confirmed | default(false) | bool)
+    and (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+
+- name: Validate RBAC before decommission
+  ansible.builtin.include_tasks: validate_rbac.yml
+
+- name: Delete Observability resources
+  ansible.builtin.include_tasks: delete_observability.yml
+  when: acm_switchover_decommission.has_observability | default(false) | bool
+
+- name: Delete non-local ManagedCluster resources
+  ansible.builtin.include_tasks: delete_managed_clusters.yml
+
+- name: Delete MultiClusterHub
+  ansible.builtin.include_tasks: delete_multiclusterhub.yml
+
+- name: Publish decommission result
+  ansible.builtin.set_fact:
+    acm_switchover_decommission_result:
+      phase: decommission
+      mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
+      status: pass
+
+- name: Normalize summary path input
+  ansible.builtin.set_fact:
+    _acm_decommission_summary_path: "{{ summary_path | default(acm_switchover_summary_path | default(''), true) }}"
+  when: summary_path is defined or acm_switchover_summary_path is defined
+
+- name: Resolve summary path to absolute
+  ansible.builtin.set_fact:
+    _acm_summary_path_abs: >-
+      {{
+        _acm_decommission_summary_path
+        if _acm_decommission_summary_path.startswith('/')
+        else (lookup('env', 'PWD') ~ '/' ~ _acm_decommission_summary_path)
+      }}
+  when: _acm_decommission_summary_path | default('') | length > 0
+
+- name: Write summary when requested
+  ansible.builtin.copy:
+    content: "{{ acm_switchover_decommission_result | to_json }}"
+    dest: "{{ _acm_summary_path_abs }}"
+    mode: "0644"
+  when: _acm_decommission_summary_path | default('') | length > 0

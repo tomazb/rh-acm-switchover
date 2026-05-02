@@ -1,0 +1,87 @@
+---
+- name: Initialize disable-auto-import result
+  ansible.builtin.set_fact:
+    acm_switchover_auto_import_result:
+      changed: false
+      disabled_clusters: []
+      target_strategy: >-
+        {{
+          'ImportAndSync'
+          if acm_switchover_features.manage_auto_import_strategy | default(false)
+          else 'default'
+        }}
+
+- name: Skip disable-auto-import annotation management in dry-run mode
+  ansible.builtin.set_fact:
+    acm_switchover_auto_import_result:
+      changed: false
+      disabled_clusters: []
+      status: skipped
+      reason: dry_run
+      target_strategy: >-
+        {{
+          'ImportAndSync'
+          if acm_switchover_features.manage_auto_import_strategy | default(false)
+          else 'default'
+        }}
+  when: acm_switchover_execution.mode | default('execute') == 'dry_run'
+
+- name: Read primary hub ManagedClusters before disable-auto-import annotation pass
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_primary_managed_clusters_info
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Collect non-local ManagedClusters missing disable-auto-import annotations
+  ansible.builtin.set_fact:
+    _acm_primary_disable_auto_import_targets: >-
+      {%- set targets = [] -%}
+      {%- for cluster in (_acm_primary_managed_clusters_info.resources | default([])) -%}
+      {%- set metadata = cluster.get('metadata', {}) -%}
+      {%- set name = metadata.get('name', '') -%}
+      {%- set annotations = metadata.get('annotations', {}) or {} -%}
+      {%- if
+        name | length > 0
+        and name != 'local-cluster'
+        and 'import.open-cluster-management.io/disable-auto-import' not in annotations
+      -%}
+      {%- set _ = targets.append(name) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ targets }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Add disable-auto-import annotations to primary ManagedClusters
+  kubernetes.core.k8s:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    name: "{{ item }}"
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+    state: patched
+    definition:
+      metadata:
+        annotations:
+          import.open-cluster-management.io/disable-auto-import: ""
+  loop: "{{ _acm_primary_disable_auto_import_targets | default([]) }}"
+  register: _acm_primary_disable_auto_import_results
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_primary_disable_auto_import_targets | default([]) | length) > 0
+
+- name: Publish disable-auto-import result
+  ansible.builtin.set_fact:
+    acm_switchover_auto_import_result:
+      changed: "{{ _acm_primary_disable_auto_import_results.changed | default(false) }}"
+      disabled_clusters: "{{ _acm_primary_disable_auto_import_targets | default([]) }}"
+      status: pass
+      target_strategy: >-
+        {{
+          'ImportAndSync'
+          if acm_switchover_features.manage_auto_import_strategy | default(false)
+          else 'default'
+        }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'

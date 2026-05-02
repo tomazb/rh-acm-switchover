@@ -1,0 +1,45 @@
+---
+- name: Read secondary hub BackupSchedules when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_backup_schedules_info
+  when: acm_secondary_backup_schedules_info is not defined
+
+- name: Refresh secondary MultiClusterHub when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: operator.open-cluster-management.io/v1
+    kind: MultiClusterHub
+    namespace: open-cluster-management
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_mch_info
+  when: acm_secondary_mch_info is not defined
+
+- name: Seed empty old-hub passive restore info in dry-run mode
+  ansible.builtin.set_fact:
+    _old_hub_existing_restore_info:
+      resources: []
+  when:
+    - _old_hub_existing_restore_info is not defined
+    - acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+    - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
+    - not (acm_switchover_operation.restore_only | default(false))
+
+- name: Read existing passive sync restore on old hub when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: Restore
+    name: restore-acm-passive-sync
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _old_hub_existing_restore_info
+  when:
+    - _old_hub_existing_restore_info is not defined
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
+    - not (acm_switchover_operation.restore_only | default(false))

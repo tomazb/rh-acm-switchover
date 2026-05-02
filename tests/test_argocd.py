@@ -41,7 +41,11 @@ class TestFindAcmTouchingApps:
                 "metadata": {"namespace": "openshift-gitops", "name": "acm-app"},
                 "status": {
                     "resources": [
-                        {"kind": "BackupSchedule", "namespace": "open-cluster-management-backup", "name": "x"},
+                        {
+                            "kind": "BackupSchedule",
+                            "namespace": "open-cluster-management-backup",
+                            "name": "x",
+                        },
                     ]
                 },
             }
@@ -58,7 +62,11 @@ class TestFindAcmTouchingApps:
                 "metadata": {"namespace": "argocd", "name": "acm-ns"},
                 "status": {
                     "resources": [
-                        {"kind": "ConfigMap", "namespace": "open-cluster-management", "name": "y"},
+                        {
+                            "kind": "ConfigMap",
+                            "namespace": "open-cluster-management",
+                            "name": "y",
+                        },
                     ]
                 },
             }
@@ -85,6 +93,21 @@ class TestFindAcmTouchingApps:
         apps = [{"metadata": {"namespace": "argocd", "name": "no-status"}, "status": {}}]
         result = argocd_lib.find_acm_touching_apps(apps)
         assert len(result) == 0
+
+    def test_logs_debug_for_empty_resources(self, caplog):
+        """Apps with empty status.resources should emit a debug log."""
+        import logging
+
+        apps = [
+            {
+                "metadata": {"namespace": "argocd", "name": "empty-res"},
+                "status": {"resources": []},
+            }
+        ]
+        with caplog.at_level(logging.DEBUG, logger="acm_switchover"):
+            result = argocd_lib.find_acm_touching_apps(apps)
+        assert len(result) == 0
+        assert any("empty-res" in msg and "no status.resources" in msg for msg in caplog.messages)
 
     def test_excludes_app_with_missing_status(self):
         apps = [{"metadata": {"namespace": "argocd", "name": "x"}}]
@@ -128,7 +151,11 @@ class TestFindAcmTouchingApps:
                 "metadata": {"namespace": "argocd", "name": "local-cluster-app"},
                 "status": {
                     "resources": [
-                        {"kind": "ConfigMap", "namespace": "local-cluster", "name": "cfg"},
+                        {
+                            "kind": "ConfigMap",
+                            "namespace": "local-cluster",
+                            "name": "cfg",
+                        },
                     ]
                 },
             }
@@ -162,19 +189,26 @@ class TestPauseAutosync:
         client = MagicMock()
         client.patch_custom_resource.return_value = {"metadata": {"resourceVersion": "1001"}}
         app = {
-            "metadata": {"namespace": "argocd", "name": "app", "resourceVersion": "1000"},
+            "metadata": {
+                "namespace": "argocd",
+                "name": "app",
+                "resourceVersion": "1000",
+            },
             "spec": {"syncPolicy": {"automated": {"prune": True}, "syncOptions": []}},
         }
         result = argocd_lib.pause_autosync(client, app, "run-1")
         assert result.patched is True
-        assert result.original_sync_policy == {"automated": {"prune": True}, "syncOptions": []}
+        assert result.original_sync_policy == {
+            "automated": {"prune": True},
+            "syncOptions": [],
+        }
         client.patch_custom_resource.assert_called_once()
         call_kw = client.patch_custom_resource.call_args[1]
         assert call_kw["namespace"] == "argocd"
         assert call_kw["name"] == "app"
         patch = call_kw["patch"]
         assert patch["metadata"]["annotations"][argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION] == "run-1"
-        assert "automated" not in patch["spec"]["syncPolicy"]
+        assert patch["spec"]["syncPolicy"]["automated"] is None
         assert patch["spec"]["syncPolicy"].get("syncOptions") == []
 
     def test_api_exception_on_patch_returns_patched_false(self):
@@ -194,14 +228,18 @@ class TestPauseAutosync:
         client = MagicMock()
         client.patch_custom_resource.return_value = {"metadata": {"resourceVersion": "1001"}}
         app = {
-            "metadata": {"namespace": "argocd", "name": "app", "resourceVersion": "1000"},
+            "metadata": {
+                "namespace": "argocd",
+                "name": "app",
+                "resourceVersion": "1000",
+            },
             "spec": {"syncPolicy": {"automated": {}}},
         }
         result = argocd_lib.pause_autosync(client, app, "run-1")
         assert result.patched is True
         client.patch_custom_resource.assert_called_once()
         patch = client.patch_custom_resource.call_args[1]["patch"]
-        assert "automated" not in patch["spec"]["syncPolicy"]
+        assert patch["spec"]["syncPolicy"]["automated"] is None
 
     def test_dry_run_pause_supports_keyword_arguments(self):
         client = MagicMock()
@@ -247,7 +285,10 @@ class TestResumeAutosync:
     def test_restores_when_marker_matches(self):
         client = MagicMock()
         client.get_custom_resource.return_value = {
-            "metadata": {"resourceVersion": "500", "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
+            "metadata": {
+                "resourceVersion": "500",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+            },
         }
         client.patch_custom_resource.return_value = {"metadata": {"resourceVersion": "501"}}
         result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {"prune": True}}, "run-1")
@@ -291,7 +332,10 @@ class TestResumeAutosync:
     def test_patch_exception_returns_skip_reason(self):
         client = MagicMock()
         client.get_custom_resource.return_value = {
-            "metadata": {"resourceVersion": "500", "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"}},
+            "metadata": {
+                "resourceVersion": "500",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+            },
         }
         client.patch_custom_resource.side_effect = RuntimeError("boom")
         result = argocd_lib.resume_autosync(client, "argocd", "app", {"automated": {"prune": True}}, "run-1")
@@ -378,7 +422,10 @@ class TestDetectArgocdInstallation:
 
     def test_vanilla_when_app_crd_only(self):
         client = MagicMock()
-        client.get_custom_resource.side_effect = [{"metadata": {"name": "applications.argoproj.io"}}, None]
+        client.get_custom_resource.side_effect = [
+            {"metadata": {"name": "applications.argoproj.io"}},
+            None,
+        ]
         result = argocd_lib.detect_argocd_installation(client)
         assert result.has_applications_crd is True
         assert result.has_argocds_crd is False

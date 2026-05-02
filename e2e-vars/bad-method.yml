@@ -1,0 +1,13 @@
+# V3: Invalid method
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+  secondary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+acm_switchover_operation:
+  method: invalid_method
+acm_switchover_execution:
+  mode: validate
+  report_dir: ./artifacts

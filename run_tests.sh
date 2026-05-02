@@ -15,6 +15,26 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+STRICT_QUALITY="${STRICT_QUALITY:-0}"
+QUALITY_PATHS=(acm_switchover.py lib/ modules/)
+
+run_advisory_or_strict() {
+    local label="$1"
+    shift
+
+    if "$@"; then
+        return 0
+    fi
+
+    if [ "$STRICT_QUALITY" = "1" ]; then
+        echo -e "${RED}${label} failed and STRICT_QUALITY=1${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}${label} reported issues (advisory; set STRICT_QUALITY=1 to fail).${NC}"
+    return 0
+}
+
 # Use existing virtual environment if active, else prefer .venv then venv
 if [ -n "$VIRTUAL_ENV" ]; then
     echo -e "${GREEN}Using active virtualenv: $VIRTUAL_ENV${NC}"
@@ -61,23 +81,24 @@ echo "======================================"
 
 echo ""
 echo "--- Flake8 (Style Check) ---"
-flake8 acm_switchover.py lib/ modules/ || true
+flake8 "${QUALITY_PATHS[@]}" --count --select=E9,F63,F7,F82 --show-source --statistics
+run_advisory_or_strict "Flake8 full style check" flake8 "${QUALITY_PATHS[@]}"
 
 echo ""
 echo "--- Pylint (Code Analysis) ---"
-pylint acm_switchover.py lib/ modules/ --exit-zero || true
+run_advisory_or_strict "Pylint" pylint "${QUALITY_PATHS[@]}" --max-line-length=120 --disable=C0103,C0114,C0115,C0116
 
 echo ""
 echo "--- Black (Format Check) ---"
-black --check --line-length 120 acm_switchover.py lib/ modules/ || echo -e "${YELLOW}Format issues found. Run: black --line-length 120 .${NC}"
+run_advisory_or_strict "Black format check" black --check --line-length 120 "${QUALITY_PATHS[@]}"
 
 echo ""
 echo "--- isort (Import Sort Check) ---"
-isort --check-only --profile black --line-length 120 acm_switchover.py lib/ modules/ || echo -e "${YELLOW}Import sorting issues found. Run: isort --profile black --line-length 120 .${NC}"
+run_advisory_or_strict "isort import check" isort --check-only --profile black --line-length 120 "${QUALITY_PATHS[@]}"
 
 echo ""
 echo "--- MyPy (Type Check) ---"
-mypy acm_switchover.py lib/ modules/ --ignore-missing-imports --no-strict-optional || true
+run_advisory_or_strict "MyPy" mypy "${QUALITY_PATHS[@]}" --ignore-missing-imports --no-strict-optional
 
 echo ""
 echo "======================================"
@@ -86,11 +107,11 @@ echo "======================================"
 
 echo ""
 echo "--- Bandit (Security Linter) ---"
-bandit --ini .bandit -ll || true
+run_advisory_or_strict "Bandit security check" bandit --ini .bandit -ll
 
 echo ""
 echo "--- pip-audit (Dependency Vulnerabilities) ---"
-pip-audit || true
+run_advisory_or_strict "pip-audit dependency check" pip-audit
 
 echo ""
 echo "======================================"

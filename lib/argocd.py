@@ -33,7 +33,7 @@ ARGOCD_APP_VERSION = "v1alpha1"
 ARGOCD_APP_PLURAL = "applications"
 ARGOCD_INSTANCE_CRD_PLURAL = "argocds"
 
-# Annotation key for our pause marker (must match scripts/argocd-manage.sh)
+# Annotation key for our pause marker (must match the Ansible argocd_manage role)
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 
 # ACM namespace regex (must match scripts/lib-common.sh)
@@ -179,7 +179,12 @@ def _get_crd_presence(
         if e.status == 404:
             logger.debug("CRD %s not found (not installed): %s", crd_name, e)
             return False
-        logger.warning("Unexpected API error checking CRD %s (status=%s): %s", crd_name, e.status, e)
+        logger.warning(
+            "Unexpected API error checking CRD %s (status=%s): %s",
+            crd_name,
+            e.status,
+            e,
+        )
         if required:
             raise
     except Exception as e:
@@ -235,11 +240,17 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
                 )
         except ApiException as e:
             if e.status != 404:
-                logger.warning("Failed to list ArgoCD instances (status=%s); instance list may be incomplete", e.status)
+                logger.warning(
+                    "Failed to list ArgoCD instances (status=%s); instance list may be incomplete",
+                    e.status,
+                )
             else:
                 logger.debug("Failed to list ArgoCD instances: %s", e)
         except Exception as e:
-            logger.warning("Failed to list ArgoCD instances: %s; instance list may be incomplete", e)
+            logger.warning(
+                "Failed to list ArgoCD instances: %s; instance list may be incomplete",
+                e,
+            )
         install_type = "operator"
     else:
         install_type = install_type_override or "vanilla"
@@ -266,7 +277,11 @@ def _list_argocd_applications_once(client: KubeClient, namespace: Optional[str])
         if e.status == 404:
             logger.debug("Argo CD Applications not found in %s: %s", scope_label, e)
             return []
-        logger.warning("Failed to list Argo CD Applications in %s (status=%s)", scope_label, e.status)
+        logger.warning(
+            "Failed to list Argo CD Applications in %s (status=%s)",
+            scope_label,
+            e.status,
+        )
         raise
     except Exception as e:
         logger.warning("Failed to list Argo CD Applications in %s: %s", scope_label, e)
@@ -327,7 +342,13 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
         ns = meta.get("namespace", "")
         name = meta.get("name", "")
         resources = app.get("status", {}).get("resources") or []
-        if not isinstance(resources, list):
+        if not isinstance(resources, list) or not resources:
+            if not resources:
+                logger.debug(
+                    "App %s/%s has no status.resources; cannot verify ACM impact — skipped",
+                    ns,
+                    name,
+                )
             continue
         acm_count = sum(1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r))
         if acm_count > 0:
@@ -365,7 +386,12 @@ def resume_recorded_applications(
             continue
         if not all([hub, ns, name, original_sync_policy is not None]):
             summary.failed += 1
-            logger.warning("  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)", hub, ns, name)
+            logger.warning(
+                "  Skip entry missing required fields (hub=%s, namespace=%s, name=%s)",
+                hub,
+                ns,
+                name,
+            )
             continue
 
         if hub == "primary":
@@ -439,8 +465,9 @@ def pause_autosync(
             patched=False,
             skip_reason=PAUSE_SKIP_REASON_AUTOSYNC_DISABLED,
         )
-    # Remove automated, keep rest; add annotation
-    new_sync = {k: v for k, v in sync_policy.items() if k != "automated"}
+    # Null deletes the CRD map key under Kubernetes merge-patch semantics.
+    new_sync = dict(sync_policy)
+    new_sync["automated"] = None
     patch: Dict[str, Any] = {
         "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: run_id}},
         "spec": {"syncPolicy": new_sync},
@@ -507,11 +534,26 @@ def resume_autosync(
         if e.status == 404:
             logger.debug("Application %s/%s not found: %s", namespace, name, e)
             return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
-        logger.warning("API error fetching Application %s/%s (status=%s); leaving paused", namespace, name, e.status)
-        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason=f"fetch error: {e.status}")
+        logger.warning(
+            "API error fetching Application %s/%s (status=%s); leaving paused",
+            namespace,
+            name,
+            e.status,
+        )
+        return ResumeResult(
+            namespace=namespace,
+            name=name,
+            restored=False,
+            skip_reason=f"fetch error: {e.status}",
+        )
     except Exception as e:
         logger.warning("Unexpected error fetching Application %s/%s: %s", namespace, name, e)
-        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason=f"fetch error: {e}")
+        return ResumeResult(
+            namespace=namespace,
+            name=name,
+            restored=False,
+            skip_reason=f"fetch error: {e}",
+        )
     if not current:
         return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
     ann = (current.get("metadata") or {}).get("annotations") or {}

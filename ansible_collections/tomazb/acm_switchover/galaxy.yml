@@ -1,0 +1,19 @@
+namespace: tomazb
+name: acm_switchover
+version: 1.7.7
+readme: README.md
+authors:
+  - Tomaz B
+description: >-
+  Ansible Collection foundation for Red Hat Advanced Cluster Management hub
+  switchover automation.
+license:
+  - MIT
+tags:
+  - acm
+  - kubernetes
+  - openshift
+  - switchover
+dependencies:
+  kubernetes.core: ">=3.0.0"
+repository: https://github.com/tomazb/rh-acm-switchover

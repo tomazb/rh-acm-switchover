@@ -1,0 +1,10 @@
+---
+# After activation, reset autoImportStrategy to ImportOnly if we changed it.
+#
+# NOTE: This file is kept here for backward compatibility and reference.
+# The reset is performed from finalization/tasks/reset_auto_import.yml, which
+# runs AFTER the post_activation cleanup_auto_import_annotations.yml window closes.
+# This matches the Python CLI: modules/finalization.py performs the reset, not
+# modules/activation.py. Resetting here (during activation) would shorten the
+# ImportAndSync window before cleanup_auto_import_annotations.yml mutates
+# ManagedClusters in post_activation, potentially causing Pending Import failures.

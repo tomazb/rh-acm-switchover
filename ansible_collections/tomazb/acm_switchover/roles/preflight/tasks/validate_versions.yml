@@ -1,0 +1,79 @@
+---
+- name: Extract primary and secondary ACM versions
+  ansible.builtin.set_fact:
+    acm_primary_version: >-
+      {{
+        (
+          (acm_primary_mch_info.resources | default([]) | first | default({}))
+          .get('status', {})
+          .get('currentVersion', '')
+        )
+      }}
+    acm_secondary_version: >-
+      {{
+        (
+          (acm_secondary_mch_info.resources | default([]) | first | default({}))
+          .get('status', {})
+          .get('currentVersion', '')
+        )
+      }}
+
+- name: Record ACM version compatibility result
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-version-compatibility",
+            "severity": "critical",
+            "status": "fail"
+              if not acm_primary_version or not acm_secondary_version
+              else ("pass"
+                if (acm_primary_version.split('.')[0:2] == acm_secondary_version.split('.')[0:2])
+                else "fail"),
+            "message": "primary or secondary hub ACM version is unavailable"
+              if not acm_primary_version or not acm_secondary_version
+              else ("primary and secondary hubs are on compatible ACM minor versions"
+                if (acm_primary_version.split('.')[0:2] == acm_secondary_version.split('.')[0:2])
+                else "primary and secondary hubs are on incompatible ACM minor versions"),
+            "details": {
+              "primary_version": acm_primary_version,
+              "secondary_version": acm_secondary_version,
+              "primary_found": (acm_primary_mch_info.resources | default([]) | length > 0),
+              "secondary_found": (acm_secondary_mch_info.resources | default([]) | length > 0)
+            },
+            "recommended_action": "Verify MulticlusterHub discovery returned currentVersion for both hubs before running switchover"
+              if not acm_primary_version or not acm_secondary_version
+              else ("Upgrade or align the secondary hub before running switchover"
+                if (acm_primary_version.split('.')[0:2] != acm_secondary_version.split('.')[0:2])
+                else None)
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record secondary ACM version availability for restore-only
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-version-secondary",
+            "severity": "critical",
+            "status": "pass" if acm_secondary_version else "fail",
+            "message": "secondary hub ACM version detected"
+              if acm_secondary_version
+              else "secondary hub ACM version is unavailable",
+            "details": {
+              "secondary_version": acm_secondary_version,
+              "secondary_found": (acm_secondary_mch_info.resources | default([]) | length > 0)
+            },
+            "recommended_action": "Verify MultiClusterHub is installed and healthy on the secondary hub"
+              if not acm_secondary_version
+              else None
+          }
+        ]
+      }}
+  when: acm_switchover_operation.restore_only | default(false)

@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: finalization
+  author: Tomaz B
+  description: Finalization — enable backups on new hub, verify MCH health, handle old hub disposition.
+  license: MIT
+  min_ansible_version: "2.15"
+dependencies: []

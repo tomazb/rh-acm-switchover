@@ -42,10 +42,12 @@ SKIP_GITOPS_CHECK=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --new-hub-context)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --new-hub-context requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             NEW_HUB_CONTEXT="$2"
             shift 2
             ;;
         --old-hub-context)
+            [[ $# -lt 2 || "$2" == --* ]] && { echo "Error: --old-hub-context requires a value" >&2; exit "$EXIT_INVALID_ARGS"; }
             OLD_HUB_CONTEXT="$2"
             shift 2
             ;;
@@ -124,8 +126,8 @@ else
     IS_PASSIVE_SYNC=false
 fi
 
-# Check if BackupSchedule is enabled (which deletes Restore objects)
-BACKUP_SCHEDULE_ENABLED=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].spec.paused}' 2>/dev/null || echo "")
+# Check if BackupSchedule is paused (spec.paused field; false/empty means active)
+BACKUP_SCHEDULE_PAUSED=$(oc --context="$NEW_HUB_CONTEXT" get $RES_BACKUP_SCHEDULE -n "$BACKUP_NAMESPACE" -o jsonpath='{.items[0].spec.paused}' 2>/dev/null || echo "")
 
 if [[ -n "$RESTORE_NAME" ]]; then
     if [[ "$RESTORE_PHASE" == "Finished" ]] || [[ "$RESTORE_PHASE" == "Completed" ]]; then
@@ -162,7 +164,7 @@ if [[ -n "$RESTORE_NAME" ]]; then
         fi
         echo -e "${RED}       Unavailable BSL means restores cannot proceed${NC}"
     fi
-elif [[ "$BACKUP_SCHEDULE_ENABLED" == "false" ]] || [[ -z "$BACKUP_SCHEDULE_ENABLED" ]]; then
+elif [[ "$BACKUP_SCHEDULE_PAUSED" == "false" ]] || [[ -z "$BACKUP_SCHEDULE_PAUSED" ]]; then
     # No restore objects but BackupSchedule is enabled - this is expected behavior
     # When BackupSchedule is enabled, OADP cleans up Restore objects
     check_pass "No restore objects found (expected: BackupSchedule is enabled and cleaned up Restore resources)"

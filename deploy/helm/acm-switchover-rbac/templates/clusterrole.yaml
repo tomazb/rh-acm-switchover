@@ -13,7 +13,7 @@ rules:
   # Core API - Namespace validation
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   
   # Core API - Nodes (for cluster health validation per runbook)
   - apiGroups: [""]
@@ -102,7 +102,7 @@ rules:
   # Core API - Namespace validation
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   
   # Core API - Nodes (for cluster health validation per runbook)
   - apiGroups: [""]

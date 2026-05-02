@@ -348,7 +348,8 @@ done
 # Merge using KUBECONFIG path stacking
 # kubectl config view --merge --flatten combines all configs
 # NOTE: KUBECONFIG is set only for this subcommand and does not affect the parent shell
-if KUBECONFIG="$KUBECONFIG_PATHS" kubectl config view --merge --flatten > "$OUTPUT_FILE"; then
+# Use umask 077 so the merged kubeconfig is created owner-readable only.
+if (umask 077 && KUBECONFIG="$KUBECONFIG_PATHS" kubectl config view --merge --flatten > "$OUTPUT_FILE"); then
     check_pass "Merged kubeconfig written to: $OUTPUT_FILE"
 else
     check_fail "Failed to merge kubeconfigs"

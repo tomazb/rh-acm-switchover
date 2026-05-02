@@ -1,0 +1,49 @@
+profile_version: 1
+name: lab-argocd-release
+release:
+  expected_version: 1.7.7
+  metadata_files:
+    - README.md
+    - CHANGELOG.md
+    - setup.cfg
+    - ansible_collections/tomazb/acm_switchover/galaxy.yml
+hubs:
+  primary:
+    kubeconfig: /path/to/primary-kubeconfig
+    context: lab-primary-context
+  secondary:
+    kubeconfig: /path/to/secondary-kubeconfig
+    context: lab-secondary-context
+managed_clusters:
+  expected_count: 2
+streams:
+  - id: bash
+    required: false
+  - id: python
+  - id: ansible
+scenarios:
+  - id: static-gates
+  - id: lab-readiness
+  - id: baseline-check
+  - id: preflight
+  - id: python-passive-switchover
+  - id: ansible-passive-switchover
+  - id: python-restore-only
+  - id: ansible-restore-only
+  - id: argocd-managed-switchover
+  - id: runtime-parity
+  - id: final-baseline-check
+argocd:
+  mandatory: true
+  namespaces:
+    - openshift-gitops
+  application_selectors:
+    - match_labels:
+        app.kubernetes.io/part-of: acm-switchover-fixture
+baseline:
+  initial_primary: primary
+limits: {}
+recovery: {}
+artifacts:
+  redaction:
+    required: true

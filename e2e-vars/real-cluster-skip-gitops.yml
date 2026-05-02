@@ -1,0 +1,24 @@
+# P7b: Preflight with skip_gitops_check: true — preflight-gitops-warning absent
+acm_switchover_hubs:
+  primary:
+    context: mgmt2
+    kubeconfig: ~/.kube/config
+  secondary:
+    context: mgmt1
+    kubeconfig: ~/.kube/config
+
+acm_switchover_operation:
+  method: passive
+  activation_method: patch
+
+acm_switchover_features:
+  skip_rbac_validation: false
+  skip_observability_checks: false
+  skip_gitops_check: true
+  disable_observability_on_secondary: false
+  argocd:
+    manage: false
+
+acm_switchover_execution:
+  mode: validate
+  report_dir: ./artifacts

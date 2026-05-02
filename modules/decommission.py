@@ -22,7 +22,7 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import confirm_action
-from lib.waiter import wait_for_condition
+from lib.waiter import WaitConditionResult, wait_for_condition
 
 logger = logging.getLogger("acm_switchover")
 
@@ -135,8 +135,8 @@ class Decommission:
         def _observability_terminated():
             pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
             if not pods:
-                return True, "all observability pods terminated"
-            return False, f"{len(pods)} pod(s) remaining"
+                return WaitConditionResult.complete("all observability pods terminated")
+            return WaitConditionResult.pending(f"{len(pods)} pod(s) remaining")
 
         success = wait_for_condition(
             "Observability pod termination",
@@ -204,9 +204,9 @@ class Decommission:
                 # Filter out local-cluster
                 non_local = [mc for mc in remaining if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME]
                 if not non_local:
-                    return True, "all ManagedClusters removed (except local-cluster)"
+                    return WaitConditionResult.complete("all ManagedClusters removed (except local-cluster)")
                 names = [mc.get("metadata", {}).get("name") for mc in non_local]
-                return False, f"{len(non_local)} ManagedCluster(s) remaining: {', '.join(names)}"
+                return WaitConditionResult.pending(f"{len(non_local)} ManagedCluster(s) remaining: {', '.join(names)}")
 
             success = wait_for_condition(
                 "ManagedCluster removal",
@@ -277,15 +277,17 @@ class Decommission:
             """Check if ACM pods are removed (excluding operator pods which remain)."""
             pods = self.primary.get_pods(namespace=ACM_NAMESPACE)
             if not pods:
-                return True, "all ACM pods removed"
+                return WaitConditionResult.complete("all ACM pods removed")
             # Filter out operator pods - they remain after MCH deletion
             non_operator_pods = [
                 p for p in pods if not p.get("metadata", {}).get("name", "").startswith(ACM_OPERATOR_POD_PREFIX)
             ]
             if not non_operator_pods:
                 operator_count = len(pods)
-                return True, f"all ACM pods removed (except {operator_count} operator pod(s) which remain)"
-            return False, f"{len(non_operator_pods)} non-operator pod(s) remaining"
+                return WaitConditionResult.complete(
+                    f"all ACM pods removed (except {operator_count} operator pod(s) which remain)"
+                )
+            return WaitConditionResult.pending(f"{len(non_operator_pods)} non-operator pod(s) remaining")
 
         success = wait_for_condition(
             "ACM pod removal",

@@ -1,0 +1,22 @@
+---
+acm_switchover_hubs:
+  primary:
+    context: primary-hub
+    kubeconfig: ./kubeconfigs/primary
+  secondary:
+    context: secondary-hub
+    kubeconfig: ./kubeconfigs/secondary
+
+acm_switchover_operation:
+  method: passive
+  activation_method: patch
+
+acm_switchover_features:
+  skip_rbac_validation: true
+  skip_observability_checks: true
+  argocd:
+    manage: false
+
+acm_switchover_execution:
+  mode: validate
+  report_dir: __TMP_PATH__/artifacts/../outside

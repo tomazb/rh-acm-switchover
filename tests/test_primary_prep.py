@@ -133,6 +133,19 @@ class TestPrimaryPreparation:
         # Should not scale Thanos since no observability
         mock_primary_client.scale_statefulset.assert_not_called()
 
+    def test_pause_backup_schedule_fails_when_multiple_schedules_exist(self, primary_prep_no_obs, mock_primary_client):
+        """Multiple BackupSchedules are ambiguous and must not be silently first-selected."""
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
+            {"metadata": {"name": "schedule-b"}, "spec": {"paused": False}},
+        ]
+
+        with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
+            primary_prep_no_obs._pause_backup_schedule()
+
+        mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
+
     def test_prepare_steps_already_completed(self, primary_prep_with_obs, mock_state_manager):
         """Test skipping already completed steps."""
         mock_state_manager.is_step_completed.return_value = True
@@ -192,10 +205,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -245,10 +258,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-2", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             pause_autosync.return_value = argocd_lib.PauseResult(
                 namespace="argocd",
@@ -293,7 +306,7 @@ class TestPrimaryPreparation:
         )
 
         with patch(
-            "modules.primary_prep.argocd_lib.detect_argocd_installation",
+            "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
             return_value=discovery,
         ):
             prep._pause_argocd_acm_apps()
@@ -353,10 +366,10 @@ class TestPrimaryPreparation:
             )
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app1, app2]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync", side_effect=pause_side_effect),
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app1, app2]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync", side_effect=pause_side_effect),
         ):
             prep._pause_argocd_acm_apps()
 
@@ -407,11 +420,11 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
             patch(
-                "modules.primary_prep.argocd_lib.pause_autosync",
+                "lib.argocd_coordinator.argocd_lib.pause_autosync",
                 return_value=argocd_lib.PauseResult(
                     namespace="argocd",
                     name="app-1",
@@ -471,11 +484,11 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="openshift-gitops", name="acm-app", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
             patch(
-                "modules.primary_prep.argocd_lib.pause_autosync",
+                "lib.argocd_coordinator.argocd_lib.pause_autosync",
                 return_value=argocd_lib.PauseResult(
                     namespace="openshift-gitops",
                     name="acm-app",
@@ -528,10 +541,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             prep._pause_argocd_acm_apps()
 
@@ -586,10 +599,10 @@ class TestPrimaryPreparation:
         impacts = [argocd_lib.AppImpact(namespace="argocd", name="app-1", resource_count=1, app=app)]
 
         with (
-            patch("modules.primary_prep.argocd_lib.detect_argocd_installation", return_value=discovery),
-            patch("modules.primary_prep.argocd_lib.list_argocd_applications", return_value=[app]),
-            patch("modules.primary_prep.argocd_lib.find_acm_touching_apps", return_value=impacts),
-            patch("modules.primary_prep.argocd_lib.pause_autosync") as pause_autosync,
+            patch("lib.argocd_coordinator.argocd_lib.detect_argocd_installation", return_value=discovery),
+            patch("lib.argocd_coordinator.argocd_lib.list_argocd_applications", return_value=[app]),
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps", return_value=impacts),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as pause_autosync,
         ):
             prep._pause_argocd_acm_apps()
 

@@ -1,0 +1,30 @@
+---
+- name: Announce MultiClusterHub deletion (dry_run)
+  ansible.builtin.debug:
+    msg: "[dry_run] Would delete all MultiClusterHub resources"
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: List MultiClusterHub resources
+  kubernetes.core.k8s_info:
+    kind: MultiClusterHub
+    api_version: operator.open-cluster-management.io/v1
+    namespace: open-cluster-management
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+  register: _multiclusterhub_resources
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Delete discovered MultiClusterHub resources
+  kubernetes.core.k8s:
+    kind: MultiClusterHub
+    api_version: operator.open-cluster-management.io/v1
+    name: "{{ item.metadata.name }}"
+    namespace: open-cluster-management
+    state: absent
+    wait: true
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+  loop: "{{ _multiclusterhub_resources.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'

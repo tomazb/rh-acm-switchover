@@ -1,0 +1,14 @@
+---
+- name: Read primary hub Thanos compactor StatefulSet when not pre-seeded by tests
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: StatefulSet
+    namespace: open-cluster-management-observability
+    label_selectors:
+      - "app.kubernetes.io/name=thanos-compact"
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_compactor_info
+  when:
+    - acm_primary_compactor_info is not defined
+    - not (acm_switchover_features.skip_observability_checks | default(false) | bool)

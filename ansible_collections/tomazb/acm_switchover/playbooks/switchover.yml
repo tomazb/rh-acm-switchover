@@ -1,0 +1,107 @@
+---
+- name: ACM Hub Switchover
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Run switchover phases
+      block:
+        - name: Run preflight validation
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.preflight
+
+        - name: Stop after preflight when mode is validate
+          ansible.builtin.meta: end_play
+          when: acm_switchover_execution.mode | default('') == 'validate'
+
+        - name: Run primary prep
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.primary_prep
+
+        - name: Run activation
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.activation
+
+        - name: Run post activation verification
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.post_activation
+
+        - name: Run finalization
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.finalization
+
+      rescue:
+        - name: Attempt Argo CD resume on secondary hub after failure
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.argocd_manage
+          vars:
+            acm_switchover_argocd_mode_override: resume
+            _argocd_discover_hub: secondary
+          when:
+            - acm_switchover_features.argocd.manage | default(false)
+            - acm_switchover_features.argocd.resume_on_failure | default(false)
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Attempt Argo CD resume on primary hub after failure
+          ansible.builtin.include_role:
+            name: tomazb.acm_switchover.argocd_manage
+          vars:
+            acm_switchover_argocd_mode_override: resume
+            _argocd_discover_hub: primary
+          when:
+            - acm_switchover_features.argocd.manage | default(false)
+            - acm_switchover_features.argocd.resume_on_failure | default(false)
+            - acm_switchover_hubs.primary is defined
+            - (acm_switchover_hubs.primary.kubeconfig | default('')) | length > 0
+            - (acm_switchover_hubs.primary.context | default('')) | length > 0
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Reset primary prep checkpoint after Argo CD resume on failure
+          tomazb.acm_switchover.checkpoint_phase:
+            phase: primary_prep
+            checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+            status: reset
+          when:
+            - acm_switchover_features.argocd.manage | default(false)
+            - acm_switchover_features.argocd.resume_on_failure | default(false)
+            - acm_switchover_execution.checkpoint.enabled | default(false)
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Re-raise original switchover failure
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default('Switchover failed') }}"
+
+      always:
+        - name: Build switchover report contract
+          ansible.builtin.set_fact:
+            acm_switchover_report:
+              schema_version: "1.0"
+              source: tomazb.acm_switchover
+              argocd:
+                run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+                summary: >-
+                  {%- set hubs = acm_switchover_argocd_summary_by_hub | default({}) -%}
+                  {%- if hubs | length > 0 -%}
+                  {%- set ns = namespace(paused=0, restored=0) -%}
+                  {%- for _hub_name, hub_summary in hubs.items() -%}
+                  {%- set ns.paused = ns.paused + (hub_summary.get('paused', 0) | int) -%}
+                  {%- set ns.restored = ns.restored + (hub_summary.get('restored', 0) | int) -%}
+                  {%- endfor -%}
+                  {{ {'paused': ns.paused, 'restored': ns.restored} }}
+                  {%- else -%}
+                  {{ acm_switchover_argocd_summary | default({}) }}
+                  {%- endif -%}
+              phases: >-
+                {{
+                  {}
+                  | combine({'primary_prep': acm_switchover_primary_prep_result} if acm_switchover_primary_prep_result is defined else {})
+                  | combine({'activation': acm_switchover_activation_result} if acm_switchover_activation_result is defined else {})
+                  | combine({'post_activation': acm_switchover_post_activation_result} if acm_switchover_post_activation_result is defined else {})
+                  | combine({'finalization': acm_switchover_finalization_result} if acm_switchover_finalization_result is defined else {})
+                }}
+
+        - name: Write switchover report artifact
+          tomazb.acm_switchover.acm_report_artifact:
+            path: "{{ (acm_switchover_execution.report_dir | default('./artifacts')) ~ '/switchover-report.json' }}"
+            report: "{{ acm_switchover_report }}"

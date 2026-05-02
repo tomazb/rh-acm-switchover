@@ -1,0 +1,81 @@
+---
+- name: Collect discovered namespace names
+  ansible.builtin.set_fact:
+    acm_primary_namespace_names: "{{ (acm_primary_namespace_info.resources | default([])) | map(attribute='metadata.name') | list }}"
+    acm_secondary_namespace_names: "{{ (acm_secondary_namespace_info.resources | default([])) | map(attribute='metadata.name') | list }}"
+
+- name: Record primary hub namespace presence
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-namespaces-primary",
+            "severity": "critical",
+            "status": "pass" if 'open-cluster-management-backup' in acm_primary_namespace_names else 'fail',
+            "message": "primary hub backup namespace exists"
+              if 'open-cluster-management-backup' in acm_primary_namespace_names
+              else "primary hub backup namespace is missing",
+            "details": {"namespaces": acm_primary_namespace_names},
+            "recommended_action": "Install or restore ACM backup components on the primary hub"
+              if 'open-cluster-management-backup' not in acm_primary_namespace_names
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record secondary hub namespace presence
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-namespaces-secondary",
+            "severity": "critical",
+            "status": "pass" if 'open-cluster-management-backup' in acm_secondary_namespace_names else 'fail',
+            "message": "secondary hub backup namespace exists"
+              if 'open-cluster-management-backup' in acm_secondary_namespace_names
+              else "secondary hub backup namespace is missing",
+            "details": {"namespaces": acm_secondary_namespace_names},
+            "recommended_action": "Install or restore ACM backup components on the secondary hub"
+              if 'open-cluster-management-backup' not in acm_secondary_namespace_names
+              else None
+          }
+        ]
+      }}
+
+- name: Record primary hub observability namespace presence
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-observability-primary",
+            "severity": "warning",
+            "status": "skip"
+              if (acm_switchover_features.skip_observability_checks | default(false))
+              else (
+                "pass" if 'open-cluster-management-observability' in acm_primary_namespace_names else "fail"
+              ),
+            "message": "observability checks skipped by operator request"
+              if (acm_switchover_features.skip_observability_checks | default(false))
+              else (
+                "primary hub observability namespace exists"
+                if 'open-cluster-management-observability' in acm_primary_namespace_names
+                else "primary hub observability namespace is not installed"
+              ),
+            "details": {"namespaces": acm_primary_namespace_names},
+            "recommended_action": "Install observability before relying on Grafana or Thanos validation"
+              if (
+                not (acm_switchover_features.skip_observability_checks | default(false))
+                and 'open-cluster-management-observability' not in acm_primary_namespace_names
+              )
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))

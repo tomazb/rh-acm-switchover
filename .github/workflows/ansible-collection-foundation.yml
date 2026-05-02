@@ -1,0 +1,48 @@
+name: ansible-collection-foundation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install foundation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core==2.15.* pytest PyYAML ansible-builder
+      - name: Install collection dependencies
+        run: |
+          ansible-galaxy collection install -r ansible_collections/tomazb/acm_switchover/requirements.yml
+      - name: Run collection unit tests
+        run: |
+          PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q
+      - name: Run collection integration tests
+        run: |
+          export ANSIBLE_COLLECTIONS_PATH="${GITHUB_WORKSPACE}:${HOME}/.ansible/collections"
+          PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/integration/ -q
+      - name: Run collection scenario tests
+        run: |
+          export ANSIBLE_COLLECTIONS_PATH="${GITHUB_WORKSPACE}:${HOME}/.ansible/collections"
+          PYTHONPATH=. pytest ansible_collections/tomazb/acm_switchover/tests/scenario/ -q
+      - name: Syntax check playbooks
+        run: |
+          export ANSIBLE_COLLECTIONS_PATH="${GITHUB_WORKSPACE}:${HOME}/.ansible/collections"
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/preflight.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/restore_only.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/decommission.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/discovery.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/rbac_bootstrap.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/argocd_manage_test.yml --syntax-check
+          ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/argocd_resume.yml --syntax-check
+      - name: Build collection archive
+        run: |
+          cd ansible_collections/tomazb/acm_switchover
+          ansible-galaxy collection build --output-path /tmp/dist

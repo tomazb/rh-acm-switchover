@@ -1,0 +1,90 @@
+---
+- name: Pause auto-sync on discovered applications
+  when: acm_switchover_argocd_installed | default(false)
+  block:
+    # In mock mode (integration testing without a real cluster), skip k8s patching.
+    - name: Record mock pause summary
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_summary: >-
+          {{
+            (acm_switchover_argocd_summary | default({'paused': 0, 'restored': 0}))
+            | combine({
+                'paused': (
+                  ((acm_switchover_argocd_summary | default({})).get('paused', 0) | int)
+                  + (acm_switchover_argocd_acm_apps | length | int)
+                ),
+                'restored': ((acm_switchover_argocd_summary | default({})).get('restored', 0) | int)
+              })
+          }}
+        acm_switchover_argocd_summary_by_hub: >-
+          {%- set hub = _argocd_discover_hub | default('primary') -%}
+          {%- set existing = (acm_switchover_argocd_summary_by_hub | default({})).get(hub, {}) -%}
+          {{
+            (acm_switchover_argocd_summary_by_hub | default({}))
+            | combine({
+                hub: {
+                  'paused': (existing.get('paused', 0) | int) + (acm_switchover_argocd_acm_apps | length | int),
+                  'restored': (existing.get('restored', 0) | int)
+                }
+              })
+          }}
+      when: acm_switchover_argocd_mock_apps is defined
+
+    - name: Remove automated sync policy and annotate with run-id
+      kubernetes.core.k8s:
+        kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
+        context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
+        state: patched
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ item.metadata.namespace }}"
+        name: "{{ item.metadata.name }}"
+        definition:
+          metadata:
+            annotations:
+              acm-switchover.argoproj.io/paused-by: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('unknown')) }}"
+              acm-switchover.argoproj.io/original-sync-policy: >-
+                {{ item.spec.syncPolicy | default({}) | to_json }}
+          spec:
+            syncPolicy: >-
+              {{
+                (item.spec.syncPolicy | default({}))
+                | combine({'automated': none})
+              }}
+      loop: "{{ acm_switchover_argocd_acm_apps }}"
+      loop_control:
+        label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      register: acm_argocd_pause_results
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - "'automated' in (item.spec.syncPolicy | default({}))"
+        - "'acm-switchover.argoproj.io/paused-by' not in (item.metadata.annotations | default({}))"
+
+    - name: Record pause summary
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_summary: >-
+          {{
+            (acm_switchover_argocd_summary | default({'paused': 0, 'restored': 0}))
+            | combine({
+                'paused': (
+                  ((acm_switchover_argocd_summary | default({})).get('paused', 0) | int)
+                  + (acm_argocd_pause_results.results | selectattr('changed') | list | length | int)
+                ),
+                'restored': ((acm_switchover_argocd_summary | default({})).get('restored', 0) | int)
+              })
+          }}
+        acm_switchover_argocd_summary_by_hub: >-
+          {%- set hub = _argocd_discover_hub | default('primary') -%}
+          {%- set existing = (acm_switchover_argocd_summary_by_hub | default({})).get(hub, {}) -%}
+          {{
+            (acm_switchover_argocd_summary_by_hub | default({}))
+            | combine({
+                hub: {
+                  'paused': (existing.get('paused', 0) | int)
+                    + (acm_argocd_pause_results.results | selectattr('changed') | list | length | int),
+                  'restored': (existing.get('restored', 0) | int)
+                }
+              })
+          }}
+      when: acm_switchover_argocd_mock_apps is not defined
