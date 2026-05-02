@@ -17,6 +17,7 @@ CONSTANT_PAIRS = {
     "RESTORE_FULL_NAME": "FULL_RESTORE_NAME",
     "MANAGED_CLUSTER_RESTORE_NAME": "ACTIVATION_RESTORE_NAME",
     # Velero / restore values
+    "VELERO_BACKUP_LATEST": "VELERO_BACKUP_LATEST",
     "VELERO_BACKUP_SKIP": "VELERO_BACKUP_SKIP",
     "CLEANUP_BEFORE_RESTORE_VALUE": "CLEANUP_BEFORE_RESTORE_VALUE",
     # Auto-import strategy constants
@@ -48,7 +49,9 @@ def test_shared_constants_parity():
         elif ans_val is _MISSING:
             mismatches.append(f"Ansible missing: {ans_name}")
         elif py_val != ans_val:
-            mismatches.append(f"{py_name}={py_val!r} (Python) != {ans_name}={ans_val!r} (Ansible)")
+            mismatches.append(
+                f"{py_name}={py_val!r} (Python) != {ans_name}={ans_val!r} (Ansible)"
+            )
 
     assert not mismatches, "Constants drift detected:\n  " + "\n  ".join(mismatches)
 

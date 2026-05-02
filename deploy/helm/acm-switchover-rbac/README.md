@@ -44,6 +44,7 @@ If your ACM installation uses custom namespaces:
 
 ```bash
 helm install acm-switchover-rbac ./deploy/helm/acm-switchover-rbac \
+  --set role.namespaces.acm=my-acm-namespace \
   --set role.namespaces.backup=my-backup-namespace \
   --set role.namespaces.observability=my-observability-namespace \
   --set role.namespaces.mce=my-mce-namespace
@@ -76,6 +77,7 @@ The following table lists the configurable parameters and their default values.
 | `clusterRole.validator.name` | Validator cluster role name | `acm-switchover-validator` |
 | `clusterRoleBinding.create` | Create cluster role bindings | `true` |
 | `role.create` | Create namespace-scoped roles | `true` |
+| `role.namespaces.acm` | ACM namespace | `open-cluster-management` |
 | `role.namespaces.backup` | ACM backup namespace | `open-cluster-management-backup` |
 | `role.namespaces.observability` | ACM observability namespace | `open-cluster-management-observability` |
 | `role.namespaces.mce` | Multicluster engine namespace | `multicluster-engine` |

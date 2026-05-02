@@ -4,40 +4,25 @@ from __future__ import annotations
 
 import re
 
-ACM_NAMESPACES = {
-    "open-cluster-management",
-    "open-cluster-management-backup",
-    "open-cluster-management-observability",
-    "multicluster-engine",
-    "open-cluster-management-global-set",
-    "local-cluster",
-}
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ARGOCD_ACM_KINDS,
+    ARGOCD_ACM_NAMESPACE_PATTERN,
+    ARGOCD_ACM_NAMESPACES,
+    ARGOCD_PAUSED_BY_ANNOTATION,
+)
 
-ACM_NAMESPACE_REGEX = re.compile(r"^open-cluster-management($|-.*)")
-
-ACM_KINDS = {
-    "MultiClusterHub",
-    "MultiClusterEngine",
-    "MultiClusterObservability",
-    "ManagedCluster",
-    "ManagedClusterSet",
-    "ManagedClusterSetBinding",
-    "Placement",
-    "PlacementBinding",
-    "Policy",
-    "PolicySet",
-    "BackupSchedule",
-    "Restore",
-    "DataProtectionApplication",
-    "ClusterDeployment",
-}
+ACM_NAMESPACES = ARGOCD_ACM_NAMESPACES
+ACM_NAMESPACE_REGEX = re.compile(ARGOCD_ACM_NAMESPACE_PATTERN)
+ACM_KINDS = ARGOCD_ACM_KINDS
 
 
 def is_acm_touching_application(app: dict) -> bool:
     """Return True if any resource in the Application's status touches an ACM namespace or kind."""
     for resource in app.get("status", {}).get("resources", []):
         namespace = resource.get("namespace")
-        if namespace in ACM_NAMESPACES or (namespace and ACM_NAMESPACE_REGEX.match(namespace)):
+        if namespace in ACM_NAMESPACES or (
+            namespace and ACM_NAMESPACE_REGEX.match(namespace)
+        ):
             return True
         if resource.get("kind") in ACM_KINDS:
             return True
@@ -55,7 +40,7 @@ def build_pause_patch(sync_policy: dict, run_id: str) -> dict:
     if "automated" in sync_policy:
         sync_policy["automated"] = None
     return {
-        "metadata": {"annotations": {"acm-switchover.argoproj.io/paused-by": run_id}},
+        "metadata": {"annotations": {ARGOCD_PAUSED_BY_ANNOTATION: run_id}},
         "spec": {"syncPolicy": sync_policy},
     }
 

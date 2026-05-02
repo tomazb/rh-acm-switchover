@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Aligned collection decommission, activation, finalization, post-activation, preflight, RBAC, and Thanos-selector behavior with the Python CLI parity contract.
+- Hardened collection RBAC validation to fail closed on malformed access-review responses and aligned bootstrap manifests with namespaced `MultiClusterHub` decommission permissions.
 
 ## [1.7.7] - 2026-04-30
 

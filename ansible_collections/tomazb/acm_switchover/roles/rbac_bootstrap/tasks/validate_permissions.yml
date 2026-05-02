@@ -53,8 +53,22 @@
     _rbac_denied_permissions: >-
       {%- set denied = [] -%}
       {%- for result in _rbac_sar_results.results | default([]) -%}
-        {%- if result.result is defined and result.result.status is defined and not result.result.status.allowed -%}
-          {%- set _ = denied.append({"api_group": result.item.0, "resource": result.item.1, "verb": result.item.2, "namespace": result.item.3 | default(none)}) -%}
+        {%- if result.failed | default(false) or result.result is not defined or result.result.status is not defined -%}
+          {%- set _ = denied.append({
+            "api_group": result.item.0,
+            "resource": result.item.1,
+            "verb": result.item.2,
+            "namespace": result.item.3 | default(none),
+            "reason": result.msg | default("SubjectAccessReview did not return a status")
+          }) -%}
+        {%- elif not (result.result.status.allowed | default(false)) -%}
+          {%- set _ = denied.append({
+            "api_group": result.item.0,
+            "resource": result.item.1,
+            "verb": result.item.2,
+            "namespace": result.item.3 | default(none),
+            "reason": result.result.status.reason | default(result.result.status.evaluationError | default("denied"))
+          }) -%}
         {%- endif -%}
       {%- endfor -%}
       {{ denied }}
@@ -65,6 +79,10 @@
     role: "{{ acm_switchover_rbac_bootstrap.role }}"
     include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
     denied_permissions: "{{ _rbac_denied_permissions | default([]) }}"
+    result_id: rbac-bootstrap-primary
+    failure_message: RBAC bootstrap cannot verify required permissions on primary hub
+    success_message: RBAC bootstrap permissions validated on primary hub
+    recommended_action: Run rbac_bootstrap with an account that can grant the documented role
   register: _rbac_validation
 
 - name: Fail when RBAC validation finds denied permissions

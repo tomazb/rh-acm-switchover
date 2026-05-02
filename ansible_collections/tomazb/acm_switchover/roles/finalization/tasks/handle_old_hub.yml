@@ -75,9 +75,9 @@
       changed: "{{ _old_hub_restore_applied.changed | default(false) }}"
       message: >-
         {{
-          'Old hub configured as secondary ACM hub with passive sync restore'
-          if (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
-          else 'Old hub scheduled for decommission'
-          if (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
-          else 'No action taken on old hub'
+          {
+            'secondary': 'Old hub configured as secondary ACM hub with passive sync restore',
+            'decommission': 'Old hub scheduled for decommission',
+            'none': 'No action taken on old hub'
+          }.get(acm_switchover_operation.old_hub_action | default('secondary'), 'No action taken on old hub')
         }}

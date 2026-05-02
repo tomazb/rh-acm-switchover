@@ -2,7 +2,10 @@
 
 import pytest
 
-from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_bootstrap import select_rbac_assets
+from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_bootstrap import (
+    main,
+    select_rbac_assets,
+)
 
 
 def test_select_rbac_assets_for_decommission():
@@ -39,3 +42,32 @@ def test_validator_role_rejects_decommission_assets():
 def test_invalid_role_is_rejected():
     with pytest.raises(ValueError, match="Invalid RBAC role"):
         select_rbac_assets(role="admin", include_decommission=False)
+
+
+def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "role": "validator",
+                "include_decommission": True,
+                "generate_kubeconfigs": False,
+            }
+
+        def exit_json(self, **kwargs):
+            raise AssertionError(f"unexpected exit_json: {kwargs}")
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_bootstrap.AnsibleModule",
+        FakeModule,
+    )
+
+    main()
+
+    assert captured["fail"] == {
+        "msg": "include_decommission is only valid for the operator role."
+    }
