@@ -52,7 +52,7 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 |-----|------|---------|-------------|
 | `confirmed` | bool | `false` | Must be `true` to proceed outside `dry_run` mode |
 | `interactive` | bool | `false` | Reserved for future interactive prompting |
-| `has_observability` | bool | `false` | When `true`, delete `MultiClusterObservability` first |
+| `has_observability` | `auto`, `true`, `false` | `auto` | Auto-detect `open-cluster-management-observability` by default; `true`/`false` force the observability deletion path on or off |
 
 ### `acm_switchover_rbac_bootstrap`
 

@@ -30,13 +30,13 @@
             "status": "fail"
               if not acm_primary_version or not acm_secondary_version
               else ("pass"
-                if (acm_primary_version.split('.')[0:2] == acm_secondary_version.split('.')[0:2])
+                if (acm_primary_version == acm_secondary_version)
                 else "fail"),
             "message": "primary or secondary hub ACM version is unavailable"
               if not acm_primary_version or not acm_secondary_version
-              else ("primary and secondary hubs are on compatible ACM minor versions"
-                if (acm_primary_version.split('.')[0:2] == acm_secondary_version.split('.')[0:2])
-                else "primary and secondary hubs are on incompatible ACM minor versions"),
+              else ("primary and secondary hubs are on the same ACM version"
+                if (acm_primary_version == acm_secondary_version)
+                else "primary and secondary hubs are on different ACM versions"),
             "details": {
               "primary_version": acm_primary_version,
               "secondary_version": acm_secondary_version,
@@ -45,8 +45,8 @@
             },
             "recommended_action": "Verify MulticlusterHub discovery returned currentVersion for both hubs before running switchover"
               if not acm_primary_version or not acm_secondary_version
-              else ("Upgrade or align the secondary hub before running switchover"
-                if (acm_primary_version.split('.')[0:2] != acm_secondary_version.split('.')[0:2])
+              else ("Upgrade or align the secondary hub to the exact primary ACM version before running switchover"
+                if (acm_primary_version != acm_secondary_version)
                 else None)
           }
         ]

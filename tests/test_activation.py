@@ -563,6 +563,7 @@ class TestSecondaryActivation:
             return None
 
         mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+        mock_secondary_client.list_custom_resources.return_value = []
 
         with patch("modules.activation.wait_for_condition") as mock_wait:
 
@@ -603,6 +604,7 @@ class TestSecondaryActivation:
             return None
 
         mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+        mock_secondary_client.list_custom_resources.return_value = []
 
         with patch("modules.activation.wait_for_condition") as mock_wait:
 
@@ -617,6 +619,29 @@ class TestSecondaryActivation:
             mock_wait.side_effect = side_effect
 
             activation_full._wait_for_restore_completion()
+
+    @patch("modules.activation.wait_for_condition")
+    def test_full_restore_enforces_min_managed_clusters_after_restore(
+        self, mock_wait, mock_secondary_client, mock_state_manager
+    ):
+        """Full restore must enforce --min-managed-clusters after the restore completes."""
+        activation = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            method="full",
+            min_managed_clusters=1,
+        )
+        mock_wait.return_value = True
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "restore-acm-full"},
+            "status": {"phase": "Completed"},
+        }
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "local-cluster"}},
+        ]
+
+        with pytest.raises(FatalError, match="Expected at least 1 ManagedCluster"):
+            activation._wait_for_restore_completion()
 
     def test_poll_velero_restore_waits_when_acm_restore_missing(self, activation_passive, mock_secondary_client):
         """Velero restore wait must return structured pending status when ACM restore is absent."""

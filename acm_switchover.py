@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Iterable, Optional, Tuple
+from typing import Any, Callable, Iterable, Optional, Tuple
 
 from lib import (
     KubeClient,
@@ -45,6 +45,8 @@ from lib.constants import (
 )
 from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
+from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
+from lib.report_artifacts import build_operation_report, write_json_report_artifact
 from lib.validation import InputValidator, ValidationError
 from modules import (
     Decommission,
@@ -203,6 +205,14 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--report-dir",
+        default=None,
+        help=(
+            "Directory for machine-readable JSON report artifacts "
+            "(preflight-report.json, switchover-report.json, restore-only-report.json, or decommission-report.json)"
+        ),
+    )
+    parser.add_argument(
         "--reset-state",
         action="store_true",
         help="Reset state file and start fresh (use with caution)",
@@ -337,6 +347,9 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         else:
             # Validate user-specified state file path to prevent unsafe locations
             InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
+
+        if getattr(args, "report_dir", None):
+            InputValidator.validate_safe_filesystem_path(args.report_dir, "--report-dir")
 
         if getattr(args, "validate_only", False) and getattr(args, "argocd_manage", False):
             logger.warning("--argocd-manage has no effect with --validate-only; continuing without Argo CD management.")
@@ -839,6 +852,16 @@ def _run_phase_preflight(
         restore_only=is_restore_only,
     )
     passed, config = validator.validate_all()
+    preflight_results = list(validator.reporter.results)
+    state.set_config("preflight_results", preflight_results)
+    state.set_config(
+        "preflight_summary",
+        {
+            "passed": passed,
+            "critical_failures": len(validator.reporter.critical_failures()),
+            "total": len(preflight_results),
+        },
+    )
 
     if not passed:
         return _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
@@ -1129,6 +1152,96 @@ def run_decommission(
     return decom.decommission(interactive=not args.non_interactive)
 
 
+def _report_target(args: argparse.Namespace) -> tuple[str, str]:
+    """Return report type and filename for the current Python CLI operation."""
+    if getattr(args, "validate_only", False):
+        return "preflight", "preflight-report.json"
+    if getattr(args, "decommission", False):
+        return "decommission", "decommission-report.json"
+    if getattr(args, "restore_only", False):
+        return "restore", "restore-only-report.json"
+    return "switchover", "switchover-report.json"
+
+
+def _phase_report_from_state(state_snapshot: dict) -> dict:
+    """Build a compact phase map from durable state."""
+    phases: dict[str, dict[str, Any]] = {}
+    phase_by_step_prefix = {
+        "preflight": "preflight",
+        "pause_argocd": "preflight",
+        "pause_backup": "primary_prep",
+        "disable_auto_import": "primary_prep",
+        "scale_down": "primary_prep",
+        "verify_passive_sync": "activation",
+        "activate_managed_clusters": "activation",
+        "create_full_restore": "activation",
+        "wait_restore_completion": "activation",
+        "apply_immediate_import": "activation",
+        "verify_managed_clusters": "post_activation",
+        "verify_klusterlet": "post_activation",
+        "enable_backup_schedule": "finalization",
+        "verify_backup_schedule": "finalization",
+        "fix_backup_collision": "finalization",
+        "verify_new_backups": "finalization",
+        "verify_backup_integrity": "finalization",
+        "verify_mch_health": "finalization",
+        "handle_old_hub": "finalization",
+    }
+
+    for step in state_snapshot.get("completed_steps", []) or []:
+        name = step.get("name", "")
+        phase = next((value for prefix, value in phase_by_step_prefix.items() if name.startswith(prefix)), None)
+        if not phase:
+            continue
+        phase_entry = phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})
+        phase_entry["steps"].append(name)
+
+    current_phase = state_snapshot.get("current_phase")
+    if current_phase == Phase.FAILED.value:
+        errors = state_snapshot.get("errors", []) or []
+        failed_phase_value = (errors[-1] or {}).get("phase") if errors else None
+        failed_phase = {
+            Phase.PREFLIGHT.value: "preflight",
+            Phase.PRIMARY_PREP.value: "primary_prep",
+            Phase.ACTIVATION.value: "activation",
+            Phase.POST_ACTIVATION.value: "post_activation",
+            Phase.FINALIZATION.value: "finalization",
+        }.get(failed_phase_value)
+        if failed_phase:
+            phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})["status"] = "fail"
+
+    return phases
+
+
+def _write_python_report(
+    args: argparse.Namespace,
+    state: Optional[StateManager],
+    status: str,
+    logger: logging.Logger,
+) -> None:
+    """Write a Python CLI report artifact when --report-dir is set."""
+    report_dir = getattr(args, "report_dir", None)
+    if not report_dir or state is None:
+        return
+
+    try:
+        report_type, filename = _report_target(args)
+        state_snapshot = state.capture_state_snapshot()
+        report = build_operation_report(
+            report_type=report_type,
+            status=status,
+            source=PYTHON_REPORT_SOURCE,
+            args=args,
+            state_snapshot=state_snapshot,
+            phases=_phase_report_from_state(state_snapshot),
+        )
+        destination = os.path.join(report_dir, filename)
+        written_path = write_json_report_artifact(report, destination)
+        logger.info("Wrote report artifact: %s", written_path)
+    except Exception as exc:
+        logger.error("Failed to write report artifact: %s", exc)
+
+
 def run_setup(
     args: argparse.Namespace,
     logger: logging.Logger,
@@ -1205,6 +1318,7 @@ def run_setup(
 def main():  # noqa: C901
     """Main entry point."""
     args = parse_args()
+    state: Optional[StateManager] = None
 
     # Set up logging early so validate_args can use logger
     logger = setup_logging(args.verbose, args.log_format)
@@ -1322,6 +1436,12 @@ def main():  # noqa: C901
             operation_exit_code = EXIT_FAILURE
     finally:
         # Print GitOps detection report if any markers were found
+        _write_python_report(
+            args,
+            state,
+            "pass" if operation_exit_code == EXIT_SUCCESS else "fail",
+            logger,
+        )
         GitOpsCollector.get_instance().print_report()
 
     sys.exit(operation_exit_code)

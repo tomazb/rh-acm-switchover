@@ -1,4 +1,102 @@
 ---
+- name: Identify primary backups still in progress
+  ansible.builtin.set_fact:
+    _acm_primary_in_progress_backups: >-
+      {%- set names = [] -%}
+      {%- for backup in (acm_primary_backups_info.resources | default([])) -%}
+      {%- if backup.get('status', {}).get('phase') == 'InProgress' -%}
+      {%- set _ = names.append(backup.get('metadata', {}).get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ names }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Wait for primary in-progress backups to finish
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_primary_backup_wait_info
+  until: >-
+    {{
+      (
+        _acm_primary_backup_wait_info.resources | default([])
+        | selectattr('status.phase', 'equalto', 'InProgress')
+        | list
+        | length
+      ) == 0
+    }}
+  retries: "{{ acm_switchover_backup_wait_retries | default(60) }}"
+  delay: "{{ acm_switchover_backup_wait_delay | default(10) }}"
+  changed_when: false
+  failed_when: false
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - (_acm_primary_in_progress_backups | default([]) | length) > 0
+
+- name: Read primary hub backups after in-progress wait
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_backups_info
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - (_acm_primary_in_progress_backups | default([]) | length) > 0
+
+- name: Identify restore-only target backups still in progress
+  ansible.builtin.set_fact:
+    _acm_secondary_in_progress_backups: >-
+      {%- set names = [] -%}
+      {%- for backup in (acm_secondary_backups_info.resources | default([])) -%}
+      {%- if backup.get('status', {}).get('phase') == 'InProgress' -%}
+      {%- set _ = names.append(backup.get('metadata', {}).get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ names }}
+  when: acm_switchover_operation.restore_only | default(false)
+
+- name: Wait for restore-only target in-progress backups to finish
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_backup_wait_info
+  until: >-
+    {{
+      (
+        _acm_secondary_backup_wait_info.resources | default([])
+        | selectattr('status.phase', 'equalto', 'InProgress')
+        | list
+        | length
+      ) == 0
+    }}
+  retries: "{{ acm_switchover_backup_wait_retries | default(60) }}"
+  delay: "{{ acm_switchover_backup_wait_delay | default(10) }}"
+  changed_when: false
+  failed_when: false
+  when:
+    - acm_switchover_operation.restore_only | default(false)
+    - (_acm_secondary_in_progress_backups | default([]) | length) > 0
+
+- name: Read restore-only target backups after in-progress wait
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_backups_info
+  when:
+    - acm_switchover_operation.restore_only | default(false)
+    - (_acm_secondary_in_progress_backups | default([]) | length) > 0
+
 - name: Record latest backup existence
   ansible.builtin.set_fact:
     acm_switchover_validation_results: >-
@@ -47,6 +145,88 @@
       }}
   when: acm_switchover_operation.restore_only | default(false)
 
+- name: Identify latest primary Velero backup
+  ansible.builtin.set_fact:
+    _acm_primary_latest_backup: "{{ (acm_primary_backups_info.resources | default([]) | sort(attribute='metadata.creationTimestamp') | last | default({})) }}"
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record latest primary Velero backup completion
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-latest-completed",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                (acm_primary_backups_info.resources | default([]) | length) > 0
+                and (_acm_primary_latest_backup.get('status', {}).get('phase', 'unknown') == 'Completed')
+              )
+              else "fail",
+            "message": "latest backup " + (_acm_primary_latest_backup.get('metadata', {}).get('name', 'unknown')) + " completed successfully"
+              if (
+                (acm_primary_backups_info.resources | default([]) | length) > 0
+                and (_acm_primary_latest_backup.get('status', {}).get('phase', 'unknown') == 'Completed')
+              )
+              else "latest backup " + (_acm_primary_latest_backup.get('metadata', {}).get('name', 'unknown')) + " in unexpected state: " + (_acm_primary_latest_backup.get('status', {}).get('phase', 'missing')),
+            "details": {
+              "backup_name": _acm_primary_latest_backup.get('metadata', {}).get('name'),
+              "phase": _acm_primary_latest_backup.get('status', {}).get('phase', 'missing')
+            },
+            "recommended_action": "Wait for the latest Velero backup to complete or run a fresh backup before switchover"
+              if (
+                (acm_primary_backups_info.resources | default([]) | length) == 0
+                or (_acm_primary_latest_backup.get('status', {}).get('phase', 'unknown') != 'Completed')
+              )
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Identify latest restore-only target Velero backup
+  ansible.builtin.set_fact:
+    _acm_secondary_latest_backup: "{{ (acm_secondary_backups_info.resources | default([]) | sort(attribute='metadata.creationTimestamp') | last | default({})) }}"
+  when: acm_switchover_operation.restore_only | default(false)
+
+- name: Record latest restore-only target Velero backup completion
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-latest-completed-restore-only",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                (acm_secondary_backups_info.resources | default([]) | length) > 0
+                and (_acm_secondary_latest_backup.get('status', {}).get('phase', 'unknown') == 'Completed')
+              )
+              else "fail",
+            "message": "latest backup " + (_acm_secondary_latest_backup.get('metadata', {}).get('name', 'unknown')) + " completed successfully"
+              if (
+                (acm_secondary_backups_info.resources | default([]) | length) > 0
+                and (_acm_secondary_latest_backup.get('status', {}).get('phase', 'unknown') == 'Completed')
+              )
+              else "latest backup " + (_acm_secondary_latest_backup.get('metadata', {}).get('name', 'unknown')) + " in unexpected state: " + (_acm_secondary_latest_backup.get('status', {}).get('phase', 'missing')),
+            "details": {
+              "backup_name": _acm_secondary_latest_backup.get('metadata', {}).get('name'),
+              "phase": _acm_secondary_latest_backup.get('status', {}).get('phase', 'missing')
+            },
+            "recommended_action": "Wait for the latest Velero backup to complete or sync a completed backup artifact to the target hub"
+              if (
+                (acm_secondary_backups_info.resources | default([]) | length) == 0
+                or (_acm_secondary_latest_backup.get('status', {}).get('phase', 'unknown') != 'Completed')
+              )
+              else None
+          }
+        ]
+      }}
+  when: acm_switchover_operation.restore_only | default(false)
+
 - name: Record BackupSchedule presence
   ansible.builtin.set_fact:
     acm_switchover_validation_results: >-
@@ -80,38 +260,26 @@
           {
             "id": "preflight-backup-schedule-use-managed-service-account",
             "severity": "critical",
-            "status": "skip"
-              if acm_switchover_operation.method == 'full'
-              else (
-                "pass"
-                if (
-                  (acm_primary_backup_schedules_info.resources | default([]) | length) > 0
-                  and ((acm_primary_backup_schedules_info.resources | first | default({})).get('spec', {}).get('useManagedServiceAccount', false) | bool)
-                )
-                else "fail"
-              ),
-            "message": "BackupSchedule useManagedServiceAccount=true"
+            "status": "pass"
               if (
-                acm_switchover_operation.method != 'full'
-                and (acm_primary_backup_schedules_info.resources | default([]) | length) > 0
+                (acm_primary_backup_schedules_info.resources | default([]) | length) > 0
                 and ((acm_primary_backup_schedules_info.resources | first | default({})).get('spec', {}).get('useManagedServiceAccount', false) | bool)
               )
-              else (
-                "useManagedServiceAccount not required for full restore"
-                if acm_switchover_operation.method == 'full'
-                else "BackupSchedule useManagedServiceAccount is not enabled"
-              ),
+              else "fail",
+            "message": "BackupSchedule useManagedServiceAccount=true"
+              if (
+                (acm_primary_backup_schedules_info.resources | default([]) | length) > 0
+                and ((acm_primary_backup_schedules_info.resources | first | default({})).get('spec', {}).get('useManagedServiceAccount', false) | bool)
+              )
+              else "BackupSchedule useManagedServiceAccount is not enabled",
             "details": {
               "method": acm_switchover_operation.method,
               "useManagedServiceAccount": ((acm_primary_backup_schedules_info.resources | first | default({})).get('spec', {}).get('useManagedServiceAccount', false) | bool)
             },
-            "recommended_action": "Set spec.useManagedServiceAccount=true in the primary BackupSchedule before passive switchover"
+            "recommended_action": "Set spec.useManagedServiceAccount=true in the primary BackupSchedule before switchover"
               if (
-                acm_switchover_operation.method != 'full'
-                and (
-                  (acm_primary_backup_schedules_info.resources | default([]) | length) == 0
-                  or not ((acm_primary_backup_schedules_info.resources | first | default({})).get('spec', {}).get('useManagedServiceAccount', false) | bool)
-                )
+                (acm_primary_backup_schedules_info.resources | default([]) | length) == 0
+                or not ((acm_primary_backup_schedules_info.resources | first | default({})).get('spec', {}).get('useManagedServiceAccount', false) | bool)
               )
               else None
           }
@@ -458,6 +626,94 @@
             },
             "recommended_action": "Set spec.preserveOnDelete=true before switchover to avoid infrastructure deletion"
               if (_acm_primary_missing_preserve_on_delete | default([]) | length) > 0
+              else None
+          }
+        ]
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Identify joined primary ManagedClusters
+  ansible.builtin.set_fact:
+    _acm_primary_joined_managed_clusters: >-
+      {%- set joined_clusters = [] -%}
+      {%- for cluster in (acm_primary_managed_clusters_info.resources | default([])) -%}
+      {%- set metadata = cluster.get('metadata', {}) -%}
+      {%- set name = metadata.get('name', '') -%}
+      {%- set conditions = cluster.get('status', {}).get('conditions', []) or [] -%}
+      {%- set joined = namespace(value=false) -%}
+      {%- for condition in conditions -%}
+      {%- if condition.get('type') == 'ManagedClusterJoined' and condition.get('status') == 'True' -%}
+      {%- set joined.value = true -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if name != 'local-cluster' and joined.value -%}
+      {%- set _ = joined_clusters.append(name) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ joined_clusters }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Identify latest managed-clusters backup artifact
+  ansible.builtin.set_fact:
+    _acm_primary_latest_managed_clusters_backup: >-
+      {%- set backups = [] -%}
+      {%- for backup in (acm_primary_backups_info.resources | default([])) -%}
+      {%- set labels = backup.get('metadata', {}).get('labels', {}) or {} -%}
+      {%- if labels.get('cluster.open-cluster-management.io/backup-schedule-type') == 'managedClusters' -%}
+      {%- set _ = backups.append(backup) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ (backups | sort(attribute='metadata.creationTimestamp') | last) if (backups | length) > 0 else {} }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Record managed-clusters backup completion
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-managed-clusters-backup-completed",
+            "severity": "critical",
+            "status": "pass"
+              if (
+                (_acm_primary_joined_managed_clusters | default([]) | length) == 0
+                or (
+                  (_acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', '') | length) > 0
+                  and _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'unknown') == 'Completed'
+                )
+              )
+              else "fail",
+            "message": "no joined ManagedClusters found (only local-cluster)"
+              if (_acm_primary_joined_managed_clusters | default([]) | length) == 0
+              else (
+                "latest managed-clusters backup "
+                + _acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', 'unknown')
+                + " completed successfully"
+                if _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'unknown') == 'Completed'
+                else (
+                  "latest managed-clusters backup "
+                  + _acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', 'unknown')
+                  + " not completed: "
+                  + _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'missing')
+                  if (_acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', '') | length) > 0
+                  else "no managed-clusters backups found"
+                )
+              ),
+            "details": {
+              "joined_cluster_count": _acm_primary_joined_managed_clusters | default([]) | length,
+              "joined_clusters": _acm_primary_joined_managed_clusters | default([]),
+              "backup_name": _acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name'),
+              "phase": _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'missing')
+            },
+            "recommended_action": "Run a fresh managed-clusters backup on the primary hub before switchover"
+              if (
+                (_acm_primary_joined_managed_clusters | default([]) | length) > 0
+                and (
+                  (_acm_primary_latest_managed_clusters_backup.get('metadata', {}).get('name', '') | length) == 0
+                  or _acm_primary_latest_managed_clusters_backup.get('status', {}).get('phase', 'unknown') != 'Completed'
+                )
+              )
               else None
           }
         ]

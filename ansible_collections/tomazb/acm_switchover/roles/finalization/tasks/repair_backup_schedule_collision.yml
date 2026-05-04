@@ -1,0 +1,127 @@
+---
+- name: Skip BackupSchedule collision repair in dry-run mode
+  ansible.builtin.set_fact:
+    acm_switchover_repair_backup_schedule_collision_result:
+      changed: "{{ (acm_secondary_backup_schedules_info.resources | default([]) | length) > 0 }}"
+      status: skipped
+      reason: dry_run
+      message: >-
+        [dry_run] Would recreate the BackupSchedule to prevent or repair BackupCollision.
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Skip BackupSchedule collision repair when restore_only has no BackupSchedule
+  ansible.builtin.set_fact:
+    acm_switchover_repair_backup_schedule_collision_result:
+      changed: false
+      status: skipped
+      reason: restore_only_no_backup_schedule
+      message: >-
+        Restore-only mode has no BackupSchedule to repair. Create a BackupSchedule
+        manually after finalization.
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_operation.restore_only | default(false)
+    - (acm_secondary_backup_schedules_info.resources | default([]) | length) == 0
+
+- name: Fail fast when normal finalization has no BackupSchedule to repair
+  ansible.builtin.fail:
+    msg: >-
+      No BackupSchedule found on the new hub during finalization. Normal switchover
+      finalization requires an enabled BackupSchedule before backup continuity checks.
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - not (acm_switchover_operation.restore_only | default(false))
+    - (acm_secondary_backup_schedules_info.resources | default([]) | length) == 0
+
+- name: Refuse to repair when multiple BackupSchedules exist
+  ansible.builtin.fail:
+    msg: >-
+      Multiple BackupSchedules found on the new hub. Refusing to choose one
+      automatically for collision repair.
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_repair_backup_schedule_collision_result is not defined
+    - (acm_secondary_backup_schedules_info.resources | default([]) | length) > 1
+
+- name: Save BackupSchedule body for collision repair
+  ansible.builtin.set_fact:
+    _backup_schedule_collision_repair_body:
+      apiVersion: cluster.open-cluster-management.io/v1beta1
+      kind: BackupSchedule
+      metadata:
+        name: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.name }}"
+        namespace: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.namespace | default('open-cluster-management-backup') }}"
+        labels: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.labels | default({}) }}"
+        annotations: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.annotations | default({}) }}"
+      spec: "{{ (acm_secondary_backup_schedules_info.resources | first).spec | default({}) }}"
+    _backup_schedule_collision_repair_uid: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.uid | default('') }}"
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_repair_backup_schedule_collision_result is not defined
+    - (acm_secondary_backup_schedules_info.resources | default([]) | length) == 1
+
+- name: Delete BackupSchedule for collision repair
+  kubernetes.core.k8s:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    name: "{{ _backup_schedule_collision_repair_body.metadata.name }}"
+    namespace: "{{ _backup_schedule_collision_repair_body.metadata.namespace }}"
+    state: absent
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _backup_schedule_collision_delete
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_repair_backup_schedule_collision_result is not defined
+
+- name: Wait for BackupSchedule deletion to complete
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    name: "{{ _backup_schedule_collision_repair_body.metadata.name }}"
+    namespace: "{{ _backup_schedule_collision_repair_body.metadata.namespace }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _backup_schedule_collision_delete_wait
+  retries: 30
+  delay: 5
+  until: (_backup_schedule_collision_delete_wait.resources | default([]) | length) == 0
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_repair_backup_schedule_collision_result is not defined
+
+- name: Recreate BackupSchedule after collision repair delete
+  kubernetes.core.k8s:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    state: present
+    definition: "{{ _backup_schedule_collision_repair_body }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _backup_schedule_collision_create
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_repair_backup_schedule_collision_result is not defined
+
+- name: Refresh BackupSchedule facts after collision repair
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1beta1
+    kind: BackupSchedule
+    namespace: "{{ _backup_schedule_collision_repair_body.metadata.namespace | default('open-cluster-management-backup') }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_backup_schedules_info
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_repair_backup_schedule_collision_result is not defined
+
+- name: Publish BackupSchedule collision repair result
+  ansible.builtin.set_fact:
+    acm_switchover_repair_backup_schedule_collision_result:
+      changed: true
+      status: pass
+      schedule_name: "{{ _backup_schedule_collision_repair_body.metadata.name }}"
+      previous_uid: "{{ _backup_schedule_collision_repair_uid }}"
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_switchover_repair_backup_schedule_collision_result is not defined

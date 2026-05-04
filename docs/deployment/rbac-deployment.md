@@ -321,6 +321,8 @@ kubectl get policy policy-acm-switchover-rbac \
 
 For detailed ACM Policy usage, see [deploy/acm-policies/README.md](../../deploy/acm-policies/README.md).
 
+The ACM Policy manifest embeds the same baseline least-privilege resources as `deploy/rbac/`. It does not grant the optional cluster-scoped decommission extension; apply the extension separately when the same operator service account must run old-hub teardown.
+
 ## Validation
 
 ### Check RBAC Permissions

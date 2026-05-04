@@ -28,6 +28,8 @@
 
     - name: Verify managed clusters
       ansible.builtin.include_tasks: verify_managed_clusters.yml
+      vars:
+        acm_switchover_managed_cluster_wait_soft_fail: true
       when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
     - name: Verify klusterlet status

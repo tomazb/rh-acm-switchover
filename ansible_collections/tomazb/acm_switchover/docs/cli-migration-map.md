@@ -12,7 +12,23 @@
 | `--dry-run` | `acm_switchover_execution.mode=dry_run` |
 | `--state-file` | `acm_switchover_execution.checkpoint.path` |
 | `--reset-state` | `acm_switchover_execution.checkpoint.reset` |
+| `--report-dir` | `acm_switchover_execution.report_dir` |
+| `--restore-only` | Run `playbooks/restore_only.yml` for the operator workflow; set `acm_switchover_operation.restore_only=true` when invoking a role or alternate playbook directly |
+| `--decommission` | `playbooks/decommission.yml` |
+| `--setup` | `playbooks/rbac_bootstrap.yml` |
 | `--argocd-manage` | `acm_switchover_features.argocd.manage` |
+| `--argocd-resume-only` | `playbooks/argocd_resume.yml` |
+| `--argocd-resume-on-failure` | `acm_switchover_features.argocd.resume_on_failure` |
+| `--skip-gitops-check` | `acm_switchover_features.skip_gitops_check` |
+| `--skip-rbac-validation` | `acm_switchover_features.skip_rbac_validation` |
+| `--skip-observability-checks` | `acm_switchover_features.skip_observability_checks` |
+| `--non-interactive` | `acm_switchover_decommission.confirmed=true` for decommission automation |
+| `--admin-kubeconfig` | `acm_switchover_hubs.primary.kubeconfig` for the admin bootstrap target |
+| `--role {operator,validator,both}` | `acm_switchover_rbac_bootstrap.role` |
+| `--include-decommission` | `acm_switchover_rbac_bootstrap.include_decommission` |
+| `--generate-kubeconfig` | `acm_switchover_rbac_bootstrap.generate_kubeconfigs` |
+| `--token-duration` | `acm_switchover_rbac_bootstrap.token_duration` |
+| `--output-dir` | `acm_switchover_rbac_bootstrap.output_dir` |
 
 ## Phase 5 Capability Status
 

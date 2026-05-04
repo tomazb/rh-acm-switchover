@@ -163,3 +163,14 @@ INITIAL_CLUSTER_WAIT_TIMEOUT = 120
 
 # Pod readiness tolerance (allow 20% pods not ready)
 POD_READINESS_TOLERANCE = 0.8
+
+# Python CLI report artifact schema
+REPORT_SCHEMA_VERSION = "1.0"
+REPORT_SOURCE_PYTHON_CLI = "python-cli"
+REPORT_PHASE_PREFLIGHT = "preflight"
+REPORT_STATUS_PASS = "pass"
+REPORT_STATUS_FAIL = "fail"
+REPORT_SEVERITY_CRITICAL = "critical"
+REPORT_SEVERITY_WARNING = "warning"
+REPORT_DEFAULT_CHECK = "validation"
+REPORT_ID_PREFIX_PREFLIGHT = "preflight-"

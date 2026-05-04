@@ -36,6 +36,41 @@ def test_main_cleans_restores_before_enabling_backups():
     ), "cleanup_restores.yml must run before enable_backups.yml"
 
 
+def test_main_repairs_backup_schedule_collision_before_continuity_checks():
+    """Collection finalization must mirror Python's BackupSchedule delete/recreate collision repair."""
+    includes = [task.get("ansible.builtin.include_tasks", "") for task in _main_block_tasks()]
+
+    assert "repair_backup_schedule_collision.yml" in includes
+    assert includes.index("verify_backups.yml") > includes.index("repair_backup_schedule_collision.yml")
+    assert includes.index("enable_backups.yml") < includes.index("repair_backup_schedule_collision.yml")
+
+
+def test_repair_backup_schedule_collision_deletes_and_recreates_schedule():
+    """Collision repair must delete and recreate the current BackupSchedule outside dry-run."""
+    path = FINALIZATION_TASKS / "repair_backup_schedule_collision.yml"
+    assert path.exists(), "finalization must define BackupSchedule collision repair tasks"
+    text = path.read_text()
+    tasks = yaml.safe_load(text)
+
+    delete_tasks = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s", {}).get("kind") == "BackupSchedule"
+        and task.get("kubernetes.core.k8s", {}).get("state") == "absent"
+    ]
+    create_tasks = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s", {}).get("kind") == "BackupSchedule"
+        and task.get("kubernetes.core.k8s", {}).get("state") == "present"
+    ]
+
+    assert delete_tasks, "collision repair must delete the current BackupSchedule"
+    assert create_tasks, "collision repair must recreate the BackupSchedule"
+    assert "default('dry_run') != 'dry_run'" in text
+    assert "restore_only_no_backup_schedule" in text
+
+
 def test_main_resets_auto_import_after_backup_and_mch_verification():
     """Finalization auto-import reset must match Python's post-verification ordering."""
     includes = [task.get("ansible.builtin.include_tasks", "") for task in _main_block_tasks()]

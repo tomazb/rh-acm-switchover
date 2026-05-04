@@ -66,6 +66,9 @@
     - name: Enable backup schedules on new hub
       ansible.builtin.include_tasks: enable_backups.yml
 
+    - name: Repair BackupSchedule collision risk on new hub
+      ansible.builtin.include_tasks: repair_backup_schedule_collision.yml
+
     - name: Verify backup schedules on new hub
       ansible.builtin.include_tasks: verify_backups.yml
 
@@ -108,6 +111,7 @@
               or (acm_switchover_disable_old_hub_observability_result.changed | default(false))
               or (acm_switchover_enable_backups_result.changed | default(false))
               or (acm_switchover_verify_backups_result.changed | default(false))
+              or (acm_switchover_repair_backup_schedule_collision_result.changed | default(false))
               or (acm_switchover_verify_mch_result.changed | default(false))
               or (acm_switchover_reset_auto_import_result.changed | default(false))
               or (acm_switchover_old_hub_disposition.changed | default(false))
@@ -118,6 +122,7 @@
           disable_old_hub_observability: "{{ acm_switchover_disable_old_hub_observability_result | default({}) }}"
           cleanup_restores: "{{ acm_switchover_cleanup_restores_result | default({}) }}"
           enable_backups: "{{ acm_switchover_enable_backups_result | default({}) }}"
+          backup_schedule_collision_repair: "{{ acm_switchover_repair_backup_schedule_collision_result | default({}) }}"
           verify_backups: "{{ acm_switchover_verify_backups_result | default({}) }}"
           verify_mch: "{{ acm_switchover_verify_mch_result | default({}) }}"
           reset_auto_import: "{{ acm_switchover_reset_auto_import_result | default({}) }}"

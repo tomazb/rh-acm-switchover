@@ -48,7 +48,7 @@ This document summarizes the comprehensive RBAC (Role-Based Access Control) impl
 - **Documentation**: Detailed README with usage examples
 
 ### 5. ACM Policy Governance (deploy/acm-policies/)
-- **Policy**: Validates and enforces RBAC resources across managed clusters
+- **Policy**: Validates and enforces the baseline `deploy/rbac/` resources across managed clusters
 - **PlacementRule**: Determines which clusters receive the policy
 - **PlacementBinding**: Binds policy to placement rule
 - **Features**:
@@ -56,6 +56,7 @@ This document summarizes the comprehensive RBAC (Role-Based Access Control) impl
   - Multi-cluster governance
   - Inform or enforce modes
   - NIST CSF compliance annotations
+  - Baseline least-privilege alignment; optional decommission extension remains separate
 
 ### 6. RBAC Validation Module (lib/rbac_validator.py)
 - **RBACValidator class**: Programmatic RBAC permission validation
@@ -66,6 +67,7 @@ This document summarizes the comprehensive RBAC (Role-Based Access Control) impl
   - `validate_all_permissions()` - Complete validation
   - `generate_permission_report()` - Detailed validation report
 - **Integration**: Integrated into pre-flight validation workflow
+- **Subresource handling**: Access reviews split resources such as `statefulsets/scale` into Kubernetes `resource` and `subresource` fields.
 
 ### 7. Standalone RBAC Checker (check_rbac.py)
 - **Purpose**: Validate RBAC permissions without running full switchover

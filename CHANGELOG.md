@@ -7,10 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added Python CLI `--report-dir` support for schema-versioned JSON artifacts (`preflight-report.json`, `switchover-report.json`, `restore-only-report.json`, and `decommission-report.json`) aligned with collection report fields.
+
+### Changed
+
+- Collection decommission now defaults `has_observability` to `auto`, discovers the observability namespace, and uses the effective value for RBAC checks and deletion tasks while preserving explicit `true`/`false` overrides.
+- Collection preflight now enforces exact ACM version equality, waits for in-progress Velero backups, validates the latest backup phase, and fails when joined clusters are not covered by a completed managed-clusters backup.
+- Collection discovery remains dual-supported as classification and bridge guidance; full live context enumeration remains the supported `scripts/discover-hub.sh` bridge.
+
 ### Fixed
 
 - Aligned collection decommission, activation, finalization, post-activation, preflight, RBAC, and Thanos-selector behavior with the Python CLI parity contract.
 - Hardened collection RBAC validation to fail closed on malformed access-review responses and aligned bootstrap manifests with namespaced `MultiClusterHub` decommission permissions.
+- Fixed Python RBAC SelfSubjectAccessReview construction for Kubernetes subresources such as `statefulsets/scale`.
+- Fixed Python full-restore `--min-managed-clusters` enforcement so the threshold is checked after restore completion.
+- Added collection BackupSchedule collision repair and normal-mode missing-schedule fail-fast behavior to match Python finalization safety.
+- Preserved collection Argo CD pause `run_id` across resume-on-failure retry paths so retries do not strand applications under an older pause marker.
 
 ## [1.7.7] - 2026-04-30
 

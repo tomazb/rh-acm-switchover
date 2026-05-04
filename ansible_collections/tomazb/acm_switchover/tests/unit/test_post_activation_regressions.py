@@ -141,6 +141,18 @@ class TestKlusterletReverification:
         when_str = str(when)
         assert "remediation_attempted" in when_str, "Re-verify 'when' must check a remediation-attempted flag"
 
+    def test_initial_managed_cluster_wait_is_soft_failed(self):
+        """The first cluster wait must allow klusterlet remediation to run before final hard failure."""
+        verify_mc_indices = self._find_task_indices("verify_managed_clusters.yml")
+        initial_task = self.block_tasks[verify_mc_indices[0]]
+        reverify_task = self.block_tasks[verify_mc_indices[-1]]
+
+        assert "acm_switchover_managed_cluster_wait_soft_fail" in str(initial_task)
+        assert "acm_switchover_managed_cluster_wait_soft_fail" not in str(reverify_task)
+        verify_text = (POST_ACTIVATION_TASKS / "verify_managed_clusters.yml").read_text()
+        assert "failed_when" in verify_text
+        assert "acm_switchover_managed_cluster_wait_soft_fail" in verify_text
+
     def test_verify_klusterlet_sets_remediation_flag(self):
         """verify_klusterlet.yml must set a remediation-attempted flag."""
         content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()

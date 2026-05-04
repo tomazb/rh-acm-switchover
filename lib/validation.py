@@ -372,6 +372,10 @@ class InputValidator:
         if hasattr(args, "state_file") and args.state_file:
             InputValidator.validate_safe_filesystem_path(args.state_file, "state-file")
 
+        # Validate report directory path if provided
+        if hasattr(args, "report_dir") and args.report_dir:
+            InputValidator.validate_safe_filesystem_path(args.report_dir, "report-dir")
+
         # Validate minimum managed cluster threshold
         if hasattr(args, "min_managed_clusters") and args.min_managed_clusters is not None:
             if not isinstance(args.min_managed_clusters, int):

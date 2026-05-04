@@ -872,13 +872,17 @@ class SecondaryActivation:
         if not completed:
             raise FatalError(f"Timeout waiting for restore to complete after {timeout}s")
 
-        # For passive sync, wait for the managed clusters Velero restore to actually complete
+        # For passive sync, wait for the managed clusters Velero restore to actually complete.
+        # For full restore, the ACM Restore completion is the terminal signal; then enforce
+        # the ManagedCluster count contract exposed by --min-managed-clusters.
         if self.method == "passive":
             # Skip waiting for Velero restore in dry-run mode since the patch wasn't applied
             if self.secondary.dry_run:
                 logger.info("[DRY-RUN] Skipping wait for Velero managed clusters restore")
             else:
                 self._wait_for_managed_clusters_velero_restore(restore_name, timeout)
+        else:
+            self._verify_managed_clusters_restored()
 
     def _wait_for_managed_clusters_velero_restore(self, restore_name: str, timeout: int = 300):
         """

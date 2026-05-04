@@ -129,6 +129,35 @@ def test_switchover_rescue_resets_primary_prep_checkpoint_after_resume_on_failur
     assert "checkpoint.enabled" in when_text
 
 
+def test_switchover_rescue_reset_preserves_argocd_run_id_for_retry():
+    """Failed resume-on-failure retries must keep matching the original pause marker."""
+    playbook = _load_playbook("switchover.yml")
+    task_block = _get_task_block(playbook)
+    reset_tasks = [
+        task
+        for task in task_block["rescue"]
+        if task.get("tomazb.acm_switchover.checkpoint_phase", {}).get("status") == "reset"
+    ]
+
+    assert reset_tasks, "switchover.yml rescue must reset primary_prep after resume-on-failure"
+    checkpoint_args = reset_tasks[0]["tomazb.acm_switchover.checkpoint_phase"]
+    operational_data = checkpoint_args.get("operational_data", {})
+    assert "argocd_run_id" in operational_data
+    assert "acm_switchover_argocd.run_id" in operational_data["argocd_run_id"]
+
+
+def test_primary_prep_rehydrates_argocd_run_id_from_checkpoint_before_pause():
+    """Retrying primary_prep must not generate a new run_id while old markers remain."""
+    text = (ROLES_DIR / "primary_prep" / "tasks" / "main.yml").read_text()
+    pause_index = text.index("Pause Argo CD auto-sync on primary hub when enabled")
+    rehydrate_index = text.find("Rehydrate Argo CD run_id from checkpoint")
+
+    assert rehydrate_index != -1
+    assert rehydrate_index < pause_index
+    assert "operational_data" in text
+    assert "argocd_run_id" in text
+
+
 def test_switchover_rescue_uses_ignore_errors():
     """switchover.yml rescue resume tasks must use ignore_errors to prevent compounding failures."""
     playbook = _load_playbook("switchover.yml")
