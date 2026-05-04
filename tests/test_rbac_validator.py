@@ -685,7 +685,7 @@ class TestValidateDecommissionPermissions:
             in validator.check_permission.call_args_list
         )
         assert (
-            call("operator.open-cluster-management.io", "multiclusterhubs", "list", ACM_NAMESPACE)
+            call("operator.open-cluster-management.io", "multiclusterhubs", "list", None)
             in validator.check_permission.call_args_list
         )
         assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in validator.check_permission.call_args_list

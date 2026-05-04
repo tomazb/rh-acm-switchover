@@ -75,7 +75,7 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: ["operator.open-cluster-management.io"]
     resources: ["multiclusterhubs"]
-    verbs: ["list", "delete"]
+    verbs: ["list"]
 
 ---
 # Role for ACM Switchover Operator in MCE namespace

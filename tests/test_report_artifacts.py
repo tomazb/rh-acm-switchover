@@ -75,6 +75,15 @@ def test_write_json_report_artifact_validates_path_and_writes_json(tmp_path):
     assert json.loads(destination.read_text(encoding="utf-8")) == {"schema_version": "1.0"}
 
 
+def test_write_json_report_artifact_allows_nested_absolute_report_dirs(tmp_path):
+    destination = tmp_path / "reports" / "run-1" / "switchover-report.json"
+
+    written = write_json_report_artifact({"schema_version": "1.0"}, str(destination))
+
+    assert written == str(destination)
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"schema_version": "1.0"}
+
+
 def test_write_json_report_artifact_rejects_unsafe_paths():
     with pytest.raises(SecurityValidationError):
         write_json_report_artifact({"schema_version": "1.0"}, "./artifacts/../outside/report.json")

@@ -18,6 +18,7 @@ from lib.constants import (
     REPORT_STATUS_FAIL,
     REPORT_STATUS_PASS,
 )
+from lib.exceptions import SecurityValidationError, ValidationError
 from lib.validation import InputValidator
 
 SCHEMA_VERSION = REPORT_SCHEMA_VERSION
@@ -66,6 +67,32 @@ def _hubs_from_args(args: Any) -> dict[str, dict[str, Any]]:
     if secondary_context:
         hubs["secondary"] = {"context": secondary_context}
     return hubs
+
+
+def _validate_path_syntax(path_value: str, field_name: str) -> None:
+    """Apply path syntax checks without requiring absolute parents to exist yet."""
+    if not path_value:
+        raise ValidationError(f"{field_name} path cannot be empty")
+    if ".." in path_value.split("/"):
+        raise SecurityValidationError(
+            f"SECURITY: Path traversal attempt detected in {field_name} path '{path_value}'. "
+            "The '..' sequence is not allowed as a path component."
+        )
+    unsafe_chars = ["~", "$", "{", "}", "|", "&", ";", "<", ">", "`"]
+    if any(char in path_value for char in unsafe_chars):
+        raise SecurityValidationError(
+            f"SECURITY: Invalid characters in {field_name} path '{path_value}'. "
+            "Path contains unsafe characters that could be used for command injection. "
+            f"Disallowed patterns: {', '.join(unsafe_chars)}."
+        )
+
+
+def _nearest_existing_ancestor(path: Path) -> Path:
+    """Return the nearest existing ancestor for an absolute path."""
+    current = path
+    while not current.exists() and current.parent != current:
+        current = current.parent
+    return current
 
 
 def build_operation_report(
@@ -120,8 +147,16 @@ def build_operation_report(
 def write_json_report_artifact(report: dict[str, Any], destination: str) -> str:
     """Validate and write a JSON report artifact."""
     path = Path(destination)
-    InputValidator.validate_safe_filesystem_path(str(path.parent), "report artifact directory")
+    _validate_path_syntax(destination, "report artifact")
+    if path.is_absolute():
+        InputValidator.validate_safe_filesystem_path(
+            str(_nearest_existing_ancestor(path.parent)),
+            "report artifact ancestor",
+        )
+    else:
+        InputValidator.validate_safe_filesystem_path(str(path.parent), "report artifact directory")
     path.parent.mkdir(parents=True, exist_ok=True)
+    InputValidator.validate_safe_filesystem_path(str(path.parent), "report artifact directory")
     InputValidator.validate_safe_filesystem_path(destination, "report artifact")
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return str(path)

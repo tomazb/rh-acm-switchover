@@ -22,6 +22,11 @@ spec:
         spec:
           remediationAction: inform
           severity: high
+          namespaceSelector:
+            exclude:
+              - kube-*
+            include:
+              - '*'
           object-templates:
             - complianceType: musthave
               objectDefinition:
@@ -266,7 +271,7 @@ spec:
                     verbs: ["get", "list"]
                   - apiGroups: ["operator.open-cluster-management.io"]
                     resources: ["multiclusterhubs"]
-                    verbs: ["list", "delete"]
+                    verbs: ["list"]
             - complianceType: musthave
               objectDefinition:
                 apiVersion: rbac.authorization.k8s.io/v1

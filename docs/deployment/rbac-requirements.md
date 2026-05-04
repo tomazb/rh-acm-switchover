@@ -155,12 +155,12 @@ The RBAC model is designed following the principle of least privilege:
 
 #### MultiClusterHubs
 - **Resources**: `multiclusterhubs`
-- **Verbs**: `get`, `list` cluster-wide; `list`, `delete` in `open-cluster-management` for old-hub teardown
+- **Verbs**: `get`, `list` cluster-wide; `list` in `open-cluster-management` for namespaced discovery
 - **Scope**: Cluster-wide and namespace-scoped (`open-cluster-management`)
 - **Purpose**: 
   - Detect ACM version
   - Verify ACM operator installation
-  - Delete namespaced `MultiClusterHub` resources during decommission
+  - Discover namespaced `MultiClusterHub` resources before decommission
 
 ### Observability API Group (observability.open-cluster-management.io)
 
@@ -222,8 +222,8 @@ Delete permissions for old-hub teardown are intentionally separated from the def
   - `delete` on cluster-scoped `multiclusterhubs`
   - `delete` on `multiclusterobservabilities`
 
-The baseline operator Role also includes `list` and `delete` on namespaced `multiclusterhubs` in `open-cluster-management`,
-because Kubernetes authorizes deletion of the namespaced `MultiClusterHub` resource through that namespace Role.
+The baseline operator Role includes only `list` on namespaced `multiclusterhubs` in `open-cluster-management`.
+Delete access remains in the opt-in decommission extension so ordinary switchover operators do not receive teardown privileges.
 
 Grant this extension only to service accounts that are allowed to run `--decommission`. The baseline operator role is sufficient for validation, switchover, and post-activation/finalization work.
 Validator/read-only roles must not request this extension.
@@ -253,7 +253,7 @@ These resources use Role and RoleBinding for specific namespaces:
 
 #### open-cluster-management (if needed)
 - `pods` (get, list)
-- `multiclusterhubs` (list, delete - operator.open-cluster-management.io) for decommission of the namespaced ACM hub resource
+- `multiclusterhubs` (list - operator.open-cluster-management.io) for namespaced ACM hub discovery
 
 ### Managed-Cluster (Spoke) RBAC
 

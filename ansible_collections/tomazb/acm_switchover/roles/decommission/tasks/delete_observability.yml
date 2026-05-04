@@ -37,7 +37,19 @@
   register: _observability_pods_after_delete
   retries: 60
   delay: 10
-  until: (_observability_pods_after_delete.resources | default([]) | length) == 0
+  failed_when:
+    - _observability_pods_after_delete.failed | default(false)
+    - "'NotFound' not in (_observability_pods_after_delete.msg | default(''))"
+    - "'not found' not in (_observability_pods_after_delete.msg | default('') | lower)"
+  until: >-
+    (_observability_pods_after_delete.resources | default([]) | length) == 0
+    or (
+      _observability_pods_after_delete.failed | default(false)
+      and (
+        'NotFound' in (_observability_pods_after_delete.msg | default(''))
+        or 'not found' in (_observability_pods_after_delete.msg | default('') | lower)
+      )
+    )
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - (_multiclusterobservability_resources.resources | default([]) | length) > 0

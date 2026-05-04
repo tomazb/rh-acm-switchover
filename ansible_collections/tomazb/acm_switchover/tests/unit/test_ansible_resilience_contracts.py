@@ -180,6 +180,9 @@ def test_decommission_waits_for_observability_and_acm_workload_pods():
 
     assert "kind: Pod" in obs_text
     assert "until" in obs_text
+    assert "failed_when" in obs_text
+    assert "NotFound" in obs_text
+    assert "not found" in obs_text
     assert "open-cluster-management-observability" in obs_text
     assert "kind: Pod" in mch_text
     assert "until" in mch_text

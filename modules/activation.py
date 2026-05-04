@@ -882,7 +882,7 @@ class SecondaryActivation:
             else:
                 self._wait_for_managed_clusters_velero_restore(restore_name, timeout)
         else:
-            self._verify_managed_clusters_restored()
+            self._wait_for_managed_clusters_restored(timeout)
 
     def _wait_for_managed_clusters_velero_restore(self, restore_name: str, timeout: int = 300):
         """
@@ -960,6 +960,48 @@ class SecondaryActivation:
         # Verify ManagedCluster resources actually exist
         self._verify_managed_clusters_restored()
 
+    def _list_restored_managed_cluster_names(self) -> list[str]:
+        """Return non-local ManagedCluster names currently visible on the secondary hub."""
+        managed_clusters = self.secondary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+        names = []
+        for mc in managed_clusters:
+            name = mc.get("metadata", {}).get("name")
+            if name and name != LOCAL_CLUSTER_NAME:
+                names.append(name)
+        return names
+
+    def _wait_for_managed_clusters_restored(self, timeout: int) -> None:
+        """Wait for full-restore ManagedCluster resources before enforcing the minimum."""
+        if self.min_managed_clusters == 0:
+            self._verify_managed_clusters_restored()
+            return
+
+        def _poll_managed_clusters():
+            non_local_clusters = self._list_restored_managed_cluster_names()
+            count = len(non_local_clusters)
+            if count >= self.min_managed_clusters:
+                return WaitConditionResult.complete(f"found {count} ManagedCluster(s): {', '.join(non_local_clusters)}")
+            return WaitConditionResult.pending(
+                f"found {count}/{self.min_managed_clusters} ManagedCluster(s): {non_local_clusters}"
+            )
+
+        completed = wait_for_condition(
+            "full-restore ManagedCluster resources",
+            _poll_managed_clusters,
+            timeout=timeout,
+            interval=RESTORE_POLL_INTERVAL,
+            fast_interval=RESTORE_FAST_POLL_INTERVAL,
+            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
+            logger=logger,
+        )
+
+        if not completed:
+            self._verify_managed_clusters_restored()
+
     def _verify_managed_clusters_restored(self):
         """
         Verify that ManagedCluster resources were actually restored.
@@ -968,20 +1010,7 @@ class SecondaryActivation:
         the managed clusters before we proceed with creating a BackupSchedule.
         """
         logger.info("Verifying ManagedCluster resources were restored...")
-
-        managed_clusters = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
-        )
-
-        # Count non-local clusters
-        non_local_clusters = [
-            mc.get("metadata", {}).get("name")
-            for mc in managed_clusters
-            if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
-        ]
-
+        non_local_clusters = self._list_restored_managed_cluster_names()
         count = len(non_local_clusters)
 
         if self.min_managed_clusters == 0:

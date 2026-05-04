@@ -294,6 +294,17 @@ class TestRBACManifestConsistency:
         assert_unique_keys("baseline", baseline_objects)
         assert {key(obj): obj for obj in policy_objects} == {key(obj): obj for obj in baseline_objects}
 
+    def test_acm_policy_has_cross_namespace_selector(self, acm_policy_path):
+        """ACM Policy must evaluate the namespaces that contain embedded baseline RBAC objects."""
+        policy_docs = list(yaml.safe_load_all(acm_policy_path.read_text(encoding="utf-8")))
+        policy = next(doc for doc in policy_docs if doc.get("kind") == "Policy")
+        config_policy = policy["spec"]["policy-templates"][0]["objectDefinition"]
+
+        assert config_policy["spec"]["namespaceSelector"] == {
+            "exclude": ["kube-*"],
+            "include": ["*"],
+        }
+
     def test_kustomize_roles_cover_expected_namespaces(self, kustomize_roles):
         """Test that Kustomize roles cover all expected namespaces."""
         expected_namespaces = {
@@ -379,8 +390,8 @@ class TestRBACManifestConsistency:
 
         assert secrets_rule is not None, "Expected secrets rule in observability operator role"
 
-    def test_kustomize_acm_role_has_namespaced_multiclusterhub_decommission_rule(self, kustomize_roles):
-        """ACM namespace Role must include namespaced MCH delete/list for decommission validation."""
+    def test_kustomize_acm_role_has_namespaced_multiclusterhub_discovery_rule(self, kustomize_roles):
+        """Baseline ACM namespace Role must keep MCH access non-destructive."""
         acm_operator_role = next(
             (
                 r
@@ -403,16 +414,15 @@ class TestRBACManifestConsistency:
         )
 
         assert mch_rule is not None, "Expected namespaced MultiClusterHub rule in ACM operator role"
-        assert "list" in mch_rule["verbs"]
-        assert "delete" in mch_rule["verbs"]
+        assert mch_rule["verbs"] == ["list"]
 
-    def test_helm_acm_role_has_namespaced_multiclusterhub_decommission_rule(self, helm_role_path):
-        """Helm Role template must expose the same namespaced MCH delete/list rule."""
+    def test_helm_acm_role_has_namespaced_multiclusterhub_discovery_rule(self, helm_role_path):
+        """Helm Role template must keep the same non-destructive namespaced MCH rule."""
         content = helm_role_path.read_text(encoding="utf-8")
         snippet = (
             '  - apiGroups: ["operator.open-cluster-management.io"]\n'
             '    resources: ["multiclusterhubs"]\n'
-            '    verbs: ["list", "delete"]'
+            '    verbs: ["list"]'
         )
 
         assert snippet in content

@@ -182,8 +182,8 @@ kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 ```
 
-The baseline namespace Roles include the `open-cluster-management` namespaced
-`multiclusterhubs` list/delete rule; the optional extension adds the
+The baseline namespace Roles include only the `open-cluster-management`
+namespaced `multiclusterhubs` list rule; the optional extension adds the
 cluster-scoped delete permissions needed to complete decommission.
 
 #### Step 4: Verify

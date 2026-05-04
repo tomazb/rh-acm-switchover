@@ -201,6 +201,7 @@ class RBACValidator:
     DECOMMISSION_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
         ("cluster.open-cluster-management.io", "managedclusters", ["list", "delete"]),
+        ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
         (
             "observability.open-cluster-management.io",
             "multiclusterobservabilities",
@@ -211,7 +212,6 @@ class RBACValidator:
     DECOMMISSION_NAMESPACE_PERMISSIONS = {
         ACM_NAMESPACE: [
             ("", "pods", ["get", "list"]),
-            ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
         ],
         OBSERVABILITY_NAMESPACE: [
             ("", "pods", ["get", "list"]),
