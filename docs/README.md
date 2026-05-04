@@ -13,6 +13,7 @@ Welcome to the ACM Switchover Automation documentation.
 | Deploy RBAC | [RBAC Deployment](deployment/rbac-deployment.md) |
 | Understand the collection form factor | [Ansible Collection Feature Inventory](ansible-collection/feature-inventory.md) |
 | Understand the architecture | [Architecture](development/architecture.md) |
+| Deep-dive into the code | [Code Walkthrough](development/code-walkthrough.md) |
 | Contribute to the project | [Contributing](../CONTRIBUTING.md) |
 
 ---
@@ -59,6 +60,7 @@ Architecture, testing, and contribution guidelines.
 ### Core Documentation
 
 - **[Architecture](development/architecture.md)** - Design principles and implementation details
+- **[Code Walkthrough](development/code-walkthrough.md)** - Deep explanation of Python, Ansible, and Bash implementation flows with Mermaid diagrams
 - **[Testing Guide](development/testing.md)** - How to run tests and CI/CD pipelines
 - **[CI/CD Setup](development/ci.md)** - GitHub Actions pipeline configuration
 - **[RBAC Implementation](development/rbac-implementation.md)** - Overview of RBAC features
@@ -115,6 +117,7 @@ docs/
 │   └── validation-rules.md      # Validation rules reference
 ├── development/
 │   ├── architecture.md          # Architecture documentation
+│   ├── code-walkthrough.md      # Deep implementation walkthrough
 │   ├── testing.md               # Testing guide
 │   ├── ci.md                    # CI/CD setup
 │   ├── rbac-implementation.md   # RBAC implementation details
