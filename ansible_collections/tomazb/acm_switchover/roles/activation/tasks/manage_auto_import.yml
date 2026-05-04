@@ -5,6 +5,7 @@
 - name: Initialize auto-import strategy management state
   ansible.builtin.set_fact:
     _auto_import_strategy_changed: false
+    _auto_import_current_strategy: default
 
 - name: Derive secondary ACM version for auto-import strategy management
   ansible.builtin.set_fact:

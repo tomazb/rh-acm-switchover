@@ -134,6 +134,16 @@ def test_manage_auto_import_preserves_python_guards_and_detect_only_mode():
     assert "ImportAndSync" in content
 
 
+def test_manage_auto_import_initializes_strategy_for_dry_run_paths():
+    """Dry-run skips live ConfigMap discovery, but later when clauses still need a strategy value."""
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
+    init_task = next(
+        task for task in tasks if task.get("name") == "Initialize auto-import strategy management state"
+    )
+
+    assert init_task["ansible.builtin.set_fact"]["_auto_import_current_strategy"] == "default"
+
+
 def test_manage_auto_import_creates_missing_configmap_like_python():
     """Default strategy is represented by an absent ConfigMap, so manage mode must create it."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())

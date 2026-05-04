@@ -30,6 +30,7 @@
 
 - name: Validate RBAC before decommission
   ansible.builtin.include_tasks: validate_rbac.yml
+  when: not (acm_switchover_features.skip_rbac_validation | default(false))
 
 - name: Delete Observability resources
   ansible.builtin.include_tasks: delete_observability.yml

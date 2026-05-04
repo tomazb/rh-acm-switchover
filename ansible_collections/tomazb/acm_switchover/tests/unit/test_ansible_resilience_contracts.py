@@ -83,6 +83,10 @@ def test_decommission_validates_rbac_before_destructive_steps():
     assert includes.index("validate_rbac.yml") < includes.index(
         "delete_managed_clusters.yml"
     ), "decommission RBAC validation must run before destructive delete tasks"
+    validate_include = next(
+        task for task in main_tasks if task.get("ansible.builtin.include_tasks") == "validate_rbac.yml"
+    )
+    assert validate_include["when"] == "not (acm_switchover_features.skip_rbac_validation | default(false))"
 
     validate_text = (DECOMMISSION_TASKS / "validate_rbac.yml").read_text()
     assert "tomazb.acm_switchover.acm_rbac_validate" in validate_text

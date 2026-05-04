@@ -36,7 +36,7 @@ acm_secondary_mch_info:
     - metadata:
         name: multiclusterhub
       status:
-        currentVersion: 2.14.1
+        currentVersion: 2.14.3
 
 acm_primary_namespace_info:
   resources:
