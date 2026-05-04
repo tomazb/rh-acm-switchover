@@ -7,6 +7,9 @@ acm_switchover_hubs:
 acm_switchover_execution:
   mode: dry_run
 
+acm_switchover_features:
+  skip_rbac_validation: true
+
 acm_switchover_decommission:
   interactive: false
   has_observability: true

@@ -38,12 +38,13 @@ def test_finalization_fixture_reports_enable_backup_operation(run_switchover_fix
     assert report["phases"]["finalization"]["enable_backups"]["operation"]["action"] == "patch"
 
 
-def test_finalization_reports_no_change_when_backup_enable_is_already_satisfied(run_switchover_fixture):
+def test_finalization_reports_collision_repair_plan_when_backup_enable_is_already_satisfied(run_switchover_fixture):
     completed, report = run_switchover_fixture("finalization_noop.yml")
     assert completed.returncode == 0
     assert report["phases"]["finalization"]["status"] == "pass"
     assert report["phases"]["finalization"]["enable_backups"]["operation"]["action"] == "none"
-    assert report["phases"]["finalization"]["changed"] is False
+    assert report["phases"]["finalization"]["backup_schedule_collision_repair"]["changed"] is True
+    assert report["phases"]["finalization"]["changed"] is True
 
 
 def test_switchover_invalid_report_dir_fails_without_writing_report(run_switchover_fixture):

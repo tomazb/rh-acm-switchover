@@ -8,12 +8,33 @@
     not (acm_switchover_decommission.confirmed | default(false) | bool)
     and (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
 
+- name: Detect observability namespace when configured for auto
+  kubernetes.core.k8s_info:
+    kind: Namespace
+    api_version: v1
+    name: open-cluster-management-observability
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+  register: _decommission_observability_namespace
+  failed_when: false
+  when: (acm_switchover_decommission.has_observability | default('auto') | string | lower) == 'auto'
+
+- name: Publish effective observability setting
+  ansible.builtin.set_fact:
+    acm_switchover_decommission_effective_has_observability: >-
+      {{
+        (_decommission_observability_namespace.resources | default([]) | length) > 0
+        if (acm_switchover_decommission.has_observability | default('auto') | string | lower) == 'auto'
+        else (acm_switchover_decommission.has_observability | bool)
+      }}
+
 - name: Validate RBAC before decommission
   ansible.builtin.include_tasks: validate_rbac.yml
+  when: not (acm_switchover_features.skip_rbac_validation | default(false))
 
 - name: Delete Observability resources
   ansible.builtin.include_tasks: delete_observability.yml
-  when: acm_switchover_decommission.has_observability | default(false) | bool
+  when: acm_switchover_decommission_effective_has_observability | bool
 
 - name: Delete non-local ManagedCluster resources
   ansible.builtin.include_tasks: delete_managed_clusters.yml
@@ -27,6 +48,7 @@
       phase: decommission
       mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
       status: pass
+      has_observability: "{{ acm_switchover_decommission_effective_has_observability | bool }}"
 
 - name: Normalize summary path input
   ansible.builtin.set_fact:

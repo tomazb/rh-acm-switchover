@@ -63,6 +63,9 @@
          | selectattr('metadata.name', 'ne', 'local-cluster') | list | length)
       )
     )
+  failed_when: >-
+    (not (acm_switchover_managed_cluster_wait_soft_fail | default(false) | bool))
+    and (acm_secondary_managed_clusters_info.failed | default(false) | bool)
 
 - name: Summarize managed cluster conditions
   tomazb.acm_switchover.acm_managedcluster_status:
@@ -79,3 +82,20 @@
     cluster_status: "{{ cluster_status_result.cluster_status }}"
     min_managed_clusters: "{{ acm_switchover_operation.min_managed_clusters | default(0) | int }}"
   register: acm_cluster_verify_result
+
+- name: Preserve soft managed-cluster wait failure for downstream remediation
+  ansible.builtin.set_fact:
+    acm_cluster_verify_result: >-
+      {{
+        acm_cluster_verify_result
+        | combine({
+            'passed': false,
+            'pending': (
+              (acm_cluster_verify_result.pending | default([]))
+              + ['managed-cluster-status-timeout']
+            )
+          })
+      }}
+  when:
+    - acm_switchover_managed_cluster_wait_soft_fail | default(false) | bool
+    - acm_secondary_managed_clusters_info.failed | default(false)

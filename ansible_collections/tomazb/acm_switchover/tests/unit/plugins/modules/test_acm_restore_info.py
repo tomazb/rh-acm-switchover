@@ -3,6 +3,7 @@
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_restore_info import (
     build_activation_patch,
     build_restore_activation_plan,
+    passive_restore_ready_for_preflight,
     select_passive_sync_restore,
 )
 
@@ -116,16 +117,11 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
     )
 
     assert plan["operation"]["action"] == "patch"
-    assert plan["operation"]["patch"] == {
-        "spec": {"veleroManagedClustersBackupName": "latest"}
-    }
+    assert plan["operation"]["patch"] == {"spec": {"veleroManagedClustersBackupName": "latest"}}
     assert plan["wait_target"]["name"] == "restore-acm-passive-sync"
     assert plan["wait_target"]["success_phases"] == ["Enabled", "Finished", "Completed"]
     assert plan["wait_target"]["velero_restore_required"] is True
-    assert (
-        plan["wait_target"]["velero_restore_status_field"]
-        == "veleroManagedClustersRestoreName"
-    )
+    assert plan["wait_target"]["velero_restore_status_field"] == "veleroManagedClustersRestoreName"
     assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
     assert plan["restore_ready"] is True
     assert plan["restore_phase"] == "Enabled"
@@ -149,9 +145,7 @@ def test_build_restore_activation_plan_defaults_passive_patch_to_latest_backup()
     )
 
     assert plan["operation"]["action"] == "patch"
-    assert plan["operation"]["patch"] == {
-        "spec": {"veleroManagedClustersBackupName": "latest"}
-    }
+    assert plan["operation"]["patch"] == {"spec": {"veleroManagedClustersBackupName": "latest"}}
     assert plan["patch"] == {"spec": {"veleroManagedClustersBackupName": "latest"}}
 
 
@@ -175,6 +169,31 @@ def test_build_restore_activation_plan_marks_unknown_passive_restore_not_ready()
     assert plan["restore"] is not None
     assert plan["restore_phase"] == "Unknown"
     assert plan["restore_ready"] is False
+
+
+def test_passive_restore_ready_accepts_benign_finished_with_errors():
+    restore = {
+        "status": {
+            "phase": "FinishedWithErrors",
+            "messages": [
+                "ManagedCluster cluster-a already available",
+                "ManagedCluster cluster-b already available",
+            ],
+        }
+    }
+
+    assert passive_restore_ready_for_preflight(restore) is True
+
+
+def test_passive_restore_ready_rejects_non_benign_finished_with_errors():
+    restore = {
+        "status": {
+            "phase": "FinishedWithErrors",
+            "messages": ["Velero restore failed validation"],
+        }
+    }
+
+    assert passive_restore_ready_for_preflight(restore) is False
 
 
 def test_build_restore_activation_plan_passive_patch_already_applied():
@@ -226,33 +245,16 @@ def test_build_restore_activation_plan_passive_restore_activation():
 
     assert plan["operation"]["action"] == "delete_and_create"
     assert plan["operation"]["delete_restore"]["name"] == "restore-acm-passive-sync"
-    assert (
-        plan["operation"]["create_restore"]["metadata"]["name"]
-        == "restore-acm-activate"
-    )
-    assert (
-        plan["operation"]["create_restore"]["spec"]["veleroManagedClustersBackupName"]
-        == "latest"
-    )
-    assert (
-        plan["operation"]["create_restore"]["spec"]["veleroCredentialsBackupName"]
-        == "skip"
-    )
-    assert (
-        plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"]
-        == "skip"
-    )
-    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {
-        "managed-by": "test"
-    }
+    assert plan["operation"]["create_restore"]["metadata"]["name"] == "restore-acm-activate"
+    assert plan["operation"]["create_restore"]["spec"]["veleroManagedClustersBackupName"] == "latest"
+    assert plan["operation"]["create_restore"]["spec"]["veleroCredentialsBackupName"] == "skip"
+    assert plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"] == "skip"
+    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {"managed-by": "test"}
     assert plan["wait_target"]["name"] == "restore-acm-activate"
     assert plan["wait_target"]["success_phases"] == ["Finished", "Completed"]
-    # velero_restore_required must NOT be set for activation_method=restore: the Restore CR
-    # phase reaching Finished/Completed is sufficient; separate Velero restore polling is
-    # only needed for the patch path where the Restore stays "Enabled" indefinitely.
-    # Absence of velero_restore_required prevents the Ansible "Publish restore wait result"
-    # task from accessing .resources on skipped Velero polling task variables (Bug 14).
-    assert not plan["wait_target"].get("velero_restore_required", False)
+    assert plan["wait_target"]["velero_restore_required"] is True
+    assert plan["wait_target"]["velero_restore_status_field"] == "veleroManagedClustersRestoreName"
+    assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
 
 
 def test_build_restore_activation_plan_for_full_restore_mode():
@@ -265,20 +267,12 @@ def test_build_restore_activation_plan_for_full_restore_mode():
 
     assert plan["operation"]["action"] == "create"
     assert plan["operation"]["create_restore"]["metadata"]["name"] == "restore-acm-full"
-    assert (
-        plan["operation"]["create_restore"]["spec"]["veleroManagedClustersBackupName"]
-        == "latest"
-    )
-    assert (
-        plan["operation"]["create_restore"]["spec"]["veleroCredentialsBackupName"]
-        == "latest"
-    )
-    assert (
-        plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"]
-        == "latest"
-    )
+    assert plan["operation"]["create_restore"]["spec"]["veleroManagedClustersBackupName"] == "latest"
+    assert plan["operation"]["create_restore"]["spec"]["veleroCredentialsBackupName"] == "latest"
+    assert plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"] == "latest"
     assert plan["wait_target"]["name"] == "restore-acm-full"
     assert plan["wait_target"]["success_phases"] == ["Finished", "Completed"]
+    assert plan["wait_target"]["velero_restore_required"] is True
 
 
 def test_build_restore_activation_plan_defaults_full_restore_to_latest_backup():
@@ -321,10 +315,5 @@ def test_build_restore_activation_plan_for_full_restore_preserves_passive_restor
     assert plan["operation"]["action"] == "delete_and_create"
     assert plan["operation"]["delete_restore"]["name"] == "restore-acm-passive-sync"
     assert plan["operation"]["create_restore"]["metadata"]["name"] == "restore-acm-full"
-    assert (
-        plan["operation"]["rollback_restore"]["metadata"]["name"]
-        == "restore-acm-passive-sync"
-    )
-    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {
-        "managed-by": "test"
-    }
+    assert plan["operation"]["rollback_restore"]["metadata"]["name"] == "restore-acm-passive-sync"
+    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {"managed-by": "test"}

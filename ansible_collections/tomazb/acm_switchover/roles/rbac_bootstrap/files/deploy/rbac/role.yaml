@@ -112,10 +112,10 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list"]
 
-  # ACM Operator API - namespace-scoped MultiClusterHub teardown
+  # ACM Operator API - namespace-scoped MultiClusterHub discovery
   - apiGroups: ["operator.open-cluster-management.io"]
     resources: ["multiclusterhubs"]
-    verbs: ["list", "delete"]
+    verbs: ["list"]
 
 ---
 # Role for ACM Switchover Operator in multicluster-engine namespace

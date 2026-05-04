@@ -26,6 +26,8 @@ def test_python_preflight_command_uses_profile_contexts(tmp_path: Path) -> None:
     assert "primary" in command
     assert "--secondary-context" in command
     assert "secondary" in command
+    assert "--report-dir" in command
+    assert command[command.index("--report-dir") + 1].endswith("preflight/python")
 
 
 def test_python_restore_only_command_uses_unique_state_file(tmp_path: Path) -> None:
@@ -37,6 +39,7 @@ def test_python_restore_only_command_uses_unique_state_file(tmp_path: Path) -> N
     assert "--state-file" in command
     state_file = command[command.index("--state-file") + 1]
     assert state_file.endswith("python-restore-only/python/state.json")
+    assert "--report-dir" in command
 
 
 def test_python_passive_switchover_command_includes_required_flags(tmp_path: Path) -> None:
@@ -261,6 +264,7 @@ def test_python_decommission_command_uses_decommission_flag(tmp_path: Path) -> N
     assert "--non-interactive" in command
     assert "--secondary-context" not in command
     assert "--primary-context" in command
+    assert "--report-dir" in command
 
 
 def test_python_full_restore_command_forces_method_full(tmp_path: Path) -> None:

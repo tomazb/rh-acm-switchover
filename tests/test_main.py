@@ -215,6 +215,27 @@ class TestArgParsing:
             with pytest.raises(SystemExit):
                 parse_args()
 
+    def test_report_dir_parses_for_python_artifacts(self):
+        """Python CLI should expose a report directory for machine-readable artifacts."""
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "p2",
+                "--method",
+                "passive",
+                "--old-hub-action",
+                "secondary",
+                "--report-dir",
+                "./artifacts/run-1",
+            ],
+        ):
+            args = parse_args()
+            assert args.report_dir == "./artifacts/run-1"
+
     def test_validate_args_warns_when_argocd_manage_has_no_effect_in_validate_only(
         self,
     ):

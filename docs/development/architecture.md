@@ -347,6 +347,7 @@ Important state categories:
 - saved resources needed for version-specific restore/unpause behavior
 - Argo CD pause metadata such as `argocd_run_id` and `argocd_paused_apps`
 - error history
+- optional schema-versioned report artifacts written through `--report-dir`
 
 Operational guarantees:
 
@@ -354,6 +355,7 @@ Operational guarantees:
 - locking protects against concurrent modification
 - signal and exit handlers flush dirty state
 - completed-state reruns remain safe, including validate-only behavior
+- report artifact writes validate controller-side paths before creating JSON files
 
 ## Validation and Safety Model
 
@@ -421,6 +423,8 @@ The collection uses a fundamentally different architecture from the Python CLI:
 - **Playbooks** (`switchover.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints
 - **Grouped variables** (`acm_switchover_hubs`, `acm_switchover_operation`, `acm_switchover_features`) replace CLI flags as the primary operator interface
 - **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
+- **Report artifacts** use schema version `1.0` across preflight, switchover, restore-only, and decommission paths; Python `--report-dir` writes the same core fields
+- **Decommission observability** defaults to namespace autodetection in the collection, with explicit `true`/`false` overrides for known environments
 - **Constants isolation**: `plugins/module_utils/constants.py` is the collection's constants file — it cannot import from `lib/constants.py`
 
 The collection architecture is fully detailed in the [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md). Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.

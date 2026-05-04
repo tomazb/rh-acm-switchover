@@ -1,6 +1,6 @@
 # Test Migration Catalog
 
-Date: 2026-04-10
+Date: 2026-05-04
 Purpose: Triage the existing Python-oriented test suite into collection-era test layers
 
 ## Target Layers
@@ -29,16 +29,24 @@ Purpose: Triage the existing Python-oriented test suite into collection-era test
 | `tests/test_finalization.py` | parity, later integration | core switchover phase |
 | `tests/test_validation.py` | later unit/integration | variable-validation semantics |
 | `tests/test_rbac_validator.py` | later unit/integration | RBAC self-validation stays in core parity |
-| `tests/test_argocd.py` | deferred | Phase 5 |
-| `tests/test_gitops_detector.py` | deferred | Phase 5 |
-| `tests/test_decommission.py` | deferred | Phase 6 |
+| `tests/test_argocd.py` | parity, collection unit | Argo CD pause/resume and resume-on-failure are dual-supported |
+| `tests/test_gitops_detector.py` | parity, collection unit | GitOps classification remains shared behavior; full context discovery remains bridge-backed |
+| `tests/test_decommission.py` | parity, collection unit | Decommission is dual-supported, including observability autodetection and pod waits |
 | `tests/test_scripts_integration.py` | partial drop, partial bridge docs | only bridge behavior retained |
+| `tests/test_rbac_validator.py` | parity, collection unit | SSAR shape, dry-run validation, and manifest/policy alignment are shared contracts |
+| `tests/release/adapters/test_python_cli.py` | release adapter | Python scenario commands must pass `--report-dir` |
 
-## Phase 1 Test Baseline
+## Current Test Baseline
 
-Phase 1 tests should verify only:
+Current boundary tests should verify:
 
 - collection metadata parses correctly
 - playbooks are syntactically valid
 - example variable files parse correctly
 - CI entrypoints run successfully
+
+## Current Safety-Parity Coverage
+
+- Restore-only, Argo CD, discovery, decommission, RBAC bootstrap, report artifacts, and runtime parity now have collection unit or shared parity tests.
+- Bridge-only script behavior remains tested only where the script is still the supported bridge, especially full hub context enumeration through `scripts/discover-hub.sh`.
+- New parity-sensitive changes should add tests in both the Python suite and `ansible_collections/tomazb/acm_switchover/tests/unit/` unless the parity matrix records an approved divergence.

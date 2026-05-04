@@ -62,6 +62,8 @@
             phase: primary_prep
             checkpoint: "{{ acm_switchover_execution.checkpoint }}"
             status: reset
+            operational_data:
+              argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
           when:
             - acm_switchover_features.argocd.manage | default(false)
             - acm_switchover_features.argocd.resume_on_failure | default(false)

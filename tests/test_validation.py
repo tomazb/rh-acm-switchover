@@ -137,6 +137,52 @@ class TestCLIArgumentValidation:
         # Should not raise any exceptions
         InputValidator.validate_all_cli_args(args)
 
+    def test_validate_all_cli_args_accepts_safe_report_dir(self):
+        """--report-dir should accept safe relative artifact directories."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            report_dir="./artifacts/run-1",
+            decommission=False,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_rejects_unsafe_report_dir(self):
+        """--report-dir should reject unsafe filesystem paths through CLI validation."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            report_dir="../artifacts",
+            decommission=False,
+        )
+
+        with pytest.raises(SecurityValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_ignores_empty_report_dir(self):
+        """Empty --report-dir values should behave as if report output was not requested."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file=".state/switchover-state.json",
+            report_dir="",
+            decommission=False,
+        )
+
+        InputValidator.validate_all_cli_args(args)
+
     def test_validate_all_cli_args_invalid_context(self):
         """Test validation failure with invalid context."""
         args = MockArgs(

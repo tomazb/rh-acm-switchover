@@ -29,7 +29,7 @@ from `deploy/rbac/`.
 
 ## Lock Model
 
-Phase 1 defines the rule only:
+Current boundaries define the rule only:
 
 - local file-backed checkpoints require advisory locking
 - shared or controller-backed checkpoints require a Lease-style or equivalent coordination mechanism

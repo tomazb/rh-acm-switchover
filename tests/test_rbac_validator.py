@@ -63,6 +63,27 @@ class TestRBACValidator:
         assert "Forbidden" in error
 
     @patch("kubernetes.client")
+    def test_check_permission_splits_subresource_for_ssar(self, mock_k8s_client, validator):
+        """Kubernetes SSAR resourceAttributes require resource and subresource to be separate fields."""
+        mock_response = MagicMock()
+        mock_response.status.allowed = True
+        mock_response.status.reason = None
+
+        mock_api = MagicMock()
+        mock_api.create_self_subject_access_review.return_value = mock_response
+        mock_k8s_client.AuthorizationV1Api.return_value = mock_api
+
+        validator.check_permission("apps", "statefulsets/scale", "patch", OBSERVABILITY_NAMESPACE)
+
+        mock_k8s_client.V1ResourceAttributes.assert_called_once_with(
+            verb="patch",
+            resource="statefulsets",
+            subresource="scale",
+            group="apps",
+            namespace=OBSERVABILITY_NAMESPACE,
+        )
+
+    @patch("kubernetes.client")
     def test_check_permission_raises_validation_error_on_api_failure(self, mock_k8s_client, validator):
         """Infrastructure failures should not be reported as missing permissions."""
         mock_api = MagicMock()
@@ -664,7 +685,7 @@ class TestValidateDecommissionPermissions:
             in validator.check_permission.call_args_list
         )
         assert (
-            call("operator.open-cluster-management.io", "multiclusterhubs", "list", ACM_NAMESPACE)
+            call("operator.open-cluster-management.io", "multiclusterhubs", "list", None)
             in validator.check_permission.call_args_list
         )
         assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in validator.check_permission.call_args_list

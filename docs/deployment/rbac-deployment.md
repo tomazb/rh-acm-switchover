@@ -182,8 +182,8 @@ kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 ```
 
-The baseline namespace Roles include the `open-cluster-management` namespaced
-`multiclusterhubs` list/delete rule; the optional extension adds the
+The baseline namespace Roles include only the `open-cluster-management`
+namespaced `multiclusterhubs` list rule; the optional extension adds the
 cluster-scoped delete permissions needed to complete decommission.
 
 #### Step 4: Verify
@@ -320,6 +320,8 @@ kubectl get policy policy-acm-switchover-rbac \
 ```
 
 For detailed ACM Policy usage, see [deploy/acm-policies/README.md](../../deploy/acm-policies/README.md).
+
+The ACM Policy manifest embeds the same baseline least-privilege resources as `deploy/rbac/`. It does not grant the optional cluster-scoped decommission extension; apply the extension separately when the same operator service account must run old-hub teardown.
 
 ## Validation
 

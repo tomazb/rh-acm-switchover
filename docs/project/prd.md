@@ -263,12 +263,24 @@ The Ansible Collection design maps these flags to grouped collection variables; 
 - `--old-hub-action {secondary,decommission,none}`
 - `--manage-auto-import-strategy`
 - `--min-managed-clusters`
+- `--report-dir`
+- `--restore-only`
+- `--decommission`
 - `--skip-gitops-check`
+- `--skip-rbac-validation`
+- `--skip-observability-checks`
 - `--argocd-manage`
 - `--argocd-resume-only`
+- `--argocd-resume-on-failure`
 - `--setup`
+- `--admin-kubeconfig`
 - `--include-decommission`
+- `--role {operator,validator,both}`
+- `--token-duration`
+- `--output-dir`
 - `--disable-observability-on-secondary` (deprecated compatibility flag)
+
+Both production form factors must emit machine-readable report artifacts with schema version `1.0` for preflight, switchover, restore-only, and decommission workflows when report output is requested.
 
 ## Constraints and Caveats
 
@@ -292,6 +304,7 @@ The Ansible Collection (`tomazb.acm_switchover`) has been implemented and is a p
 - Ansible-native idempotency by default, with optional persistent checkpoints for long-running or interrupted switchovers
 - Collection-first architecture with roles, playbooks, and thin custom plugins instead of a monolithic Python CLI
 - Grouped variable model (`acm_switchover_hubs`, `acm_switchover_operation`, etc.) replacing flat CLI flags
+- Shared report schema with collection report artifact modules and Python `--report-dir`
 - Execution-environment packaging for AAP alongside `ansible-galaxy` distribution
 
 See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md) for the full design.

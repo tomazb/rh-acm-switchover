@@ -83,6 +83,7 @@ class PythonCliAdapter:
     def build_command(self, scenario_id: str) -> list[str]:
         scenario_dir = self.scenario_dir(scenario_id)
         state_file = scenario_dir / "state.json"
+        report_dir = scenario_dir
 
         if scenario_id == "python-restore-only":
             # restore-only is standalone; method and old-hub-action are not required
@@ -93,6 +94,8 @@ class PythonCliAdapter:
                 self.secondary_context,
                 "--state-file",
                 str(state_file),
+                "--report-dir",
+                str(report_dir),
                 "--restore-only",
             ]
 
@@ -105,6 +108,8 @@ class PythonCliAdapter:
                 self.primary_context,
                 "--state-file",
                 str(state_file),
+                "--report-dir",
+                str(report_dir),
                 "--decommission",
                 "--non-interactive",
             ]
@@ -124,6 +129,8 @@ class PythonCliAdapter:
             self.old_hub_action,
             "--state-file",
             str(state_file),
+            "--report-dir",
+            str(report_dir),
         ]
         if scenario_id == "preflight":
             return base + ["--validate-only"]

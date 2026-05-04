@@ -201,6 +201,7 @@ class RBACValidator:
     DECOMMISSION_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
         ("cluster.open-cluster-management.io", "managedclusters", ["list", "delete"]),
+        ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
         (
             "observability.open-cluster-management.io",
             "multiclusterobservabilities",
@@ -211,7 +212,6 @@ class RBACValidator:
     DECOMMISSION_NAMESPACE_PERMISSIONS = {
         ACM_NAMESPACE: [
             ("", "pods", ["get", "list"]),
-            ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
         ],
         OBSERVABILITY_NAMESPACE: [
             ("", "pods", ["get", "list"]),
@@ -333,10 +333,17 @@ class RBACValidator:
 
             api_instance = k8s_client.AuthorizationV1Api(self.client.core_v1.api_client)
 
-            # Construct resource attributes
+            # Construct resource attributes. Kubernetes SSAR expects subresources
+            # such as statefulsets/scale to be split into separate fields.
+            resource_name = resource
+            subresource = None
+            if "/" in resource:
+                resource_name, subresource = resource.split("/", 1)
+
             resource_attrs = k8s_client.V1ResourceAttributes(
                 verb=verb,
-                resource=resource,
+                resource=resource_name,
+                subresource=subresource,
                 group=api_group if api_group else None,
                 namespace=namespace,
             )

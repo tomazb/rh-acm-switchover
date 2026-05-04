@@ -22,6 +22,8 @@
     hub: primary
     role: "{{ acm_switchover_rbac_bootstrap.role }}"
     include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
+    argocd_mode: "{{ 'manage' if acm_switchover_rbac_bootstrap.role == 'operator' else 'check' }}"
+    argocd_install_type: operator
     denied_permissions: []
   register: _rbac_validation_plan
 
@@ -78,6 +80,8 @@
     hub: primary
     role: "{{ acm_switchover_rbac_bootstrap.role }}"
     include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
+    argocd_mode: "{{ 'manage' if acm_switchover_rbac_bootstrap.role == 'operator' else 'check' }}"
+    argocd_install_type: operator
     denied_permissions: "{{ _rbac_denied_permissions | default([]) }}"
     result_id: rbac-bootstrap-primary
     failure_message: RBAC bootstrap cannot verify required permissions on primary hub

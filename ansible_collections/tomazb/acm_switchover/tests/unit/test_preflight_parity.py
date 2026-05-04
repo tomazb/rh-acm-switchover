@@ -81,10 +81,33 @@ def test_preflight_runs_controller_tooling_advisory():
     assert '"severity": "warning"' in text
 
 
+def test_validate_versions_requires_exact_acm_version_match():
+    """Collection preflight must match Python's exact ACM version equality check."""
+    text = (PREFLIGHT_TASKS / "validate_versions.yml").read_text()
+
+    assert "acm_primary_version == acm_secondary_version" in text
+    assert ".split('.')[0:2]" not in text
+    assert "same ACM version" in text
+
+
 def test_validate_backups_enforces_backup_and_cluster_parity_checks():
     """validate_backups.yml must include the missing critical parity checks."""
     text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
 
+    assert "InProgress" in text, "validate_backups.yml must wait for in-progress Velero backups"
+    assert "until:" in text, "validate_backups.yml must poll backup state before judging latest backup phase"
+    assert (
+        "Read primary hub backups after in-progress wait" in text
+    ), "validate_backups.yml must refresh backup facts after waiting"
+    assert (
+        "latest backup" in text and "unexpected state" in text
+    ), "validate_backups.yml must fail when the latest Velero backup is not Completed"
+    assert (
+        "no managed-clusters backups found" in text
+    ), "validate_backups.yml must fail when joined clusters exist without a managed-clusters backup artifact"
+    assert (
+        "latest managed-clusters backup" in text and "not completed" in text
+    ), "validate_backups.yml must fail when the latest managed-clusters backup is not Completed"
     assert (
         "useManagedServiceAccount" in text
     ), "validate_backups.yml must enforce BackupSchedule useManagedServiceAccount"
@@ -94,6 +117,16 @@ def test_validate_backups_enforces_backup_and_cluster_parity_checks():
     assert (
         "clusters imported after latest backup will be lost" in text
     ), "validate_backups.yml must detect clusters imported after the latest managed-clusters backup"
+    msa_block = text[
+        text.index('"id": "preflight-backup-schedule-use-managed-service-account"') : text.index(
+            "- name: Record primary hub BackupStorageLocation health"
+        )
+    ]
+    assert 'status": "skip"' not in msa_block
+    assert "not required for full restore" not in msa_block
+    assert (
+        "acm_switchover_operation.method == 'full'" not in msa_block
+    ), "useManagedServiceAccount validation must be critical for full and passive non-restore-only switchovers"
 
 
 def test_validate_backups_use_managed_service_account_recommended_action_is_valid_jinja():
@@ -101,7 +134,7 @@ def test_validate_backups_use_managed_service_account_recommended_action_is_vali
     text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
     anchor = (
         '"recommended_action": "Set spec.useManagedServiceAccount=true in the primary BackupSchedule before '
-        'passive switchover"'
+        'switchover"'
     )
     start = text.index(anchor)
     end = text.index("else None", start) + len("else None")

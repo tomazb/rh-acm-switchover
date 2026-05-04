@@ -1,6 +1,6 @@
 # Parity Matrix
 
-Date: 2026-04-22 (Phase 6 complete)
+Date: 2026-05-04 (safety parity realignment)
 Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`
 
 Intentional parity changes require explicit operator approval before implementation. When a capability's support status changes, or approved work intentionally leaves a `dual-supported` capability divergent, record that decision here and update the related mapping/coexistence docs in the same change.
@@ -15,11 +15,11 @@ Intentional parity changes require explicit operator approval before implementat
 | post-activation verification | dual-supported | dual-supported | core parity requirement |
 | finalization | dual-supported | dual-supported | core parity requirement |
 | RBAC self-validation | dual-supported | dual-supported | core parity requirement |
-| machine-readable reports | dual-supported | dual-supported | schema defined in Phase 1 |
+| machine-readable reports | dual-supported | dual-supported | Python and collection both write schema version `1.0` report artifacts |
 | optional checkpoints | dual-supported | dual-supported | Phase 4 collection implementation complete |
 | Argo CD management | dual-supported | dual-supported | Phase 5 collection implementation complete |
-| discovery | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/discover-hub.sh remains supported bridge |
-| decommission | dual-supported | dual-supported | Phase 6 collection implementation complete |
+| discovery | dual-supported | dual-supported | Collection provides classification/reporting and bridge guidance; `scripts/discover-hub.sh` remains the full context-enumeration bridge |
+| decommission | dual-supported | dual-supported | Collection defaults observability detection to `auto` and waits for ACM/observability workload pods during teardown |
 | RBAC bootstrap | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/setup-rbac.sh deprecated |
 
 ## Milestone Gates
@@ -49,11 +49,11 @@ These tests run in CI and must remain green. Add a new test or assertion wheneve
 | Capability | Python Status | Collection Status | Phase | Notes |
 | --- | --- | --- | --- | --- |
 | Kubeconfig validation | implemented | dual-supported | 2 | Connectivity and safe-path coverage landed in Phase 2 |
-| ACM version validation | implemented | dual-supported | 2 | Collection preflight enforces compatible ACM minor versions |
+| ACM version validation | implemented | dual-supported | 2 | Collection preflight enforces exact ACM version equality like Python |
 | Namespace validation | implemented | dual-supported | 2 | Backup namespaces validated on both hubs |
 | Observability detection | implemented | dual-supported | 2 | Collection preflight records observability presence or skip state |
-| Backup validation | implemented | dual-supported | 2 | Backup, BackupSchedule, and BSL checks landed |
-| ManagedCluster backup validation | implemented | dual-supported | 2 | Collection preflight requires managed-cluster backup artifacts |
+| Backup validation | implemented | dual-supported | 2 | Backup, BackupSchedule, BSL, latest Completed backup, and in-progress wait checks are aligned |
+| ManagedCluster backup validation | implemented | dual-supported | 2 | Collection preflight requires a completed managed-clusters backup when joined clusters exist |
 | ClusterDeployment validation | implemented | dual-supported | 2 | Collection preflight requires Hive ClusterDeployment resources |
 | Passive sync validation | implemented | dual-supported | 2 | Secondary passive restore required for passive method |
 | RBAC self-validation (SelfSubjectAccessReview) | implemented | dual-supported | 2 | Collection module mirrors Python RBAC gate |

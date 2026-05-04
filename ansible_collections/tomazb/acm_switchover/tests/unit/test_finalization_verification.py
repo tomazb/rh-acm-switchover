@@ -20,6 +20,16 @@ def _main_block_tasks() -> list[dict]:
     raise AssertionError("finalization/main.yml must contain a block of phase tasks")
 
 
+def _flatten_tasks(tasks: list[dict]) -> list[dict]:
+    flattened = []
+    for task in tasks:
+        flattened.append(task)
+        for key in ("block", "rescue", "always"):
+            if key in task:
+                flattened.extend(_flatten_tasks(task[key]))
+    return flattened
+
+
 def test_cleanup_restores_file_exists():
     """finalization must define a dedicated restore cleanup task file."""
     assert (FINALIZATION_TASKS / "cleanup_restores.yml").exists()
@@ -34,6 +44,57 @@ def test_main_cleans_restores_before_enabling_backups():
     assert includes.index("cleanup_restores.yml") < includes.index(
         "enable_backups.yml"
     ), "cleanup_restores.yml must run before enable_backups.yml"
+
+
+def test_main_repairs_backup_schedule_collision_before_continuity_checks():
+    """Collection finalization must mirror Python's BackupSchedule delete/recreate collision repair."""
+    includes = [task.get("ansible.builtin.include_tasks", "") for task in _main_block_tasks()]
+
+    assert "repair_backup_schedule_collision.yml" in includes
+    assert includes.index("verify_backups.yml") > includes.index("repair_backup_schedule_collision.yml")
+    assert includes.index("enable_backups.yml") < includes.index("repair_backup_schedule_collision.yml")
+
+
+def test_repair_backup_schedule_collision_deletes_and_recreates_schedule():
+    """Collision repair must delete and recreate the current BackupSchedule outside dry-run."""
+    path = FINALIZATION_TASKS / "repair_backup_schedule_collision.yml"
+    assert path.exists(), "finalization must define BackupSchedule collision repair tasks"
+    text = path.read_text()
+    tasks = _flatten_tasks(yaml.safe_load(text))
+
+    delete_tasks = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s", {}).get("kind") == "BackupSchedule"
+        and task.get("kubernetes.core.k8s", {}).get("state") == "absent"
+    ]
+    create_tasks = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s", {}).get("kind") == "BackupSchedule"
+        and task.get("kubernetes.core.k8s", {}).get("state") == "present"
+    ]
+
+    assert delete_tasks, "collision repair must delete the current BackupSchedule"
+    assert create_tasks, "collision repair must recreate the BackupSchedule"
+    assert "rescue:" in text
+    assert "Restore BackupSchedule after failed collision repair" in text
+    assert "default('dry_run') != 'dry_run'" in text
+    assert "restore_only_no_backup_schedule" in text
+
+
+def test_repair_backup_schedule_collision_validates_cardinality_in_dry_run():
+    """Dry-run must still fail fast when BackupSchedule cardinality is unsafe."""
+    tasks = _load_yaml("repair_backup_schedule_collision.yml")
+    missing_name = "Fail fast when normal finalization has no BackupSchedule to repair"
+    multiple_name = "Refuse to repair when multiple BackupSchedules exist"
+    missing_task = next(
+        task for task in tasks if task.get("name") == missing_name
+    )
+    multiple_task = next(task for task in tasks if task.get("name") == multiple_name)
+
+    assert "dry_run" not in str(missing_task.get("when", ""))
+    assert "dry_run" not in str(multiple_task.get("when", ""))
 
 
 def test_main_resets_auto_import_after_backup_and_mch_verification():

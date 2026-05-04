@@ -14,7 +14,7 @@
 ## Notes
 
 - The collection public API is grouped variables, not a flat CLI flag layer.
-- checkpoint keys are contract-only in Phase 1.
+- checkpoint keys are contract-only in the current boundaries.
 
 ## Preflight Result Facts
 
@@ -52,7 +52,7 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 |-----|------|---------|-------------|
 | `confirmed` | bool | `false` | Must be `true` to proceed outside `dry_run` mode |
 | `interactive` | bool | `false` | Reserved for future interactive prompting |
-| `has_observability` | bool | `false` | When `true`, delete `MultiClusterObservability` first |
+| `has_observability` | `auto`, `true`, `false` | `auto` | Auto-detect `open-cluster-management-observability` by default; `true`/`false` force the observability deletion path on or off |
 
 ### `acm_switchover_rbac_bootstrap`
 
