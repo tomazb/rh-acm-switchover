@@ -92,8 +92,8 @@ graph TD
     L --> M[Step 8: Restart Observatorium API<br/>Gateway Pods]
     M --> N[Step 9: Verify Observability Pods<br/>Are Running]
     N --> O[Step 10: Verify Metrics Collection]
-    O --> P{Disable Observability<br/>on old secondary hub?}
-    P -->|Yes| Q[Optional: Disable Observability Permanently<br/>on Old Secondary Hub]
+    O --> P{Keeping old primary<br/>as secondary?}
+    P -->|Yes| Q[Optional: Disable Observability Permanently<br/>on Old Hub]
     P -->|No| R[Step 11: Enable BackupSchedule<br/>on New Active Hub]
     Q --> R
     R --> S[Step 12: Verify Backup Integrity]
@@ -124,8 +124,8 @@ graph TD
     L --> M[Step 8: Restart Observatorium API<br/>Gateway Pods]
     M --> N[Step 9: Verify Observability Pods<br/>Are Running]
     N --> O[Step 10: Verify Metrics Collection]
-    O --> P{Disable Observability<br/>on old secondary hub?}
-    P -->|Yes| Q[Optional: Disable Observability Permanently<br/>on Old Secondary Hub]
+    O --> P{Keeping old primary<br/>as secondary?}
+    P -->|Yes| Q[Optional: Disable Observability Permanently<br/>on Old Hub]
     P -->|No| R[Step 11: Enable BackupSchedule<br/>on New Active Hub]
     Q --> R
     R --> S[Step 12: Verify Backup Integrity]

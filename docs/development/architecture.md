@@ -79,7 +79,7 @@ The entrypoint exposes five distinct execution branches:
 4. **Argo CD resume-only path (`--argocd-resume-only`)**
    - Loads recorded pause state and resumes Application auto-sync without running switchover phases.
 5. **Restore-only path (`--restore-only`)**
-   - Single-hub restore from S3 backups. No primary hub needed. Skips PRIMARY_PREP, runs secondary-only preflight.
+   - Single-hub restore from S3 backups. No primary hub needed. Skips PRIMARY_PREP, runs secondary-only preflight, and can optionally pause Argo CD apps on the secondary hub before activation.
 
 ```mermaid
 flowchart TD
@@ -89,15 +89,25 @@ flowchart TD
     B -->|--argocd-resume-only| E[Load state and resume recorded Argo CD apps]
     B -->|--restore-only| R[Initialize state and secondary client]
     B -->|standard switchover| F[Initialize state and clients]
+    C --> C1{Success?}
+    C1 -->|yes| C2[Exit 0]
+    C1 -->|no| C3[Exit 1]
     D --> D1{Success?}
     D1 -->|yes| D2[Exit 0]
     D1 -->|no| D3[Exit 1]
+    E --> E1{Success?}
+    E1 -->|yes| E2[Exit 0]
+    E1 -->|no| E3[Exit 1]
     R --> RG[PREFLIGHT secondary-only]
-    RG --> RI[ACTIVATION full restore]
+    RG --> RP{--argocd-manage?}
+    RP -->|yes| RQ[Pause ACM-touching<br/>Argo CD Applications<br/>on secondary]
+    RP -->|no| RI[ACTIVATION full restore]
+    RQ --> RI
     RI --> RJ[POST_ACTIVATION]
     RJ --> RM[FINALIZATION backups-only]
     RM --> RK[COMPLETED]
     RG --> RL[FAILED]
+    RQ --> RL
     RI --> RL
     RJ --> RL
     RM --> RL

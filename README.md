@@ -105,6 +105,7 @@ Standalone validation scripts ensure safe and successful switchovers:
 - **[ACM Switchover Runbook](docs/ACM_SWITCHOVER_RUNBOOK.md)** - Detailed operational procedures
 - **[Installation Guide](docs/getting-started/install.md)** - Detailed installation instructions
 - **[Architecture](docs/development/architecture.md)** - Design and implementation details
+- **[Code Walkthrough](docs/development/code-walkthrough.md)** - Deep explanation of Python, Ansible, and Bash implementation flows
 - **[Testing Guide](docs/development/testing.md)** - How to run tests and CI/CD
 - **[Contributing](CONTRIBUTING.md)** - Development guidelines
 
@@ -309,7 +310,10 @@ When using `--restore-only` (no primary hub available), the workflow is simplifi
 
 ```mermaid
 flowchart LR
-    A[PREFLIGHT] --> B[ACTIVATION]
+    A[PREFLIGHT] --> P{--argocd-manage?}
+    P -->|yes| Q[Pause ACM-touching<br/>Argo CD Applications]
+    P -->|no| B
+    Q --> B
     B --> C[POST_ACTIVATION]
     C --> D[FINALIZATION]
     D --> E[COMPLETED]
@@ -318,9 +322,10 @@ flowchart LR
 ```
 
 1. **Preflight** — validates target hub only (ACM version, BSL credentials, namespaces)
-2. **Activation** — creates a one-time full Restore from the latest S3 backup
-3. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents
-4. **Finalization** — enables BackupSchedule on the new hub
+2. **Optional Argo CD pause** — with `--argocd-manage`, pauses ACM-touching Applications on the target hub before activation
+3. **Activation** — creates a one-time full Restore from the latest S3 backup
+4. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents
+5. **Finalization** — enables BackupSchedule on the new hub
 
 ### State Management
 

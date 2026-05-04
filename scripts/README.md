@@ -324,29 +324,31 @@ graph TD
     C --> D[Check Kubernetes Contexts]
     D --> E[Verify Namespaces]
     E --> F[Check ACM Versions]
-    F --> G{Versions Match?}
-    G -->|No| H[FAIL: Version Mismatch]
-    G -->|Yes| I[Check OADP Operator]
-    I --> J[Verify DataProtectionApplication]
-    J --> J2[Check BackupStorageLocation]
-    J2 --> J3{BSL Available?}
-    J3 -->|No| J4[FAIL: Storage Inaccessible]
-    J3 -->|Yes| J5[Check Cluster Health]
-    J5 --> J6{Nodes Ready &<br/>ClusterOps Healthy?}
-    J6 -->|No| J7[FAIL: Cluster Unhealthy]
-    J6 -->|Yes| J8{Upgrade in<br/>Progress?}
-    J8 -->|Yes| J9[FAIL: Upgrade in Progress]
-    J8 -->|No| K[Check Backup Status]
-    K --> L{Backups OK?}
-    L -->|No| M[FAIL: Backup Issues]
-    L -->|Yes| N[CRITICAL: Check useManagedServiceAccount]
+    F --> G[Detect GitOps markers<br/>on hub resources]
+    G --> H{Versions Match?}
+    H -->|No| I[FAIL: Version Mismatch]
+    H -->|Yes| J[Build Hub Summary<br/>cluster counts + BackupSchedule state]
+    J --> K[Check OADP Operator]
+    K --> L[Verify DataProtectionApplication]
+    L --> L2[Check BackupStorageLocation]
+    L2 --> L3{BSL Available?}
+    L3 -->|No| L4[FAIL: Storage Inaccessible]
+    L3 -->|Yes| L5[Check Cluster Health]
+    L5 --> L6{Nodes Ready,<br/>ClusterOps Healthy,<br/>No Upgrade?}
+    L6 -->|No| L7[FAIL: Cluster Unhealthy<br/>or Upgrade in Progress]
+    L6 -->|Yes| M[Check Backup Status]
+    M --> M2[Wait for in-progress backups<br/>within timeout]
+    M2 --> M3[Check latest backup phase,<br/>age/cadence, and cluster coverage]
+    M3 --> M4{Backups OK?}
+    M4 -->|No| M5[FAIL: Backup Issues]
+    M4 -->|Yes| N[CRITICAL: Check useManagedServiceAccount]
     N --> O{BackupSchedule has<br/>useManagedServiceAccount=true?}
     O -->|No| P[FAIL: Missing useManagedServiceAccount<br/>Auto-reconnect at risk]
     O -->|Yes| Q[CRITICAL: Check preserveOnDelete]
     Q --> R{All CDs have<br/>preserveOnDelete=true?}
     R -->|No| S[FAIL: Missing preserveOnDelete<br/>DANGER: Infrastructure at risk!]
     R -->|Yes| T{Method?}
-    T -->|Passive| U[Find & Check Latest Restore]
+    T -->|Passive| U[Find passive sync Restore<br/>by spec or well-known name]
     T -->|Full| V[Skip Passive Check]
     U --> W{Passive Sync<br/>Enabled?}
     W -->|No| X[FAIL: Passive Sync Not Ready]
@@ -358,21 +360,21 @@ graph TD
     Y3 --> Y4
     Y4 --> Y5{Non-default<br/>Strategy?}
     Y5 -->|Yes| Y6[WARN: Non-default Strategy]
-    Y5 -->|No| Z[Generate Summary Report]
+    Y5 -->|No| Z[Check Argo CD / GitOps<br/>management unless skipped]
     Y6 --> Z
-    Z --> ZA{Any Failures?}
-    ZA -->|Yes| ZB[Exit Code 1<br/>Display Failed Checks]
-    ZA -->|No| ZC[Exit Code 0<br/>Ready to Proceed]
+    Z --> ZA[Generate Summary Report]
+    ZA --> ZB{Any Failures?}
+    ZB -->|Yes| ZC[Exit Code 1<br/>Display Failed Checks]
+    ZB -->|No| ZD[Exit Code 0<br/>Ready to Proceed]
     
     style P fill:#ff6b6b
     style S fill:#ff6b6b
-    style H fill:#ff6b6b
-    style M fill:#ff6b6b
+    style I fill:#ff6b6b
+    style M5 fill:#ff6b6b
     style X fill:#ff6b6b
-    style J4 fill:#ff6b6b
-    style J7 fill:#ff6b6b
-    style J9 fill:#ff6b6b
-    style ZC fill:#51cf66
+    style L4 fill:#ff6b6b
+    style L7 fill:#ff6b6b
+    style ZD fill:#51cf66
 ```
 
 ---
@@ -486,7 +488,8 @@ Recommended next steps:
 ```mermaid
 graph TD
     A[Start Post-flight Check] --> B[Parse Arguments]
-    B --> C[Find & Check Latest Restore]
+    B --> B2[Verify CLI Tools]
+    B2 --> C[Find passive sync or latest Restore]
     C --> D{Restore<br/>Found?}
     D -->|Yes| D2{Phase<br/>Finished?}
     D2 -->|No| E[FAIL: Restore Not Complete]
@@ -499,22 +502,25 @@ graph TD
     G -->|No| H[FAIL: Clusters Not Connected]
     G -->|Yes| I{All Clusters<br/>Joined?}
     I -->|No| J[WARN: Some Clusters Still Joining]
-    I -->|Yes| K[Check Observability Pods]
-    J --> K
+    I -->|Yes| I2[Check Pending Import status]
+    J --> I2
+    I2 --> K[Check Observability Components]
     K --> L{Observability<br/>Installed?}
     L -->|No| M[SKIP: Observability Not Installed]
-    L -->|Yes| N{All Pods<br/>Running?}
-    N -->|No| O[FAIL: Observability Pods Failed]
-    N -->|Yes| P[Check observatorium-api Restart]
+    L -->|Yes| N[Check MCO Ready,<br/>critical pods, and pod errors]
+    N --> N2{Components<br/>Healthy?}
+    N2 -->|No| O[FAIL: Observability Components Failed]
+    N2 -->|Yes| P[Check observatorium-api Restart]
     M --> Q
     P --> Q[Check Grafana Route]
     Q --> R[Verify BackupSchedule Enabled]
     R --> S{BackupSchedule<br/>Enabled?}
     S -->|No| T[FAIL: Backups Not Enabled]
-    S -->|Yes| S2[Check BackupStorageLocation]
-    S2 --> S3{BSL Available?}
-    S3 -->|No| S4[FAIL: Storage Inaccessible]
-    S3 -->|Yes| U[Check ACM Hub Components]
+    S -->|Yes| S2[Check BackupSchedule status,<br/>collision, recent backups,<br/>backup age, and Velero logs]
+    S2 --> S3[Check BackupStorageLocation]
+    S3 --> S4{BSL Available?}
+    S4 -->|No| S5[FAIL: Storage Inaccessible]
+    S4 -->|Yes| U[Check ACM Hub Components]
     U --> V{MultiClusterHub<br/>Running?}
     V -->|No| W[FAIL: MCH Not Running]
     V -->|Yes| X{Old Hub<br/>Provided?}
@@ -529,28 +535,31 @@ graph TD
     AC3 -->|No| AC4[WARN: Failback Not Ready]
     AC3 -->|Yes| AC5[Check Old Hub ACM<br/>Still Installed or Decommissioned]
     AC4 --> AC5
-    AC5 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    AC5 --> Y1[Check disable-auto-import<br/>annotations on new hub]
+    Y1 --> Y2[Check Auto-Import Strategy<br/>ACM 2.14+]
     Y2 --> Y3{Non-default<br/>Strategy?}
     Y3 -->|Yes| Y4[WARN: Reset Strategy to Default]
     Y3 -->|No| AD
     Y4 --> AD
-    Z --> Z2[Check Auto-Import Strategy<br/>ACM 2.14+]
+    Z --> Z1[Check disable-auto-import<br/>annotations on new hub]
+    Z1 --> Z2[Check Auto-Import Strategy<br/>ACM 2.14+]
     Z2 --> Z3{Non-default<br/>Strategy?}
     Z3 -->|Yes| Z4[WARN: Reset Strategy to Default]
     Z3 -->|No| AD
     Z4 --> AD
-    AD[Generate Summary Report]
-    AD --> AE{Any Failures?}
-    AE -->|Yes| AF[Exit Code 1<br/>Display Issues & Recommendations]
-    AE -->|No| AG[Exit Code 0<br/>Switchover Successful]
+    AD[Check Argo CD / GitOps<br/>management unless skipped]
+    AD --> AE[Generate Summary Report]
+    AE --> AF{Any Failures?}
+    AF -->|Yes| AG[Exit Code 1<br/>Display Issues & Recommendations]
+    AF -->|No| AH[Exit Code 0<br/>Switchover Successful]
     
     style E fill:#ff6b6b
     style H fill:#ff6b6b
     style O fill:#ff6b6b
     style T fill:#ff6b6b
-    style S4 fill:#ff6b6b
+    style S5 fill:#ff6b6b
     style W fill:#ff6b6b
-    style AG fill:#51cf66
+    style AH fill:#51cf66
     style D4 fill:#51cf66
     style J fill:#ffd43b
     style AB fill:#ffd43b
@@ -881,17 +890,18 @@ graph TD
     Q -->|Yes| R[Skip RBAC validation]
     Q -->|No| S[Run check_rbac.py]
     S --> T{Validation<br/>passed?}
-    T -->|No| U[Warning: Validation failed]
+    T -->|No| U[FAIL: Validation failed]
     T -->|Yes| V[Success]
     R --> V
-    U --> V
+    U --> X[Exit 1]
     V --> W[Exit 0]
     
     style C fill:#ff6b6b
     style F fill:#ff6b6b
     style I fill:#ff6b6b
     style L fill:#ff6b6b
-    style U fill:#ffd43b
+    style U fill:#ff6b6b
+    style X fill:#ff6b6b
     style W fill:#51cf66
 ```
 
@@ -943,34 +953,34 @@ graph TD
     B --> C{Pre-flight<br/>Passed?}
     C -->|No| D[Fix Issues]
     D --> B
-  C -->|Yes| E{Argo CD<br/>Managing ACM?}
-  E -->|Yes| F0[Optional: Pause ACM-touching<br/>Argo CD Applications]
-  E -->|No| F[Begin Switchover Procedure]
-  F0 --> F
-  F --> G[Step 1-3: Prepare Primary Hub]
-  G --> H[Step 4-5: Activate Secondary Hub]
-  H --> I[Wait for Restore Complete]
-  I --> J[Run Post-flight Check]
-  J --> K{Post-flight<br/>Passed?}
-  K -->|No| L{Critical<br/>Failures?}
-  L -->|Yes| M[Consider Reverse Switchover]
-  L -->|No| N[Troubleshoot & Retry]
-  N --> I
-  K -->|Yes| O[Steps 6-10: Post-Activation Common Steps]
-  O --> P[Steps 11-12: Finalization]
-  P --> Q{Argo CD<br/>Paused Earlier?}
-  Q -->|Yes| R[Optional: Resume ACM-touching<br/>Argo CD Applications]
-  Q -->|No| S[Step 13: Inform Stakeholders]
-  R --> S
-  S --> T[Verify Metrics in Grafana<br/>and Monitor for 24 Hours]
-  T --> U[Step 14: Decommission Old Hub Optional]
-  U --> V[Switchover Complete]
+    C -->|Yes| E{Argo CD<br/>Managing ACM?}
+    E -->|Yes| F0[Pause ACM-touching<br/>Argo CD Applications]
+    E -->|No| F[Begin Switchover Procedure]
+    F0 --> F
+    F --> G[Step 1-3: Prepare Primary Hub]
+    G --> H[Step 4-5: Activate Secondary Hub]
+    H --> I[Wait for Restore Complete]
+    I --> O[Steps 6-10: Post-Activation Common Steps]
+    O --> P[Steps 11-12: Finalization]
+    P --> J[Run Post-flight Check]
+    J --> K{Post-flight<br/>Passed?}
+    K -->|No| L{Critical<br/>Failures?}
+    L -->|Yes| M[Consider rollback or<br/>reverse switchover]
+    L -->|No| N[Troubleshoot & Retry]
+    N --> J
+    K -->|Yes| Q{Argo CD<br/>Paused Earlier?}
+    Q -->|Yes| R[Optional: Resume ACM-touching<br/>Argo CD Applications<br/>after Git retargeting]
+    Q -->|No| S[Step 13: Inform Stakeholders]
+    R --> S
+    S --> T[Verify Metrics in Grafana<br/>and Monitor for 24 Hours]
+    T --> U[Step 14: Decommission Old Hub Optional]
+    U --> V[Switchover Complete]
     
     style C fill:#ffd43b
-  style E fill:#ffd43b
-  style K fill:#ffd43b
-  style M fill:#ff6b6b
-  style V fill:#51cf66
+    style E fill:#ffd43b
+    style K fill:#ffd43b
+    style M fill:#ff6b6b
+    style V fill:#51cf66
 ```
 
 > **Note**: RBAC setup (`setup-rbac.sh`) and kubeconfig generation are **one-time prerequisites** 
@@ -989,8 +999,11 @@ graph TD
     B --> C{Preflight<br/>Passed?}
     C -->|No| D[Fix Issues<br/>BSL, OADP, namespaces]
     D --> B
-    C -->|Yes| E["Execute Restore<br/>(python acm_switchover.py --restore-only --secondary-context target-hub)"]
-    E --> F[ACTIVATION: Create Restore from S3]
+    C -->|Yes| E{Argo CD<br/>Managing ACM?}
+    E -->|Yes| E2[Use --argocd-manage<br/>to pause ACM-touching Applications]
+    E -->|No| E3["Execute Restore<br/>(python acm_switchover.py --restore-only --secondary-context target-hub)"]
+    E2 --> E3
+    E3 --> F[ACTIVATION: Create Restore from S3]
     F --> G[POST_ACTIVATION: Wait for Clusters]
     G --> H[FINALIZATION: Enable BackupSchedule]
     H --> I[Run Post-flight Check<br/>./scripts/postflight-check.sh --new-hub-context target-hub]
@@ -1000,6 +1013,7 @@ graph TD
     J -->|Yes| L[Restore Complete]
 
     style C fill:#ffd43b
+    style E fill:#ffd43b
     style J fill:#ffd43b
     style L fill:#51cf66
 ```

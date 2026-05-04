@@ -19,6 +19,7 @@ Both tools automate the same phased workflow for migrating from a primary ACM hu
 - **Keep changes minimal and localized**: Touch as few files and code paths as possible to implement a change.
 - **Respect existing patterns and abstractions**: Align with current architecture and style unless there is a strong reason to refactor.
 - **Keep AGENTS.md current**: Update this file when making significant architectural, workflow, module, or CLI changes.
+- **Keep READMEs and Mermaid diagrams current**: When workflow, phase ordering, CLI branching, script checks, or operator-facing behavior changes, update the relevant README files and any Mermaid diagrams in `README.md`, `docs/`, and `scripts/README.md` that describe that flow. READMEs and diagrams are part of the documentation contract and must not drift from the implementation.
 
 ## Dual-Supported Parity Contract
 
