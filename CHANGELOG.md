@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-05-04
+
 ### Added
 
 - Added Python CLI `--report-dir` support for schema-versioned JSON artifacts (`preflight-report.json`, `switchover-report.json`, `restore-only-report.json`, and `decommission-report.json`) aligned with collection report fields.
@@ -1229,7 +1231,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.7...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.8...HEAD
+[1.7.8]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.7...v1.7.8
 [1.7.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.6...v1.7.7
 [1.7.6]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.3...v1.7.6
 [1.7.3]: https://github.com/tomazb/rh-acm-switchover/compare/v1.6.10...v1.7.3

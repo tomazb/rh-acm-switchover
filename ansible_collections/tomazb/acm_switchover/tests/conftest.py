@@ -117,7 +117,11 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
     vars_payload.setdefault("acm_primary_managed_clusters_info", {"resources": []})
 
     for backup in vars_payload.get("acm_primary_backups_info", {}).get("resources", []):
-        backup.setdefault("status", {}).setdefault("phase", "Completed")
+        status = backup.get("status")
+        if not isinstance(status, dict):
+            status = {}
+            backup["status"] = status
+        status.setdefault("phase", "Completed")
     for schedule in vars_payload.get("acm_primary_backup_schedules_info", {}).get(
         "resources", []
     ):

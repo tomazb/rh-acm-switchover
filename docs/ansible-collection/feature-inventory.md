@@ -5,8 +5,8 @@ Source: `acm_switchover.py`, `lib/validation.py`, `scripts/`
 
 ## Purpose
 
-This document records the Phase 0 migration-control subset of current operator-facing behavior that the
-collection migration must account for first.
+This document records the current migration-control subset of operator-facing behavior that the
+collection migration must account for.
 
 ## Top-Level Variable Namespaces
 
@@ -18,14 +18,14 @@ collection migration must account for first.
 
 ## Core Switchover and Validation Inputs
 
-| Current CLI Flag | Collection Variable | Phase 1 Foundation | Notes |
+| Current CLI Flag | Collection Variable | Current Boundary | Notes |
 | --- | --- | --- | --- |
 | `--primary-context` | `acm_switchover_hubs.primary.context` | yes | Required in supported flows |
 | `--secondary-context` | `acm_switchover_hubs.secondary.context` | yes | Required in core switchover flows |
 | `--method` | `acm_switchover_operation.method` | yes | `passive` or `full` |
 | `--old-hub-action` | `acm_switchover_operation.old_hub_action` | yes | `secondary`, `decommission`, or `none` |
 | `--activation-method` | `acm_switchover_operation.activation_method` | yes | `restore` only valid with passive |
-| `--min-managed-clusters` | `acm_switchover_operation.min_managed_clusters` | yes | Threshold contract only in Phase 1 |
+| `--min-managed-clusters` | `acm_switchover_operation.min_managed_clusters` | yes | Threshold contract only in Current Boundaries |
 | `--validate-only` | `acm_switchover_execution.mode=validate` | yes | Playbook contract only |
 | `--dry-run` | `acm_switchover_execution.mode=dry_run` | yes | Contract only; no runtime implementation here |
 | `--verbose` | `acm_switchover_execution.verbose` | yes | Output contract only |
@@ -60,7 +60,7 @@ Deferred phase numbers refer to later Ansible Collection rewrite implementation 
 
 ## Execution Modes
 
-Supported in Phase 1 documentation and stubs:
+Supported in current documentation and stubs:
 
 - `execute`
 - `validate`

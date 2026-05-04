@@ -26,7 +26,7 @@ acm_switchover_execution:
 acm_primary_mch_info:
   resources:
     - status:
-        currentVersion: 2.14.3
+        currentVersion: 2.14.2
 
 acm_secondary_mch_info:
   resources:

@@ -29,14 +29,14 @@ acm_primary_mch_info:
     - metadata:
         name: multiclusterhub
       status:
-        currentVersion: 2.14.3
+        currentVersion: 2.14.2
 
 acm_secondary_mch_info:
   resources:
     - metadata:
         name: multiclusterhub
       status:
-        currentVersion: 2.14.3
+        currentVersion: 2.14.2
 
 acm_primary_namespace_info:
   resources:
@@ -91,6 +91,13 @@ acm_secondary_bsl_info:
         name: acm-bsl
       status:
         phase: Available
+
+acm_secondary_backup_schedules_info:
+  resources:
+    - metadata:
+        name: acm-hub-backup
+      spec:
+        paused: false
 
 acm_secondary_restore_info:
   resources:

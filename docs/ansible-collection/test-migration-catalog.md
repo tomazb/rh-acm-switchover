@@ -36,9 +36,9 @@ Purpose: Triage the existing Python-oriented test suite into collection-era test
 | `tests/test_rbac_validator.py` | parity, collection unit | SSAR shape, dry-run validation, and manifest/policy alignment are shared contracts |
 | `tests/release/adapters/test_python_cli.py` | release adapter | Python scenario commands must pass `--report-dir` |
 
-## Phase 1 Test Baseline
+## Current Test Baseline
 
-Phase 1 tests should verify only:
+Current boundary tests should verify:
 
 - collection metadata parses correctly
 - playbooks are syntactically valid

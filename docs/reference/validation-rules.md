@@ -157,6 +157,17 @@ The ACM switchover automation tool implements comprehensive input validation to:
 
 **Valid Values**: `["text", "json"]`
 
+#### Report Directory Validation
+
+`--report-dir` is optional. When set, it must pass filesystem path validation and point to a writable
+directory location for schema-versioned report artifacts. Relative paths are accepted and resolved
+from the current working directory. Absolute paths are accepted only under the safe path roots listed
+in [Filesystem Path Validation](#6-filesystem-path-validation).
+
+Report artifacts use schema version `1.0` and preserve field parity with collection JSON artifacts.
+The CLI validates the path before writing `preflight-report.json`, `switchover-report.json`,
+`restore-only-report.json`, or `decommission-report.json`.
+
 #### Cross-Argument Rules
 
 - `--activation-method=restore` is only valid with `--method passive`
@@ -178,6 +189,7 @@ The ACM switchover automation tool implements comprehensive input validation to:
 - In `check_rbac.py`, `--include-decommission` is only valid with `--role operator`; combining it with `--role validator` is rejected with an explicit error (decommission permissions are operator-only)
 - With `--validate-only`, `--argocd-manage` has no effect (management is not performed during validation); a warning is emitted if both are set
 - ArgoCD detection runs automatically when CRD is detected; `--skip-gitops-check` disables all GitOps detection including ArgoCD deep dive
+- `--report-dir`, when set, must be a safe filesystem path for schema-versioned JSON report artifacts
 
 ### 6. Filesystem Path Validation
 

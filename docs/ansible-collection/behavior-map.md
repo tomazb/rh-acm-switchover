@@ -32,7 +32,7 @@ Source: `lib/`, `modules/`, `scripts/`
 | `modules/preflight/backup_validators.py` restore analysis | `plugins/modules/acm_restore_info.py`, `roles/preflight/tasks/validate_backups.yml`, `roles/activation/tasks/wait_for_restore.yml` | 2-3 |
 | `check_rbac.py` / `scripts/setup-rbac.sh` | `playbooks/rbac_bootstrap.yml`, `roles/rbac_bootstrap/`, `plugins/modules/acm_rbac_bootstrap.py` | 6 |
 | `lib/waiter.py` (`WaitConditionResult`, `wait_for_condition`) | no direct equivalent — collection roles use Ansible's native `until`/`retries` loop construct; architectural difference, not a gap to close | coexistence |
-| `scripts/discover-hub.sh` | supported migration bridge, not rewritten in Phase 1 | coexistence |
+| `scripts/discover-hub.sh` | supported migration bridge, not rewritten in the collection | coexistence |
 
 ## ACM Version Gates to Preserve
 
@@ -40,7 +40,7 @@ Source: `lib/`, `modules/`, `scripts/`
 - ACM 2.12+ BackupSchedule pause semantics
 - ACM 2.14+ `autoImportStrategy`
 
-Roles must not hard-code scattered version comparisons. Phase 1 should document normalized facts only:
+Roles must not hard-code scattered version comparisons. Current boundaries document normalized facts only:
 
 - `backup_schedule_pause_mode`
 - `supports_auto_import_strategy`

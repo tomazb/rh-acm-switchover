@@ -22,14 +22,14 @@ acm_primary_mch_info:
     - metadata:
         name: multiclusterhub
       status:
-        currentVersion: 2.14.3
+        currentVersion: 2.14.2
 
 acm_secondary_mch_info:
   resources:
     - metadata:
         name: multiclusterhub
       status:
-        currentVersion: 2.14.3
+        currentVersion: 2.14.2
 
 acm_primary_namespace_info:
   resources:

@@ -14,7 +14,7 @@
 ## Notes
 
 - The collection public API is grouped variables, not a flat CLI flag layer.
-- checkpoint keys are contract-only in Phase 1.
+- checkpoint keys are contract-only in the current boundaries.
 
 ## Preflight Result Facts
 
