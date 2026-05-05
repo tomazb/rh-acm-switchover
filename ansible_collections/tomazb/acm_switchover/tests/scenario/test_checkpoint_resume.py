@@ -2,17 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
-import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import yaml
-
-from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
-    ActionModule,
-)
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _CHECKPOINT_SURFACE_FILES = [
@@ -31,42 +24,26 @@ _CHECKPOINT_SURFACE_FILES = [
 _SWITCHOVER_PLAYBOOK = (
     _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml"
 )
+_SEEDED_CHECKPOINT_TIMESTAMPS = {
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "updated_at": "2026-01-01T00:00:00+00:00",
+}
 
 
-def _make_checkpoint_action(*, phase: str, checkpoint: dict, status: str = "enter"):
-    task = MagicMock()
-    task.async_val = 0
-    task.args = {
+def _task_pattern(role: str, task_name: str, result: str) -> str:
+    return rf"tomazb\.acm_switchover\.{role} : {re.escape(task_name)}.*\n.*{result}"
+
+
+def _expected_checkpoint(phase: str, completed_phases: list[str]) -> dict:
+    return {
+        "schema_version": "1.0",
         "phase": phase,
-        "checkpoint": checkpoint,
-        "status": status,
+        "completed_phases": completed_phases,
+        "operational_data": {},
+        "errors": [],
+        "report_refs": [],
+        **_SEEDED_CHECKPOINT_TIMESTAMPS,
     }
-    return ActionModule(
-        task=task,
-        connection=MagicMock(),
-        play_context=MagicMock(),
-        loader=MagicMock(),
-        templar=MagicMock(),
-        shared_loader_obj=MagicMock(),
-    )
-
-
-def _task_vars_from_fixture(payload: dict, *, mode: str | None = None) -> dict:
-    task_vars = {
-        "acm_switchover_execution": {
-            "mode": mode or payload["acm_switchover_execution"]["mode"]
-        },
-        "acm_switchover_hubs": payload["acm_switchover_hubs"],
-        "acm_switchover_operation": payload["acm_switchover_operation"],
-    }
-    return task_vars
-
-
-def _load_vars_file(command: list[str]) -> dict:
-    vars_arg = command[command.index("-e") + 1]
-    assert vars_arg.startswith("@"), "scenario harness should pass vars file via -e @<path>"
-    vars_path = Path(vars_arg[1:])
-    return yaml.safe_load(vars_path.read_text(encoding="utf-8")) or {}
 
 
 def test_checkpoint_operator_surface_exposes_reset_from_and_rescue_pruning():
@@ -85,8 +62,7 @@ def test_checkpoint_operator_surface_exposes_reset_from_and_rescue_pruning():
     ), "switchover rescue should reset from primary_prep through checkpoint config"
 
 
-def test_reset_from_primary_prep_prunes_downstream_phases_from_fixture_yaml(
-    monkeypatch,
+def test_dry_run_reset_from_primary_prep_prunes_downstream_phases_via_playbook(
     run_checkpoint_fixture,
 ):
     expected_phases = [
@@ -97,68 +73,44 @@ def test_reset_from_primary_prep_prunes_downstream_phases_from_fixture_yaml(
         "finalization",
     ]
 
-    def fake_run(command, **kwargs):
-        payload = _load_vars_file(command)
-        checkpoint = payload["acm_switchover_execution"]["checkpoint"]
-        assert checkpoint["reset_from"] == "primary_prep"
-
-        preflight_result = _make_checkpoint_action(
-            phase="preflight",
-            checkpoint=checkpoint,
-        ).run(task_vars=_task_vars_from_fixture(payload))
-        primary_prep_result = _make_checkpoint_action(
-            phase="primary_prep",
-            checkpoint=checkpoint,
-        ).run(task_vars=_task_vars_from_fixture(payload))
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout=json.dumps(
-                {
-                    "preflight": preflight_result,
-                    "primary_prep": primary_prep_result,
-                }
-            ),
-            stderr="",
-        )
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
     completed, checkpoint = run_checkpoint_fixture(
         "interrupted_after_activation.yml",
         pre_completed_phases=expected_phases,
     )
 
     assert completed.returncode == 0, completed.stderr
-    results = json.loads(completed.stdout)
-    assert results["preflight"]["skipped_phase"] is True
-    assert results["preflight"]["checkpoint"]["completed_phases"] == ["preflight"]
-    assert results["primary_prep"]["skipped_phase"] is False
-    assert results["primary_prep"]["checkpoint"]["completed_phases"] == ["preflight"]
-    assert checkpoint["completed_phases"] == expected_phases
+    assert checkpoint == _expected_checkpoint("finalization", expected_phases)
+    stdout = completed.stdout
+
+    assert re.search(
+        _task_pattern("preflight", "Mark checkpoint phase completion", "skipping"),
+        stdout,
+    ), "preflight should stay skipped after reset_from prunes downstream phases"
+
+    for resumed_phase in (
+        "primary_prep",
+        "activation",
+        "post_activation",
+        "finalization",
+    ):
+        assert re.search(
+            _task_pattern(resumed_phase, "Mark checkpoint phase completion", "ok"),
+            stdout,
+        ), f"{resumed_phase} should rerun through the playbook path"
+        assert not re.search(
+            _task_pattern(resumed_phase, "Mark checkpoint phase completion", "skipping"),
+            stdout,
+        ), f"{resumed_phase} should not remain skipped after reset_from"
+        assert not re.search(
+            _task_pattern(resumed_phase, "Mark checkpoint phase completion", "changed"),
+            stdout,
+        ), f"{resumed_phase} should not persist checkpoint completion during dry-run"
 
 
 def test_validate_mode_with_checkpoint_enabled_does_not_create_or_mutate_checkpoint_path(
-    monkeypatch,
     run_checkpoint_fixture,
 ):
     seeded_phases = ["preflight", "primary_prep"]
-
-    def fake_run(command, **kwargs):
-        payload = _load_vars_file(command)
-        checkpoint = payload["acm_switchover_execution"]["checkpoint"]
-        result = _make_checkpoint_action(
-            phase="preflight",
-            checkpoint=checkpoint,
-        ).run(task_vars=_task_vars_from_fixture(payload, mode="validate"))
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout=json.dumps(result),
-            stderr="",
-        )
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
 
     completed, checkpoint = run_checkpoint_fixture(
         "interrupted_after_activation.yml",
@@ -168,10 +120,8 @@ def test_validate_mode_with_checkpoint_enabled_does_not_create_or_mutate_checkpo
     )
 
     assert completed.returncode == 0, completed.stderr
-    result = json.loads(completed.stdout)
-    assert result["changed"] is False
-    assert result["skipped_phase"] is True
-    assert checkpoint["completed_phases"] == seeded_phases
+    assert "Stop after preflight when mode is validate" in completed.stdout
+    assert checkpoint == _expected_checkpoint("primary_prep", seeded_phases)
 
     completed, checkpoint = run_checkpoint_fixture(
         "interrupted_after_activation.yml",

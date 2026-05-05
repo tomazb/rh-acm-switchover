@@ -120,7 +120,9 @@ def test_switchover_rescue_resets_primary_prep_checkpoint_after_resume_on_failur
     reset_task = reset_tasks[0]
     checkpoint_args = reset_task.get("tomazb.acm_switchover.checkpoint_phase", {})
     assert checkpoint_args.get("phase") == "primary_prep"
-    assert checkpoint_args.get("checkpoint") == "{{ acm_switchover_execution.checkpoint }}"
+    assert checkpoint_args.get("checkpoint") == (
+        "{{ acm_switchover_execution.checkpoint | combine({'reset_from': 'primary_prep'}) }}"
+    )
 
     when = reset_task.get("when", [])
     when_text = " ".join(str(w) for w in when) if isinstance(when, list) else str(when)
