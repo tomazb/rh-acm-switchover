@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: MIT
 """Tests for checkpoint_phase and artifact runtime helpers."""
 
+import json
+import os
+from datetime import datetime, timezone
+from unittest.mock import mock_open, patch
+
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
     build_phase_transition,
 )
@@ -36,8 +41,8 @@ def _task_vars_for_mode(mode):
     return {"acm_switchover_execution": {"mode": mode}}
 
 
-def _task_vars_with_operation_identity(mode="execute"):
-    return {
+def _task_vars_with_operation_identity(mode="execute", collection_version=None):
+    task_vars = {
         "acm_switchover_execution": {"mode": mode},
         "acm_switchover_hubs": {
             "primary": {
@@ -56,6 +61,9 @@ def _task_vars_with_operation_identity(mode="execute"):
             "old_hub_action": "secondary",
         },
     }
+    if collection_version is not None:
+        task_vars["acm_switchover_collection_version"] = collection_version
+    return task_vars
 
 
 def test_build_phase_transition_marks_completion():
@@ -115,9 +123,10 @@ def test_action_module_persists_phase_status_on_pass(tmp_path):
     checkpoint_file.write_text(
         json.dumps(
             {
-                "schema_version": "1.0",
+                "schema_version": "2.0",
                 "completed_phases": ["preflight"],
                 "operational_data": {},
+                "operation_identity": build_operation_identity(hubs={}, operation={}),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -167,9 +176,10 @@ def test_action_module_merges_operational_data_on_pass(tmp_path):
     checkpoint_file.write_text(
         json.dumps(
             {
-                "schema_version": "1.0",
+                "schema_version": "2.0",
                 "completed_phases": ["preflight"],
                 "operational_data": {"existing": "keep"},
+                "operation_identity": build_operation_identity(hubs={}, operation={}),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -225,11 +235,12 @@ def test_action_module_does_not_overwrite_operational_data_with_empty_strings(tm
     checkpoint_file.write_text(
         json.dumps(
             {
-                "schema_version": "1.0",
+                "schema_version": "2.0",
                 "completed_phases": ["preflight"],
                 "operational_data": {
                     "backup_schedule_enabled_at": "2026-04-16T10:00:00Z"
                 },
+                "operation_identity": build_operation_identity(hubs={}, operation={}),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -286,9 +297,10 @@ def test_action_module_persists_phase_status_on_fail(tmp_path):
     checkpoint_file.write_text(
         json.dumps(
             {
-                "schema_version": "1.0",
+                "schema_version": "2.0",
                 "completed_phases": ["preflight"],
                 "operational_data": {},
+                "operation_identity": build_operation_identity(hubs={}, operation={}),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -336,9 +348,10 @@ def test_action_module_persists_checkpoint_reset_without_error(tmp_path):
     checkpoint_file.write_text(
         json.dumps(
             {
-                "schema_version": "1.0",
+                "schema_version": "2.0",
                 "completed_phases": ["preflight", "primary_prep", "activation"],
                 "operational_data": {"argocd_run_id": "run-1"},
+                "operation_identity": build_operation_identity(hubs={}, operation={}),
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -683,10 +696,11 @@ def test_action_module_dry_run_pass_does_not_mutate_checkpoint_file(tmp_path):
 
     checkpoint_file = tmp_path / "checkpoint.json"
     original = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "phase": "preflight",
         "completed_phases": ["preflight"],
         "operational_data": {"argocd_run_id": "run-1"},
+        "operation_identity": build_operation_identity(hubs={}, operation={}),
         "errors": [],
         "report_refs": [],
         "updated_at": "2026-01-01T00:00:00+00:00",
@@ -718,10 +732,11 @@ def test_action_module_dry_run_fail_does_not_mutate_checkpoint_file(tmp_path):
 
     checkpoint_file = tmp_path / "checkpoint.json"
     original = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "phase": "activation",
         "completed_phases": ["preflight"],
         "operational_data": {},
+        "operation_identity": build_operation_identity(hubs={}, operation={}),
         "errors": [],
         "report_refs": [],
         "updated_at": "2026-01-01T00:00:00+00:00",
@@ -748,8 +763,6 @@ def test_action_module_dry_run_fail_does_not_mutate_checkpoint_file(tmp_path):
 
 
 def test_action_module_dry_run_reset_enter_does_not_mutate_checkpoint_file(tmp_path):
-    import json
-
     checkpoint_file = tmp_path / "checkpoint.json"
     original = {
         "schema_version": "1.0",
@@ -786,6 +799,319 @@ def test_action_module_dry_run_reset_enter_does_not_mutate_checkpoint_file(tmp_p
     assert result["checkpoint"]["completed_phases"] == []
     assert result["skipped_phase"] is False
     assert json.loads(checkpoint_file.read_text()) == original
+
+
+def test_action_module_validate_mode_does_not_mutate_checkpoint_file(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    original = {
+        "schema_version": "2.0",
+        "phase": "preflight",
+        "completed_phases": ["preflight"],
+        "operational_data": {"argocd_run_id": "run-1"},
+        "operation_identity": build_operation_identity(
+            hubs=_task_vars_with_operation_identity()["acm_switchover_hubs"],
+            operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
+        ),
+        "errors": [],
+        "report_refs": [],
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    checkpoint_file.write_text(json.dumps(original))
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "pass",
+            "operational_data": {"validate_key": "discard"},
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode="validate"))
+
+    assert result["changed"] is False
+    assert result["checkpoint"]["completed_phases"] == ["preflight"]
+    assert json.loads(checkpoint_file.read_text()) == original
+
+
+def test_action_module_rejects_identity_mismatch_without_explicit_reset(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "operation_identity": build_operation_identity(
+                    hubs={
+                        "primary": {
+                            "context": "primary-hub",
+                            "kubeconfig": "./kubeconfigs/primary",
+                        },
+                        "secondary": {
+                            "context": "other-secondary",
+                            "kubeconfig": "./kubeconfigs/secondary",
+                        },
+                    },
+                    operation=_task_vars_with_operation_identity()[
+                        "acm_switchover_operation"
+                    ],
+                ),
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "enter",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result["failed"] is True
+    assert "operation identity" in result["msg"].lower()
+    assert "reset" in result["msg"].lower()
+
+
+def test_action_module_rejects_identity_mismatch_on_pass_without_explicit_reset(
+    tmp_path,
+):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    original = {
+        "schema_version": "2.0",
+        "phase": "preflight",
+        "completed_phases": ["preflight"],
+        "operational_data": {},
+        "operation_identity": build_operation_identity(
+            hubs={
+                "primary": {
+                    "context": "primary-hub",
+                    "kubeconfig": "./kubeconfigs/primary",
+                },
+                "secondary": {
+                    "context": "other-secondary",
+                    "kubeconfig": "./kubeconfigs/secondary",
+                },
+            },
+            operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
+        ),
+        "errors": [],
+        "report_refs": [],
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    checkpoint_file.write_text(json.dumps(original))
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "pass",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result["failed"] is True
+    assert "operation identity" in result["msg"].lower()
+    assert json.loads(checkpoint_file.read_text()) == original
+
+
+def test_action_module_rejects_unsafe_legacy_checkpoint_without_explicit_reset(
+    tmp_path,
+):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "phase": "activation",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "enter",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result["failed"] is True
+    assert "schema 1.0" in result["msg"]
+    assert "reset" in result["msg"].lower()
+
+
+def test_action_module_rejects_unsafe_legacy_checkpoint_on_fail_without_reset(
+    tmp_path,
+):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    original = {
+        "schema_version": "1.0",
+        "phase": "activation",
+        "completed_phases": ["preflight"],
+        "operational_data": {},
+        "errors": [],
+        "report_refs": [],
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    checkpoint_file.write_text(json.dumps(original))
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "fail",
+            "error": "should not persist",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result["failed"] is True
+    assert "schema 1.0" in result["msg"]
+    assert json.loads(checkpoint_file.read_text()) == original
+
+
+def test_action_module_reset_from_primary_prep_prunes_downstream_phases(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "finalization",
+                "completed_phases": [
+                    "preflight",
+                    "primary_prep",
+                    "activation",
+                    "post_activation",
+                    "finalization",
+                ],
+                "operational_data": {},
+                "operation_identity": build_operation_identity(
+                    hubs=_task_vars_with_operation_identity()["acm_switchover_hubs"],
+                    operation=_task_vars_with_operation_identity()[
+                        "acm_switchover_operation"
+                    ],
+                ),
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    action = _make_checkpoint_action(
+        {
+            "phase": "primary_prep",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+                "reset_from": "primary_prep",
+            },
+            "status": "enter",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result.get("failed") is not True
+    assert result["checkpoint"]["completed_phases"] == ["preflight"]
+    assert result["skipped_phase"] is False
+    assert json.loads(checkpoint_file.read_text())["completed_phases"] == ["preflight"]
+
+
+def test_action_module_quarantines_corrupt_checkpoint_json(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text('{"schema_version": "2.0", bad json')
+    fixed_now = datetime(2026, 4, 16, 12, 30, 45, tzinfo=timezone.utc)
+    action = _make_checkpoint_action(
+        {
+            "phase": "preflight",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "enter",
+        }
+    )
+
+    class FixedDateTime:
+        @staticmethod
+        def now(tz=None):
+            return fixed_now
+
+    with patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.datetime",
+        FixedDateTime,
+    ):
+        result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    quarantined_path = (
+        f"{checkpoint_file}.corrupt-{fixed_now.strftime('%Y%m%dT%H%M%SZ')}"
+    )
+    assert result["failed"] is True
+    assert "corrupted" in result["msg"].lower()
+    assert "quarantined" in result["msg"].lower()
+    assert not checkpoint_file.exists()
+    assert os.path.exists(quarantined_path)
+
+
+def test_action_module_operation_identity_includes_collection_version_when_available(
+    tmp_path,
+):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    action = _make_checkpoint_action(
+        {
+            "phase": "preflight",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+                "reset": True,
+            },
+            "status": "enter",
+        }
+    )
+    task_vars = _task_vars_with_operation_identity(collection_version="1.2.3")
+
+    result = action.run(task_vars=task_vars)
+
+    assert result["checkpoint"]["operation_identity"] == build_operation_identity(
+        hubs=task_vars["acm_switchover_hubs"],
+        operation=task_vars["acm_switchover_operation"],
+        collection_version="1.2.3",
+    )
 
 
 def test_action_module_rejects_unsafe_checkpoint_path_before_file_access():
@@ -833,8 +1159,6 @@ def test_action_module_rejects_unsafe_checkpoint_path_before_file_access():
 
 
 def test_load_checkpoint_reads_with_utf8_encoding():
-    from unittest.mock import mock_open, patch
-
     from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
         ActionModule,
     )
@@ -856,8 +1180,6 @@ def test_load_checkpoint_reads_with_utf8_encoding():
 
 
 def test_save_checkpoint_writes_with_utf8_encoding():
-    from unittest.mock import mock_open, patch
-
     from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
         ActionModule,
     )
@@ -867,6 +1189,8 @@ def test_save_checkpoint_writes_with_utf8_encoding():
     with patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.makedirs"
     ) as makedirs, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"
+    ) as mocked_replace, patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.open",
         mock_open(),
         create=True,
@@ -877,9 +1201,11 @@ def test_save_checkpoint_writes_with_utf8_encoding():
 
     assert result is None
     makedirs.assert_called_once_with("/tmp/state", exist_ok=True)
-    mocked_open.assert_called_once_with(
-        "/tmp/state/checkpoint.json", "w", encoding="utf-8"
-    )
+    temp_path = mocked_open.call_args.args[0]
+    assert temp_path != "/tmp/state/checkpoint.json"
+    assert os.path.dirname(temp_path) == "/tmp/state"
+    mocked_open.assert_called_once_with(temp_path, "w", encoding="utf-8")
+    mocked_replace.assert_called_once_with(temp_path, "/tmp/state/checkpoint.json")
 
 
 def test_build_report_ref_accepts_custom_kind():
