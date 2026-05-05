@@ -35,7 +35,7 @@ Avoid relying on hard-coded totals in this file; the suite is still expanding.
 
 - `tests/release/` contains the profile-driven release certification framework.
 - Framework unit tests are explicit and are not part of the default `./run_tests.sh` run.
-- Live certification requires a real lab profile and is not certification eligible when fake discovery clients or fake stream adapters are injected.
+- Live certification requires a real lab profile and is not certification-eligible when fake discovery clients or fake stream adapters are injected.
 - See `tests/release/README.md` and `docs/development/release-validation-framework.md`.
 
 ## Running Tests
