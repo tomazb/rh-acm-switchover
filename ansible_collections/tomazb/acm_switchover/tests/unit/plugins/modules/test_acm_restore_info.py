@@ -117,11 +117,16 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
     )
 
     assert plan["operation"]["action"] == "patch"
-    assert plan["operation"]["patch"] == {"spec": {"veleroManagedClustersBackupName": "latest"}}
+    assert plan["operation"]["patch"] == {
+        "spec": {"veleroManagedClustersBackupName": "latest"}
+    }
     assert plan["wait_target"]["name"] == "restore-acm-passive-sync"
     assert plan["wait_target"]["success_phases"] == ["Enabled", "Finished", "Completed"]
     assert plan["wait_target"]["velero_restore_required"] is True
-    assert plan["wait_target"]["velero_restore_status_field"] == "veleroManagedClustersRestoreName"
+    assert (
+        plan["wait_target"]["velero_restore_status_field"]
+        == "veleroManagedClustersRestoreName"
+    )
     assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
     assert plan["restore_ready"] is True
     assert plan["restore_phase"] == "Enabled"
@@ -145,7 +150,9 @@ def test_build_restore_activation_plan_defaults_passive_patch_to_latest_backup()
     )
 
     assert plan["operation"]["action"] == "patch"
-    assert plan["operation"]["patch"] == {"spec": {"veleroManagedClustersBackupName": "latest"}}
+    assert plan["operation"]["patch"] == {
+        "spec": {"veleroManagedClustersBackupName": "latest"}
+    }
     assert plan["patch"] == {"spec": {"veleroManagedClustersBackupName": "latest"}}
 
 
@@ -245,15 +252,32 @@ def test_build_restore_activation_plan_passive_restore_activation():
 
     assert plan["operation"]["action"] == "delete_and_create"
     assert plan["operation"]["delete_restore"]["name"] == "restore-acm-passive-sync"
-    assert plan["operation"]["create_restore"]["metadata"]["name"] == "restore-acm-activate"
-    assert plan["operation"]["create_restore"]["spec"]["veleroManagedClustersBackupName"] == "latest"
-    assert plan["operation"]["create_restore"]["spec"]["veleroCredentialsBackupName"] == "skip"
-    assert plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"] == "skip"
-    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {"managed-by": "test"}
+    assert (
+        plan["operation"]["create_restore"]["metadata"]["name"]
+        == "restore-acm-activate"
+    )
+    assert (
+        plan["operation"]["create_restore"]["spec"]["veleroManagedClustersBackupName"]
+        == "latest"
+    )
+    assert (
+        plan["operation"]["create_restore"]["spec"]["veleroCredentialsBackupName"]
+        == "skip"
+    )
+    assert (
+        plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"]
+        == "skip"
+    )
+    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {
+        "managed-by": "test"
+    }
     assert plan["wait_target"]["name"] == "restore-acm-activate"
     assert plan["wait_target"]["success_phases"] == ["Finished", "Completed"]
     assert plan["wait_target"]["velero_restore_required"] is True
-    assert plan["wait_target"]["velero_restore_status_field"] == "veleroManagedClustersRestoreName"
+    assert (
+        plan["wait_target"]["velero_restore_status_field"]
+        == "veleroManagedClustersRestoreName"
+    )
     assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
 
 
@@ -267,9 +291,18 @@ def test_build_restore_activation_plan_for_full_restore_mode():
 
     assert plan["operation"]["action"] == "create"
     assert plan["operation"]["create_restore"]["metadata"]["name"] == "restore-acm-full"
-    assert plan["operation"]["create_restore"]["spec"]["veleroManagedClustersBackupName"] == "latest"
-    assert plan["operation"]["create_restore"]["spec"]["veleroCredentialsBackupName"] == "latest"
-    assert plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"] == "latest"
+    assert (
+        plan["operation"]["create_restore"]["spec"]["veleroManagedClustersBackupName"]
+        == "latest"
+    )
+    assert (
+        plan["operation"]["create_restore"]["spec"]["veleroCredentialsBackupName"]
+        == "latest"
+    )
+    assert (
+        plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"]
+        == "latest"
+    )
     assert plan["wait_target"]["name"] == "restore-acm-full"
     assert plan["wait_target"]["success_phases"] == ["Finished", "Completed"]
     assert plan["wait_target"]["velero_restore_required"] is True
@@ -315,5 +348,10 @@ def test_build_restore_activation_plan_for_full_restore_preserves_passive_restor
     assert plan["operation"]["action"] == "delete_and_create"
     assert plan["operation"]["delete_restore"]["name"] == "restore-acm-passive-sync"
     assert plan["operation"]["create_restore"]["metadata"]["name"] == "restore-acm-full"
-    assert plan["operation"]["rollback_restore"]["metadata"]["name"] == "restore-acm-passive-sync"
-    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {"managed-by": "test"}
+    assert (
+        plan["operation"]["rollback_restore"]["metadata"]["name"]
+        == "restore-acm-passive-sync"
+    )
+    assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {
+        "managed-by": "test"
+    }

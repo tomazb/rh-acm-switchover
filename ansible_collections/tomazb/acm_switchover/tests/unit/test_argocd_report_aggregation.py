@@ -21,7 +21,9 @@ def _get_report_contract(playbook: list[dict]) -> dict:
                 sf = always_task.get("ansible.builtin.set_fact")
                 if sf and "acm_switchover_report" in sf:
                     return sf["acm_switchover_report"]
-    raise AssertionError("Could not locate acm_switchover_report set_fact in playbook always block")
+    raise AssertionError(
+        "Could not locate acm_switchover_report set_fact in playbook always block"
+    )
 
 
 def test_switchover_report_aggregates_argocd_summary_by_hub_when_available():

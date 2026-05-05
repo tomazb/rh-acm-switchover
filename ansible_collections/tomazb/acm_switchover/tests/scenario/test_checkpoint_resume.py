@@ -19,7 +19,8 @@ _CHECKPOINT_SURFACE_FILES = [
     / "ansible_collections/tomazb/acm_switchover/roles/post_activation/defaults/main.yml",
     _REPO_ROOT
     / "ansible_collections/tomazb/acm_switchover/roles/finalization/defaults/main.yml",
-    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/examples/group_vars/all.yml",
+    _REPO_ROOT
+    / "ansible_collections/tomazb/acm_switchover/examples/group_vars/all.yml",
 ]
 _SWITCHOVER_PLAYBOOK = (
     _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml"
@@ -98,7 +99,9 @@ def test_dry_run_reset_from_primary_prep_prunes_downstream_phases_via_playbook(
             stdout,
         ), f"{resumed_phase} should rerun through the playbook path"
         assert not re.search(
-            _task_pattern(resumed_phase, "Mark checkpoint phase completion", "skipping"),
+            _task_pattern(
+                resumed_phase, "Mark checkpoint phase completion", "skipping"
+            ),
             stdout,
         ), f"{resumed_phase} should not remain skipped after reset_from"
         assert not re.search(

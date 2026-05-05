@@ -201,7 +201,9 @@ VALIDATOR_HUB_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]]
 }
 
 # Managed-cluster namespace permissions for operator role
-OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
+OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[
+    str, list[tuple[str, str, list[str]]]
+] = {
     MANAGED_CLUSTER_AGENT_NAMESPACE: [
         ("", "secrets", ["get", "create", "delete"]),
         (APPS, "deployments", ["get", "patch"]),
@@ -209,7 +211,9 @@ OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, l
 }
 
 # Managed-cluster namespace permissions for validator role (read-only)
-VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
+VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[
+    str, list[tuple[str, str, list[str]]]
+] = {
     MANAGED_CLUSTER_AGENT_NAMESPACE: [
         ("", "secrets", ["get"]),
         (APPS, "deployments", ["get"]),
@@ -294,7 +298,9 @@ def expand_rbac_requirements(
         filtered_cluster = [
             (g, r, v)
             for g, r, v in DECOMMISSION_CLUSTER_PERMISSIONS
-            if not (skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO)
+            if not (
+                skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO
+            )
         ]
         permissions.extend(_expand_permission_list(filtered_cluster))
 
@@ -311,8 +317,16 @@ def expand_rbac_requirements(
     if role == "validator" and argocd_mode == "manage":
         raise ValueError("validator role cannot use argocd_mode=manage")
 
-    cluster_perms = OPERATOR_CLUSTER_PERMISSIONS if role == "operator" else VALIDATOR_CLUSTER_PERMISSIONS
-    hub_ns_perms = OPERATOR_HUB_NAMESPACE_PERMISSIONS if role == "operator" else VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+    cluster_perms = (
+        OPERATOR_CLUSTER_PERMISSIONS
+        if role == "operator"
+        else VALIDATOR_CLUSTER_PERMISSIONS
+    )
+    hub_ns_perms = (
+        OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        if role == "operator"
+        else VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+    )
 
     permissions: list[tuple[str, str, str, str | None]] = []
 
@@ -335,9 +349,13 @@ def expand_rbac_requirements(
         if argocd_install_type != "none":
             permissions.extend(_expand_permission_list(ARGOCD_BASE_CLUSTER_PERMISSIONS))
             if argocd_install_type != "vanilla":
-                permissions.extend(_expand_permission_list(ARGOCD_OPERATOR_CLUSTER_PERMISSIONS))
+                permissions.extend(
+                    _expand_permission_list(ARGOCD_OPERATOR_CLUSTER_PERMISSIONS)
+                )
             if argocd_mode == "manage" and role == "operator":
-                permissions.extend(_expand_permission_list(ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS))
+                permissions.extend(
+                    _expand_permission_list(ARGOCD_MANAGE_EXTRA_CLUSTER_PERMISSIONS)
+                )
 
     # Decommission extras
     if include_decommission:
@@ -355,10 +373,15 @@ def summarize_rbac_results(
     recommended_action: str | None = None,
 ) -> dict:
     result_id = result_id or f"preflight-rbac-{hub}"
-    failure_message = failure_message or f"missing required RBAC permissions on {hub} hub"
-    success_message = success_message or f"all required RBAC permissions validated on {hub} hub"
+    failure_message = (
+        failure_message or f"missing required RBAC permissions on {hub} hub"
+    )
+    success_message = (
+        success_message or f"all required RBAC permissions validated on {hub} hub"
+    )
     recommended_action = (
-        recommended_action or "Grant the documented collection RBAC role before running preflight again"
+        recommended_action
+        or "Grant the documented collection RBAC role before running preflight again"
     )
 
     if denied_permissions:

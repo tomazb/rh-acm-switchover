@@ -139,5 +139,7 @@ class TestValidateSafePathPositive:
     def test_accepts_absolute_path_var(self):
         validate_safe_path("/var/log/file.txt")
 
-    def test_accepts_absolute_path_with_missing_parent_below_allowed_ancestor(self, tmp_path):
+    def test_accepts_absolute_path_with_missing_parent_below_allowed_ancestor(
+        self, tmp_path
+    ):
         validate_safe_path(str(tmp_path / "missing-parent" / "state.json"))

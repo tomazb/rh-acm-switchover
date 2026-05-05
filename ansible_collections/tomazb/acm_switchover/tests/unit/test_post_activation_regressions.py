@@ -35,7 +35,9 @@ class TestVerifyManagedClustersPolling:
 
     @pytest.fixture(autouse=True)
     def _load_tasks(self):
-        self.content = (POST_ACTIVATION_TASKS / "verify_managed_clusters.yml").read_text()
+        self.content = (
+            POST_ACTIVATION_TASKS / "verify_managed_clusters.yml"
+        ).read_text()
 
     def test_until_checks_available_condition(self):
         assert "ManagedClusterConditionAvailable" in self.content
@@ -83,8 +85,14 @@ class TestVerifyManagedClustersPolling:
     def test_status_summary_receives_only_non_local_clusters(self):
         """local-cluster must not count toward managed cluster readiness verification."""
         tasks = yaml.safe_load(self.content)
-        summary_task = next(task for task in tasks if "tomazb.acm_switchover.acm_managedcluster_status" in task)
-        clusters_arg = str(summary_task["tomazb.acm_switchover.acm_managedcluster_status"]["clusters"])
+        summary_task = next(
+            task
+            for task in tasks
+            if "tomazb.acm_switchover.acm_managedcluster_status" in task
+        )
+        clusters_arg = str(
+            summary_task["tomazb.acm_switchover.acm_managedcluster_status"]["clusters"]
+        )
 
         assert "local-cluster" in clusters_arg
         assert "selectattr('metadata.name', 'ne', 'local-cluster')" in clusters_arg
@@ -139,7 +147,9 @@ class TestKlusterletReverification:
         when = reverify_task.get("when")
         assert when is not None, "Re-verify task must have a 'when' guard"
         when_str = str(when)
-        assert "remediation_attempted" in when_str, "Re-verify 'when' must check a remediation-attempted flag"
+        assert (
+            "remediation_attempted" in when_str
+        ), "Re-verify 'when' must check a remediation-attempted flag"
 
     def test_initial_managed_cluster_wait_is_soft_failed(self):
         """The first cluster wait must allow klusterlet remediation to run before final hard failure."""
@@ -149,7 +159,9 @@ class TestKlusterletReverification:
 
         assert "acm_switchover_managed_cluster_wait_soft_fail" in str(initial_task)
         assert "acm_switchover_managed_cluster_wait_soft_fail" not in str(reverify_task)
-        verify_text = (POST_ACTIVATION_TASKS / "verify_managed_clusters.yml").read_text()
+        verify_text = (
+            POST_ACTIVATION_TASKS / "verify_managed_clusters.yml"
+        ).read_text()
         assert "failed_when" in verify_text
         assert "acm_switchover_managed_cluster_wait_soft_fail" in verify_text
 

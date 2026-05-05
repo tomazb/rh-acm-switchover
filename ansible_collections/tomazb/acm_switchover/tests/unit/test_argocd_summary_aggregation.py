@@ -4,7 +4,9 @@ import pathlib
 
 import yaml
 
-ROLE_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "tasks"
+ROLE_DIR = (
+    pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "tasks"
+)
 
 
 def _load_yaml(name: str) -> list[dict]:
@@ -31,9 +33,13 @@ def test_pause_summary_is_aggregated_not_overwritten():
         assert (
             "acm_switchover_argocd_summary" in value
         ), "pause.yml must reference the existing summary when updating totals"
-        assert "get('paused'" in value, "pause.yml must accumulate paused totals using the previous summary"
+        assert (
+            "get('paused'" in value
+        ), "pause.yml must accumulate paused totals using the previous summary"
 
-    by_hub_values = _extract_set_fact_values(tasks, "acm_switchover_argocd_summary_by_hub")
+    by_hub_values = _extract_set_fact_values(
+        tasks, "acm_switchover_argocd_summary_by_hub"
+    )
     assert by_hub_values, "pause.yml must set acm_switchover_argocd_summary_by_hub"
     for value in by_hub_values:
         assert "acm_switchover_argocd_summary_by_hub" in value
@@ -50,9 +56,13 @@ def test_resume_summary_is_aggregated_not_overwritten():
         assert (
             "acm_switchover_argocd_summary" in value
         ), "resume.yml must reference the existing summary when updating totals"
-        assert "get('restored'" in value, "resume.yml must accumulate restored totals using the previous summary"
+        assert (
+            "get('restored'" in value
+        ), "resume.yml must accumulate restored totals using the previous summary"
 
-    by_hub_values = _extract_set_fact_values(tasks, "acm_switchover_argocd_summary_by_hub")
+    by_hub_values = _extract_set_fact_values(
+        tasks, "acm_switchover_argocd_summary_by_hub"
+    )
     assert by_hub_values, "resume.yml must set acm_switchover_argocd_summary_by_hub"
     for value in by_hub_values:
         assert "acm_switchover_argocd_summary_by_hub" in value

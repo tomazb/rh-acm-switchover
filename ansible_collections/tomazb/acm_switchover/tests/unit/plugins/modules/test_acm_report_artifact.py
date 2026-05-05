@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 
-from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_report_artifact import main
+from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_report_artifact import (
+    main,
+)
 
 
 def test_run_module_writes_report_json(tmp_path, monkeypatch):
@@ -33,7 +35,10 @@ def test_run_module_writes_report_json(tmp_path, monkeypatch):
     main()
 
     assert captured["exit"] == {"changed": True, "path": str(destination)}
-    assert json.loads(destination.read_text()) == {"status": "pass", "phase": "preflight"}
+    assert json.loads(destination.read_text()) == {
+        "status": "pass",
+        "phase": "preflight",
+    }
 
 
 def test_run_module_check_mode_validates_without_writing(tmp_path, monkeypatch):

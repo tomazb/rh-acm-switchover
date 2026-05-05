@@ -18,12 +18,18 @@ def _main_block_tasks() -> list[dict]:
 
 def test_finalization_main_includes_old_hub_support_tasks():
     """finalization/main.yml must wire the old-hub parity task files."""
-    includes = [task.get("ansible.builtin.include_tasks", "") for task in _main_block_tasks()]
+    includes = [
+        task.get("ansible.builtin.include_tasks", "") for task in _main_block_tasks()
+    ]
 
     assert "disable_old_hub_observability.yml" in includes
     assert "verify_old_hub_state.yml" in includes
-    assert includes.index("disable_old_hub_observability.yml") < includes.index("enable_backups.yml")
-    assert includes.index("verify_old_hub_state.yml") > includes.index("handle_old_hub.yml")
+    assert includes.index("disable_old_hub_observability.yml") < includes.index(
+        "enable_backups.yml"
+    )
+    assert includes.index("verify_old_hub_state.yml") > includes.index(
+        "handle_old_hub.yml"
+    )
 
 
 def test_finalization_main_disables_old_hub_observability_only_when_observability_enabled():
@@ -31,13 +37,17 @@ def test_finalization_main_disables_old_hub_observability_only_when_observabilit
     disable_task = next(
         task
         for task in _main_block_tasks()
-        if task.get("ansible.builtin.include_tasks") == "disable_old_hub_observability.yml"
+        if task.get("ansible.builtin.include_tasks")
+        == "disable_old_hub_observability.yml"
     )
     when_text = "\n".join(disable_task.get("when", []))
 
     assert "disable_observability_on_secondary" not in when_text
     assert "skip_observability_checks" in when_text
-    assert "(acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'" in when_text
+    assert (
+        "(acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'"
+        in when_text
+    )
 
 
 def test_disable_old_hub_observability_deletes_mco_and_waits_for_termination():
