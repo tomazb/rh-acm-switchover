@@ -531,6 +531,50 @@ def test_action_module_new_checkpoint_includes_operation_identity(tmp_path):
     )
 
 
+def test_action_module_enter_persists_backfilled_operation_identity_for_skipped_phase(
+    tmp_path,
+):
+    import json
+
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "operation_identity": None,
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    action = _make_checkpoint_action(
+        {
+            "phase": "preflight",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "enter",
+        }
+    )
+
+    task_vars = _task_vars_with_operation_identity()
+    result = action.run(task_vars=task_vars)
+
+    assert result["skipped_phase"] is True
+    assert result["checkpoint"]["operation_identity"] == build_operation_identity(
+        hubs=task_vars["acm_switchover_hubs"],
+        operation=task_vars["acm_switchover_operation"],
+    )
+    saved = json.loads(checkpoint_file.read_text())
+    assert saved["operation_identity"] == result["checkpoint"]["operation_identity"]
+
+
 def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_path):
     import json
     from unittest.mock import MagicMock

@@ -11,6 +11,7 @@ from ansible.plugins.action import ActionBase
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     KNOWN_PHASES,
+    SCHEMA_VERSION,
     build_checkpoint_record,
     build_operation_identity,
     should_resume_phase,
@@ -121,14 +122,16 @@ class ActionModule(ActionBase):
         )
         if checkpoint_data.get("failed"):
             return checkpoint_data
+        backfilled_operation_identity = False
         if (
-            checkpoint_data.get("schema_version") == "2.0"
+            checkpoint_data.get("schema_version") == SCHEMA_VERSION
             and checkpoint_data.get("operation_identity") is None
         ):
             checkpoint_data["operation_identity"] = build_operation_identity(
                 hubs=task_vars.get("acm_switchover_hubs") or {},
                 operation=task_vars.get("acm_switchover_operation") or {},
             )
+            backfilled_operation_identity = True
 
         checkpoint_data["phase"] = phase
 
@@ -138,6 +141,10 @@ class ActionModule(ActionBase):
                 return save_result
 
         if status == "enter":
+            if backfilled_operation_identity and backend == "file" and not is_dry_run:
+                save_result = self._save_checkpoint(path, checkpoint_data)
+                if save_result is not None and save_result.get("failed"):
+                    return save_result
             already_done = not should_resume_phase(checkpoint_data, phase)
             return {
                 "changed": False,
