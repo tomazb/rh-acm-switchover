@@ -228,12 +228,13 @@ class ActionModule(ActionBase):
         expected_operation_identity: dict,
     ) -> tuple[dict, bool]:
         if reset_from and status in {"enter", "reset"}:
-            return (
-                self._build_reset_from_checkpoint(
-                    checkpoint_data, reset_from, expected_operation_identity
-                ),
-                False,
-            )
+            if reset_from in checkpoint_data.get("completed_phases", []):
+                return (
+                    self._build_reset_from_checkpoint(
+                        checkpoint_data, reset_from, expected_operation_identity
+                    ),
+                    False,
+                )
 
         if is_unsafe_legacy_checkpoint(checkpoint_data):
             if not has_explicit_reset:

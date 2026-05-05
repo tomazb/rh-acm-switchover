@@ -1260,3 +1260,70 @@ def test_build_report_ref_accepts_custom_kind():
         path="/reports/out.yaml", phase="preflight", kind="yaml-report"
     )
     assert ref["kind"] == "yaml-report"
+
+
+def test_reset_from_does_not_reprune_phases_completed_in_current_run(tmp_path):
+    """reset_from must only prune once; phases completed after the initial reset must not be re-pruned.
+
+    Regression test for: reset_from fires on every 'enter', not just the first time.
+    """
+    import json
+    from unittest.mock import MagicMock
+
+    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
+        ActionModule,
+    )
+
+    checkpoint_file = tmp_path / "checkpoint.json"
+    op_identity = build_operation_identity(hubs={}, operation={})
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "completed_phases": ["preflight", "primary_prep"],
+                "operational_data": {},
+                "operation_identity": op_identity,
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+
+    def _make_action(phase, status):
+        task = MagicMock()
+        task.async_val = 0
+        task.args = {
+            "phase": phase,
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+                "reset_from": "primary_prep",
+            },
+            "status": status,
+        }
+        return ActionModule(
+            task=task,
+            connection=MagicMock(),
+            play_context=MagicMock(),
+            loader=MagicMock(),
+            templar=MagicMock(),
+            shared_loader_obj=MagicMock(),
+        )
+
+    task_vars = _task_vars_for_mode("execute")
+
+    # First enter: reset_from fires because primary_prep is still in completed_phases.
+    result = _make_action("activation", "enter").run(task_vars=task_vars)
+    assert "primary_prep" not in result["checkpoint"]["completed_phases"]
+
+    # Activation completes successfully in this run.
+    result = _make_action("activation", "pass").run(task_vars=task_vars)
+    assert "activation" in result["checkpoint"]["completed_phases"]
+
+    # Second enter: reset_from must NOT fire again (primary_prep is gone; nothing left to prune).
+    result = _make_action("post_activation", "enter").run(task_vars=task_vars)
+    assert (
+        "activation" in result["checkpoint"]["completed_phases"]
+    ), "activation must not be re-pruned by reset_from on subsequent enter calls"
