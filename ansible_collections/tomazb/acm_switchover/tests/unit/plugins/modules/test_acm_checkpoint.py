@@ -41,6 +41,38 @@ def test_build_operation_identity_captures_hub_and_operation_inputs():
     }
 
 
+def test_build_operation_identity_canonicalizes_sparse_inputs_to_defaults():
+    expected_identity = {
+        "primary_context": "",
+        "secondary_context": "",
+        "primary_kubeconfig": "",
+        "secondary_kubeconfig": "",
+        "method": "passive",
+        "activation_method": "patch",
+        "restore_only": False,
+        "old_hub_action": "secondary",
+        "collection_version": "",
+    }
+
+    assert build_operation_identity(hubs={}, operation={}) == expected_identity
+    assert (
+        build_operation_identity(
+            hubs={
+                "primary": {"context": "", "kubeconfig": ""},
+                "secondary": {"context": "", "kubeconfig": ""},
+            },
+            operation={
+                "method": "passive",
+                "activation_method": "patch",
+                "restore_only": False,
+                "old_hub_action": "secondary",
+            },
+            collection_version="",
+        )
+        == expected_identity
+    )
+
+
 def test_build_checkpoint_record_sets_schema_phase_and_operation_identity():
     operation_identity = build_operation_identity(
         hubs={

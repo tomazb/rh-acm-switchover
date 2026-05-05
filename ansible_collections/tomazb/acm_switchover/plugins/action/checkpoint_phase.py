@@ -12,6 +12,7 @@ from ansible.plugins.action import ActionBase
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     KNOWN_PHASES,
     build_checkpoint_record,
+    build_operation_identity,
     should_resume_phase,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
@@ -37,7 +38,9 @@ def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
     if status == "pass" and phase not in completed:
         completed.append(phase)
     elif status == "reset":
-        completed = [completed_phase for completed_phase in completed if completed_phase != phase]
+        completed = [
+            completed_phase for completed_phase in completed if completed_phase != phase
+        ]
     return {
         "completed_phases": completed,
         "phase_status": status,
@@ -111,9 +114,21 @@ class ActionModule(ActionBase):
 
         reset = bool(checkpoint_config.get("reset", False))
         should_reset = reset and status == "enter" and phase == self.INITIAL_PHASE
-        checkpoint_data = build_checkpoint_record(phase, {}) if should_reset else self._load_checkpoint(path)
+        checkpoint_data = (
+            build_checkpoint_record(phase, {})
+            if should_reset
+            else self._load_checkpoint(path)
+        )
         if checkpoint_data.get("failed"):
             return checkpoint_data
+        if (
+            checkpoint_data.get("schema_version") == "2.0"
+            and checkpoint_data.get("operation_identity") is None
+        ):
+            checkpoint_data["operation_identity"] = build_operation_identity(
+                hubs=task_vars.get("acm_switchover_hubs") or {},
+                operation=task_vars.get("acm_switchover_operation") or {},
+            )
 
         checkpoint_data["phase"] = phase
 
@@ -141,11 +156,19 @@ class ActionModule(ActionBase):
         checkpoint_data["completed_phases"] = transition["completed_phases"]
         checkpoint_data["phase_status"] = transition["phase_status"]
         checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        sanitized_operational_data = {key: value for key, value in operational_data.items() if value not in (None, "")}
-        checkpoint_data.setdefault("operational_data", {}).update(sanitized_operational_data)
+        sanitized_operational_data = {
+            key: value
+            for key, value in operational_data.items()
+            if value not in (None, "")
+        }
+        checkpoint_data.setdefault("operational_data", {}).update(
+            sanitized_operational_data
+        )
 
         if error and status == "fail":
-            checkpoint_data.setdefault("errors", []).append({"phase": phase, "error": error})
+            checkpoint_data.setdefault("errors", []).append(
+                {"phase": phase, "error": error}
+            )
         if report_ref:
             checkpoint_data.setdefault("report_refs", []).append(
                 {"phase": phase, "path": report_ref, "kind": "json-report"}

@@ -25,16 +25,17 @@ def build_operation_identity(
     """Build a stable identity payload for the current switchover operation."""
     primary = hubs.get("primary") or {}
     secondary = hubs.get("secondary") or {}
+    restore_only = operation.get("restore_only")
     return {
-        "primary_context": primary.get("context"),
-        "secondary_context": secondary.get("context"),
-        "primary_kubeconfig": primary.get("kubeconfig"),
-        "secondary_kubeconfig": secondary.get("kubeconfig"),
-        "method": operation.get("method"),
-        "activation_method": operation.get("activation_method"),
-        "restore_only": operation.get("restore_only"),
-        "old_hub_action": operation.get("old_hub_action"),
-        "collection_version": collection_version,
+        "primary_context": primary.get("context") or "",
+        "secondary_context": secondary.get("context") or "",
+        "primary_kubeconfig": primary.get("kubeconfig") or "",
+        "secondary_kubeconfig": secondary.get("kubeconfig") or "",
+        "method": operation.get("method") or "passive",
+        "activation_method": operation.get("activation_method") or "patch",
+        "restore_only": False if restore_only is None else restore_only,
+        "old_hub_action": operation.get("old_hub_action") or "secondary",
+        "collection_version": collection_version or "",
     }
 
 

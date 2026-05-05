@@ -7,6 +7,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase i
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts import (
     build_report_ref,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
+    build_operation_identity,
+)
 
 
 def _make_checkpoint_action(task_args):
@@ -31,6 +34,28 @@ def _make_checkpoint_action(task_args):
 
 def _task_vars_for_mode(mode):
     return {"acm_switchover_execution": {"mode": mode}}
+
+
+def _task_vars_with_operation_identity(mode="execute"):
+    return {
+        "acm_switchover_execution": {"mode": mode},
+        "acm_switchover_hubs": {
+            "primary": {
+                "context": "primary-hub",
+                "kubeconfig": "./kubeconfigs/primary",
+            },
+            "secondary": {
+                "context": "secondary-hub",
+                "kubeconfig": "./kubeconfigs/secondary",
+            },
+        },
+        "acm_switchover_operation": {
+            "method": "passive",
+            "activation_method": "patch",
+            "restore_only": False,
+            "old_hub_action": "secondary",
+        },
+    }
 
 
 def test_build_phase_transition_marks_completion():
@@ -202,7 +227,9 @@ def test_action_module_does_not_overwrite_operational_data_with_empty_strings(tm
             {
                 "schema_version": "1.0",
                 "completed_phases": ["preflight"],
-                "operational_data": {"backup_schedule_enabled_at": "2026-04-16T10:00:00Z"},
+                "operational_data": {
+                    "backup_schedule_enabled_at": "2026-04-16T10:00:00Z"
+                },
                 "errors": [],
                 "report_refs": [],
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -234,10 +261,16 @@ def test_action_module_does_not_overwrite_operational_data_with_empty_strings(tm
     )
 
     result = action.run(task_vars=_task_vars_for_mode("execute"))
-    assert result["checkpoint"]["operational_data"]["backup_schedule_enabled_at"] == "2026-04-16T10:00:00Z"
+    assert (
+        result["checkpoint"]["operational_data"]["backup_schedule_enabled_at"]
+        == "2026-04-16T10:00:00Z"
+    )
 
     saved = json.loads(checkpoint_file.read_text())
-    assert saved["operational_data"]["backup_schedule_enabled_at"] == "2026-04-16T10:00:00Z"
+    assert (
+        saved["operational_data"]["backup_schedule_enabled_at"]
+        == "2026-04-16T10:00:00Z"
+    )
 
 
 def test_action_module_persists_phase_status_on_fail(tmp_path):
@@ -465,10 +498,37 @@ def test_action_module_reset_discards_previous_checkpoint_state_on_preflight_ent
         shared_loader_obj=MagicMock(),
     )
 
-    result = action.run(task_vars=_task_vars_for_mode("execute"))
+    result = action.run(task_vars=_task_vars_with_operation_identity())
     assert result["checkpoint"]["phase"] == "preflight"
     assert result["checkpoint"]["completed_phases"] == []
+    assert result["checkpoint"]["operation_identity"] == build_operation_identity(
+        hubs=_task_vars_with_operation_identity()["acm_switchover_hubs"],
+        operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
+    )
     assert result["skipped_phase"] is False
+
+
+def test_action_module_new_checkpoint_includes_operation_identity(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    action = _make_checkpoint_action(
+        {
+            "phase": "preflight",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "pass",
+        }
+    )
+
+    task_vars = _task_vars_with_operation_identity()
+    result = action.run(task_vars=task_vars)
+
+    assert result["checkpoint"]["operation_identity"] == build_operation_identity(
+        hubs=task_vars["acm_switchover_hubs"],
+        operation=task_vars["acm_switchover_operation"],
+    )
 
 
 def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_path):
@@ -566,7 +626,9 @@ def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_
         templar=MagicMock(),
         shared_loader_obj=MagicMock(),
     )
-    activation_enter_result = activation_enter_action.run(task_vars=_task_vars_for_mode("execute"))
+    activation_enter_result = activation_enter_action.run(
+        task_vars=_task_vars_for_mode("execute")
+    )
 
     assert activation_enter_result["checkpoint"]["completed_phases"] == ["preflight"]
     assert activation_enter_result["skipped_phase"] is False
@@ -711,8 +773,12 @@ def test_action_module_rejects_unsafe_checkpoint_path_before_file_access():
         templar=MagicMock(),
         shared_loader_obj=MagicMock(),
     )
-    action._load_checkpoint = MagicMock(side_effect=AssertionError("_load_checkpoint should not be called"))
-    action._save_checkpoint = MagicMock(side_effect=AssertionError("_save_checkpoint should not be called"))
+    action._load_checkpoint = MagicMock(
+        side_effect=AssertionError("_load_checkpoint should not be called")
+    )
+    action._save_checkpoint = MagicMock(
+        side_effect=AssertionError("_save_checkpoint should not be called")
+    )
 
     result = action.run(task_vars=_task_vars_for_mode("execute"))
 
@@ -761,13 +827,19 @@ def test_save_checkpoint_writes_with_utf8_encoding():
         mock_open(),
         create=True,
     ) as mocked_open:
-        result = action._save_checkpoint("/tmp/state/checkpoint.json", {"schema_version": "1.0"})
+        result = action._save_checkpoint(
+            "/tmp/state/checkpoint.json", {"schema_version": "1.0"}
+        )
 
     assert result is None
     makedirs.assert_called_once_with("/tmp/state", exist_ok=True)
-    mocked_open.assert_called_once_with("/tmp/state/checkpoint.json", "w", encoding="utf-8")
+    mocked_open.assert_called_once_with(
+        "/tmp/state/checkpoint.json", "w", encoding="utf-8"
+    )
 
 
 def test_build_report_ref_accepts_custom_kind():
-    ref = build_report_ref(path="/reports/out.yaml", phase="preflight", kind="yaml-report")
+    ref = build_report_ref(
+        path="/reports/out.yaml", phase="preflight", kind="yaml-report"
+    )
     assert ref["kind"] == "yaml-report"
