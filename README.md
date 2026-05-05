@@ -383,11 +383,19 @@ Edit state file manually or use `--reset-state` to start fresh (use with caution
 ### Run Tests
 
 ```bash
-# Run all tests with coverage
+# Run default non-release tests with coverage
 ./run_tests.sh
 
+# Run release validation framework tests explicitly
+python -m pytest tests/release -q
+
+# Run live release certification with an operator-provided lab profile
+python -m pytest tests/release/test_release_certification.py \
+  --release-profile /path/to/release-profile.yaml \
+  --release-mode certification
+
 # Or manually
-python -m pytest tests/ -v --cov=. --cov-report=html
+python -m pytest tests/ --ignore=tests/release -v --cov=. --cov-report=html
 ```
 
 ### E2E Testing

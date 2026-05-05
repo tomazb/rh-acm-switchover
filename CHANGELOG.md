@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a release certification orchestrator that wires real release profiles through static gates, lab readiness, baseline snapshots, stream adapters, runtime parity, final baseline checks, summary generation, and durable release artifacts.
+
+### Changed
+
+- Local `run_tests.sh` now excludes the release validation framework by default; run `python -m pytest tests/release -q` for framework tests and supply `--release-profile` for live release certification.
+
 ## [1.7.8] - 2026-05-04
 
 ### Added
