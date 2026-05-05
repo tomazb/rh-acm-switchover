@@ -36,3 +36,9 @@ def test_run_tests_quality_gates_are_explicit_and_scoped():
     assert "QUALITY_PATHS=" in text
     assert "black --check --line-length 120 ." not in text
     assert "isort --check-only --profile black --line-length 120 ." not in text
+
+
+def test_run_tests_excludes_release_framework_by_default():
+    text = RUN_TESTS.read_text()
+
+    assert "--ignore=tests/release" in text
