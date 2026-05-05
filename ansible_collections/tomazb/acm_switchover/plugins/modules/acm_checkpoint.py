@@ -45,7 +45,7 @@ checkpoint:
     schema_version:
       description: Record schema version.
       type: str
-      sample: "1.0"
+      sample: "2.0"
     phase:
       description: Phase this checkpoint was created for.
       type: str
@@ -54,6 +54,9 @@ checkpoint:
       type: list
     operational_data:
       description: Phase-specific metadata supplied by the caller.
+      type: dict
+    operation_identity:
+      description: Operation identity payload used to bind a checkpoint to a specific run.
       type: dict
     errors:
       description: List of error strings recorded during the phase.
