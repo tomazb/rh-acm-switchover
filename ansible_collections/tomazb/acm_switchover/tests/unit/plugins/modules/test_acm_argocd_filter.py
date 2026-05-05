@@ -16,7 +16,10 @@ def _app(name: str, resources: list[dict]) -> dict:
 
 def test_filters_to_only_acm_touching_apps():
     apps = [
-        _app("acm-app", [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}]),
+        _app(
+            "acm-app",
+            [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}],
+        ),
         _app("unrelated-app", [{"kind": "Deployment", "namespace": "my-namespace"}]),
         _app("mce-app", [{"kind": "Deployment", "namespace": "multicluster-engine"}]),
     ]
@@ -37,7 +40,10 @@ def test_app_with_no_status_resources_is_excluded():
 def test_non_acm_app_is_excluded():
     assert (
         is_acm_touching_application(
-            {"metadata": {"name": "frontend"}, "status": {"resources": [{"kind": "Deployment", "namespace": "web"}]}}
+            {
+                "metadata": {"name": "frontend"},
+                "status": {"resources": [{"kind": "Deployment", "namespace": "web"}]},
+            }
         )
         is False
     )
@@ -47,7 +53,10 @@ def test_policy_kind_is_acm_touching():
     """Policy kind (newly added) should be recognized as ACM-touching."""
     assert (
         is_acm_touching_application(
-            {"metadata": {"name": "policy-app"}, "status": {"resources": [{"kind": "Policy", "namespace": "default"}]}}
+            {
+                "metadata": {"name": "policy-app"},
+                "status": {"resources": [{"kind": "Policy", "namespace": "default"}]},
+            }
         )
         is True
     )
@@ -59,7 +68,9 @@ def test_placement_binding_kind_is_acm_touching():
         is_acm_touching_application(
             {
                 "metadata": {"name": "placement-app"},
-                "status": {"resources": [{"kind": "PlacementBinding", "namespace": "default"}]},
+                "status": {
+                    "resources": [{"kind": "PlacementBinding", "namespace": "default"}]
+                },
             }
         )
         is True

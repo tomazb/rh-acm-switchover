@@ -11,6 +11,10 @@ import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
+_ANSIBLE_PY314_COMPAT_PATH = (
+    _REPO_ROOT
+    / "ansible_collections/tomazb/acm_switchover/tests/support/python314_ast_compat"
+)
 
 
 def _materialize_report_dir(report_dir: str, tmp_path: Path) -> Path:
@@ -132,12 +136,14 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
         cluster_deployment.setdefault("spec", {}).setdefault("preserveOnDelete", True)
 
 
-def _ansible_env(repo_root: Path, tmp_path: Path) -> dict:
+def _ansible_env(
+    repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Path, ...] = ()
+) -> dict:
     local_tmp = tmp_path / "ansible-local"
     remote_tmp = tmp_path / "ansible-remote"
     local_tmp.mkdir(parents=True, exist_ok=True)
     remote_tmp.mkdir(parents=True, exist_ok=True)
-    return {
+    env = {
         **os.environ,
         "ANSIBLE_COLLECTIONS_PATH": ":".join(
             [
@@ -148,6 +154,22 @@ def _ansible_env(repo_root: Path, tmp_path: Path) -> dict:
         "ANSIBLE_LOCAL_TEMP": str(local_tmp),
         "ANSIBLE_REMOTE_TMP": str(remote_tmp),
     }
+    pythonpaths = [str(_ANSIBLE_PY314_COMPAT_PATH)]
+    pythonpaths.extend(str(path) for path in extra_pythonpaths)
+    existing_pythonpath = os.environ.get("PYTHONPATH")
+    if existing_pythonpath:
+        pythonpaths.append(existing_pythonpath)
+    env["PYTHONPATH"] = ":".join(pythonpaths)
+    return env
+
+
+def _merge_test_vars(base: dict, overrides: dict) -> dict:
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_test_vars(base[key], value)
+        else:
+            base[key] = value
+    return base
 
 
 @pytest.fixture
@@ -245,6 +267,8 @@ def run_checkpoint_fixture(tmp_path):
     def _run(
         fixture_name: str,
         pre_completed_phases: list[str] | None = None,
+        vars_overrides: dict | None = None,
+        checkpoint_name: str = "checkpoint.json",
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _REPO_ROOT
         fixture_path = (
@@ -254,8 +278,10 @@ def run_checkpoint_fixture(tmp_path):
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
+        if vars_overrides:
+            _merge_test_vars(vars_payload, vars_overrides)
 
-        checkpoint_path = tmp_path / "checkpoint.json"
+        checkpoint_path = tmp_path / checkpoint_name
         report_dir = _prepare_execution_vars(vars_payload, tmp_path)
         vars_payload["acm_switchover_execution"].setdefault("checkpoint", {})
         vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(
@@ -282,7 +308,10 @@ def run_checkpoint_fixture(tmp_path):
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
 
-        env = _ansible_env(repo_root, tmp_path)
+        env = _ansible_env(
+            repo_root,
+            tmp_path,
+        )
 
         try:
             completed = subprocess.run(

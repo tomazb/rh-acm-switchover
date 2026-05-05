@@ -17,7 +17,9 @@ def test_pause_backups_captures_saved_backup_schedule_body():
 def test_backup_schedule_version_derivation_does_not_default_to_212():
     """Missing MCH versions must fail planning instead of assuming ACM 2.12 semantics."""
     primary_text = (PRIMARY_PREP_TASKS / "pause_backups.yml").read_text()
-    finalization_text = (ROLES_DIR / "finalization" / "tasks" / "enable_backups.yml").read_text()
+    finalization_text = (
+        ROLES_DIR / "finalization" / "tasks" / "enable_backups.yml"
+    ).read_text()
 
     assert "currentVersion', '2.12.0'" not in primary_text
     assert "currentVersion', '2.12.0'" not in finalization_text

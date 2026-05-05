@@ -19,7 +19,9 @@ def test_generate_kubeconfigs_invokes_packaged_script_for_selected_service_accou
 
     assert "role_path" in text
     assert "files/scripts/generate-sa-kubeconfig.sh" in text
-    assert "scripts/generate-sa-kubeconfig.sh" not in text.replace("files/scripts/generate-sa-kubeconfig.sh", "")
+    assert "scripts/generate-sa-kubeconfig.sh" not in text.replace(
+        "files/scripts/generate-sa-kubeconfig.sh", ""
+    )
     assert "acm-switchover" in text
     assert "acm-switchover-operator" in text
     assert "acm-switchover-validator" in text
@@ -29,8 +31,12 @@ def test_generate_kubeconfigs_invokes_packaged_script_for_selected_service_accou
 
     copy_tasks = [task for task in tasks if task.get("ansible.builtin.copy")]
     assert copy_tasks, "generated kubeconfig stdout must be written to a durable file"
-    assert any(task["ansible.builtin.copy"].get("mode") == "0600" for task in copy_tasks)
-    assert any(task.get("no_log") is True for task in tasks), "credential output must be hidden"
+    assert any(
+        task["ansible.builtin.copy"].get("mode") == "0600" for task in copy_tasks
+    )
+    assert any(
+        task.get("no_log") is True for task in tasks
+    ), "credential output must be hidden"
 
 
 def test_validate_permissions_impersonates_bootstrapped_service_account():

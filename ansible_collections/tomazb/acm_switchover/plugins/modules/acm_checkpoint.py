@@ -45,7 +45,7 @@ checkpoint:
     schema_version:
       description: Record schema version.
       type: str
-      sample: "1.0"
+      sample: "2.0"
     phase:
       description: Phase this checkpoint was created for.
       type: str
@@ -55,6 +55,13 @@ checkpoint:
     operational_data:
       description: Phase-specific metadata supplied by the caller.
       type: dict
+    operation_identity:
+      description: >
+        Operation identity payload binding the checkpoint to a specific switchover run.
+        Populated by the checkpoint_phase action plugin; null when the record is
+        created directly via this module without identity context.
+      type: dict
+      returned: always
     errors:
       description: List of error strings recorded during the phase.
       type: list

@@ -20,7 +20,10 @@ def test_report_status_is_fail_when_critical_finding_fails():
                 "recommended_action": "Upgrade the secondary hub",
             }
         ],
-        hubs={"primary": {"context": "primary-hub"}, "secondary": {"context": "secondary-hub"}},
+        hubs={
+            "primary": {"context": "primary-hub"},
+            "secondary": {"context": "secondary-hub"},
+        },
     )
     assert report["status"] == "fail"
     assert report["phase"] == "preflight"
@@ -39,7 +42,10 @@ def test_report_status_is_pass_when_only_warnings_exist():
                 "recommended_action": "Regenerate kubeconfigs",
             }
         ],
-        hubs={"primary": {"context": "primary-hub"}, "secondary": {"context": "secondary-hub"}},
+        hubs={
+            "primary": {"context": "primary-hub"},
+            "secondary": {"context": "secondary-hub"},
+        },
     )
     assert report["status"] == "pass"
 

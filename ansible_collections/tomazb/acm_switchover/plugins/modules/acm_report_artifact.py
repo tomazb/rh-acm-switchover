@@ -36,7 +36,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts im
     ArtifactWriteError,
     write_json_artifact,
 )
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import ValidationError
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
+    ValidationError,
+)
 
 
 def main() -> None:
@@ -52,7 +54,9 @@ def main() -> None:
     report = module.params["report"]
 
     try:
-        output_path = write_json_artifact(report=report, destination=destination, check_mode=module.check_mode)
+        output_path = write_json_artifact(
+            report=report, destination=destination, check_mode=module.check_mode
+        )
     except (ArtifactWriteError, ValidationError) as exc:
         module.fail_json(msg=str(exc), path=destination)
         return

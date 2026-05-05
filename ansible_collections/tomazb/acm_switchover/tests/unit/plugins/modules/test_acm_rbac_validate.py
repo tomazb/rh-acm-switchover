@@ -190,8 +190,14 @@ def test_summary_accepts_workflow_specific_metadata():
 
     result = summary["results"][0]
     assert result["id"] == "rbac-bootstrap-primary"
-    assert result["message"] == "RBAC bootstrap cannot verify required permissions on primary hub"
-    assert result["recommended_action"] == "Run rbac_bootstrap with an account that can grant the documented role"
+    assert (
+        result["message"]
+        == "RBAC bootstrap cannot verify required permissions on primary hub"
+    )
+    assert (
+        result["recommended_action"]
+        == "Run rbac_bootstrap with an account that can grant the documented role"
+    )
 
 
 def test_summary_reports_pass_when_all_permissions_allowed():
@@ -230,7 +236,9 @@ def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
 
     main()
 
-    assert captured["fail"] == {"msg": "include_decommission is only valid for the operator role"}
+    assert captured["fail"] == {
+        "msg": "include_decommission is only valid for the operator role"
+    }
 
 
 def test_validator_role_has_readonly_managedcluster_permission():
@@ -273,7 +281,9 @@ def test_hub_validation_surface_excludes_managed_cluster_namespace_permissions()
         argocd_install_type="unknown",
     )
 
-    managed_cluster_perms = [p for p in permissions if p[3] == "open-cluster-management-agent"]
+    managed_cluster_perms = [
+        p for p in permissions if p[3] == "open-cluster-management-agent"
+    ]
     assert managed_cluster_perms == []
 
 
@@ -287,7 +297,11 @@ def test_validator_role_no_write_on_backupschedules():
         argocd_install_type="unknown",
     )
     # Filter to backup namespace permissions
-    backup_perms = [p for p in permissions if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"]
+    backup_perms = [
+        p
+        for p in permissions
+        if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"
+    ]
     # Should only have get/list, no write operations
     verbs = {p[2] for p in backup_perms}
     assert verbs == {"get", "list"}
@@ -345,7 +359,11 @@ def test_operator_role_has_write_on_backupschedules():
         argocd_install_type="unknown",
     )
     # Filter to backup namespace permissions
-    backup_perms = [p for p in permissions if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"]
+    backup_perms = [
+        p
+        for p in permissions
+        if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"
+    ]
     verbs = {p[2] for p in backup_perms}
     assert "create" in verbs
     assert "patch" in verbs

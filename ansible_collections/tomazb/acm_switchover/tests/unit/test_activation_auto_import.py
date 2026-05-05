@@ -7,7 +7,12 @@ import yaml
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 ACTIVATION_TASKS = ROLES_DIR / "activation" / "tasks"
 FINALIZATION_TASKS = ROLES_DIR / "finalization" / "tasks"
-CONSTANTS_FILE = pathlib.Path(__file__).resolve().parents[2] / "plugins" / "module_utils" / "constants.py"
+CONSTANTS_FILE = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / "plugins"
+    / "module_utils"
+    / "constants.py"
+)
 
 
 def test_manage_auto_import_file_exists():
@@ -49,10 +54,18 @@ def test_main_includes_manage_after_passive_verification_before_activation():
         elif inc == "reset_auto_import.yml":
             reset_idx = i
 
-    assert manage_idx is not None, "manage_auto_import.yml must be included in activation"
-    assert verify_idx is not None, "verify_passive_sync.yml must be included in activation"
-    assert verify_idx < manage_idx, "passive sync must be verified before ImportAndSync management"
-    assert manage_idx < activate_idx, "manage_auto_import must come before activate_restore"
+    assert (
+        manage_idx is not None
+    ), "manage_auto_import.yml must be included in activation"
+    assert (
+        verify_idx is not None
+    ), "verify_passive_sync.yml must be included in activation"
+    assert (
+        verify_idx < manage_idx
+    ), "passive sync must be verified before ImportAndSync management"
+    assert (
+        manage_idx < activate_idx
+    ), "manage_auto_import must come before activate_restore"
     assert reset_idx is None, (
         "reset_auto_import.yml must NOT be in activation/tasks/main.yml — "
         "it belongs in finalization to match Python CLI timing"
@@ -79,9 +92,13 @@ def test_finalization_includes_reset_after_discover():
         elif inc == "reset_auto_import.yml":
             reset_idx = i
 
-    assert reset_idx is not None, "reset_auto_import.yml must be included in finalization"
+    assert (
+        reset_idx is not None
+    ), "reset_auto_import.yml must be included in finalization"
     assert discover_idx is not None, "discover_resources.yml must be in finalization"
-    assert reset_idx > discover_idx, "reset_auto_import must come after discover_resources"
+    assert (
+        reset_idx > discover_idx
+    ), "reset_auto_import must come after discover_resources"
 
 
 def test_activation_persists_auto_import_reset_flag_in_checkpoint():
@@ -138,16 +155,25 @@ def test_manage_auto_import_initializes_strategy_for_dry_run_paths():
     """Dry-run skips live ConfigMap discovery, but later when clauses still need a strategy value."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
     init_task = next(
-        task for task in tasks if task.get("name") == "Initialize auto-import strategy management state"
+        task
+        for task in tasks
+        if task.get("name") == "Initialize auto-import strategy management state"
     )
 
-    assert init_task["ansible.builtin.set_fact"]["_auto_import_current_strategy"] == "default"
+    assert (
+        init_task["ansible.builtin.set_fact"]["_auto_import_current_strategy"]
+        == "default"
+    )
 
 
 def test_manage_auto_import_creates_missing_configmap_like_python():
     """Default strategy is represented by an absent ConfigMap, so manage mode must create it."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())
-    strategy_task = next(task for task in tasks if task.get("name") == "Set autoImportStrategy to ImportAndSync")
+    strategy_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Set autoImportStrategy to ImportAndSync"
+    )
     module_args = strategy_task["kubernetes.core.k8s"]
 
     assert module_args["state"] == "present"
@@ -170,8 +196,13 @@ def test_manage_auto_import_omits_missing_secondary_context():
 
     assert kube_tasks
     for task in kube_tasks:
-        module_args = task.get("kubernetes.core.k8s_info", {}) or task.get("kubernetes.core.k8s", {})
-        assert module_args["context"] == "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+        module_args = task.get("kubernetes.core.k8s_info", {}) or task.get(
+            "kubernetes.core.k8s", {}
+        )
+        assert (
+            module_args["context"]
+            == "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+        )
 
 
 def test_apply_immediate_import_requires_acm_214_or_newer():
@@ -185,8 +216,12 @@ def test_apply_immediate_import_requires_acm_214_or_newer():
 
 def test_apply_immediate_import_treats_strategy_read_errors_as_warning_skip():
     """Python warns and skips immediate-import annotations when strategy lookup is unavailable."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "apply_immediate_import.yml").read_text())
-    config_task = next(task for task in tasks if task.get("name") == "Get current autoImportStrategy")
+    tasks = yaml.safe_load(
+        (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
+    )
+    config_task = next(
+        task for task in tasks if task.get("name") == "Get current autoImportStrategy"
+    )
     content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
 
     assert config_task.get("failed_when") is False
@@ -196,8 +231,14 @@ def test_apply_immediate_import_treats_strategy_read_errors_as_warning_skip():
 
 def test_apply_immediate_import_retriggers_non_empty_annotations_like_python():
     """Python removes non-empty immediate-import markers before setting the empty trigger."""
-    tasks = yaml.safe_load((ACTIVATION_TASKS / "apply_immediate_import.yml").read_text())
-    patch_tasks = [task for task in tasks if task.get("kubernetes.core.k8s", {}).get("kind") == "ManagedCluster"]
+    tasks = yaml.safe_load(
+        (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
+    )
+    patch_tasks = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s", {}).get("kind") == "ManagedCluster"
+    ]
 
     null_tasks = [
         task
@@ -216,8 +257,12 @@ def test_apply_immediate_import_retriggers_non_empty_annotations_like_python():
         == ""
     ]
 
-    assert null_tasks, "apply_immediate_import.yml must clear stale non-empty markers first"
-    assert empty_tasks, "apply_immediate_import.yml must then set the empty immediate-import trigger"
+    assert (
+        null_tasks
+    ), "apply_immediate_import.yml must clear stale non-empty markers first"
+    assert (
+        empty_tasks
+    ), "apply_immediate_import.yml must then set the empty immediate-import trigger"
     assert tasks.index(null_tasks[0]) < tasks.index(empty_tasks[0])
 
 

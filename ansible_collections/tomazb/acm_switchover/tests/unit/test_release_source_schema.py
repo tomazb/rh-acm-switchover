@@ -45,7 +45,7 @@ def _find_task_set_fact(plays: list, task_name: str) -> dict | None:
 def test_checkpoint_fields_consumed_by_release_normalizer_are_stable() -> None:
     checkpoint = build_checkpoint_record(phase="preflight", operational_data={})
 
-    assert checkpoint["schema_version"] == "1.0"
+    assert checkpoint["schema_version"] == "2.0"
     assert checkpoint["phase"] == "preflight"
     assert checkpoint["completed_phases"] == []
     assert checkpoint["errors"] == []
@@ -61,7 +61,9 @@ def test_preflight_report_fields_consumed_by_release_normalizer_are_stable() -> 
     )
     build_preflight_report = acm_preflight_report.build_preflight_report
 
-    results = [{"id": "acm-version", "severity": "critical", "status": "pass", "message": "ok"}]
+    results = [
+        {"id": "acm-version", "severity": "critical", "status": "pass", "message": "ok"}
+    ]
     report = build_preflight_report(phase="preflight", results=results, hubs={})
 
     assert report["schema_version"] == "1.0"
@@ -80,7 +82,14 @@ def test_preflight_report_status_is_fail_when_critical_results_present() -> None
     )
     build_preflight_report = acm_preflight_report.build_preflight_report
 
-    results = [{"id": "acm-version", "severity": "critical", "status": "fail", "message": "mismatch"}]
+    results = [
+        {
+            "id": "acm-version",
+            "severity": "critical",
+            "status": "fail",
+            "message": "mismatch",
+        }
+    ]
     report = build_preflight_report(phase="preflight", results=results, hubs={})
 
     assert report["status"] == "fail"
@@ -110,7 +119,9 @@ def test_switchover_report_contract_top_level_keys_are_stable() -> None:
     plays = yaml.safe_load((_PLAYBOOKS_DIR / "switchover.yml").read_text())
     contract = _find_task_set_fact(plays, "Build switchover report contract")
 
-    assert contract is not None, "Build switchover report contract task not found in switchover.yml"
+    assert (
+        contract is not None
+    ), "Build switchover report contract task not found in switchover.yml"
     assert contract["schema_version"] == "1.0"
     assert contract["source"] == "tomazb.acm_switchover"
     assert "argocd" in contract
@@ -121,7 +132,9 @@ def test_restore_only_report_contract_top_level_keys_are_stable() -> None:
     plays = yaml.safe_load((_PLAYBOOKS_DIR / "restore_only.yml").read_text())
     contract = _find_task_set_fact(plays, "Build restore-only report contract")
 
-    assert contract is not None, "Build restore-only report contract task not found in restore_only.yml"
+    assert (
+        contract is not None
+    ), "Build restore-only report contract task not found in restore_only.yml"
     assert contract["schema_version"] == "1.0"
     assert contract["source"] == "tomazb.acm_switchover"
     assert contract["operation"] == "restore_only"

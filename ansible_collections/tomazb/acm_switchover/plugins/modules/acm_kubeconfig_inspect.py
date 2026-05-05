@@ -70,14 +70,18 @@ def _require_named_entries(items: list[dict], field_name: str) -> None:
     for item in items:
         name = item.get("name")
         if not isinstance(name, str) or not name.strip():
-            raise ValueError(f"'{field_name}' entries must define 'name' as a non-empty string")
+            raise ValueError(
+                f"'{field_name}' entries must define 'name' as a non-empty string"
+            )
 
 
 def _require_string_field(user_cfg: dict, field_name: str, user_name: str) -> None:
     if field_name in user_cfg:
         value = user_cfg[field_name]
         if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"user entry '{user_name}' must define '{field_name}' as a non-empty string")
+            raise ValueError(
+                f"user entry '{user_name}' must define '{field_name}' as a non-empty string"
+            )
 
 
 def _decode_jwt_exp(token: str) -> tuple[datetime | None, bool, str | None]:
@@ -120,11 +124,15 @@ def _load_kubeconfig(kubeconfig: str) -> dict:
     return config
 
 
-def _normalize_token_file_path(token_file: object, kubeconfig: str, user_name: str) -> Path:
+def _normalize_token_file_path(
+    token_file: object, kubeconfig: str, user_name: str
+) -> Path:
     try:
         token_file_str = os.fspath(token_file)
     except TypeError as exc:
-        raise ValueError(f"user entry '{user_name}' must define 'tokenFile' as a string or path") from exc
+        raise ValueError(
+            f"user entry '{user_name}' must define 'tokenFile' as a string or path"
+        ) from exc
     if not token_file_str or not token_file_str.strip():
         raise ValueError(f"user entry '{user_name}' defines an empty tokenFile path")
 
@@ -140,9 +148,13 @@ def _load_token_file(token_file: object, kubeconfig: str, user_name: str) -> str
     try:
         token_value = token_file_path.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        raise ValueError(f"unable to read tokenFile '{token_file_path}': {exc}") from exc
+        raise ValueError(
+            f"unable to read tokenFile '{token_file_path}': {exc}"
+        ) from exc
     if not token_value:
-        raise ValueError(f"user entry '{user_name}' tokenFile resolved to empty content")
+        raise ValueError(
+            f"user entry '{user_name}' tokenFile resolved to empty content"
+        )
     return token_value
 
 
@@ -150,7 +162,9 @@ def _base_details(context: str, user_name: str) -> dict:
     return {"context": context, "user": user_name}
 
 
-def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 4) -> dict:
+def inspect_kubeconfig_auth(
+    kubeconfig: str, context: str, warning_hours: int = 4
+) -> dict:
     if warning_hours < 0:
         raise ValueError("warning_hours must be non-negative")
 
@@ -167,15 +181,21 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
         raise ValueError(f"context '{context}' not found in kubeconfig")
 
     if "context" not in ctx:
-        raise ValueError(f"context entry '{context}' is missing required 'context' mapping")
+        raise ValueError(
+            f"context entry '{context}' is missing required 'context' mapping"
+        )
 
     context_cfg = ctx.get("context")
     if not isinstance(context_cfg, dict):
-        raise ValueError(f"context entry '{context}' must contain a mapping under 'context'")
+        raise ValueError(
+            f"context entry '{context}' must contain a mapping under 'context'"
+        )
 
     user_name = context_cfg.get("user")
     if not isinstance(user_name, str) or not user_name.strip():
-        raise ValueError(f"context entry '{context}' is missing required 'user' reference")
+        raise ValueError(
+            f"context entry '{context}' is missing required 'user' reference"
+        )
 
     user_entry = _find_named(users, user_name)
     if user_entry is None:
@@ -186,25 +206,42 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
 
     user_cfg = user_entry.get("user")
     if not isinstance(user_cfg, dict):
-        raise ValueError(f"user entry '{user_name}' must contain a mapping under 'user'")
+        raise ValueError(
+            f"user entry '{user_name}' must contain a mapping under 'user'"
+        )
     details = _base_details(context, user_name)
 
     if "exec" in user_cfg and not isinstance(user_cfg["exec"], dict):
         raise ValueError(f"user entry '{user_name}' must define 'exec' as a mapping")
     if "auth-provider" in user_cfg and not isinstance(user_cfg["auth-provider"], dict):
-        raise ValueError(f"user entry '{user_name}' must define 'auth-provider' as a mapping")
-    cert_fields = ("client-certificate", "client-certificate-data", "client-key", "client-key-data")
+        raise ValueError(
+            f"user entry '{user_name}' must define 'auth-provider' as a mapping"
+        )
+    cert_fields = (
+        "client-certificate",
+        "client-certificate-data",
+        "client-key",
+        "client-key-data",
+    )
     for field_name in cert_fields:
         _require_string_field(user_cfg, field_name, user_name)
     file_pair = "client-certificate" in user_cfg or "client-key" in user_cfg
     data_pair = "client-certificate-data" in user_cfg or "client-key-data" in user_cfg
     if file_pair or data_pair:
-        has_complete_file_pair = "client-certificate" in user_cfg and "client-key" in user_cfg and not data_pair
+        has_complete_file_pair = (
+            "client-certificate" in user_cfg
+            and "client-key" in user_cfg
+            and not data_pair
+        )
         has_complete_data_pair = (
-            "client-certificate-data" in user_cfg and "client-key-data" in user_cfg and not file_pair
+            "client-certificate-data" in user_cfg
+            and "client-key-data" in user_cfg
+            and not file_pair
         )
         if not (has_complete_file_pair or has_complete_data_pair):
-            raise ValueError(f"user entry '{user_name}' must define a complete client certificate pair")
+            raise ValueError(
+                f"user entry '{user_name}' must define a complete client certificate pair"
+            )
 
     if "exec" in user_cfg:
         return {
@@ -231,13 +268,19 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
     else:
         token = user_cfg.get("token")
         if token is not None and not isinstance(token, str):
-            raise ValueError(f"user entry '{user_name}' must define 'token' as a string")
+            raise ValueError(
+                f"user entry '{user_name}' must define 'token' as a string"
+            )
         if token is not None and not token.strip():
             raise ValueError(f"user entry '{user_name}' defines an empty bearer token")
     if token:
         expires_at, has_exp_claim, decode_error = _decode_jwt_exp(token)
         if decode_error:
-            auth_type = "bearer_jwt" if decode_error == "token has no expiration claim" else "bearer_opaque"
+            auth_type = (
+                "bearer_jwt"
+                if decode_error == "token has no expiration claim"
+                else "bearer_opaque"
+            )
             return {
                 "status": "warn",
                 "severity": "warning",
@@ -249,7 +292,9 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
                 },
             }
 
-        hours_until_expiry = (expires_at - datetime.now(timezone.utc)).total_seconds() / 3600
+        hours_until_expiry = (
+            expires_at - datetime.now(timezone.utc)
+        ).total_seconds() / 3600
         bearer_details = {
             **details,
             "has_exp_claim": has_exp_claim,
@@ -292,11 +337,19 @@ def inspect_kubeconfig_auth(kubeconfig: str, context: str, warning_hours: int = 
 
     if "username" in user_cfg or "password" in user_cfg:
         if "username" not in user_cfg or "password" not in user_cfg:
-            raise ValueError(f"user entry '{user_name}' basic auth requires both 'username' and 'password'")
-        if not isinstance(user_cfg["username"], str) or not isinstance(user_cfg["password"], str):
-            raise ValueError(f"user entry '{user_name}' must define basic auth 'username' and 'password' as strings")
+            raise ValueError(
+                f"user entry '{user_name}' basic auth requires both 'username' and 'password'"
+            )
+        if not isinstance(user_cfg["username"], str) or not isinstance(
+            user_cfg["password"], str
+        ):
+            raise ValueError(
+                f"user entry '{user_name}' must define basic auth 'username' and 'password' as strings"
+            )
         if not user_cfg["username"].strip() or not user_cfg["password"].strip():
-            raise ValueError(f"user entry '{user_name}' basic auth 'username' and 'password' must be non-empty")
+            raise ValueError(
+                f"user entry '{user_name}' basic auth 'username' and 'password' must be non-empty"
+            )
         return {
             "status": "pass",
             "severity": "info",

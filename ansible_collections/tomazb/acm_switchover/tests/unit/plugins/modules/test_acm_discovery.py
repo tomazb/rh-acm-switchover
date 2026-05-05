@@ -1,4 +1,6 @@
-from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_discovery import classify_hub_state
+from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_discovery import (
+    classify_hub_state,
+)
 
 
 def test_classify_hub_state_marks_passive_sync_secondary():

@@ -5,11 +5,45 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = "1.0"
-KNOWN_PHASES = ("preflight", "primary_prep", "activation", "post_activation", "finalization")
+SCHEMA_VERSION = "2.0"
+KNOWN_PHASES = (
+    "preflight",
+    "primary_prep",
+    "activation",
+    "post_activation",
+    "finalization",
+)
 
 
-def build_checkpoint_record(phase: str, operational_data: dict) -> dict:
+class CheckpointIdentityMismatch(ValueError):
+    """Raised when a checkpoint belongs to a different switchover operation."""
+
+
+def build_operation_identity(
+    hubs: dict, operation: dict, collection_version: str | None = None
+) -> dict:
+    """Build a stable identity payload for the current switchover operation."""
+    primary = hubs.get("primary") or {}
+    secondary = hubs.get("secondary") or {}
+    restore_only = operation.get("restore_only")
+    _restore_only = False if restore_only is None else restore_only
+    return {
+        "primary_context": primary.get("context") or "",
+        "secondary_context": secondary.get("context") or "",
+        "primary_kubeconfig": primary.get("kubeconfig") or "",
+        "secondary_kubeconfig": secondary.get("kubeconfig") or "",
+        "method": operation.get("method") or ("full" if _restore_only else "passive"),
+        "activation_method": operation.get("activation_method") or "patch",
+        "restore_only": _restore_only,
+        "old_hub_action": operation.get("old_hub_action")
+        or ("none" if _restore_only else "secondary"),
+        "collection_version": collection_version or "",
+    }
+
+
+def build_checkpoint_record(
+    phase: str, operational_data: dict, operation_identity: dict | None = None
+) -> dict:
     """Return a fresh checkpoint record dict for the given phase."""
     timestamp = datetime.now(timezone.utc).isoformat()
     return {
@@ -17,11 +51,47 @@ def build_checkpoint_record(phase: str, operational_data: dict) -> dict:
         "phase": phase,
         "completed_phases": [],
         "operational_data": operational_data,
+        "operation_identity": operation_identity,
         "errors": [],
         "report_refs": [],
         "created_at": timestamp,
         "updated_at": timestamp,
     }
+
+
+def validate_operation_identity(
+    checkpoint: dict, expected_identity: dict, *, allow_missing: bool = False
+) -> bool:
+    """Validate that a checkpoint belongs to the expected switchover operation."""
+    actual_identity = checkpoint.get("operation_identity")
+    if actual_identity is None:
+        if allow_missing:
+            return False
+        raise CheckpointIdentityMismatch("Checkpoint is missing operation identity.")
+    if actual_identity != expected_identity:
+        raise CheckpointIdentityMismatch(
+            "Checkpoint operation identity does not match the current execution."
+        )
+    return True
+
+
+def reset_completed_phases_from(completed_phases: list[str], phase: str) -> list[str]:
+    """Prune the requested phase and every downstream phase from the completed phase list."""
+    if phase not in KNOWN_PHASES:
+        raise ValueError(f"Unknown checkpoint phase '{phase}'.")
+    phases_to_reset = set(KNOWN_PHASES[KNOWN_PHASES.index(phase) :])
+    return [
+        completed_phase
+        for completed_phase in completed_phases
+        if completed_phase not in phases_to_reset
+    ]
+
+
+def is_unsafe_legacy_checkpoint(checkpoint: dict) -> bool:
+    """Return True when a legacy schema 1.0 checkpoint has completed phases to prune."""
+    return checkpoint.get("schema_version") == "1.0" and bool(
+        checkpoint.get("completed_phases")
+    )
 
 
 def should_resume_phase(checkpoint: dict, phase: str) -> bool:

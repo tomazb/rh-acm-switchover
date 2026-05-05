@@ -18,13 +18,19 @@ def test_primary_prep_manage_auto_import_patches_managed_clusters():
     text = (PRIMARY_PREP_TASKS / "manage_auto_import.yml").read_text()
 
     managed_cluster_queries = [
-        task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
     ]
     patch_tasks = [task for task in tasks if "kubernetes.core.k8s" in task]
 
-    assert managed_cluster_queries, "manage_auto_import.yml must query ManagedCluster resources"
+    assert (
+        managed_cluster_queries
+    ), "manage_auto_import.yml must query ManagedCluster resources"
     assert patch_tasks, "manage_auto_import.yml must patch ManagedClusters"
-    assert "disable-auto-import" in text, "manage_auto_import.yml must add the disable-auto-import annotation"
+    assert (
+        "disable-auto-import" in text
+    ), "manage_auto_import.yml must add the disable-auto-import annotation"
     assert "local-cluster" in text, "manage_auto_import.yml must exclude local-cluster"
 
 

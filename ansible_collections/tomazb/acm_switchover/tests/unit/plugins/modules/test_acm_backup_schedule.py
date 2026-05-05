@@ -56,7 +56,10 @@ def test_build_enable_creates_saved_schedule_when_missing_on_secondary():
         saved_schedule={
             "apiVersion": "cluster.open-cluster-management.io/v1beta1",
             "kind": "BackupSchedule",
-            "metadata": {"name": "acm-hub-backup", "namespace": "open-cluster-management-backup"},
+            "metadata": {
+                "name": "acm-hub-backup",
+                "namespace": "open-cluster-management-backup",
+            },
             "spec": {"veleroSchedule": "*/30 * * * *", "paused": True},
         },
     )

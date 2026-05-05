@@ -86,7 +86,8 @@ def backup_schedule_pause_mode(acm_version: str) -> str:
         major, minor, *_rest = [int(part) for part in acm_version.split(".")]
     except ValueError as e:
         raise ValueError(
-            f"Invalid ACM version format '{acm_version}'. " f"Expected numeric version like '2.14.3', got error: {e}"
+            f"Invalid ACM version format '{acm_version}'. "
+            f"Expected numeric version like '2.14.3', got error: {e}"
         ) from e
     return "delete" if (major, minor) <= (2, 11) else "pause"
 
@@ -94,7 +95,13 @@ def backup_schedule_pause_mode(acm_version: str) -> str:
 def _build_saved_schedule_body(saved_schedule: dict) -> dict:
     body = copy.deepcopy(saved_schedule)
     metadata = body.get("metadata") or {}
-    for key in ("uid", "resourceVersion", "creationTimestamp", "generation", "managedFields"):
+    for key in (
+        "uid",
+        "resourceVersion",
+        "creationTimestamp",
+        "generation",
+        "managedFields",
+    ):
         metadata.pop(key, None)
     if metadata:
         body["metadata"] = metadata
@@ -105,12 +112,18 @@ def _build_saved_schedule_body(saved_schedule: dict) -> dict:
 
 
 def _backup_schedule_names(schedules: list[dict]) -> str:
-    names = [schedule.get("metadata", {}).get("name") or "<unnamed>" for schedule in schedules]
+    names = [
+        schedule.get("metadata", {}).get("name") or "<unnamed>"
+        for schedule in schedules
+    ]
     return ", ".join(names)
 
 
 def build_backup_schedule_operation(
-    acm_version: str, intent: str, schedules: list[dict], saved_schedule: dict | None = None
+    acm_version: str,
+    intent: str,
+    schedules: list[dict],
+    saved_schedule: dict | None = None,
 ) -> dict:
     mode = backup_schedule_pause_mode(acm_version)
     if len(schedules) > 1:

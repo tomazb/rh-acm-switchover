@@ -42,7 +42,9 @@ EXAMPLES = r"""
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.result import ValidationResult
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.result import (
+    ValidationResult,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
     ValidationError,
     validate_context_name,
@@ -102,14 +104,27 @@ def build_input_validation_results(params: dict) -> list[dict]:
             )
         else:
             results.append(
-                _pass_result("preflight-input-primary-context", "primary context correctly empty for restore-only")
+                _pass_result(
+                    "preflight-input-primary-context",
+                    "primary context correctly empty for restore-only",
+                )
             )
     else:
         try:
             validate_context_name(primary_context)
-            results.append(_pass_result("preflight-input-primary-context", "primary context is valid"))
+            results.append(
+                _pass_result(
+                    "preflight-input-primary-context", "primary context is valid"
+                )
+            )
         except ValidationError as exc:
-            results.append(_fail_result("preflight-input-primary-context", str(exc), "Set a valid primary context"))
+            results.append(
+                _fail_result(
+                    "preflight-input-primary-context",
+                    str(exc),
+                    "Set a valid primary context",
+                )
+            )
 
     # --- Secondary context validation ---
     if not secondary_context:
@@ -123,9 +138,19 @@ def build_input_validation_results(params: dict) -> list[dict]:
     else:
         try:
             validate_context_name(secondary_context)
-            results.append(_pass_result("preflight-input-secondary-context", "secondary context is valid"))
+            results.append(
+                _pass_result(
+                    "preflight-input-secondary-context", "secondary context is valid"
+                )
+            )
         except ValidationError as exc:
-            results.append(_fail_result("preflight-input-secondary-context", str(exc), "Set a valid secondary context"))
+            results.append(
+                _fail_result(
+                    "preflight-input-secondary-context",
+                    str(exc),
+                    "Set a valid secondary context",
+                )
+            )
 
     # --- Path validation (skip primary kubeconfig in restore-only) ---
     path_checks = [
@@ -149,7 +174,9 @@ def build_input_validation_results(params: dict) -> list[dict]:
     if report_dir:
         path_checks.append(("preflight-input-report-dir", "report", report_dir, False))
     if checkpoint_path:
-        path_checks.append(("preflight-input-checkpoint-path", "checkpoint", checkpoint_path, False))
+        path_checks.append(
+            ("preflight-input-checkpoint-path", "checkpoint", checkpoint_path, False)
+        )
 
     for result_id, path_label, path_value, required in path_checks:
         if not path_value:
@@ -164,7 +191,9 @@ def build_input_validation_results(params: dict) -> list[dict]:
             continue
         try:
             validate_safe_path(path_value)
-            results.append(_pass_result(result_id, f"{result_id} is safe", {"path": path_value}))
+            results.append(
+                _pass_result(result_id, f"{result_id} is safe", {"path": path_value})
+            )
         except ValidationError as exc:
             results.append(
                 _fail_result(
@@ -185,7 +214,9 @@ def build_input_validation_results(params: dict) -> list[dict]:
 
     # --- Operation combination validation ---
     try:
-        normalized_operation = validate_operation_inputs(operation=operation, features=features)
+        normalized_operation = validate_operation_inputs(
+            operation=operation, features=features
+        )
         results.append(
             _pass_result(
                 "preflight-input-operation",
@@ -207,7 +238,9 @@ def build_input_validation_results(params: dict) -> list[dict]:
 
 def summarize_input_validation(results: list[dict]) -> dict:
     critical_failures = [
-        item for item in results if item["severity"] == "critical" and item["status"] in {"fail", "error"}
+        item
+        for item in results
+        if item["severity"] == "critical" and item["status"] in {"fail", "error"}
     ]
     return {
         "passed": len(critical_failures) == 0,
