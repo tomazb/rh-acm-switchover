@@ -227,7 +227,7 @@ class ActionModule(ActionBase):
         has_explicit_reset: bool,
         expected_operation_identity: dict,
     ) -> tuple[dict, bool]:
-        if status == "enter" and reset_from:
+        if reset_from and status in {"enter", "reset"}:
             return (
                 self._build_reset_from_checkpoint(
                     checkpoint_data, reset_from, expected_operation_identity

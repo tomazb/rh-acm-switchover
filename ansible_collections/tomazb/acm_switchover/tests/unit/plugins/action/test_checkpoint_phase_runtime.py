@@ -1050,6 +1050,53 @@ def test_action_module_reset_from_primary_prep_prunes_downstream_phases(tmp_path
     assert json.loads(checkpoint_file.read_text())["completed_phases"] == ["preflight"]
 
 
+def test_action_module_reset_status_with_reset_from_prunes_downstream_phases(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "finalization",
+                "completed_phases": [
+                    "preflight",
+                    "primary_prep",
+                    "activation",
+                    "post_activation",
+                    "finalization",
+                ],
+                "operational_data": {},
+                "operation_identity": build_operation_identity(
+                    hubs=_task_vars_with_operation_identity()["acm_switchover_hubs"],
+                    operation=_task_vars_with_operation_identity()[
+                        "acm_switchover_operation"
+                    ],
+                ),
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    action = _make_checkpoint_action(
+        {
+            "phase": "primary_prep",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+                "reset_from": "primary_prep",
+            },
+            "status": "reset",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity())
+
+    assert result["checkpoint"]["completed_phases"] == ["preflight"]
+    assert result["checkpoint"]["phase_status"] == "reset"
+    assert json.loads(checkpoint_file.read_text())["completed_phases"] == ["preflight"]
+
+
 def test_action_module_quarantines_corrupt_checkpoint_json(tmp_path):
     checkpoint_file = tmp_path / "checkpoint.json"
     checkpoint_file.write_text('{"schema_version": "2.0", bad json')
