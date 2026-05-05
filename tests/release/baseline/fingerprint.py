@@ -14,7 +14,7 @@ def _hub_payload(facts: HubFacts) -> dict:
         "kubernetes_version": "unknown",
         "hub_role": facts.hub_role,
         "backup_schedule": facts.backup_schedule,
-        "backup_storage_location": {"present": False, "health": "unknown"},
+        "backup_storage_location": facts.backup_storage_location,
         "oadp": {"present": False, "status": "unknown"},
         "restore": facts.restore,
         "observability": facts.observability,

@@ -1,5 +1,6 @@
 import pytest
 
+from tests.release.contracts.loader import load_profile
 from tests.release.scenarios.catalog import select_release_matrix
 
 
@@ -37,3 +38,42 @@ def test_mutating_filter_adds_prerequisites_and_final_checks() -> None:
 def test_unknown_scenario_fails_before_mutation() -> None:
     with pytest.raises(ValueError, match="unknown release scenario"):
         select_release_matrix(enabled_streams=("python",), scenario_filters=("missing",), stream_filters=())
+
+
+def test_profile_declared_scenarios_define_full_matrix() -> None:
+    profile = load_profile("tests/release/profiles/dev-minimal.example.yaml").profile
+
+    selected = select_release_matrix(
+        enabled_streams=("python", "ansible"),
+        scenario_filters=(),
+        stream_filters=(),
+        profile_scenarios=profile.scenarios,
+    )
+
+    assert selected.scenario_ids == (
+        "static-gates",
+        "lab-readiness",
+        "baseline-check",
+        "preflight",
+        "final-baseline-check",
+    )
+
+
+def test_mutating_profile_filter_adds_prerequisites_and_final_checks() -> None:
+    profile = load_profile("tests/release/profiles/full-release.example.yaml").profile
+
+    selected = select_release_matrix(
+        enabled_streams=("python", "ansible"),
+        scenario_filters=("python-passive-switchover",),
+        stream_filters=(),
+        profile_scenarios=profile.scenarios,
+    )
+
+    assert selected.scenario_ids == (
+        "static-gates",
+        "lab-readiness",
+        "baseline-check",
+        "python-passive-switchover",
+        "runtime-parity",
+        "final-baseline-check",
+    )

@@ -63,6 +63,13 @@ def test_python_and_ansible_streams_enable_expected_gate_ids() -> None:
     assert "collection-scenario-tests" in gate_ids
 
 
+def test_root_non_e2e_gate_excludes_release_framework() -> None:
+    gates = build_default_gate_commands(enabled_streams=("python",), repo_root=Path("/repo"))
+    root_gate = next(gate for gate in gates if gate.gate_id == "root-non-e2e-tests")
+
+    assert "--ignore=tests/release" in root_gate.command
+
+
 def test_ansible_stream_includes_restore_only_syntax_gate() -> None:
     gates = build_default_gate_commands(enabled_streams=("ansible",), repo_root=Path("/repo"))
     restore_only_gates = [
@@ -77,3 +84,17 @@ def test_ansible_stream_includes_restore_only_syntax_gate() -> None:
 def test_bash_only_profile_still_runs_local_root_gate() -> None:
     gates = build_default_gate_commands(enabled_streams=("bash",), repo_root=Path("/repo"))
     assert [gate.gate_id for gate in gates] == ["root-non-e2e-tests"]
+
+
+def test_run_gate_command_rejects_unredacted_secret_output(tmp_path: Path) -> None:
+    result = run_gate_command(
+        GateCommand(
+            gate_id="sample", label="secret", command=["python", "-c", "print('token: abc123')"], cwd=Path.cwd()
+        ),
+        artifact_dir=tmp_path,
+    )
+
+    assert result.status == "failed"
+    assert result.returncode == 0
+    assert Path(result.stdout_path).read_text(encoding="utf-8") == ""
+    assert "rejected by the sanitizer" in Path(result.stderr_path).read_text(encoding="utf-8")

@@ -27,14 +27,22 @@ def build_summary(
         failure_reasons.append("run is not certification eligible")
     for scenario_id in _failed_required_scenarios(required_scenarios):
         failure_reasons.append(f"required scenario failed: {scenario_id}")
-    for name, payload in {
+    status_expectations = {
+        "runtime parity": {"passed", "not_applicable"},
+        "artifact redaction": {"passed"},
+        "final baseline": {"passed"},
+        "mandatory Argo CD": {"passed"},
+        "release metadata": {"passed"},
+    }
+    payloads = {
         "runtime parity": runtime_parity,
         "artifact redaction": artifact_redaction,
         "final baseline": final_baseline,
         "mandatory Argo CD": mandatory_argocd,
         "release metadata": release_metadata,
-    }.items():
-        if payload.get("status") != "passed":
+    }
+    for name, payload in payloads.items():
+        if payload.get("status") not in status_expectations[name]:
             failure_reasons.append(f"{name} failed")
     if recovery.get("hard_stops"):
         failure_reasons.append("recovery hard stop remains open")

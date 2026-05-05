@@ -15,6 +15,7 @@ class HubFacts:
     acm_version: str
     hub_role: str
     backup_schedule: dict
+    backup_storage_location: dict
     restore: dict
     managed_cluster_names: tuple[str, ...]
     observability: dict
@@ -35,6 +36,15 @@ def _managed_cluster_names(items: list[dict]) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def _backup_storage_location_payload(item: dict | None) -> dict:
+    status = item.get("status", {}) if item else {}
+    return {
+        "present": item is not None,
+        "name": item.get("metadata", {}).get("name") if item else None,
+        "health": status.get("phase") or status.get("status") or "unknown",
+    }
+
+
 def discover_hub_facts(
     *,
     client: HubDiscoveryClient,
@@ -44,6 +54,7 @@ def discover_hub_facts(
 ) -> HubFacts:
     mch = _first(client.list_resources("multiclusterhubs", acm_namespace)) or {}
     backup = _first(client.list_resources("backupschedules", acm_namespace))
+    backup_storage_location = _first(client.list_resources("backupstoragelocations", "openshift-adp"))
     restore = _first(client.list_resources("restores", acm_namespace))
     managed_clusters = client.list_resources("managedclusters")
 
@@ -70,6 +81,7 @@ def discover_hub_facts(
             "name": backup.get("metadata", {}).get("name") if backup else None,
             "paused": backup.get("spec", {}).get("paused") if backup else None,
         },
+        backup_storage_location=_backup_storage_location_payload(backup_storage_location),
         restore={
             "present": restore_present,
             "name": restore.get("metadata", {}).get("name") if restore else None,

@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 from tests.release.reporting.redaction import RedactionError, sanitize_text
 
@@ -60,7 +61,7 @@ class PythonCliAdapter:
     method: str = "passive"
     old_hub_action: str = "secondary"
 
-    def _build_env(self, scenario_id: str) -> dict[str, str]:
+    def _build_env(self, scenario_id: str, extra_env: Mapping[str, str] | None = None) -> dict[str, str]:
         """Build subprocess environment with KUBECONFIG set from adapter fields.
 
         Clears any inherited KUBECONFIG first, then sets it from the adapter
@@ -75,12 +76,14 @@ class PythonCliAdapter:
         kubeconfig_str = os.pathsep.join(k for k in kubeconfigs if k)
         if kubeconfig_str:
             env["KUBECONFIG"] = kubeconfig_str
+        if extra_env:
+            env.update({str(key): str(value) for key, value in extra_env.items()})
         return env
 
     def scenario_dir(self, scenario_id: str) -> Path:
         return self.artifact_dir / "scenarios" / scenario_id / "python"
 
-    def build_command(self, scenario_id: str) -> list[str]:
+    def build_command(self, scenario_id: str, extra_args: tuple[str, ...] = ()) -> list[str]:
         scenario_dir = self.scenario_dir(scenario_id)
         state_file = scenario_dir / "state.json"
         report_dir = scenario_dir
@@ -97,7 +100,7 @@ class PythonCliAdapter:
                 "--report-dir",
                 str(report_dir),
                 "--restore-only",
-            ]
+            ] + list(extra_args)
 
         if scenario_id == "decommission":
             # decommission targets the primary hub only; --non-interactive for automation
@@ -112,7 +115,7 @@ class PythonCliAdapter:
                 str(report_dir),
                 "--decommission",
                 "--non-interactive",
-            ]
+            ] + list(extra_args)
 
         # full-restore forces --method full regardless of the adapter method field
         method = "full" if scenario_id == "full-restore" else self.method
@@ -133,11 +136,11 @@ class PythonCliAdapter:
             str(report_dir),
         ]
         if scenario_id == "preflight":
-            return base + ["--validate-only"]
+            return base + ["--validate-only"] + list(extra_args)
         if scenario_id == "argocd-managed-switchover":
-            return base + ["--argocd-manage"]
+            return base + ["--argocd-manage"] + list(extra_args)
         # python-passive-switchover, full-restore, checkpoint-resume, failure-injection, soak
-        return base
+        return base + list(extra_args)
 
     def discover_reports(self, scenario_id: str) -> list[ReportArtifact]:
         if scenario_id not in REPORT_NAMES:
@@ -152,10 +155,17 @@ class PythonCliAdapter:
             schema_version = None
         return [ReportArtifact(type=report_type, path=str(path), schema_version=schema_version, required=True)]
 
-    def execute(self, scenario_id: str) -> StreamResult:
+    def execute(
+        self,
+        scenario_id: str,
+        *,
+        timeout_seconds: int | None = None,
+        env: Mapping[str, str] | None = None,
+        extra_args: tuple[str, ...] = (),
+    ) -> StreamResult:
         output_dir = self.scenario_dir(scenario_id)
         output_dir.mkdir(parents=True, exist_ok=True)
-        command = self.build_command(scenario_id)
+        command = self.build_command(scenario_id, extra_args=extra_args)
         stdout_path = output_dir / "stdout.txt"
         stderr_path = output_dir / "stderr.txt"
         started_at = _now()
@@ -166,8 +176,8 @@ class PythonCliAdapter:
                 text=True,
                 capture_output=True,
                 check=False,
-                timeout=3600,
-                env=self._build_env(scenario_id),
+                timeout=timeout_seconds or 3600,
+                env=self._build_env(scenario_id, env),
             )
         except subprocess.TimeoutExpired as exc:
             ended_at = _now()
@@ -181,7 +191,7 @@ class PythonCliAdapter:
                     expected="0",
                     actual="timeout",
                     evidence_path=str(stderr_path),
-                    message="Python CLI timed out after 3600 seconds",
+                    message=f"Python CLI timed out after {timeout_seconds or 3600} seconds",
                 )
             ]
             if not stdout_written or not stderr_written:

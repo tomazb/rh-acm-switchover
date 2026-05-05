@@ -15,6 +15,11 @@ def hub(context: str, role: str) -> HubFacts:
             "name": "acm-backup",
             "paused": False,
         },
+        backup_storage_location={
+            "present": True,
+            "name": "default",
+            "health": "Available",
+        },
         restore={
             "present": role != "primary",
             "name": "restore",

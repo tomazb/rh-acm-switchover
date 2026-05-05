@@ -255,6 +255,36 @@ def test_python_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_pa
     assert any(a.name == "artifact-redaction" for a in result.assertions)
 
 
+def test_python_adapter_execute_uses_profile_timeout_env_and_extra_args(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["timeout"] = kwargs["timeout"]
+        captured["env"] = kwargs["env"]
+
+        class Completed:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    adapter.execute(
+        "preflight",
+        timeout_seconds=12,
+        env={"ACM_RELEASE_FLAG": "1"},
+        extra_args=("--verbose",),
+    )
+
+    assert captured["timeout"] == 12
+    assert captured["env"]["ACM_RELEASE_FLAG"] == "1"
+    assert captured["command"][-1] == "--verbose"
+
+
 def test_python_decommission_command_uses_decommission_flag(tmp_path: Path) -> None:
     adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
 

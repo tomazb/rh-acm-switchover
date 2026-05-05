@@ -234,6 +234,44 @@ def test_ansible_adapter_discover_reports_returns_empty_for_unknown_scenario(tmp
     assert reports == []
 
 
+def test_ansible_adapter_execute_uses_profile_timeout_env_and_extra_args(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["timeout"] = kwargs["timeout"]
+        captured["env"] = kwargs["env"]
+
+        class Completed:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    adapter = AnsibleAdapter(
+        Path("/repo"),
+        Path("/repo/ansible_collections/tomazb/acm_switchover"),
+        "primary",
+        "secondary",
+        "/kube/primary",
+        "/kube/secondary",
+        tmp_path,
+    )
+
+    adapter.execute(
+        "preflight",
+        timeout_seconds=34,
+        env={"ANSIBLE_STDOUT_CALLBACK": "yaml"},
+        extra_args=("--diff",),
+    )
+
+    assert captured["timeout"] == 34
+    assert captured["env"]["ANSIBLE_STDOUT_CALLBACK"] == "yaml"
+    assert captured["command"][-1] == "--diff"
+
+
 def test_ansible_adapter_discover_reports_handles_malformed_json(tmp_path: Path) -> None:
     adapter = _make_adapter(tmp_path)
     scenario_dir = adapter.scenario_dir("preflight")

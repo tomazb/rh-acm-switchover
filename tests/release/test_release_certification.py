@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
+from tests.release.orchestrator import run_release_certification
 from tests.release.reporting.render import render_release_report
 from tests.release.reporting.summary import build_summary
 from tests.release.scenarios.catalog import SCENARIOS_BY_ID
@@ -77,5 +79,12 @@ def finalize_release_artifacts(*, artifacts, manifest: dict, summary_inputs: dic
 
 
 @pytest.mark.release
-def test_release_certification(release_options, baseline_manager) -> None:
+def test_release_certification(release_options, release_profile, release_artifacts) -> None:
     assert release_options.profile_path is not None
+    summary = run_release_certification(
+        release_options=release_options,
+        release_profile=release_profile,
+        artifacts=release_artifacts,
+        repo_root=Path.cwd(),
+    )
+    assert summary["status"] == "passed"

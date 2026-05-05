@@ -87,6 +87,43 @@ def test_build_command_raises_for_unknown_scenario(tmp_path: Path) -> None:
         adapter.build_command("not-a-real-scenario")
 
 
+def test_bash_adapter_execute_uses_profile_timeout_env_and_extra_args(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["timeout"] = kwargs["timeout"]
+        captured["env"] = kwargs["env"]
+
+        class Completed:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    adapter = BashAdapter(
+        Path("/repo"),
+        "primary",
+        "secondary",
+        "/kube/primary",
+        "/kube/secondary",
+        tmp_path,
+    )
+
+    adapter.execute(
+        "preflight",
+        timeout_seconds=56,
+        env={"ACM_BASH_RELEASE": "1"},
+        extra_args=("--verbose",),
+    )
+
+    assert captured["timeout"] == 56
+    assert captured["env"]["ACM_BASH_RELEASE"] == "1"
+    assert captured["command"][-1] == "--verbose"
+
+
 def test_bash_adapter_execute_handles_timeout(monkeypatch, tmp_path: Path) -> None:
     def fake_run(command, cwd, text, capture_output, check, timeout):
         raise subprocess.TimeoutExpired(

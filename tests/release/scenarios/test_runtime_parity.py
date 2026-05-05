@@ -9,6 +9,7 @@ from tests.release.scenarios.runtime_parity import (
     compare_normalized_records,
     normalize_argocd_management,
     normalize_preflight,
+    runtime_parity_not_applicable,
     write_runtime_parity_artifact,
 )
 from tests.release.test_release_certification import execute_runtime_parity
@@ -129,3 +130,16 @@ def test_execute_runtime_parity_compares_matching_sources(tmp_path: Path) -> Non
     )
 
     assert comparisons[0].status == "passed"
+
+
+def test_runtime_parity_writes_not_applicable_without_supported_reports(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+
+    write_runtime_parity_artifact(
+        artifacts=artifacts,
+        comparisons=[runtime_parity_not_applicable("preflight validation", "runtime-parity", "missing source reports")],
+    )
+
+    payload = json.loads((artifacts.run_dir / "runtime-parity.json").read_text(encoding="utf-8"))
+    assert payload["status"] == "not_applicable"
+    assert payload["comparisons"][0]["status"] == "not_applicable"

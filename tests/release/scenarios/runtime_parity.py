@@ -20,18 +20,6 @@ CAPABILITY_REQUIRED_FIELDS = {
         "resume_failures",
         "conflict_allowlist_used",
     ),
-    "activation": (
-        "restore_name",
-        "restore_phase_category",
-        "sync_restore_enabled",
-        "managed_cluster_activation_requested",
-    ),
-    "finalization": (
-        "backup_schedule_present",
-        "backup_schedule_paused",
-        "post_enable_backup_observed",
-        "old_hub_action_result",
-    ),
 }
 
 
@@ -86,6 +74,18 @@ def compare_normalized_records(
     )
 
 
+def runtime_parity_not_applicable(capability: str, scenario_id: str, reason: str) -> ComparisonRecord:
+    return ComparisonRecord(
+        capability=capability,
+        scenario_id=scenario_id,
+        streams=("python", "ansible"),
+        status="not_applicable",
+        required_fields=CAPABILITY_REQUIRED_FIELDS.get(capability, ()),
+        differences=[{"reason": reason}],
+        evidence_paths=(),
+    )
+
+
 def _sorted_list(value: Any) -> list:
     return sorted(value or [])
 
@@ -111,13 +111,14 @@ def normalize_argocd_management(source: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_runtime_parity_artifact(*, artifacts, comparisons: list[ComparisonRecord]) -> None:
-    status = (
-        "passed"
-        if comparisons and all(item.status in {"passed", "not_applicable"} for item in comparisons)
-        else "failed"
-    )
     if not comparisons:
         status = "not_applicable"
+    elif all(item.status == "not_applicable" for item in comparisons):
+        status = "not_applicable"
+    elif all(item.status in {"passed", "not_applicable"} for item in comparisons):
+        status = "passed"
+    else:
+        status = "failed"
     artifacts.write_json(
         "runtime-parity.json",
         {

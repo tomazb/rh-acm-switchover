@@ -4,6 +4,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from tests.release.reporting.redaction import RedactionError, sanitize_text
+
 GATE_COMMAND_TIMEOUT_SECONDS = 300
 TIMEOUT_RETURN_CODE = -1
 
@@ -37,6 +39,15 @@ def _text_output(value: str | bytes | None) -> str:
     return value
 
 
+def _sanitized_write(path: Path, content: str) -> bool:
+    try:
+        sanitized = sanitize_text(content)
+    except RedactionError:
+        return False
+    path.write_text(sanitized.text, encoding="utf-8")
+    return True
+
+
 def run_gate_command(command: GateCommand, artifact_dir: Path) -> GateResult:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = artifact_dir / f"{command.gate_id}-{command.label}.stdout"
@@ -62,14 +73,19 @@ def run_gate_command(command: GateCommand, artifact_dir: Path) -> GateResult:
         stderr_text = f"{stderr_text}Command timed out after {exc.timeout} seconds\n"
         returncode = TIMEOUT_RETURN_CODE
 
-    stdout_path.write_text(stdout_text, encoding="utf-8")
-    stderr_path.write_text(stderr_text, encoding="utf-8")
+    stdout_written = _sanitized_write(stdout_path, stdout_text)
+    stderr_written = _sanitized_write(stderr_path, stderr_text)
+    status = "passed" if returncode == 0 else "failed"
+    if not stdout_written or not stderr_written:
+        status = "failed"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("Captured output was rejected by the sanitizer\n", encoding="utf-8")
     return GateResult(
         gate_id=command.gate_id,
         label=command.label,
         command=command.command,
         returncode=returncode,
-        status="passed" if returncode == 0 else "failed",
+        status=status,
         stdout_path=str(stdout_path),
         stderr_path=str(stderr_path),
         required=command.required,
@@ -81,7 +97,7 @@ def build_default_gate_commands(*, enabled_streams: tuple[str, ...], repo_root: 
         GateCommand(
             gate_id="root-non-e2e-tests",
             label="pytest-root",
-            command=["python", "-m", "pytest", "tests/", "-m", "not e2e and not release"],
+            command=["python", "-m", "pytest", "tests/", "--ignore=tests/release", "-m", "not e2e and not release"],
             cwd=repo_root,
         )
     ]
