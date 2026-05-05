@@ -150,6 +150,15 @@ def _ansible_env(repo_root: Path, tmp_path: Path) -> dict:
     }
 
 
+def _merge_test_vars(base: dict, overrides: dict) -> dict:
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_test_vars(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 @pytest.fixture
 def run_switchover_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
@@ -245,6 +254,8 @@ def run_checkpoint_fixture(tmp_path):
     def _run(
         fixture_name: str,
         pre_completed_phases: list[str] | None = None,
+        vars_overrides: dict | None = None,
+        checkpoint_name: str = "checkpoint.json",
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _REPO_ROOT
         fixture_path = (
@@ -254,8 +265,10 @@ def run_checkpoint_fixture(tmp_path):
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
+        if vars_overrides:
+            _merge_test_vars(vars_payload, vars_overrides)
 
-        checkpoint_path = tmp_path / "checkpoint.json"
+        checkpoint_path = tmp_path / checkpoint_name
         report_dir = _prepare_execution_vars(vars_payload, tmp_path)
         vars_payload["acm_switchover_execution"].setdefault("checkpoint", {})
         vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(

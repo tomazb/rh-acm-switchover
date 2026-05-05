@@ -60,7 +60,7 @@
         - name: Reset primary prep checkpoint after Argo CD resume on failure
           tomazb.acm_switchover.checkpoint_phase:
             phase: primary_prep
-            checkpoint: "{{ acm_switchover_execution.checkpoint }}"
+            checkpoint: "{{ acm_switchover_execution.checkpoint | combine({'reset_from': 'primary_prep'}) }}"
             status: reset
             operational_data:
               argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"

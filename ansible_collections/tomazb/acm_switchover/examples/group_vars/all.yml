@@ -32,3 +32,4 @@ acm_switchover_execution:
     backend: file
     path: .state/switchover.json
     reset: false
+    reset_from: ""

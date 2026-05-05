@@ -24,6 +24,7 @@ acm_switchover_execution:
   checkpoint:
     enabled: true
     backend: file
+    reset_from: primary_prep
     # path is overridden at runtime by run_checkpoint_fixture
 
 acm_switchover_features:
