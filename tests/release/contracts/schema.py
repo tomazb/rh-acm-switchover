@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Sequence
 
+from tests.release.scenarios.catalog import V1_SCENARIOS
+
 from .models import ProfileValidationError
 
 REQUIRED_TOP_LEVEL_KEYS = {
@@ -23,37 +25,8 @@ ALLOWED_TOP_LEVEL_KEYS = REQUIRED_TOP_LEVEL_KEYS | OPTIONAL_TOP_LEVEL_KEYS
 PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 KNOWN_STREAMS = {"bash", "python", "ansible"}
-KNOWN_SCENARIOS = {
-    "static-gates",
-    "lab-readiness",
-    "baseline-check",
-    "preflight",
-    "python-passive-switchover",
-    "ansible-passive-switchover",
-    "python-restore-only",
-    "ansible-restore-only",
-    "argocd-managed-switchover",
-    "runtime-parity",
-    "final-baseline-check",
-    "full-restore",
-    "checkpoint-resume",
-    "decommission",
-    "failure-injection",
-    "soak",
-}
-REQUIRED_FULL_RELEASE_SCENARIOS = {
-    "static-gates",
-    "lab-readiness",
-    "baseline-check",
-    "preflight",
-    "python-passive-switchover",
-    "ansible-passive-switchover",
-    "python-restore-only",
-    "ansible-restore-only",
-    "argocd-managed-switchover",
-    "runtime-parity",
-    "final-baseline-check",
-}
+KNOWN_SCENARIOS = {scenario.id for scenario in V1_SCENARIOS}
+REQUIRED_FULL_RELEASE_SCENARIOS = {scenario.id for scenario in V1_SCENARIOS if scenario.required}
 
 CREDENTIAL_KEYWORDS = {
     "token": "token",

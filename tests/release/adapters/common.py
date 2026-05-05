@@ -3,7 +3,7 @@ from __future__ import annotations
 """Stream-neutral result model for release adapter records."""
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Mapping, Protocol
 
 
 @dataclass(frozen=True)
@@ -41,3 +41,14 @@ class StreamResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class StreamAdapter(Protocol):
+    def execute(
+        self,
+        scenario_id: str,
+        *,
+        timeout_seconds: int | None = None,
+        env: Mapping[str, str] | None = None,
+        extra_args: tuple[str, ...] = (),
+    ) -> StreamResult: ...

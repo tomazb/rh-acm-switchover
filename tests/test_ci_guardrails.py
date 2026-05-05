@@ -29,6 +29,15 @@ def test_ci_version_check_uses_runtime_version_metadata():
     assert "from lib import __version__, __version_date__" in text
 
 
+def test_github_actions_use_node24_action_versions():
+    workflow_text = "\n".join(path.read_text() for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")))
+
+    assert "actions/checkout@v4" not in workflow_text
+    assert "actions/setup-python@v5" not in workflow_text
+    assert "actions/checkout@v6" in workflow_text
+    assert "actions/setup-python@v6" in workflow_text
+
+
 def test_run_tests_quality_gates_are_explicit_and_scoped():
     text = RUN_TESTS.read_text()
 
@@ -36,3 +45,9 @@ def test_run_tests_quality_gates_are_explicit_and_scoped():
     assert "QUALITY_PATHS=" in text
     assert "black --check --line-length 120 ." not in text
     assert "isort --check-only --profile black --line-length 120 ." not in text
+
+
+def test_run_tests_excludes_release_framework_by_default():
+    text = RUN_TESTS.read_text()
+
+    assert "--ignore=tests/release" in text

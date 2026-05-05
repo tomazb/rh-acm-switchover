@@ -192,6 +192,22 @@ def test_python_adapter_execute_overrides_inherited_kubeconfig(monkeypatch, tmp_
     assert "/kube/primary" in captured_env.get("KUBECONFIG", "")
 
 
+def test_python_adapter_extra_env_cannot_override_adapter_kubeconfig(monkeypatch, tmp_path: Path) -> None:
+    captured_env: dict[str, str] = {}
+
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
+        captured_env.update(env)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    adapter.execute("preflight", env={"KUBECONFIG": "/wrong/kubeconfig", "CUSTOM_FLAG": "1"})
+
+    assert captured_env.get("CUSTOM_FLAG") == "1"
+    assert captured_env.get("KUBECONFIG") == os.pathsep.join(["/kube/primary", "/kube/secondary"])
+
+
 def test_python_adapter_execute_handles_timeout_with_bytes_capture(monkeypatch, tmp_path: Path) -> None:
     def fake_run(command, cwd, text, capture_output, check, timeout, env):
         exc = subprocess.TimeoutExpired(command, 3600)
@@ -253,6 +269,36 @@ def test_python_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_pa
 
     assert result.status == "failed"
     assert any(a.name == "artifact-redaction" for a in result.assertions)
+
+
+def test_python_adapter_execute_uses_profile_timeout_env_and_extra_args(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["timeout"] = kwargs["timeout"]
+        captured["env"] = kwargs["env"]
+
+        class Completed:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    adapter.execute(
+        "preflight",
+        timeout_seconds=12,
+        env={"ACM_RELEASE_FLAG": "1"},
+        extra_args=("--verbose",),
+    )
+
+    assert captured["timeout"] == 12
+    assert captured["env"]["ACM_RELEASE_FLAG"] == "1"
+    assert captured["command"][-1] == "--verbose"
 
 
 def test_python_decommission_command_uses_decommission_flag(tmp_path: Path) -> None:

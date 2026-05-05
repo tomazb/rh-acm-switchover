@@ -7,6 +7,7 @@ Comprehensive test suite for the Red Hat Advanced Cluster Management (ACM) Switc
 The repository now ships several test surfaces:
 - Root Python and shell-adjacent tests under `tests/`
 - Collection tests under `ansible_collections/tomazb/acm_switchover/tests/`
+- Release validation framework tests under `tests/release/`
 - On-demand E2E coverage under `tests/e2e/`
 
 Avoid relying on hard-coded totals in this file; the suite is still expanding.
@@ -30,6 +31,13 @@ Avoid relying on hard-coded totals in this file; the suite is still expanding.
 - `tests/e2e/` contains the pytest-based real-cluster and dry-run orchestration harness.
 - See `tests/e2e/README.md` for environment, markers, and execution guidance.
 
+### Release Validation Framework
+
+- `tests/release/` contains the profile-driven release certification framework.
+- Framework unit tests are explicit and are not part of the default `./run_tests.sh` run.
+- Live certification requires a real lab profile and is not certification-eligible when fake discovery clients or fake stream adapters are injected.
+- See `tests/release/README.md` and `docs/development/release-validation-framework.md`.
+
 ## Running Tests
 
 ### Default Local Run
@@ -39,11 +47,26 @@ Avoid relying on hard-coded totals in this file; the suite is still expanding.
 ```
 
 This is the preferred entry point for local verification. It respects the existing virtualenv if one is active, otherwise it uses `.venv` first and falls back to `venv`.
+The default runner excludes `tests/release/`; run release framework tests explicitly when changing release validation code.
 
 ### Root Tests Only
 
 ```bash
-python -m pytest tests/ -q
+python -m pytest tests/ --ignore=tests/release -q
+```
+
+### Release Framework Tests
+
+```bash
+python -m pytest tests/release -q
+```
+
+Live certification requires an operator-provided profile:
+
+```bash
+python -m pytest tests/release/test_release_certification.py \
+  --release-profile /path/to/release-profile.yaml \
+  --release-mode certification
 ```
 
 ### Collection Tests Only

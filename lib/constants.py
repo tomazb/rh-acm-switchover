@@ -9,6 +9,7 @@ import re
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 EXIT_INTERRUPT = 130
+STATUS_UNKNOWN = "unknown"
 
 # Timeouts (in seconds)
 RESTORE_WAIT_TIMEOUT = 1800
@@ -64,6 +65,7 @@ except (ValueError, TypeError):
 
 # Namespaces
 BACKUP_NAMESPACE = "open-cluster-management-backup"
+OADP_NAMESPACE = "openshift-adp"
 OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 ACM_NAMESPACE = "open-cluster-management"
 # MCE (used for auto-import strategy ConfigMap)
@@ -80,6 +82,7 @@ RESTORE_PASSIVE_SYNC_NAME = "restore-acm-passive-sync"
 RESTORE_FULL_NAME = "restore-acm-full"
 MANAGED_CLUSTER_RESTORE_NAME = "restore-acm-activate"
 BACKUP_SCHEDULE_DEFAULT_NAME = "acm-hub-backup"
+BACKUP_STORAGE_LOCATION_RESOURCE = "backupstoragelocations"
 
 # Observability Components
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"

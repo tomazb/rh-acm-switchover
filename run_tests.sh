@@ -63,7 +63,7 @@ echo "======================================"
 
 # E2E tests are on-demand. Set RUN_E2E=1 to include them.
 # Main test run always excludes E2E; E2E runs separately when requested
-pytest_args=(tests/ -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
+pytest_args=(tests/ --ignore=tests/release -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
 python -m pytest "${pytest_args[@]}"
 
 if [ "${RUN_E2E:-0}" = "1" ]; then

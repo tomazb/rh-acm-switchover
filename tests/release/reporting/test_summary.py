@@ -40,6 +40,41 @@ def test_summary_fails_dirty_or_non_certification_run() -> None:
     assert "release mode is not certification" in summary["failure_reasons"]
 
 
+def test_certification_summary_requires_runtime_parity_evidence() -> None:
+    summary = build_summary(
+        release_mode="certification",
+        certification_eligible=True,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "not_applicable"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+    )
+
+    assert summary["status"] == "failed"
+    assert "runtime parity failed" in summary["failure_reasons"]
+
+
+def test_debug_summary_allows_missing_runtime_parity() -> None:
+    summary = build_summary(
+        release_mode="debug",
+        certification_eligible=False,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "not_applicable"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+    )
+
+    assert "runtime parity failed" not in summary["failure_reasons"]
+
+
 class FakeArtifacts:
     def __init__(self) -> None:
         self.writes = {}
