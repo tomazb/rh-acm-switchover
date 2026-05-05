@@ -61,7 +61,7 @@ checkpoint:
         Populated by the checkpoint_phase action plugin; null when the record is
         created directly via this module without identity context.
       type: dict
-      returned: when set
+      returned: always
     errors:
       description: List of error strings recorded during the phase.
       type: list

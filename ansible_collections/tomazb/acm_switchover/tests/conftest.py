@@ -159,8 +159,7 @@ def _ansible_env(
     existing_pythonpath = os.environ.get("PYTHONPATH")
     if existing_pythonpath:
         pythonpaths.append(existing_pythonpath)
-    if pythonpaths:
-        env["PYTHONPATH"] = ":".join(pythonpaths)
+    env["PYTHONPATH"] = ":".join(pythonpaths)
     return env
 
 
