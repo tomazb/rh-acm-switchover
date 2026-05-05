@@ -3,7 +3,23 @@
 **Branch baseline:** `ansible` branch of `tomazb/rh-acm-switchover`  
 **Scope:** Align the Ansible Collection with the Python CLI safety and operational semantics.  
 **Review basis:** Static code review of repository files. This plan has not been verified against a live ACM/OpenShift cluster.  
-**Confidence:** 87%
+**Confidence:** 87% for the original static review; refreshed status below is based on repository inspection only.
+
+## Current review status
+
+**Last reviewed:** 2026-05-05
+**Branch inspected:** `ansible`
+**Working tree note:** `AGENTS.md` has unrelated local modifications and was not changed for this review.
+**Verification scope:** Static inspection only. No live ACM/OpenShift cluster verification was performed.
+
+The backlog is still valid overall, but several items are partially implemented and should be narrowed before execution:
+
+- PR-2: `acm_restore_info` already returns `restore_phase` and `restore_ready`; activation still uses preflight Restore facts and still lacks an activation-time readiness assertion.
+- PR-3: `post_activation` has phase-local execute-mode ManagedCluster discovery; `primary_prep` still depends on preflight MCH and BackupSchedule facts.
+- PR-4: Argo CD resume is already run-id aware; checkpoint reset still removes only `primary_prep` and must be changed to reset downstream phases.
+- PR-8: runbook edits are protected by `AGENTS.md` and require explicit operator approval plus `.claude/skills` synchronization before any change.
+
+Do not treat partially implemented items as complete until the acceptance criteria in the relevant PR section are satisfied. In particular, existing tests for Argo CD run IDs, Restore readiness helpers, or post-activation discovery do not close the checkpoint reset, activation live-read, or primary-prep resume gaps.
 
 ---
 
@@ -38,18 +54,18 @@ git pull
 git checkout -b fix/ansible-python-parity-state-activation
 ```
 
-Recommended PR split:
+Recommended PR split and current status:
 
-| PR | Theme | Priority | Risk | Merge order |
-|---|---:|---:|---:|---:|
-| PR-1 | Checkpoint/state safety | P0 | Critical | 1 |
-| PR-2 | Activation live-read + passive readiness | P0 | Critical | 2 |
-| PR-3 | Phase self-sufficiency / fact freshness | P1 | High | 3 |
-| PR-4 | ArgoCD resume-on-failure checkpoint semantics | P1 | High | 4 |
-| PR-5 | Decommission/report path safety | P2 | Medium | 5 |
-| PR-6 | Python/Ansible validation parity | P2 | Medium | 6 |
-| PR-7 | Klusterlet scalability | P3 | Medium | 7 |
-| PR-8 | Docs, migration map, runbook updates | P2 | Medium | 8 |
+| PR | Theme | Priority | Risk | Merge order | Current status |
+|---|---:|---:|---:|---:|---|
+| PR-1 | Checkpoint/state safety | P0 | Critical | 1 | Pending |
+| PR-2 | Activation live-read + passive readiness | P0 | Critical | 2 | Partially implemented; live-read and activation assertion still pending |
+| PR-3 | Phase self-sufficiency / fact freshness | P1 | High | 3 | Partially pending; primary_prep remains the main gap |
+| PR-4 | ArgoCD resume-on-failure checkpoint semantics | P1 | High | 4 | Partially implemented; reset-from semantics still pending |
+| PR-5 | Decommission/report path safety | P2 | Medium | 5 | Pending |
+| PR-6 | Python/Ansible validation parity | P2 | Medium | 6 | Pending |
+| PR-7 | Klusterlet scalability | P3 | Medium | 7 | Pending |
+| PR-8 | Docs, migration map, runbook updates | P2 | Medium | 8 | Pending; protected runbook gate applies |
 
 Do **not** combine all of these into a single PR. The checkpoint and activation changes affect operator safety and should be reviewed independently.
 
@@ -76,6 +92,8 @@ acm_switchover_execution:
 The Python CLI has a richer state manager with context checks, stale completed-state handling, locking, and atomic write semantics.
 
 **Runtime risk [Inference]:** A checkpoint from one hub pair can be reused for another hub pair and cause Ansible to skip phases incorrectly.
+
+**Current status as of 2026-05-05:** Pending. The collection checkpoint schema is still `1.0`, and the action plugin still treats only `execution.mode=dry_run` as non-mutating. It does not yet bind checkpoints to operation identity, reject unsafe schema `1.0` resumes, support `reset_from`, or write atomically.
 
 ## 1.2 Files to modify
 
@@ -429,6 +447,8 @@ Python activation re-verifies passive sync readiness at activation time.
 
 **Runtime risk [Inference]:** Ansible activation can use a stale Restore snapshot gathered during preflight.
 
+**Current status as of 2026-05-05:** Partial. The Restore info module already exposes `restore_phase` and `restore_ready`, but activation still reads into `acm_secondary_restores_info` only when preflight facts are absent and `verify_passive_sync.yml` still falls back to `acm_secondary_restore_info`. Activation still does not assert `restore_ready` before mutation.
+
 ## 2.2 Files to modify
 
 ```text
@@ -505,7 +525,9 @@ restores: "{{ acm_secondary_restores_info.resources | default(acm_secondary_rest
 
 ## 2.5 Add explicit readiness assertion
 
-Extend `acm_restore_info` output if needed so it returns:
+`acm_restore_info` already returns `restore_phase` and `restore_ready`. Add `restore_ready_reason` only if the implementation needs a human-readable explanation in assertion failures.
+
+Expected output shape after this PR:
 
 ```json
 {
@@ -516,7 +538,7 @@ Extend `acm_restore_info` output if needed so it returns:
 }
 ```
 
-Then update activation assertion:
+Then update the activation assertion:
 
 ```yaml
 - name: Require passive sync Restore to be activation-ready
@@ -565,6 +587,8 @@ PR-2 is complete when:
 - [ ] Activation always reads Restore resources live unless an explicit test override is used.
 - [ ] Activation fails before mutation when the passive Restore is not activation-ready.
 - [ ] Activation no longer consumes `acm_secondary_restore_info` from preflight.
+- [x] Restore analysis exposes `restore_phase` and `restore_ready`.
+- [ ] Restore analysis exposes `restore_ready_reason` if assertion output needs it.
 - [ ] Unit tests cover:
   - [ ] passive Restore ready at preflight but failed at activation;
   - [ ] passive Restore missing at activation;
@@ -583,6 +607,8 @@ PR-2 is complete when:
 Primary prep currently depends on facts gathered by preflight. For example, `pause_backups.yml` uses `acm_primary_mch_info` and `acm_primary_backup_schedules_info`, while primary prep’s own discovery only reads the Thanos compactor StatefulSet.
 
 **Runtime risk [Inference]:** If checkpointing skips preflight on resume, primary prep may lack required facts or use stale ones.
+
+**Current status as of 2026-05-05:** Partially pending. `post_activation` already performs execute-mode local ManagedCluster discovery. `primary_prep` still only discovers the Thanos compactor and still uses preflight `acm_primary_mch_info` and `acm_primary_backup_schedules_info` in `pause_backups.yml`.
 
 ## 3.2 Files to modify
 
@@ -717,7 +743,7 @@ PR-3 is complete when:
 
 - [ ] `primary_prep` can run after preflight was skipped by checkpoint.
 - [ ] `activation` can run without preflight Restore facts.
-- [ ] `post_activation` can run without preflight ManagedCluster facts.
+- [x] `post_activation` can run without preflight ManagedCluster facts in execute mode.
 - [ ] No phase role requires transient facts created by a previous phase.
 - [ ] Tests simulate:
   - [ ] checkpoint has `preflight` complete;
@@ -733,6 +759,8 @@ PR-3 is complete when:
 Ansible rescue resumes ArgoCD and resets only `primary_prep`. The checkpoint plugin can skip phases listed in `completed_phases`.
 
 **Runtime risk [Inference]:** After a late failure, Ansible may resume ArgoCD, reset only `primary_prep`, and leave downstream phases marked complete. A retry may skip activation or post-activation even though ArgoCD state has been changed.
+
+**Current status as of 2026-05-05:** Partial. Argo CD resume already requires a run ID and only resumes Applications whose `acm-switchover.argoproj.io/paused-by` annotation matches that run ID. The remaining gap is checkpoint semantics: `switchover.yml` still calls `status: reset` for `primary_prep`, which removes only that phase and leaves downstream completed phases intact.
 
 ## 4.2 Files to modify
 
@@ -763,6 +791,8 @@ Expected playbook usage:
 ```
 
 ## 4.4 Store ArgoCD pause metadata in checkpoint operational data
+
+The checkpoint already stores `argocd_run_id` in several phase transitions. This PR should either keep that minimal form and document it, or expand it to the structured metadata below if resume targeting needs persisted namespaced Application names.
 
 When ArgoCD pause runs, store:
 
@@ -795,7 +825,7 @@ The Ansible ArgoCD helper defines a pause annotation:
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 ```
 
-Resume should only remove the pause for Applications whose annotation matches the current run ID, unless an explicit override is set.
+Resume already removes the pause only for Applications whose annotation matches the current run ID. The remaining optional enhancement is an explicit override for manual recovery.
 
 Add variable:
 
@@ -805,7 +835,14 @@ acm_switchover_features:
     resume_force: false
 ```
 
-Resume logic:
+Current required resume logic:
+
+```yaml
+when:
+  - app.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == acm_switchover_run_id
+```
+
+Optional force override logic:
 
 ```yaml
 when:
@@ -821,7 +858,8 @@ PR-4 is complete when:
 
 - [ ] Resume-on-failure resets checkpoint from `primary_prep`, not only `primary_prep`.
 - [ ] Completed downstream phases are removed after ArgoCD resume-on-failure.
-- [ ] Resume only targets Applications paused by the current run ID unless force is true.
+- [x] Resume only targets Applications paused by the current run ID.
+- [ ] Optional `resume_force=true` override is implemented if manual override remains desired.
 - [ ] Tests cover:
   - [ ] failure after activation;
   - [ ] completed phases include `primary_prep`, `activation`;
@@ -839,6 +877,8 @@ Decommission writes `summary_path` using `ansible.builtin.copy`.
 Other report artifacts use `acm_report_artifact`, which delegates to `write_json_artifact()` and `validate_safe_path()`.
 
 **Runtime risk [Inference]:** Decommission summary output can bypass the collection’s report-artifact path validation policy.
+
+**Current status as of 2026-05-05:** Pending. `roles/decommission/tasks/main.yml` still resolves `summary_path` manually and writes it with `ansible.builtin.copy`.
 
 ## 5.2 Files to modify
 
@@ -901,6 +941,8 @@ PR-5 is complete when:
 Python validates ArgoCD option combinations more strictly than the Ansible validation utility. The Ansible validation module validates the main features object but does not appear to enforce every Python CLI combination, especially around `argocd.resume_on_failure`.
 
 Path validation also differs: the Python validator rejects `~` paths, while Ansible validation accepts some `~/...` style paths.
+
+**Current status as of 2026-05-05:** Pending. Python still rejects `~` as an unsafe path character, while collection validation explicitly permits leading `~/`. Collection validation also still returns only `argocd_manage` and does not enforce `resume_on_failure` rules.
 
 ## 6.2 Files to modify
 
@@ -1045,6 +1087,8 @@ Ansible currently loops through cluster probes and remediation sequentially usin
 
 **Runtime risk [Inference]:** Large managed-cluster fleets can take significantly longer under Ansible than under Python.
 
+**Current status as of 2026-05-05:** Pending. `verify_klusterlet_connections.yml` and `fix_klusterlet.yml` still use sequential `include_tasks` loops, and no `acm_klusterlet_probe.py` or `acm_klusterlet_remediate.py` module exists.
+
 ## 7.2 Files to modify
 
 ```text
@@ -1150,6 +1194,8 @@ The CLI migration map appears to reference a kubeconfig generation option that d
 
 The docs should also explain checkpoint identity, validate-mode behavior, activation live-read behavior, and safe resume.
 
+**Current status as of 2026-05-05:** Pending, with a protected-doc constraint. `docs/ACM_SWITCHOVER_RUNBOOK.md` and `.claude/skills/**/*.skill.md` are protected by `AGENTS.md` and must not be edited without explicit operator approval, diff review, justification, and runbook/skills synchronization.
+
 ## 8.2 Files to modify
 
 ```text
@@ -1161,6 +1207,14 @@ docs/operations/usage.md
 docs/operations/quickref.md
 docs/ACM_SWITCHOVER_RUNBOOK.md
 docs/ACM_SWITCHOVER_RUNBOOK_TLDR.md
+```
+
+Protected-file handling:
+
+```text
+Do not edit docs/ACM_SWITCHOVER_RUNBOOK.md or .claude/skills/**/*.skill.md
+as part of a normal docs PR. If runbook wording must change, request explicit
+operator approval first and present the runbook/skills diff separately.
 ```
 
 ## 8.3 Required doc updates
@@ -1222,8 +1276,9 @@ PR-8 is complete when:
 
 - [ ] Migration map no longer references stale Python option names.
 - [ ] Variable reference documents all new variables.
-- [ ] Runbook explains validate/dry-run checkpoint behavior.
-- [ ] Runbook explains safe checkpoint reset.
+- [ ] Non-protected docs explain validate/dry-run checkpoint behavior.
+- [ ] Non-protected docs explain safe checkpoint reset.
+- [ ] Runbook and `.claude/skills` changes are either explicitly approved and synchronized, or intentionally deferred with the reason documented.
 - [ ] CHANGELOG has an operator-facing compatibility note.
 
 ---
@@ -1389,25 +1444,29 @@ Do not start activation changes until this passes locally.
 
 - [ ] Introduce `acm_activation_restores_info`.
 - [ ] Remove fallback to preflight Restore facts.
-- [ ] Add readiness output to Restore info module if missing.
+- [x] Confirm readiness output exists in Restore info module (`restore_phase`, `restore_ready`).
+- [ ] Add `restore_ready_reason` to Restore info module if assertion messages need it.
 - [ ] Add activation-time readiness assert.
 - [ ] Add tests for stale preflight Restore data.
-- [ ] Update runbook.
+- [ ] Update non-protected docs.
+- [ ] Request explicit operator approval before any runbook update.
 
 ## Block 3 — Phase self-sufficiency
 
 - [ ] Add primary prep MCH live-read.
 - [ ] Add primary prep BackupSchedule live-read.
 - [ ] Rename phase-owned facts.
-- [ ] Remove dependency on preflight facts.
+- [ ] Remove primary prep dependency on preflight facts.
+- [x] Confirm post_activation has execute-mode local ManagedCluster discovery.
 - [ ] Add phase entry asserts.
 - [ ] Add resume tests.
 
 ## Block 4 — ArgoCD resume
 
-- [ ] Add run ID to ArgoCD pause metadata if missing.
+- [x] Confirm run ID is recorded in ArgoCD pause annotation.
 - [ ] Persist pause metadata in checkpoint operational data.
-- [ ] Make resume run ID aware.
+- [x] Confirm resume is run-id aware.
+- [ ] Decide whether to add `resume_force` override; document if intentionally omitted.
 - [ ] Use `reset_from primary_prep` after resume-on-failure.
 - [ ] Add failure/resume tests.
 
@@ -1535,6 +1594,7 @@ roles/activation/tasks/verify_passive_sync.yml
 
 **Type:** bug/safety  
 **Priority:** P0  
+**Status:** Partial. `restore_phase` and `restore_ready` already exist; activation-time enforcement is still missing.
 **Files:**
 
 ```text
@@ -1544,7 +1604,8 @@ plugins/modules/acm_restore_info.py
 
 **Tasks:**
 
-- [ ] Expose `restore_ready`, `restore_phase`, and `restore_ready_reason`.
+- [x] Expose `restore_ready` and `restore_phase`.
+- [ ] Expose `restore_ready_reason` if needed for actionable assertion output.
 - [ ] Fail activation if selected Restore is not ready.
 - [ ] Keep sync-enabled/conventional-name identity check.
 
@@ -1577,6 +1638,7 @@ roles/primary_prep/tasks/pause_backups.yml
 
 **Type:** bug/resume  
 **Priority:** P1  
+**Status:** Pending. Current rescue uses `status: reset`, which removes only `primary_prep`.
 **Files:**
 
 ```text
@@ -1599,6 +1661,7 @@ plugins/action/checkpoint_phase.py
 
 **Type:** safety  
 **Priority:** P1  
+**Status:** Partial. Exact run-id matching is implemented; the optional force override is not.
 **Files:**
 
 ```text
@@ -1608,18 +1671,20 @@ plugins/module_utils/argocd.py
 
 **Tasks:**
 
-- [ ] Resume only apps annotated with current run ID.
-- [ ] Add `resume_force` override.
+- [x] Resume only apps annotated with current run ID.
+- [ ] Add `resume_force` override if manual override remains desired.
 - [ ] Add tests.
 
 **Acceptance criteria:**
 
-- [ ] Apps paused by another run are not resumed unless forced.
+- [x] Apps paused by another run are not resumed by default.
+- [ ] Apps paused by another run are resumed only when force override is explicitly enabled, if that override is added.
 
 ## Ticket ACM-ANS-009 — Decommission summary must use artifact path validation
 
 **Type:** security/hardening  
 **Priority:** P2  
+**Status:** Pending. Decommission still writes with `ansible.builtin.copy`.
 **Files:**
 
 ```text
@@ -1641,6 +1706,7 @@ plugins/modules/acm_report_artifact.py
 
 **Type:** quality  
 **Priority:** P2  
+**Status:** Pending. Python and collection path policy still diverge on leading `~/`, and collection Argo CD option validation is still incomplete.
 **Files:**
 
 ```text
@@ -1664,6 +1730,7 @@ tests/fixtures/validation_parity_cases.yml
 
 **Type:** performance  
 **Priority:** P3  
+**Status:** Pending. Klusterlet probe/remediation still uses sequential task loops.
 **Files:**
 
 ```text
@@ -1829,4 +1896,3 @@ ansible_collections/tomazb/acm_switchover/docs/variable-reference.md
 README.md
 CHANGELOG.md
 ```
-
