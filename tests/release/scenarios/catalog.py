@@ -57,8 +57,21 @@ class ScenarioSelection(Protocol):
     streams: tuple[str, ...]
 
 
-def _hash_matrix(scenario_ids: tuple[str, ...], selected_streams: tuple[str, ...]) -> str:
-    payload = json.dumps({"scenarios": scenario_ids, "streams": selected_streams}, sort_keys=True)
+def _hash_matrix(scenarios: tuple[ScenarioDefinition, ...], selected_streams: tuple[str, ...]) -> str:
+    payload = json.dumps(
+        {
+            "scenarios": [
+                {
+                    "id": scenario.id,
+                    "required": scenario.required,
+                    "streams": scenario.streams,
+                }
+                for scenario in scenarios
+            ],
+            "streams": selected_streams,
+        },
+        sort_keys=True,
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -74,6 +87,9 @@ def select_release_matrix(
         raise ValueError(f"unknown release scenario: {unknown[0]}")
     selected_streams = tuple(stream for stream in enabled_streams if not stream_filters or stream in stream_filters)
     profile_by_id = {item.id: item for item in profile_scenarios}
+    unknown_profile_ids = [item for item in profile_by_id if item not in SCENARIOS_BY_ID]
+    if unknown_profile_ids:
+        raise ValueError(f"unknown profile release scenario: {unknown_profile_ids[0]}")
     profile_ids = tuple(profile_by_id) if profile_scenarios else ()
     if scenario_filters:
         requested = tuple(dict.fromkeys(scenario_filters))
@@ -111,5 +127,5 @@ def select_release_matrix(
     return SelectedReleaseMatrix(
         scenarios=tuple(scenarios),
         selected_streams=selected_streams,
-        matrix_hash=_hash_matrix(scenario_ids, selected_streams),
+        matrix_hash=_hash_matrix(tuple(scenarios), selected_streams),
     )

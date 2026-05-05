@@ -13,13 +13,6 @@ CAPABILITY_REQUIRED_FIELDS = {
         "check_ids",
         "failed_check_ids",
     ),
-    "Argo CD management": (
-        "selected_applications",
-        "paused_applications",
-        "resumed_applications",
-        "resume_failures",
-        "conflict_allowlist_used",
-    ),
 }
 
 
@@ -110,7 +103,7 @@ def normalize_argocd_management(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_runtime_parity_artifact(*, artifacts, comparisons: list[ComparisonRecord]) -> None:
+def write_runtime_parity_artifact(*, artifacts, comparisons: list[ComparisonRecord]) -> dict:
     if not comparisons:
         status = "not_applicable"
     elif all(item.status == "not_applicable" for item in comparisons):
@@ -119,11 +112,13 @@ def write_runtime_parity_artifact(*, artifacts, comparisons: list[ComparisonReco
         status = "passed"
     else:
         status = "failed"
+    payload = {
+        "schema_version": 1,
+        "comparisons": [item.to_dict() for item in comparisons],
+        "status": status,
+    }
     artifacts.write_json(
         "runtime-parity.json",
-        {
-            "schema_version": 1,
-            "comparisons": [item.to_dict() for item in comparisons],
-            "status": status,
-        },
+        payload,
     )
+    return payload

@@ -27,8 +27,9 @@ def build_summary(
         failure_reasons.append("run is not certification eligible")
     for scenario_id in _failed_required_scenarios(required_scenarios):
         failure_reasons.append(f"required scenario failed: {scenario_id}")
+    runtime_parity_expectations = {"passed"} if release_mode == "certification" else {"passed", "not_applicable"}
     status_expectations = {
-        "runtime parity": {"passed", "not_applicable"},
+        "runtime parity": runtime_parity_expectations,
         "artifact redaction": {"passed"},
         "final baseline": {"passed"},
         "mandatory Argo CD": {"passed"},

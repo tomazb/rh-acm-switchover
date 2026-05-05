@@ -47,6 +47,11 @@ def test_fingerprint_contains_stable_lab_contract_fields() -> None:
     )
 
     assert fingerprint["hubs"]["primary"]["context"] == "primary"
+    assert fingerprint["hubs"]["primary"]["backup_storage_location"] == {
+        "present": True,
+        "name": "default",
+        "health": "Available",
+    }
     assert fingerprint["managed_clusters"]["expectation_type"] == "names"
     assert fingerprint["managed_clusters"]["observed_active_names"] == [
         "cluster-a",

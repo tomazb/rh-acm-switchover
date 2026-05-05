@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from lib.constants import BACKUP_STORAGE_LOCATION_RESOURCE, OADP_NAMESPACE, STATUS_UNKNOWN
+
 
 class HubDiscoveryClient(Protocol):
     def list_resources(self, resource: str, namespace: str | None = None) -> list[dict]: ...
@@ -41,7 +43,7 @@ def _backup_storage_location_payload(item: dict | None) -> dict:
     return {
         "present": item is not None,
         "name": item.get("metadata", {}).get("name") if item else None,
-        "health": status.get("phase") or status.get("status") or "unknown",
+        "health": status.get("phase") or status.get("status") or STATUS_UNKNOWN,
     }
 
 
@@ -51,10 +53,11 @@ def discover_hub_facts(
     context: str,
     acm_namespace: str,
     argocd_namespaces: tuple[str, ...],
+    backup_namespace: str = OADP_NAMESPACE,
 ) -> HubFacts:
     mch = _first(client.list_resources("multiclusterhubs", acm_namespace)) or {}
     backup = _first(client.list_resources("backupschedules", acm_namespace))
-    backup_storage_location = _first(client.list_resources("backupstoragelocations", "openshift-adp"))
+    backup_storage_location = _first(client.list_resources(BACKUP_STORAGE_LOCATION_RESOURCE, backup_namespace))
     restore = _first(client.list_resources("restores", acm_namespace))
     managed_clusters = client.list_resources("managedclusters")
 
@@ -74,7 +77,7 @@ def discover_hub_facts(
     return HubFacts(
         context=context,
         acm_namespace=acm_namespace,
-        acm_version=str(mch.get("status", {}).get("currentVersion", "unknown")),
+        acm_version=str(mch.get("status", {}).get("currentVersion", STATUS_UNKNOWN)),
         hub_role=hub_role,
         backup_schedule={
             "present": backup_present,
@@ -91,7 +94,7 @@ def discover_hub_facts(
         managed_cluster_names=_managed_cluster_names(managed_clusters),
         observability={
             "present": bool(client.list_resources("multiclusterobservabilities", acm_namespace)),
-            "status": "unknown",
+            "status": STATUS_UNKNOWN,
         },
         argocd={
             "present": bool(applications),

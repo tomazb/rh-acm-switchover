@@ -22,9 +22,18 @@ from tests.release.baseline.assertions import assert_baseline
 from tests.release.baseline.discovery import HubDiscoveryClient, discover_hub_facts
 from tests.release.baseline.fingerprint import build_environment_fingerprint
 from tests.release.checks.lab_readiness import assert_lab_readiness
-from tests.release.checks.static_gates import GateCommand, GateResult, build_default_gate_commands, run_gate_command
+from tests.release.checks.static_gates import (
+    GateCommand,
+    GateResult,
+    build_default_gate_commands,
+    run_gate_command,
+)
 from tests.release.conftest import ReleaseOptions
-from tests.release.contracts.models import LoadProfileResult, ScenarioProfile, StreamProfile
+from tests.release.contracts.models import (
+    LoadProfileResult,
+    ScenarioProfile,
+    StreamProfile,
+)
 from tests.release.reporting.artifacts import ReleaseArtifacts
 from tests.release.reporting.render import render_release_report
 from tests.release.reporting.summary import build_summary
@@ -32,7 +41,6 @@ from tests.release.scenarios.catalog import ScenarioDefinition, select_release_m
 from tests.release.scenarios.runtime_parity import (
     CAPABILITY_REQUIRED_FIELDS,
     compare_normalized_records,
-    normalize_argocd_management,
     normalize_preflight,
     runtime_parity_not_applicable,
     write_runtime_parity_artifact,
@@ -64,15 +72,23 @@ class OcDiscoveryClient:
         ]
         if namespace:
             command.extend(["-n", namespace])
-        completed = subprocess.run(command, text=True, capture_output=True, check=False, timeout=120)
+        try:
+            completed = subprocess.run(command, text=True, capture_output=True, check=False, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            return []
         if completed.returncode != 0:
             return []
-        payload = json.loads(completed.stdout or "{}")
+        try:
+            payload = json.loads(completed.stdout or "{}")
+        except json.JSONDecodeError:
+            return []
         items = payload.get("items", [])
         return items if isinstance(items, list) else []
 
 
-def build_default_discovery_clients(release_profile: LoadProfileResult) -> dict[str, HubDiscoveryClient]:
+def build_default_discovery_clients(
+    release_profile: LoadProfileResult,
+) -> dict[str, HubDiscoveryClient]:
     return {
         role: OcDiscoveryClient(kubeconfig=hub.kubeconfig, context=hub.context)
         for role, hub in release_profile.profile.hubs.items()
@@ -125,11 +141,15 @@ def _certification_eligible(
     return not any(bool(getattr(item, "test_only", False)) for item in participants)
 
 
-def _scenario_profiles(profile_scenarios: tuple[ScenarioProfile, ...]) -> dict[str, ScenarioProfile]:
+def _scenario_profiles(
+    profile_scenarios: tuple[ScenarioProfile, ...],
+) -> dict[str, ScenarioProfile]:
     return {scenario.id: scenario for scenario in profile_scenarios}
 
 
-def _stream_profiles(profile_streams: tuple[StreamProfile, ...]) -> dict[str, StreamProfile]:
+def _stream_profiles(
+    profile_streams: tuple[StreamProfile, ...],
+) -> dict[str, StreamProfile]:
     return {stream.id: stream for stream in profile_streams}
 
 
@@ -257,12 +277,31 @@ def _execute_stream_scenarios(
             timeout = (
                 scenario_profile.timeout_minutes * 60 if scenario_profile and scenario_profile.timeout_minutes else None
             )
-            result = adapter.execute(
-                scenario.id,
-                timeout_seconds=timeout,
-                env=dict(stream_profile.env) if stream_profile else {},
-                extra_args=stream_profile.extra_args if stream_profile else (),
-            )
+            try:
+                result = adapter.execute(
+                    scenario.id,
+                    timeout_seconds=timeout,
+                    env=dict(stream_profile.env) if stream_profile else {},
+                    extra_args=stream_profile.extra_args if stream_profile else (),
+                )
+            except Exception as exc:
+                results.append(
+                    {
+                        "stream": stream,
+                        "scenario_id": scenario.id,
+                        "status": "failed",
+                        "required": scenario.required,
+                        "assertions": [
+                            {
+                                "capability": scenario.id,
+                                "name": "adapter-execution",
+                                "status": "failed",
+                                "message": f"{stream} adapter raised {type(exc).__name__}: {exc}",
+                            }
+                        ],
+                    }
+                )
+                continue
             payload = _as_dict(result)
             payload["required"] = scenario.required
             results.append(payload)
@@ -286,8 +325,6 @@ def _normalized_runtime_sources(results: list[dict]) -> dict[str, dict[str, dict
                 continue
             if report_type == "preflight":
                 sources.setdefault("preflight validation", {})[result["stream"]] = normalize_preflight(payload)
-            if report_type == "argocd":
-                sources.setdefault("Argo CD management", {})[result["stream"]] = normalize_argocd_management(payload)
     return sources
 
 
@@ -308,11 +345,82 @@ def _runtime_parity(artifacts: ReleaseArtifacts, results: list[dict]) -> dict:
             )
         else:
             comparisons.append(runtime_parity_not_applicable(capability, "runtime-parity", "missing source reports"))
-    write_runtime_parity_artifact(artifacts=artifacts, comparisons=comparisons)
-    return json.loads((artifacts.run_dir / "runtime-parity.json").read_text(encoding="utf-8"))
+    return write_runtime_parity_artifact(artifacts=artifacts, comparisons=comparisons)
 
 
-def run_release_certification(
+def _read_redaction_state(artifacts: ReleaseArtifacts) -> dict:
+    try:
+        return json.loads((artifacts.run_dir / "redaction.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "schema_version": 1,
+            "status": "failed",
+            "rejected_artifacts": ["redaction.json"],
+            "warnings": ["redaction audit state is missing or invalid"],
+        }
+
+
+def _finalize_run(
+    *,
+    artifacts: ReleaseArtifacts,
+    release_options: ReleaseOptions,
+    matrix,
+    manifest: dict,
+    certification_eligible: bool,
+    results: list[dict],
+    runtime_parity: dict,
+    final_baseline: dict,
+    mandatory_argocd: dict,
+) -> dict:
+    scenario_statuses = [_aggregate_status(scenario, results) for scenario in matrix.scenarios]
+    artifacts.write_json(
+        "scenario-results.json",
+        {
+            "schema_version": 1,
+            "results": results,
+            "scenario_statuses": scenario_statuses,
+        },
+    )
+    required_scenarios = [item for item in scenario_statuses if item["required"]]
+    optional_scenarios = [item for item in scenario_statuses if not item["required"]]
+    redaction = _read_redaction_state(artifacts)
+    artifact_redaction = {
+        "status": "failed" if redaction.get("rejected_artifacts") else "passed",
+        "rejected_artifacts": redaction.get("rejected_artifacts", []),
+    }
+    summary = build_summary(
+        release_mode=release_options.mode or "certification",
+        certification_eligible=certification_eligible,
+        required_scenarios=required_scenarios,
+        optional_scenarios=optional_scenarios,
+        runtime_parity=runtime_parity,
+        artifact_redaction=artifact_redaction,
+        final_baseline=final_baseline,
+        recovery={"status": "not_applicable", "hard_stops": []},
+        mandatory_argocd=mandatory_argocd,
+        release_metadata={"status": "passed"},
+    )
+    artifacts.write_json("summary.json", summary)
+    final_manifest = {
+        **manifest,
+        "status": summary["status"],
+        "certification_eligible": summary["certification_eligible"],
+        "warnings": summary["warnings"],
+        "failure_reasons": summary["failure_reasons"],
+    }
+    artifacts.write_json("manifest.json", final_manifest)
+    (artifacts.run_dir / "release-report.md").write_text(
+        render_release_report(summary, final_manifest),
+        encoding="utf-8",
+    )
+    return summary
+
+
+def _not_applicable_artifact(status: str = "not_applicable") -> dict:
+    return {"schema_version": 1, "status": status, "comparisons": []}
+
+
+def _run_release_certification(
     *,
     release_options: ReleaseOptions,
     release_profile: LoadProfileResult,
@@ -342,19 +450,24 @@ def run_release_certification(
         adapters=adapters,
     )
 
-    artifacts.write_json(
-        "manifest.json",
-        {
-            "schema_version": 1,
-            "run_id": artifacts.run_id,
-            "status": "running",
-            "profile": {"path": str(release_profile.path), "sha256": release_profile.sha256},
-            "matrix": {"scenario_ids": list(matrix.scenario_ids), "hash": matrix.matrix_hash},
-            "certification_eligible": certification_eligible,
-            "warnings": [],
-            "failure_reasons": [],
+    manifest = {
+        "schema_version": 1,
+        "run_id": artifacts.run_id,
+        "status": "running",
+        "profile": {
+            "name": profile.name,
+            "path": str(release_profile.path),
+            "sha256": release_profile.sha256,
         },
-    )
+        "matrix": {
+            "scenario_ids": list(matrix.scenario_ids),
+            "hash": matrix.matrix_hash,
+        },
+        "certification_eligible": certification_eligible,
+        "warnings": [],
+        "failure_reasons": [],
+    }
+    artifacts.write_json("manifest.json", manifest)
 
     results: list[dict] = []
     scenario_profiles = _scenario_profiles(profile.scenarios)
@@ -369,7 +482,30 @@ def run_release_certification(
             selected_streams=matrix.selected_streams,
             gate_runner=gate_runner,
         )
-        results.append(_local_result("static-gates", status, gate_results, scenarios_by_id["static-gates"].required))
+        results.append(
+            _local_result(
+                "static-gates",
+                status,
+                gate_results,
+                scenarios_by_id["static-gates"].required,
+            )
+        )
+        if status == "failed" and scenarios_by_id["static-gates"].required:
+            runtime_parity = _not_applicable_artifact()
+            artifacts.write_json("runtime-parity.json", runtime_parity)
+            final_baseline = {"status": "not_applicable", "assertions": []}
+            artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
+            return _finalize_run(
+                artifacts=artifacts,
+                release_options=release_options,
+                matrix=matrix,
+                manifest=manifest,
+                certification_eligible=certification_eligible,
+                results=results,
+                runtime_parity=runtime_parity,
+                final_baseline=final_baseline,
+                mandatory_argocd=({"status": "not_applicable"} if profile.argocd.mandatory else {"status": "passed"}),
+            )
 
     initial_fingerprint = _discover_fingerprint(
         release_profile=release_profile,
@@ -399,7 +535,8 @@ def run_release_certification(
         )
 
     initial_baseline = assert_baseline(
-        fingerprint=initial_fingerprint, initial_primary=profile.baseline.initial_primary
+        fingerprint=initial_fingerprint,
+        initial_primary=profile.baseline.initial_primary,
     )
     if "baseline-check" in scenarios_by_id:
         results.append(
@@ -435,7 +572,10 @@ def run_release_certification(
     final_baseline_result = assert_baseline(
         fingerprint=final_fingerprint, initial_primary=profile.baseline.final_primary
     )
-    final_baseline = {"status": final_baseline_result.status, "assertions": final_baseline_result.assertions}
+    final_baseline = {
+        "status": final_baseline_result.status,
+        "assertions": final_baseline_result.assertions,
+    }
     artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
 
     if "final-baseline-check" in scenarios_by_id:
@@ -448,46 +588,43 @@ def run_release_certification(
             )
         )
 
-    scenario_statuses = [_aggregate_status(scenario, results) for scenario in matrix.scenarios]
-    artifacts.write_json(
-        "scenario-results.json",
-        {"schema_version": 1, "results": results, "scenario_statuses": scenario_statuses},
-    )
-    required_scenarios = [item for item in scenario_statuses if item["required"]]
-    optional_scenarios = [item for item in scenario_statuses if not item["required"]]
-    redaction = json.loads((artifacts.run_dir / "redaction.json").read_text(encoding="utf-8"))
-    artifact_redaction = {
-        "status": "failed" if redaction.get("rejected_artifacts") else "passed",
-        "rejected_artifacts": redaction.get("rejected_artifacts", []),
-    }
-    summary = build_summary(
-        release_mode=release_options.mode or "certification",
+    return _finalize_run(
+        artifacts=artifacts,
+        release_options=release_options,
+        matrix=matrix,
+        manifest=manifest,
         certification_eligible=certification_eligible,
-        required_scenarios=required_scenarios,
-        optional_scenarios=optional_scenarios,
+        results=results,
         runtime_parity=runtime_parity,
-        artifact_redaction=artifact_redaction,
         final_baseline=final_baseline,
-        recovery={"status": "not_applicable", "hard_stops": []},
         mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
-        release_metadata={"status": "passed"},
     )
-    artifacts.write_json("summary.json", summary)
-    (artifacts.run_dir / "release-report.md").write_text(
-        render_release_report(summary, json.loads((artifacts.run_dir / "manifest.json").read_text(encoding="utf-8"))),
-        encoding="utf-8",
-    )
-    artifacts.write_json(
-        "manifest.json",
-        {
-            "schema_version": 1,
-            "run_id": artifacts.run_id,
-            "status": summary["status"],
-            "profile": {"path": str(release_profile.path), "sha256": release_profile.sha256},
-            "matrix": {"scenario_ids": list(matrix.scenario_ids), "hash": matrix.matrix_hash},
-            "certification_eligible": summary["certification_eligible"],
-            "warnings": summary["warnings"],
-            "failure_reasons": summary["failure_reasons"],
-        },
-    )
-    return summary
+
+
+def run_release_certification(
+    *,
+    release_options: ReleaseOptions,
+    release_profile: LoadProfileResult,
+    artifacts: ReleaseArtifacts,
+    repo_root: Path,
+    discovery_clients: Mapping[str, HubDiscoveryClient] | None = None,
+    adapters: Mapping[str, StreamAdapter] | None = None,
+    gate_runner: GateRunner = run_gate_command,
+) -> dict:
+    try:
+        return _run_release_certification(
+            release_options=release_options,
+            release_profile=release_profile,
+            artifacts=artifacts,
+            repo_root=repo_root,
+            discovery_clients=discovery_clients,
+            adapters=adapters,
+            gate_runner=gate_runner,
+        )
+    except Exception as exc:
+        reason = f"release certification failed: {type(exc).__name__}: {exc}"
+        artifacts.write_failed_manifest(
+            reason=reason,
+            command=["pytest", "tests/release/test_release_certification.py"],
+        )
+        return json.loads((artifacts.run_dir / "summary.json").read_text(encoding="utf-8"))
