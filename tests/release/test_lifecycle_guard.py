@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_release_lifecycle_skips_without_profile() -> None:
+    env = dict(os.environ)
+    env.pop("ACM_RELEASE_PROFILE", None)
     completed = subprocess.run(
         [
             sys.executable,
@@ -24,6 +27,7 @@ def test_release_lifecycle_skips_without_profile() -> None:
         stderr=subprocess.STDOUT,
         text=True,
         timeout=120,
+        env=env,
     )
 
     assert completed.returncode == 0

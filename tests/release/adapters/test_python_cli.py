@@ -192,6 +192,22 @@ def test_python_adapter_execute_overrides_inherited_kubeconfig(monkeypatch, tmp_
     assert "/kube/primary" in captured_env.get("KUBECONFIG", "")
 
 
+def test_python_adapter_extra_env_cannot_override_adapter_kubeconfig(monkeypatch, tmp_path: Path) -> None:
+    captured_env: dict[str, str] = {}
+
+    def fake_run(command, cwd, text, capture_output, check, timeout, env):
+        captured_env.update(env)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    adapter.execute("preflight", env={"KUBECONFIG": "/wrong/kubeconfig", "CUSTOM_FLAG": "1"})
+
+    assert captured_env.get("CUSTOM_FLAG") == "1"
+    assert captured_env.get("KUBECONFIG") == os.pathsep.join(["/kube/primary", "/kube/secondary"])
+
+
 def test_python_adapter_execute_handles_timeout_with_bytes_capture(monkeypatch, tmp_path: Path) -> None:
     def fake_run(command, cwd, text, capture_output, check, timeout, env):
         exc = subprocess.TimeoutExpired(command, 3600)

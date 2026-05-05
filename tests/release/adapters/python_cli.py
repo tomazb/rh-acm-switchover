@@ -69,6 +69,8 @@ class PythonCliAdapter:
         include both primary and secondary joined with os.pathsep.
         """
         env = {k: v for k, v in os.environ.items() if k != "KUBECONFIG"}
+        if extra_env:
+            env.update({str(key): str(value) for key, value in extra_env.items() if str(key) != "KUBECONFIG"})
         if scenario_id == "python-restore-only":
             kubeconfigs = [self.secondary_kubeconfig]
         else:
@@ -76,8 +78,6 @@ class PythonCliAdapter:
         kubeconfig_str = os.pathsep.join(k for k in kubeconfigs if k)
         if kubeconfig_str:
             env["KUBECONFIG"] = kubeconfig_str
-        if extra_env:
-            env.update({str(key): str(value) for key, value in extra_env.items()})
         return env
 
     def scenario_dir(self, scenario_id: str) -> Path:
