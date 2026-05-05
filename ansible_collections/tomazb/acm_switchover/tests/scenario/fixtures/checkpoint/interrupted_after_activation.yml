@@ -116,6 +116,16 @@ acm_secondary_restores_info:
       status:
         phase: Enabled
 
+acm_switchover_test_overrides:
+  activation_restores_info:
+    resources:
+      - metadata:
+          name: restore-acm-passive-sync
+        spec:
+          syncRestoreWithNewBackups: true
+        status:
+          phase: Enabled
+
 acm_secondary_managed_clusters_info:
   resources:
     - metadata:

@@ -7,7 +7,7 @@
       {{
         [acm_switchover_restore_selection.restore]
         if (acm_switchover_restore_selection is defined and acm_switchover_restore_selection.restore is not none)
-        else (acm_secondary_restores_info.resources | default(acm_secondary_restore_info.resources | default([])))
+        else (acm_activation_restores_info.resources | default([]))
       }}
     backup_name: latest
   register: acm_restore_activation_plan

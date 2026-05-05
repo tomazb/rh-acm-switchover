@@ -87,6 +87,7 @@ acm_secondary_bsl_info:
       status:
         phase: Available
 
+# Preflight facts are intentionally ready and stale.
 acm_secondary_restore_info:
   resources:
     - metadata:
@@ -105,15 +106,18 @@ acm_secondary_restores_info:
       status:
         phase: Enabled
 
+# Activation-time facts are the authority and must fail before mutation.
 acm_switchover_test_overrides:
   activation_restores_info:
     resources:
       - metadata:
           name: restore-acm-passive-sync
+          namespace: open-cluster-management-backup
+          resourceVersion: "99"
         spec:
           syncRestoreWithNewBackups: true
         status:
-          phase: Enabled
+          phase: Failed
 
 acm_secondary_managed_clusters_info:
   resources:
@@ -131,4 +135,4 @@ acm_secondary_backup_schedules_info:
     - metadata:
         name: acm-hub-backup
       spec:
-        paused: false
+        paused: true
