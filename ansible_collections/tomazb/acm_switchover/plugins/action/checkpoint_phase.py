@@ -228,6 +228,9 @@ class ActionModule(ActionBase):
         expected_operation_identity: dict,
     ) -> tuple[dict, bool]:
         if reset_from and status in {"enter", "reset"}:
+            # Only prune when reset_from is still in completed_phases.
+            # By invariant, if reset_from is absent, all downstream phases are too
+            # (phases are appended in order), so pruning is already complete.
             if reset_from in checkpoint_data.get("completed_phases", []):
                 return (
                     self._build_reset_from_checkpoint(

@@ -4,9 +4,10 @@
 import json
 import os
 from datetime import datetime, timezone
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
+    ActionModule,
     build_phase_transition,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts import (
@@ -1267,13 +1268,6 @@ def test_reset_from_does_not_reprune_phases_completed_in_current_run(tmp_path):
 
     Regression test for: reset_from fires on every 'enter', not just the first time.
     """
-    import json
-    from unittest.mock import MagicMock
-
-    from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
-        ActionModule,
-    )
-
     checkpoint_file = tmp_path / "checkpoint.json"
     op_identity = build_operation_identity(hubs={}, operation={})
     checkpoint_file.write_text(
