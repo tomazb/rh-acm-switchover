@@ -154,7 +154,8 @@ def _ansible_env(
         "ANSIBLE_LOCAL_TEMP": str(local_tmp),
         "ANSIBLE_REMOTE_TMP": str(remote_tmp),
     }
-    pythonpaths = [str(path) for path in extra_pythonpaths]
+    pythonpaths = [str(_ANSIBLE_PY314_COMPAT_PATH)]
+    pythonpaths.extend(str(path) for path in extra_pythonpaths)
     existing_pythonpath = os.environ.get("PYTHONPATH")
     if existing_pythonpath:
         pythonpaths.append(existing_pythonpath)
@@ -311,7 +312,6 @@ def run_checkpoint_fixture(tmp_path):
         env = _ansible_env(
             repo_root,
             tmp_path,
-            extra_pythonpaths=(_ANSIBLE_PY314_COMPAT_PATH,),
         )
 
         try:

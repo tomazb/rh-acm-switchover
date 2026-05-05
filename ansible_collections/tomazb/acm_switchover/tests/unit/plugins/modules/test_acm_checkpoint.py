@@ -165,6 +165,34 @@ def test_validate_operation_identity_allows_missing_identity_when_requested():
     )
 
 
+def test_build_operation_identity_restore_only_defaults_method_full_and_old_hub_none():
+    identity = build_operation_identity(
+        hubs={},
+        operation={"restore_only": True},
+    )
+    assert identity["method"] == "full"
+    assert identity["old_hub_action"] == "none"
+    assert identity["restore_only"] is True
+
+
+def test_build_operation_identity_restore_only_sparse_equals_fully_populated():
+    sparse = build_operation_identity(hubs={}, operation={"restore_only": True})
+    fully_populated = build_operation_identity(
+        hubs={
+            "primary": {"context": "", "kubeconfig": ""},
+            "secondary": {"context": "", "kubeconfig": ""},
+        },
+        operation={
+            "method": "full",
+            "activation_method": "patch",
+            "restore_only": True,
+            "old_hub_action": "none",
+        },
+        collection_version="",
+    )
+    assert sparse == fully_populated
+
+
 def test_is_unsafe_legacy_checkpoint_requires_reset_for_completed_legacy_state():
     assert (
         is_unsafe_legacy_checkpoint(

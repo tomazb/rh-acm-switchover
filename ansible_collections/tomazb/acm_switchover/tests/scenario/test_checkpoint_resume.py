@@ -36,6 +36,8 @@ def _task_pattern(role: str, task_name: str, result: str) -> str:
 
 
 def _expected_checkpoint(phase: str, completed_phases: list[str]) -> dict:
+    # Intentionally seeds a schema 1.0 file to verify that dry_run/validate
+    # mode never mutates or migrates a legacy checkpoint.
     return {
         "schema_version": "1.0",
         "phase": phase,

@@ -26,15 +26,17 @@ def build_operation_identity(
     primary = hubs.get("primary") or {}
     secondary = hubs.get("secondary") or {}
     restore_only = operation.get("restore_only")
+    _restore_only = False if restore_only is None else restore_only
     return {
         "primary_context": primary.get("context") or "",
         "secondary_context": secondary.get("context") or "",
         "primary_kubeconfig": primary.get("kubeconfig") or "",
         "secondary_kubeconfig": secondary.get("kubeconfig") or "",
-        "method": operation.get("method") or "passive",
+        "method": operation.get("method") or ("full" if _restore_only else "passive"),
         "activation_method": operation.get("activation_method") or "patch",
-        "restore_only": False if restore_only is None else restore_only,
-        "old_hub_action": operation.get("old_hub_action") or "secondary",
+        "restore_only": _restore_only,
+        "old_hub_action": operation.get("old_hub_action")
+        or ("none" if _restore_only else "secondary"),
         "collection_version": collection_version or "",
     }
 
