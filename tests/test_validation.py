@@ -897,7 +897,9 @@ class TestFilesystemValidation:
             "state-file.json",
             ".state/switchover-state.json",
             "relative/path/to/file",
+            "/tmp",
             "/tmp/valid-file",
+            "/var",
             "/var/log/app.log",
             "my_file_123.txt",
         ]
@@ -929,6 +931,14 @@ class TestFilesystemValidation:
         """Test empty filesystem path."""
         with pytest.raises(ValidationError):
             InputValidator.validate_safe_filesystem_path("", "test")
+
+    def test_rejects_missing_path_under_existing_file(self, tmp_path):
+        """Test missing absolute paths cannot use an existing file as an anchor."""
+        file_anchor = tmp_path / "state-file"
+        file_anchor.write_text("not a directory", encoding="utf-8")
+
+        with pytest.raises(SecurityValidationError, match="non-directory ancestor"):
+            InputValidator.validate_safe_filesystem_path(str(file_anchor / "missing" / "state.json"), "test")
 
 
 class TestStringValidation:

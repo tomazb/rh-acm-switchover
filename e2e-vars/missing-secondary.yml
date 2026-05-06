@@ -2,7 +2,7 @@
 acm_switchover_hubs:
   primary:
     context: mgmt2
-    kubeconfig: ~/.kube/config
+    kubeconfig: /tmp/acm-switchover/kubeconfig
   # secondary intentionally omitted
 acm_switchover_operation:
   method: passive
