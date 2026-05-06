@@ -2,7 +2,7 @@
 - name: Use activation Restore test override when supplied
   ansible.builtin.debug:
     msg: Using acm_switchover_test_overrides.activation_restores_info
-  when: acm_switchover_test_overrides.activation_restores_info is defined
+  when: (acm_switchover_test_overrides | default({})).activation_restores_info is defined
 
 - name: Read live secondary Restore resources for activation
   kubernetes.core.k8s_info:
@@ -12,7 +12,7 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: acm_activation_restores_info
-  when: acm_switchover_test_overrides.activation_restores_info is not defined
+  when: (acm_switchover_test_overrides | default({})).activation_restores_info is not defined
 
 - name: Read secondary MultiClusterHub when not pre-seeded by tests
   kubernetes.core.k8s_info:

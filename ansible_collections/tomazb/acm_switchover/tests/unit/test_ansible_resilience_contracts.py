@@ -326,6 +326,7 @@ def test_activation_rediscovers_restore_facts_before_passive_selection():
 
     assert "register: acm_activation_restores_info" in discover_text
     assert "activation_restores_info" in discover_text
+    assert "acm_switchover_test_overrides | default({})" in discover_text
     assert "register: acm_secondary_restores_info" not in discover_text
     assert includes[0] == "discover_resources.yml"
     assert includes.index("discover_resources.yml") < includes.index(
