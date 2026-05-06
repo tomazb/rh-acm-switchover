@@ -94,7 +94,7 @@ def write_report(report: dict, destination: str) -> tuple[str, str | None]:
         Tuple of (path, error_message). error_message is None on success.
     """
     try:
-        path = write_json_artifact(report=report, destination=destination)
+        path, _changed = write_json_artifact(report=report, destination=destination)
     except (ArtifactWriteError, ValidationError) as exc:
         return destination, str(exc)
     return path, None

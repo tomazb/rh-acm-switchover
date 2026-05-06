@@ -21,6 +21,13 @@ options:
     description: Structured JSON-compatible report payload to write.
     required: true
     type: dict
+  mode:
+    description:
+      - File mode for the written report artifact.
+      - Must be an octal permission string such as C(0644); symbolic modes are not supported.
+    required: false
+    type: str
+    default: "0644"
 """
 
 EXAMPLES = r"""
@@ -46,22 +53,27 @@ def main() -> None:
         argument_spec={
             "path": {"type": "str", "required": True},
             "report": {"type": "dict", "required": True},
+            "mode": {"type": "str", "default": "0644"},
         },
         supports_check_mode=True,
     )
 
     destination = module.params["path"]
     report = module.params["report"]
+    mode = module.params["mode"]
 
     try:
-        output_path = write_json_artifact(
-            report=report, destination=destination, check_mode=module.check_mode
+        output_path, changed = write_json_artifact(
+            report=report,
+            destination=destination,
+            check_mode=module.check_mode,
+            mode=mode,
         )
     except (ArtifactWriteError, ValidationError) as exc:
         module.fail_json(msg=str(exc), path=destination)
         return
 
-    module.exit_json(changed=not module.check_mode, path=output_path)
+    module.exit_json(changed=changed, path=output_path)
 
 
 if __name__ == "__main__":

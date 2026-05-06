@@ -65,9 +65,9 @@
       }}
   when: _acm_decommission_summary_path | default('') | length > 0
 
-- name: Write summary when requested
-  ansible.builtin.copy:
-    content: "{{ acm_switchover_decommission_result | to_json }}"
-    dest: "{{ _acm_summary_path_abs }}"
+- name: Write decommission summary when requested
+  tomazb.acm_switchover.acm_report_artifact:
+    path: "{{ _acm_summary_path_abs }}"
+    report: "{{ acm_switchover_decommission_result }}"
     mode: "0644"
   when: _acm_decommission_summary_path | default('') | length > 0
