@@ -59,6 +59,8 @@
           status: "{{ 'pass' if acm_cluster_verify_result.passed else 'fail' }}"
           changed: false
           summary: "{{ acm_cluster_verify_result }}"
+          klusterlet_probe: "{{ _klusterlet_probe_result | default({}) }}"
+          klusterlet_remediation: "{{ _klusterlet_remediation_result | default({}) }}"
           cleanup_auto_import: "{{ acm_switchover_cleanup_auto_import_result | default({}) }}"
           observability: "{{ acm_observability_check_result | default({}) }}"
       tags:

@@ -30,67 +30,71 @@ def test_verify_klusterlet_includes_remediation():
     """verify_klusterlet.yml must include fix_klusterlet.yml for auto-remediation."""
     content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
     assert "fix_klusterlet.yml" in content, "Must include fix_klusterlet.yml"
-    assert (
-        "acm_switchover_managed_clusters" in content
-    ), "Must guard on managed_clusters"
+    assert "acm_switchover_managed_clusters" in content, "Must guard on managed_clusters"
 
 
 def test_verify_klusterlet_probes_connections_even_when_cluster_status_is_green():
     """Green ManagedCluster conditions can be stale, so klusterlet secrets still need probing."""
-    tasks = yaml.safe_load(
-        (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
-    )
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
 
     probe_tasks = [
-        task
-        for task in tasks
-        if task.get("ansible.builtin.include_tasks")
-        == "verify_klusterlet_connections.yml"
+        task for task in tasks if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml"
     ]
-    assert (
-        probe_tasks
-    ), "verify_klusterlet.yml must include the green-path klusterlet probe"
+    assert probe_tasks, "verify_klusterlet.yml must include the green-path klusterlet probe"
     probe_when = _when_text(probe_tasks[0])
     assert "acm_switchover_managed_clusters" in probe_when
-    assert (
-        "pending" not in probe_when
-    ), "green-path probe must not be gated by pending cluster status"
+    assert "pending" not in probe_when, "green-path probe must not be gated by pending cluster status"
 
 
 def test_verify_klusterlet_connection_probe_can_remediate_wrong_hub_secret():
-    """The probe must inspect hub kubeconfig secrets and reuse the remediation path for mismatches."""
+    """The probe must inspect hub kubeconfig secrets through the bounded module."""
     path = POST_ACTIVATION_TASKS / "verify_klusterlet_connections.yml"
-    single_path = POST_ACTIVATION_TASKS / "verify_klusterlet_connection_single.yml"
     assert path.exists(), "verify_klusterlet_connections.yml must exist"
-    assert single_path.exists(), "verify_klusterlet_connection_single.yml must exist"
-    content = path.read_text() + "\n" + single_path.read_text()
+    content = path.read_text()
 
-    assert "hub-kubeconfig-secret" in content
-    assert "bootstrap-hub-kubeconfig" in content
-    assert "import.yaml" in content
-    assert "fix_klusterlet_single.yml" in content
-    assert "from_yaml" in content
-    assert "regex_replace" in content
-    assert "server" in content
+    assert "tomazb.acm_switchover.acm_klusterlet_probe" in content
+    assert "klusterlet_probe_workers" in content
+    assert "register: _klusterlet_probe_result" in content
     assert (
-        "_klusterlet_current_hub_kubeconfig != _klusterlet_expected_hub_kubeconfig"
-        not in content
-    )
+        "include_tasks: verify_klusterlet_connection_single.yml" not in content
+    ), "Probe must not loop through per-cluster task includes"
+
+
+def test_fix_klusterlet_uses_bounded_remediation_module():
+    """Remediation must be handled by the bounded module, not a sequential task loop."""
+    content = (POST_ACTIVATION_TASKS / "fix_klusterlet.yml").read_text()
+
+    assert "tomazb.acm_switchover.acm_klusterlet_remediate" in content
+    assert "klusterlet_remediation_workers" in content
+    assert "strict_remediation" in content
+    assert (
+        "include_tasks: fix_klusterlet_single.yml" not in content
+    ), "Remediation must not loop through per-cluster task includes"
+
+
+def test_verify_klusterlet_records_module_remediation_attempts():
+    """Re-verification must be gated on module-reported remediation attempts."""
+    content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
+
+    assert "_klusterlet_remediation_result.changed" in content
+    assert "_klusterlet_probe_result.wrong_hub_clusters" in content
+
+
+def test_post_activation_defaults_include_klusterlet_concurrency_and_strict_mode():
+    """Defaults must expose worker controls and preserve non-strict behavior."""
+    defaults = yaml.safe_load((POST_ACTIVATION_DEFAULTS / "main.yml").read_text())
+
+    assert defaults["acm_switchover_execution"]["concurrency"]["klusterlet_probe_workers"] == 10
+    assert defaults["acm_switchover_execution"]["concurrency"]["klusterlet_remediation_workers"] == 10
+    assert defaults["acm_switchover_features"]["klusterlet"]["strict_remediation"] is False
 
 
 def test_verify_klusterlet_connection_probe_omits_missing_secondary_context():
     """Hub import-secret reads must not require an explicit secondary context."""
-    tasks = yaml.safe_load(
-        (POST_ACTIVATION_TASKS / "verify_klusterlet_connection_single.yml").read_text()
-    )
-    import_secret_task = next(
-        task
-        for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("name")
-        == "{{ _probe_cluster_name }}-import"
-    )
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet_connections.yml").read_text())
+    probe_task = next(task for task in tasks if "tomazb.acm_switchover.acm_klusterlet_probe" in task)
 
-    assert import_secret_task["kubernetes.core.k8s_info"]["context"] == (
+    assert probe_task["tomazb.acm_switchover.acm_klusterlet_probe"]["secondary_hub"]["context"] == (
         "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
     )
 
@@ -98,26 +102,16 @@ def test_verify_klusterlet_connection_probe_omits_missing_secondary_context():
 def test_defaults_include_managed_clusters():
     """post_activation defaults must define acm_switchover_managed_clusters."""
     defaults = yaml.safe_load((POST_ACTIVATION_DEFAULTS / "main.yml").read_text())
-    assert (
-        "acm_switchover_managed_clusters" in defaults
-    ), "Defaults must define acm_switchover_managed_clusters"
-    assert (
-        defaults["acm_switchover_managed_clusters"] == {}
-    ), "Default must be empty dict"
+    assert "acm_switchover_managed_clusters" in defaults, "Defaults must define acm_switchover_managed_clusters"
+    assert defaults["acm_switchover_managed_clusters"] == {}, "Default must be empty dict"
 
 
 def test_fix_klusterlet_single_has_required_steps():
-    """fix_klusterlet_single.yml must have the 5 remediation steps."""
-    content = (POST_ACTIVATION_TASKS / "fix_klusterlet_single.yml").read_text()
-    # Check for the key operations
-    assert (
-        "_import_yaml_raw: null" in content
-    ), "Must clear state at start of each iteration"
-    assert (
-        "import" in content.lower() and "secret" in content.lower()
-    ), "Must fetch import secret from hub"
-    assert (
-        "bootstrap-hub-kubeconfig" in content
-    ), "Must handle bootstrap-hub-kubeconfig secret"
-    assert "klusterlet" in content.lower(), "Must restart klusterlet deployment"
-    assert "open-cluster-management-agent" in content, "Must reference agent namespace"
+    """The remediation module must carry the key remediation operations."""
+    module_path = pathlib.Path(__file__).resolve().parents[2] / "plugins" / "module_utils" / "klusterlet.py"
+    content = module_path.read_text()
+
+    assert "import.yaml" in content, "Must fetch import secret from hub"
+    assert "bootstrap-hub-kubeconfig" in content, "Must handle bootstrap-hub-kubeconfig secret"
+    assert "patch_namespaced_deployment" in content, "Must restart klusterlet deployment"
+    assert "MANAGED_CLUSTER_AGENT_NAMESPACE" in content, "Must reference agent namespace"

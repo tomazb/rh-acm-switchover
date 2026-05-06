@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added a release certification orchestrator that wires real release profiles through static gates, lab readiness, baseline snapshots, stream adapters, runtime parity, final baseline checks, summary generation, and durable release artifacts.
+- Added bounded-concurrency Ansible klusterlet probe and remediation modules with per-cluster structured results, 10-worker defaults, and optional strict remediation failure behavior.
 
 ### Changed
 

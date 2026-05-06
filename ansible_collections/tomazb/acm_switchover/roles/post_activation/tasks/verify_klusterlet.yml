@@ -4,17 +4,29 @@
   when:
     - (acm_switchover_managed_clusters | default({}) | length) > 0
 
+- name: Combine pending and wrong-hub klusterlet remediation candidates
+  ansible.builtin.set_fact:
+    _klusterlet_remediation_candidates: >-
+      {{
+        (
+          (acm_cluster_verify_result.pending | default([]))
+          + (_klusterlet_probe_result.wrong_hub_clusters | default([]))
+        )
+        | unique
+        | list
+      }}
+
 - name: Attempt klusterlet auto-remediation
   ansible.builtin.include_tasks: fix_klusterlet.yml
   when:
-    - (acm_cluster_verify_result.pending | default([]) | length) > 0
+    - (_klusterlet_remediation_candidates | default([]) | length) > 0
     - (acm_switchover_managed_clusters | default({}) | length) > 0
 
 - name: Record that klusterlet remediation was attempted
   ansible.builtin.set_fact:
     _klusterlet_remediation_attempted: true
   when:
-    - (acm_cluster_verify_result.pending | default([]) | length) > 0
+    - _klusterlet_remediation_result.changed | default(false)
     - (acm_switchover_managed_clusters | default({}) | length) > 0
 
 - name: Note klusterlet remediation candidates
@@ -22,4 +34,7 @@
     acm_klusterlet_remediation_note:
       warning: "Klusterlet verification requires manual review - check klusterlet pod logs on managed clusters if clusters fail to connect"
       pending: "{{ acm_cluster_verify_result.pending | default([]) }}"
-  when: (acm_cluster_verify_result.pending | default([]) | length) > 0
+      wrong_hub: "{{ _klusterlet_probe_result.wrong_hub_clusters | default([]) }}"
+      failed: "{{ _klusterlet_remediation_result.failed_clusters | default([]) }}"
+      skipped: "{{ _klusterlet_remediation_result.skipped_clusters | default([]) }}"
+  when: (_klusterlet_remediation_candidates | default([]) | length) > 0
