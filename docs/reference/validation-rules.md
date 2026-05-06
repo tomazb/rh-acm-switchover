@@ -180,6 +180,9 @@ The CLI validates the path before writing `preflight-report.json`, `switchover-r
 - `--argocd-resume-only` cannot be used with `--setup`
 - `--argocd-manage` has no effect with `--validate-only`; a warning is emitted and validation continues
 - `--argocd-manage` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-on-failure` requires `--argocd-manage`
+- `--argocd-resume-on-failure` cannot be used with `--argocd-resume-only`
+- `--argocd-resume-on-failure` cannot be used with `--validate-only`
 - `--include-decommission` is only valid with `--setup` when `--role` is `operator` or `both`
 - `--restore-only` requires `--secondary-context` (the restore target hub)
 - `--restore-only` cannot be used with `--primary-context` (no primary hub needed)
@@ -208,6 +211,7 @@ The CLI validates the path before writing `preflight-report.json`, `switchover-r
 - `.state/switchover-state.json`
 - `relative/path/to/file`
 - `/tmp/valid-file`
+- `/tmp/acm-switchover/report.json`
 - `/var/log/app.log`
 - `/home/user/workspace/config.json` (under home)
 - `/path/to/workspace/data.json` (under cwd)
@@ -221,6 +225,9 @@ The CLI validates the path before writing `preflight-report.json`, `switchover-r
 - `/etc/passwd` (absolute path outside allowed directories)
 
 **Note**: Relative paths are always permitted and are resolved relative to the current working directory.
+For absolute paths that do not exist yet, validation resolves the nearest existing ancestor and
+allows new child paths only when that resolved ancestor is under an allowed safe root. Tilde
+expansion is intentionally not performed; pass a shell-expanded absolute path instead.
 
 ### 7. String Validation
 

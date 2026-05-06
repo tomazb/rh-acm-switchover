@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python and collection validation now share a parity fixture covering Argo CD resume-on-failure rules and safe-path policy; collection validation now rejects `~/` paths and enforces `argocd.resume_on_failure` combinations consistently with the Python CLI.
 - Collection decommission summaries now use the shared report artifact writer so `summary_path` is validated by the safe-path policy before writing.
 - Collection checkpoint resumes now rediscover primary prep, activation, and finalization resources with phase-owned facts so skipped preflight data cannot go stale across resumed runs.
 - Collection activation now re-reads live Restore resources at activation time, ignores stale preflight Restore facts, fails before mutation when the selected passive Restore is not ready, and includes Restore `resourceVersion` in activation patches when available.

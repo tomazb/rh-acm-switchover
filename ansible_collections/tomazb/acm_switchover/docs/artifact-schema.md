@@ -5,6 +5,20 @@ artifacts share schema version `"1.0"` and the same top-level status fields. The
 collection uses `source: tomazb.acm_switchover`; the Python CLI uses
 `source: python-cli`.
 
+## Controller-Side Safe Path Policy
+
+Python and collection artifact, checkpoint, and kubeconfig path validation share
+the same controller-side policy:
+
+- relative paths are allowed when they do not contain traversal or shell metacharacters
+- absolute paths are allowed only when the resolved path is under `/tmp/`, `/var/`, the current working directory, or the controller user's home directory
+- new absolute child paths are allowed when their nearest existing ancestor resolves under an allowed root
+- `~`, `$`, `{`, `}`, `|`, `&`, `;`, `<`, `>`, and backticks are rejected; tilde expansion is not performed
+- `..` is rejected as a path component
+
+Use shell-expanded absolute paths or relative paths such as `./kubeconfigs/primary`
+instead of `~/.kube/config`.
+
 ## Preflight Report Contract
 
 - Path: `{{ acm_switchover_execution.report_dir }}/preflight-report.json`

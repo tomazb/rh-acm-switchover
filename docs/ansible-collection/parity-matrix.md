@@ -41,6 +41,7 @@ Cross-implementation contracts are enforced by automated parity tests in `tests/
 | `tests/test_constants_parity.py` | ~18 shared constants match between `lib/constants.py` and `plugins/module_utils/constants.py` |
 | `tests/test_rbac_collection_parity.py` | Python `RBACValidator` permission matrix matches collection `acm_rbac_validate` expansion |
 | `tests/test_argocd_constants_parity.py` | `ACM_KINDS`, `ACM_NAMESPACES`, and `build_pause_patch` match between Python and collection |
+| `tests/test_validation_parity.py` and collection `test_validation_parity_fixture.py` | Shared validation fixture keeps Argo CD option rules and safe-path policy aligned |
 
 These tests run in CI and must remain green. Add a new test or assertion whenever a new shared constant or behavioral contract is added.
 

@@ -272,21 +272,22 @@ class InputValidator:
         # Permit /tmp, /var, and absolute paths under current working directory or $HOME
         if path.startswith("/"):
             # Resolve symlinks to prevent bypass via symlink chains
-            # Only resolve if path exists; for new files, validate the parent directory
             if os.path.exists(path):
                 resolved_path = os.path.realpath(path)
             else:
-                # For non-existent paths, require the parent directory to exist
-                # This prevents symlink-based path bypasses via non-existent parent directories
-                parent = os.path.dirname(path)
-                if parent and os.path.exists(parent):
-                    resolved_path = os.path.join(os.path.realpath(parent), os.path.basename(path))
-                else:
+                ancestor = path
+                missing_parts: list[str] = []
+                while ancestor and not os.path.exists(ancestor):
+                    ancestor, name = os.path.split(ancestor)
+                    if name:
+                        missing_parts.insert(0, name)
+
+                if not ancestor or not os.path.exists(ancestor):
                     raise SecurityValidationError(
-                        f"SECURITY: Absolute path '{path}' for {field_name} has a non-existent parent directory. "
-                        f"Creating files in non-existent absolute directories is not allowed to prevent symlink-based path bypasses. "
-                        f"Create the parent directory in an allowed location (/tmp, /var, workspace root, or home directory) before using this path."
+                        f"SECURITY: Absolute path '{path}' for {field_name} cannot be resolved against an existing directory."
                     )
+
+                resolved_path = os.path.join(os.path.realpath(ancestor), *missing_parts)
 
             # B108 is skipped in .bandit because these are allowed path prefixes
             # used for validation, not hardcoded temp file creation paths.

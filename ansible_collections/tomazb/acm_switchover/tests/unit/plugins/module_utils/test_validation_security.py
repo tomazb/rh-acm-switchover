@@ -111,15 +111,17 @@ class TestValidateSafePathPositive:
     def test_accepts_single_dot(self):
         validate_safe_path("./file")
 
-    def test_accepts_home_relative_kubeconfig(self):
-        validate_safe_path("~/.kube/config")  # should not raise
-
-    def test_accepts_home_relative_nested(self):
-        validate_safe_path("~/projects/kubeconfigs/cluster.yaml")  # should not raise
-
     def test_rejects_mid_path_tilde(self):
         with pytest.raises(ValidationError, match="unsafe characters"):
             validate_safe_path("/path/file~backup")
+
+    def test_rejects_home_relative_kubeconfig(self):
+        with pytest.raises(ValidationError, match="unsafe characters"):
+            validate_safe_path("~/.kube/config")
+
+    def test_rejects_home_relative_nested(self):
+        with pytest.raises(ValidationError, match="unsafe characters"):
+            validate_safe_path("~/projects/kubeconfigs/cluster.yaml")
 
     def test_rejects_tilde_without_slash(self):
         with pytest.raises(ValidationError, match="unsafe characters"):
@@ -139,7 +141,5 @@ class TestValidateSafePathPositive:
     def test_accepts_absolute_path_var(self):
         validate_safe_path("/var/log/file.txt")
 
-    def test_accepts_absolute_path_with_missing_parent_below_allowed_ancestor(
-        self, tmp_path
-    ):
+    def test_accepts_absolute_path_with_missing_parent_below_allowed_ancestor(self, tmp_path):
         validate_safe_path(str(tmp_path / "missing-parent" / "state.json"))

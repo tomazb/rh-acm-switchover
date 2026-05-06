@@ -2,10 +2,10 @@
 acm_switchover_hubs:
   primary:
     context: primary-hub
-    kubeconfig: ~/.kube/config
+    kubeconfig: ./kubeconfigs/hub.kubeconfig
   secondary:
     context: secondary-hub
-    kubeconfig: ~/.kube/config
+    kubeconfig: ./kubeconfigs/hub.kubeconfig
 
 acm_switchover_operation:
   method: passive
