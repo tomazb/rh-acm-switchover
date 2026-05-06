@@ -6,7 +6,6 @@
 - `acm_switchover_operation`
 - `acm_switchover_features`
 - `acm_switchover_execution`
-- `acm_switchover_rbac`
 - `acm_switchover_decommission`
 - `acm_switchover_rbac_bootstrap`
 - `acm_switchover_discovery`
@@ -14,7 +13,60 @@
 ## Notes
 
 - The collection public API is grouped variables, not a flat CLI flag layer.
-- checkpoint keys are contract-only in the current boundaries.
+- Checkpoint files are collection-owned JSON state and are not interchangeable with Python CLI state files.
+
+## Core Input Variables
+
+### `acm_switchover_hubs`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `primary.context` | str | required for switchover | Primary hub kubeconfig context |
+| `primary.kubeconfig` | str | caller environment | Primary hub kubeconfig path |
+| `secondary.context` | str | required for switchover and restore-only | Secondary or restore target hub kubeconfig context |
+| `secondary.kubeconfig` | str | caller environment | Secondary or restore target hub kubeconfig path |
+
+### `acm_switchover_operation`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `method` | `passive`, `full` | `passive` | Switchover activation strategy |
+| `old_hub_action` | `secondary`, `decommission`, `none` | `secondary` | Finalization action for the old hub |
+| `activation_method` | `patch`, `restore` | `patch` | Passive activation mechanism; `restore` is valid only with `method=passive` |
+| `min_managed_clusters` | int | `0` | Minimum non-local ManagedClusters required after activation |
+| `restore_only` | bool | `false` | Set by `playbooks/restore_only.yml`; direct role invocations must set it explicitly |
+
+### `acm_switchover_features`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `manage_auto_import_strategy` | bool | `false` | Temporarily set ACM 2.14+ auto-import strategy for activation |
+| `skip_observability_checks` | bool | `false` | Skip observability preflight and post-activation checks |
+| `skip_gitops_check` | bool | `false` | Skip read-only GitOps marker checks |
+| `skip_rbac_validation` | bool | `false` | Skip RBAC self-validation in preflight |
+| `disable_observability_on_secondary` | bool | `false` | Deprecated compatibility setting; old-hub MCO deletion is now automatic when keeping the old hub as secondary |
+| `argocd.manage` | bool | `false` | Pause ACM-touching Argo CD Applications during switchover |
+| `argocd.resume_on_failure` | bool | `false` | Best-effort resume of Applications paused by the current run if switchover fails |
+| `klusterlet.strict_remediation` | bool | `false` | Fail post-activation when any klusterlet remediation candidate fails |
+
+### `acm_switchover_execution`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `mode` | `execute`, `validate`, `dry_run` | `execute` | Runtime mode; `validate` and `dry_run` do not persist checkpoint transitions |
+| `verbose` | bool | `false` | Enable verbose collection output where roles expose additional debug detail |
+| `force` | bool | `false` | Operator override flag reserved for compatibility with Python CLI state-reset workflows |
+| `report_dir` | str | `./artifacts` | Directory for JSON report artifacts; validated by the safe-path policy |
+| `checkpoint.enabled` | bool | `false` | Enable file-backed phase checkpointing |
+| `checkpoint.backend` | str | `file` | Checkpoint backend; only `file` is currently supported |
+| `checkpoint.path` | str | `.state/switchover.json` | Checkpoint JSON path; validated by the safe-path policy before controller-side reads or writes |
+| `checkpoint.reset` | bool | `false` | Start a fresh checkpoint from `preflight` and ignore existing checkpoint content |
+| `checkpoint.reset_from` | phase name or empty string | `""` | Remove the named phase and every downstream phase from `completed_phases`; used for safe retries such as Argo CD resume-on-failure |
+| `concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
+| `concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
+
+The full variable name is `acm_switchover_execution.checkpoint.reset_from`.
+Checkpoint `reset_from` accepts `preflight`, `primary_prep`, `activation`, `post_activation`, or `finalization`.
 
 ## Preflight Result Facts
 

@@ -95,17 +95,29 @@ Each result entry must support:
 
 ## Checkpoint Contract
 
-Implemented in Phase 4. Path: controlled by `acm_switchover_execution.checkpoint.path`.
+Path: controlled by `acm_switchover_execution.checkpoint.path`.
 
 Written by the `tomazb.acm_switchover.checkpoint_phase` action plugin after each phase during live execution.
-When `acm_switchover_execution.mode` is `dry_run`, the plugin reports the simulated transition without writing the
-checkpoint file or appending `completed_phases`.
+When `acm_switchover_execution.mode` is `validate` or `dry_run`, the plugin reports the simulated transition without
+creating, migrating, resetting, or mutating the checkpoint file.
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
+  "phase": "activation",
   "completed_phases": ["preflight", "primary_prep", "activation"],
   "phase_status": "pass",
+  "operation_identity": {
+    "primary_context": "primary-hub",
+    "secondary_context": "secondary-hub",
+    "primary_kubeconfig": "./kubeconfigs/hub.kubeconfig",
+    "secondary_kubeconfig": "./kubeconfigs/hub.kubeconfig",
+    "method": "passive",
+    "activation_method": "patch",
+    "restore_only": false,
+    "old_hub_action": "secondary",
+    "collection_version": "1.7.9"
+  },
   "operational_data": {
     "argocd_run_id": "9f2e4c13b8aa"
   },
@@ -113,24 +125,52 @@ checkpoint file or appending `completed_phases`.
   "report_refs": [
     {"phase": "preflight", "path": "/artifacts/preflight-report.json", "kind": "json-report"}
   ],
-  "locked_by": "ansible-run-2026-01-01T00:00:00",
+  "created_at": "2026-01-01T00:00:00+00:00",
   "updated_at": "2026-01-01T00:00:00+00:00"
 }
 ```
 
 Fields:
 
-- `schema_version` — always `"1.0"`
+- `schema_version` — `"2.0"` for current collection checkpoints
+- `phase` — last phase processed by the action plugin
 - `completed_phases` — ordered list of phase names that have passed; used to skip phases on resume
-- `phase_status` — last recorded phase outcome (`"pass"` or `"fail"`)
+- `phase_status` — last recorded phase outcome (`"pass"`, `"fail"`, or `"reset"`)
+- `operation_identity` — hub and operation identity used to prevent reusing a checkpoint for a different switchover
 - `operational_data` — runtime state carried across resumes (for example `argocd_run_id` and backup verification baselines)
 - `errors` — list of `{phase, error}` objects recorded on failure
 - `report_refs` — list of `{phase, path, kind}` report artifact references (preflight only at present)
-- `locked_by` — identifier of the active run holding the checkpoint lock; prevents concurrent switchover executions from corrupting state. Null or absent when no run is active
+- `created_at` — ISO-8601 UTC timestamp of checkpoint creation
 - `updated_at` — ISO-8601 UTC timestamp of last write
 
 Enabling checkpoints requires `acm_switchover_execution.checkpoint.enabled: true` and
 a writable `acm_switchover_execution.checkpoint.path`.
+
+### Checkpoint Resume And Reset
+
+Current schema `2.0` checkpoints are bound to the current operation identity:
+primary and secondary contexts, kubeconfig path strings, method, activation method,
+restore-only mode, old-hub action, and collection version. If the stored identity
+does not match the current invocation, the run fails before reusing the checkpoint.
+
+Use `acm_switchover_execution.checkpoint.reset: true` to start from a fresh checkpoint.
+Use `acm_switchover_execution.checkpoint.reset_from` to remove the named phase and
+all downstream phases from `completed_phases`. For example,
+`checkpoint.reset_from: primary_prep` keeps `preflight` complete and reruns
+`primary_prep`, `activation`, `post_activation`, and `finalization`.
+
+The accepted `checkpoint.reset_from` values are:
+
+- `preflight`
+- `primary_prep`
+- `activation`
+- `post_activation`
+- `finalization`
+
+Legacy schema `1.0` checkpoints with any completed phases cannot prove operation
+identity. The collection refuses to resume them unless the operator supplies
+`checkpoint.reset: true` or `checkpoint.reset_from: <phase>` to select a safe
+restart point.
 
 ## Compatibility Rule
 

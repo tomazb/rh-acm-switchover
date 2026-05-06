@@ -106,3 +106,35 @@ def test_active_operator_docs_do_not_recommend_deprecated_argocd_script():
 
     for path in guarded_paths:
         _assert_argocd_script_only_in_deprecated_context(path, _read(path))
+
+
+def test_collection_migration_map_tracks_current_cli_surface():
+    """The collection migration map must not preserve stale Python option names."""
+    content = _read("ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md")
+
+    assert "--generate-kubeconfig" not in content
+    assert "--skip-kubeconfig-generation" in content
+    assert "--manage-auto-import-strategy" in content
+    assert "--log-format" in content
+
+
+def test_collection_variable_reference_documents_checkpoint_and_klusterlet_controls():
+    """Variable docs must cover the current checkpoint and post-activation control surface."""
+    content = _read("ansible_collections/tomazb/acm_switchover/docs/variable-reference.md")
+
+    assert "acm_switchover_execution.checkpoint.reset_from" in content
+    assert "acm_switchover_execution.concurrency.klusterlet_probe_workers" in content
+    assert "acm_switchover_execution.concurrency.klusterlet_remediation_workers" in content
+    assert "acm_switchover_features.klusterlet.strict_remediation" in content
+
+
+def test_collection_artifact_schema_documents_current_checkpoint_contract():
+    """Checkpoint docs must describe schema 2.0 and non-mutating validate/dry-run behavior."""
+    content = _read("ansible_collections/tomazb/acm_switchover/docs/artifact-schema.md")
+
+    assert '"schema_version": "2.0"' in content
+    assert "operation_identity" in content
+    assert "checkpoint.reset_from" in content
+    assert "validate" in content
+    assert "dry_run" in content
+    assert "locked_by" not in content

@@ -8,8 +8,12 @@
 | `--old-hub-action` | `acm_switchover_operation.old_hub_action` |
 | `--activation-method` | `acm_switchover_operation.activation_method` |
 | `--min-managed-clusters` | `acm_switchover_operation.min_managed_clusters` |
+| `--manage-auto-import-strategy` | `acm_switchover_features.manage_auto_import_strategy` |
 | `--validate-only` | `acm_switchover_execution.mode=validate` |
 | `--dry-run` | `acm_switchover_execution.mode=dry_run` |
+| `--verbose` / `-v` | `acm_switchover_execution.verbose` |
+| `--force` | `acm_switchover_execution.force` |
+| `--log-format` | No direct collection variable; Ansible output formatting is controlled by the selected callback/output plugin |
 | `--state-file` | `acm_switchover_execution.checkpoint.path` |
 | `--reset-state` | `acm_switchover_execution.checkpoint.reset` |
 | `--report-dir` | `acm_switchover_execution.report_dir` |
@@ -22,11 +26,12 @@
 | `--skip-gitops-check` | `acm_switchover_features.skip_gitops_check` |
 | `--skip-rbac-validation` | `acm_switchover_features.skip_rbac_validation` |
 | `--skip-observability-checks` | `acm_switchover_features.skip_observability_checks` |
+| `--disable-observability-on-secondary` | Deprecated compatibility flag; use `acm_switchover_features.disable_observability_on_secondary` only when preserving legacy Python invocation shape |
 | `--non-interactive` | `acm_switchover_decommission.confirmed=true` for decommission automation |
 | `--admin-kubeconfig` | `acm_switchover_hubs.primary.kubeconfig` for the admin bootstrap target |
 | `--role {operator,validator,both}` | `acm_switchover_rbac_bootstrap.role` |
 | `--include-decommission` | `acm_switchover_rbac_bootstrap.include_decommission` |
-| `--generate-kubeconfig` | `acm_switchover_rbac_bootstrap.generate_kubeconfigs` |
+| `--skip-kubeconfig-generation` | `acm_switchover_rbac_bootstrap.generate_kubeconfigs=false` |
 | `--token-duration` | `acm_switchover_rbac_bootstrap.token_duration` |
 | `--output-dir` | `acm_switchover_rbac_bootstrap.output_dir` |
 
