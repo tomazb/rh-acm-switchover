@@ -54,10 +54,17 @@
     namespace: open-cluster-management-backup
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: acm_finalization_backup_schedules_info
+  register: _acm_finalization_backup_schedules_refresh_info
   when:
     - acm_enable_backup_schedule_operation.operation.action in ['patch', 'create']
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Publish refreshed BackupSchedule facts after enable or recreation
+  ansible.builtin.set_fact:
+    acm_finalization_backup_schedules_info: "{{ _acm_finalization_backup_schedules_refresh_info }}"
+  when:
+    - _acm_finalization_backup_schedules_refresh_info is defined
+    - not (_acm_finalization_backup_schedules_refresh_info.skipped | default(false))
 
 - name: Record backup verification baseline timestamp
   ansible.builtin.set_fact:

@@ -326,7 +326,8 @@ def test_activation_rediscovers_restore_facts_before_passive_selection():
     includes = [task.get("ansible.builtin.include_tasks", "") for task in block_tasks]
 
     assert "register: _acm_activation_restores_live_info" in discover_text
-    assert "register: acm_activation_mch_info" in discover_text
+    assert "register: _acm_activation_mch_live_info" in discover_text
+    assert "acm_activation_mch_info:" in discover_text
     assert "activation_restores_info" in discover_text
     assert "acm_activation_restores_info:" in discover_text
     assert "acm_activation_mch_info" in discover_text
@@ -398,6 +399,33 @@ def test_resumable_roles_use_phase_local_discovery_facts():
             assert expected_fact in text, f"{path.name} must use {expected_fact}"
         for stale_fact in stale_preflight_facts:
             assert stale_fact not in text, f"{path.name} must not read {stale_fact}"
+
+
+def test_phase_local_facts_are_not_direct_register_targets():
+    """Skipped discovery tasks must not overwrite pre-seeded phase-local facts."""
+    phase_local_facts = [
+        "acm_primary_prep_mch_info",
+        "acm_primary_prep_backup_schedules_info",
+        "acm_activation_mch_info",
+        "acm_finalization_backup_schedules_info",
+        "acm_finalization_mch_info",
+        "acm_finalization_restores_info",
+    ]
+    files = [
+        PRIMARY_PREP_TASKS / "discover_resources.yml",
+        ACTIVATION_TASKS / "discover_resources.yml",
+        FINALIZATION_TASKS / "discover_resources.yml",
+        FINALIZATION_TASKS / "enable_backups.yml",
+        FINALIZATION_TASKS / "repair_backup_schedule_collision.yml",
+    ]
+
+    for path in files:
+        text = path.read_text()
+        for fact in phase_local_facts:
+            assert f"register: {fact}" not in text, (
+                f"{path.name} must register to a temporary variable and publish "
+                f"{fact} only with guarded set_fact"
+            )
 
 
 def test_activation_requires_passive_restore_ready_before_mutation_tasks():

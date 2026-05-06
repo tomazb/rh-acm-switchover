@@ -122,10 +122,17 @@
     namespace: "{{ _backup_schedule_collision_repair_body.metadata.namespace | default('open-cluster-management-backup') }}"
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: acm_finalization_backup_schedules_info
+  register: _acm_finalization_backup_schedules_collision_repair_info
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - acm_switchover_repair_backup_schedule_collision_result is not defined
+
+- name: Publish refreshed BackupSchedule facts after collision repair
+  ansible.builtin.set_fact:
+    acm_finalization_backup_schedules_info: "{{ _acm_finalization_backup_schedules_collision_repair_info }}"
+  when:
+    - _acm_finalization_backup_schedules_collision_repair_info is defined
+    - not (_acm_finalization_backup_schedules_collision_repair_info.skipped | default(false))
 
 - name: Publish BackupSchedule collision repair result
   ansible.builtin.set_fact:

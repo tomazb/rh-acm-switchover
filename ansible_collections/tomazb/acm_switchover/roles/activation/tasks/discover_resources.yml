@@ -28,5 +28,12 @@
     namespace: open-cluster-management
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: acm_activation_mch_info
+  register: _acm_activation_mch_live_info
   when: acm_activation_mch_info is not defined
+
+- name: Publish live activation MultiClusterHub resources
+  ansible.builtin.set_fact:
+    acm_activation_mch_info: "{{ _acm_activation_mch_live_info }}"
+  when:
+    - _acm_activation_mch_live_info is defined
+    - not (_acm_activation_mch_live_info.skipped | default(false))
