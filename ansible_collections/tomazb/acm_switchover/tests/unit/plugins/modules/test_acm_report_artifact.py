@@ -4,6 +4,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts import (
+    ArtifactWriteError,
+    write_json_artifact,
+)
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
+    ValidationError,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_report_artifact import (
     main,
 )
@@ -18,6 +27,7 @@ def test_run_module_writes_report_json(tmp_path, monkeypatch):
             self.params = {
                 "path": str(destination),
                 "report": {"status": "pass", "phase": "preflight"},
+                "mode": "0644",
             }
             self.check_mode = False
 
@@ -51,6 +61,7 @@ def test_run_module_check_mode_validates_without_writing(tmp_path, monkeypatch):
             self.params = {
                 "path": str(destination),
                 "report": {"status": "pass"},
+                "mode": "0644",
             }
             self.check_mode = True
 
@@ -79,6 +90,7 @@ def test_run_module_rejects_unsafe_report_path(monkeypatch):
             self.params = {
                 "path": "./artifacts/../outside/report.json",
                 "report": {"status": "fail"},
+                "mode": "0644",
             }
             self.check_mode = False
 
@@ -96,3 +108,55 @@ def test_run_module_rejects_unsafe_report_path(monkeypatch):
     main()
 
     assert "Path traversal attempt" in captured["fail"]["msg"]
+
+
+def test_write_json_artifact_accepts_valid_relative_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    output_path = write_json_artifact(
+        report={"phase": "decommission"},
+        destination="artifacts/decommission-summary.json",
+        mode="0644",
+    )
+
+    destination = tmp_path / "artifacts" / "decommission-summary.json"
+    assert output_path == "artifacts/decommission-summary.json"
+    assert json.loads(destination.read_text()) == {"phase": "decommission"}
+
+
+def test_write_json_artifact_accepts_valid_absolute_path_with_mode(tmp_path):
+    destination = tmp_path / "artifacts" / "decommission-summary.json"
+
+    output_path = write_json_artifact(
+        report={"phase": "decommission"},
+        destination=str(destination),
+        mode="0600",
+    )
+
+    assert output_path == str(destination)
+    assert json.loads(destination.read_text()) == {"phase": "decommission"}
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_write_json_artifact_rejects_traversal_path(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValidationError, match="Path traversal attempt"):
+        write_json_artifact(
+            report={"phase": "decommission"},
+            destination="artifacts/../outside/decommission-summary.json",
+            mode="0644",
+        )
+
+
+def test_write_json_artifact_rejects_invalid_mode_before_writing(tmp_path):
+    destination = tmp_path / "artifacts" / "decommission-summary.json"
+
+    with pytest.raises(ArtifactWriteError, match="Invalid report artifact mode"):
+        write_json_artifact(
+            report={"phase": "decommission"},
+            destination=str(destination),
+            mode="not-octal",
+        )
+
+    assert not destination.exists()

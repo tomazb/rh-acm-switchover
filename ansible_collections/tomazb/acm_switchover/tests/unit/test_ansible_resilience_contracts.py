@@ -170,6 +170,33 @@ def test_decommission_defaults_missing_execution_mode_to_dry_run_for_destructive
         ), f"{path.name} must treat missing execution.mode as dry_run"
 
 
+def test_decommission_summary_uses_report_artifact_safe_path_policy():
+    """Optional decommission summaries must use the shared report artifact writer."""
+    main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
+    summary_tasks = [
+        task
+        for task in main_tasks
+        if task.get("name") == "Write decommission summary when requested"
+    ]
+
+    assert summary_tasks, "decommission/main.yml must write the optional summary"
+    summary_task = summary_tasks[0]
+    artifact_args = summary_task.get("tomazb.acm_switchover.acm_report_artifact")
+    assert artifact_args, "decommission summary writes must use acm_report_artifact"
+    assert artifact_args["path"] == "{{ _acm_summary_path_abs }}"
+    assert artifact_args["report"] == "{{ acm_switchover_decommission_result }}"
+    assert artifact_args["mode"] == "0644"
+    assert (
+        summary_task["when"]
+        == "_acm_decommission_summary_path | default('') | length > 0"
+    )
+    assert not any(
+        task.get("ansible.builtin.copy", {}).get("dest")
+        == "{{ _acm_summary_path_abs }}"
+        for task in main_tasks
+    ), "decommission summary writes must not bypass artifact path validation"
+
+
 def test_decommission_waits_for_non_local_managed_clusters_before_mch_delete():
     """ManagedCluster finalizers must drain before MultiClusterHub deletion starts."""
     tasks = _load_yaml(DECOMMISSION_TASKS / "delete_managed_clusters.yml")
@@ -354,35 +381,37 @@ def test_activation_uses_live_restore_facts_instead_of_preflight_restore_facts()
 def test_resumable_roles_use_phase_local_discovery_facts():
     """Checkpoint resumes must not depend on facts owned by skipped preflight."""
     expected_phase_facts = {
-        PRIMARY_PREP_TASKS / "discover_resources.yml": [
+        PRIMARY_PREP_TASKS
+        / "discover_resources.yml": [
             "acm_primary_prep_mch_info",
             "acm_primary_prep_backup_schedules_info",
         ],
-        PRIMARY_PREP_TASKS / "pause_backups.yml": [
+        PRIMARY_PREP_TASKS
+        / "pause_backups.yml": [
             "acm_primary_prep_mch_info",
             "acm_primary_prep_backup_schedules_info",
         ],
         ACTIVATION_TASKS / "discover_resources.yml": ["acm_activation_mch_info"],
         ACTIVATION_TASKS / "manage_auto_import.yml": ["acm_activation_mch_info"],
         ACTIVATION_TASKS / "apply_immediate_import.yml": ["acm_activation_mch_info"],
-        FINALIZATION_TASKS / "discover_resources.yml": [
+        FINALIZATION_TASKS
+        / "discover_resources.yml": [
             "acm_finalization_backup_schedules_info",
             "acm_finalization_mch_info",
             "acm_finalization_restores_info",
         ],
-        FINALIZATION_TASKS / "cleanup_restores.yml": [
-            "acm_finalization_restores_info"
-        ],
-        FINALIZATION_TASKS / "enable_backups.yml": [
+        FINALIZATION_TASKS / "cleanup_restores.yml": ["acm_finalization_restores_info"],
+        FINALIZATION_TASKS
+        / "enable_backups.yml": [
             "acm_finalization_backup_schedules_info",
             "acm_finalization_mch_info",
         ],
-        FINALIZATION_TASKS / "repair_backup_schedule_collision.yml": [
+        FINALIZATION_TASKS
+        / "repair_backup_schedule_collision.yml": [
             "acm_finalization_backup_schedules_info"
         ],
-        FINALIZATION_TASKS / "verify_backups.yml": [
-            "acm_finalization_backup_schedules_info"
-        ],
+        FINALIZATION_TASKS
+        / "verify_backups.yml": ["acm_finalization_backup_schedules_info"],
     }
     stale_preflight_facts = {
         "acm_primary_mch_info",

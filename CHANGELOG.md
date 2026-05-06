@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collection decommission summaries now use the shared report artifact writer so `summary_path` is validated by the safe-path policy before writing.
 - Collection checkpoint resumes now rediscover primary prep, activation, and finalization resources with phase-owned facts so skipped preflight data cannot go stale across resumed runs.
 - Collection activation now re-reads live Restore resources at activation time, ignores stale preflight Restore facts, fails before mutation when the selected passive Restore is not ready, and includes Restore `resourceVersion` in activation patches when available.
 - Documented collection Argo CD resume-on-failure checkpoint retry safety: retries reset from `primary_prep`, prune downstream completed phases, and keep resume scoped to the current run ID without adding a force-resume variable.

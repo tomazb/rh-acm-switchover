@@ -21,9 +21,14 @@ class ArtifactWriteError(Exception):
 
 
 def write_json_artifact(
-    report: dict, destination: str, check_mode: bool = False
+    report: dict, destination: str, check_mode: bool = False, mode: str = "0644"
 ) -> str:
     """Validate and optionally write a JSON artifact on the controller."""
+    try:
+        file_mode = int(mode, 8)
+    except ValueError as exc:
+        raise ArtifactWriteError(f"Invalid report artifact mode '{mode}'") from exc
+
     validate_safe_path(destination)
 
     if check_mode:
@@ -33,6 +38,7 @@ def write_json_artifact(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        path.chmod(file_mode)
     except OSError as exc:
         raise ArtifactWriteError(
             f"Cannot write report artifact to '{path}': {exc}"
