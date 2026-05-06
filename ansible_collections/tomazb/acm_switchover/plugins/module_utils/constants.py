@@ -9,6 +9,11 @@ OBSERVABILITY_NAMESPACE = "open-cluster-management-observability"
 MCE_NAMESPACE = "multicluster-engine"
 MANAGED_CLUSTER_AGENT_NAMESPACE = "open-cluster-management-agent"
 LOCAL_CLUSTER_NAME = "local-cluster"
+SECRET_VISIBILITY_TIMEOUT = 10
+SECRET_VISIBILITY_INTERVAL = 1
+KLUSTERLET_DEFAULT_WORKERS = 10
+HUB_KUBECONFIG_SECRET_NAME = "hub-kubeconfig-secret"  # nosec B105
+BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME = "bootstrap-hub-kubeconfig"  # nosec B105
 
 VALIDATION_METHOD_CHOICES = ("passive", "full")
 VALIDATION_OLD_HUB_ACTION_CHOICES = ("secondary", "decommission", "none")

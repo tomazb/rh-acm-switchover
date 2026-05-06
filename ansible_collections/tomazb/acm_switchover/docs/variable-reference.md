@@ -33,7 +33,7 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 |----------|-------|------------|
 | `acm_switchover_primary_prep_result` | primary_prep | `status`, `changed`, `pause_backups`, `auto_import`, `observability` |
 | `acm_switchover_activation_result` | activation | `status`, `changed`, `method`, `restore`, `patch` |
-| `acm_switchover_post_activation_result` | post_activation | `status`, `changed`, `summary.passed`, `summary.total`, `summary.pending` |
+| `acm_switchover_post_activation_result` | post_activation | `status`, `changed`, `summary.passed`, `summary.total`, `summary.pending`, `klusterlet_probe`, `klusterlet_remediation` |
 | `acm_switchover_finalization_result` | finalization | `status`, `changed`, `old_hub_action` |
 
 ### post_activation summary fields
@@ -43,6 +43,19 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | `summary.passed` | bool | True when all clusters are joined and available |
 | `summary.total` | int | Total number of ManagedClusters evaluated |
 | `summary.pending` | list[str] | Names of clusters not yet joined or available |
+| `klusterlet_probe.results` | list[dict] | Per-cluster klusterlet hub comparison results |
+| `klusterlet_probe.wrong_hub_clusters` | list[str] | Clusters whose klusterlet kubeconfig still points at a different hub |
+| `klusterlet_remediation.results` | list[dict] | Per-cluster remediation steps and status |
+| `klusterlet_remediation.failed_clusters` | list[str] | Clusters where remediation failed; non-empty fails the role only when strict remediation is enabled |
+
+### post_activation input variables
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `acm_switchover_managed_clusters` | dict | `{}` | Optional managed-cluster kubeconfigs used for klusterlet probe and remediation |
+| `acm_switchover_execution.concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
+| `acm_switchover_execution.concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
+| `acm_switchover_features.klusterlet.strict_remediation` | bool | `false` | Fail post-activation when any klusterlet remediation candidate fails |
 
 ## Phase 6 Non-Core Input Variables
 

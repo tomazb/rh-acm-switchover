@@ -1074,7 +1074,7 @@ Ansible currently loops through cluster probes and remediation sequentially usin
 
 **Runtime risk [Inference]:** Large managed-cluster fleets can take significantly longer under Ansible than under Python.
 
-**Current status as of 2026-05-05:** Pending. `verify_klusterlet_connections.yml` and `fix_klusterlet.yml` still use sequential `include_tasks` loops, and no `acm_klusterlet_probe.py` or `acm_klusterlet_remediate.py` module exists.
+**Current status as of 2026-05-06:** Complete. `verify_klusterlet_connections.yml` and `fix_klusterlet.yml` now call bounded-concurrency custom modules, and `acm_klusterlet_probe.py` / `acm_klusterlet_remediate.py` return per-cluster structured results.
 
 ## 7.2 Files to modify
 
@@ -1158,18 +1158,18 @@ strict_remediation=true:
 
 PR-7 is complete when:
 
-- [ ] Klusterlet probe/remediation supports bounded concurrency.
-- [ ] Default concurrency matches Python’s effective behavior: 10 workers.
-- [ ] Sequential behavior can be forced with workers=1.
-- [ ] Module returns per-cluster structured results.
-- [ ] Existing best-effort behavior remains available.
-- [ ] Tests cover:
-  - [ ] no pending clusters;
-  - [ ] pending cluster without kubeconfig;
-  - [ ] import secret missing;
-  - [ ] successful remediation;
-  - [ ] partial remediation failure;
-  - [ ] strict and non-strict modes.
+- [x] Klusterlet probe/remediation supports bounded concurrency.
+- [x] Default concurrency matches Python’s effective behavior: 10 workers.
+- [x] Sequential behavior can be forced with workers=1.
+- [x] Module returns per-cluster structured results.
+- [x] Existing best-effort behavior remains available.
+- [x] Tests cover:
+  - [x] no pending clusters;
+  - [x] pending cluster without kubeconfig;
+  - [x] import secret missing;
+  - [x] successful remediation;
+  - [x] partial remediation failure;
+  - [x] strict and non-strict modes.
 
 ---
 
@@ -1717,7 +1717,7 @@ tests/fixtures/validation_parity_cases.yml
 
 **Type:** performance  
 **Priority:** P3  
-**Status:** Pending. Klusterlet probe/remediation still uses sequential task loops.
+**Status:** Complete. Klusterlet probe/remediation now uses bounded-concurrency modules.
 **Files:**
 
 ```text
@@ -1728,14 +1728,14 @@ plugins/modules/acm_klusterlet_remediate.py
 
 **Tasks:**
 
-- [ ] Add worker variables.
-- [ ] Add custom modules or async fan-out.
-- [ ] Return structured results.
-- [ ] Preserve best-effort mode.
+- [x] Add worker variables.
+- [x] Add custom modules or async fan-out.
+- [x] Return structured results.
+- [x] Preserve best-effort mode.
 
 **Acceptance criteria:**
 
-- [ ] 50-cluster remediation no longer runs strictly one cluster at a time unless workers=1.
+- [x] 50-cluster remediation no longer runs strictly one cluster at a time unless workers=1.
 
 ---
 

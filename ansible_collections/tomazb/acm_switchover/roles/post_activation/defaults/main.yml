@@ -12,6 +12,9 @@ acm_switchover_execution:
   verbose: false
   force: false
   report_dir: ./artifacts
+  concurrency:
+    klusterlet_probe_workers: 10
+    klusterlet_remediation_workers: 10
   checkpoint:
     enabled: false
     backend: file
@@ -27,6 +30,8 @@ acm_switchover_features:
   disable_observability_on_secondary: false
   argocd:
     manage: false
+  klusterlet:
+    strict_remediation: false
 
 # Optional: kubeconfigs for managed clusters to enable automatic klusterlet
 # remediation. Without this, pending clusters get a warning only.

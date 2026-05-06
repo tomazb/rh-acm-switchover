@@ -21,12 +21,17 @@ acm_switchover_features:
   disable_observability_on_secondary: false
   argocd:
     manage: false
+  klusterlet:
+    strict_remediation: false
 
 acm_switchover_execution:
   mode: execute
   verbose: false
   force: false
   report_dir: ./artifacts
+  concurrency:
+    klusterlet_probe_workers: 10
+    klusterlet_remediation_workers: 10
   checkpoint:
     enabled: false
     backend: file
