@@ -408,7 +408,7 @@ def test_resumable_roles_use_phase_local_discovery_facts():
         ],
         FINALIZATION_TASKS
         / "repair_backup_schedule_collision.yml": [
-            "acm_finalization_backup_schedules_info"
+            "acm_finalization_backup_schedules_info",
         ],
         FINALIZATION_TASKS
         / "verify_backups.yml": ["acm_finalization_backup_schedules_info"],
