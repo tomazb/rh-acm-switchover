@@ -76,8 +76,15 @@ def test_verify_klusterlet_records_module_remediation_attempts():
     """Re-verification must be gated on module-reported remediation attempts."""
     content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
 
-    assert "_klusterlet_remediation_result.changed" in content
+    assert "_klusterlet_remediation_result is defined" in content
     assert "_klusterlet_probe_result.wrong_hub_clusters" in content
+
+
+def test_fix_klusterlet_filters_candidates_to_clusters_with_kubeconfigs():
+    """The skip branch must apply when candidates lack managed-cluster kubeconfigs."""
+    content = (POST_ACTIVATION_TASKS / "fix_klusterlet.yml").read_text()
+
+    assert "acm_switchover_managed_clusters[item].kubeconfig" in content
 
 
 def test_post_activation_defaults_include_klusterlet_concurrency_and_strict_mode():
@@ -106,12 +113,12 @@ def test_defaults_include_managed_clusters():
     assert defaults["acm_switchover_managed_clusters"] == {}, "Default must be empty dict"
 
 
-def test_fix_klusterlet_single_has_required_steps():
+def test_klusterlet_module_has_required_operations():
     """The remediation module must carry the key remediation operations."""
     module_path = pathlib.Path(__file__).resolve().parents[2] / "plugins" / "module_utils" / "klusterlet.py"
     content = module_path.read_text()
 
     assert "import.yaml" in content, "Must fetch import secret from hub"
-    assert "bootstrap-hub-kubeconfig" in content, "Must handle bootstrap-hub-kubeconfig secret"
+    assert "BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME" in content, "Must handle bootstrap hub kubeconfig secret"
     assert "patch_namespaced_deployment" in content, "Must restart klusterlet deployment"
     assert "MANAGED_CLUSTER_AGENT_NAMESPACE" in content, "Must reference agent namespace"

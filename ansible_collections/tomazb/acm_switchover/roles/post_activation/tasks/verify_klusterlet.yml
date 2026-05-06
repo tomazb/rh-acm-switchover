@@ -26,7 +26,7 @@
   ansible.builtin.set_fact:
     _klusterlet_remediation_attempted: true
   when:
-    - _klusterlet_remediation_result.changed | default(false)
+    - _klusterlet_remediation_result is defined
     - (acm_switchover_managed_clusters | default({}) | length) > 0
 
 - name: Note klusterlet remediation candidates

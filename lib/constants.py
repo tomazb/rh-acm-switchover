@@ -76,6 +76,8 @@ MANAGED_CLUSTER_AGENT_NAMESPACE = "open-cluster-management-agent"
 
 # Secrets (these are Kubernetes secret names, not passwords)
 THANOS_OBJECT_STORAGE_SECRET = "thanos-object-storage"  # nosec B105
+HUB_KUBECONFIG_SECRET_NAME = "hub-kubeconfig-secret"  # nosec B105
+BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME = "bootstrap-hub-kubeconfig"  # nosec B105
 
 # ACM Resource Names
 RESTORE_PASSIVE_SYNC_NAME = "restore-acm-passive-sync"

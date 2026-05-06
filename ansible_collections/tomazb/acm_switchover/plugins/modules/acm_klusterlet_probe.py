@@ -22,7 +22,6 @@ options:
     description: Cluster names to probe.
     type: list
     elements: str
-    default: []
   workers:
     description: Maximum concurrent workers. Use C(1) for sequential behavior.
     type: int
@@ -52,7 +51,7 @@ def main() -> None:
         argument_spec={
             "secondary_hub": {"type": "dict", "required": True},
             "managed_clusters": {"type": "dict", "default": {}},
-            "candidate_clusters": {"type": "list", "elements": "str", "default": []},
+            "candidate_clusters": {"type": "list", "elements": "str", "required": False},
             "workers": {"type": "int", "default": KLUSTERLET_DEFAULT_WORKERS},
         },
         supports_check_mode=True,
@@ -61,10 +60,10 @@ def main() -> None:
         result = probe_klusterlet_connections(
             secondary_hub=module.params["secondary_hub"],
             managed_clusters=module.params["managed_clusters"],
-            candidate_clusters=module.params["candidate_clusters"],
+            candidate_clusters=module.params.get("candidate_clusters"),
             workers=module.params["workers"],
         )
-    except ValueError as exc:
+    except Exception as exc:
         module.fail_json(msg=str(exc))
         return
     module.exit_json(**result)

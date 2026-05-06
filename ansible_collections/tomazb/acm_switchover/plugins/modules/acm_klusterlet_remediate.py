@@ -72,7 +72,7 @@ def main() -> None:
             strict=module.params["strict"],
             check_mode=module.check_mode,
         )
-    except ValueError as exc:
+    except Exception as exc:
         module.fail_json(msg=str(exc))
         return
     if result.get("failed"):

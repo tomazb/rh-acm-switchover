@@ -4,7 +4,7 @@
 
 - name: Identify clusters eligible for remediation
   ansible.builtin.set_fact:
-    _klusterlet_fix_candidates: >-
+    _klusterlet_remediation_requested: >-
       {{
         (
           _klusterlet_remediation_candidates
@@ -14,11 +14,23 @@
         | list
       }}
 
+- name: Filter clusters eligible for remediation to those with kubeconfigs
+  ansible.builtin.set_fact:
+    _klusterlet_fix_candidates: []
+
+- name: Add clusters with managed-cluster kubeconfigs to remediation candidates
+  ansible.builtin.set_fact:
+    _klusterlet_fix_candidates: "{{ _klusterlet_fix_candidates + [item] }}"
+  loop: "{{ _klusterlet_remediation_requested }}"
+  when:
+    - item in (acm_switchover_managed_clusters | default({}))
+    - (acm_switchover_managed_clusters[item].kubeconfig | default('') | length) > 0
+
 - name: Skip klusterlet fix when no remediation candidates have kubeconfigs
   ansible.builtin.debug:
     msg: >-
       No klusterlet remediation possible — pending clusters
-      {{ acm_cluster_verify_result.pending | default([]) | join(', ') }}
+      {{ _klusterlet_remediation_requested | default([]) | join(', ') }}
       do not have entries in acm_switchover_managed_clusters
   when: _klusterlet_fix_candidates | length == 0
 

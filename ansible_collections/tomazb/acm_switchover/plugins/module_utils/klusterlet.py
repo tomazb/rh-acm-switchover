@@ -12,6 +12,8 @@ from typing import Callable
 import yaml
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+    HUB_KUBECONFIG_SECRET_NAME,
     KLUSTERLET_DEFAULT_WORKERS,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
 )
@@ -35,9 +37,9 @@ def normalize_workers(workers: int | None) -> int:
 def build_core_v1_client(kubeconfig: str, context: str | None = None):
     from kubernetes import client, config
 
-    kwargs = {"persist_config": False}
-    if kubeconfig:
-        kwargs["config_file"] = kubeconfig
+    if not kubeconfig:
+        raise ValueError("kubeconfig is required")
+    kwargs = {"persist_config": False, "config_file": kubeconfig}
     if context:
         kwargs["context"] = context
     api_client = config.new_client_from_config(**kwargs)
@@ -47,9 +49,9 @@ def build_core_v1_client(kubeconfig: str, context: str | None = None):
 def build_apps_v1_client(kubeconfig: str, context: str | None = None):
     from kubernetes import client, config
 
-    kwargs = {"persist_config": False}
-    if kubeconfig:
-        kwargs["config_file"] = kubeconfig
+    if not kubeconfig:
+        raise ValueError("kubeconfig is required")
+    kwargs = {"persist_config": False, "config_file": kubeconfig}
     if context:
         kwargs["context"] = context
     api_client = config.new_client_from_config(**kwargs)
@@ -107,7 +109,7 @@ def import_manifest_docs(import_yaml_b64: str) -> list[dict]:
 
 def bootstrap_secret_doc(import_yaml_b64: str) -> dict | None:
     for doc in import_manifest_docs(import_yaml_b64):
-        if doc.get("kind") == "Secret" and doc.get("metadata", {}).get("name") == "bootstrap-hub-kubeconfig":
+        if doc.get("kind") == "Secret" and doc.get("metadata", {}).get("name") == BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME:
             return doc
     return None
 
@@ -135,7 +137,7 @@ def ordered_bounded_map(items: list[str], workers: int, fn: Callable[[str], dict
 
 def probe_one_cluster(
     cluster_name: str,
-    secondary_hub: dict,
+    secondary_client: object,
     managed_clusters: dict,
     core_client_factory: CoreClientFactory,
 ) -> dict:
@@ -150,19 +152,18 @@ def probe_one_cluster(
         current_secret = read_secret(
             managed_client,
             MANAGED_CLUSTER_AGENT_NAMESPACE,
-            "hub-kubeconfig-secret",
+            HUB_KUBECONFIG_SECRET_NAME,
         )
         if current_secret is None:
             current_secret = read_secret(
                 managed_client,
                 MANAGED_CLUSTER_AGENT_NAMESPACE,
-                "bootstrap-hub-kubeconfig",
+                BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
             )
         current_kubeconfig = secret_data(current_secret).get("kubeconfig", "")
         if not current_kubeconfig:
             return {"cluster": cluster_name, "status": "skipped", "reason": "current_hub_secret_missing"}
 
-        secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
         import_secret = read_secret(secondary_client, cluster_name, f"{cluster_name}-import")
         import_yaml = secret_data(import_secret).get("import.yaml", "")
         expected_kubeconfig = bootstrap_kubeconfig_from_import(import_yaml)
@@ -201,10 +202,13 @@ def probe_klusterlet_connections(
 ) -> dict:
     worker_count = normalize_workers(workers)
     candidates = list(candidate_clusters if candidate_clusters is not None else managed_clusters.keys())
+    secondary_client = None
+    if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
+        secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
     results = ordered_bounded_map(
         candidates,
         worker_count,
-        lambda cluster: probe_one_cluster(cluster, secondary_hub, managed_clusters, core_client_factory),
+        lambda cluster: probe_one_cluster(cluster, secondary_client, managed_clusters, core_client_factory),
     )
     return {
         "changed": False,
@@ -229,9 +233,13 @@ def _result(cluster_name: str, status: str, steps: dict, reason: str = "", chang
     return result
 
 
+def _mark_pending_not_run(steps: dict) -> dict:
+    return {key: ("not_run" if value == "pending" else value) for key, value in steps.items()}
+
+
 def remediate_one_cluster(
     cluster_name: str,
-    secondary_hub: dict,
+    secondary_client: object,
     managed_clusters: dict,
     core_client_factory: CoreClientFactory,
     apps_client_factory: AppsClientFactory,
@@ -250,26 +258,31 @@ def remediate_one_cluster(
         return _result(cluster_name, "skipped", steps, reason="no_managed_cluster_kubeconfig")
 
     try:
-        secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
         import_secret = read_secret(secondary_client, cluster_name, f"{cluster_name}-import")
         import_yaml = secret_data(import_secret).get("import.yaml", "")
         if not import_yaml:
             steps["import_secret_read"] = "missing"
-            return _result(cluster_name, "failed", steps, reason="import_secret_missing")
+            return _result(cluster_name, "failed", _mark_pending_not_run(steps), reason="import_secret_missing")
         steps["import_secret_read"] = "ok"
 
         bootstrap_doc = bootstrap_secret_doc(import_yaml)
         if not bootstrap_doc:
             steps["bootstrap_secret_applied"] = "missing"
-            return _result(cluster_name, "failed", steps, reason="bootstrap_secret_missing_from_import")
+            return _result(
+                cluster_name,
+                "failed",
+                _mark_pending_not_run(steps),
+                reason="bootstrap_secret_missing_from_import",
+            )
+        bootstrap_namespace = bootstrap_doc.get("metadata", {}).get("namespace") or MANAGED_CLUSTER_AGENT_NAMESPACE
 
         managed_core = core_client_factory(kubeconfig, context)
         apps_client = apps_client_factory(kubeconfig, context)
         changed = False
         try:
             managed_core.delete_namespaced_secret(
-                name="bootstrap-hub-kubeconfig",
-                namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                name=BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+                namespace=bootstrap_namespace,
             )
             steps["bootstrap_secret_deleted"] = "ok"
             changed = True
@@ -278,11 +291,16 @@ def remediate_one_cluster(
                 steps["bootstrap_secret_deleted"] = "absent"
             else:
                 steps["bootstrap_secret_deleted"] = "failed"
-                return _result(cluster_name, "failed", steps, reason=error_summary(exc), changed=changed)
+                return _result(
+                    cluster_name,
+                    "failed",
+                    _mark_pending_not_run(steps),
+                    reason=error_summary(exc),
+                    changed=changed,
+                )
 
         try:
-            namespace = bootstrap_doc.get("metadata", {}).get("namespace") or MANAGED_CLUSTER_AGENT_NAMESPACE
-            managed_core.create_namespaced_secret(namespace=namespace, body=bootstrap_doc)
+            managed_core.create_namespaced_secret(namespace=bootstrap_namespace, body=bootstrap_doc)
             steps["bootstrap_secret_applied"] = "ok"
             changed = True
         except Exception as exc:
@@ -290,7 +308,13 @@ def remediate_one_cluster(
                 steps["bootstrap_secret_applied"] = "exists"
             else:
                 steps["bootstrap_secret_applied"] = "failed"
-                return _result(cluster_name, "failed", steps, reason=error_summary(exc), changed=changed)
+                return _result(
+                    cluster_name,
+                    "failed",
+                    _mark_pending_not_run(steps),
+                    reason=error_summary(exc),
+                    changed=changed,
+                )
 
         restarted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         patch = {
@@ -314,11 +338,13 @@ def remediate_one_cluster(
             changed = True
         except Exception as exc:
             steps["klusterlet_restarted"] = "failed"
-            return _result(cluster_name, "failed", steps, reason=error_summary(exc), changed=changed)
+            return _result(
+                cluster_name, "failed", _mark_pending_not_run(steps), reason=error_summary(exc), changed=changed
+            )
 
         return _result(cluster_name, "remediated", steps, changed=changed)
     except Exception as exc:
-        return _result(cluster_name, "failed", steps, reason=error_summary(exc))
+        return _result(cluster_name, "failed", _mark_pending_not_run(steps), reason=error_summary(exc))
 
 
 def remediate_klusterlets(
@@ -352,22 +378,26 @@ def remediate_klusterlets(
                     "klusterlet_restarted": "skipped",
                 }
                 results.append(_result(cluster_name, "skipped", steps, reason="no_managed_cluster_kubeconfig"))
+        planned_clusters = [item["cluster"] for item in results if item["status"] == "planned"]
         return {
-            "changed": False,
+            "changed": bool(planned_clusters),
             "failed": False,
             "workers": worker_count,
             "results": results,
             "failed_clusters": [],
             "skipped_clusters": [item["cluster"] for item in results if item["status"] == "skipped"],
             "remediated_clusters": [],
-            "planned_clusters": [item["cluster"] for item in results if item["status"] == "planned"],
+            "planned_clusters": planned_clusters,
         }
+    secondary_client = None
+    if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
+        secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
     results = ordered_bounded_map(
         candidates,
         worker_count,
         lambda cluster: remediate_one_cluster(
             cluster,
-            secondary_hub,
+            secondary_client,
             managed_clusters,
             core_client_factory,
             apps_client_factory,
