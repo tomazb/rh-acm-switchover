@@ -4,9 +4,7 @@ import pathlib
 
 import yaml
 
-ROLE_DIR = (
-    pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "tasks"
-)
+ROLE_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles" / "argocd_manage" / "tasks"
 
 
 def _load_yaml(name: str) -> list[dict]:
@@ -24,21 +22,11 @@ def test_pause_uses_parameterized_hub():
                 if k8s:
                     kc = str(k8s.get("kubeconfig", ""))
                     ctx = str(k8s.get("context", ""))
-                    assert (
-                        ".primary." not in kc
-                    ), f"pause.yml hardcodes .primary in kubeconfig: {kc}"
-                    assert (
-                        ".primary." not in ctx
-                    ), f"pause.yml hardcodes .primary in context: {ctx}"
-                    assert (
-                        ".secondary." not in kc
-                    ), f"pause.yml hardcodes .secondary in kubeconfig: {kc}"
-                    assert (
-                        ".secondary." not in ctx
-                    ), f"pause.yml hardcodes .secondary in context: {ctx}"
-                    assert (
-                        "_argocd_discover_hub" in kc
-                    ), f"pause.yml kubeconfig should use _argocd_discover_hub: {kc}"
+                    assert ".primary." not in kc, f"pause.yml hardcodes .primary in kubeconfig: {kc}"
+                    assert ".primary." not in ctx, f"pause.yml hardcodes .primary in context: {ctx}"
+                    assert ".secondary." not in kc, f"pause.yml hardcodes .secondary in kubeconfig: {kc}"
+                    assert ".secondary." not in ctx, f"pause.yml hardcodes .secondary in context: {ctx}"
+                    assert "_argocd_discover_hub" in kc, f"pause.yml kubeconfig should use _argocd_discover_hub: {kc}"
 
 
 def test_resume_uses_parameterized_hub():
@@ -50,21 +38,11 @@ def test_resume_uses_parameterized_hub():
             if k8s:
                 kc = str(k8s.get("kubeconfig", ""))
                 ctx = str(k8s.get("context", ""))
-                assert (
-                    ".primary." not in kc
-                ), f"resume.yml hardcodes .primary in kubeconfig: {kc}"
-                assert (
-                    ".primary." not in ctx
-                ), f"resume.yml hardcodes .primary in context: {ctx}"
-                assert (
-                    ".secondary." not in kc
-                ), f"resume.yml hardcodes .secondary in kubeconfig: {kc}"
-                assert (
-                    ".secondary." not in ctx
-                ), f"resume.yml hardcodes .secondary in context: {ctx}"
-                assert (
-                    "_argocd_discover_hub" in kc
-                ), f"resume.yml kubeconfig should use _argocd_discover_hub: {kc}"
+                assert ".primary." not in kc, f"resume.yml hardcodes .primary in kubeconfig: {kc}"
+                assert ".primary." not in ctx, f"resume.yml hardcodes .primary in context: {ctx}"
+                assert ".secondary." not in kc, f"resume.yml hardcodes .secondary in kubeconfig: {kc}"
+                assert ".secondary." not in ctx, f"resume.yml hardcodes .secondary in context: {ctx}"
+                assert "_argocd_discover_hub" in kc, f"resume.yml kubeconfig should use _argocd_discover_hub: {kc}"
 
 
 def test_run_id_default_is_not_empty_string():
@@ -78,36 +56,47 @@ def test_run_id_default_is_not_empty_string():
     ), "run_id defaults to empty string, which bypasses Jinja default() filter"
 
 
-def test_pause_has_clobber_guard():
-    """pause.yml k8s patch task should skip apps already paused (have our annotation)."""
+def _find_pause_application_patch_task() -> dict:
     tasks = _load_yaml("pause.yml")
     for task in tasks:
         for block_task in task.get("block", []):
             k8s = block_task.get("kubernetes.core.k8s", {})
             if k8s:
-                when = block_task.get("when", [])
-                if isinstance(when, str):
-                    when = [when]
-                when_text = " ".join(str(w) for w in when)
-                assert "paused-by" in when_text, (
-                    "pause.yml k8s patch task should check for existing paused-by "
-                    f"annotation in when condition to prevent clobber. Current when: {when}"
-                )
+                return block_task
+
+    raise AssertionError("pause.yml should contain an Application patch task")
+
+
+def test_pause_patches_automated_apps_even_with_existing_pause_marker():
+    """A stale pause marker must not skip an app that currently has automated sync."""
+    patch_task = _find_pause_application_patch_task()
+    when = patch_task.get("when", [])
+    if isinstance(when, str):
+        when = [when]
+    when_text = " ".join(str(w) for w in when)
+
+    assert "automated" in when_text
+    assert "paused-by" not in when_text, (
+        "pause.yml must not skip patching solely because a stale paused-by " f"annotation exists. Current when: {when}"
+    )
+
+
+def test_pause_skips_apps_without_automated_sync_policy():
+    """Applications already lacking automated sync must not have original-sync-policy clobbered."""
+    patch_task = _find_pause_application_patch_task()
+    when = patch_task.get("when", [])
+    if isinstance(when, str):
+        when = [when]
+
+    assert "'automated' in (item.spec.syncPolicy | default({}))" in when
 
 
 def test_pause_sets_automated_to_null_for_merge_patch_delete():
     """pause.yml must use null, not omission, to remove syncPolicy.automated via merge patch."""
-    tasks = _load_yaml("pause.yml")
-    for task in tasks:
-        for block_task in task.get("block", []):
-            k8s = block_task.get("kubernetes.core.k8s", {})
-            if k8s:
-                sync_policy = str(k8s["definition"]["spec"]["syncPolicy"])
-                assert "combine({'automated': none})" in sync_policy
-                assert "rejectattr('key', 'equalto', 'automated')" not in sync_policy
-                return
-
-    raise AssertionError("pause.yml should contain an Application patch task")
+    patch_task = _find_pause_application_patch_task()
+    sync_policy = str(patch_task["kubernetes.core.k8s"]["definition"]["spec"]["syncPolicy"])
+    assert "combine({'automated': none})" in sync_policy
+    assert "rejectattr('key', 'equalto', 'automated')" not in sync_policy
 
 
 def test_discover_uses_parameterized_hub():
@@ -121,9 +110,7 @@ def test_discover_uses_parameterized_hub():
                 kc = str(k8s_info.get("kubeconfig", ""))
                 assert "_argocd_discover_hub" in kc
                 found = True
-    assert (
-        found
-    ), "discover.yml should have at least one k8s_info task with _argocd_discover_hub"
+    assert found, "discover.yml should have at least one k8s_info task with _argocd_discover_hub"
 
 
 def test_discover_namespace_defaults_to_omit():
@@ -134,8 +121,7 @@ def test_discover_namespace_defaults_to_omit():
     """
     text = (ROLE_DIR / "discover.yml").read_text()
     assert "default('argocd')" not in text, (
-        "discover.yml still hardcodes default('argocd'); "
-        "should use default(omit) for cluster-wide discovery"
+        "discover.yml still hardcodes default('argocd'); " "should use default(omit) for cluster-wide discovery"
     )
     tasks = _load_yaml("discover.yml")
     for task in tasks:
@@ -143,9 +129,7 @@ def test_discover_namespace_defaults_to_omit():
             k8s_info = block_task.get("kubernetes.core.k8s_info", {})
             if k8s_info:
                 ns = str(k8s_info.get("namespace", ""))
-                assert (
-                    "default(omit)" in ns
-                ), f"discover.yml namespace should use default(omit), got: {ns}"
+                assert "default(omit)" in ns, f"discover.yml namespace should use default(omit), got: {ns}"
 
 
 ROLES_DIR = ROLE_DIR.parents[1]
@@ -173,8 +157,7 @@ def test_primary_prep_pauses_argocd_before_acm_mutations():
     argocd_indices = [
         index
         for index, task in enumerate(block_tasks)
-        if task.get("ansible.builtin.include_role", {}).get("name")
-        == "tomazb.acm_switchover.argocd_manage"
+        if task.get("ansible.builtin.include_role", {}).get("name") == "tomazb.acm_switchover.argocd_manage"
     ]
     mutation_indices = [
         index
@@ -192,9 +175,7 @@ def test_finalization_does_not_auto_resume():
     """finalization/main.yml should NOT auto-resume argocd (removed feature)."""
     text = (ROLES_DIR / "finalization" / "tasks" / "main.yml").read_text()
     resume_count = text.count("acm_switchover_argocd_mode_override: resume")
-    assert (
-        resume_count == 0
-    ), f"finalization should not auto-resume argocd, found {resume_count} resume include(s)"
+    assert resume_count == 0, f"finalization should not auto-resume argocd, found {resume_count} resume include(s)"
 
 
 PLAYBOOKS_DIR = pathlib.Path(__file__).resolve().parents[2] / "playbooks"
@@ -209,9 +190,7 @@ def test_standalone_argocd_resume_covers_both_hubs():
     """
     text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
     resume_count = text.count("acm_switchover_argocd_mode_override: resume")
-    assert (
-        resume_count >= 2
-    ), f"argocd_resume.yml should resume on both hubs, found {resume_count} resume block(s)"
+    assert resume_count >= 2, f"argocd_resume.yml should resume on both hubs, found {resume_count} resume block(s)"
     assert "_argocd_discover_hub: secondary" in text, "Should resume secondary hub"
     assert "_argocd_discover_hub: primary" in text, "Should resume primary hub"
     assert (
@@ -276,15 +255,9 @@ def test_standalone_argocd_resume_validates_checkpoint_path_before_file_reads():
     validate_index = text.find("tomazb.acm_switchover.acm_safe_path_validate")
     stat_index = text.find("ansible.builtin.stat")
 
-    assert (
-        validate_index != -1
-    ), "argocd_resume.yml must validate checkpoint.path before touching controller files"
-    assert (
-        stat_index != -1
-    ), "argocd_resume.yml should still inspect the checkpoint file after validation"
-    assert (
-        validate_index < stat_index
-    ), "argocd_resume.yml must validate checkpoint.path before stat/slurp"
+    assert validate_index != -1, "argocd_resume.yml must validate checkpoint.path before touching controller files"
+    assert stat_index != -1, "argocd_resume.yml should still inspect the checkpoint file after validation"
+    assert validate_index < stat_index, "argocd_resume.yml must validate checkpoint.path before stat/slurp"
 
 
 def test_discover_run_id_gated_by_resume_mode():
@@ -307,8 +280,7 @@ def test_discover_run_id_gated_by_resume_mode():
                     when = [when]
                 when_text = " ".join(str(w) for w in when)
                 assert "resume" in when_text, (
-                    "discover.yml run_id generation must be gated to exclude resume mode. "
-                    f"Current when: {when}"
+                    "discover.yml run_id generation must be gated to exclude resume mode. " f"Current when: {when}"
                 )
                 return
 

@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collection finalization now runs the decommission role when `old_hub_action: decommission` is selected during switchover, while preserving the standalone decommission confirmation gate.
+- Collection Argo CD pause now re-patches Applications that still have automated sync even when a stale switchover pause marker is present.
 - Python and collection validation now share a parity fixture covering Argo CD resume-on-failure rules and safe-path policy; collection validation now rejects `~/` paths and enforces `argocd.resume_on_failure` combinations consistently with the Python CLI.
 - Collection decommission summaries now use the shared report artifact writer so `summary_path` is validated by the safe-path policy before writing.
 - Collection checkpoint resumes now rediscover primary prep, activation, and finalization resources with phase-owned facts so skipped preflight data cannot go stale across resumed runs.
