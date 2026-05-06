@@ -126,6 +126,8 @@ def test_collection_variable_reference_documents_checkpoint_and_klusterlet_contr
     assert "acm_switchover_execution.concurrency.klusterlet_probe_workers" in content
     assert "acm_switchover_execution.concurrency.klusterlet_remediation_workers" in content
     assert "acm_switchover_features.klusterlet.strict_remediation" in content
+    assert "acm_switchover_discovery.bridge_script" in content
+    assert "scripts/discover-hub.sh" in content
 
 
 def test_collection_artifact_schema_documents_current_checkpoint_contract():
@@ -134,7 +136,18 @@ def test_collection_artifact_schema_documents_current_checkpoint_contract():
 
     assert '"schema_version": "2.0"' in content
     assert "operation_identity" in content
+    assert '"primary_kubeconfig": "./kubeconfigs/primary.kubeconfig"' in content
+    assert '"secondary_kubeconfig": "./kubeconfigs/secondary.kubeconfig"' in content
     assert "checkpoint.reset_from" in content
     assert "validate" in content
     assert "dry_run" in content
     assert "locked_by" not in content
+
+
+def test_changelog_unreleased_keeps_standard_groups():
+    """The active changelog section should keep all standard project groups present."""
+    content = _read("CHANGELOG.md")
+    unreleased = content.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+
+    for heading in ("### Added", "### Changed", "### Fixed", "### Removed"):
+        assert heading in unreleased

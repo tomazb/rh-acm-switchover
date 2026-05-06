@@ -110,8 +110,8 @@ creating, migrating, resetting, or mutating the checkpoint file.
   "operation_identity": {
     "primary_context": "primary-hub",
     "secondary_context": "secondary-hub",
-    "primary_kubeconfig": "./kubeconfigs/hub.kubeconfig",
-    "secondary_kubeconfig": "./kubeconfigs/hub.kubeconfig",
+    "primary_kubeconfig": "./kubeconfigs/primary.kubeconfig",
+    "secondary_kubeconfig": "./kubeconfigs/secondary.kubeconfig",
     "method": "passive",
     "activation_method": "patch",
     "restore_only": false,

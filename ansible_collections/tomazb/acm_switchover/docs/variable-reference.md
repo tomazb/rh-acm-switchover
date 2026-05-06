@@ -134,6 +134,7 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
+| `acm_switchover_discovery.bridge_script` | str | `scripts/discover-hub.sh` | Bridge script used for kubeconfig context enumeration until full native discovery coverage |
 | `acm_switchover_discovery_restore_state` | str | `none` | Observed restore state (e.g. `passive-sync`) |
 | `acm_switchover_discovery_managed_clusters` | int | `0` | Number of non-local ManagedClusters registered |
 
