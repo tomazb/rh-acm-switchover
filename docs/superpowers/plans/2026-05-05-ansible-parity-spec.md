@@ -7,7 +7,7 @@
 
 ## Current review status
 
-**Last reviewed:** 2026-05-05
+**Last reviewed:** 2026-05-06
 **Branch inspected:** `ansible`
 **Working tree note:** `AGENTS.md` has unrelated local modifications and was not changed for this review.
 **Verification scope:** Static inspection only. No live ACM/OpenShift cluster verification was performed.
@@ -16,7 +16,7 @@ The backlog is still valid overall, but several items are partially implemented 
 
 - PR-2: `acm_restore_info` already returns `restore_phase` and `restore_ready`; activation still uses preflight Restore facts and still lacks an activation-time readiness assertion.
 - PR-3: `post_activation` has phase-local execute-mode ManagedCluster discovery; `primary_prep` still depends on preflight MCH and BackupSchedule facts.
-- PR-4: Argo CD resume is already run-id aware; checkpoint reset still removes only `primary_prep` and must be changed to reset downstream phases.
+- PR-4: Argo CD resume is run-id aware, and resume-on-failure now resets the checkpoint from `primary_prep` so downstream phases are retried. The optional `resume_force` override was intentionally omitted to keep resume scoped to Applications paused by the current run ID.
 - PR-8: runbook edits are protected by `AGENTS.md` and require explicit operator approval plus `.claude/skills` synchronization before any change.
 
 Do not treat partially implemented items as complete until the acceptance criteria in the relevant PR section are satisfied. In particular, existing tests for Argo CD run IDs, Restore readiness helpers, or post-activation discovery do not close the checkpoint reset, activation live-read, or primary-prep resume gaps.
@@ -61,7 +61,7 @@ Recommended PR split and current status:
 | PR-1 | Checkpoint/state safety | P0 | Critical | 1 | Pending |
 | PR-2 | Activation live-read + passive readiness | P0 | Critical | 2 | Partially implemented; live-read and activation assertion still pending |
 | PR-3 | Phase self-sufficiency / fact freshness | P1 | High | 3 | Partially pending; primary_prep remains the main gap |
-| PR-4 | ArgoCD resume-on-failure checkpoint semantics | P1 | High | 4 | Partially implemented; reset-from semantics still pending |
+| PR-4 | ArgoCD resume-on-failure checkpoint semantics | P1 | High | 4 | Implemented; `reset_from primary_prep` semantics verified |
 | PR-5 | Decommission/report path safety | P2 | Medium | 5 | Pending |
 | PR-6 | Python/Ansible validation parity | P2 | Medium | 6 | Pending |
 | PR-7 | Klusterlet scalability | P3 | Medium | 7 | Pending |
@@ -760,7 +760,7 @@ Ansible rescue resumes ArgoCD and resets only `primary_prep`. The checkpoint plu
 
 **Runtime risk [Inference]:** After a late failure, Ansible may resume ArgoCD, reset only `primary_prep`, and leave downstream phases marked complete. A retry may skip activation or post-activation even though ArgoCD state has been changed.
 
-**Current status as of 2026-05-05:** Partial. Argo CD resume already requires a run ID and only resumes Applications whose `acm-switchover.argoproj.io/paused-by` annotation matches that run ID. The remaining gap is checkpoint semantics: `switchover.yml` still calls `status: reset` for `primary_prep`, which removes only that phase and leaves downstream completed phases intact.
+**Current status as of 2026-05-06:** Implemented. Argo CD resume requires a run ID and only resumes Applications whose `acm-switchover.argoproj.io/paused-by` annotation matches that run ID. The switchover rescue calls `checkpoint_phase` with `status: reset` and `checkpoint.reset_from: primary_prep`, which removes `primary_prep` plus downstream phases from `completed_phases` while preserving `preflight`.
 
 ## 4.2 Files to modify
 
@@ -776,18 +776,21 @@ ansible_collections/tomazb/acm_switchover/plugins/modules/acm_argocd_filter.py
 
 ## 4.3 Use checkpoint action `reset_from`
 
-Expected playbook usage:
+Implemented playbook usage:
 
 ```yaml
-- name: Reset checkpoint from primary prep after ArgoCD resume-on-failure
+- name: Reset primary prep checkpoint after Argo CD resume on failure
   tomazb.acm_switchover.checkpoint_phase:
     phase: primary_prep
-    status: reset_from
-    checkpoint_path: "{{ acm_switchover_execution.checkpoint.path }}"
-    execution_mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
+    checkpoint: "{{ acm_switchover_execution.checkpoint | combine({'reset_from': 'primary_prep'}) }}"
+    status: reset
+    operational_data:
+      argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
   when:
-    - acm_switchover_execution.checkpoint.enabled | default(false) | bool
-    - acm_switchover_features.argocd.resume_on_failure | default(false) | bool
+    - acm_switchover_features.argocd.manage | default(false)
+    - acm_switchover_features.argocd.resume_on_failure | default(false)
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+  ignore_errors: true  # noqa: ignore-errors
 ```
 
 ## 4.4 Store ArgoCD pause metadata in checkpoint operational data
@@ -825,15 +828,7 @@ The Ansible ArgoCD helper defines a pause annotation:
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 ```
 
-Resume already removes the pause only for Applications whose annotation matches the current run ID. The remaining optional enhancement is an explicit override for manual recovery.
-
-Add variable:
-
-```yaml
-acm_switchover_features:
-  argocd:
-    resume_force: false
-```
+Resume removes the pause only for Applications whose annotation matches the current run ID. Issue #31 intentionally does not add `resume_force`; manual recovery remains a separate operator action instead of a collection variable that can resume Applications paused by a different run.
 
 Current required resume logic:
 
@@ -842,29 +837,21 @@ when:
   - app.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == acm_switchover_run_id
 ```
 
-Optional force override logic:
-
-```yaml
-when:
-  - app.metadata.annotations['acm-switchover.argoproj.io/paused-by'] == acm_switchover_run_id
-    or acm_switchover_features.argocd.resume_force | default(false) | bool
-```
-
 **Runtime rationale [Inference]:** This avoids one switchover run accidentally resuming Applications paused by another run.
 
 ## 4.6 PR-4 acceptance criteria
 
 PR-4 is complete when:
 
-- [ ] Resume-on-failure resets checkpoint from `primary_prep`, not only `primary_prep`.
-- [ ] Completed downstream phases are removed after ArgoCD resume-on-failure.
+- [x] Resume-on-failure resets checkpoint from `primary_prep`, not only `primary_prep`.
+- [x] Completed downstream phases are removed after ArgoCD resume-on-failure.
 - [x] Resume only targets Applications paused by the current run ID.
-- [ ] Optional `resume_force=true` override is implemented if manual override remains desired.
-- [ ] Tests cover:
-  - [ ] failure after activation;
-  - [ ] completed phases include `primary_prep`, `activation`;
-  - [ ] ArgoCD resume runs;
-  - [ ] checkpoint result keeps `preflight` but removes `primary_prep`, `activation`, `post_activation`, `finalization`.
+- [x] Optional `resume_force=true` override is intentionally omitted; manual override remains out of scope.
+- [x] Tests cover:
+  - [x] failure after activation;
+  - [x] completed phases include `primary_prep`, `activation`;
+  - [x] ArgoCD resume runs;
+  - [x] checkpoint result keeps `preflight` but removes `primary_prep`, `activation`, `post_activation`, `finalization`.
 
 ---
 
@@ -1466,9 +1453,9 @@ Do not start activation changes until this passes locally.
 - [x] Confirm run ID is recorded in ArgoCD pause annotation.
 - [ ] Persist pause metadata in checkpoint operational data.
 - [x] Confirm resume is run-id aware.
-- [ ] Decide whether to add `resume_force` override; document if intentionally omitted.
-- [ ] Use `reset_from primary_prep` after resume-on-failure.
-- [ ] Add failure/resume tests.
+- [x] Decide whether to add `resume_force` override; document if intentionally omitted.
+- [x] Use `reset_from primary_prep` after resume-on-failure.
+- [x] Add failure/resume tests.
 
 ## Block 5 — Decommission path safety
 
@@ -1638,7 +1625,7 @@ roles/primary_prep/tasks/pause_backups.yml
 
 **Type:** bug/resume  
 **Priority:** P1  
-**Status:** Pending. Current rescue uses `status: reset`, which removes only `primary_prep`.
+**Status:** Implemented. Current rescue uses `status: reset` with `checkpoint.reset_from: primary_prep`, which removes `primary_prep` and downstream phases.
 **Files:**
 
 ```text
@@ -1649,19 +1636,19 @@ plugins/action/checkpoint_phase.py
 
 **Tasks:**
 
-- [ ] Add `reset_from` action.
-- [ ] Use it after ArgoCD resume-on-failure.
-- [ ] Remove downstream completed phases.
+- [x] Add `reset_from` checkpoint configuration.
+- [x] Use it after ArgoCD resume-on-failure.
+- [x] Remove downstream completed phases.
 
 **Acceptance criteria:**
 
-- [ ] After late failure + ArgoCD resume, retry starts from primary prep boundary.
+- [x] After late failure + ArgoCD resume, retry starts from primary prep boundary.
 
 ## Ticket ACM-ANS-008 — Make ArgoCD resume run-id aware
 
 **Type:** safety  
 **Priority:** P1  
-**Status:** Partial. Exact run-id matching is implemented; the optional force override is not.
+**Status:** Implemented for issue #31. Exact run-id matching is implemented; the optional force override is intentionally omitted so resume remains scoped to Applications paused by the current run.
 **Files:**
 
 ```text
@@ -1672,13 +1659,13 @@ plugins/module_utils/argocd.py
 **Tasks:**
 
 - [x] Resume only apps annotated with current run ID.
-- [ ] Add `resume_force` override if manual override remains desired.
-- [ ] Add tests.
+- [x] Omit `resume_force`; manual recovery remains out of scope.
+- [x] Add tests.
 
 **Acceptance criteria:**
 
 - [x] Apps paused by another run are not resumed by default.
-- [ ] Apps paused by another run are resumed only when force override is explicitly enabled, if that override is added.
+- [x] Force override is intentionally omitted, so Applications paused by another run remain out of scope for automated resume.
 
 ## Ticket ACM-ANS-009 — Decommission summary must use artifact path validation
 
