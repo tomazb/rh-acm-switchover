@@ -3,6 +3,7 @@
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_restore_info import (
     build_activation_patch,
     build_restore_activation_plan,
+    passive_restore_ready_reason,
     passive_restore_ready_for_preflight,
     select_passive_sync_restore,
 )
@@ -74,6 +75,25 @@ def test_select_passive_sync_restore_falls_back_to_conventional_name():
     assert diagnostics["reason"] == "conventional_name_fallback"
 
 
+def test_select_passive_sync_restore_rejects_explicit_sync_false_conventional_name():
+    restore, diagnostics = select_passive_sync_restore(
+        [
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "creationTimestamp": "2026-04-10T10:00:00Z",
+                },
+                "spec": {"syncRestoreWithNewBackups": False},
+            }
+        ]
+    )
+
+    assert restore is None
+    assert diagnostics["restore_count"] == 1
+    assert diagnostics["sync_enabled_count"] == 0
+    assert diagnostics["reason"] == "no_sync_restore"
+
+
 def test_select_passive_sync_restore_handles_null_creation_timestamp():
     restore, diagnostics = select_passive_sync_restore(
         [
@@ -99,6 +119,14 @@ def test_build_activation_patch_targets_latest_backup():
     assert patch == {"spec": {"veleroManagedClustersBackupName": "latest"}}
 
 
+def test_build_activation_patch_includes_resource_version_when_supplied():
+    patch = build_activation_patch("latest", resource_version="12345")
+    assert patch == {
+        "metadata": {"resourceVersion": "12345"},
+        "spec": {"veleroManagedClustersBackupName": "latest"},
+    }
+
+
 def test_build_restore_activation_plan_for_passive_patch_mode():
     plan = build_restore_activation_plan(
         method="passive",
@@ -108,6 +136,7 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
                 "metadata": {
                     "name": "restore-acm-passive-sync",
                     "namespace": "open-cluster-management-backup",
+                    "resourceVersion": "42",
                 },
                 "spec": {"syncRestoreWithNewBackups": True},
                 "status": {"phase": "Enabled"},
@@ -118,6 +147,7 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
 
     assert plan["operation"]["action"] == "patch"
     assert plan["operation"]["patch"] == {
+        "metadata": {"resourceVersion": "42"},
         "spec": {"veleroManagedClustersBackupName": "latest"}
     }
     assert plan["wait_target"]["name"] == "restore-acm-passive-sync"
@@ -129,6 +159,7 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
     )
     assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
     assert plan["restore_ready"] is True
+    assert plan["restore_ready_reason"] == "Passive Restore phase Enabled is ready."
     assert plan["restore_phase"] == "Enabled"
 
 
@@ -176,6 +207,47 @@ def test_build_restore_activation_plan_marks_unknown_passive_restore_not_ready()
     assert plan["restore"] is not None
     assert plan["restore_phase"] == "Unknown"
     assert plan["restore_ready"] is False
+    assert (
+        plan["restore_ready_reason"]
+        == "Passive Restore phase Unknown is not activation-ready."
+    )
+
+
+def test_build_restore_activation_plan_normalizes_missing_passive_restore_phase():
+    plan = build_restore_activation_plan(
+        method="passive",
+        activation_method="patch",
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                },
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {},
+            }
+        ],
+        backup_name="latest",
+    )
+
+    assert plan["restore_phase"] == "Unknown"
+    assert (
+        plan["restore_ready_reason"]
+        == "Passive Restore phase Unknown is not activation-ready."
+    )
+
+
+def test_build_restore_activation_plan_exposes_missing_restore_ready_reason():
+    plan = build_restore_activation_plan(
+        method="passive",
+        activation_method="patch",
+        restores=[],
+        backup_name="latest",
+    )
+
+    assert plan["restore"] is None
+    assert plan["restore_ready"] is False
+    assert plan["restore_ready_reason"] == "No passive Restore resource was selected."
 
 
 def test_passive_restore_ready_accepts_benign_finished_with_errors():
@@ -190,6 +262,10 @@ def test_passive_restore_ready_accepts_benign_finished_with_errors():
     }
 
     assert passive_restore_ready_for_preflight(restore) is True
+    assert (
+        passive_restore_ready_reason(restore)
+        == "Passive Restore FinishedWithErrors only contains already-available messages."
+    )
 
 
 def test_passive_restore_ready_rejects_non_benign_finished_with_errors():
@@ -201,6 +277,17 @@ def test_passive_restore_ready_rejects_non_benign_finished_with_errors():
     }
 
     assert passive_restore_ready_for_preflight(restore) is False
+    assert (
+        passive_restore_ready_reason(restore)
+        == "Passive Restore FinishedWithErrors contains non-benign errors."
+    )
+
+
+def test_passive_restore_ready_reason_reports_hard_failure_phase():
+    restore = {"status": {"phase": "Failed"}}
+
+    assert passive_restore_ready_for_preflight(restore) is False
+    assert passive_restore_ready_reason(restore) == "Passive Restore phase Failed failed."
 
 
 def test_build_restore_activation_plan_passive_patch_already_applied():

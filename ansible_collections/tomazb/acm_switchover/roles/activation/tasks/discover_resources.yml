@@ -1,15 +1,25 @@
 ---
-- name: Read secondary Restore resources when not pre-seeded by tests
+- name: Use activation Restore test override when supplied
+  ansible.builtin.set_fact:
+    acm_activation_restores_info: "{{ (acm_switchover_test_overrides | default({})).activation_restores_info }}"
+  when: (acm_switchover_test_overrides | default({})).activation_restores_info is defined
+
+- name: Read live secondary Restore resources for activation
   kubernetes.core.k8s_info:
     api_version: cluster.open-cluster-management.io/v1beta1
     kind: Restore
     namespace: open-cluster-management-backup
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: acm_secondary_restores_info
+  register: _acm_activation_restores_live_info
+  when: (acm_switchover_test_overrides | default({})).activation_restores_info is not defined
+
+- name: Publish live activation Restore resources
+  ansible.builtin.set_fact:
+    acm_activation_restores_info: "{{ _acm_activation_restores_live_info }}"
   when:
-    - acm_secondary_restores_info is not defined
-    - acm_secondary_restore_info is not defined
+    - _acm_activation_restores_live_info is defined
+    - not (_acm_activation_restores_live_info.skipped | default(false))
 
 - name: Read secondary MultiClusterHub when not pre-seeded by tests
   kubernetes.core.k8s_info:
@@ -18,5 +28,12 @@
     namespace: open-cluster-management
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: acm_secondary_mch_info
+  register: _acm_secondary_mch_live_info
   when: acm_secondary_mch_info is not defined
+
+- name: Publish live secondary MultiClusterHub resources
+  ansible.builtin.set_fact:
+    acm_secondary_mch_info: "{{ _acm_secondary_mch_live_info }}"
+  when:
+    - _acm_secondary_mch_live_info is defined
+    - not (_acm_secondary_mch_live_info.skipped | default(false))

@@ -27,6 +27,18 @@ def test_restore_activation_fixture_reports_delete_and_create_plan(
     )
 
 
+def test_stale_preflight_restore_facts_do_not_allow_failed_live_activation_restore(
+    run_switchover_fixture,
+):
+    completed, report = run_switchover_fixture(
+        "stale_preflight_live_activation_failure.yml"
+    )
+    assert completed.returncode != 0
+    assert "Passive Restore phase Failed failed." in completed.stdout
+    assert "Build activation plan" not in completed.stdout
+    assert report.get("phases", {}).get("activation") is None
+
+
 def test_full_activation_fixture_reports_full_restore_plan(run_switchover_fixture):
     completed, report = run_switchover_fixture("full_activation_success.yml")
     assert completed.returncode == 0

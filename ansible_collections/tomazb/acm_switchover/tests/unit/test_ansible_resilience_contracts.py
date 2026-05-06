@@ -319,13 +319,51 @@ def test_checkpoint_fixture_seed_matches_runtime_checkpoint_contract():
 def test_activation_rediscovers_restore_facts_before_passive_selection():
     """Checkpoint resume can skip preflight, so activation must discover Restore facts itself."""
     assert (ACTIVATION_TASKS / "discover_resources.yml").exists()
+    discover_text = (ACTIVATION_TASKS / "discover_resources.yml").read_text()
     main_tasks = _load_yaml(ACTIVATION_TASKS / "main.yml")
     block_tasks = next(task["block"] for task in main_tasks if "block" in task)
     includes = [task.get("ansible.builtin.include_tasks", "") for task in block_tasks]
 
+    assert "register: _acm_activation_restores_live_info" in discover_text
+    assert "register: _acm_secondary_mch_live_info" in discover_text
+    assert "activation_restores_info" in discover_text
+    assert "acm_activation_restores_info:" in discover_text
+    assert "acm_secondary_mch_info:" in discover_text
+    assert "acm_switchover_test_overrides | default({})" in discover_text
+    assert "register: acm_secondary_restores_info" not in discover_text
     assert includes[0] == "discover_resources.yml"
     assert includes.index("discover_resources.yml") < includes.index(
         "verify_passive_sync.yml"
+    )
+
+
+def test_activation_uses_live_restore_facts_instead_of_preflight_restore_facts():
+    """Activation must not select or mutate Restores from stale preflight variables."""
+    for path in [
+        ACTIVATION_TASKS / "verify_passive_sync.yml",
+        ACTIVATION_TASKS / "activate_restore.yml",
+    ]:
+        text = path.read_text()
+        assert "acm_activation_restores_info.resources" in text
+        assert "acm_secondary_restore_info" not in text
+        assert "acm_secondary_restores_info" not in text
+
+
+def test_activation_requires_passive_restore_ready_before_mutation_tasks():
+    """Passive readiness must be asserted before auto-import or Restore mutations run."""
+    verify_text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
+    assert "restore_ready" in verify_text
+    assert "restore_ready_reason" in verify_text
+
+    main_tasks = _load_yaml(ACTIVATION_TASKS / "main.yml")
+    block_tasks = next(task["block"] for task in main_tasks if "block" in task)
+    includes = [task.get("ansible.builtin.include_tasks", "") for task in block_tasks]
+
+    assert includes.index("verify_passive_sync.yml") < includes.index(
+        "manage_auto_import.yml"
+    )
+    assert includes.index("verify_passive_sync.yml") < includes.index(
+        "activate_restore.yml"
     )
 
 
