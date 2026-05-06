@@ -9,6 +9,14 @@ from __future__ import annotations
 import os
 import re
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE,
+    ARGOCD_RESUME_ON_FAILURE_VALIDATE_MODE_MESSAGE,
+    VALIDATION_ACTIVATION_METHOD_CHOICES,
+    VALIDATION_METHOD_CHOICES,
+    VALIDATION_OLD_HUB_ACTION_CHOICES,
+)
+
 CONTEXT_NAME_MAX_LENGTH = 128
 CONTEXT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-/@]*[A-Za-z0-9]$|^[A-Za-z0-9]$")
 
@@ -72,16 +80,18 @@ def validate_safe_path(path: str) -> None:
 
             if not ancestor or not os.path.exists(ancestor):
                 raise ValidationError(f"Absolute path '{path}' cannot be resolved against an existing directory.")
+            if not os.path.isdir(ancestor):
+                raise ValidationError(f"Absolute path '{path}' resolves through a non-directory ancestor.")
 
             resolved_path = os.path.join(os.path.realpath(ancestor), *missing_parts)
 
         home_dir = os.path.expanduser("~")
-        allowed_prefixes = ["/tmp/", "/var/", os.path.realpath(home_dir) + "/"]
+        allowed_roots = ["/tmp", "/var", os.path.realpath(home_dir)]
         cwd = os.getcwd()
         if cwd:
-            allowed_prefixes.append(os.path.realpath(cwd) + "/")
+            allowed_roots.append(os.path.realpath(cwd))
 
-        if not any(resolved_path.startswith(prefix) for prefix in allowed_prefixes):
+        if not any(os.path.commonpath([resolved_path, allowed_root]) == allowed_root for allowed_root in allowed_roots):
             raise ValidationError(
                 f"Absolute path '{path}' is outside allowed directories. "
                 f"Allowed prefixes: /tmp/, /var/, {home_dir}/"
@@ -139,12 +149,12 @@ def validate_operation_inputs(operation: dict, features: dict, execution: dict |
     argocd_resume_on_failure = argocd.get("resume_on_failure", False)
     execution_mode = execution.get("mode", "execute")
 
-    _validate_choice(activation_method, ["patch", "restore"], "activation_method")
+    _validate_choice(activation_method, VALIDATION_ACTIVATION_METHOD_CHOICES, "activation_method")
 
     if argocd_resume_on_failure and not argocd_manage:
-        raise ValidationError("argocd.resume_on_failure requires argocd.manage=true")
+        raise ValidationError(ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE)
     if argocd_resume_on_failure and execution_mode == "validate":
-        raise ValidationError("argocd.resume_on_failure is not valid with execution.mode=validate")
+        raise ValidationError(ARGOCD_RESUME_ON_FAILURE_VALIDATE_MODE_MESSAGE)
 
     if disable_observability_on_secondary and old_hub_action != "secondary":
         raise ValidationError(
@@ -171,8 +181,8 @@ def validate_operation_inputs(operation: dict, features: dict, execution: dict |
 
     method = operation.get("method", "passive")
 
-    _validate_choice(method, ["passive", "full"], "method")
-    _validate_choice(old_hub_action, ["secondary", "decommission", "none"], "old_hub_action")
+    _validate_choice(method, VALIDATION_METHOD_CHOICES, "method")
+    _validate_choice(old_hub_action, VALIDATION_OLD_HUB_ACTION_CHOICES, "old_hub_action")
 
     if method != "passive" and activation_method == "restore":
         raise ValidationError(

@@ -118,6 +118,22 @@ IMMEDIATE_IMPORT_ANNOTATION = "import.open-cluster-management.io/immediate-impor
 # Local cluster name (hub's self-managed cluster, excluded from counts)
 LOCAL_CLUSTER_NAME = "local-cluster"
 
+# CLI validation choices
+VALIDATION_METHOD_CHOICES = ("passive", "full")
+VALIDATION_OLD_HUB_ACTION_CHOICES = ("secondary", "decommission", "none")
+VALIDATION_ACTIVATION_METHOD_CHOICES = ("patch", "restore")
+VALIDATION_LOG_FORMAT_CHOICES = ("text", "json")
+VALIDATION_SETUP_ROLE_CHOICES = ("operator", "validator", "both")
+
+# Argo CD validation messages
+ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE = "--argocd-resume-on-failure requires --argocd-manage"
+ARGOCD_RESUME_ON_FAILURE_CONFLICTS_RESUME_ONLY_MESSAGE = (
+    "--argocd-resume-on-failure cannot be used with --argocd-resume-only"
+)
+ARGOCD_RESUME_ON_FAILURE_CONFLICTS_VALIDATE_ONLY_MESSAGE = (
+    "--argocd-resume-on-failure cannot be used with --validate-only"
+)
+
 # Stale state detection threshold (default: 6 hours)
 # Can be overridden via ACM_SWITCHOVER_STALE_HOURS environment variable
 DEFAULT_STALE_STATE_THRESHOLD_HOURS = 6

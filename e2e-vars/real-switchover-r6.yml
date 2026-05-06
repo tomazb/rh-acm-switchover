@@ -4,10 +4,10 @@
 acm_switchover_hubs:
   primary:
     context: mgmt2
-    kubeconfig: ~/.kube/r6-validator-kubeconfig
+    kubeconfig: /tmp/acm-switchover/r6-validator-kubeconfig
   secondary:
     context: mgmt1
-    kubeconfig: ~/.kube/config
+    kubeconfig: /tmp/acm-switchover/kubeconfig
 
 acm_switchover_operation:
   method: passive

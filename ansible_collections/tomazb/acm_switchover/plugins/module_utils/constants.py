@@ -10,6 +10,12 @@ MCE_NAMESPACE = "multicluster-engine"
 MANAGED_CLUSTER_AGENT_NAMESPACE = "open-cluster-management-agent"
 LOCAL_CLUSTER_NAME = "local-cluster"
 
+VALIDATION_METHOD_CHOICES = ("passive", "full")
+VALIDATION_OLD_HUB_ACTION_CHOICES = ("secondary", "decommission", "none")
+VALIDATION_ACTIVATION_METHOD_CHOICES = ("patch", "restore")
+ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE = "argocd.resume_on_failure requires argocd.manage=true"
+ARGOCD_RESUME_ON_FAILURE_VALIDATE_MODE_MESSAGE = "argocd.resume_on_failure is not valid with execution.mode=validate"
+
 PASSIVE_SYNC_RESTORE_NAME = "restore-acm-passive-sync"
 ACTIVATION_RESTORE_NAME = "restore-acm-activate"
 FULL_RESTORE_NAME = "restore-acm-full"

@@ -13,7 +13,17 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
     validate_safe_path,
 )
 
-FIXTURE_PATH = Path(__file__).resolve().parents[5] / "tests" / "fixtures" / "validation_parity_cases.yml"
+
+def _find_repo_root() -> Path:
+    current = Path(__file__).resolve().parent
+    while current != current.parent:
+        if (current / ".git").exists():
+            return current
+        current = current.parent
+    raise RuntimeError(f"Could not find repository root from {Path(__file__)}")
+
+
+FIXTURE_PATH = _find_repo_root() / "tests" / "fixtures" / "validation_parity_cases.yml"
 
 
 def _load_cases() -> list[dict]:

@@ -2,10 +2,10 @@
 acm_switchover_hubs:
   primary:
     context: mgmt2
-    kubeconfig: ~/.kube/config
+    kubeconfig: /tmp/acm-switchover/kubeconfig
   secondary:
     context: mgmt1
-    kubeconfig: ~/.kube/config
+    kubeconfig: /tmp/acm-switchover/kubeconfig
 acm_switchover_operation:
   method: invalid_method
 acm_switchover_execution:

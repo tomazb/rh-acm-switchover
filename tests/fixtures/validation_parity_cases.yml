@@ -98,6 +98,14 @@
   expected:
     passed: true
 
+- name: disallowed absolute root rejected
+  kind: path
+  input:
+    path: /etc/acm-switchover/state.json
+  expected:
+    passed: false
+    contains: "allowed"
+
 - name: tilde path rejected
   kind: path
   input:

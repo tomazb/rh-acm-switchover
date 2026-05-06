@@ -2,12 +2,12 @@
 acm_switchover_hubs:
   primary:
     context: mgmt2
-    kubeconfig: ~/.kube/config
+    kubeconfig: /tmp/acm-switchover/kubeconfig
 acm_switchover_rbac_bootstrap:
   role: validator
   include_decommission: false
   generate_kubeconfigs: true
   validate_permissions: true
-  kubeconfig_path: ~/.kube/r6-validator-kubeconfig
+  kubeconfig_path: /tmp/acm-switchover/r6-validator-kubeconfig
 acm_switchover_execution:
   mode: execute
