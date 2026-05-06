@@ -35,10 +35,11 @@ def normalize_workers(workers: int | None) -> int:
 
 
 def build_core_v1_client(kubeconfig: str, context: str | None = None):
-    from kubernetes import client, config
-
     if not kubeconfig:
         raise ValueError("kubeconfig is required")
+
+    from kubernetes import client, config
+
     kwargs = {"persist_config": False, "config_file": kubeconfig}
     if context:
         kwargs["context"] = context
@@ -47,10 +48,11 @@ def build_core_v1_client(kubeconfig: str, context: str | None = None):
 
 
 def build_apps_v1_client(kubeconfig: str, context: str | None = None):
-    from kubernetes import client, config
-
     if not kubeconfig:
         raise ValueError("kubeconfig is required")
+
+    from kubernetes import client, config
+
     kwargs = {"persist_config": False, "config_file": kubeconfig}
     if context:
         kwargs["context"] = context

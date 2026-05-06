@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import builtins
 import threading
 
 import pytest
@@ -166,7 +167,16 @@ def test_probe_defaults_to_all_managed_clusters_when_candidates_are_omitted():
     assert result["verified_clusters"] == ["cluster-a"]
 
 
-def test_client_builders_require_explicit_kubeconfig():
+def test_client_builders_require_explicit_kubeconfig(monkeypatch):
+    original_import = builtins.__import__
+
+    def fail_kubernetes_import(name, *args, **kwargs):
+        if name == "kubernetes" or name.startswith("kubernetes."):
+            pytest.fail("kubeconfig validation must run before importing kubernetes")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_kubernetes_import)
+
     with pytest.raises(ValueError, match="kubeconfig is required"):
         build_core_v1_client("")
     with pytest.raises(ValueError, match="kubeconfig is required"):
