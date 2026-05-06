@@ -22,7 +22,9 @@ options:
     required: true
     type: dict
   mode:
-    description: File mode for the written report artifact.
+    description:
+      - File mode for the written report artifact.
+      - Must be an octal permission string such as C(0644); symbolic modes are not supported.
     required: false
     type: str
     default: "0644"
@@ -61,7 +63,7 @@ def main() -> None:
     mode = module.params["mode"]
 
     try:
-        output_path = write_json_artifact(
+        output_path, changed = write_json_artifact(
             report=report,
             destination=destination,
             check_mode=module.check_mode,
@@ -71,7 +73,7 @@ def main() -> None:
         module.fail_json(msg=str(exc), path=destination)
         return
 
-    module.exit_json(changed=not module.check_mode, path=output_path)
+    module.exit_json(changed=changed, path=output_path)
 
 
 if __name__ == "__main__":
