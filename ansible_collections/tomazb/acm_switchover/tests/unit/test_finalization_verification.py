@@ -232,7 +232,7 @@ def test_enable_backups_can_recreate_saved_schedule():
         "operation.action == 'create'" in text
     ), "enable_backups.yml must create a BackupSchedule when planning returns create"
     assert (
-        "acm_secondary_backup_schedules_info" in text
+        "acm_finalization_backup_schedules_info" in text
     ), "enable_backups.yml must refresh schedule facts after create/patch so later verification sees current state"
 
 
