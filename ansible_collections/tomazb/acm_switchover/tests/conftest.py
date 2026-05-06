@@ -125,6 +125,7 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
     vars_payload.setdefault("acm_primary_dpa_info", reconciled_dpa)
     vars_payload.setdefault("acm_secondary_dpa_info", reconciled_dpa)
     vars_payload.setdefault("acm_primary_managed_clusters_info", {"resources": []})
+    _seed_phase_local_facts(vars_payload)
 
     for backup in vars_payload.get("acm_primary_backups_info", {}).get("resources", []):
         status = backup.get("status")
@@ -140,6 +141,36 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
         "acm_primary_cluster_deployments_info", {}
     ).get("resources", []):
         cluster_deployment.setdefault("spec", {}).setdefault("preserveOnDelete", True)
+
+
+def _seed_phase_local_facts(vars_payload: dict) -> None:
+    phase_fact_aliases = {
+        "acm_primary_mch_info": "acm_primary_prep_mch_info",
+        "acm_primary_backup_schedules_info": "acm_primary_prep_backup_schedules_info",
+        "acm_secondary_mch_info": "acm_activation_mch_info",
+        "acm_secondary_backup_schedules_info": "acm_finalization_backup_schedules_info",
+        "acm_secondary_restores_info": "acm_finalization_restores_info",
+        "acm_secondary_restore_info": "acm_finalization_restores_info",
+    }
+
+    for source_fact, phase_fact in phase_fact_aliases.items():
+        if source_fact in vars_payload and phase_fact not in vars_payload:
+            vars_payload[phase_fact] = vars_payload[source_fact]
+
+    if (
+        "acm_activation_mch_info" not in vars_payload
+        and "acm_finalization_mch_info" in vars_payload
+    ):
+        vars_payload["acm_activation_mch_info"] = vars_payload[
+            "acm_finalization_mch_info"
+        ]
+    if (
+        "acm_finalization_mch_info" not in vars_payload
+        and "acm_activation_mch_info" in vars_payload
+    ):
+        vars_payload["acm_finalization_mch_info"] = vars_payload[
+            "acm_activation_mch_info"
+        ]
 
 
 def _ansible_env(
@@ -275,6 +306,7 @@ def run_checkpoint_fixture(tmp_path):
         pre_completed_phases: list[str] | None = None,
         vars_overrides: dict | None = None,
         checkpoint_name: str = "checkpoint.json",
+        checkpoint_schema_version: str = "1.0",
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _REPO_ROOT
         fixture_path = (
@@ -295,21 +327,29 @@ def run_checkpoint_fixture(tmp_path):
         )
 
         if pre_completed_phases:
-            checkpoint_path.write_text(
-                json.dumps(
-                    {
-                        "schema_version": "1.0",
-                        "phase": pre_completed_phases[-1],
-                        "completed_phases": pre_completed_phases,
-                        "operational_data": {},
-                        "errors": [],
-                        "report_refs": [],
-                        "created_at": "2026-01-01T00:00:00+00:00",
-                        "updated_at": "2026-01-01T00:00:00+00:00",
-                    },
-                    indent=2,
+            checkpoint_record = {
+                "schema_version": checkpoint_schema_version,
+                "phase": pre_completed_phases[-1],
+                "completed_phases": pre_completed_phases,
+                "operational_data": {},
+                "errors": [],
+                "report_refs": [],
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+            if checkpoint_schema_version == "2.0":
+                from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
+                    build_operation_identity,
                 )
-            )
+
+                checkpoint_record["operation_identity"] = build_operation_identity(
+                    hubs=vars_payload.get("acm_switchover_hubs") or {},
+                    operation=vars_payload.get("acm_switchover_operation") or {},
+                    collection_version=vars_payload.get(
+                        "acm_switchover_collection_version"
+                    ),
+                )
+            checkpoint_path.write_text(json.dumps(checkpoint_record, indent=2))
 
         vars_file = tmp_path / "vars.yml"
         vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))

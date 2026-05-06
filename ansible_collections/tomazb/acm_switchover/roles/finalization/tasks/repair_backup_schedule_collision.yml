@@ -10,7 +10,7 @@
         manually after finalization.
   when:
     - acm_switchover_operation.restore_only | default(false)
-    - (acm_secondary_backup_schedules_info.resources | default([]) | length) == 0
+    - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 0
 
 - name: Fail fast when normal finalization has no BackupSchedule to repair
   ansible.builtin.fail:
@@ -19,7 +19,7 @@
       finalization requires an enabled BackupSchedule before backup continuity checks.
   when:
     - not (acm_switchover_operation.restore_only | default(false))
-    - (acm_secondary_backup_schedules_info.resources | default([]) | length) == 0
+    - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 0
 
 - name: Refuse to repair when multiple BackupSchedules exist
   ansible.builtin.fail:
@@ -28,12 +28,12 @@
       automatically for collision repair.
   when:
     - acm_switchover_repair_backup_schedule_collision_result is not defined
-    - (acm_secondary_backup_schedules_info.resources | default([]) | length) > 1
+    - (acm_finalization_backup_schedules_info.resources | default([]) | length) > 1
 
 - name: Skip BackupSchedule collision repair in dry-run mode
   ansible.builtin.set_fact:
     acm_switchover_repair_backup_schedule_collision_result:
-      changed: "{{ (acm_secondary_backup_schedules_info.resources | default([]) | length) > 0 }}"
+      changed: "{{ (acm_finalization_backup_schedules_info.resources | default([]) | length) > 0 }}"
       status: skipped
       reason: dry_run
       message: >-
@@ -48,16 +48,16 @@
       apiVersion: cluster.open-cluster-management.io/v1beta1
       kind: BackupSchedule
       metadata:
-        name: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.name }}"
-        namespace: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.namespace | default('open-cluster-management-backup') }}"
-        labels: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.labels | default({}) }}"
-        annotations: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.annotations | default({}) }}"
-      spec: "{{ (acm_secondary_backup_schedules_info.resources | first).spec | default({}) }}"
-    _backup_schedule_collision_repair_uid: "{{ (acm_secondary_backup_schedules_info.resources | first).metadata.uid | default('') }}"
+        name: "{{ (acm_finalization_backup_schedules_info.resources | first).metadata.name }}"
+        namespace: "{{ (acm_finalization_backup_schedules_info.resources | first).metadata.namespace | default('open-cluster-management-backup') }}"
+        labels: "{{ (acm_finalization_backup_schedules_info.resources | first).metadata.labels | default({}) }}"
+        annotations: "{{ (acm_finalization_backup_schedules_info.resources | first).metadata.annotations | default({}) }}"
+      spec: "{{ (acm_finalization_backup_schedules_info.resources | first).spec | default({}) }}"
+    _backup_schedule_collision_repair_uid: "{{ (acm_finalization_backup_schedules_info.resources | first).metadata.uid | default('') }}"
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - acm_switchover_repair_backup_schedule_collision_result is not defined
-    - (acm_secondary_backup_schedules_info.resources | default([]) | length) == 1
+    - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 1
 
 - name: Recreate BackupSchedule for collision repair
   when:
@@ -122,10 +122,17 @@
     namespace: "{{ _backup_schedule_collision_repair_body.metadata.namespace | default('open-cluster-management-backup') }}"
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
-  register: acm_secondary_backup_schedules_info
+  register: _acm_finalization_backup_schedules_collision_repair_info
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - acm_switchover_repair_backup_schedule_collision_result is not defined
+
+- name: Publish refreshed BackupSchedule facts after collision repair
+  ansible.builtin.set_fact:
+    acm_finalization_backup_schedules_info: "{{ _acm_finalization_backup_schedules_collision_repair_info }}"
+  when:
+    - _acm_finalization_backup_schedules_collision_repair_info is defined
+    - not (_acm_finalization_backup_schedules_collision_repair_info.skipped | default(false))
 
 - name: Publish BackupSchedule collision repair result
   ansible.builtin.set_fact:

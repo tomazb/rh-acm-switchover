@@ -19,14 +19,14 @@
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - acm_switchover_operation.restore_only | default(false)
-    - (acm_secondary_backup_schedules_info.resources | default([]) | length) == 0
+    - (acm_finalization_backup_schedules_info.resources | default([]) | length) == 0
     - acm_enable_backup_schedule_operation.operation.action == 'none'
 
 - name: Wait for a fresh ACM-owned backup on the secondary hub
   ansible.builtin.set_fact:
     _acm_secondary_backup_verify_timeout_seconds: >-
       {%- set cron_expr = (
-        ((acm_secondary_backup_schedules_info.resources | default([]) | first | default({}))
+        ((acm_finalization_backup_schedules_info.resources | default([]) | first | default({}))
         .get('spec', {})
         .get('veleroSchedule', ''))
       -%}

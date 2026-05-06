@@ -12,6 +12,7 @@ TESTS_DIR = COLLECTION_DIR / "tests"
 ARGOCD_TASKS = ROLES_DIR / "argocd_manage" / "tasks"
 ACTIVATION_TASKS = ROLES_DIR / "activation" / "tasks"
 PREFLIGHT_TASKS = ROLES_DIR / "preflight" / "tasks"
+PRIMARY_PREP_TASKS = ROLES_DIR / "primary_prep" / "tasks"
 POST_ACTIVATION_TASKS = ROLES_DIR / "post_activation" / "tasks"
 FINALIZATION_TASKS = ROLES_DIR / "finalization" / "tasks"
 DECOMMISSION_TASKS = ROLES_DIR / "decommission" / "tasks"
@@ -325,10 +326,11 @@ def test_activation_rediscovers_restore_facts_before_passive_selection():
     includes = [task.get("ansible.builtin.include_tasks", "") for task in block_tasks]
 
     assert "register: _acm_activation_restores_live_info" in discover_text
-    assert "register: _acm_secondary_mch_live_info" in discover_text
+    assert "register: _acm_activation_mch_live_info" in discover_text
+    assert "acm_activation_mch_info:" in discover_text
     assert "activation_restores_info" in discover_text
     assert "acm_activation_restores_info:" in discover_text
-    assert "acm_secondary_mch_info:" in discover_text
+    assert "acm_activation_mch_info" in discover_text
     assert "acm_switchover_test_overrides | default({})" in discover_text
     assert "register: acm_secondary_restores_info" not in discover_text
     assert includes[0] == "discover_resources.yml"
@@ -347,6 +349,83 @@ def test_activation_uses_live_restore_facts_instead_of_preflight_restore_facts()
         assert "acm_activation_restores_info.resources" in text
         assert "acm_secondary_restore_info" not in text
         assert "acm_secondary_restores_info" not in text
+
+
+def test_resumable_roles_use_phase_local_discovery_facts():
+    """Checkpoint resumes must not depend on facts owned by skipped preflight."""
+    expected_phase_facts = {
+        PRIMARY_PREP_TASKS / "discover_resources.yml": [
+            "acm_primary_prep_mch_info",
+            "acm_primary_prep_backup_schedules_info",
+        ],
+        PRIMARY_PREP_TASKS / "pause_backups.yml": [
+            "acm_primary_prep_mch_info",
+            "acm_primary_prep_backup_schedules_info",
+        ],
+        ACTIVATION_TASKS / "discover_resources.yml": ["acm_activation_mch_info"],
+        ACTIVATION_TASKS / "manage_auto_import.yml": ["acm_activation_mch_info"],
+        ACTIVATION_TASKS / "apply_immediate_import.yml": ["acm_activation_mch_info"],
+        FINALIZATION_TASKS / "discover_resources.yml": [
+            "acm_finalization_backup_schedules_info",
+            "acm_finalization_mch_info",
+            "acm_finalization_restores_info",
+        ],
+        FINALIZATION_TASKS / "cleanup_restores.yml": [
+            "acm_finalization_restores_info"
+        ],
+        FINALIZATION_TASKS / "enable_backups.yml": [
+            "acm_finalization_backup_schedules_info",
+            "acm_finalization_mch_info",
+        ],
+        FINALIZATION_TASKS / "repair_backup_schedule_collision.yml": [
+            "acm_finalization_backup_schedules_info"
+        ],
+        FINALIZATION_TASKS / "verify_backups.yml": [
+            "acm_finalization_backup_schedules_info"
+        ],
+    }
+    stale_preflight_facts = {
+        "acm_primary_mch_info",
+        "acm_primary_backup_schedules_info",
+        "acm_secondary_mch_info",
+        "acm_secondary_backup_schedules_info",
+        "acm_secondary_restore_info",
+        "acm_secondary_restores_info",
+    }
+
+    for path, expected_facts in expected_phase_facts.items():
+        text = path.read_text()
+        for expected_fact in expected_facts:
+            assert expected_fact in text, f"{path.name} must use {expected_fact}"
+        for stale_fact in stale_preflight_facts:
+            assert stale_fact not in text, f"{path.name} must not read {stale_fact}"
+
+
+def test_phase_local_facts_are_not_direct_register_targets():
+    """Skipped discovery tasks must not overwrite pre-seeded phase-local facts."""
+    phase_local_facts = [
+        "acm_primary_prep_mch_info",
+        "acm_primary_prep_backup_schedules_info",
+        "acm_activation_mch_info",
+        "acm_finalization_backup_schedules_info",
+        "acm_finalization_mch_info",
+        "acm_finalization_restores_info",
+    ]
+    files = [
+        PRIMARY_PREP_TASKS / "discover_resources.yml",
+        ACTIVATION_TASKS / "discover_resources.yml",
+        FINALIZATION_TASKS / "discover_resources.yml",
+        FINALIZATION_TASKS / "enable_backups.yml",
+        FINALIZATION_TASKS / "repair_backup_schedule_collision.yml",
+    ]
+
+    for path in files:
+        text = path.read_text()
+        for fact in phase_local_facts:
+            assert f"register: {fact}" not in text, (
+                f"{path.name} must register to a temporary variable and publish "
+                f"{fact} only with guarded set_fact"
+            )
 
 
 def test_activation_requires_passive_restore_ready_before_mutation_tasks():

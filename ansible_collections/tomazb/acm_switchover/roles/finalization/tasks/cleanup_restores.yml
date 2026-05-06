@@ -1,7 +1,7 @@
 ---
 - name: Use discovered secondary Restore resources in dry-run mode
   ansible.builtin.set_fact:
-    _acm_secondary_restores_to_cleanup: "{{ acm_secondary_restores_info | default(acm_secondary_restore_info | default({'resources': []})) }}"
+    _acm_secondary_restores_to_cleanup: "{{ acm_finalization_restores_info | default({'resources': []}) }}"
   when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 
 - name: Read Restore resources on the secondary hub

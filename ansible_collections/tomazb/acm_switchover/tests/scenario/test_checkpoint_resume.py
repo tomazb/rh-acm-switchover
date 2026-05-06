@@ -135,3 +135,22 @@ def test_validate_mode_with_checkpoint_enabled_does_not_create_or_mutate_checkpo
     )
     assert completed.returncode == 0, completed.stderr
     assert checkpoint == {}, "validate mode should not create a checkpoint file"
+
+
+def test_resume_after_preflight_uses_phase_local_discovery_facts(
+    run_checkpoint_fixture,
+):
+    completed, checkpoint = run_checkpoint_fixture(
+        "preflight_completed_without_preflight_facts.yml",
+        pre_completed_phases=["preflight"],
+        checkpoint_schema_version="2.0",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert checkpoint["schema_version"] == "2.0"
+    assert checkpoint["phase"] == "preflight"
+    assert checkpoint["completed_phases"] == ["preflight"]
+    assert re.search(
+        _task_pattern("primary_prep", "Pause BackupSchedule on primary hub", "included"),
+        completed.stdout,
+    ), "primary_prep should resume without preflight-owned BackupSchedule facts"
