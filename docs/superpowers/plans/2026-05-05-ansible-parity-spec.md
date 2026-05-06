@@ -7,7 +7,7 @@
 
 ## Current review status
 
-**Last reviewed:** 2026-05-05
+**Last reviewed:** 2026-05-06
 **Branch inspected:** `ansible`
 **Working tree note:** `AGENTS.md` has unrelated local modifications and was not changed for this review.
 **Verification scope:** Static inspection only. No live ACM/OpenShift cluster verification was performed.
@@ -779,7 +779,7 @@ ansible_collections/tomazb/acm_switchover/plugins/modules/acm_argocd_filter.py
 Implemented playbook usage:
 
 ```yaml
-- name: Reset checkpoint from primary prep after ArgoCD resume-on-failure
+- name: Reset primary prep checkpoint after Argo CD resume on failure
   tomazb.acm_switchover.checkpoint_phase:
     phase: primary_prep
     checkpoint: "{{ acm_switchover_execution.checkpoint | combine({'reset_from': 'primary_prep'}) }}"
@@ -789,7 +789,8 @@ Implemented playbook usage:
   when:
     - acm_switchover_features.argocd.manage | default(false)
     - acm_switchover_features.argocd.resume_on_failure | default(false)
-    - acm_switchover_execution.checkpoint.enabled | default(false) | bool
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+  ignore_errors: true  # noqa: ignore-errors
 ```
 
 ## 4.4 Store ArgoCD pause metadata in checkpoint operational data
@@ -1664,7 +1665,7 @@ plugins/module_utils/argocd.py
 **Acceptance criteria:**
 
 - [x] Apps paused by another run are not resumed by default.
-- [ ] Apps paused by another run are resumed only when force override is explicitly enabled, if that override is added.
+- [x] Force override is intentionally omitted, so Applications paused by another run remain out of scope for automated resume.
 
 ## Ticket ACM-ANS-009 — Decommission summary must use artifact path validation
 
