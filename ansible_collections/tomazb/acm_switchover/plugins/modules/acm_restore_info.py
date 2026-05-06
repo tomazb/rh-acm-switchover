@@ -122,7 +122,7 @@ def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict
 def passive_restore_phase(restore: dict | None) -> str | None:
     if restore is None:
         return None
-    return restore.get("status", {}).get("phase", "unknown")
+    return restore.get("status", {}).get("phase", "Unknown")
 
 
 def passive_restore_ready_for_preflight(restore: dict | None) -> bool:

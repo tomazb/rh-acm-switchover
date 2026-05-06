@@ -103,7 +103,7 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
     if isinstance(test_overrides, dict):
         activation_restores_info = test_overrides.get("activation_restores_info")
         if activation_restores_info is not None:
-            vars_payload.setdefault("acm_activation_restores_info", activation_restores_info)
+            vars_payload["acm_activation_restores_info"] = activation_restores_info
 
     vars_payload.setdefault("acm_switchover_features", {}).setdefault(
         "token_expiry_warning_hours", 4

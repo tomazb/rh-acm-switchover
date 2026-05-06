@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions workflows now use Node 24-backed `actions/checkout@v6` and `actions/setup-python@v6` to avoid the Node 20 action runtime deprecation.
 - Local `run_tests.sh` now excludes the release validation framework by default; run `python -m pytest tests/release -q` for framework tests and supply `--release-profile` for live release certification.
 
+### Fixed
+
+- Collection activation now re-reads live Restore resources at activation time, ignores stale preflight Restore facts, fails before mutation when the selected passive Restore is not ready, and includes Restore `resourceVersion` in activation patches when available.
+
 ## [1.7.9] - 2026-05-05
 
 ### Fixed

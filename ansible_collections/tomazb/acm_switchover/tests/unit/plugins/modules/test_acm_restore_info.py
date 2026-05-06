@@ -213,6 +213,30 @@ def test_build_restore_activation_plan_marks_unknown_passive_restore_not_ready()
     )
 
 
+def test_build_restore_activation_plan_normalizes_missing_passive_restore_phase():
+    plan = build_restore_activation_plan(
+        method="passive",
+        activation_method="patch",
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                },
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {},
+            }
+        ],
+        backup_name="latest",
+    )
+
+    assert plan["restore_phase"] == "Unknown"
+    assert (
+        plan["restore_ready_reason"]
+        == "Passive Restore phase Unknown is not activation-ready."
+    )
+
+
 def test_build_restore_activation_plan_exposes_missing_restore_ready_reason():
     plan = build_restore_activation_plan(
         method="passive",
