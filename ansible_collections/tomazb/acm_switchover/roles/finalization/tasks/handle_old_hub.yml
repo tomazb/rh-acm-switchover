@@ -68,16 +68,54 @@
       register: _old_hub_restore_applied
       when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
+- name: Build embedded decommission settings
+  ansible.builtin.set_fact:
+    _acm_switchover_embedded_decommission: >-
+      {{
+        (acm_switchover_decommission | default({}, true))
+        | combine({'confirmed': true}, recursive=True)
+      }}
+  when:
+    - (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Decommission old hub
+  ansible.builtin.include_role:
+    name: tomazb.acm_switchover.decommission
+  vars:
+    acm_switchover_decommission: "{{ _acm_switchover_embedded_decommission }}"
+  register: _old_hub_decommission_role_result
+  when:
+    - (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Determine old hub decommission completion
+  ansible.builtin.set_fact:
+    _old_hub_decommission_completed: >-
+      {{
+        (acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'
+        and (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
+        and ((acm_switchover_decommission_result | default({})).status | default('')) == 'pass'
+      }}
+
 - name: Determine old hub disposition
   ansible.builtin.set_fact:
     acm_switchover_old_hub_disposition:
       action: "{{ acm_switchover_operation.old_hub_action | default('secondary') }}"
-      changed: "{{ _old_hub_restore_applied.changed | default(false) }}"
-      message: >-
+      changed: >-
         {{
-          {
-            'secondary': 'Old hub configured as secondary ACM hub with passive sync restore',
-            'decommission': 'Old hub scheduled for decommission',
-            'none': 'No action taken on old hub'
-          }.get(acm_switchover_operation.old_hub_action | default('secondary'), 'No action taken on old hub')
+          ((_old_hub_restore_applied | default({})).changed | default(false))
+          or ((acm_switchover_decommission_result | default({})).changed | default(false))
+          or ((_old_hub_decommission_role_result | default({})).changed | default(false))
         }}
+      message: >-
+        {%- set action = acm_switchover_operation.old_hub_action | default('secondary') -%}
+        {%- if action == 'secondary' -%}
+        Old hub configured as secondary ACM hub with passive sync restore
+        {%- elif action == 'decommission' and (_old_hub_decommission_completed | default(false) | bool) -%}
+        Old hub decommission completed
+        {%- elif action == 'decommission' -%}
+        Old hub scheduled for decommission
+        {%- else -%}
+        No action taken on old hub
+        {%- endif -%}

@@ -35,6 +35,7 @@
   loop: "{{ _managed_cluster_delete_targets | default([]) }}"
   loop_control:
     label: "{{ item.metadata.name }}"
+  register: _managed_cluster_delete_results
   when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Wait for ManagedCluster finalizers to complete
