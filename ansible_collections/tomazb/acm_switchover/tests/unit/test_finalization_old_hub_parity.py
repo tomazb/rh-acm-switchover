@@ -79,14 +79,18 @@ def test_handle_old_hub_decommission_includes_decommission_role():
 def test_embedded_finalization_decommission_passes_scoped_confirmation():
     """Embedded finalization decommission must confirm only the included role invocation."""
     tasks = yaml.safe_load((FINALIZATION_TASKS / "handle_old_hub.yml").read_text())
-    text = (FINALIZATION_TASKS / "handle_old_hub.yml").read_text()
     defaults = yaml.safe_load((ROLES_DIR / "decommission" / "defaults" / "main.yml").read_text())
 
     assert defaults["acm_switchover_decommission"]["confirmed"] is False
-    assert "confirmed': true" in text or "confirmed: true" in text
     assert not any(
         "acm_switchover_decommission:" in str(task.get("ansible.builtin.set_fact", {})) for task in tasks
     ), "handle_old_hub.yml must not overwrite the global decommission settings"
+
+    settings_task = next(task for task in tasks if task.get("name") == "Build embedded decommission settings")
+    settings_fact = settings_task.get("ansible.builtin.set_fact", {})
+    settings_value = settings_fact.get("_acm_switchover_embedded_decommission", "")
+    assert "acm_switchover_decommission | default({}, true)" in settings_value
+    assert "combine({'confirmed': true}, recursive=True)" in settings_value
 
     decommission_task = next(
         task
@@ -95,7 +99,6 @@ def test_embedded_finalization_decommission_passes_scoped_confirmation():
     )
     assert "acm_switchover_decommission" in decommission_task.get("vars", {})
 
-    settings_task = next(task for task in tasks if task.get("name") == "Build embedded decommission settings")
     settings_when = "\n".join(settings_task.get("when", []))
     assert "acm_switchover_execution.mode | default('dry_run') != 'dry_run'" in settings_when
 

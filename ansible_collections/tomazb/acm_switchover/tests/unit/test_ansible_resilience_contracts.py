@@ -107,7 +107,21 @@ def test_decommission_autodetects_observability_by_default_before_rbac():
     assert "Namespace" in main_text
     assert "open-cluster-management-observability" in main_text
     assert "acm_switchover_decommission_effective_has_observability" in main_text
-    assert includes.index("validate_rbac.yml") < includes.index("delete_observability.yml")
+
+    namespace_lookup_index = next(
+        index
+        for index, task in enumerate(main_tasks)
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Namespace"
+    )
+    observability_fact_index = next(
+        index
+        for index, task in enumerate(main_tasks)
+        if "acm_switchover_decommission_effective_has_observability" in str(task.get("ansible.builtin.set_fact", {}))
+    )
+    validate_index = includes.index("validate_rbac.yml")
+
+    assert namespace_lookup_index < observability_fact_index < validate_index
+    assert validate_index < includes.index("delete_observability.yml")
 
 
 def test_decommission_playbook_exposes_precheck_role_path():
