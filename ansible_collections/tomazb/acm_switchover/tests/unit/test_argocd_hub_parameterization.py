@@ -81,14 +81,14 @@ def test_pause_patches_automated_apps_even_with_existing_pause_marker():
     )
 
 
-def test_pause_skips_apps_without_automated_sync_policy():
-    """Applications already lacking automated sync must not have original-sync-policy clobbered."""
+def test_pause_skips_apps_without_non_null_automated_sync_policy():
+    """Applications without non-null automated sync must not have original-sync-policy clobbered."""
     patch_task = _find_pause_application_patch_task()
     when = patch_task.get("when", [])
     if isinstance(when, str):
         when = [when]
 
-    assert "'automated' in (item.spec.syncPolicy | default({}))" in when
+    assert "(item.spec.syncPolicy | default({})).automated | default(none) is not none" in when
 
 
 def test_pause_sets_automated_to_null_for_merge_patch_delete():

@@ -25,6 +25,7 @@
   loop: "{{ _multiclusterobservability_resources.resources | default([]) }}"
   loop_control:
     label: "{{ item.metadata.name }}"
+  register: _multiclusterobservability_delete_results
   when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Wait for observability pods to terminate

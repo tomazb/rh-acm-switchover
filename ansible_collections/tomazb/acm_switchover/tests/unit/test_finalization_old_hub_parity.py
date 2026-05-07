@@ -73,6 +73,7 @@ def test_handle_old_hub_decommission_includes_decommission_role():
     assert decommission_tasks, "handle_old_hub.yml must include the decommission role"
     when_text = "\n".join(decommission_tasks[0].get("when", []))
     assert "(acm_switchover_operation.old_hub_action | default('secondary')) == 'decommission'" in when_text
+    assert "acm_switchover_execution.mode | default('dry_run') != 'dry_run'" in when_text
 
 
 def test_embedded_finalization_decommission_passes_scoped_confirmation():
@@ -93,3 +94,27 @@ def test_embedded_finalization_decommission_passes_scoped_confirmation():
         if task.get("ansible.builtin.include_role", {}).get("name") == "tomazb.acm_switchover.decommission"
     )
     assert "acm_switchover_decommission" in decommission_task.get("vars", {})
+
+    settings_task = next(task for task in tasks if task.get("name") == "Build embedded decommission settings")
+    settings_when = "\n".join(settings_task.get("when", []))
+    assert "acm_switchover_execution.mode | default('dry_run') != 'dry_run'" in settings_when
+
+
+def test_old_hub_disposition_uses_safe_defaults_and_real_decommission_changed_state():
+    """Disposition changed must be safe for skipped branches and preserve decommission idempotence."""
+    text = (FINALIZATION_TASKS / "handle_old_hub.yml").read_text()
+
+    assert "register: _old_hub_decommission_role_result" in text
+    assert "((_old_hub_restore_applied | default({})).changed | default(false))" in text
+    assert "((_old_hub_decommission_role_result | default({})).changed | default(false))" in text
+    assert "acm_switchover_decommission_result.status | default('')) == 'pass'" not in text
+
+
+def test_decommission_disposition_message_requires_completed_live_decommission():
+    """Finalization must not report completed decommission for dry-run or skipped role paths."""
+    text = (FINALIZATION_TASKS / "handle_old_hub.yml").read_text()
+
+    assert "_old_hub_decommission_completed" in text
+    assert "((acm_switchover_decommission_result | default({})).status | default('')) == 'pass'" in text
+    assert "Old hub decommission completed" in text
+    assert "Old hub scheduled for decommission" in text

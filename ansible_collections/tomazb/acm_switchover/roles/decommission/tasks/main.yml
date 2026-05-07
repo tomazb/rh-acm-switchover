@@ -49,6 +49,21 @@
       mode: "{{ acm_switchover_execution.mode | default('dry_run') }}"
       status: pass
       has_observability: "{{ acm_switchover_decommission_effective_has_observability | bool }}"
+      changed: >-
+        {{
+          (
+            ((_managed_cluster_delete_results | default({})).results | default([])
+            | selectattr('changed') | list | length) > 0
+          )
+          or (
+            ((_multiclusterobservability_delete_results | default({})).results | default([])
+            | selectattr('changed') | list | length) > 0
+          )
+          or (
+            ((_multiclusterhub_delete_results | default({})).results | default([])
+            | selectattr('changed') | list | length) > 0
+          )
+        }}
 
 - name: Normalize summary path input
   ansible.builtin.set_fact:

@@ -27,6 +27,7 @@
   loop: "{{ _multiclusterhub_resources.resources | default([]) }}"
   loop_control:
     label: "{{ item.metadata.name }}"
+  register: _multiclusterhub_delete_results
   when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Wait for ACM workload pods to terminate after MultiClusterHub deletion
