@@ -13,6 +13,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE,
     ARGOCD_RESUME_ON_FAILURE_VALIDATE_MODE_MESSAGE,
     VALIDATION_ACTIVATION_METHOD_CHOICES,
+    VALIDATION_EXECUTION_MODE_CHOICES,
     VALIDATION_METHOD_CHOICES,
     VALIDATION_OLD_HUB_ACTION_CHOICES,
 )
@@ -150,6 +151,7 @@ def validate_operation_inputs(operation: dict, features: dict, execution: dict |
     execution_mode = execution.get("mode", "execute")
 
     _validate_choice(activation_method, VALIDATION_ACTIVATION_METHOD_CHOICES, "activation_method")
+    _validate_choice(execution_mode, VALIDATION_EXECUTION_MODE_CHOICES, "execution.mode")
 
     if argocd_resume_on_failure and not argocd_manage:
         raise ValidationError(ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE)

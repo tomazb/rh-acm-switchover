@@ -18,6 +18,7 @@ BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME = "bootstrap-hub-kubeconfig"  # nosec B105
 VALIDATION_METHOD_CHOICES = ("passive", "full")
 VALIDATION_OLD_HUB_ACTION_CHOICES = ("secondary", "decommission", "none")
 VALIDATION_ACTIVATION_METHOD_CHOICES = ("patch", "restore")
+VALIDATION_EXECUTION_MODE_CHOICES = ("execute", "validate", "dry_run")
 ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE = "argocd.resume_on_failure requires argocd.manage=true"
 ARGOCD_RESUME_ON_FAILURE_VALIDATE_MODE_MESSAGE = "argocd.resume_on_failure is not valid with execution.mode=validate"
 

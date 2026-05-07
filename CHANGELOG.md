@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Collection input validation now rejects unknown `acm_switchover_execution.mode` values before role tasks can treat a typo as live execution.
 - Collection finalization now runs the decommission role when `old_hub_action: decommission` is selected during switchover, while preserving the standalone decommission confirmation gate and avoiding completed/changed reporting for dry-run or no-op decommission paths.
 - Collection Argo CD pause now re-patches Applications that still have automated sync even when a stale switchover pause marker is present.
 - Python and collection validation now share a parity fixture covering Argo CD resume-on-failure rules and safe-path policy; collection validation now rejects `~/` paths and enforces `argocd.resume_on_failure` combinations consistently with the Python CLI.

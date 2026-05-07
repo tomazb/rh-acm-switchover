@@ -449,3 +449,24 @@ def test_invalid_activation_method_rejected():
     )
     assert any(item["id"] == "preflight-input-operation" and item["status"] == "fail" for item in results)
     assert any("restor" in item["message"] for item in results)
+
+
+def test_invalid_execution_mode_rejected():
+    """A typo in execution.mode must be caught before live tasks can run."""
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/hub.kubeconfig"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "./kubeconfigs/hub.kubeconfig",
+                },
+            },
+            "operation": {"method": "passive", "activation_method": "patch"},
+            "execution": {"mode": "dry-run", "checkpoint": {"path": ".state/run.json"}},
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+    op_result = next(item for item in results if item["id"] == "preflight-input-operation")
+    assert op_result["status"] == "fail"
+    assert "Invalid execution.mode 'dry-run'" in op_result["message"]
