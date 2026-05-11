@@ -18,20 +18,37 @@ ACM_KINDS = ARGOCD_ACM_KINDS
 
 def is_acm_touching_application(app: dict) -> bool:
     """Return True if any resource in the Application's status touches an ACM namespace or kind."""
+    return count_acm_resources(app) > 0
+
+
+def count_acm_resources(app: dict) -> int:
+    """Return the number of Application status resources that touch ACM."""
+    count = 0
     for resource in app.get("status", {}).get("resources", []):
         namespace = resource.get("namespace")
         if namespace in ACM_NAMESPACES or (
             namespace and ACM_NAMESPACE_REGEX.match(namespace)
         ):
-            return True
+            count += 1
+            continue
         if resource.get("kind") in ACM_KINDS:
-            return True
-    return False
+            count += 1
+    return count
 
 
 def filter_acm_applications(applications: list[dict]) -> list[dict]:
     """Return only applications that manage ACM resources."""
-    return [app for app in applications if is_acm_touching_application(app)]
+    filtered = []
+    for app in applications:
+        count = count_acm_resources(app)
+        if count > 0:
+            metadata = app.get("metadata", {}) or {}
+            annotated = dict(app)
+            annotated["acm_resource_count"] = count
+            annotated["namespace"] = metadata.get("namespace", "")
+            annotated["name"] = metadata.get("name", "")
+            filtered.append(annotated)
+    return filtered
 
 
 def build_pause_patch(sync_policy: dict, run_id: str) -> dict:

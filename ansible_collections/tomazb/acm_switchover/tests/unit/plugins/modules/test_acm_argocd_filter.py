@@ -26,6 +26,9 @@ def test_filters_to_only_acm_touching_apps():
     filtered = filter_acm_applications(apps)
     names = [a["metadata"]["name"] for a in filtered]
     assert names == ["acm-app", "mce-app"]
+    assert filtered[0]["acm_resource_count"] == 1
+    assert filtered[0]["namespace"] == "argocd"
+    assert filtered[0]["name"] == "acm-app"
 
 
 def test_empty_list_returns_empty():
