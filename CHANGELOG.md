@@ -17,9 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions workflows now use Node 24-backed `actions/checkout@v6` and `actions/setup-python@v6` to avoid the Node 20 action runtime deprecation.
 - Local `run_tests.sh` now excludes the release validation framework by default; run `python -m pytest tests/release -q` for framework tests and supply `--release-profile` for live release certification.
 - Refreshed collection migration and variable reference docs for the current checkpoint, validate/dry-run, safe-path, RBAC bootstrap, and klusterlet concurrency interfaces. Protected runbook and `.claude/skills` updates remain draft-only because those files require explicit operator approval and synchronized review before editing.
+- Clarified report artifact documentation so Python and collection reports share schema version `1.0` and aligned contracts without promising identical top-level fields for every report type.
 
 ### Fixed
 
+- Collection preflight now emits read-only Argo CD ACM-impact advisory details comparable to the Python CLI while keeping discovery failures non-blocking.
+- Collection primary prep now checks Thanos compactor pods after scale-down and emits a non-fatal warning when pods remain.
+- RBAC requirements documentation now matches the enforced observability route and `statefulsets/scale` permissions.
 - Collection input validation now rejects unknown `acm_switchover_execution.mode` values before role tasks can treat a typo as live execution.
 - Collection finalization now runs the decommission role when `old_hub_action: decommission` is selected during switchover, while preserving the standalone decommission confirmation gate and avoiding completed/changed reporting for dry-run or no-op decommission paths.
 - Collection Argo CD pause now re-patches Applications that still have automated sync even when a stale switchover pause marker is present.

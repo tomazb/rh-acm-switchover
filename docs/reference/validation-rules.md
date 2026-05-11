@@ -164,8 +164,10 @@ directory location for schema-versioned report artifacts. Relative paths are acc
 from the current working directory. Absolute paths are accepted only under the safe path roots listed
 in [Filesystem Path Validation](#6-filesystem-path-validation).
 
-Report artifacts use schema version `1.0` and preserve field parity with collection JSON artifacts.
-The CLI validates the path before writing `preflight-report.json`, `switchover-report.json`,
+Report artifacts use schema version `1.0` and preserve the shared status/report contract with
+collection JSON artifacts. Report types are not field-for-field identical across the Python CLI
+and collection because each runtime includes context fields for its own execution model. The CLI
+validates the path before writing `preflight-report.json`, `switchover-report.json`,
 `restore-only-report.json`, or `decommission-report.json`.
 
 #### Cross-Argument Rules

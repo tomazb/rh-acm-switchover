@@ -21,7 +21,9 @@ def _assert_argocd_script_only_in_deprecated_context(path: str, content: str) ->
         window_start = max(0, idx - 2)
         window_end = min(len(lines), idx + 3)
         context = "\n".join(lines[window_start:window_end]).lower()
-        assert "deprecated" in context, f"Non-deprecated argocd-manage.sh guidance remains in {path}: {line}"
+        assert (
+            "deprecated" in context
+        ), f"Non-deprecated argocd-manage.sh guidance remains in {path}: {line}"
 
 
 def test_docs_index_surfaces_collection_and_tldr_docs():
@@ -89,7 +91,9 @@ def test_argocd_guardrail_rejects_non_deprecated_script_guidance():
 def test_install_quick_test_mentions_supported_virtualenv_names():
     """Quick-test guidance should clarify both supported virtualenv directory names."""
     content = _read("docs/getting-started/install.md")
-    quick_test_section = content.split("### Quick Test", 1)[1].split("### Enable Bash Completions", 1)[0]
+    quick_test_section = content.split("### Quick Test", 1)[1].split(
+        "### Enable Bash Completions", 1
+    )[0]
 
     assert "source .venv/bin/activate" in quick_test_section
     assert "source venv/bin/activate" in quick_test_section
@@ -110,7 +114,9 @@ def test_active_operator_docs_do_not_recommend_deprecated_argocd_script():
 
 def test_collection_migration_map_tracks_current_cli_surface():
     """The collection migration map must not preserve stale Python option names."""
-    content = _read("ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md")
+    content = _read(
+        "ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md"
+    )
 
     assert "--generate-kubeconfig" not in content
     assert "--skip-kubeconfig-generation" in content
@@ -120,11 +126,15 @@ def test_collection_migration_map_tracks_current_cli_surface():
 
 def test_collection_variable_reference_documents_checkpoint_and_klusterlet_controls():
     """Variable docs must cover the current checkpoint and post-activation control surface."""
-    content = _read("ansible_collections/tomazb/acm_switchover/docs/variable-reference.md")
+    content = _read(
+        "ansible_collections/tomazb/acm_switchover/docs/variable-reference.md"
+    )
 
     assert "acm_switchover_execution.checkpoint.reset_from" in content
     assert "acm_switchover_execution.concurrency.klusterlet_probe_workers" in content
-    assert "acm_switchover_execution.concurrency.klusterlet_remediation_workers" in content
+    assert (
+        "acm_switchover_execution.concurrency.klusterlet_remediation_workers" in content
+    )
     assert "acm_switchover_features.klusterlet.strict_remediation" in content
     assert "acm_switchover_discovery.bridge_script" in content
     assert "scripts/discover-hub.sh" in content
@@ -142,6 +152,40 @@ def test_collection_artifact_schema_documents_current_checkpoint_contract():
     assert "validate" in content
     assert "dry_run" in content
     assert "locked_by" not in content
+
+
+def test_rbac_docs_match_observability_route_and_scale_permissions():
+    """Operator-facing RBAC docs must not drift from the enforced observability matrix."""
+    rbac_requirements = _read("docs/deployment/rbac-requirements.md")
+    install_doc = _read("docs/getting-started/install.md")
+
+    assert "- **Verbs**: `get`" in rbac_requirements
+    assert (
+        "- **Verbs**: `get`, `list`\n- **Scope**: Namespace-scoped (various)"
+        not in rbac_requirements
+    )
+    assert "`statefulsets/scale` (get, patch)" in rbac_requirements
+    assert 'resources: ["routes"]' in install_doc
+    assert 'verbs: ["get"]' in install_doc
+    assert (
+        'resources: ["deployments", "statefulsets", "statefulsets/scale"]'
+        in install_doc
+    )
+
+
+def test_report_artifact_docs_do_not_claim_identical_top_level_fields():
+    """Report docs must describe aligned contracts without promising field-for-field identity."""
+    artifact_schema = _read(
+        "ansible_collections/tomazb/acm_switchover/docs/artifact-schema.md"
+    )
+    validation_rules = _read("docs/reference/validation-rules.md")
+    architecture = _read("docs/development/architecture.md")
+
+    forbidden = "same top-level status fields"
+    assert forbidden not in artifact_schema
+    assert "not identical across all report types" in artifact_schema
+    assert "field parity with collection JSON artifacts" not in validation_rules
+    assert "same core fields" not in architecture
 
 
 def test_changelog_unreleased_keeps_standard_groups():

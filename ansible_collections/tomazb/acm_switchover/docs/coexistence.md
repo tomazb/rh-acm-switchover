@@ -50,6 +50,12 @@ The `roles/preflight/tasks/validate_gitops.yml` task records an informational re
 (`preflight-gitops-warning`) when `acm_switchover_features.skip_gitops_check` is not
 set, but does not fail the preflight or block the switchover.
 
+The same preflight task also performs read-only Argo CD Application discovery for
+operator advisory output. It lists ACM-touching Applications by hub and prints the
+same kind of pause/scope recommendation as the Python CLI when Argo CD management
+is not enabled. Discovery failures remain non-blocking and are reported as
+warnings.
+
 Argo CD auto-sync pause/resume is the **only supported mutating GitOps integration**
 in the collection. It is managed by the `argocd_manage` role:
 

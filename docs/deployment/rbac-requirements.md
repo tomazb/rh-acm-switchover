@@ -90,6 +90,12 @@ The RBAC model is designed following the principle of least privilege:
 - **Scope**: Namespace-scoped (`open-cluster-management-observability`)
 - **Purpose**: Scale Thanos compactor during primary hub preparation
 
+#### StatefulSet Scale Subresource
+- **Resources**: `statefulsets/scale`
+- **Verbs**: `get`, `patch`
+- **Scope**: Namespace-scoped (`open-cluster-management-observability`)
+- **Purpose**: Scale Thanos compactor during primary hub preparation
+
 ### ACM Cluster API Group (cluster.open-cluster-management.io)
 
 #### ManagedClusters
@@ -175,8 +181,8 @@ The RBAC model is designed following the principle of least privilege:
 
 #### Routes
 - **Resources**: `routes`
-- **Verbs**: `get`, `list`
-- **Scope**: Namespace-scoped (various)
+- **Verbs**: `get`
+- **Scope**: Namespace-scoped (`open-cluster-management-observability`)
 - **Purpose**: Retrieve route hostnames for connectivity verification
 
 ### Argo CD API Groups (validated automatically when Argo CD detection is enabled; additional write permissions required with `--argocd-manage`)
@@ -247,6 +253,8 @@ These resources use Role and RoleBinding for specific namespaces:
 - `pods` (get, list)
 - `deployments` (get, patch)
 - `statefulsets` (get, patch)
+- `statefulsets/scale` (get, patch)
+- `routes` (get)
 
 #### multicluster-engine
 - `configmaps` (get, create, patch, delete)

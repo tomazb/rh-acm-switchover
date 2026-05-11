@@ -433,7 +433,7 @@ The collection uses a fundamentally different architecture from the Python CLI:
 - **Playbooks** (`switchover.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints
 - **Grouped variables** (`acm_switchover_hubs`, `acm_switchover_operation`, `acm_switchover_features`) replace CLI flags as the primary operator interface
 - **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
-- **Report artifacts** use schema version `1.0` across preflight, switchover, restore-only, and decommission paths; Python `--report-dir` writes the same core fields
+- **Report artifacts** use schema version `1.0` across preflight, switchover, restore-only, and decommission paths; Python and collection reports preserve aligned status/report contracts without requiring identical top-level fields for every report type
 - **Decommission observability** defaults to namespace autodetection in the collection, with explicit `true`/`false` overrides for known environments
 - **Constants isolation**: `plugins/module_utils/constants.py` is the collection's constants file — it cannot import from `lib/constants.py`
 

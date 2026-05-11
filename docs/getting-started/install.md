@@ -223,8 +223,13 @@ rules:
 
 # Deployments and StatefulSets (for scaling)
 - apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets", "deployments/scale", "statefulsets/scale"]
-  verbs: ["get", "list", "patch"]
+  resources: ["deployments", "statefulsets", "statefulsets/scale"]
+  verbs: ["get", "patch"]
+
+# OpenShift routes (observability access)
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get"]
 
 # OADP resources
 - apiGroups: ["oadp.openshift.io"]

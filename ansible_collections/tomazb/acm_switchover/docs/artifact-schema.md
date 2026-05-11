@@ -1,9 +1,12 @@
 # Artifact Schema
 
 Python CLI `--report-dir` artifacts and collection `acm_switchover_execution.report_dir`
-artifacts share schema version `"1.0"` and the same top-level status fields. The
-collection uses `source: tomazb.acm_switchover`; the Python CLI uses
-`source: python-cli`.
+artifacts share schema version `"1.0"` and aligned status/report contracts, but
+they are not identical across all report types. Preflight reports share the
+strongest shape alignment around `status`, `summary`, `hubs`, and `results[]`.
+Switchover, restore-only, and decommission reports may use different top-level
+context fields to match each runtime's execution model. The collection uses
+`source: tomazb.acm_switchover`; the Python CLI uses `source: python-cli`.
 
 ## Controller-Side Safe Path Policy
 
