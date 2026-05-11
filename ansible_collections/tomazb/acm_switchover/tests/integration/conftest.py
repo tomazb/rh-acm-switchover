@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -11,6 +10,7 @@ import pytest
 import yaml
 
 from ansible_collections.tomazb.acm_switchover.tests.conftest import (
+    _ansible_env,
     _materialize_fixture_kubeconfigs,
     _seed_fixture_defaults,
 )
@@ -44,24 +44,6 @@ def _prepare_execution_vars(vars_payload: dict, tmp_path: Path) -> Path:
         execution["report_dir"] = str(effective_report_dir)
     _materialize_fixture_kubeconfigs(vars_payload, tmp_path)
     return effective_report_dir
-
-
-def _ansible_env(repo_root: Path, tmp_path: Path) -> dict:
-    local_tmp = tmp_path / "ansible-local"
-    remote_tmp = tmp_path / "ansible-remote"
-    local_tmp.mkdir(parents=True, exist_ok=True)
-    remote_tmp.mkdir(parents=True, exist_ok=True)
-    return {
-        **os.environ,
-        "ANSIBLE_COLLECTIONS_PATH": ":".join(
-            [
-                str(repo_root),
-                os.path.expanduser("~/.ansible/collections"),
-            ]
-        ),
-        "ANSIBLE_LOCAL_TEMP": str(local_tmp),
-        "ANSIBLE_REMOTE_TMP": str(remote_tmp),
-    }
 
 
 @pytest.fixture
