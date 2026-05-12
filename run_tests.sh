@@ -17,6 +17,13 @@ NC='\033[0m' # No Color
 
 STRICT_QUALITY="${STRICT_QUALITY:-0}"
 QUALITY_PATHS=(acm_switchover.py lib/ modules/)
+MYPY_PATHS=(
+    acm_switchover.py
+    lib/
+    modules/
+    ansible_collections/tomazb/acm_switchover/plugins
+    ansible_collections/tomazb/acm_switchover/tests
+)
 
 run_advisory_or_strict() {
     local label="$1"
@@ -98,7 +105,7 @@ run_advisory_or_strict "isort import check" isort --check-only --profile black -
 
 echo ""
 echo "--- MyPy (Type Check) ---"
-run_advisory_or_strict "MyPy" mypy "${QUALITY_PATHS[@]}" --ignore-missing-imports --no-strict-optional
+run_advisory_or_strict "MyPy" mypy --explicit-package-bases "${MYPY_PATHS[@]}" --ignore-missing-imports --no-strict-optional
 
 echo ""
 echo "======================================"

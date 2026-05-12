@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
     ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE,
@@ -99,7 +100,7 @@ def validate_safe_path(path: str) -> None:
             )
 
 
-def _validate_choice(value: str, valid_choices: list[str], field_name: str) -> None:
+def _validate_choice(value: str, valid_choices: Sequence[str], field_name: str) -> None:
     """Validate that a value is one of the allowed choices.
 
     Raises:

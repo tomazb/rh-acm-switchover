@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import builtins
 import threading
+from typing import NoReturn
 
 import pytest
 import yaml
@@ -67,6 +68,14 @@ class FakeAppsClient:
 
     def patch_namespaced_deployment(self, name: str, namespace: str, body: dict):
         self.patched.append((namespace, name, body))
+
+
+def _fail_client_factory(kubeconfig: str, context: str | None = None) -> NoReturn:
+    pytest.fail("check mode must not build clients")
+
+
+def _new_fake_apps_client(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+    return FakeAppsClient()
 
 
 def _b64_yaml(payload: dict) -> str:
@@ -201,8 +210,8 @@ def test_remediation_check_mode_returns_plan_without_clients():
         managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
         pending_clusters=["cluster-a"],
         check_mode=True,
-        core_client_factory=lambda kubeconfig, context=None: pytest.fail("check mode must not build clients"),
-        apps_client_factory=lambda kubeconfig, context=None: pytest.fail("check mode must not build clients"),
+        core_client_factory=_fail_client_factory,
+        apps_client_factory=_fail_client_factory,
     )
 
     assert result["changed"] is True
@@ -226,14 +235,17 @@ def test_remediation_skips_pending_cluster_without_kubeconfig():
 def test_remediation_reports_missing_import_secret_as_best_effort_failure():
     secondary = FakeCoreClient()
 
+    def core_client_factory(kubeconfig: str, context: str | None = None) -> FakeCoreClient:
+        return secondary
+
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},
         managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
         pending_clusters=["cluster-a"],
         workers=1,
         strict=False,
-        core_client_factory=lambda kubeconfig, context=None: secondary,
-        apps_client_factory=lambda kubeconfig, context=None: FakeAppsClient(),
+        core_client_factory=core_client_factory,
+        apps_client_factory=_new_fake_apps_client,
     )
 
     assert result["failed"] is False
@@ -258,13 +270,16 @@ def test_remediation_deletes_reapplies_and_restarts_klusterlet():
     def core_client_factory(kubeconfig: str, context: str | None = None):
         return secondary if kubeconfig == "hub" else managed
 
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},
         managed_clusters={"cluster-a": {"kubeconfig": "cluster-a", "context": "ctx-a"}},
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=lambda kubeconfig, context=None: apps,
+        apps_client_factory=apps_client_factory,
     )
 
     assert result["changed"] is True
@@ -296,7 +311,7 @@ def test_remediation_deletes_bootstrap_secret_from_manifest_namespace():
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=lambda kubeconfig, context=None: FakeAppsClient(),
+        apps_client_factory=_new_fake_apps_client,
     )
 
     assert result["failed_clusters"] == []
@@ -323,6 +338,9 @@ def test_remediation_preserves_best_effort_partial_failure():
             return secondary
         return managed_clients[kubeconfig]
 
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},
         managed_clusters={
@@ -333,7 +351,7 @@ def test_remediation_preserves_best_effort_partial_failure():
         workers=2,
         strict=False,
         core_client_factory=core_client_factory,
-        apps_client_factory=lambda kubeconfig, context=None: apps,
+        apps_client_factory=apps_client_factory,
     )
 
     assert result["changed"] is True
@@ -349,15 +367,16 @@ def test_remediation_preserves_best_effort_partial_failure():
 def test_remediation_strict_mode_fails_partial_failure():
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
 
+    def core_client_factory(kubeconfig: str, context: str | None = None) -> FakeCoreClient:
+        return secondary if kubeconfig == "hub" else FakeCoreClient(fail_create=True)
+
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},
         managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
         pending_clusters=["cluster-a"],
         strict=True,
-        core_client_factory=lambda kubeconfig, context=None: (
-            secondary if kubeconfig == "hub" else FakeCoreClient(fail_create=True)
-        ),
-        apps_client_factory=lambda kubeconfig, context=None: FakeAppsClient(),
+        core_client_factory=core_client_factory,
+        apps_client_factory=_new_fake_apps_client,
     )
 
     assert result["failed"] is True
@@ -386,7 +405,7 @@ def test_remediation_uses_bounded_worker_threads():
         pending_clusters=["cluster-a", "cluster-b"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=lambda kubeconfig, context=None: FakeAppsClient(),
+        apps_client_factory=_new_fake_apps_client,
     )
 
     assert result["workers"] == 1

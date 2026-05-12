@@ -7,7 +7,7 @@ import base64
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Protocol
 
 import yaml
 
@@ -18,8 +18,24 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     MANAGED_CLUSTER_AGENT_NAMESPACE,
 )
 
-CoreClientFactory = Callable[[str, str | None], object]
-AppsClientFactory = Callable[[str, str | None], object]
+class CoreV1Client(Protocol):
+    def read_namespaced_secret(self, name: str, namespace: str) -> dict | object:
+        ...
+
+    def delete_namespaced_secret(self, name: str, namespace: str) -> object:
+        ...
+
+    def create_namespaced_secret(self, namespace: str, body: dict) -> object:
+        ...
+
+
+class AppsV1Client(Protocol):
+    def patch_namespaced_deployment(self, name: str, namespace: str, body: dict) -> object:
+        ...
+
+
+CoreClientFactory = Callable[[str, str | None], CoreV1Client]
+AppsClientFactory = Callable[[str, str | None], AppsV1Client]
 
 
 def normalize_workers(workers: int | None) -> int:
@@ -60,7 +76,7 @@ def build_apps_v1_client(kubeconfig: str, context: str | None = None):
     return client.AppsV1Api(api_client=api_client)
 
 
-def read_secret(core_client: object, namespace: str, name: str) -> dict | object | None:
+def read_secret(core_client: CoreV1Client, namespace: str, name: str) -> dict | object | None:
     try:
         return core_client.read_namespaced_secret(name=name, namespace=namespace)
     except Exception as exc:
@@ -139,7 +155,7 @@ def ordered_bounded_map(items: list[str], workers: int, fn: Callable[[str], dict
 
 def probe_one_cluster(
     cluster_name: str,
-    secondary_client: object,
+    secondary_client: CoreV1Client | None,
     managed_clusters: dict,
     core_client_factory: CoreClientFactory,
 ) -> dict:
@@ -165,6 +181,9 @@ def probe_one_cluster(
         current_kubeconfig = secret_data(current_secret).get("kubeconfig", "")
         if not current_kubeconfig:
             return {"cluster": cluster_name, "status": "skipped", "reason": "current_hub_secret_missing"}
+
+        if secondary_client is None:
+            return {"cluster": cluster_name, "status": "skipped", "reason": "secondary_hub_client_unavailable"}
 
         import_secret = read_secret(secondary_client, cluster_name, f"{cluster_name}-import")
         import_yaml = secret_data(import_secret).get("import.yaml", "")
@@ -204,7 +223,7 @@ def probe_klusterlet_connections(
 ) -> dict:
     worker_count = normalize_workers(workers)
     candidates = list(candidate_clusters if candidate_clusters is not None else managed_clusters.keys())
-    secondary_client = None
+    secondary_client: CoreV1Client | None = None
     if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
         secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
     results = ordered_bounded_map(
@@ -241,7 +260,7 @@ def _mark_pending_not_run(steps: dict) -> dict:
 
 def remediate_one_cluster(
     cluster_name: str,
-    secondary_client: object,
+    secondary_client: CoreV1Client,
     managed_clusters: dict,
     core_client_factory: CoreClientFactory,
     apps_client_factory: AppsClientFactory,

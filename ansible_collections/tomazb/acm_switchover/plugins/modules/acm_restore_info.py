@@ -71,7 +71,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 PASSIVE_PREFLIGHT_READY_PHASES = ("Enabled", "Finished", "Completed", "Running")
 
 
-def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict]:
+def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict[str, object]]:
     """Select the best passive sync restore and return diagnostics.
 
     Returns:
@@ -82,7 +82,7 @@ def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict
     candidates = [item for item in restores if item.get("spec", {}).get("syncRestoreWithNewBackups") is True]
     sync_enabled_count = len(candidates)
 
-    diagnostics = {
+    diagnostics: dict[str, object] = {
         "restore_count": total_count,
         "sync_enabled_count": sync_enabled_count,
     }
@@ -188,7 +188,7 @@ def build_wait_target(
     namespace: str = BACKUP_NAMESPACE,
     **extra: object,
 ) -> dict:
-    target = {
+    target: dict[str, object] = {
         "name": name,
         "namespace": namespace,
         "success_phases": success_phases,

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - GitHub Actions workflows now use Node 24-backed `actions/checkout@v6` and `actions/setup-python@v6` to avoid the Node 20 action runtime deprecation.
+- MyPy checks now cover Ansible collection plugins and collection tests with explicit package bases to avoid local package-name collisions.
 - Local `run_tests.sh` now excludes the release validation framework by default; run `python -m pytest tests/release -q` for framework tests and supply `--release-profile` for live release certification.
 - Refreshed collection migration and variable reference docs for the current checkpoint, validate/dry-run, safe-path, RBAC bootstrap, and klusterlet concurrency interfaces. Protected runbook and `.claude/skills` updates remain draft-only because those files require explicit operator approval and synchronized review before editing.
 - Clarified report artifact documentation so Python and collection reports share schema version `1.0` and aligned contracts without promising identical top-level fields for every report type.

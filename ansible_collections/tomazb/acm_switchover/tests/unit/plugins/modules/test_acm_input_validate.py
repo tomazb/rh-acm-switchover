@@ -1,5 +1,7 @@
 """Tests for the acm_input_validate collection module."""
 
+from typing import Any
+
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_input_validate import (
     build_input_validation_results,
     summarize_input_validation,
@@ -151,9 +153,9 @@ def test_non_mapping_argocd_features_fail_structured_validation():
 # ---------------------------------------------------------------------------
 
 
-def _restore_only_params(**overrides):
+def _restore_only_params(**overrides: object) -> dict[str, Any]:
     """Build a minimal valid restore_only param set, with optional overrides."""
-    params = {
+    params: dict[str, Any] = {
         "hubs": {
             "primary": {"context": "", "kubeconfig": ""},
             "secondary": {"context": "new-hub", "kubeconfig": "./kubeconfigs/hub.kubeconfig"},
@@ -165,7 +167,7 @@ def _restore_only_params(**overrides):
     for key, value in overrides.items():
         # support dotted paths like "hubs.primary.context"
         parts = key.split(".")
-        target = params
+        target: dict[str, Any] = params
         for part in parts[:-1]:
             target = target[part]
         target[parts[-1]] = value

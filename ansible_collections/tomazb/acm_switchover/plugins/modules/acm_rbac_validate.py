@@ -290,20 +290,20 @@ def expand_rbac_requirements(
         if role != "operator":
             raise ValueError("decommission_only is only valid for the operator role")
 
-        permissions: list[tuple[str, str, str, str | None]] = []
+        decommission_permissions: list[tuple[str, str, str, str | None]] = []
         filtered_cluster = [
             (g, r, v)
             for g, r, v in DECOMMISSION_CLUSTER_PERMISSIONS
             if not (skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO)
         ]
-        permissions.extend(_expand_permission_list(filtered_cluster))
+        decommission_permissions.extend(_expand_permission_list(filtered_cluster))
 
         for namespace, ns_perms in DECOMMISSION_NAMESPACE_PERMISSIONS.items():
             if skip_observability and namespace == OBSERVABILITY_NAMESPACE:
                 continue
-            permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
+            decommission_permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
 
-        return permissions
+        return decommission_permissions
 
     if include_decommission and role != "operator":
         raise ValueError("include_decommission is only valid for the operator role")

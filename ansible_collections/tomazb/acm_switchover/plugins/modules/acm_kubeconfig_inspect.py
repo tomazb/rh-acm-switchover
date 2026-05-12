@@ -121,10 +121,15 @@ def _load_kubeconfig(kubeconfig: str) -> dict:
 
 
 def _normalize_token_file_path(token_file: object, kubeconfig: str, user_name: str) -> Path:
-    try:
-        token_file_str = os.fspath(token_file)
-    except TypeError as exc:
-        raise ValueError(f"user entry '{user_name}' must define 'tokenFile' as a string or path") from exc
+    if isinstance(token_file, str):
+        token_file_str = token_file
+    elif isinstance(token_file, os.PathLike):
+        token_file_value = os.fspath(token_file)
+        if not isinstance(token_file_value, str):
+            raise ValueError(f"user entry '{user_name}' must define 'tokenFile' as a string or path")
+        token_file_str = token_file_value
+    else:
+        raise ValueError(f"user entry '{user_name}' must define 'tokenFile' as a string or path")
     if not token_file_str or not token_file_str.strip():
         raise ValueError(f"user entry '{user_name}' defines an empty tokenFile path")
 

@@ -1173,15 +1173,21 @@ def test_action_module_rejects_unsafe_checkpoint_path_before_file_access():
         templar=MagicMock(),
         shared_loader_obj=MagicMock(),
     )
-    action._load_checkpoint = MagicMock(side_effect=AssertionError("_load_checkpoint should not be called"))
-    action._save_checkpoint = MagicMock(side_effect=AssertionError("_save_checkpoint should not be called"))
-
-    result = action.run(task_vars=_task_vars_for_mode("execute"))
+    with patch.object(
+        ActionModule,
+        "_load_checkpoint",
+        side_effect=AssertionError("_load_checkpoint should not be called"),
+    ) as load_checkpoint, patch.object(
+        ActionModule,
+        "_save_checkpoint",
+        side_effect=AssertionError("_save_checkpoint should not be called"),
+    ) as save_checkpoint:
+        result = action.run(task_vars=_task_vars_for_mode("execute"))
 
     assert result["failed"] is True
     assert "outside allowed directories" in result["msg"]
-    action._load_checkpoint.assert_not_called()
-    action._save_checkpoint.assert_not_called()
+    load_checkpoint.assert_not_called()
+    save_checkpoint.assert_not_called()
 
 
 def test_load_checkpoint_reads_with_utf8_encoding():

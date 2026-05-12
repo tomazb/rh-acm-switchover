@@ -99,7 +99,7 @@ jobs:
         
     - name: Run type checking with mypy
       run: |
-        mypy acm_switchover.py lib/ modules/ --ignore-missing-imports --no-strict-optional
+        mypy --explicit-package-bases acm_switchover.py lib/ modules/ ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests --ignore-missing-imports --no-strict-optional
         
     - name: Run bandit security linter
       run: |
