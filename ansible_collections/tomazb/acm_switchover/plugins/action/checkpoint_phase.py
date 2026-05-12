@@ -183,7 +183,7 @@ class ActionModule(ActionBase):
             }
             if is_check_mode:
                 result["check_mode"] = True
-            else:
+            if execution_mode in {"dry_run", "validate"}:
                 result[execution_mode] = True
             return result
 

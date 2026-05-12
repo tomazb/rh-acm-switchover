@@ -456,7 +456,42 @@ def test_action_module_play_context_check_mode_fail_leaves_existing_checkpoint_u
     assert result["changed"] is False
     assert result["check_mode"] is True
     assert result["checkpoint"]["errors"] == []
-    assert result["checkpoint"].get("phase_status") != "fail"
+    assert "phase_status" not in result["checkpoint"]
+    assert checkpoint_file.read_bytes() == original_bytes
+
+
+def test_action_module_check_mode_and_dry_run_flags_are_non_exclusive(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    original = {
+        "schema_version": "2.0",
+        "phase": "preflight",
+        "completed_phases": ["preflight"],
+        "operational_data": {},
+        "operation_identity": build_operation_identity(hubs={}, operation={}),
+        "errors": [],
+        "report_refs": [],
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    checkpoint_file.write_text(json.dumps(original, indent=2))
+    original_bytes = checkpoint_file.read_bytes()
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "pass",
+        }
+    )
+
+    result = action.run(task_vars={**_task_vars_for_mode("dry_run"), "ansible_check_mode": True})
+
+    assert result["changed"] is False
+    assert result["check_mode"] is True
+    assert result["dry_run"] is True
     assert checkpoint_file.read_bytes() == original_bytes
 
 

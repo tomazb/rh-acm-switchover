@@ -699,6 +699,9 @@ class TestSwitchoverPhaseFlow:
         assert state.get_current_phase() == Phase.COMPLETED
         preflight.assert_called_once()
         primary_prep.assert_called_once()
+        activation.assert_called_once()
+        post_activation.assert_called_once()
+        finalization.assert_called_once()
 
     def test_run_switchover_fails_when_successful_handler_leaves_wrong_phase(self, tmp_path):
         """A True handler result must not allow COMPLETED when durable phase state is wrong."""
@@ -2236,12 +2239,17 @@ class TestInitializeClients:
         logger = Mock()
 
         with patch("acm_switchover.KubeClient") as kube_client:
+            primary_client = Mock(name="primary-client")
+            secondary_client = Mock(name="secondary-client")
+            kube_client.side_effect = [primary_client, secondary_client]
             primary, secondary = _initialize_clients(args, logger)
 
-        assert primary is kube_client.return_value
-        assert secondary is kube_client.return_value
-        kube_client.assert_any_call("hub-a", dry_run=True)
-        kube_client.assert_any_call("hub-b", dry_run=True)
+        assert primary is primary_client
+        assert secondary is secondary_client
+        assert kube_client.call_args_list == [
+            (("hub-a",), {"dry_run": True}),
+            (("hub-b",), {"dry_run": True}),
+        ]
 
     def test_initialize_clients_passes_dry_run_to_restore_only_secondary(self):
         args = SimpleNamespace(primary_context=None, secondary_context="restore-hub", dry_run=True)
