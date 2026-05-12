@@ -51,9 +51,7 @@ def run_preflight_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
-            repo_root
-            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight"
-            / fixture_name
+            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
@@ -93,9 +91,7 @@ def run_argocd_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
-            repo_root
-            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd"
-            / fixture_name
+            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/argocd" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 
@@ -133,14 +129,10 @@ def run_argocd_fixture(tmp_path):
 
 @pytest.fixture
 def run_noncore_fixture(tmp_path):
-    def _run(
-        fixture_name: str, playbook_name: str
-    ) -> tuple[subprocess.CompletedProcess[str], dict]:
+    def _run(fixture_name: str, playbook_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
-            repo_root
-            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/noncore"
-            / fixture_name
+            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/noncore" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
 

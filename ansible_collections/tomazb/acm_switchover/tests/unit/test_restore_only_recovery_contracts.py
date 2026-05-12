@@ -66,28 +66,20 @@ def test_verify_passive_sync_requires_passive_restore_candidate():
 def test_activation_checkpoint_persists_argocd_run_id():
     """Activation checkpoint writes must preserve the generated Argo CD run_id."""
     text = (ACTIVATION_TASKS / "main.yml").read_text()
-    assert (
-        "argocd_run_id:" in text
-    ), "activation/main.yml must persist argocd_run_id in checkpoint operational_data"
+    assert "argocd_run_id:" in text, "activation/main.yml must persist argocd_run_id in checkpoint operational_data"
 
 
 def test_primary_prep_checkpoint_persists_argocd_run_id():
     """primary_prep checkpoint writes must preserve the generated Argo CD run_id."""
     text = (PRIMARY_PREP_TASKS / "main.yml").read_text()
-    assert (
-        "argocd_run_id:" in text
-    ), "primary_prep/main.yml must persist argocd_run_id in checkpoint operational_data"
+    assert "argocd_run_id:" in text, "primary_prep/main.yml must persist argocd_run_id in checkpoint operational_data"
 
 
 def test_switchover_report_persists_argocd_run_id():
     """switchover-report.json must include Argo CD pause metadata for later explicit resume."""
     text = (PLAYBOOKS / "switchover.yml").read_text()
-    assert (
-        "argocd:" in text
-    ), "switchover.yml must publish Argo CD metadata into the report contract"
-    assert (
-        "run_id" in text
-    ), "switchover.yml report must carry the generated Argo CD run_id"
+    assert "argocd:" in text, "switchover.yml must publish Argo CD metadata into the report contract"
+    assert "run_id" in text, "switchover.yml report must carry the generated Argo CD run_id"
 
 
 def test_switchover_report_uses_validated_report_writer():
@@ -96,23 +88,15 @@ def test_switchover_report_uses_validated_report_writer():
     assert (
         "tomazb.acm_switchover.acm_report_artifact" in text
     ), "switchover.yml must use acm_report_artifact for the final report write"
-    assert (
-        "ansible.builtin.copy" not in text
-    ), "switchover.yml should not use raw copy for final report artifacts"
-    assert (
-        "ansible.builtin.file" not in text
-    ), "switchover.yml should not mkdir final report artifacts directly"
+    assert "ansible.builtin.copy" not in text, "switchover.yml should not use raw copy for final report artifacts"
+    assert "ansible.builtin.file" not in text, "switchover.yml should not mkdir final report artifacts directly"
 
 
 def test_restore_only_report_persists_argocd_run_id():
     """restore-only-report.json must include Argo CD pause metadata for later explicit resume."""
     text = (PLAYBOOKS / "restore_only.yml").read_text()
-    assert (
-        "argocd:" in text
-    ), "restore_only.yml must publish Argo CD metadata into the report contract"
-    assert (
-        "run_id" in text
-    ), "restore_only.yml report must carry the generated Argo CD run_id"
+    assert "argocd:" in text, "restore_only.yml must publish Argo CD metadata into the report contract"
+    assert "run_id" in text, "restore_only.yml report must carry the generated Argo CD run_id"
 
 
 def test_restore_only_report_uses_validated_report_writer():
@@ -121,20 +105,14 @@ def test_restore_only_report_uses_validated_report_writer():
     assert (
         "tomazb.acm_switchover.acm_report_artifact" in text
     ), "restore_only.yml must use acm_report_artifact for the final report write"
-    assert (
-        "ansible.builtin.copy" not in text
-    ), "restore_only.yml should not use raw copy for final report artifacts"
-    assert (
-        "ansible.builtin.file" not in text
-    ), "restore_only.yml should not mkdir final report artifacts directly"
+    assert "ansible.builtin.copy" not in text, "restore_only.yml should not use raw copy for final report artifacts"
+    assert "ansible.builtin.file" not in text, "restore_only.yml should not mkdir final report artifacts directly"
 
 
 def test_restore_only_persists_argocd_run_id_in_checkpoint_after_pause():
     """restore_only.yml must persist the Argo CD pause run_id before activation starts."""
     text = (PLAYBOOKS / "restore_only.yml").read_text()
-    assert (
-        "checkpoint_phase" in text
-    ), "restore_only.yml must update the checkpoint after Argo CD pause"
+    assert "checkpoint_phase" in text, "restore_only.yml must update the checkpoint after Argo CD pause"
     assert (
         "operational_data" in text and "argocd_run_id" in text
     ), "restore_only.yml must persist operational_data.argocd_run_id for standalone argocd_resume.yml"
@@ -152,21 +130,9 @@ def test_argocd_manage_test_only_writes_summary_when_requested():
 def test_argocd_manage_test_validates_summary_path_before_write():
     """The optional Argo CD test summary path must use the collection safe-path validator."""
     tasks = _load_playbook("argocd_manage_test.yml")[0]["tasks"]
-    validate_indices = [
-        idx
-        for idx, task in enumerate(tasks)
-        if "tomazb.acm_switchover.acm_safe_path_validate" in task
-    ]
-    write_indices = [
-        idx
-        for idx, task in enumerate(tasks)
-        if task.get("name") == "Write summary file"
-    ]
+    validate_indices = [idx for idx, task in enumerate(tasks) if "tomazb.acm_switchover.acm_safe_path_validate" in task]
+    write_indices = [idx for idx, task in enumerate(tasks) if task.get("name") == "Write summary file"]
 
-    assert (
-        validate_indices
-    ), "argocd_manage_test.yml must validate summary_path before writing it"
-    assert (
-        write_indices
-    ), "argocd_manage_test.yml must still write the requested summary file"
+    assert validate_indices, "argocd_manage_test.yml must validate summary_path before writing it"
+    assert write_indices, "argocd_manage_test.yml must still write the requested summary file"
     assert validate_indices[0] < write_indices[0]

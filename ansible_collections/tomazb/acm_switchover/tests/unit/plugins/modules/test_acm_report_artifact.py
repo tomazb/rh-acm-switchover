@@ -57,10 +57,7 @@ def test_run_module_reports_unchanged_when_artifact_matches(tmp_path, monkeypatc
     captured = {}
     destination = tmp_path / "artifacts" / "report.json"
     destination.parent.mkdir()
-    destination.write_text(
-        json.dumps({"phase": "preflight", "status": "pass"}, indent=2, sort_keys=True)
-        + "\n"
-    )
+    destination.write_text(json.dumps({"phase": "preflight", "status": "pass"}, indent=2, sort_keys=True) + "\n")
     destination.chmod(0o644)
 
     class FakeModule:

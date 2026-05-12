@@ -18,19 +18,13 @@ def test_primary_prep_manage_auto_import_patches_managed_clusters():
     text = (PRIMARY_PREP_TASKS / "manage_auto_import.yml").read_text()
 
     managed_cluster_queries = [
-        task
-        for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+        task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
     ]
     patch_tasks = [task for task in tasks if "kubernetes.core.k8s" in task]
 
-    assert (
-        managed_cluster_queries
-    ), "manage_auto_import.yml must query ManagedCluster resources"
+    assert managed_cluster_queries, "manage_auto_import.yml must query ManagedCluster resources"
     assert patch_tasks, "manage_auto_import.yml must patch ManagedClusters"
-    assert (
-        "disable-auto-import" in text
-    ), "manage_auto_import.yml must add the disable-auto-import annotation"
+    assert "disable-auto-import" in text, "manage_auto_import.yml must add the disable-auto-import annotation"
     assert "local-cluster" in text, "manage_auto_import.yml must exclude local-cluster"
 
 
@@ -46,23 +40,13 @@ def test_scale_observability_warns_when_thanos_pods_remain():
     text = (PRIMARY_PREP_TASKS / "scale_observability.yml").read_text()
     tasks = _load_yaml("scale_observability.yml")
 
-    pod_queries = [
-        task
-        for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"
-    ]
+    pod_queries = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
     warning_tasks = [
-        task
-        for task in tasks
-        if "Thanos compactor still has" in str(task.get("ansible.builtin.debug", {}))
+        task for task in tasks if "Thanos compactor still has" in str(task.get("ansible.builtin.debug", {}))
     ]
 
     assert "ansible.builtin.pause" in text
-    assert (
-        pod_queries
-    ), "scale_observability.yml must query Thanos compactor pods after scaling"
+    assert pod_queries, "scale_observability.yml must query Thanos compactor pods after scaling"
     assert "app.kubernetes.io/name=thanos-compact" in str(pod_queries[0])
-    assert (
-        warning_tasks
-    ), "remaining Thanos compactor pods must produce a visible non-fatal warning"
+    assert warning_tasks, "remaining Thanos compactor pods must produce a visible non-fatal warning"
     assert "failed_when: false" in text

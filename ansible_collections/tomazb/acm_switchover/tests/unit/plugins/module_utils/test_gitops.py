@@ -9,7 +9,5 @@ def test_detect_gitops_markers_flags_argocd_instance():
 
 
 def test_detect_gitops_markers_marks_generic_instance_unreliable():
-    markers = detect_gitops_markers(
-        {"labels": {"app.kubernetes.io/instance": "something"}}
-    )
+    markers = detect_gitops_markers({"labels": {"app.kubernetes.io/instance": "something"}})
     assert "label:app.kubernetes.io/instance (UNRELIABLE)" in markers

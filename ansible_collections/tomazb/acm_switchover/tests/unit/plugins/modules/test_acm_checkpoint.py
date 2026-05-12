@@ -159,10 +159,7 @@ def test_validate_operation_identity_raises_when_identity_is_missing_by_default(
 
 
 def test_validate_operation_identity_allows_missing_identity_when_requested():
-    assert (
-        validate_operation_identity({}, {"method": "passive"}, allow_missing=True)
-        is False
-    )
+    assert validate_operation_identity({}, {"method": "passive"}, allow_missing=True) is False
 
 
 def test_build_operation_identity_restore_only_defaults_method_full_and_old_hub_none():
@@ -194,19 +191,6 @@ def test_build_operation_identity_restore_only_sparse_equals_fully_populated():
 
 
 def test_is_unsafe_legacy_checkpoint_requires_reset_for_completed_legacy_state():
-    assert (
-        is_unsafe_legacy_checkpoint(
-            {"schema_version": "1.0", "completed_phases": ["preflight"]}
-        )
-        is True
-    )
-    assert (
-        is_unsafe_legacy_checkpoint({"schema_version": "1.0", "completed_phases": []})
-        is False
-    )
-    assert (
-        is_unsafe_legacy_checkpoint(
-            {"schema_version": "2.0", "completed_phases": ["preflight"]}
-        )
-        is False
-    )
+    assert is_unsafe_legacy_checkpoint({"schema_version": "1.0", "completed_phases": ["preflight"]}) is True
+    assert is_unsafe_legacy_checkpoint({"schema_version": "1.0", "completed_phases": []}) is False
+    assert is_unsafe_legacy_checkpoint({"schema_version": "2.0", "completed_phases": ["preflight"]}) is False

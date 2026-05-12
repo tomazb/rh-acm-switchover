@@ -29,21 +29,13 @@ def write_text_file(tmp_path, name, content):
 
 def _jwt_with_exp(expiry: datetime) -> str:
     payload = {"exp": int(expiry.timestamp())}
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8"))
-        .decode("utf-8")
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
     return f"header.{payload_b64}.signature"
 
 
 def _pem_data(label: str) -> str:
     return base64.b64encode(
-        (
-            f"-----BEGIN {label}-----\n"
-            f"{label.lower()}-fixture\n"
-            f"-----END {label}-----\n"
-        ).encode("utf-8")
+        (f"-----BEGIN {label}-----\n" f"{label.lower()}-fixture\n" f"-----END {label}-----\n").encode("utf-8")
     ).decode("utf-8")
 
 
@@ -114,9 +106,7 @@ def test_bearer_jwt_near_expiry_returns_warn(tmp_path):
         _kubeconfig_for_user({"token": _jwt_with_exp(expiry)}),
     )
 
-    result = inspect_kubeconfig_auth(
-        str(kubeconfig), "primary-hub", warning_hours=1_000_000
-    )
+    result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub", warning_hours=1_000_000)
 
     assert result["status"] == "warn"
     assert result["severity"] == "warning"
@@ -130,9 +120,7 @@ def test_bearer_jwt_near_expiry_returns_warn(tmp_path):
 
 def test_bearer_jwt_without_exp_returns_warn(tmp_path):
     payload_b64 = (
-        base64.urlsafe_b64encode(
-            json.dumps({"sub": "system:serviceaccount:test"}).encode("utf-8")
-        )
+        base64.urlsafe_b64encode(json.dumps({"sub": "system:serviceaccount:test"}).encode("utf-8"))
         .decode("utf-8")
         .rstrip("=")
     )
@@ -155,9 +143,7 @@ def test_bearer_jwt_without_exp_returns_warn(tmp_path):
 
 def test_bearer_jwt_with_non_numeric_exp_returns_warn(tmp_path):
     payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps({"exp": "not-a-timestamp"}).encode("utf-8"))
-        .decode("utf-8")
-        .rstrip("=")
+        base64.urlsafe_b64encode(json.dumps({"exp": "not-a-timestamp"}).encode("utf-8")).decode("utf-8").rstrip("=")
     )
     kubeconfig = write_kubeconfig(
         tmp_path,
@@ -177,9 +163,7 @@ def test_bearer_jwt_with_non_numeric_exp_returns_warn(tmp_path):
 
 
 def test_invalid_jwt_format_returns_warn(tmp_path):
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"token": "not.a-valid-jwt"})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "not.a-valid-jwt"}))
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
@@ -217,9 +201,7 @@ def test_malformed_jwt_payload_returns_warn_opaque(tmp_path, payload_bytes):
 def test_token_file_with_jwt_returns_pass(tmp_path):
     expiry = datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc)
     token_file = write_text_file(tmp_path, "token.txt", _jwt_with_exp(expiry))
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)}))
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
@@ -254,9 +236,7 @@ def test_static_bearer_takes_precedence_over_client_cert(tmp_path):
 
 def test_token_file_with_opaque_token_returns_warn(tmp_path):
     token_file = write_text_file(tmp_path, "token.txt", "opaque-token-value")
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)}))
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
@@ -273,17 +253,13 @@ def test_token_file_with_opaque_token_returns_warn(tmp_path):
 def test_empty_inline_token_raises_value_error(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": ""}))
 
-    with pytest.raises(
-        ValueError, match="user entry 'primary-user' defines an empty bearer token"
-    ):
+    with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty bearer token"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
 def test_whitespace_only_token_file_raises_value_error(tmp_path):
     token_file = write_text_file(tmp_path, "token.txt", "   \n\t ")
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": str(token_file)}))
 
     with pytest.raises(
         ValueError,
@@ -295,29 +271,21 @@ def test_whitespace_only_token_file_raises_value_error(tmp_path):
 def test_empty_token_file_raises_value_error(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": ""}))
 
-    with pytest.raises(
-        ValueError, match="user entry 'primary-user' defines an empty tokenFile path"
-    ):
+    with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty tokenFile path"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
 def test_whitespace_only_token_file_path_raises_value_error(tmp_path):
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"tokenFile": "   \n\t "})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"tokenFile": "   \n\t "}))
 
-    with pytest.raises(
-        ValueError, match="user entry 'primary-user' defines an empty tokenFile path"
-    ):
+    with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty tokenFile path"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
 def test_whitespace_only_inline_token_raises_value_error(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "   \n\t "}))
 
-    with pytest.raises(
-        ValueError, match="user entry 'primary-user' defines an empty bearer token"
-    ):
+    with pytest.raises(ValueError, match="user entry 'primary-user' defines an empty bearer token"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
@@ -349,9 +317,7 @@ def test_token_file_takes_precedence_over_inline_token(tmp_path):
     token_file = write_text_file(tmp_path, "token.txt", _jwt_with_exp(expiry))
     kubeconfig = write_kubeconfig(
         tmp_path,
-        _kubeconfig_for_user(
-            {"token": "opaque-inline-token", "tokenFile": str(token_file)}
-        ),
+        _kubeconfig_for_user({"token": "opaque-inline-token", "tokenFile": str(token_file)}),
     )
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
@@ -377,9 +343,7 @@ def test_token_file_overrides_malformed_inline_token(tmp_path):
 
 
 def test_exec_auth_returns_warn_without_execution(tmp_path):
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"exec": {"command": "oc", "args": ["whoami"]}})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"exec": {"command": "oc", "args": ["whoami"]}}))
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
@@ -393,18 +357,14 @@ def test_exec_auth_returns_warn_without_execution(tmp_path):
 def test_exec_auth_must_be_mapping(tmp_path):
     kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"exec": "oc whoami"}))
 
-    with pytest.raises(
-        ValueError, match="user entry 'primary-user' must define 'exec' as a mapping"
-    ):
+    with pytest.raises(ValueError, match="user entry 'primary-user' must define 'exec' as a mapping"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
 def test_auth_provider_returns_warn_without_execution(tmp_path):
     kubeconfig = write_kubeconfig(
         tmp_path,
-        _kubeconfig_for_user(
-            {"auth-provider": {"name": "oidc", "config": {"id-token": "example"}}}
-        ),
+        _kubeconfig_for_user({"auth-provider": {"name": "oidc", "config": {"id-token": "example"}}}),
     )
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
@@ -417,9 +377,7 @@ def test_auth_provider_returns_warn_without_execution(tmp_path):
 
 
 def test_auth_provider_must_be_mapping(tmp_path):
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"auth-provider": "oidc"})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"auth-provider": "oidc"}))
 
     with pytest.raises(
         ValueError,
@@ -571,9 +529,7 @@ def test_malformed_basic_auth_raises_value_error(tmp_path, user_config, error_ma
 
 
 def test_basic_auth_returns_pass_with_details(tmp_path):
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"username": "admin", "password": "secret"})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"username": "admin", "password": "secret"}))
 
     result = inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
@@ -587,9 +543,7 @@ def test_basic_auth_returns_pass_with_details(tmp_path):
 
 
 def test_missing_context_raises_validation_error(tmp_path):
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"token": "header.payload.signature"})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "header.payload.signature"}))
 
     with pytest.raises(ValueError, match="context 'missing-context' not found"):
         inspect_kubeconfig_auth(str(kubeconfig), "missing-context")
@@ -617,9 +571,7 @@ def test_missing_user_raises_validation_error(tmp_path):
         },
     )
 
-    with pytest.raises(
-        ValueError, match="user 'missing-user' not found for context 'primary-hub'"
-    ):
+    with pytest.raises(ValueError, match="user 'missing-user' not found for context 'primary-hub'"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub")
 
 
@@ -650,63 +602,51 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
     [
         (["not", "a", "mapping"], "kubeconfig must be a YAML mapping"),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"contexts": None},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": None},
             "kubeconfig is missing required 'contexts' list",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"users": None},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": None},
             "kubeconfig is missing required 'users' list",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"contexts": "bad"},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": "bad"},
             "'contexts' must be a list",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"users": "bad"},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": "bad"},
             "'users' must be a list",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"contexts": ["bad"]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": ["bad"]},
             "'contexts' entries must be mappings",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"users": ["bad"]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": ["bad"]},
             "'users' entries must be mappings",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"contexts": [{}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{}]},
             "'contexts' entries must define 'name' as a non-empty string",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"contexts": [{"name": "", "context": {}}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{"name": "", "context": {}}]},
             "'contexts' entries must define 'name' as a non-empty string",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"contexts": [{"name": 123, "context": {}}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{"name": 123, "context": {}}]},
             "'contexts' entries must define 'name' as a non-empty string",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"users": [{}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": [{}]},
             "'users' entries must define 'name' as a non-empty string",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"users": [{"name": "", "user": {}}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": [{"name": "", "user": {}}]},
             "'users' entries must define 'name' as a non-empty string",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"users": [{"name": 123, "user": {}}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": [{"name": 123, "user": {}}]},
             "'users' entries must define 'name' as a non-empty string",
         ),
         (
@@ -715,8 +655,7 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
             "context entry 'primary-hub' must contain a mapping under 'context'",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"contexts": [{"name": "primary-hub"}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"contexts": [{"name": "primary-hub"}]},
             "context entry 'primary-hub' is missing required 'context' mapping",
         ),
         (
@@ -725,17 +664,12 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
             "user entry 'primary-user' must contain a mapping under 'user'",
         ),
         (
-            _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {"users": [{"name": "primary-user"}]},
+            _kubeconfig_for_user({"token": "header.payload.signature"}) | {"users": [{"name": "primary-user"}]},
             "user entry 'primary-user' is missing required 'user' mapping",
         ),
         (
             _kubeconfig_for_user({"token": "header.payload.signature"})
-            | {
-                "contexts": [
-                    {"name": "primary-hub", "context": {"cluster": "primary-cluster"}}
-                ]
-            },
+            | {"contexts": [{"name": "primary-hub", "context": {"cluster": "primary-cluster"}}]},
             "context entry 'primary-hub' is missing required 'user' reference",
         ),
         (
@@ -772,9 +706,7 @@ def test_missing_kubeconfig_path_raises_value_error(tmp_path):
         ),
     ],
 )
-def test_malformed_kubeconfig_structure_raises_value_error(
-    tmp_path, kubeconfig_data, error_match
-):
+def test_malformed_kubeconfig_structure_raises_value_error(tmp_path, kubeconfig_data, error_match):
     kubeconfig = write_kubeconfig(tmp_path, kubeconfig_data)
 
     with pytest.raises(ValueError, match=error_match):
@@ -782,9 +714,7 @@ def test_malformed_kubeconfig_structure_raises_value_error(
 
 
 def test_negative_warning_hours_raises_value_error(tmp_path):
-    kubeconfig = write_kubeconfig(
-        tmp_path, _kubeconfig_for_user({"token": "header.payload.signature"})
-    )
+    kubeconfig = write_kubeconfig(tmp_path, _kubeconfig_for_user({"token": "header.payload.signature"}))
 
     with pytest.raises(ValueError, match="warning_hours must be non-negative"):
         inspect_kubeconfig_auth(str(kubeconfig), "primary-hub", warning_hours=-1)

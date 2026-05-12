@@ -336,8 +336,9 @@ Before pushing changes, verify the same CI assumptions that have recently caused
 
 - **Root `tests/` jobs do not install `ansible-core`**: top-level tests under [`tests/`](tests/) may import collection helpers, but they must not hard-require `ansible.module_utils` at import time. If a parity test needs a collection module, keep the test import-safe without assuming the root Python job has Ansible installed.
 - **CodeQL can flag URL-like strings in tests**: avoid putting raw host-like strings such as CRD names ending in `.argoproj.io` into assertion message text when a less URL-like description will do. Prefer messages like "applications CRD" or "argocds CRD" unless the exact literal is required by the assertion itself.
+- **CodeQL can flag shared-helper logging**: do not log raw timeout/configuration/input values from reusable helpers unless the value is explicitly sanitized and operator-safe. Prefer stable public status text plus already-sanitized public detail fields.
 - **Run formatting checks on tracked source trees, not the virtualenv**: scope `black`/`isort` to repository paths such as `acm_switchover.py`, `lib`, `modules`, `ansible_collections`, and `tests`. Do not run repo-wide formatting commands that can walk `.venv/` or other generated directories.
-- **If CI formatting fails, fix the repo to match the pinned formatter**: the current workflows enforce `black` and `isort`, so run both locally before push when touching Python files.
+- **If CI formatting fails, fix the repo to match the pinned formatter**: the current workflows enforce `black` and `isort`, so run both locally before push when touching Python files. Match the CI scope exactly: `acm_switchover.py`, `lib`, `modules`, `ansible_collections/tomazb/acm_switchover/plugins`, `ansible_collections/tomazb/acm_switchover/tests`, and `tests`.
 
 ### Cross-Implementation Verification
 

@@ -53,7 +53,7 @@ def wait_for_condition(
 
     start_time = time.time()
     last_result: Optional[WaitConditionResult] = None
-    logger.info("Waiting for %s (timeout: %ss)...", description, timeout)
+    logger.info("Waiting for %s...", description)
 
     while time.time() - start_time < timeout:
         result = _require_wait_condition_result(condition_fn())
@@ -89,7 +89,7 @@ def wait_for_condition(
             return True
 
     if last_result and last_result.public_detail:
-        logger.warning("%s not complete after %ss timeout: %s", description, timeout, last_result.public_detail)
+        logger.warning("%s not complete before timeout: %s", description, last_result.public_detail)
     else:
-        logger.warning("%s not complete after %ss timeout", description, timeout)
+        logger.warning("%s not complete before timeout", description)
     return False

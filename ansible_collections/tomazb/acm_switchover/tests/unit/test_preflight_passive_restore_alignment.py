@@ -44,7 +44,5 @@ def test_validate_backups_accepts_conventional_passive_restore_fallback():
 def test_validate_backups_requires_activation_ready_passive_restore_phase():
     """A present passive Restore in phase Unknown must not pass preflight."""
     text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
-    assert (
-        "restore_ready" in text
-    ), "validate_backups.yml must require acm_restore_info.restore_ready"
+    assert "restore_ready" in text, "validate_backups.yml must require acm_restore_info.restore_ready"
     assert "Wait for the Restore to reach" in text

@@ -238,9 +238,7 @@ def test_action_module_does_not_overwrite_operational_data_with_empty_strings(tm
             {
                 "schema_version": "2.0",
                 "completed_phases": ["preflight"],
-                "operational_data": {
-                    "backup_schedule_enabled_at": "2026-04-16T10:00:00Z"
-                },
+                "operational_data": {"backup_schedule_enabled_at": "2026-04-16T10:00:00Z"},
                 "operation_identity": build_operation_identity(hubs={}, operation={}),
                 "errors": [],
                 "report_refs": [],
@@ -273,16 +271,10 @@ def test_action_module_does_not_overwrite_operational_data_with_empty_strings(tm
     )
 
     result = action.run(task_vars=_task_vars_for_mode("execute"))
-    assert (
-        result["checkpoint"]["operational_data"]["backup_schedule_enabled_at"]
-        == "2026-04-16T10:00:00Z"
-    )
+    assert result["checkpoint"]["operational_data"]["backup_schedule_enabled_at"] == "2026-04-16T10:00:00Z"
 
     saved = json.loads(checkpoint_file.read_text())
-    assert (
-        saved["operational_data"]["backup_schedule_enabled_at"]
-        == "2026-04-16T10:00:00Z"
-    )
+    assert saved["operational_data"]["backup_schedule_enabled_at"] == "2026-04-16T10:00:00Z"
 
 
 def test_action_module_persists_phase_status_on_fail(tmp_path):
@@ -684,9 +676,7 @@ def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_
         templar=MagicMock(),
         shared_loader_obj=MagicMock(),
     )
-    activation_enter_result = activation_enter_action.run(
-        task_vars=_task_vars_for_mode("execute")
-    )
+    activation_enter_result = activation_enter_action.run(task_vars=_task_vars_for_mode("execute"))
 
     assert activation_enter_result["checkpoint"]["completed_phases"] == ["preflight"]
     assert activation_enter_result["skipped_phase"] is False
@@ -858,9 +848,7 @@ def test_action_module_rejects_identity_mismatch_without_explicit_reset(tmp_path
                             "kubeconfig": "./kubeconfigs/secondary",
                         },
                     },
-                    operation=_task_vars_with_operation_identity()[
-                        "acm_switchover_operation"
-                    ],
+                    operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
                 ),
                 "errors": [],
                 "report_refs": [],
@@ -1020,9 +1008,7 @@ def test_action_module_reset_from_primary_prep_prunes_downstream_phases(tmp_path
                 "operational_data": {},
                 "operation_identity": build_operation_identity(
                     hubs=_task_vars_with_operation_identity()["acm_switchover_hubs"],
-                    operation=_task_vars_with_operation_identity()[
-                        "acm_switchover_operation"
-                    ],
+                    operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
                 ),
                 "errors": [],
                 "report_refs": [],
@@ -1068,9 +1054,7 @@ def test_action_module_reset_status_with_reset_from_prunes_downstream_phases(tmp
                 "operational_data": {},
                 "operation_identity": build_operation_identity(
                     hubs=_task_vars_with_operation_identity()["acm_switchover_hubs"],
-                    operation=_task_vars_with_operation_identity()[
-                        "acm_switchover_operation"
-                    ],
+                    operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
                 ),
                 "errors": [],
                 "report_refs": [],
@@ -1125,9 +1109,7 @@ def test_action_module_quarantines_corrupt_checkpoint_json(tmp_path):
     ):
         result = action.run(task_vars=_task_vars_with_operation_identity())
 
-    quarantined_path = (
-        f"{checkpoint_file}.corrupt-{fixed_now.strftime('%Y%m%dT%H%M%SZ')}"
-    )
+    quarantined_path = f"{checkpoint_file}.corrupt-{fixed_now.strftime('%Y%m%dT%H%M%SZ')}"
     assert result["failed"] is True
     assert "corrupted" in result["msg"].lower()
     assert "quarantined" in result["msg"].lower()
@@ -1191,12 +1173,8 @@ def test_action_module_rejects_unsafe_checkpoint_path_before_file_access():
         templar=MagicMock(),
         shared_loader_obj=MagicMock(),
     )
-    action._load_checkpoint = MagicMock(
-        side_effect=AssertionError("_load_checkpoint should not be called")
-    )
-    action._save_checkpoint = MagicMock(
-        side_effect=AssertionError("_save_checkpoint should not be called")
-    )
+    action._load_checkpoint = MagicMock(side_effect=AssertionError("_load_checkpoint should not be called"))
+    action._save_checkpoint = MagicMock(side_effect=AssertionError("_save_checkpoint should not be called"))
 
     result = action.run(task_vars=_task_vars_for_mode("execute"))
 
@@ -1243,9 +1221,7 @@ def test_save_checkpoint_writes_with_utf8_encoding():
         mock_open(),
         create=True,
     ) as mocked_open:
-        result = action._save_checkpoint(
-            "/tmp/state/checkpoint.json", {"schema_version": "1.0"}
-        )
+        result = action._save_checkpoint("/tmp/state/checkpoint.json", {"schema_version": "1.0"})
 
     assert result is None
     makedirs.assert_called_once_with("/tmp/state", exist_ok=True)
@@ -1257,9 +1233,7 @@ def test_save_checkpoint_writes_with_utf8_encoding():
 
 
 def test_build_report_ref_accepts_custom_kind():
-    ref = build_report_ref(
-        path="/reports/out.yaml", phase="preflight", kind="yaml-report"
-    )
+    ref = build_report_ref(path="/reports/out.yaml", phase="preflight", kind="yaml-report")
     assert ref["kind"] == "yaml-report"
 
 

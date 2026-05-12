@@ -11,10 +11,7 @@ def test_integration_ansible_env_includes_python314_compat_path(tmp_path):
 
     env = _ansible_env(repo_root, tmp_path)
 
-    compat_path = (
-        repo_root
-        / "ansible_collections/tomazb/acm_switchover/tests/support/python314_ast_compat"
-    )
+    compat_path = repo_root / "ansible_collections/tomazb/acm_switchover/tests/support/python314_ast_compat"
     pythonpaths = env["PYTHONPATH"].split(":")
 
     assert str(compat_path) in pythonpaths

@@ -9,22 +9,14 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _CHECKPOINT_SURFACE_FILES = [
-    _REPO_ROOT
-    / "ansible_collections/tomazb/acm_switchover/roles/preflight/defaults/main.yml",
-    _REPO_ROOT
-    / "ansible_collections/tomazb/acm_switchover/roles/primary_prep/defaults/main.yml",
-    _REPO_ROOT
-    / "ansible_collections/tomazb/acm_switchover/roles/activation/defaults/main.yml",
-    _REPO_ROOT
-    / "ansible_collections/tomazb/acm_switchover/roles/post_activation/defaults/main.yml",
-    _REPO_ROOT
-    / "ansible_collections/tomazb/acm_switchover/roles/finalization/defaults/main.yml",
-    _REPO_ROOT
-    / "ansible_collections/tomazb/acm_switchover/examples/group_vars/all.yml",
+    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/roles/preflight/defaults/main.yml",
+    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/roles/primary_prep/defaults/main.yml",
+    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/roles/activation/defaults/main.yml",
+    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/roles/post_activation/defaults/main.yml",
+    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/roles/finalization/defaults/main.yml",
+    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/examples/group_vars/all.yml",
 ]
-_SWITCHOVER_PLAYBOOK = (
-    _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml"
-)
+_SWITCHOVER_PLAYBOOK = _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/playbooks/switchover.yml"
 _SEEDED_CHECKPOINT_TIMESTAMPS = {
     "created_at": "2026-01-01T00:00:00+00:00",
     "updated_at": "2026-01-01T00:00:00+00:00",
@@ -54,8 +46,7 @@ def test_checkpoint_operator_surface_exposes_reset_from_and_rescue_pruning():
         payload = yaml.safe_load(surface_path.read_text()) or {}
         checkpoint = payload["acm_switchover_execution"]["checkpoint"]
         assert checkpoint.get("reset_from") == "", (
-            f"{surface_path.relative_to(_REPO_ROOT)} should expose "
-            "acm_switchover_execution.checkpoint.reset_from"
+            f"{surface_path.relative_to(_REPO_ROOT)} should expose " "acm_switchover_execution.checkpoint.reset_from"
         )
 
     playbook = _SWITCHOVER_PLAYBOOK.read_text(encoding="utf-8")
@@ -101,9 +92,7 @@ def test_dry_run_reset_from_primary_prep_prunes_downstream_phases_via_playbook(
             stdout,
         ), f"{resumed_phase} should rerun through the playbook path"
         assert not re.search(
-            _task_pattern(
-                resumed_phase, "Mark checkpoint phase completion", "skipping"
-            ),
+            _task_pattern(resumed_phase, "Mark checkpoint phase completion", "skipping"),
             stdout,
         ), f"{resumed_phase} should not remain skipped after reset_from"
         assert not re.search(

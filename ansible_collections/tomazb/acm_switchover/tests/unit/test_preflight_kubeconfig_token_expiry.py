@@ -46,10 +46,7 @@ def test_validate_kubeconfigs_wires_warning_hours_feature_into_module_call():
         "tomazb.acm_switchover.acm_kubeconfig_inspect"
     ]
 
-    assert (
-        module_args["warning_hours"]
-        == "{{ acm_switchover_features.token_expiry_warning_hours }}"
-    )
+    assert module_args["warning_hours"] == "{{ acm_switchover_features.token_expiry_warning_hours }}"
 
 
 def test_validate_kubeconfigs_records_stable_token_expiry_result_ids():
@@ -77,9 +74,7 @@ def test_secondary_token_expiry_tasks_are_always_present():
     tasks = _load_tasks()
 
     secondary_inspect = _find_task(tasks, "Inspect secondary kubeconfig token expiry")
-    secondary_record = _find_task(
-        tasks, "Record secondary kubeconfig token expiry result"
-    )
+    secondary_record = _find_task(tasks, "Record secondary kubeconfig token expiry result")
 
     assert "when" not in secondary_inspect
     assert "when" not in secondary_record

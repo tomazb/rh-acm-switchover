@@ -30,33 +30,19 @@ def test_validate_kubeconfigs_uses_direct_api_probe():
     """Kubeconfig validation must not depend on MultiClusterHub discovery."""
     text = (PREFLIGHT_TASKS / "validate_kubeconfigs.yml").read_text()
 
-    assert (
-        "kind: Namespace" in text
-    ), "validate_kubeconfigs.yml must probe a core resource directly"
-    assert (
-        "name: default" in text
-    ), "validate_kubeconfigs.yml must query the default namespace for reachability"
-    assert (
-        "acm_primary_mch_info" not in text
-    ), "validate_kubeconfigs.yml must not depend on MCH discovery"
-    assert (
-        "acm_secondary_mch_info" not in text
-    ), "validate_kubeconfigs.yml must not depend on MCH discovery"
+    assert "kind: Namespace" in text, "validate_kubeconfigs.yml must probe a core resource directly"
+    assert "name: default" in text, "validate_kubeconfigs.yml must query the default namespace for reachability"
+    assert "acm_primary_mch_info" not in text, "validate_kubeconfigs.yml must not depend on MCH discovery"
+    assert "acm_secondary_mch_info" not in text, "validate_kubeconfigs.yml must not depend on MCH discovery"
 
 
 def test_preflight_discovers_dpa_velero_and_managed_clusters():
     """discover_resources.yml must fetch the resources needed for parity backup checks."""
     text = (PREFLIGHT_TASKS / "discover_resources.yml").read_text()
 
-    assert (
-        "kind: DataProtectionApplication" in text
-    ), "discover_resources.yml must query DataProtectionApplications"
-    assert (
-        "app.kubernetes.io/name=velero" in text
-    ), "discover_resources.yml must query Velero pods"
-    assert (
-        "kind: ManagedCluster" in text
-    ), "discover_resources.yml must query ManagedClusters"
+    assert "kind: DataProtectionApplication" in text, "discover_resources.yml must query DataProtectionApplications"
+    assert "app.kubernetes.io/name=velero" in text, "discover_resources.yml must query Velero pods"
+    assert "kind: ManagedCluster" in text, "discover_resources.yml must query ManagedClusters"
 
 
 def test_preflight_runs_auto_import_strategy_validator_after_version_checks():
@@ -66,9 +52,7 @@ def test_preflight_runs_auto_import_strategy_validator_after_version_checks():
 
     assert "validate_versions.yml" in include_names
     assert "validate_auto_import.yml" in include_names
-    assert include_names.index("validate_versions.yml") < include_names.index(
-        "validate_auto_import.yml"
-    )
+    assert include_names.index("validate_versions.yml") < include_names.index("validate_auto_import.yml")
 
     tasks = _load_yaml("validate_auto_import.yml")
     text = (PREFLIGHT_TASKS / "validate_auto_import.yml").read_text()
@@ -110,12 +94,8 @@ def test_validate_backups_enforces_backup_and_cluster_parity_checks():
     """validate_backups.yml must include the missing critical parity checks."""
     text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
 
-    assert (
-        "InProgress" in text
-    ), "validate_backups.yml must wait for in-progress Velero backups"
-    assert (
-        "until:" in text
-    ), "validate_backups.yml must poll backup state before judging latest backup phase"
+    assert "InProgress" in text, "validate_backups.yml must wait for in-progress Velero backups"
+    assert "until:" in text, "validate_backups.yml must poll backup state before judging latest backup phase"
     assert (
         "Read primary hub backups after in-progress wait" in text
     ), "validate_backups.yml must refresh backup facts after waiting"
@@ -131,22 +111,16 @@ def test_validate_backups_enforces_backup_and_cluster_parity_checks():
     assert (
         "useManagedServiceAccount" in text
     ), "validate_backups.yml must enforce BackupSchedule useManagedServiceAccount"
-    assert (
-        "preserveOnDelete" in text
-    ), "validate_backups.yml must enforce ClusterDeployment preserveOnDelete"
-    assert (
-        "Reconciled" in text
-    ), "validate_backups.yml must verify DataProtectionApplication reconciliation"
-    assert (
-        "velero_pod_count" in text
-    ), "validate_backups.yml must verify OADP/Velero presence"
+    assert "preserveOnDelete" in text, "validate_backups.yml must enforce ClusterDeployment preserveOnDelete"
+    assert "Reconciled" in text, "validate_backups.yml must verify DataProtectionApplication reconciliation"
+    assert "velero_pod_count" in text, "validate_backups.yml must verify OADP/Velero presence"
     assert (
         "clusters imported after latest backup will be lost" in text
     ), "validate_backups.yml must detect clusters imported after the latest managed-clusters backup"
     msa_block = text[
-        text.index(
-            '"id": "preflight-backup-schedule-use-managed-service-account"'
-        ) : text.index("- name: Record primary hub BackupStorageLocation health")
+        text.index('"id": "preflight-backup-schedule-use-managed-service-account"') : text.index(
+            "- name: Record primary hub BackupStorageLocation health"
+        )
     ]
     assert 'status": "skip"' not in msa_block
     assert "not required for full restore" not in msa_block

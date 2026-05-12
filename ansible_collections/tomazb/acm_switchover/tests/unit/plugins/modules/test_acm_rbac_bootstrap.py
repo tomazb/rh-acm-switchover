@@ -68,6 +68,4 @@ def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
 
     main()
 
-    assert captured["fail"] == {
-        "msg": "include_decommission is only valid for the operator role."
-    }
+    assert captured["fail"] == {"msg": "include_decommission is only valid for the operator role."}

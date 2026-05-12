@@ -56,15 +56,10 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
 
 def summarize_preflight_results(results: list[dict]) -> dict:
     critical_failures = [
-        item
-        for item in results
-        if item.get("severity") == "critical"
-        and item.get("status") in {"fail", "error"}
+        item for item in results if item.get("severity") == "critical" and item.get("status") in {"fail", "error"}
     ]
     warning_failures = [
-        item
-        for item in results
-        if item.get("severity") == "warning" and item.get("status") in {"fail", "error"}
+        item for item in results if item.get("severity") == "warning" and item.get("status") in {"fail", "error"}
     ]
     return {
         "passed": len(critical_failures) == 0,

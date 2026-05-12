@@ -15,8 +15,6 @@ def test_discovery_bridge_fixture(run_noncore_fixture):
 
 
 def test_rbac_bootstrap_dry_run_fixture(run_noncore_fixture):
-    completed, summary = run_noncore_fixture(
-        "rbac_bootstrap_dry_run.yml", "rbac_bootstrap"
-    )
+    completed, summary = run_noncore_fixture("rbac_bootstrap_dry_run.yml", "rbac_bootstrap")
     assert completed.returncode == 0
     assert summary["mode"] == "dry_run"

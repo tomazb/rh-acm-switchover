@@ -26,9 +26,7 @@ def count_acm_resources(app: dict) -> int:
     count = 0
     for resource in app.get("status", {}).get("resources", []):
         namespace = resource.get("namespace")
-        if namespace in ACM_NAMESPACES or (
-            namespace and ACM_NAMESPACE_REGEX.match(namespace)
-        ):
+        if namespace in ACM_NAMESPACES or (namespace and ACM_NAMESPACE_REGEX.match(namespace)):
             count += 1
             continue
         if resource.get("kind") in ACM_KINDS:

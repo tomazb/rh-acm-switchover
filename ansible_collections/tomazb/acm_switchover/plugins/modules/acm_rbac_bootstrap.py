@@ -76,9 +76,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 def select_rbac_assets(role: str, include_decommission: bool) -> list[str]:
     """Return an ordered list of RBAC manifest paths for the requested profile."""
     if role not in RBAC_VALID_ROLES:
-        raise ValueError(
-            f"Invalid RBAC role '{role}'. Expected one of: {', '.join(RBAC_VALID_ROLES)}."
-        )
+        raise ValueError(f"Invalid RBAC role '{role}'. Expected one of: {', '.join(RBAC_VALID_ROLES)}.")
     if include_decommission and role != "operator":
         raise ValueError("include_decommission is only valid for the operator role.")
     assets = list(RBAC_BASE_ASSETS)

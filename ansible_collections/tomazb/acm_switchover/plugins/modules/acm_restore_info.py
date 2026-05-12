@@ -79,11 +79,7 @@ def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict
         diagnostics_dict contains: restore_count, sync_enabled_count, reason
     """
     total_count = len(restores)
-    candidates = [
-        item
-        for item in restores
-        if item.get("spec", {}).get("syncRestoreWithNewBackups") is True
-    ]
+    candidates = [item for item in restores if item.get("spec", {}).get("syncRestoreWithNewBackups") is True]
     sync_enabled_count = len(candidates)
 
     diagnostics = {
@@ -131,9 +127,7 @@ def passive_restore_ready_for_preflight(restore: dict | None) -> bool:
         return True
     if phase == "FinishedWithErrors":
         messages = (restore or {}).get("status", {}).get("messages", [])
-        return bool(messages) and all(
-            "already available" in message for message in messages
-        )
+        return bool(messages) and all("already available" in message for message in messages)
     return False
 
 
@@ -146,10 +140,7 @@ def passive_restore_ready_reason(restore: dict | None) -> str:
     if phase == "FinishedWithErrors":
         messages = (restore or {}).get("status", {}).get("messages", [])
         if messages and all("already available" in message for message in messages):
-            return (
-                "Passive Restore FinishedWithErrors only contains "
-                "already-available messages."
-            )
+            return "Passive Restore FinishedWithErrors only contains " "already-available messages."
         return "Passive Restore FinishedWithErrors contains non-benign errors."
     if phase in WAIT_FAILURE_PHASES:
         return f"Passive Restore phase {phase} failed."
@@ -254,9 +245,7 @@ def build_restore_activation_plan(
 
     patch_resource_version = None
     if method == "passive" and activation_method == "patch" and passive_restore:
-        patch_resource_version = passive_restore.get("metadata", {}).get(
-            "resourceVersion"
-        )
+        patch_resource_version = passive_restore.get("metadata", {}).get("resourceVersion")
     patch = build_activation_patch(backup_name, resource_version=patch_resource_version)
     operation: dict = {"action": "none"}
     wait_target = None
@@ -279,12 +268,8 @@ def build_restore_activation_plan(
                     operation = {
                         "action": "delete_and_create",
                         "delete_restore": {
-                            "name": passive_restore.get("metadata", {}).get(
-                                "name", PASSIVE_SYNC_RESTORE_NAME
-                            ),
-                            "namespace": passive_restore.get("metadata", {}).get(
-                                "namespace", BACKUP_NAMESPACE
-                            ),
+                            "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
+                            "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
                         },
                         "create_restore": create_restore,
                         "rollback_restore": build_restore_snapshot(passive_restore),
@@ -297,32 +282,22 @@ def build_restore_activation_plan(
         else:
             if passive_restore is not None:
                 wait_target = build_wait_target(
-                    passive_restore.get("metadata", {}).get(
-                        "name", PASSIVE_SYNC_RESTORE_NAME
-                    ),
+                    passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
                     ["Enabled", "Finished", "Completed"],
-                    passive_restore.get("metadata", {}).get(
-                        "namespace", BACKUP_NAMESPACE
-                    ),
+                    passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
                     velero_restore_required=True,
                     velero_restore_status_field="veleroManagedClustersRestoreName",
                     velero_success_phases=["Completed"],
                     velero_failure_phases=["Failed", "PartiallyFailed"],
                 )
-                current_backup = passive_restore.get("spec", {}).get(
-                    "veleroManagedClustersBackupName"
-                )
+                current_backup = passive_restore.get("spec", {}).get("veleroManagedClustersBackupName")
                 if current_backup != backup_name:
                     operation = {
                         "action": "patch",
                         "patch": patch,
                         "patch_target": {
-                            "name": passive_restore.get("metadata", {}).get(
-                                "name", PASSIVE_SYNC_RESTORE_NAME
-                            ),
-                            "namespace": passive_restore.get("metadata", {}).get(
-                                "namespace", BACKUP_NAMESPACE
-                            ),
+                            "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
+                            "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
                         },
                     }
     else:
@@ -341,12 +316,8 @@ def build_restore_activation_plan(
                 operation = {
                     "action": "delete_and_create",
                     "delete_restore": {
-                        "name": passive_restore.get("metadata", {}).get(
-                            "name", PASSIVE_SYNC_RESTORE_NAME
-                        ),
-                        "namespace": passive_restore.get("metadata", {}).get(
-                            "namespace", BACKUP_NAMESPACE
-                        ),
+                        "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
+                        "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
                     },
                     "create_restore": create_restore,
                     "rollback_restore": build_restore_snapshot(passive_restore),
@@ -363,9 +334,7 @@ def build_restore_activation_plan(
         "restore_phase": passive_restore_phase(passive_restore),
         "restore_ready": passive_restore_ready_for_preflight(passive_restore),
         "restore_ready_reason": passive_restore_ready_reason(passive_restore),
-        "patch": (
-            patch if method == "passive" and activation_method == "patch" else None
-        ),
+        "patch": (patch if method == "passive" and activation_method == "patch" else None),
         "operation": operation,
         "wait_target": wait_target,
         "restore_count": diagnostics["restore_count"],

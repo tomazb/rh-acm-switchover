@@ -60,8 +60,6 @@ def write_json_artifact(
             handle.write(content)
         path.chmod(file_mode)
     except OSError as exc:
-        raise ArtifactWriteError(
-            f"Cannot write report artifact to '{path}': {exc}"
-        ) from exc
+        raise ArtifactWriteError(f"Cannot write report artifact to '{path}': {exc}") from exc
 
     return str(path), True

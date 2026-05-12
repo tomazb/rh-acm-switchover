@@ -6,18 +6,14 @@ def test_preflight_input_failure_writes_report_and_fails(run_preflight_fixture):
     assert completed.returncode != 0
     assert report["phase"] == "preflight"
     assert report["status"] == "fail"
-    assert any(
-        item["id"] == "preflight-input-secondary-context" for item in report["results"]
-    )
+    assert any(item["id"] == "preflight-input-secondary-context" for item in report["results"])
 
 
 def test_preflight_success_fixture_passes(run_preflight_fixture):
     completed, report = run_preflight_fixture("passive_success.yml")
     assert completed.returncode == 0
     assert report["status"] == "pass"
-    assert any(
-        item["id"] == "preflight-version-compatibility" for item in report["results"]
-    )
+    assert any(item["id"] == "preflight-version-compatibility" for item in report["results"])
 
 
 def test_preflight_version_mismatch_fails(run_preflight_fixture):
@@ -25,8 +21,7 @@ def test_preflight_version_mismatch_fails(run_preflight_fixture):
     assert completed.returncode != 0
     assert report["status"] == "fail"
     assert any(
-        item["id"] == "preflight-version-compatibility" and item["status"] == "fail"
-        for item in report["results"]
+        item["id"] == "preflight-version-compatibility" and item["status"] == "fail" for item in report["results"]
     )
 
 
@@ -56,7 +51,4 @@ def test_preflight_invalid_report_dir_fails_without_writing_report(
     completed, report = run_preflight_fixture("invalid_report_dir.yml")
     assert completed.returncode != 0
     assert report == {}
-    assert (
-        "Path traversal attempt" in completed.stdout
-        or "Path traversal attempt" in completed.stderr
-    )
+    assert "Path traversal attempt" in completed.stdout or "Path traversal attempt" in completed.stderr

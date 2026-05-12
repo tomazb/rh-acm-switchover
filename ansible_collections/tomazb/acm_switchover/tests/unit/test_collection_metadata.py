@@ -5,9 +5,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 COLLECTION_ROOT = REPO_ROOT / "ansible_collections" / "tomazb" / "acm_switchover"
-PACKAGED_RBAC_ROOT = (
-    COLLECTION_ROOT / "roles" / "rbac_bootstrap" / "files" / "deploy" / "rbac"
-)
+PACKAGED_RBAC_ROOT = COLLECTION_ROOT / "roles" / "rbac_bootstrap" / "files" / "deploy" / "rbac"
 REPO_RBAC_ROOT = REPO_ROOT / "deploy" / "rbac"
 ROLE_META_FILES = sorted(COLLECTION_ROOT.glob("roles/*/meta/main.yml"))
 
@@ -20,11 +18,7 @@ def test_galaxy_yml_parses():
 
 def test_collection_version_matches_repo_release_version():
     galaxy_data = yaml.safe_load((COLLECTION_ROOT / "galaxy.yml").read_text())
-    chart_data = yaml.safe_load(
-        (
-            REPO_ROOT / "deploy" / "helm" / "acm-switchover-rbac" / "Chart.yaml"
-        ).read_text()
-    )
+    chart_data = yaml.safe_load((REPO_ROOT / "deploy" / "helm" / "acm-switchover-rbac" / "Chart.yaml").read_text())
     init_text = (REPO_ROOT / "lib" / "__init__.py").read_text()
     match = re.search(r'__version__ = "([^"]+)"', init_text)
 
@@ -45,9 +39,7 @@ def test_collection_license_metadata_matches_repo_license():
 
     for meta_file in ROLE_META_FILES:
         role_meta = yaml.safe_load(meta_file.read_text())
-        assert (
-            role_meta["galaxy_info"]["license"] == "MIT"
-        ), f"{meta_file} should declare MIT"
+        assert role_meta["galaxy_info"]["license"] == "MIT", f"{meta_file} should declare MIT"
 
 
 def test_runtime_yml_parses():
@@ -56,9 +48,7 @@ def test_runtime_yml_parses():
 
 
 def test_example_group_vars_parse():
-    data = yaml.safe_load(
-        (COLLECTION_ROOT / "examples" / "group_vars" / "all.yml").read_text()
-    )
+    data = yaml.safe_load((COLLECTION_ROOT / "examples" / "group_vars" / "all.yml").read_text())
     assert "acm_switchover_hubs" in data
     assert "acm_switchover_execution" in data
 

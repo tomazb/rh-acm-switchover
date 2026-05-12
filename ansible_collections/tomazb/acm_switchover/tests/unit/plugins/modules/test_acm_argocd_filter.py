@@ -71,9 +71,7 @@ def test_placement_binding_kind_is_acm_touching():
         is_acm_touching_application(
             {
                 "metadata": {"name": "placement-app"},
-                "status": {
-                    "resources": [{"kind": "PlacementBinding", "namespace": "default"}]
-                },
+                "status": {"resources": [{"kind": "PlacementBinding", "namespace": "default"}]},
             }
         )
         is True

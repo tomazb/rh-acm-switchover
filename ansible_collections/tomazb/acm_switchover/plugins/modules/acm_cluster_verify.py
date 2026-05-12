@@ -42,9 +42,7 @@ from ansible.module_utils.basic import AnsibleModule
 def summarize_cluster_group(clusters: list[dict], min_managed_clusters: int) -> dict:
     if min_managed_clusters < 0:
         raise ValueError("min_managed_clusters must be a non-negative integer")
-    pending = [
-        item["name"] for item in clusters if not (item["joined"] and item["available"])
-    ]
+    pending = [item["name"] for item in clusters if not (item["joined"] and item["available"])]
     return {
         "passed": len(clusters) >= min_managed_clusters and not pending,
         "total": len(clusters),

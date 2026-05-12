@@ -294,7 +294,7 @@ def test_collection_rbac_validation_runs_ssars_in_dry_run():
 
 def test_fixture_playbook_runs_use_per_test_ansible_temp_dirs():
     """Integration fixtures must avoid shared /tmp ansible dirs across parallel test runs."""
-    text = (TESTS_DIR / "integration" / "conftest.py").read_text()
+    text = (TESTS_DIR / "conftest.py").read_text()
 
     assert '"/tmp/ansible-local"' not in text
     assert '"/tmp/ansible-remote"' not in text
