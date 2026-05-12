@@ -63,6 +63,7 @@ PhaseHandler = Callable[
     [argparse.Namespace, StateManager, KubeClient, KubeClient, logging.Logger],
     bool,
 ]
+PhaseFlowEntry = Tuple[PhaseHandler, Iterable[Phase], Phase]
 
 
 def parse_args():
@@ -467,9 +468,9 @@ def _run_switchover_impl(
         finally:
             state.restore_runtime_checkpoint(runtime_checkpoint)
 
-    phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
-        (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
-        (_run_phase_primary_prep, (Phase.PREFLIGHT, Phase.PRIMARY_PREP)),
+    phase_flow: Tuple[PhaseFlowEntry, ...] = (
+        (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),
+        (_run_phase_primary_prep, (Phase.PREFLIGHT, Phase.PRIMARY_PREP), Phase.PRIMARY_PREP),
         (
             _run_phase_activation,
             (
@@ -478,13 +479,14 @@ def _run_switchover_impl(
                 Phase.SECONDARY_VERIFY,
                 Phase.ACTIVATION,
             ),
+            Phase.ACTIVATION,
         ),
-        (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION)),
-        (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION)),
+        (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION), Phase.POST_ACTIVATION),
+        (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION), Phase.FINALIZATION),
     )
 
     current_phase = state.get_current_phase()
-    runnable_phases = {phase for _, phases in phase_flow for phase in phases}
+    runnable_phases = {phase for _, phases, _ in phase_flow for phase in phases}
     if current_phase not in runnable_phases:
         return _fail_phase(
             state,
@@ -493,11 +495,15 @@ def _run_switchover_impl(
         )
 
     ran_phase = False
-    for handler, allowed_states in phase_flow:
+    for handler, allowed_states, expected_phase in phase_flow:
         if state.get_current_phase() in allowed_states:
             ran_phase = True
             result = handler(args, state, primary, secondary, logger)
             if not result:
+                _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+                return False
+            if state.get_current_phase() != expected_phase:
+                _fail_unexpected_phase_state(state, expected_phase, logger)
                 _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
                 return False
 
@@ -673,16 +679,16 @@ def _run_restore_only_impl(
 
     # Restore-only phase flow: skip PRIMARY_PREP entirely
     # ArgoCD pause runs between preflight and activation (secondary hub only)
-    phase_flow: Tuple[Tuple[PhaseHandler, Iterable[Phase]], ...] = (
-        (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT)),
-        (_run_restore_only_argocd_pause, (Phase.PREFLIGHT,)),
-        (_run_phase_activation, (Phase.PREFLIGHT, Phase.ACTIVATION)),
-        (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION)),
-        (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION)),
+    phase_flow: Tuple[PhaseFlowEntry, ...] = (
+        (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),
+        (_run_restore_only_argocd_pause, (Phase.PREFLIGHT,), Phase.PREFLIGHT),
+        (_run_phase_activation, (Phase.PREFLIGHT, Phase.ACTIVATION), Phase.ACTIVATION),
+        (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION), Phase.POST_ACTIVATION),
+        (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION), Phase.FINALIZATION),
     )
 
     current_phase = state.get_current_phase()
-    runnable_phases = {phase for _, phases in phase_flow for phase in phases}
+    runnable_phases = {phase for _, phases, _ in phase_flow for phase in phases}
     if current_phase not in runnable_phases:
         return _fail_phase(
             state,
@@ -691,11 +697,15 @@ def _run_restore_only_impl(
         )
 
     ran_phase = False
-    for handler, allowed_states in phase_flow:
+    for handler, allowed_states, expected_phase in phase_flow:
         if state.get_current_phase() in allowed_states:
             ran_phase = True
             result = handler(args, state, None, secondary, logger)
             if not result:
+                _attempt_argocd_resume_on_failure(args, state, None, secondary, logger)
+                return False
+            if state.get_current_phase() != expected_phase:
+                _fail_unexpected_phase_state(state, expected_phase, logger)
                 _attempt_argocd_resume_on_failure(args, state, None, secondary, logger)
                 return False
 
@@ -824,6 +834,24 @@ def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bo
     # it with the generic wrapper message.
     if retry_has_no_new_phase_error or last_error.get("phase") != current_phase:
         state.add_error(message, phase=current_phase)
+    state.set_phase(Phase.FAILED)
+    return False
+
+
+def _fail_unexpected_phase_state(
+    state: StateManager,
+    expected_phase: Phase,
+    logger: logging.Logger,
+) -> bool:
+    """Fail when a successful phase handler leaves an impossible resume state."""
+
+    observed_phase = state.get_current_phase()
+    message = (
+        f"Phase handler reported success but left state in phase '{observed_phase.value}'; "
+        f"expected phase '{expected_phase.value}'."
+    )
+    logger.error(message)
+    state.add_error(message, phase=expected_phase.value)
     state.set_phase(Phase.FAILED)
     return False
 

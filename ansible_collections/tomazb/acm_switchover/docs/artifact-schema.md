@@ -101,8 +101,9 @@ Each result entry must support:
 Path: controlled by `acm_switchover_execution.checkpoint.path`.
 
 Written by the `tomazb.acm_switchover.checkpoint_phase` action plugin after each phase during live execution.
-When `acm_switchover_execution.mode` is `validate` or `dry_run`, the plugin reports the simulated transition without
-creating, migrating, resetting, or mutating the checkpoint file.
+When `acm_switchover_execution.mode` is `validate` or `dry_run`, or when the play runs under native Ansible check mode
+(`ansible-playbook --check`), the plugin reports the transition as non-mutating without creating, migrating, resetting,
+quarantining, or mutating the checkpoint file.
 
 ```json
 {

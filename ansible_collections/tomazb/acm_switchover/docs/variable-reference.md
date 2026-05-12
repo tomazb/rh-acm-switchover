@@ -53,7 +53,7 @@
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `mode` | `execute`, `validate`, `dry_run` | `execute` | Runtime mode; `validate` and `dry_run` do not persist checkpoint transitions |
+| `mode` | `execute`, `validate`, `dry_run` | `execute` | Runtime mode; `validate` and `dry_run` do not persist checkpoint transitions. Native Ansible check mode is also non-mutating even when this is `execute` |
 | `verbose` | bool | `false` | Enable verbose collection output where roles expose additional debug detail |
 | `force` | bool | `false` | Operator override flag reserved for compatibility with Python CLI state-reset workflows |
 | `report_dir` | str | `./artifacts` | Directory for JSON report artifacts; validated by the safe-path policy |

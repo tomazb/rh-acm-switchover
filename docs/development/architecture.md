@@ -142,6 +142,7 @@ The architecture distinguishes validation failures, recoverable API issues, and 
 - Critical preflight failures stop before mutation
 - Terminal restore states fail explicitly
 - State captures phase and error context for reruns and debugging
+- The orchestrator only reports `COMPLETED` after each successful phase handler leaves durable state in the expected resulting phase; mismatches are recorded against the expected phase and transition the run to `FAILED`
 
 ### Explicit over implicit
 
@@ -195,6 +196,11 @@ Critical checkpoints call `flush_state()`. Non-critical changes call `save_state
 Dry-run orchestration captures and restores a full `StateManager` snapshot after the run; this is separate from
 validate-only runtime checkpoints, which intentionally preserve discovered config while restoring phase and error
 state.
+
+The main switchover and restore-only phase loops assert the expected durable phase
+after each handler that returns success. This keeps resume and completion
+criteria tied to `StateManager.current_phase`, not just a handler return value,
+and prevents a stale or invalid phase from falling through to `COMPLETED`.
 
 ### `lib/kube_client.py`
 

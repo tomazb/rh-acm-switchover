@@ -28,10 +28,12 @@ def _make_checkpoint_action(task_args):
     task = MagicMock()
     task.async_val = 0
     task.args = task_args
+    play_context = MagicMock()
+    play_context.check_mode = False
     return ActionModule(
         task=task,
         connection=MagicMock(),
-        play_context=MagicMock(),
+        play_context=play_context,
         loader=MagicMock(),
         templar=MagicMock(),
         shared_loader_obj=MagicMock(),
@@ -383,6 +385,100 @@ def test_action_module_persists_checkpoint_reset_without_error(tmp_path):
     assert saved["phase_status"] == "reset"
     assert saved["completed_phases"] == ["preflight", "activation"]
     assert saved["errors"] == []
+
+
+def test_action_module_check_mode_pass_leaves_existing_checkpoint_unchanged(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    original = {
+        "schema_version": "2.0",
+        "phase": "preflight",
+        "completed_phases": ["preflight"],
+        "operational_data": {},
+        "operation_identity": build_operation_identity(hubs={}, operation={}),
+        "errors": [],
+        "report_refs": [],
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    checkpoint_file.write_text(json.dumps(original, indent=2))
+    original_bytes = checkpoint_file.read_bytes()
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "pass",
+        }
+    )
+
+    result = action.run(task_vars={**_task_vars_for_mode("execute"), "ansible_check_mode": True})
+
+    assert result["changed"] is False
+    assert result["check_mode"] is True
+    assert result["checkpoint"]["completed_phases"] == ["preflight"]
+    assert checkpoint_file.read_bytes() == original_bytes
+
+
+def test_action_module_play_context_check_mode_fail_leaves_existing_checkpoint_unchanged(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    original = {
+        "schema_version": "2.0",
+        "phase": "activation",
+        "completed_phases": ["preflight"],
+        "operational_data": {},
+        "operation_identity": build_operation_identity(hubs={}, operation={}),
+        "errors": [],
+        "report_refs": [],
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    checkpoint_file.write_text(json.dumps(original, indent=2))
+    original_bytes = checkpoint_file.read_bytes()
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "fail",
+            "error": "planned failure",
+        }
+    )
+    action._play_context.check_mode = True
+
+    result = action.run(task_vars=_task_vars_for_mode("execute"))
+
+    assert result["changed"] is False
+    assert result["check_mode"] is True
+    assert result["checkpoint"]["errors"] == []
+    assert result["checkpoint"].get("phase_status") != "fail"
+    assert checkpoint_file.read_bytes() == original_bytes
+
+
+def test_action_module_check_mode_does_not_create_missing_checkpoint(tmp_path):
+    checkpoint_file = tmp_path / "missing-checkpoint.json"
+    action = _make_checkpoint_action(
+        {
+            "phase": "preflight",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "pass",
+        }
+    )
+
+    result = action.run(task_vars={**_task_vars_for_mode("execute"), "ansible_check_mode": True})
+
+    assert result["changed"] is False
+    assert result["check_mode"] is True
+    assert not checkpoint_file.exists()
 
 
 def test_action_module_rejects_missing_phase(tmp_path):
