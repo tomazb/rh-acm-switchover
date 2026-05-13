@@ -1,6 +1,9 @@
 """Tests for the acm_argocd_filter module."""
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
+    PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED,
+    PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT,
+    find_argocd_pause_blockers,
     filter_acm_applications,
     has_applicationset_owner,
     is_acm_touching_application,
@@ -40,6 +43,47 @@ def test_app_with_no_status_resources_is_excluded():
     assert filter_acm_applications(apps) == []
 
 
+def test_autosync_app_with_no_status_resources_is_blocked():
+    app = _app("unknown-impact", [])
+    app["spec"] = {"syncPolicy": {"automated": {"prune": True}}}
+
+    blockers = find_argocd_pause_blockers([app])
+
+    assert len(blockers) == 1
+    assert blockers[0]["reason"] == PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT
+    assert "cannot determine whether it touches ACM" in blockers[0]["message"]
+
+
+def test_autosync_app_with_stale_status_resources_is_blocked():
+    app = _app("stale-impact", [{"kind": "Deployment", "namespace": "default"}])
+    app["metadata"]["generation"] = 7
+    app["spec"] = {"syncPolicy": {"automated": {"prune": True}}}
+    app["status"]["observedGeneration"] = 6
+
+    blockers = find_argocd_pause_blockers([app])
+
+    assert len(blockers) == 1
+    assert blockers[0]["reason"] == PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT
+
+
+def test_applicationset_owned_acm_app_is_blocked():
+    app = _app(
+        "child-app",
+        [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}],
+    )
+    app["metadata"]["ownerReferences"] = [
+        {"kind": "ApplicationSet", "name": "parent-set"}
+    ]
+    app["spec"] = {"syncPolicy": {"automated": {"selfHeal": True}}}
+
+    blockers = find_argocd_pause_blockers([app])
+
+    assert len(blockers) == 1
+    assert blockers[0]["reason"] == PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED
+    assert "parent-set" in blockers[0]["message"]
+    assert "pause/update the ApplicationSet" in blockers[0]["message"]
+
+
 def test_non_acm_app_is_excluded():
     assert (
         is_acm_touching_application(
@@ -71,7 +115,9 @@ def test_placement_binding_kind_is_acm_touching():
         is_acm_touching_application(
             {
                 "metadata": {"name": "placement-app"},
-                "status": {"resources": [{"kind": "PlacementBinding", "namespace": "default"}]},
+                "status": {
+                    "resources": [{"kind": "PlacementBinding", "namespace": "default"}]
+                },
             }
         )
         is True

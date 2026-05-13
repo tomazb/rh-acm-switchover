@@ -96,6 +96,17 @@ class AppImpact:
 
 
 @dataclass
+class ArgocdPauseBlocker:
+    """An Application that makes managed Argo CD pause unsafe."""
+
+    namespace: str
+    name: str
+    reason: str
+    message: str
+    app: Optional[Dict[str, Any]] = None
+
+
+@dataclass
 class PauseResult:
     """Result of pausing one Application."""
 
@@ -120,6 +131,8 @@ class ResumeResult:
 RESUME_SKIP_REASON_MARKER_MISSING = "marker missing or already resumed"
 RESUME_SKIP_REASON_MARKER_MISMATCH = "marker mismatch (paused by different run)"
 PAUSE_SKIP_REASON_AUTOSYNC_DISABLED = "auto-sync not enabled"
+PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED = "applicationset-managed"
+PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT = "unknown-acm-impact"
 
 
 @dataclass
@@ -133,7 +146,9 @@ class ResumeSummary:
 
 def is_resume_noop(result: ResumeResult) -> bool:
     """Return True when resume did not patch because app is already resumed."""
-    return (not result.restored) and (result.skip_reason == RESUME_SKIP_REASON_MARKER_MISSING)
+    return (not result.restored) and (
+        result.skip_reason == RESUME_SKIP_REASON_MARKER_MISSING
+    )
 
 
 def _format_exception_detail(exc: Exception) -> str:
@@ -208,11 +223,15 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
         ArgocdDiscoveryResult with CRD presence and instance list.
     """
     has_app = _get_crd_presence(client, "applications.argoproj.io", required=True)
-    has_argocds_present = _get_crd_presence(client, "argocds.argoproj.io", required=False)
+    has_argocds_present = _get_crd_presence(
+        client, "argocds.argoproj.io", required=False
+    )
     has_argocds = bool(has_argocds_present)
     install_type_override = None
     if has_argocds_present is None:
-        logger.warning("Could not determine ArgoCD CRDs presence; install type will be 'unknown'")
+        logger.warning(
+            "Could not determine ArgoCD CRDs presence; install type will be 'unknown'"
+        )
         install_type_override = "unknown"
     instances: List[Dict[str, str]] = []
     if not has_app:
@@ -263,7 +282,9 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
     )
 
 
-def _list_argocd_applications_once(client: KubeClient, namespace: Optional[str]) -> List[Dict[str, Any]]:
+def _list_argocd_applications_once(
+    client: KubeClient, namespace: Optional[str]
+) -> List[Dict[str, Any]]:
     """List Argo CD Applications for one namespace scope and surface real errors."""
     scope_label = namespace or "cluster-wide scope"
     try:
@@ -326,6 +347,116 @@ def _resource_touches_acm(resource: Dict[str, Any]) -> bool:
     return False
 
 
+def _app_identity(app: Dict[str, Any]) -> tuple[str, str]:
+    meta = app.get("metadata", {}) or {}
+    return meta.get("namespace", ""), meta.get("name", "")
+
+
+def _sync_policy(app: Dict[str, Any]) -> Dict[str, Any]:
+    return dict((app.get("spec", {}) or {}).get("syncPolicy") or {})
+
+
+def is_autosync_enabled(app: Dict[str, Any]) -> bool:
+    """Return True when the Application has automated sync configured."""
+    return "automated" in _sync_policy(app)
+
+
+def has_applicationset_owner(app: Dict[str, Any]) -> bool:
+    """Return True if the Application is controlled by an ApplicationSet."""
+    for ref in (app.get("metadata", {}) or {}).get("ownerReferences", []) or []:
+        if ref.get("kind") == "ApplicationSet":
+            return True
+    return False
+
+
+def _applicationset_owner_name(app: Dict[str, Any]) -> str:
+    for ref in (app.get("metadata", {}) or {}).get("ownerReferences", []) or []:
+        if ref.get("kind") == "ApplicationSet":
+            return ref.get("name") or "<unknown>"
+    return "<unknown>"
+
+
+def _status_resources(app: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    resources = (app.get("status", {}) or {}).get("resources")
+    if not isinstance(resources, list) or not resources:
+        return None
+    return resources
+
+
+def _status_resources_are_stale(app: Dict[str, Any]) -> bool:
+    meta = app.get("metadata", {}) or {}
+    status = app.get("status", {}) or {}
+    generation = meta.get("generation")
+    observed_generation = status.get("observedGeneration")
+    if generation is None or observed_generation is None:
+        return False
+    try:
+        return int(observed_generation) < int(generation)
+    except (TypeError, ValueError):
+        return True
+
+
+def _resources_have_unknown_acm_impact(app: Dict[str, Any]) -> bool:
+    return _status_resources(app) is None or _status_resources_are_stale(app)
+
+
+def _count_acm_resources(app: Dict[str, Any]) -> int:
+    resources = _status_resources(app)
+    if resources is None:
+        return 0
+    return sum(1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r))
+
+
+def _unknown_impact_message(namespace: str, name: str) -> str:
+    return (
+        f"Application {namespace}/{name} has auto-sync enabled but status.resources is empty or stale, "
+        "so the tool cannot determine whether it touches ACM resources. Refresh or sync the Application "
+        "until Argo CD reports current resources, or inspect and pause it manually before retrying."
+    )
+
+
+def _applicationset_message(namespace: str, name: str, parent: str) -> str:
+    return (
+        f"Application {namespace}/{name} is managed by ApplicationSet {parent}; patching the child Application "
+        "can be reverted by the ApplicationSet controller. Remediate: pause/update the ApplicationSet or its "
+        "generator/template, then retry the switchover."
+    )
+
+
+def find_argocd_pause_blockers(apps: List[Dict[str, Any]]) -> List[ArgocdPauseBlocker]:
+    """Return Applications that make managed auto-sync pause unsafe."""
+    blockers: List[ArgocdPauseBlocker] = []
+    for app in apps:
+        if not is_autosync_enabled(app):
+            continue
+
+        namespace, name = _app_identity(app)
+        if _resources_have_unknown_acm_impact(app):
+            blockers.append(
+                ArgocdPauseBlocker(
+                    namespace=namespace,
+                    name=name,
+                    reason=PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT,
+                    message=_unknown_impact_message(namespace, name),
+                    app=app,
+                )
+            )
+            continue
+
+        if has_applicationset_owner(app) and _count_acm_resources(app) > 0:
+            parent = _applicationset_owner_name(app)
+            blockers.append(
+                ArgocdPauseBlocker(
+                    namespace=namespace,
+                    name=name,
+                    reason=PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED,
+                    message=_applicationset_message(namespace, name, parent),
+                    app=app,
+                )
+            )
+    return blockers
+
+
 def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
     """
     Filter Applications to those that touch ACM namespaces/kinds (per status.resources).
@@ -338,21 +469,20 @@ def find_acm_touching_apps(apps: List[Dict[str, Any]]) -> List[AppImpact]:
     """
     result: List[AppImpact] = []
     for app in apps:
-        meta = app.get("metadata", {})
-        ns = meta.get("namespace", "")
-        name = meta.get("name", "")
-        resources = app.get("status", {}).get("resources") or []
-        if not isinstance(resources, list) or not resources:
-            if not resources:
-                logger.debug(
-                    "App %s/%s has no status.resources; cannot verify ACM impact — skipped",
-                    ns,
-                    name,
-                )
+        ns, name = _app_identity(app)
+        resources = _status_resources(app)
+        if resources is None:
+            logger.debug(
+                "App %s/%s has no status.resources; cannot verify ACM impact — skipped",
+                ns,
+                name,
+            )
             continue
-        acm_count = sum(1 for r in resources if isinstance(r, dict) and _resource_touches_acm(r))
+        acm_count = _count_acm_resources(app)
         if acm_count > 0:
-            result.append(AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app))
+            result.append(
+                AppImpact(namespace=ns, name=name, resource_count=acm_count, app=app)
+            )
     return result
 
 
@@ -382,7 +512,9 @@ def resume_recorded_applications(
             continue
         if not entry.get("pause_applied", True):
             summary.failed += 1
-            logger.warning("  Skip %s/%s (pause state was recorded but not confirmed)", ns, name)
+            logger.warning(
+                "  Skip %s/%s (pause state was recorded but not confirmed)", ns, name
+            )
             continue
         if not all([hub, ns, name, original_sync_policy is not None]):
             summary.failed += 1
@@ -417,7 +549,9 @@ def resume_recorded_applications(
             logger.info("  Already resumed %s/%s on %s", ns, name, hub)
         else:
             summary.failed += 1
-            logger.warning("  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored")
+            logger.warning(
+                "  Failed %s/%s: %s", ns, name, result.skip_reason or "not restored"
+            )
 
     return summary
 
@@ -465,6 +599,14 @@ def pause_autosync(
             patched=False,
             skip_reason=PAUSE_SKIP_REASON_AUTOSYNC_DISABLED,
         )
+    if has_applicationset_owner(app):
+        return PauseResult(
+            namespace=ns,
+            name=name,
+            original_sync_policy=original,
+            patched=False,
+            error=_applicationset_message(ns, name, _applicationset_owner_name(app)),
+        )
     # Null deletes the CRD map key under Kubernetes merge-patch semantics.
     new_sync = dict(sync_policy)
     new_sync["automated"] = None
@@ -490,7 +632,43 @@ def pause_autosync(
             patched=False,
             error=detail,
         )
-    return PauseResult(namespace=ns, name=name, original_sync_policy=original, patched=True)
+    try:
+        current = client.get_custom_resource(
+            group=ARGOCD_APP_GROUP,
+            version=ARGOCD_APP_VERSION,
+            plural=ARGOCD_APP_PLURAL,
+            name=name,
+            namespace=ns or None,
+        )
+    except Exception as e:
+        detail = _format_exception_detail(e)
+        logger.warning(
+            "Failed to verify Argo CD Application %s/%s pause: %s", ns, name, detail
+        )
+        return PauseResult(
+            namespace=ns,
+            name=name,
+            original_sync_policy=original,
+            patched=False,
+            error=f"pause verification failed: {detail}",
+        )
+    current_policy = ((current or {}).get("spec", {}) or {}).get("syncPolicy") or {}
+    if "automated" in current_policy:
+        message = (
+            f"Application {ns}/{name} auto-sync remains enabled after pause. "
+            "Check for Argo CD controller reconciliation, ApplicationSet management, or RBAC/patch conflicts before retrying."
+        )
+        logger.warning(message)
+        return PauseResult(
+            namespace=ns,
+            name=name,
+            original_sync_policy=original,
+            patched=False,
+            error=message,
+        )
+    return PauseResult(
+        namespace=ns, name=name, original_sync_policy=original, patched=True
+    )
 
 
 # NOTE: same dry_run_skip / KubeClient-as-self pattern as pause_autosync above.
@@ -533,7 +711,9 @@ def resume_autosync(
     except ApiException as e:
         if e.status == 404:
             logger.debug("Application %s/%s not found: %s", namespace, name, e)
-            return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
+            return ResumeResult(
+                namespace=namespace, name=name, restored=False, skip_reason="not found"
+            )
         logger.warning(
             "API error fetching Application %s/%s (status=%s); leaving paused",
             namespace,
@@ -547,7 +727,9 @@ def resume_autosync(
             skip_reason=f"fetch error: {e.status}",
         )
     except Exception as e:
-        logger.warning("Unexpected error fetching Application %s/%s: %s", namespace, name, e)
+        logger.warning(
+            "Unexpected error fetching Application %s/%s: %s", namespace, name, e
+        )
         return ResumeResult(
             namespace=namespace,
             name=name,
@@ -555,7 +737,9 @@ def resume_autosync(
             skip_reason=f"fetch error: {e}",
         )
     if not current:
-        return ResumeResult(namespace=namespace, name=name, restored=False, skip_reason="not found")
+        return ResumeResult(
+            namespace=namespace, name=name, restored=False, skip_reason="not found"
+        )
     ann = (current.get("metadata") or {}).get("annotations") or {}
     marker = ann.get(ARGOCD_PAUSED_BY_ANNOTATION)
     if marker != run_id:
@@ -572,7 +756,8 @@ def resume_autosync(
         current_policy = (current.get("spec") or {}).get("syncPolicy") or {}
         if "automated" in current_policy:
             logger.info(
-                "Application %s/%s has stale marker %s (expected %s) " "but auto-sync is already enabled; cleaning up",
+                "Application %s/%s has stale marker %s (expected %s) "
+                "but auto-sync is already enabled; cleaning up",
                 namespace,
                 name,
                 marker,

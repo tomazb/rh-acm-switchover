@@ -97,7 +97,7 @@ python acm_switchover.py \
 > Both hubs share the same object storage backend; re-enabling on the old hub can cause data corruption and split-brain.
 > Only re-enable on the old hub if you are switching back and have shut down these components on the current primary first.
 
-**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused after switchover; resume only after updating Git/desired state for the new hub, using `--argocd-resume-only` as a standalone step. Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
+**Argo CD / GitOps:** If you use Argo CD to manage ACM resources, enable `--argocd-manage` so the tool pauses auto-sync on ACM-touching Applications during primary prep (on both hubs). Applications are left paused after switchover; resume only after updating Git/desired state for the new hub, using `--argocd-resume-only` as a standalone step. Managed pause fails closed for ApplicationSet-managed child Applications, auto-sync Applications whose current `status.resources` cannot prove ACM impact, and Applications that still have auto-sync after a post-patch re-read. Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
 
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
@@ -517,6 +517,11 @@ python acm_switchover.py \
 
 Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and left paused by default. State is stored in the switchover state file.
 
+**Managed pause safety checks:**
+- ApplicationSet-managed child Applications are not patched. The ApplicationSet controller can revert child edits, so pause or update the parent ApplicationSet, generator, or template, then retry.
+- Auto-sync Applications with empty or stale `status.resources` block the workflow because ACM impact cannot be ruled out. Refresh/sync the Application until Argo CD reports current resources, or inspect and pause it manually.
+- After each pause patch, the tool re-reads the Application and fails if `spec.syncPolicy.automated` remains enabled.
+
 **Resume auto-sync after updating Git for the new hub:**
 - Standalone: `--argocd-resume-only` with `--primary-context` and `--secondary-context` to restore from state.
 - Resume-only auto-discovers the original state file when the swapped-context match is unambiguous. If both context orderings have state files, pass the original file explicitly with `--state-file`.
@@ -527,7 +532,7 @@ Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect 
 
 **Resume on failure:** Add `--argocd-resume-on-failure` alongside `--argocd-manage` to automatically attempt ArgoCD resume if the switchover fails. This is safe because Git repos have not been updated yet, so ArgoCD syncing back to the original desired state helps restore pre-switchover state. Resume errors are logged but do not compound the original failure. For Ansible, set `acm_switchover_features.argocd.resume_on_failure: true` in your vars file.
 
-**Bash alternative (deprecated):** `./scripts/argocd-manage.sh` is deprecated and will be removed in a future release. Use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
+**Bash alternative (deprecated):** `./scripts/argocd-manage.sh` is deprecated and will be removed in a future release. It is not updated for the ApplicationSet and unknown-status blockers above; use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
 
 ### Issue: Script Hangs During Restore
 

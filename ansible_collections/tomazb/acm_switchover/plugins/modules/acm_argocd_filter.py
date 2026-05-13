@@ -23,6 +23,7 @@ options:
 from ansible.module_utils.basic import AnsibleModule
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
+    find_argocd_pause_blockers,
     filter_acm_applications,
 )
 
@@ -35,11 +36,14 @@ def main() -> None:
         supports_check_mode=True,
     )
     filtered = filter_acm_applications(module.params["applications"])
+    blocked = find_argocd_pause_blockers(module.params["applications"])
     module.exit_json(
         changed=False,
         applications=filtered,
+        blocked=blocked,
         total=len(module.params["applications"]),
         matched=len(filtered),
+        blocked_count=len(blocked),
     )
 
 
