@@ -90,6 +90,7 @@
   retries: 30
   delay: 10
   until: (_acm_old_hub_observability_pods_info.resources | default([]) | length) == 0
+  failed_when: false
   changed_when: false
   when:
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
@@ -103,6 +104,8 @@
       indicate a product bug.
   when:
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_old_hub_mco_info.resources | default([]) | length) > 0
+    - _acm_old_hub_observability_pods_info is defined
     - (_acm_old_hub_observability_pods_info.resources | default([]) | length) > 0
 
 - name: Publish old hub observability disable result

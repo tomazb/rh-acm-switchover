@@ -55,17 +55,19 @@ def test_verify_observability_performs_real_health_checks():
     assert any(
         "retries" in task and "delay" in task for task in deployment_checks + pod_checks
     ), "verify_observability.yml must poll until workloads recover"
-    assert any(
-        "ansible.builtin.fail" in task for task in tasks
-    ), "verify_observability.yml must fail when Observability health checks do not pass"
+    fail_tasks = [task for task in tasks if "ansible.builtin.fail" in task]
+    assert fail_tasks, "verify_observability.yml must fail when Observability health checks do not pass"
     assert (
         "status:" in text and "'failed'" in text
     ), "verify_observability.yml must publish failed status for unhealthy observability"
     wait_tasks = [task for task in deployment_checks + pod_checks if "retries" in task and "delay" in task]
-    assert wait_tasks, "verify_observability.yml must retain bounded waits before failing"
+    assert wait_tasks, "verify_observability.yml must retain bounded waits before explicit failure"
     assert all(
-        task.get("failed_when") is not False for task in wait_tasks
-    ), "observability wait timeouts must fail post_activation"
+        task.get("failed_when") is False for task in wait_tasks
+    ), "observability wait timeouts must continue to publish deterministic failure facts"
+    fail_when = str(fail_tasks[-1].get("when", ""))
+    assert "_acm_observatorium_rollout_ready" in fail_when
+    assert "_acm_observability_pods_ready" in fail_when
 
 
 def test_observatorium_rollout_gate_requires_updated_replicas():

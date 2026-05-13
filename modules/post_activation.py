@@ -469,11 +469,11 @@ class PostActivationVerification:
                 raise SwitchoverError("observatorium-api deployment not found") from e
             else:
                 raise
-        except Exception as e:
-            if isinstance(e, SwitchoverError):
-                raise
-            logger.error("Failed to restart observatorium-api: %s", e)
+        except SwitchoverError:
             raise
+        except Exception as e:
+            logger.error("Failed to restart observatorium-api: %s", e)
+            raise SwitchoverError(f"Failed to restart observatorium-api: {e}") from e
 
     def _wait_for_observatorium_api_rollout(self) -> bool:
         """Wait for the full observatorium-api Deployment rollout to recover after restart."""

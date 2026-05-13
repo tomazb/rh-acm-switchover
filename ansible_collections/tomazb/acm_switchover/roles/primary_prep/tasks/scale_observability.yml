@@ -49,6 +49,10 @@
       {{ acm_primary_compactor_pods_after_scale.resources | default([]) | length }}
       pod(s) running after scale-down
   when:
+    - (acm_primary_compactor_info.resources | default([]) | length) > 0
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - acm_primary_compactor_scale is defined
+    - acm_primary_compactor_pods_after_scale is defined
     - (acm_primary_compactor_pods_after_scale.resources | default([]) | length) > 0
 
 - name: Publish observability scale result

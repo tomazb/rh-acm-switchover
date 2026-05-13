@@ -535,6 +535,18 @@ class TestPostActivationVerification:
 
         assert exc_info.value.status == 403
 
+    def test_restart_observatorium_api_wraps_unexpected_errors(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
+        """Unexpected restart errors should be classified as SwitchoverError."""
+        mock_secondary_client.rollout_restart_deployment.side_effect = RuntimeError("rollout API failed")
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            post_verify_with_obs._restart_observatorium_api()
+
+        assert "Failed to restart observatorium-api" in str(exc_info.value)
+        assert "rollout API failed" in str(exc_info.value)
+
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_observability_pods_all_ready(self, mock_wait, post_verify_with_obs, mock_secondary_client):
         """Test when all observability pods are ready."""

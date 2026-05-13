@@ -49,4 +49,8 @@ def test_scale_observability_blocks_when_thanos_pods_remain():
     assert pod_queries, "scale_observability.yml must query Thanos compactor pods after scaling"
     assert "app.kubernetes.io/name=thanos-compact" in str(pod_queries[0])
     assert fail_tasks, "remaining Thanos compactor pods must fail primary_prep"
+    fail_when = str(fail_tasks[0].get("when", ""))
+    assert "acm_primary_compactor_pods_after_scale is defined" in fail_when
+    assert "acm_primary_compactor_scale is defined" in fail_when
+    assert "acm_switchover_execution.mode" in fail_when
     assert "failed_when: false" not in text

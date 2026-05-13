@@ -138,6 +138,41 @@
         == 0
       )
     }}
+  failed_when: false
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
+
+- name: Record observatorium-api rollout readiness
+  ansible.builtin.set_fact:
+    _acm_observatorium_rollout_ready: >-
+      {{
+        (_acm_secondary_observatorium_api_ready_info.resources | default([]) | length) > 0
+        and (
+          (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('observedGeneration', 0)) | int)
+          >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('metadata', {}).get('generation', 0)) | int)
+        )
+        and (
+          (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('updatedReplicas', 0)) | int)
+          >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)) | int)
+        )
+        and (
+          (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('availableReplicas', 0)) | int)
+          >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)) | int)
+        )
+        and (
+          (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('readyReplicas', 0)) | int)
+          >= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)) | int)
+        )
+        and (
+          (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('replicas', (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('spec', {}).get('replicas', 1)))) | int)
+          <= (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('updatedReplicas', 0)) | int)
+        )
+        and (
+          (((_acm_secondary_observatorium_api_ready_info.resources | first | default({})).get('status', {}).get('unavailableReplicas', 0)) | int)
+          == 0
+        )
+      }}
   when:
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
     - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
@@ -179,6 +214,7 @@
     {%- endif -%}
     {%- endfor -%}
     {{ (_acm_secondary_observability_pods_info.resources | default([]) | length) > 0 and (ns.unhealthy | length) == 0 }}
+  failed_when: false
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
 - name: Summarize unhealthy observability Pods
@@ -210,6 +246,15 @@
       {{ unhealthy }}
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
+- name: Record observability pod readiness
+  ansible.builtin.set_fact:
+    _acm_observability_pods_ready: >-
+      {{
+        (_acm_secondary_observability_pods_info.resources | default([]) | length) > 0
+        and (_acm_secondary_unhealthy_observability_pods | default([]) | length) == 0
+      }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
 - name: Publish observability verification result
   ansible.builtin.set_fact:
     acm_observability_check_result:
@@ -225,12 +270,16 @@
           if (
             (_acm_observability_missing_workloads | default([]) | length) > 0
             or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
+            or not (_acm_observatorium_rollout_ready | default(true) | bool)
+            or not (_acm_observability_pods_ready | default(true) | bool)
           )
           else 'pass'
         }}
       failures:
         missing_workloads: "{{ _acm_observability_missing_workloads | default([]) }}"
         unhealthy_pods: "{{ _acm_secondary_unhealthy_observability_pods | default([]) }}"
+        observatorium_rollout_ready: "{{ _acm_observatorium_rollout_ready | default(true) }}"
+        observability_pods_ready: "{{ _acm_observability_pods_ready | default(true) }}"
       observatorium_ready_replicas: >-
         {{
           ((_acm_secondary_observatorium_api_ready_info.resources | default([]) | first | default({}))
@@ -244,11 +293,15 @@
   ansible.builtin.fail:
     msg: >-
       Observability verification failed. Missing workloads={{ _acm_observability_missing_workloads | default([]) | join(', ') }};
-      unhealthy pods={{ _acm_secondary_unhealthy_observability_pods | default([]) | join(', ') }}.
+      unhealthy pods={{ _acm_secondary_unhealthy_observability_pods | default([]) | join(', ') }};
+      observatorium rollout ready={{ _acm_observatorium_rollout_ready | default(true) }};
+      observability pods ready={{ _acm_observability_pods_ready | default(true) }}.
       Set acm_switchover_features.skip_observability_checks=true only when explicitly bypassing Observability checks.
   when: >-
     acm_switchover_execution.mode | default('execute') != 'dry_run'
     and (
       (_acm_observability_missing_workloads | default([]) | length) > 0
       or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
+      or not (_acm_observatorium_rollout_ready | default(true) | bool)
+      or not (_acm_observability_pods_ready | default(true) | bool)
     )

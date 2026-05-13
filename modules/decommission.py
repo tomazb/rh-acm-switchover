@@ -152,9 +152,11 @@ class Decommission:
         )
 
         if not success:
-            raise SwitchoverError(
-                f"Observability pods still running after {OBSERVABILITY_TERMINATE_TIMEOUT}s"
-            )
+            remaining = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
+            if remaining:
+                raise SwitchoverError(
+                    f"Observability pods still running after {OBSERVABILITY_TERMINATE_TIMEOUT}s"
+                )
 
     def _delete_managed_clusters(self):
         """Delete ManagedCluster resources (excluding local-cluster)."""
