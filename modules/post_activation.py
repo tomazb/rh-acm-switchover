@@ -737,7 +737,10 @@ class PostActivationVerification:
         3. Restarting the klusterlet deployment
 
         If we can't connect to a managed cluster (no context available), we log a
-        warning but don't fail the switchover.
+        warning but don't fail the switchover. If a wrong-hub klusterlet is
+        remediated, the post-remediation re-check is strict: failed remediation,
+        persistent wrong-hub state, or an unverifiable re-check fails
+        post-activation instead of reporting success.
         """
 
         logger.info("Verifying klusterlet connections to new hub...")
@@ -876,16 +879,16 @@ class PostActivationVerification:
 
             fatal_messages = []
             if fix_failed:
-                fatal_messages.append("Klusterlet remediation failed for cluster(s): " + ", ".join(fix_failed))
+                fatal_messages.append(f"Klusterlet remediation failed for cluster(s): {', '.join(fix_failed)}")
             if post_remediation_wrong_hub:
                 fatal_messages.append(
                     "Klusterlet still connected to the wrong hub after remediation: "
-                    + ", ".join(post_remediation_wrong_hub)
+                    f"{', '.join(post_remediation_wrong_hub)}"
                 )
             if post_remediation_unverified:
                 fatal_messages.append(
                     "Klusterlet remediation could not be verified for cluster(s): "
-                    + ", ".join(post_remediation_unverified)
+                    f"{', '.join(post_remediation_unverified)}"
                 )
             if fatal_messages:
                 raise SwitchoverError("; ".join(fatal_messages))
