@@ -47,7 +47,7 @@
 | `disable_observability_on_secondary` | bool | `false` | Deprecated compatibility setting; old-hub MCO deletion is now automatic when keeping the old hub as secondary |
 | `argocd.manage` | bool | `false` | Pause ACM-touching Argo CD Applications during switchover |
 | `argocd.resume_on_failure` | bool | `false` | Best-effort resume of Applications paused by the current run if switchover fails |
-| `klusterlet.strict_remediation` | bool | `false` | Fail post-activation when any klusterlet remediation candidate fails |
+| `klusterlet.strict_remediation` | bool | `false` | Module-level immediate failure toggle for klusterlet remediation. The role still fails after the post-remediation re-check when remediation failed or klusterlets remain on the wrong hub |
 
 ### `acm_switchover_execution`
 
@@ -99,8 +99,9 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | `summary.pending` | list[str] | Names of clusters not yet joined or available |
 | `klusterlet_probe.results` | list[dict] | Per-cluster klusterlet hub comparison results |
 | `klusterlet_probe.wrong_hub_clusters` | list[str] | Clusters whose klusterlet kubeconfig still points at a different hub |
+| `klusterlet_probe.skipped_clusters` | list[str] | Clusters skipped because direct klusterlet probing could not run, commonly because no managed-cluster kubeconfig was supplied |
 | `klusterlet_remediation.results` | list[dict] | Per-cluster remediation steps and status |
-| `klusterlet_remediation.failed_clusters` | list[str] | Clusters where remediation failed; non-empty fails the role only when strict remediation is enabled |
+| `klusterlet_remediation.failed_clusters` | list[str] | Clusters where remediation failed; non-empty fails post-activation after the klusterlet re-check |
 
 ### post_activation input variables
 
@@ -109,7 +110,16 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | `acm_switchover_managed_clusters` | dict | `{}` | Optional managed-cluster kubeconfigs used for klusterlet probe and remediation |
 | `acm_switchover_execution.concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
 | `acm_switchover_execution.concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
-| `acm_switchover_features.klusterlet.strict_remediation` | bool | `false` | Fail post-activation when any klusterlet remediation candidate fails |
+| `acm_switchover_features.klusterlet.strict_remediation` | bool | `false` | Module-level immediate failure toggle. Leave `false` for the role's normal remediation, re-check, then fail behavior |
+
+Post-activation klusterlet probing is stricter than best-effort status logging:
+wrong-hub klusterlets are remediated, probed again, and then fail the role if
+they still point at the wrong hub or if remediation reported failed clusters.
+Clusters without entries in `acm_switchover_managed_clusters` are skipped for
+direct klusterlet probing/remediation because the collection has no managed
+cluster kubeconfig to reach them. That skip is non-fatal only when
+ManagedCluster readiness already passed; if the cluster is still pending, the
+ManagedCluster verification result remains the blocking failure.
 
 When `acm_switchover_features.skip_observability_checks` is `false` and
 Observability is detected, Observability failures block the workflow by default:

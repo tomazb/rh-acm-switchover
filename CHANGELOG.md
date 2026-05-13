@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python phase orchestration now fails instead of reporting completion when a successful handler leaves state in an unexpected phase, and collection checkpoints now remain non-mutating under native Ansible check mode.
 - Python and collection activation now reject stale managed-clusters Velero restore signals after activation, and Python full restore now recreates a deleted passive-sync Restore if full Restore creation fails.
 - Python and collection post-activation checks now enforce preflight-derived expected ManagedCluster names/count when the operator omits `min_managed_clusters`, preventing false success when restored hubs contain fewer clusters than preflight observed.
+- Python and collection post-activation klusterlet remediation now re-checks wrong-hub clusters after remediation and fails when remediation failed or klusterlets still point at the wrong hub, while keeping missing managed-cluster kubeconfigs as explicit skips unless ManagedCluster readiness is unhealthy.
 
 ### Removed
 

@@ -77,7 +77,36 @@ def test_verify_klusterlet_records_module_remediation_attempts():
     content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
 
     assert "_klusterlet_remediation_result is defined" in content
-    assert "_klusterlet_probe_result.wrong_hub_clusters" in content
+    assert "_klusterlet_initial_probe_result.wrong_hub_clusters" in content
+
+
+def test_verify_klusterlet_reprobes_after_remediation():
+    """Wrong-hub remediation must be followed by a second klusterlet probe."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+
+    fix_index = next(
+        index for index, task in enumerate(tasks) if task.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml"
+    )
+    reprobe_indexes = [
+        index
+        for index, task in enumerate(tasks)
+        if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml" and index > fix_index
+    ]
+
+    assert reprobe_indexes, "verify_klusterlet.yml must re-probe after remediation"
+
+
+def test_verify_klusterlet_fails_failed_or_persistent_wrong_hub_after_recheck():
+    """Failed fixes and persistent wrong-hub probes must become fatal after re-check."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+
+    fail_tasks = [task for task in tasks if "ansible.builtin.fail" in task]
+    assert fail_tasks, "verify_klusterlet.yml must fail strict remediation errors"
+
+    fail_when = _when_text(fail_tasks[0])
+    assert "_klusterlet_remediation_result.failed_clusters" in fail_when
+    assert "_klusterlet_post_remediation_probe_result.wrong_hub_clusters" in fail_when
+    assert "_klusterlet_post_remediation_probe_result.skipped_clusters" not in fail_when
 
 
 def test_fix_klusterlet_filters_candidates_to_clusters_with_kubeconfigs():

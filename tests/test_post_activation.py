@@ -535,9 +535,7 @@ class TestPostActivationVerification:
 
         assert exc_info.value.status == 403
 
-    def test_restart_observatorium_api_wraps_unexpected_errors(
-        self, post_verify_with_obs, mock_secondary_client
-    ):
+    def test_restart_observatorium_api_wraps_unexpected_errors(self, post_verify_with_obs, mock_secondary_client):
         """Unexpected restart errors should be classified as SwitchoverError."""
         mock_secondary_client.rollout_restart_deployment.side_effect = RuntimeError("rollout API failed")
 
@@ -1184,8 +1182,12 @@ class TestKlusterletParallelVerification:
             ],
         }
 
+        c2_results = iter(["wrong_hub", "verified"])
+
         def fake_check(ctx, name, hub):
-            return {"c1": "verified", "c2": "wrong_hub", "c3": "unreachable"}[name]
+            if name == "c2":
+                return next(c2_results)
+            return {"c1": "verified", "c3": "unreachable"}[name]
 
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
@@ -1196,6 +1198,58 @@ class TestKlusterletParallelVerification:
         # wrong_hub cluster c2 should be fixed
         mock_fix.assert_called_once()
         assert mock_fix.call_args[0][0] == "c2"
+
+    def test_wrong_hub_remaining_after_remediation_is_fatal(self, mock_secondary_client, mock_state_manager):
+        """Wrong-hub klusterlet state must fail when remediation does not move it."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+        kube_data = {
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
+        }
+
+        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
+                    with patch.object(
+                        pav,
+                        "_check_klusterlet_connection",
+                        side_effect=["wrong_hub", "wrong_hub"],
+                    ):
+                        with pytest.raises(SwitchoverError, match="still connected to the wrong hub"):
+                            pav._verify_klusterlet_connections()
+
+    def test_failed_remediation_is_fatal_after_recheck(self, mock_secondary_client, mock_state_manager):
+        """A failed klusterlet remediation attempt must not be logged as success."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+        kube_data = {
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
+        }
+
+        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(pav, "_force_klusterlet_reconnect", return_value=False):
+                    with patch.object(
+                        pav,
+                        "_check_klusterlet_connection",
+                        side_effect=["wrong_hub", "wrong_hub"],
+                    ):
+                        with pytest.raises(SwitchoverError, match="Klusterlet remediation failed"):
+                            pav._verify_klusterlet_connections()
 
     def test_no_hub_api_server_skips(self, mock_secondary_client, mock_state_manager):
         """If hub API server can't be determined, skip verification."""
