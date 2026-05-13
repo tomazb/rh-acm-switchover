@@ -69,6 +69,44 @@ def test_activation_checkpoint_persists_argocd_run_id():
     assert "argocd_run_id:" in text, "activation/main.yml must persist argocd_run_id in checkpoint operational_data"
 
 
+def test_activation_wait_rejects_stale_velero_restore_signal():
+    """Activation wait must require a new managed-clusters Velero restore name when one existed before activation."""
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "wait_for_restore.yml").read_text())
+    wait_task = next(t for t in tasks if t.get("name") == "Wait for managed-clusters Velero restore to be created")
+    stale_assert = next(
+        t for t in tasks if t.get("name") == "Fail when managed-clusters Velero restore signal is stale"
+    )
+
+    assert "previous_velero_restore_name" not in wait_task["until"], (
+        "wait_for_restore.yml must wait for the status field to appear first, then let the "
+        "dedicated stale-signal assertion produce the operator-facing failure"
+    )
+    assert "previous_velero_restore_name" in stale_assert["ansible.builtin.assert"]["that"][0]
+    assert "waiting for a new managed-clusters Velero restore" in stale_assert["ansible.builtin.assert"]["fail_msg"]
+
+
+def test_preflight_skipped_checkpoint_requires_expected_managedcluster_metadata():
+    """Skipped preflight must not silently downgrade expected ManagedCluster enforcement to 0."""
+    tasks = yaml.safe_load((PREFLIGHT_TASKS / "main.yml").read_text())
+    restore_index = next(
+        idx
+        for idx, task in enumerate(tasks)
+        if task.get("name") == "Restore expected ManagedClusters from checkpoint when preflight is skipped"
+    )
+    assert restore_index > 0
+
+    validation_task = tasks[restore_index - 1]
+    assert validation_task.get("name") == "Validate expected ManagedCluster checkpoint data when preflight is skipped"
+    validation = validation_task["ansible.builtin.assert"]
+    validation_text = "\n".join(validation["that"])
+    assert "expected_managed_cluster_names" in validation_text
+    assert "expected_managed_cluster_count" in validation_text
+
+    restored_values = yaml.dump(tasks[restore_index]["ansible.builtin.set_fact"])
+    assert ".get('expected_managed_cluster_names', [])" not in restored_values
+    assert ".get('expected_managed_cluster_count', 0)" not in restored_values
+
+
 def test_primary_prep_checkpoint_persists_argocd_run_id():
     """primary_prep checkpoint writes must preserve the generated Argo CD run_id."""
     text = (PRIMARY_PREP_TASKS / "main.yml").read_text()

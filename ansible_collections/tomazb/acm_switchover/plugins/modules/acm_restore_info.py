@@ -198,6 +198,12 @@ def build_wait_target(
     return target
 
 
+def previous_managed_clusters_velero_restore_name(restore: dict | None) -> str:
+    if restore is None:
+        return ""
+    return restore.get("status", {}).get("veleroManagedClustersRestoreName", "") or ""
+
+
 def build_activation_restore_body(backup_name: str) -> dict:
     return {
         "apiVersion": "cluster.open-cluster-management.io/v1beta1",
@@ -281,6 +287,12 @@ def build_restore_activation_plan(
                     }
         else:
             if passive_restore is not None:
+                current_backup = passive_restore.get("spec", {}).get("veleroManagedClustersBackupName")
+                wait_target_extra = {}
+                if current_backup != backup_name:
+                    wait_target_extra["previous_velero_restore_name"] = previous_managed_clusters_velero_restore_name(
+                        passive_restore
+                    )
                 wait_target = build_wait_target(
                     passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
                     ["Enabled", "Finished", "Completed"],
@@ -289,8 +301,8 @@ def build_restore_activation_plan(
                     velero_restore_status_field="veleroManagedClustersRestoreName",
                     velero_success_phases=["Completed"],
                     velero_failure_phases=["Failed", "PartiallyFailed"],
+                    **wait_target_extra,
                 )
-                current_backup = passive_restore.get("spec", {}).get("veleroManagedClustersBackupName")
                 if current_backup != backup_name:
                     operation = {
                         "action": "patch",

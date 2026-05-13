@@ -44,8 +44,8 @@ class TestVerifyManagedClustersPolling:
         """Polling must check ManagedClusterJoined, not just Available."""
         assert "ManagedClusterJoined" in self.content
 
-    def test_until_uses_totality_not_threshold(self):
-        """Polling must compare count == total (totality), not count >= threshold."""
+    def test_until_uses_effective_expected_count_and_totality(self):
+        """Polling must wait for the effective expected count, then require all observed clusters ready."""
         tasks = yaml.safe_load(self.content)
         poll_task = None
         for task in tasks:
@@ -54,10 +54,19 @@ class TestVerifyManagedClustersPolling:
                 break
         assert poll_task is not None, "Must have a polling task with retries + until"
         until_expr = poll_task["until"]
-        assert "min_managed_clusters" not in until_expr, (
-            "Polling until clause should not use min_managed_clusters threshold — "
-            "it should wait for ALL clusters like the Python CLI"
-        )
+        assert "_acm_post_activation_min_managed_clusters" in until_expr
+        assert ">= (_acm_post_activation_min_managed_clusters | int)" in until_expr
+        assert "ManagedClusterConditionAvailable" in until_expr
+        assert "ManagedClusterJoined" in until_expr
+
+    def test_until_waits_for_expected_names_before_exiting(self):
+        """Derived expected ManagedCluster names must keep polling until every expected name is visible."""
+        tasks = yaml.safe_load(self.content)
+        poll_task = next(task for task in tasks if task.get("retries") and task.get("until"))
+        until_expr = poll_task["until"]
+
+        assert "_acm_post_activation_expected_managed_cluster_names" in until_expr
+        assert "difference(" in until_expr
 
     def test_until_requires_non_empty_resources_before_exiting(self):
         """Polling must NOT exit when resources list is empty.
@@ -88,6 +97,15 @@ class TestVerifyManagedClustersPolling:
 
         assert "local-cluster" in clusters_arg
         assert "selectattr('metadata.name', 'ne', 'local-cluster')" in clusters_arg
+
+    def test_cluster_verify_uses_derived_expected_count_by_default(self):
+        """Omitted min_managed_clusters should use the preflight-derived expected count."""
+        tasks = yaml.safe_load(self.content)
+        verify_task = next(task for task in tasks if "tomazb.acm_switchover.acm_cluster_verify" in task)
+        module_args = verify_task["tomazb.acm_switchover.acm_cluster_verify"]
+
+        assert "_acm_post_activation_min_managed_clusters" in str(module_args["min_managed_clusters"])
+        assert "_acm_post_activation_expected_managed_cluster_names" in str(module_args["expected_names"])
 
 
 # ── Issue 2: Re-verification after klusterlet remediation ──
@@ -220,3 +238,22 @@ class TestNegativeMinManagedClusters:
         )
         assert result["passed"] is False
         assert "c1" in result["pending"]
+
+    def test_cluster_verify_enforces_expected_names(self):
+        """Derived expected names must be missing-aware, not only count-aware."""
+        result = summarize_cluster_group(
+            [{"name": "cluster-a", "joined": True, "available": True}],
+            min_managed_clusters=2,
+            expected_names=["cluster-a", "cluster-b"],
+        )
+        assert result["passed"] is False
+        assert "cluster-b" in result["missing"]
+
+    def test_cluster_verify_zero_can_disable_expected_names(self):
+        """Explicit min_managed_clusters=0 must allow empty restore targets."""
+        result = summarize_cluster_group(
+            [],
+            min_managed_clusters=0,
+            expected_names=[],
+        )
+        assert result["passed"] is True

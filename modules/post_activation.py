@@ -52,11 +52,17 @@ class PostActivationVerification:
         state_manager: StateManager,
         has_observability: bool,
         dry_run: bool = False,
+        min_managed_clusters: int = 0,
+        expected_managed_cluster_names: Optional[List[str]] = None,
+        enforce_expected_managed_cluster_names: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
         self.has_observability = has_observability
         self.dry_run = dry_run
+        self.min_managed_clusters = min_managed_clusters
+        self.expected_managed_cluster_names = sorted(expected_managed_cluster_names or [])
+        self.enforce_expected_managed_cluster_names = enforce_expected_managed_cluster_names
         self._cached_managed_clusters: Optional[List[Dict]] = None  # Cache for managed clusters
         # Kubeconfig caching to reduce repeated file I/O (findings #10)
         self._kubeconfig_cache: Optional[Dict] = None
@@ -207,6 +213,7 @@ class PostActivationVerification:
             available_clusters = 0
             joined_clusters = 0
             pending_clusters = []
+            observed_names = []
 
             for mc in managed_clusters:
                 mc_name = mc.get("metadata", {}).get("name")
@@ -215,6 +222,8 @@ class PostActivationVerification:
                     continue
 
                 total_clusters += 1
+                if mc_name:
+                    observed_names.append(mc_name)
                 conditions = mc.get("status", {}).get("conditions", [])
 
                 is_available = any(
@@ -239,6 +248,17 @@ class PostActivationVerification:
                 "pending": pending_clusters,
             }
 
+            missing_expected = sorted(set(self.expected_managed_cluster_names) - set(observed_names))
+            if self.enforce_expected_managed_cluster_names and missing_expected:
+                pending_clusters.extend(missing_expected)
+                latest_status["pending"] = pending_clusters
+                return WaitConditionResult.pending("missing expected ManagedCluster(s): " + ", ".join(missing_expected))
+
+            if self.min_managed_clusters > 0 and total_clusters < self.min_managed_clusters:
+                return WaitConditionResult.pending(
+                    f"found {total_clusters}/{self.min_managed_clusters} expected ManagedCluster(s)"
+                )
+
             # If there are no non-local ManagedClusters, that's OK - nothing to wait for
             if total_clusters == 0:
                 return WaitConditionResult.complete(
@@ -260,11 +280,31 @@ class PostActivationVerification:
         )
 
         if not success:
+            missing_expected = sorted(
+                set(self.expected_managed_cluster_names) - set(self._non_local_managed_cluster_names())
+            )
+            if self.enforce_expected_managed_cluster_names and missing_expected:
+                raise SwitchoverError(
+                    "Missing expected ManagedCluster(s) after activation: " + ", ".join(missing_expected)
+                )
             raise SwitchoverError(
                 "Timeout waiting for ManagedClusters to connect. "
                 f"{latest_status['available']}/{latest_status['total']} available, "
                 f"{latest_status['joined']}/{latest_status['total']} joined"
             )
+
+    def _non_local_managed_cluster_names(self) -> List[str]:
+        """Return non-local ManagedCluster names visible on the secondary hub."""
+        clusters = self.secondary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+        return sorted(
+            item.get("metadata", {}).get("name")
+            for item in clusters
+            if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
+        )
 
     @dry_run_skip(message="Skipping scale-up of observability components")
     def _scale_up_observability_components(self):

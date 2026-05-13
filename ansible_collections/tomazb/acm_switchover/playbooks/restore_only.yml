@@ -22,7 +22,8 @@
             | combine({
                 'restore_only': true,
                 'method': 'full',
-                'old_hub_action': 'none'
+                'old_hub_action': 'none',
+                'min_managed_clusters': 0
               })
           }}
 

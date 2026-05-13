@@ -70,7 +70,10 @@
 
     - name: Fail if post activation checks did not pass
       ansible.builtin.fail:
-        msg: "Post activation verification failed: {{ acm_cluster_verify_result.pending | join(', ') }} cluster(s) not ready"
+        msg: >-
+          Post activation verification failed:
+          {{ acm_cluster_verify_result.pending | default([]) | join(', ') }} cluster(s) not ready{% if acm_cluster_verify_result.missing | default([]) | length > 0 %};
+          missing expected ManagedCluster(s): {{ acm_cluster_verify_result.missing | join(', ') }}{% endif %}
       when:
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - not acm_cluster_verify_result.passed

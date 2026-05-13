@@ -21,6 +21,7 @@ from acm_switchover import (
     _attempt_argocd_resume_on_failure,
     _fail_phase,
     _initialize_clients,
+    _run_phase_activation,
     _report_argocd_acm_impact,
     _run_phase_finalization,
     _run_phase_preflight,
@@ -31,7 +32,15 @@ from acm_switchover import (
     validate_args,
 )
 from lib import argocd as argocd_lib
-from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
+from lib.constants import (
+    EXIT_FAILURE,
+    EXIT_INTERRUPT,
+    EXIT_SUCCESS,
+    MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+    MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
+    MANAGED_CLUSTER_EXPECTATION_KEY,
+    MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
+)
 from lib.validation import ValidationError
 
 
@@ -236,6 +245,28 @@ class TestArgParsing:
         ):
             args = parse_args()
             assert args.report_dir == "./artifacts/run-1"
+
+    def test_min_managed_clusters_omitted_is_distinct_from_explicit_zero(self):
+        """Omitted --min-managed-clusters derives from preflight; explicit 0 opts out."""
+        base_argv = [
+            "script.py",
+            "--primary-context",
+            "p1",
+            "--secondary-context",
+            "p2",
+            "--method",
+            "passive",
+            "--old-hub-action",
+            "secondary",
+        ]
+
+        with patch("sys.argv", base_argv):
+            args = parse_args()
+            assert args.min_managed_clusters is None
+
+        with patch("sys.argv", base_argv + ["--min-managed-clusters", "0"]):
+            args = parse_args()
+            assert args.min_managed_clusters == 0
 
     def test_validate_args_warns_when_argocd_manage_has_no_effect_in_validate_only(
         self,
@@ -1923,6 +1954,145 @@ class TestDecommissionAndSetupHelpers:
 
 @pytest.mark.unit
 class TestPreflightPhase:
+    def test_preflight_records_critical_result_when_expected_cluster_inventory_fails(self):
+        from modules.preflight import ValidationReporter
+        from modules.preflight_coordinator import PreflightValidator
+
+        validator = PreflightValidator.__new__(PreflightValidator)
+        validator.restore_only = False
+        validator.primary = Mock()
+        validator.primary.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
+        validator.reporter = ValidationReporter()
+
+        assert validator._derive_expected_managed_cluster_names() == []
+        failures = validator.reporter.critical_failures()
+        assert len(failures) == 1
+        assert failures[0]["check"] == "ManagedCluster inventory"
+        assert "403 Forbidden" in failures[0]["message"]
+
+    def test_run_phase_preflight_persists_expected_managed_clusters_from_primary(self):
+        args = SimpleNamespace(
+            method="passive",
+            old_hub_action="secondary",
+            skip_rbac_validation=False,
+            argocd_manage=False,
+            skip_gitops_check=True,
+            skip_observability_checks=False,
+            validate_only=False,
+            restore_only=False,
+            min_managed_clusters=None,
+        )
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+            "expected_managed_cluster_names": ["cluster-a", "cluster-b"],
+            "expected_managed_cluster_count": 2,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = _run_phase_preflight(args, state, primary, secondary, logger)
+
+        assert result is True
+        state.set_config.assert_any_call("expected_managed_cluster_names", ["cluster-a", "cluster-b"])
+        state.set_config.assert_any_call("expected_managed_cluster_count", 2)
+        state.set_config.assert_any_call(
+            MANAGED_CLUSTER_EXPECTATION_KEY,
+            MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+        )
+
+    def test_restore_only_preflight_persists_empty_expected_managed_clusters(self):
+        args = SimpleNamespace(
+            method="full",
+            old_hub_action=None,
+            skip_rbac_validation=False,
+            argocd_manage=False,
+            skip_gitops_check=True,
+            skip_observability_checks=False,
+            validate_only=False,
+            restore_only=True,
+            min_managed_clusters=None,
+        )
+        state = Mock()
+        secondary = Mock()
+        config = {
+            "primary_version": "unknown",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": False,
+            "secondary_observability_detected": False,
+            "has_observability": False,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class:
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = _run_phase_preflight(args, state, None, secondary, Mock())
+
+        assert result is True
+        state.set_config.assert_any_call("expected_managed_cluster_names", [])
+        state.set_config.assert_any_call("expected_managed_cluster_count", 0)
+        state.set_config.assert_any_call(
+            MANAGED_CLUSTER_EXPECTATION_KEY,
+            MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
+        )
+
+    def test_run_phase_activation_uses_derived_expected_count_when_min_omitted(self):
+        args = SimpleNamespace(
+            method="passive",
+            activation_method="patch",
+            manage_auto_import_strategy=False,
+            old_hub_action="secondary",
+            min_managed_clusters=None,
+        )
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "expected_managed_cluster_names": ["cluster-a", "cluster-b"],
+            "expected_managed_cluster_count": 2,
+            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+        }.get(key, default)
+        secondary = Mock()
+
+        with patch("acm_switchover.SecondaryActivation") as activation_class:
+            activation_class.return_value.activate.return_value = True
+            assert _run_phase_activation(args, state, None, secondary, Mock()) is True
+
+        activation_class.assert_called_once()
+        kwargs = activation_class.call_args.kwargs
+        assert kwargs["min_managed_clusters"] == 2
+        assert kwargs["expected_managed_cluster_names"] == ["cluster-a", "cluster-b"]
+        assert kwargs["enforce_expected_managed_cluster_names"] is True
+
+    def test_run_phase_activation_preserves_explicit_zero_opt_out(self):
+        args = SimpleNamespace(
+            method="passive",
+            activation_method="patch",
+            manage_auto_import_strategy=False,
+            old_hub_action="secondary",
+            min_managed_clusters=0,
+        )
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "expected_managed_cluster_names": ["cluster-a"],
+            "expected_managed_cluster_count": 1,
+            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
+        }.get(key, default)
+        secondary = Mock()
+
+        with patch("acm_switchover.SecondaryActivation") as activation_class:
+            activation_class.return_value.activate.return_value = True
+            assert _run_phase_activation(args, state, None, secondary, Mock()) is True
+
+        kwargs = activation_class.call_args.kwargs
+        assert kwargs["min_managed_clusters"] == 0
+        assert kwargs["expected_managed_cluster_names"] == []
+        assert kwargs["enforce_expected_managed_cluster_names"] is False
+
     def test_run_phase_preflight_passes_argocd_flags_to_preflight_validator(self):
         args = SimpleNamespace(
             method="passive",

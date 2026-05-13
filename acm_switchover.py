@@ -37,9 +37,16 @@ from lib import (
 )
 from lib.argocd_coordinator import ArgoCDPauseCoordinator
 from lib.constants import (
+    EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
+    EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
     EXIT_FAILURE,
     EXIT_INTERRUPT,
     EXIT_SUCCESS,
+    MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+    MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
+    MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM,
+    MANAGED_CLUSTER_EXPECTATION_KEY,
+    MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
     STALE_STATE_THRESHOLD,
 )
@@ -188,11 +195,12 @@ Examples:
     parser.add_argument(
         "--min-managed-clusters",
         type=int,
-        default=0,
+        default=None,
         metavar="N",
         help=(
             "Minimum number of non-local ManagedClusters expected on the secondary hub after restore. "
-            "Activation fails if fewer than N clusters are found. Default is 0 (informational check only)."
+            "Activation fails if fewer than N clusters are found. Default derives the expected count "
+            "from primary preflight; explicit 0 allows an empty hub."
         ),
     )
 
@@ -898,6 +906,7 @@ def _run_phase_preflight(
         state.set_config("primary_version", "unknown")
         state.set_config("primary_observability_detected", False)
         state.set_config("primary_has_observability", False)
+        expected_managed_cluster_names: list[str] = []
     else:
         state.set_config("primary_version", config["primary_version"])
         state.set_config(
@@ -906,6 +915,7 @@ def _run_phase_preflight(
         )
         primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
         state.set_config("primary_has_observability", primary_obs_enabled)
+        expected_managed_cluster_names = list(config.get("expected_managed_cluster_names", []))
 
     state.set_config("secondary_version", config["secondary_version"])
     state.set_config(
@@ -919,6 +929,18 @@ def _run_phase_preflight(
         "has_observability",
         state.get_config("primary_has_observability", False) or secondary_obs_enabled,
     )
+    expected_managed_cluster_count = len(expected_managed_cluster_names)
+    state.set_config(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, expected_managed_cluster_names)
+    state.set_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, expected_managed_cluster_count)
+    if is_restore_only:
+        expectation_mode = MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
+    elif getattr(args, "min_managed_clusters", None) is None:
+        expectation_mode = MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT
+    elif getattr(args, "min_managed_clusters", 0) == 0:
+        expectation_mode = MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED
+    else:
+        expectation_mode = MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM
+    state.set_config(MANAGED_CLUSTER_EXPECTATION_KEY, expectation_mode)
 
     if not getattr(args, "skip_gitops_check", False):
         _report_argocd_acm_impact(
@@ -1053,6 +1075,7 @@ def _run_phase_activation(
 ) -> bool:
     _log_phase_banner("PHASE 3: SECONDARY HUB ACTIVATION", logger)
     state.set_phase(Phase.ACTIVATION)
+    min_managed_clusters, expected_names, enforce_expected_names = _resolve_managed_cluster_expectation(args, state)
 
     activation = SecondaryActivation(
         secondary_client=secondary,
@@ -1061,7 +1084,9 @@ def _run_phase_activation(
         activation_method=getattr(args, "activation_method", "patch"),
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
         old_hub_action=getattr(args, "old_hub_action", "none"),
-        min_managed_clusters=getattr(args, "min_managed_clusters", 0),
+        min_managed_clusters=min_managed_clusters,
+        expected_managed_cluster_names=expected_names,
+        enforce_expected_managed_cluster_names=enforce_expected_names,
     )
 
     if not activation.activate():
@@ -1080,12 +1105,16 @@ def _run_phase_post_activation(
 ) -> bool:
     _log_phase_banner("PHASE 4: POST-ACTIVATION VERIFICATION", logger)
     state.set_phase(Phase.POST_ACTIVATION)
+    min_managed_clusters, expected_names, enforce_expected_names = _resolve_managed_cluster_expectation(args, state)
 
     verification = PostActivationVerification(
         secondary,
         state,
         state.get_config("secondary_has_observability", False),
         dry_run=args.dry_run,
+        min_managed_clusters=min_managed_clusters,
+        expected_managed_cluster_names=expected_names,
+        enforce_expected_managed_cluster_names=enforce_expected_names,
     )
 
     if not verification.verify():
@@ -1093,6 +1122,22 @@ def _run_phase_post_activation(
 
     logger.info("\n✓ Post-activation verification complete!")
     return True
+
+
+def _resolve_managed_cluster_expectation(
+    args: argparse.Namespace,
+    state: StateManager,
+) -> tuple[int, list[str], bool]:
+    """Return effective ManagedCluster count/name enforcement for activation phases."""
+    raw_min = getattr(args, "min_managed_clusters", None)
+    expected_names = list(state.get_config(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, []) or [])
+    expected_count = int(state.get_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, len(expected_names)) or 0)
+
+    if raw_min is None:
+        return expected_count, expected_names, bool(expected_names)
+    if raw_min == 0:
+        return 0, [], False
+    return int(raw_min), [], False
 
 
 def _run_phase_finalization(

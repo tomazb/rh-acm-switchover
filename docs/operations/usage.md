@@ -176,8 +176,10 @@ python acm_switchover.py \
 > if the phase shows `FinishedWithErrors`.
 
 > **Note:** `--activation-method` applies only to `--method passive`.
-> Use `--min-managed-clusters N` to enforce a minimum restored non-local cluster count after activation.
-> `N` must be a non-negative integer; `0` keeps the check informational-only.
+> When `--min-managed-clusters` is omitted, the tool derives the expected non-local
+> ManagedCluster names/count from primary preflight and enforces that set after
+> activation. Use `--min-managed-clusters N` to provide an explicit minimum instead;
+> `N` must be non-negative, and explicit `0` allows an empty hub.
 
 **Advantages:**
 - Faster activation (data already restored)

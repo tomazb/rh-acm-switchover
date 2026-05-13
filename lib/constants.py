@@ -86,6 +86,21 @@ MANAGED_CLUSTER_RESTORE_NAME = "restore-acm-activate"
 BACKUP_SCHEDULE_DEFAULT_NAME = "acm-hub-backup"
 BACKUP_STORAGE_LOCATION_RESOURCE = "backupstoragelocations"
 
+# ManagedCluster API identifiers
+MANAGED_CLUSTER_API_GROUP = "cluster.open-cluster-management.io"
+MANAGED_CLUSTER_API_VERSION = "v1"
+MANAGED_CLUSTER_PLURAL = "managedclusters"
+
+# ManagedCluster expectation state keys and modes
+EXPECTED_MANAGED_CLUSTER_NAMES_KEY = "expected_managed_cluster_names"
+EXPECTED_MANAGED_CLUSTER_COUNT_KEY = "expected_managed_cluster_count"
+MANAGED_CLUSTER_EXPECTATION_KEY = "managed_cluster_expectation_mode"
+MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY = "restore_only"
+MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT = "derived_from_preflight"
+MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED = "explicit_empty_allowed"
+MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM = "explicit_minimum"
+PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME = "pre_activation_velero_managed_clusters_restore_name"
+
 # Observability Components
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
 THANOS_COMPACTOR_LABEL_SELECTOR = "app.kubernetes.io/name=thanos-compact"

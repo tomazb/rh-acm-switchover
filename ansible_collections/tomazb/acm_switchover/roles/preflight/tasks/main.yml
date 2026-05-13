@@ -20,6 +20,44 @@
     - acm_switchover_execution.checkpoint.enabled | default(false)
     - acm_switchover_preflight_summary.passed
 
+- name: Validate expected ManagedCluster checkpoint data when preflight is skipped
+  ansible.builtin.assert:
+    that:
+      - >-
+        (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('expected_managed_cluster_names', none))
+        is not none
+      - >-
+        (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('expected_managed_cluster_count', none))
+        is not none
+    fail_msg: >-
+      Skipped preflight checkpoint is missing expected ManagedCluster metadata
+      (expected_managed_cluster_names/expected_managed_cluster_count). Re-run preflight
+      so activation and post-activation can enforce the restore expectation.
+  when:
+    - (_checkpoint_enter | default({})).skipped_phase | default(false)
+    - acm_switchover_execution.mode | default('execute') == 'execute'
+
+- name: Restore expected ManagedClusters from checkpoint when preflight is skipped
+  ansible.builtin.set_fact:
+    acm_switchover_expected_managed_cluster_names: >-
+      {{
+        ((_checkpoint_enter.checkpoint | default({})).get('operational_data', {}))
+        .get('expected_managed_cluster_names')
+      }}
+    acm_switchover_expected_managed_cluster_count: >-
+      {{
+        ((_checkpoint_enter.checkpoint | default({})).get('operational_data', {}))
+        .get('expected_managed_cluster_count')
+      }}
+  when:
+    - (_checkpoint_enter | default({})).skipped_phase | default(false)
+    - >-
+      (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('expected_managed_cluster_names', none))
+      is not none
+    - >-
+      (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('expected_managed_cluster_count', none))
+      is not none
+
 - name: Run preflight phase
   when:
     - acm_switchover_preflight_summary.passed
@@ -31,6 +69,35 @@
 
     - name: Discover resources needed by later preflight checks
       ansible.builtin.include_tasks: discover_resources.yml
+      when: acm_switchover_preflight_summary.passed
+
+    - name: Derive expected ManagedClusters from primary preflight
+      ansible.builtin.set_fact:
+        acm_switchover_expected_managed_cluster_names: >-
+          {{
+            (
+              acm_primary_managed_clusters_info.resources | default([])
+              | selectattr('metadata.name', 'defined')
+              | rejectattr('metadata.name', 'equalto', 'local-cluster')
+              | map(attribute='metadata.name')
+              | list
+              | sort
+            )
+            if not (acm_switchover_operation.restore_only | default(false))
+            else []
+          }}
+        acm_switchover_expected_managed_cluster_count: >-
+          {{
+            (
+              acm_primary_managed_clusters_info.resources | default([])
+              | selectattr('metadata.name', 'defined')
+              | rejectattr('metadata.name', 'equalto', 'local-cluster')
+              | list
+              | length
+            )
+            if not (acm_switchover_operation.restore_only | default(false))
+            else 0
+          }}
       when: acm_switchover_preflight_summary.passed
 
     - name: Validate kubeconfig reachability
@@ -101,6 +168,9 @@
     checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
     status: pass
     report_ref: "{{ acm_switchover_preflight_result.path | default(omit) }}"
+    operational_data:
+      expected_managed_cluster_names: "{{ acm_switchover_expected_managed_cluster_names | default([]) }}"
+      expected_managed_cluster_count: "{{ acm_switchover_expected_managed_cluster_count | default(0) }}"
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)
     - acm_switchover_preflight_summary.passed
