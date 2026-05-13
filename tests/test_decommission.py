@@ -3,6 +3,7 @@
 Tests cover Decommission class for removing ACM from old primary hub.
 """
 
+import logging
 import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -54,12 +55,8 @@ class TestDecommission:
         mock_wait.return_value = True
 
         # Mock resources
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "observability"}}
-        ]
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}}
-        ]
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "observability"}}]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
         mock_primary_client.delete_custom_resource.return_value = True
 
         result = decommission_with_obs.decommission(interactive=False)
@@ -92,9 +89,7 @@ class TestDecommission:
 
     @patch("modules.decommission.confirm_action")
     @patch("modules.decommission.wait_for_condition")
-    def test_decommission_interactive_user_cancels(
-        self, mock_wait, mock_confirm, decommission_with_obs
-    ):
+    def test_decommission_interactive_user_cancels(self, mock_wait, mock_confirm, decommission_with_obs):
         """Test interactive decommission when user cancels."""
         mock_confirm.return_value = False  # User cancels
 
@@ -131,9 +126,7 @@ class TestDecommission:
             False,  # skip ManagedCluster deletion
             False,  # decline extra unsafe MCH confirmation
         ]
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "multiclusterhub"}}
-        ]
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "multiclusterhub"}}]
 
         result = decommission_no_obs.decommission(interactive=True)
 
@@ -142,9 +135,7 @@ class TestDecommission:
         assert mock_confirm.call_count == 3
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_with_resources(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_observability_with_resources(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test deleting observability resources."""
         mock_wait.return_value = True
 
@@ -162,9 +153,7 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_called_once()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_not_found(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_observability_not_found(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test when no observability resources exist."""
         mock_primary_client.list_custom_resources.return_value = []
 
@@ -174,9 +163,7 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_not_called()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_excludes_local(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_managed_clusters_excludes_local(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test that local-cluster is excluded from deletion."""
         mock_wait.return_value = True  # Simulate successful wait for deletion
 
@@ -244,35 +231,74 @@ class TestDecommission:
         mock_primary_client.list_managed_clusters.return_value = [
             {"metadata": {"name": "cluster1"}},
         ]
-        mock_primary_client.list_custom_resources.side_effect = ApiException(
-            status=403, reason="Forbidden"
-        )
+        mock_primary_client.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
 
         with pytest.raises(SwitchoverError) as exc_info:
             decommission_with_obs._delete_managed_clusters()
 
-        assert "Unable to verify ClusterDeployment preserveOnDelete safety" in str(
-            exc_info.value
-        )
+        assert "Unable to verify ClusterDeployment preserveOnDelete safety" in str(exc_info.value)
+        mock_primary_client.delete_custom_resource.assert_not_called()
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_delete_managed_clusters_allows_verified_missing_hive_api(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
+        """Verified missing Hive API remains acceptable for non-Hive clusters."""
+        mock_wait.return_value = True
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}},
+        ]
+        mock_primary_client.list_custom_resources.side_effect = ApiException(status=404, reason="Not Found")
+
+        decommission_with_obs._delete_managed_clusters()
+
+        mock_primary_client.delete_custom_resource.assert_called_once()
+
+    def test_delete_managed_clusters_reports_all_unsafe_clusterdeployments(
+        self, decommission_with_obs, mock_primary_client
+    ):
+        """Unsafe report includes all matching ClusterDeployments deterministically."""
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "cluster2"}},
+        ]
+        mock_primary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "cluster2", "namespace": "ns2"},
+                "spec": None,
+            },
+            {
+                "metadata": {"name": "cluster1", "namespace": "ns1"},
+                "spec": {"preserveOnDelete": False},
+            },
+        ]
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            decommission_with_obs._delete_managed_clusters()
+
+        message = str(exc_info.value)
+        assert "cluster1 (ns1/cluster1)" in message
+        assert "cluster2 (ns2/cluster2)" in message
+        assert message.index("cluster1 (ns1/cluster1)") < message.index("cluster2 (ns2/cluster2)")
         mock_primary_client.delete_custom_resource.assert_not_called()
 
     def test_delete_managed_clusters_preserves_local_cluster_skip_without_hive_check(
-        self, decommission_with_obs, mock_primary_client
+        self, caplog, decommission_with_obs, mock_primary_client
     ):
         """local-cluster remains skipped and does not require Hive safety lookup."""
         mock_primary_client.list_managed_clusters.return_value = [
             {"metadata": {"name": "local-cluster"}},
         ]
 
-        decommission_with_obs._delete_managed_clusters()
+        with caplog.at_level(logging.INFO, logger="acm_switchover"):
+            decommission_with_obs._delete_managed_clusters()
 
         mock_primary_client.list_custom_resources.assert_not_called()
         mock_primary_client.delete_custom_resource.assert_not_called()
+        assert "ClusterDeployment preserveOnDelete safety was verified" not in caplog.text
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_timeout(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_managed_clusters_timeout(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test that deletion fails when ManagedClusters are not removed in time."""
         mock_wait.return_value = False  # Simulate timeout
 
@@ -287,9 +313,7 @@ class TestDecommission:
 
         assert "ManagedClusters not fully removed" in str(exc_info.value)
 
-    def test_delete_managed_clusters_none_found(
-        self, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_managed_clusters_none_found(self, decommission_with_obs, mock_primary_client):
         """Test when no managed clusters exist."""
         mock_primary_client.list_custom_resources.return_value = []
         mock_primary_client.list_managed_clusters.return_value = []
@@ -299,9 +323,7 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_not_called()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_multiclusterhub(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_multiclusterhub(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test deleting MultiClusterHub resource."""
         mock_wait.return_value = True
 
@@ -314,9 +336,7 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_called_once()
 
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_multiclusterhub_timeout(
-        self, mock_wait, decommission_with_obs, mock_primary_client
-    ):
+    def test_delete_multiclusterhub_timeout(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test when MultiClusterHub deletion times out."""
         mock_wait.return_value = False  # Timeout
 
@@ -331,9 +351,7 @@ class TestDecommission:
         # Verify deletion was attempted
         mock_primary_client.delete_custom_resource.assert_called_once()
 
-    def test_decommission_error_handling(
-        self, decommission_with_obs, mock_primary_client
-    ):
+    def test_decommission_error_handling(self, decommission_with_obs, mock_primary_client):
         """Test error handling during decommission."""
         mock_primary_client.list_custom_resources.side_effect = Exception("API error")
 
@@ -344,9 +362,7 @@ class TestDecommission:
     @pytest.mark.parametrize("has_obs", [True, False])
     def test_decommission_observability_conditional(self, mock_primary_client, has_obs):
         """Test that observability deletion is conditional."""
-        decomm = Decommission(
-            primary_client=mock_primary_client, has_observability=has_obs
-        )
+        decomm = Decommission(primary_client=mock_primary_client, has_observability=has_obs)
 
         mock_primary_client.list_custom_resources.return_value = []
 
@@ -369,9 +385,7 @@ class TestDecommissionIntegration:
         When only operator pods remain (multiclusterhub-operator-*), the
         decommission should consider ACM removed successfully.
         """
-        decomm = Decommission(
-            primary_client=mock_primary_client, has_observability=False
-        )
+        decomm = Decommission(primary_client=mock_primary_client, has_observability=False)
 
         # Set up MCH to exist so deletion is attempted
         mch_listed = False
@@ -410,9 +424,7 @@ class TestDecommissionIntegration:
                 if "pod removal" in name.lower():
                     result = condition_fn()
                     assert isinstance(result, WaitConditionResult)
-                    assert (
-                        result.done is True
-                    ), f"Expected success but got: {result.public_detail}"
+                    assert result.done is True, f"Expected success but got: {result.public_detail}"
                     assert (
                         "operator" in result.public_detail.lower()
                     ), f"Expected operator mention in: {result.public_detail}"
@@ -424,18 +436,14 @@ class TestDecommissionIntegration:
 
             # Verify wait_for_condition was called for pod removal
             calls = [str(c) for c in mock_wait.call_args_list]
-            assert any(
-                "pod removal" in c.lower() for c in calls
-            ), f"Expected pod removal call in: {calls}"
+            assert any("pod removal" in c.lower() for c in calls), f"Expected pod removal call in: {calls}"
 
     @patch("modules.decommission.wait_for_condition")
     def test_full_decommission_workflow(self, mock_wait, mock_primary_client):
         """Test complete decommission workflow."""
         mock_wait.return_value = True
 
-        decomm = Decommission(
-            primary_client=mock_primary_client, has_observability=True
-        )
+        decomm = Decommission(primary_client=mock_primary_client, has_observability=True)
 
         # Mock all resources
         mock_primary_client.list_custom_resources.side_effect = [
@@ -443,9 +451,7 @@ class TestDecommissionIntegration:
             [],  # Hive ClusterDeployments
             [{"metadata": {"name": "multiclusterhub"}}],  # MCH
         ]
-        mock_primary_client.list_managed_clusters.return_value = [
-            {"metadata": {"name": "cluster1"}}
-        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
         mock_primary_client.delete_custom_resource.return_value = True
 
         result = decomm.decommission(interactive=False)

@@ -114,10 +114,10 @@ python acm_switchover.py \
 ```
 
 Decommission re-checks matching Hive `ClusterDeployment` resources immediately
-before non-local `ManagedCluster` deletion. Unsafe
-`spec.preserveOnDelete=false` values and Hive API lookup errors block deletion;
-only verified Hive API absence or no matching ClusterDeployments is treated as
-safe.
+before non-local `ManagedCluster` deletion. Any matching ClusterDeployment
+without `spec.preserveOnDelete=true` (unset or `false`) and Hive API lookup
+errors block deletion; only verified Hive API absence or no matching
+ClusterDeployments is treated as safe.
 
 ### Restore-Only (Single Hub)
 

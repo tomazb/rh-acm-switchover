@@ -91,6 +91,11 @@ MANAGED_CLUSTER_API_GROUP = "cluster.open-cluster-management.io"
 MANAGED_CLUSTER_API_VERSION = "v1"
 MANAGED_CLUSTER_PLURAL = "managedclusters"
 
+# Hive ClusterDeployment API identifiers
+HIVE_CLUSTERDEPLOYMENT_API_GROUP = "hive.openshift.io"
+HIVE_CLUSTERDEPLOYMENT_API_VERSION = "v1"
+HIVE_CLUSTERDEPLOYMENT_PLURAL = "clusterdeployments"
+
 # ManagedCluster expectation state keys and modes
 EXPECTED_MANAGED_CLUSTER_NAMES_KEY = "expected_managed_cluster_names"
 EXPECTED_MANAGED_CLUSTER_COUNT_KEY = "expected_managed_cluster_count"

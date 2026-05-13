@@ -14,6 +14,9 @@ from lib.constants import (
     DECOMMISSION_POD_INTERVAL,
     DECOMMISSION_POD_TIMEOUT,
     DELETE_REQUEST_TIMEOUT,
+    HIVE_CLUSTERDEPLOYMENT_API_GROUP,
+    HIVE_CLUSTERDEPLOYMENT_API_VERSION,
+    HIVE_CLUSTERDEPLOYMENT_PLURAL,
     LOCAL_CLUSTER_NAME,
     MANAGED_CLUSTER_DELETE_INTERVAL,
     MANAGED_CLUSTER_DELETE_TIMEOUT,
@@ -32,9 +35,7 @@ logger = logging.getLogger("acm_switchover")
 class Decommission:
     """Handles decommissioning of old primary hub."""
 
-    def __init__(
-        self, primary_client: KubeClient, has_observability: bool, dry_run: bool = False
-    ):
+    def __init__(self, primary_client: KubeClient, has_observability: bool, dry_run: bool = False):
         self.primary = primary_client
         self.has_observability = has_observability
         self.dry_run = dry_run
@@ -64,9 +65,7 @@ class Decommission:
         try:
             # Step 14.1-14.2: Delete MultiClusterObservability
             if self.has_observability:
-                if not interactive or confirm_action(
-                    "\nDelete MultiClusterObservability resource?", default=False
-                ):
+                if not interactive or confirm_action("\nDelete MultiClusterObservability resource?", default=False):
                     self._delete_observability()
                 else:
                     logger.info("Skipped: Delete MultiClusterObservability")
@@ -121,9 +120,7 @@ class Decommission:
             mco_name = mco.get("metadata", {}).get("name")
 
             if self.dry_run:
-                logger.info(
-                    "[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name
-                )
+                logger.info("[DRY-RUN] Would delete MultiClusterObservability: %s", mco_name)
                 continue
 
             logger.info("Deleting MultiClusterObservability: %s", mco_name)
@@ -218,19 +215,11 @@ class Decommission:
             def _managed_clusters_removed():
                 remaining = self.primary.list_managed_clusters()
                 # Filter out local-cluster
-                non_local = [
-                    mc
-                    for mc in remaining
-                    if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
-                ]
+                non_local = [mc for mc in remaining if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME]
                 if not non_local:
-                    return WaitConditionResult.complete(
-                        "all ManagedClusters removed (except local-cluster)"
-                    )
+                    return WaitConditionResult.complete("all ManagedClusters removed (except local-cluster)")
                 names = [mc.get("metadata", {}).get("name") for mc in non_local]
-                return WaitConditionResult.pending(
-                    f"{len(non_local)} ManagedCluster(s) remaining: {', '.join(names)}"
-                )
+                return WaitConditionResult.pending(f"{len(non_local)} ManagedCluster(s) remaining: {', '.join(names)}")
 
             success = wait_for_condition(
                 "ManagedCluster removal",
@@ -248,32 +237,31 @@ class Decommission:
 
             logger.info("All ManagedClusters removed successfully")
 
-        logger.info(
-            "ClusterDeployment preserveOnDelete safety was verified before ManagedCluster deletion."
-        )
-
-    def _verify_managed_cluster_delete_safety(
-        self, managed_cluster_names: list[str]
-    ) -> None:
+    def _verify_managed_cluster_delete_safety(self, managed_cluster_names: list[str]) -> None:
         """Verify matching Hive ClusterDeployments are safe before deleting ManagedClusters."""
         try:
             cluster_deployments = self.primary.list_custom_resources(
-                group="hive.openshift.io",
-                version="v1",
-                plural="clusterdeployments",
+                group=HIVE_CLUSTERDEPLOYMENT_API_GROUP,
+                version=HIVE_CLUSTERDEPLOYMENT_API_VERSION,
+                plural=HIVE_CLUSTERDEPLOYMENT_PLURAL,
             )
         except ApiException as exc:
+            if exc.status == 404:
+                logger.info(
+                    "Hive ClusterDeployment API not found; no ClusterDeployments require preserveOnDelete verification"
+                )
+                return
             raise SwitchoverError(
                 "Unable to verify ClusterDeployment preserveOnDelete safety before deleting ManagedClusters: "
                 f"API error {exc.status} {exc.reason}"
             ) from exc
         except Exception as exc:
             raise SwitchoverError(
-                "Unable to verify ClusterDeployment preserveOnDelete safety before deleting ManagedClusters: "
-                f"{exc}"
+                "Unable to verify ClusterDeployment preserveOnDelete safety before deleting ManagedClusters: " f"{exc}"
             ) from exc
 
         managed_cluster_name_set = set(managed_cluster_names)
+        unsafe_matches = set()
         for cluster_deployment in cluster_deployments:
             matching_cluster_name = self._matching_managed_cluster_name(
                 cluster_deployment,
@@ -282,18 +270,20 @@ class Decommission:
             if not matching_cluster_name:
                 continue
 
-            metadata = cluster_deployment.get("metadata", {})
-            namespace = metadata.get("namespace", "unknown")
-            name = metadata.get("name", "unknown")
-            preserve_on_delete = cluster_deployment.get("spec", {}).get(
-                "preserveOnDelete", False
-            )
+            metadata = cluster_deployment.get("metadata") or {}
+            spec = cluster_deployment.get("spec") or {}
+            preserve_on_delete = spec.get("preserveOnDelete", False)
             if not preserve_on_delete:
-                raise SwitchoverError(
-                    "Cannot delete ManagedCluster "
-                    f"{matching_cluster_name}: matching Hive ClusterDeployment {namespace}/{name} "
-                    "does not have spec.preserveOnDelete=true. Set preserveOnDelete=true before decommission."
-                )
+                namespace = metadata.get("namespace", "unknown")
+                name = metadata.get("name", "unknown")
+                unsafe_matches.add(f"{matching_cluster_name} ({namespace}/{name})")
+
+        if unsafe_matches:
+            raise SwitchoverError(
+                "Cannot delete ManagedClusters because matching Hive ClusterDeployments "
+                "do not have spec.preserveOnDelete=true: "
+                f"{', '.join(sorted(unsafe_matches))}. Set preserveOnDelete=true before decommission."
+            )
 
         logger.info(
             "Verified ClusterDeployment preserveOnDelete safety for ManagedCluster(s): %s",
@@ -301,12 +291,10 @@ class Decommission:
         )
 
     @staticmethod
-    def _matching_managed_cluster_name(
-        cluster_deployment: dict, managed_cluster_names: set[str]
-    ) -> str | None:
+    def _matching_managed_cluster_name(cluster_deployment: dict, managed_cluster_names: set[str]) -> str | None:
         """Return the ManagedCluster name represented by a Hive ClusterDeployment."""
-        metadata = cluster_deployment.get("metadata", {})
-        spec = cluster_deployment.get("spec", {})
+        metadata = cluster_deployment.get("metadata") or {}
+        spec = cluster_deployment.get("spec") or {}
         for candidate in (metadata.get("name"), spec.get("clusterName")):
             if candidate in managed_cluster_names:
                 return candidate
@@ -325,9 +313,7 @@ class Decommission:
         )
 
         if not mchs:
-            logger.info(
-                "No MultiClusterHub resources found (already deleted or never created)"
-            )
+            logger.info("No MultiClusterHub resources found (already deleted or never created)")
             logger.info(
                 "Note: ACM operator pods (%s-*) may still be running - "
                 "this is expected as the operator is installed separately",
@@ -365,20 +351,14 @@ class Decommission:
                 return WaitConditionResult.complete("all ACM pods removed")
             # Filter out operator pods - they remain after MCH deletion
             non_operator_pods = [
-                p
-                for p in pods
-                if not p.get("metadata", {})
-                .get("name", "")
-                .startswith(ACM_OPERATOR_POD_PREFIX)
+                p for p in pods if not p.get("metadata", {}).get("name", "").startswith(ACM_OPERATOR_POD_PREFIX)
             ]
             if not non_operator_pods:
                 operator_count = len(pods)
                 return WaitConditionResult.complete(
                     f"all ACM pods removed (except {operator_count} operator pod(s) which remain)"
                 )
-            return WaitConditionResult.pending(
-                f"{len(non_operator_pods)} non-operator pod(s) remaining"
-            )
+            return WaitConditionResult.pending(f"{len(non_operator_pods)} non-operator pod(s) remaining")
 
         success = wait_for_condition(
             "ACM pod removal",
@@ -399,6 +379,4 @@ class Decommission:
                 ACM_OPERATOR_POD_PREFIX,
             )
 
-        logger.info(
-            "Decommission complete. Backup data in object storage remains available for the new hub."
-        )
+        logger.info("Decommission complete. Backup data in object storage remains available for the new hub.")
