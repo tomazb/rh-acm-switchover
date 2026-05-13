@@ -41,7 +41,7 @@
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `manage_auto_import_strategy` | bool | `false` | Temporarily set ACM 2.14+ auto-import strategy for activation |
-| `skip_observability_checks` | bool | `false` | Skip observability preflight and post-activation checks |
+| `skip_observability_checks` | bool | `false` | Explicitly bypass Observability preflight, primary prep, post-activation, and old-hub finalization checks. Observability failures are blocking by default when this is `false` |
 | `skip_gitops_check` | bool | `false` | Skip read-only GitOps marker checks |
 | `skip_rbac_validation` | bool | `false` | Skip RBAC self-validation in preflight |
 | `disable_observability_on_secondary` | bool | `false` | Deprecated compatibility setting; old-hub MCO deletion is now automatic when keeping the old hub as secondary |
@@ -110,6 +110,13 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | `acm_switchover_execution.concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
 | `acm_switchover_execution.concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
 | `acm_switchover_features.klusterlet.strict_remediation` | bool | `false` | Fail post-activation when any klusterlet remediation candidate fails |
+
+When `acm_switchover_features.skip_observability_checks` is `false` and
+Observability is detected, Observability failures block the workflow by default:
+Thanos scale-down in `primary_prep`, post-activation scale-up/readiness/restart
+verification, and old-hub Observability termination in `finalization` must
+succeed. Set `skip_observability_checks: true` only as an explicit bypass when
+Observability will be handled separately.
 
 ## Phase 6 Non-Core Input Variables
 

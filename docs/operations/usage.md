@@ -229,7 +229,11 @@ Skipping Observability verification (not detected)
 
 ### Scenario 2: Force Skip Observability Checks
 
-Even if Observability is detected, you can skip related steps:
+When Observability is detected, related failures are blocking by default:
+Thanos scale-down on the old hub, post-activation Observability scale-up,
+observatorium-api restart/readiness, pod health, and old-hub Observability
+termination must succeed. To explicitly bypass those checks and mutations, set
+`--skip-observability-checks`:
 
 ```bash
 python acm_switchover.py \
@@ -240,7 +244,8 @@ python acm_switchover.py \
   --skip-observability-checks
 ```
 
-**Use case:** Observability issues shouldn't block cluster migration.
+**Use case:** Use only when the operator has decided Observability issues should
+not block cluster migration and will be handled separately.
 
 ### Scenario 3: Old Hub Kept as Secondary (Observability Disabled Automatically)
 
@@ -259,6 +264,9 @@ python acm_switchover.py \
 **Notes:**
 - `--disable-observability-on-secondary` is still accepted for compatibility,
   but it is now redundant and deprecated.
+- Old-hub Observability pod termination is blocking by default. Use
+  `--skip-observability-checks` only when intentionally bypassing Observability
+  handling.
 - If the MCO is managed by GitOps (ArgoCD/Flux), coordinate deletion to avoid drift.
 
 ### Scenario 4: Different ACM Versions (2.11 vs 2.12+)

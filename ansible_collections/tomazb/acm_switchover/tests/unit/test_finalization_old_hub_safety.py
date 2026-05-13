@@ -87,3 +87,32 @@ def test_verify_old_hub_state_does_not_suppress_read_failures():
     assert all(
         task.get("failed_when") is not False for task in k8s_info_tasks
     ), "verify_old_hub_state.yml must not suppress old-hub read failures"
+
+
+def test_disable_old_hub_observability_blocks_when_pods_remain():
+    """Old-hub Observability termination failures must block finalization."""
+    tasks = _load_yaml("disable_old_hub_observability.yml")
+    text = (FINALIZATION_TASKS / "disable_old_hub_observability.yml").read_text()
+
+    wait_tasks = [
+        task
+        for task in tasks
+        if task.get("name") == "Wait for old hub observability pods to terminate"
+    ]
+    fail_tasks = [
+        task for task in tasks if "Observability pods are still running" in str(task.get("ansible.builtin.fail", {}))
+    ]
+    debug_warn_tasks = [
+        task
+        for task in _walk_tasks(tasks)
+        if "Observability pods are still running" in str(task.get("ansible.builtin.debug", {}))
+    ]
+
+    assert wait_tasks, "disable_old_hub_observability.yml must wait for old-hub Observability pods"
+    assert wait_tasks[0].get("failed_when") is False
+    assert fail_tasks, "remaining old-hub Observability pods must fail finalization"
+    fail_when = str(fail_tasks[0].get("when", ""))
+    assert "_acm_old_hub_observability_pods_info is defined" in fail_when
+    assert "_acm_old_hub_mco_info.resources" in fail_when
+    assert not debug_warn_tasks, "remaining old-hub Observability pods must not be warning-only debug output"
+    assert "failed_when: false" in text

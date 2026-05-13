@@ -334,7 +334,7 @@ class PostActivationVerification:
             )
 
             if deployment is None:
-                logger.warning("observatorium-api deployment not found, skipping scale-up")
+                raise SwitchoverError("observatorium-api deployment not found")
             else:
                 current_replicas = deployment.get("spec", {}).get("replicas", 0)
                 if current_replicas == 0:
@@ -354,8 +354,9 @@ class PostActivationVerification:
                         current_replicas,
                     )
         except Exception as e:
-            logger.warning("Failed to check/scale observatorium-api: %s", e)
-            # Continue with thanos-compact check
+            if isinstance(e, SwitchoverError):
+                raise
+            raise SwitchoverError(f"Failed to check/scale observatorium-api: {e}") from e
 
         # Check and scale thanos-compact StatefulSet
         try:
@@ -365,7 +366,7 @@ class PostActivationVerification:
             )
 
             if statefulset is None:
-                logger.warning("thanos-compact StatefulSet not found, skipping scale-up")
+                raise SwitchoverError("thanos-compact StatefulSet not found")
             else:
                 current_replicas = statefulset.get("spec", {}).get("replicas", 0)
                 if current_replicas == 0:
@@ -385,8 +386,9 @@ class PostActivationVerification:
                         current_replicas,
                     )
         except Exception as e:
-            logger.warning("Failed to check/scale thanos-compact: %s", e)
-            # Continue to wait for any components that were scaled
+            if isinstance(e, SwitchoverError):
+                raise
+            raise SwitchoverError(f"Failed to check/scale thanos-compact: {e}") from e
 
         # Wait for scaled components to be ready
         if scaled_components:
@@ -405,7 +407,7 @@ class PostActivationVerification:
                 if ready:
                     logger.info("observatorium-api pods are ready")
                 else:
-                    logger.warning("observatorium-api pods did not become ready in time")
+                    raise SwitchoverError("observatorium-api pods did not become ready in time")
 
             # Wait for thanos-compact if it was scaled
             if any(name == "thanos-compact" for name, _ in scaled_components):
@@ -420,7 +422,7 @@ class PostActivationVerification:
                 if ready:
                     logger.info("thanos-compact pods are ready")
                 else:
-                    logger.warning("thanos-compact pods did not become ready in time")
+                    raise SwitchoverError("thanos-compact pods did not become ready in time")
         else:
             logger.info("No components needed scale-up")
 
@@ -459,17 +461,19 @@ class PostActivationVerification:
                         ", ".join(start_times),
                     )
             else:
-                logger.warning("observatorium-api deployment rollout did not become ready in time")
+                raise SwitchoverError("observatorium-api deployment rollout did not become ready in time")
 
         except ApiException as e:
             logger.error("Failed to restart observatorium-api: %s", e)
             if e.status == 404:
-                logger.warning("observatorium-api deployment not found")
+                raise SwitchoverError("observatorium-api deployment not found") from e
             else:
                 raise
+        except SwitchoverError:
+            raise
         except Exception as e:
             logger.error("Failed to restart observatorium-api: %s", e)
-            raise
+            raise SwitchoverError(f"Failed to restart observatorium-api: {e}") from e
 
     def _wait_for_observatorium_api_rollout(self) -> bool:
         """Wait for the full observatorium-api Deployment rollout to recover after restart."""
@@ -543,8 +547,7 @@ class PostActivationVerification:
         )
 
         if not pods:
-            logger.warning("No Observability pods found")
-            return
+            raise SwitchoverError("No Observability pods found")
 
         critical_waiting_reasons = {
             "CrashLoopBackOff",
@@ -605,13 +608,12 @@ class PostActivationVerification:
         )
 
         if error_pods:
-            logger.warning("Pods in error state: %s", ", ".join(error_pods))
+            raise SwitchoverError("Observability pods in error state: " + ", ".join(error_pods))
 
         if ready_pods < len(pods) * POD_READINESS_TOLERANCE:
-            logger.warning(
-                "Only %d/%d pods ready. Some pods may still be starting.",
-                ready_pods,
-                len(pods),
+            raise SwitchoverError(
+                f"Only {ready_pods}/{len(pods)} Observability pods ready; "
+                "some pods may still be starting or unhealthy"
             )
 
     def _verify_metrics_collection(self):

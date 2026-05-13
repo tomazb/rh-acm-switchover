@@ -737,10 +737,10 @@ class TestPrimaryPreparation:
         )
         mock_sleep.assert_called_once_with(THANOS_SCALE_DOWN_WAIT)
 
-    def test_prepare_with_thanos_404_warns_and_continues(
+    def test_prepare_with_thanos_404_blocks(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog
     ):
-        """Missing Thanos compactor should stay optional for the full prep flow."""
+        """Missing Thanos compactor should block when Observability checks are enabled."""
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
         ]
@@ -750,16 +750,30 @@ class TestPrimaryPreparation:
             reason="Not Found",
         )
 
-        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+        with caplog.at_level(logging.ERROR, logger="acm_switchover"):
             result = primary_prep_with_obs.prepare()
 
-        assert result is True
-        mock_state_manager.add_error.assert_not_called()
-        assert any(
+        assert result is False
+        mock_state_manager.add_error.assert_called_once()
+        assert not any(
             call.args == ("scale_down_thanos",) for call in mock_state_manager.mark_step_completed.call_args_list
         )
-        assert "Thanos compactor StatefulSet not found" in caplog.text
+        assert "Failed to scale down Thanos compactor" in caplog.text
         mock_primary_client.get_pods.assert_not_called()
+
+    @patch("time.sleep")
+    def test_scale_down_thanos_pods_remaining_blocks(
+        self, mock_sleep, primary_prep_with_obs, mock_primary_client
+    ):
+        """Thanos pods still running after scale-down should block primary prep."""
+        mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
+        mock_primary_client.get_pods.return_value = [{"metadata": {"name": "thanos-compact-0"}}]
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            primary_prep_with_obs._scale_down_thanos_compactor()
+
+        assert "Thanos compactor still has 1 pod(s) running" in str(exc_info.value)
+        mock_sleep.assert_called_once_with(THANOS_SCALE_DOWN_WAIT)
 
     def test_prepare_with_thanos_api_exception_fails_as_real_error(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog

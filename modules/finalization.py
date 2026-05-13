@@ -1048,10 +1048,10 @@ class Finalization:
         if not success:
             remaining = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
             if remaining:
-                logger.warning(
-                    "Observability pods still running after MCO deletion (%s pods). "
-                    "If GitOps is not recreating MCO, this may indicate a product bug.",
-                    len(remaining),
+                raise SwitchoverError(
+                    "Observability pods still running after MCO deletion "
+                    f"({len(remaining)} pods). If GitOps is not recreating MCO, "
+                    "this may indicate a product bug."
                 )
 
     def _handle_old_hub(self):

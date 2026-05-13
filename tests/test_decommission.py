@@ -163,6 +163,33 @@ class TestDecommission:
         mock_primary_client.delete_custom_resource.assert_not_called()
 
     @patch("modules.decommission.wait_for_condition")
+    def test_delete_observability_timeout_blocks(self, mock_wait, decommission_with_obs, mock_primary_client):
+        """Observability pods remaining after MCO deletion should block decommission."""
+        mock_wait.return_value = False
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "observability"}}]
+        mock_primary_client.get_pods.return_value = [{"metadata": {"name": "obs-pod"}}]
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            decommission_with_obs._delete_observability()
+
+        assert "Observability pods still running" in str(exc_info.value)
+        mock_primary_client.delete_custom_resource.assert_called_once()
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_delete_observability_timeout_rechecks_before_failing(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
+        """A boundary timeout should not fail decommission if pods are gone on the final read."""
+        mock_wait.return_value = False
+        mock_primary_client.list_custom_resources.return_value = [{"metadata": {"name": "observability"}}]
+        mock_primary_client.get_pods.return_value = []
+
+        decommission_with_obs._delete_observability()
+
+        mock_primary_client.delete_custom_resource.assert_called_once()
+        mock_primary_client.get_pods.assert_called()
+
+    @patch("modules.decommission.wait_for_condition")
     def test_delete_managed_clusters_excludes_local(self, mock_wait, decommission_with_obs, mock_primary_client):
         """Test that local-cluster is excluded from deletion."""
         mock_wait.return_value = True  # Simulate successful wait for deletion

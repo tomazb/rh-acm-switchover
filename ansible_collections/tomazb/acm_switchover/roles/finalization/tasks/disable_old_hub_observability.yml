@@ -96,14 +96,16 @@
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
     - (_acm_old_hub_mco_info.resources | default([]) | length) > 0
 
-- name: Warn when observability pods remain after MCO deletion
-  ansible.builtin.debug:
+- name: Fail when observability pods remain after MCO deletion
+  ansible.builtin.fail:
     msg: >-
       Observability pods are still running on the old hub after deleting
       MultiClusterObservability. If GitOps is not recreating MCO, this may
       indicate a product bug.
   when:
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_old_hub_mco_info.resources | default([]) | length) > 0
+    - _acm_old_hub_observability_pods_info is defined
     - (_acm_old_hub_observability_pods_info.resources | default([]) | length) > 0
 
 - name: Publish old hub observability disable result
