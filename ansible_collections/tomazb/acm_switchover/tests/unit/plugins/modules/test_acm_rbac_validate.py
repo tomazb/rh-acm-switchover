@@ -66,6 +66,7 @@ def test_decommission_adds_delete_permissions():
     permissions = expand_rbac_requirements(
         role="operator",
         include_decommission=True,
+        include_old_hub_finalization=False,
         skip_observability=True,
         argocd_mode="none",
         argocd_install_type="unknown",
@@ -78,11 +79,66 @@ def test_decommission_adds_delete_permissions():
     ) in permissions
 
 
+def test_decommission_skips_mco_delete_permission_when_observability_absent():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=True,
+        include_old_hub_finalization=False,
+        skip_observability=True,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+
+    assert (
+        "observability.open-cluster-management.io",
+        "multiclusterobservabilities",
+        "delete",
+        None,
+    ) not in permissions
+
+
+def test_old_hub_finalization_adds_mco_delete_permission():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        include_old_hub_finalization=True,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+
+    assert (
+        "observability.open-cluster-management.io",
+        "multiclusterobservabilities",
+        "delete",
+        None,
+    ) in permissions
+
+
+def test_verified_observability_absence_skips_old_hub_mco_delete_permission():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        include_old_hub_finalization=True,
+        skip_observability=True,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+
+    assert (
+        "observability.open-cluster-management.io",
+        "multiclusterobservabilities",
+        "delete",
+        None,
+    ) not in permissions
+
+
 @pytest.mark.parametrize("role", ["operator", "validator"])
 def test_hub_validation_requires_namespace_list_for_preflight_discovery(role):
     permissions = expand_rbac_requirements(
         role=role,
         include_decommission=False,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",
@@ -96,6 +152,7 @@ def test_decommission_only_excludes_switchover_permissions():
     permissions = expand_rbac_requirements(
         role="operator",
         include_decommission=True,
+        include_old_hub_finalization=False,
         skip_observability=True,
         argocd_mode="none",
         argocd_install_type="unknown",
@@ -210,6 +267,7 @@ def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
                 "hub": "primary",
                 "role": "validator",
                 "include_decommission": True,
+                "include_old_hub_finalization": False,
                 "decommission_only": False,
                 "skip_observability": False,
                 "argocd_mode": "none",
@@ -238,6 +296,7 @@ def test_validator_role_has_readonly_managedcluster_permission():
     permissions = expand_rbac_requirements(
         role="validator",
         include_decommission=False,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",

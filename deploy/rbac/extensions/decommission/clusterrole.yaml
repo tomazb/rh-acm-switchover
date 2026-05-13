@@ -1,6 +1,7 @@
 ---
 # ClusterRole for ACM Switchover Decommission
-# Grants only the extra cluster-scoped delete permissions needed for hub teardown
+# Grants cluster-scoped delete permissions needed for hub teardown.
+# Baseline operator RBAC already grants MCO delete for normal finalization.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

@@ -45,10 +45,10 @@ rules:
     resources: ["multiclusterhubs"]
     verbs: ["get", "list"]
   
-  # Observability - Auto-detection
+  # Observability - Auto-detection and old-hub finalization cleanup
   - apiGroups: ["observability.open-cluster-management.io"]
     resources: ["multiclusterobservabilities"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "delete"]
 
   # Argo CD - Detection and pause/resume (auto-detected, --argocd-manage)
   - apiGroups: ["argoproj.io"]

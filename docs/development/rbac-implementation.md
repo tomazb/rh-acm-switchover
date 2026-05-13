@@ -120,7 +120,7 @@ Users can choose from multiple deployment methods based on their requirements:
 - Separate service accounts for operator (read/write) and validator (read-only)
 - No wildcard permissions
 - Namespace-scoped permissions where possible
-- Namespaced `MultiClusterHub` delete is kept in the `open-cluster-management` Role, while cluster-scoped decommission deletes remain in the optional extension
+- Baseline operator RBAC includes `MultiClusterObservability` delete for normal old-hub finalization, while `ManagedCluster` and cluster-scoped `MultiClusterHub` decommission deletes remain in the optional extension
 - Explicit enumeration of all required verbs
 
 ### Risk Mitigation
@@ -147,7 +147,7 @@ kubectl apply -f deploy/rbac/clusterrolebinding.yaml
 kubectl apply -f deploy/rbac/role.yaml
 kubectl apply -f deploy/rbac/rolebinding.yaml
 
-# Optional: add decommission delete permissions only when needed
+# Optional: add ManagedCluster and MultiClusterHub decommission delete permissions only when needed
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 

@@ -232,6 +232,63 @@ class TestRBACValidator:
         assert ("argoproj.io", "argocds", "get") not in checked
         assert ("apiextensions.k8s.io", "customresourcedefinitions", "get") not in checked
 
+    def test_validate_cluster_permissions_requires_mco_delete_for_old_hub_finalization(self, validator):
+        """Normal old-hub finalization deletes MCO when observability was detected."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(include_old_hub_finalization=True)
+
+        assert all_valid is True
+        assert errors == []
+        assert (
+            call(
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                "delete",
+            )
+            in validator.check_permission.call_args_list
+        )
+
+    def test_validate_cluster_permissions_skips_mco_delete_when_observability_absent(self, validator):
+        """Verified observability absence must avoid requiring MCO delete."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(
+            include_old_hub_finalization=True,
+            skip_observability=True,
+        )
+
+        assert all_valid is True
+        assert errors == []
+        assert (
+            call(
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                "delete",
+            )
+            not in validator.check_permission.call_args_list
+        )
+
+    def test_validate_cluster_permissions_skips_decommission_mco_delete_when_observability_absent(self, validator):
+        """Decommission checks should not require MCO delete after verified observability absence."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(
+            include_decommission=True,
+            skip_observability=True,
+        )
+
+        assert all_valid is True
+        assert errors == []
+        assert (
+            call(
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                "delete",
+            )
+            not in validator.check_permission.call_args_list
+        )
+
     def test_validate_namespace_permissions_success(self, validator):
         """Test validate_namespace_permissions when all permissions exist."""
         # Mock namespace_exists and check_permission
@@ -456,7 +513,11 @@ class TestValidateRBACPermissions:
 
         # Primary succeeds, secondary fails
         def mock_validate(
-            include_decommission=False, skip_observability=False, argocd_mode="none", argocd_install_type="unknown"
+            include_decommission=False,
+            include_old_hub_finalization=False,
+            skip_observability=False,
+            argocd_mode="none",
+            argocd_install_type="unknown",
         ):
             if mock_validator_class.call_count == 1:
                 # Primary validation
@@ -487,6 +548,39 @@ class TestValidateRBACPermissions:
         # Verify decommission was passed
         mock_validator.validate_all_permissions.assert_called_with(
             include_decommission=True,
+            include_old_hub_finalization=False,
+            skip_observability=False,
+            argocd_mode="none",
+            argocd_install_type="unknown",
+        )
+
+    @patch("lib.rbac_validator.RBACValidator")
+    def test_validate_old_hub_finalization_only_applies_to_primary(
+        self, mock_validator_class, mock_primary_client, mock_secondary_client
+    ):
+        """Only the old hub needs MCO delete during normal finalization."""
+        primary_validator = MagicMock()
+        primary_validator.validate_all_permissions.return_value = (True, {})
+        secondary_validator = MagicMock()
+        secondary_validator.validate_all_permissions.return_value = (True, {})
+        mock_validator_class.side_effect = [primary_validator, secondary_validator]
+
+        validate_rbac_permissions(
+            mock_primary_client,
+            mock_secondary_client,
+            include_old_hub_finalization=True,
+        )
+
+        primary_validator.validate_all_permissions.assert_called_once_with(
+            include_decommission=False,
+            include_old_hub_finalization=True,
+            skip_observability=False,
+            argocd_mode="none",
+            argocd_install_type="unknown",
+        )
+        secondary_validator.validate_all_permissions.assert_called_once_with(
+            include_decommission=False,
+            include_old_hub_finalization=False,
             skip_observability=False,
             argocd_mode="none",
             argocd_install_type="unknown",
@@ -528,6 +622,7 @@ class TestValidateRBACPermissions:
         # Verify skip_observability was passed
         mock_validator.validate_all_permissions.assert_called_with(
             include_decommission=False,
+            include_old_hub_finalization=False,
             skip_observability=True,
             argocd_mode="none",
             argocd_install_type="unknown",
@@ -544,6 +639,7 @@ class TestValidateRBACPermissions:
 
         mock_validator.validate_all_permissions.assert_called_with(
             include_decommission=False,
+            include_old_hub_finalization=False,
             skip_observability=False,
             argocd_mode="manage",
             argocd_install_type="unknown",
@@ -570,12 +666,14 @@ class TestValidateRBACPermissions:
 
         primary_validator.validate_all_permissions.assert_called_once_with(
             include_decommission=False,
+            include_old_hub_finalization=False,
             skip_observability=False,
             argocd_mode="check",
             argocd_install_type="operator",
         )
         secondary_validator.validate_all_permissions.assert_called_once_with(
             include_decommission=False,
+            include_old_hub_finalization=False,
             skip_observability=False,
             argocd_mode="check",
             argocd_install_type="vanilla",

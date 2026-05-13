@@ -437,7 +437,6 @@ class TestRBACManifestConsistency:
     DECOMMISSION_FORBIDDEN_SNIPPETS = [
         '  - apiGroups: ["cluster.open-cluster-management.io"]\n    resources: ["managedclusters"]\n    verbs: ["get", "list", "patch", "delete"]',
         '  - apiGroups: ["operator.open-cluster-management.io"]\n    resources: ["multiclusterhubs"]\n    verbs: ["get", "list", "delete"]',
-        '  - apiGroups: ["observability.open-cluster-management.io"]\n    resources: ["multiclusterobservabilities"]\n    verbs: ["get", "list", "delete"]',
     ]
 
     CLUSTERROLE_PATHS = {

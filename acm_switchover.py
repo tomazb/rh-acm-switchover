@@ -883,6 +883,7 @@ def _run_phase_preflight(
         args.method,
         skip_rbac_validation=args.skip_rbac_validation,
         include_decommission=getattr(args, "old_hub_action", None) == "decommission",
+        include_old_hub_finalization=getattr(args, "old_hub_action", None) == "secondary",
         argocd_manage=effective_argocd_manage,
         skip_gitops_check=getattr(args, "skip_gitops_check", False),
         restore_only=is_restore_only,

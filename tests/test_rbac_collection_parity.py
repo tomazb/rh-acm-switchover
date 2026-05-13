@@ -46,7 +46,15 @@ def _expand(entries, namespace=None):
     return flattened
 
 
-def _python_hub_permissions(role, *, include_decommission, skip_observability, argocd_mode, argocd_install_type):
+def _python_hub_permissions(
+    role,
+    *,
+    include_decommission,
+    include_old_hub_finalization,
+    skip_observability,
+    argocd_mode,
+    argocd_install_type,
+):
     cluster = (
         RBACValidator.OPERATOR_CLUSTER_PERMISSIONS
         if role == "operator"
@@ -84,7 +92,15 @@ def _python_hub_permissions(role, *, include_decommission, skip_observability, a
     if include_decommission:
         if role != "operator":
             raise ValueError("include_decommission=True is not valid for the validator role.")
-        permissions.extend(_expand(RBACValidator.DECOMMISSION_PERMISSIONS))
+        for api_group, resource, verbs in RBACValidator.DECOMMISSION_PERMISSIONS:
+            if skip_observability and api_group == "observability.open-cluster-management.io":
+                continue
+            permissions.extend(_expand([(api_group, resource, verbs)]))
+
+    if include_old_hub_finalization and not skip_observability:
+        if role != "operator":
+            raise ValueError("include_old_hub_finalization=True is not valid for the validator role.")
+        permissions.extend(_expand(RBACValidator.OLD_HUB_FINALIZATION_PERMISSIONS))
 
     return sorted(permissions)
 
@@ -105,24 +121,40 @@ def _python_decommission_permissions(*, skip_observability):
 
 
 @pytest.mark.parametrize(
-    ("role", "include_decommission", "skip_observability", "argocd_mode", "argocd_install_type"),
+    (
+        "role",
+        "include_decommission",
+        "include_old_hub_finalization",
+        "skip_observability",
+        "argocd_mode",
+        "argocd_install_type",
+    ),
     [
-        ("operator", False, False, "none", "unknown"),
-        ("operator", False, False, "check", "operator"),
-        ("operator", False, False, "check", "none"),
-        ("operator", False, True, "manage", "vanilla"),
-        ("operator", True, False, "none", "unknown"),
-        ("validator", False, False, "check", "operator"),
-        ("validator", False, True, "check", "none"),
+        ("operator", False, False, False, "none", "unknown"),
+        ("operator", False, False, False, "check", "operator"),
+        ("operator", False, False, False, "check", "none"),
+        ("operator", False, False, True, "manage", "vanilla"),
+        ("operator", True, False, False, "none", "unknown"),
+        ("operator", True, False, True, "none", "unknown"),
+        ("operator", False, True, False, "none", "unknown"),
+        ("operator", False, True, True, "none", "unknown"),
+        ("validator", False, False, False, "check", "operator"),
+        ("validator", False, False, True, "check", "none"),
     ],
 )
 def test_collection_hub_rbac_expansion_matches_python(
-    role, include_decommission, skip_observability, argocd_mode, argocd_install_type
+    role,
+    include_decommission,
+    include_old_hub_finalization,
+    skip_observability,
+    argocd_mode,
+    argocd_install_type,
 ):
     collection_permissions = sorted(
         expand_rbac_requirements(
             role=role,
             include_decommission=include_decommission,
+            include_old_hub_finalization=include_old_hub_finalization,
             skip_observability=skip_observability,
             argocd_mode=argocd_mode,
             argocd_install_type=argocd_install_type,
@@ -131,6 +163,7 @@ def test_collection_hub_rbac_expansion_matches_python(
     python_permissions = _python_hub_permissions(
         role,
         include_decommission=include_decommission,
+        include_old_hub_finalization=include_old_hub_finalization,
         skip_observability=skip_observability,
         argocd_mode=argocd_mode,
         argocd_install_type=argocd_install_type,
