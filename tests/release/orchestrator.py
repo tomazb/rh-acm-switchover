@@ -22,6 +22,7 @@ from tests.release.baseline.assertions import assert_baseline
 from tests.release.baseline.discovery import HubDiscoveryClient, discover_hub_facts
 from tests.release.baseline.fingerprint import build_environment_fingerprint
 from tests.release.checks.lab_readiness import assert_lab_readiness
+from tests.release.checks.rbac_certification import certify_rbac_permissions
 from tests.release.checks.static_gates import (
     GateCommand,
     GateResult,
@@ -606,6 +607,73 @@ def _run_release_certification(
             adapters=adapters,
         )
     )
+
+    # Execute live RBAC certification if enabled
+    if "rbac-bootstrap-live" in scenarios_by_id:
+        rbac_cert_dir = artifacts.run_dir / "scenarios" / "rbac-bootstrap-live"
+        rbac_cert_dir.mkdir(parents=True, exist_ok=True)
+        rbac_cert_assertions = []
+
+        # Certify primary hub
+        primary_result = certify_rbac_permissions(
+            hub=profile.hubs["primary"],
+            hub_name="primary",
+            artifact_dir=rbac_cert_dir / "primary",
+            role="operator",
+            include_decommission=True,
+            include_old_hub_finalization=True,
+        )
+        rbac_cert_assertions.extend(
+            {
+                "capability": a.capability,
+                "name": f"primary:{a.name}",
+                "status": a.status,
+                "expected": a.expected,
+                "actual": a.actual,
+                "evidence_path": a.evidence_path,
+                "message": a.message,
+            }
+            for a in primary_result.assertions
+        )
+
+        # Certify secondary hub
+        secondary_result = certify_rbac_permissions(
+            hub=profile.hubs["secondary"],
+            hub_name="secondary",
+            artifact_dir=rbac_cert_dir / "secondary",
+            role="operator",
+            include_decommission=False,
+            include_old_hub_finalization=False,
+        )
+        rbac_cert_assertions.extend(
+            {
+                "capability": a.capability,
+                "name": f"secondary:{a.name}",
+                "status": a.status,
+                "expected": a.expected,
+                "actual": a.actual,
+                "evidence_path": a.evidence_path,
+                "message": a.message,
+            }
+            for a in secondary_result.assertions
+        )
+
+        # Determine overall status
+        if primary_result.status == "skipped" and secondary_result.status == "skipped":
+            rbac_cert_status = "not_applicable"
+        elif primary_result.status == "failed" or secondary_result.status == "failed":
+            rbac_cert_status = "failed"
+        else:
+            rbac_cert_status = "passed"
+
+        results.append(
+            _local_result(
+                "rbac-bootstrap-live",
+                rbac_cert_status,
+                rbac_cert_assertions,
+                scenarios_by_id["rbac-bootstrap-live"].required,
+            )
+        )
 
     runtime_parity = (
         _runtime_parity(artifacts, results)

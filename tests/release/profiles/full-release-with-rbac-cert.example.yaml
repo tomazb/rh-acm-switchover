@@ -1,0 +1,63 @@
+profile_version: 1
+name: lab-with-rbac-certification
+release:
+  expected_version: 1.7.10
+  metadata_files:
+    - README.md
+    - CHANGELOG.md
+    - setup.cfg
+    - lib/__init__.py
+    - scripts/constants.sh
+    - container-bootstrap/Containerfile
+    - deploy/helm/acm-switchover-rbac/Chart.yaml
+    - ansible_collections/tomazb/acm_switchover/galaxy.yml
+hubs:
+  primary:
+    kubeconfig: /path/to/primary-kubeconfig
+    context: lab-primary-context
+  secondary:
+    kubeconfig: /path/to/secondary-kubeconfig
+    context: lab-secondary-context
+managed_clusters:
+  expected_count: 2
+streams:
+  - id: bash
+    required: false
+  - id: python
+  - id: ansible
+scenarios:
+  - id: static-gates
+  - id: lab-readiness
+  - id: baseline-check
+  - id: preflight
+  - id: python-passive-switchover
+  - id: ansible-passive-switchover
+  - id: python-restore-only
+  - id: ansible-restore-only
+  - id: argocd-managed-switchover
+  - id: rbac-bootstrap
+    # Static RBAC manifest parity scenario (dry-run, no live cluster validation)
+  - id: rbac-bootstrap-live
+    required: false
+    # Live RBAC certification scenario
+    # Validates applied permissions using SubjectAccessReview
+    # Requires: ACM_ENABLE_LIVE_RBAC_CERTIFICATION=1
+    # Requires: Service accounts already bootstrapped on both hubs
+  - id: runtime-parity
+  - id: final-baseline-check
+argocd:
+  namespaces:
+    - openshift-gitops
+baseline:
+  initial_primary: primary
+  lab_readiness:
+    required: true
+    backup_storage_location:
+      required: true
+    argocd_fixture:
+      required: true
+limits: {}
+recovery: {}
+artifacts:
+  redaction:
+    required: true
