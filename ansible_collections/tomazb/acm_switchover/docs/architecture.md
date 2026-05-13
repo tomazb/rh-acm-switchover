@@ -20,6 +20,7 @@ The collection defines:
 - optional checkpoint contract
 - RBAC bootstrap and validation contracts
 - decommission observability autodetection
+- release parity guardrails for report, checkpoint, decommission, restore-only, switchover, and RBAC/bootstrap artifacts
 
 The collection deliberately does not implement full kubeconfig/context enumeration. Use `scripts/discover-hub.sh` for that bridge workflow during coexistence.
 

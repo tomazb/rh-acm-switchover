@@ -1,6 +1,6 @@
 # Parity Matrix
 
-Date: 2026-05-04 (safety parity realignment)
+Date: 2026-05-12 (1.7.10 production resilience hardening)
 Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`
 
 Intentional parity changes require explicit operator approval before implementation. When a capability's support status changes, or approved work intentionally leaves a `dual-supported` capability divergent, record that decision here and update the related mapping/coexistence docs in the same change.
@@ -42,6 +42,8 @@ Cross-implementation contracts are enforced by automated parity tests in `tests/
 | `tests/test_rbac_collection_parity.py` | Python `RBACValidator` permission matrix matches collection `acm_rbac_validate` expansion |
 | `tests/test_argocd_constants_parity.py` | `ACM_KINDS`, `ACM_NAMESPACES`, and `build_pause_patch` match between Python and collection |
 | `tests/test_validation_parity.py` and collection `test_validation_parity_fixture.py` | Shared validation fixture keeps Argo CD option rules and safe-path policy aligned |
+| `tests/release/scenarios/test_runtime_parity.py` | Release runtime parity required fields cover switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifact contracts |
+| `tests/release/adapters/test_ansible.py` and `tests/release/scenarios/test_catalog.py` | Release scenario wiring discovers decommission artifacts and keeps optional resilience scenarios selectable |
 
 These tests run in CI and must remain green. Add a new test or assertion whenever a new shared constant or behavioral contract is added.
 

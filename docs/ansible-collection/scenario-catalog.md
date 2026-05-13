@@ -1,6 +1,6 @@
 # Shared Parity Scenario Catalog
 
-Date: 2026-05-04
+Date: 2026-05-12
 Purpose: Define scenarios that both implementations must eventually satisfy
 
 ## Scenario Schema
@@ -69,6 +69,7 @@ Each scenario records:
 - role: operator or validator
 - optional decommission extension: operator only
 - expected validation: shipped manifest permissions are covered, including Argo CD Application patch for operator manage mode
+- expected artifacts: applied manifest list and optional generated kubeconfig path are exposed in the bootstrap result; release guardrails track this separately from switchover reports
 
 ## Collection Coverage (Phase 2)
 
@@ -97,3 +98,4 @@ Each scenario records:
 | `rbac-bootstrap-operator` | yes | yes | Bootstrap validation covers the permissions shipped by manifests |
 | `machine-readable-reports` | yes | yes | Python and collection emit schema version `1.0` report artifacts |
 | `runtime-parity-safety` | yes | yes | Backup, restore, post-activation, finalization, RBAC, and decommission safety paths are covered by targeted regression tests |
+| `release-1.7.10-artifact-guardrails` | yes | yes | Release tests cover required fields for switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifacts |

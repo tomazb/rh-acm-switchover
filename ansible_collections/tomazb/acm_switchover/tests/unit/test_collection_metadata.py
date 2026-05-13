@@ -30,6 +30,28 @@ def test_collection_version_matches_repo_release_version():
     assert chart_data["appVersion"] == expected_version
 
 
+def test_all_release_version_surfaces_match_repo_release_version():
+    init_text = (REPO_ROOT / "lib" / "__init__.py").read_text()
+    match = re.search(r'__version__ = "([^"]+)"', init_text)
+    assert match, "Could not find lib.__version__"
+    expected_version = match.group(1)
+
+    version_surfaces = {
+        "README.md": rf"\*\*Version {re.escape(expected_version)}\*\*",
+        "setup.cfg": rf"^version = {re.escape(expected_version)}$",
+        "scripts/constants.sh": rf'^export SCRIPT_VERSION="{re.escape(expected_version)}"$',
+        "container-bootstrap/Containerfile": rf'version="{re.escape(expected_version)}"',
+        "deploy/helm/acm-switchover-rbac/Chart.yaml": rf"^version: {re.escape(expected_version)}$",
+        "ansible_collections/tomazb/acm_switchover/galaxy.yml": rf"^version: {re.escape(expected_version)}$",
+        "tests/release/profiles/full-release.example.yaml": rf"^\s+expected_version: {re.escape(expected_version)}$",
+        "tests/release/profiles/argocd-release.example.yaml": rf"^\s+expected_version: {re.escape(expected_version)}$",
+    }
+
+    for relative_path, pattern in version_surfaces.items():
+        text = (REPO_ROOT / relative_path).read_text()
+        assert re.search(pattern, text, re.MULTILINE), f"{relative_path} should reference {expected_version}"
+
+
 def test_collection_license_metadata_matches_repo_license():
     galaxy_data = yaml.safe_load((COLLECTION_ROOT / "galaxy.yml").read_text())
     license_text = (REPO_ROOT / "LICENSE").read_text()

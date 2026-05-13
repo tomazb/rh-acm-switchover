@@ -22,6 +22,7 @@ PLAYBOOKS: dict[str, str] = {
     "ansible-restore-only": f"{_COLLECTION_PLAYBOOKS_PREFIX}/restore_only.yml",
     "argocd-managed-switchover": f"{_COLLECTION_PLAYBOOKS_PREFIX}/switchover.yml",
     "decommission": f"{_COLLECTION_PLAYBOOKS_PREFIX}/decommission.yml",
+    "rbac-bootstrap": f"{_COLLECTION_PLAYBOOKS_PREFIX}/rbac_bootstrap.yml",
 }
 
 REPORT_NAMES: dict[str, tuple[str, str]] = {
@@ -29,6 +30,8 @@ REPORT_NAMES: dict[str, tuple[str, str]] = {
     "ansible-passive-switchover": ("switchover", "switchover-report.json"),
     "ansible-restore-only": ("restore", "restore-only-report.json"),
     "argocd-managed-switchover": ("switchover", "switchover-report.json"),
+    "decommission": ("decommission", "decommission-report.json"),
+    "rbac-bootstrap": ("rbac-bootstrap", "rbac-bootstrap-report.json"),
 }
 
 
@@ -82,7 +85,7 @@ class AnsibleAdapter:
         return env
 
     def build_extra_vars(self, scenario_id: str) -> dict:
-        return {
+        extra_vars = {
             "acm_switchover_hubs": {
                 "primary": {"context": self.primary_context, "kubeconfig": self.primary_kubeconfig},
                 "secondary": {"context": self.secondary_context, "kubeconfig": self.secondary_kubeconfig},
@@ -117,6 +120,26 @@ class AnsibleAdapter:
                 },
             },
         }
+        if scenario_id == "rbac-bootstrap":
+            extra_vars["acm_switchover_operation"]["dry_run"] = True
+            extra_vars["acm_switchover_execution"]["mode"] = "dry_run"
+            extra_vars["summary_path"] = str(self.scenario_dir(scenario_id) / "rbac-bootstrap-report.json")
+            extra_vars["acm_switchover_rbac_bootstrap"] = {
+                "role": "operator",
+                "include_decommission": True,
+                "generate_kubeconfigs": False,
+                "validate_permissions": False,
+                "output_dir": str(self.scenario_dir(scenario_id) / "kubeconfigs"),
+            }
+        if scenario_id == "decommission":
+            extra_vars["acm_switchover_operation"]["dry_run"] = True
+            extra_vars["acm_switchover_execution"]["mode"] = "dry_run"
+            extra_vars["summary_path"] = str(self.scenario_dir(scenario_id) / "decommission-report.json")
+            extra_vars["acm_switchover_decommission"] = {
+                "confirm": True,
+                "has_observability": "auto",
+            }
+        return extra_vars
 
     def build_command(self, scenario_id: str, extra_args: tuple[str, ...] = ()) -> list[str]:
         if scenario_id not in PLAYBOOKS:

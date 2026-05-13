@@ -96,6 +96,15 @@ Each result entry must support:
 - `details`
 - `recommended_action`
 
+## Release Parity Guardrails
+
+Release 1.7.10 validates artifact contract fields through the release runtime
+parity helpers. The guardrails cover switchover reports, restore-only reports,
+decommission reports, RBAC/bootstrap result artifacts, checkpoint records, and
+safe-path validated report artifacts. These guardrails do not require identical
+top-level report shapes across Python and Ansible, but they do require the
+shared schema/status/path fields documented here to remain comparable.
+
 ## Checkpoint Contract
 
 Path: controlled by `acm_switchover_execution.checkpoint.path`.
@@ -120,7 +129,7 @@ quarantining, or mutating the checkpoint file.
     "activation_method": "patch",
     "restore_only": false,
     "old_hub_action": "secondary",
-    "collection_version": "1.7.9"
+    "collection_version": "1.7.10"
   },
   "operational_data": {
     "argocd_run_id": "9f2e4c13b8aa"

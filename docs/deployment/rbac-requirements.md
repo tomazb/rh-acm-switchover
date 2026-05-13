@@ -15,6 +15,10 @@ The RBAC model is designed following the principle of least privilege:
 - **Read-only by default**: Write operations are explicitly granted only where needed
 - **No wildcard permissions**: All resource types and verbs are explicitly enumerated
 
+Release 1.7.10 keeps RBAC bootstrap parity under automated guardrails: Python
+RBAC validation, collection RBAC expansion, root manifests, collection-bundled
+manifests, and Helm templates must stay aligned when permissions change.
+
 ## User Roles
 
 ### 1. ACM Switchover Operator

@@ -84,6 +84,10 @@ class PythonCliAdapter:
         return self.artifact_dir / "scenarios" / scenario_id / "python"
 
     def build_command(self, scenario_id: str, extra_args: tuple[str, ...] = ()) -> list[str]:
+        if scenario_id not in REPORT_NAMES:
+            raise ValueError(
+                f"Unknown Python CLI release scenario: {scenario_id!r}. Known scenarios: {sorted(REPORT_NAMES)}"
+            )
         scenario_dir = self.scenario_dir(scenario_id)
         state_file = scenario_dir / "state.json"
         report_dir = scenario_dir

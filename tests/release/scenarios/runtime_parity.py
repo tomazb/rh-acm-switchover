@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 CAPABILITY_REQUIRED_FIELDS = {
@@ -12,6 +13,36 @@ CAPABILITY_REQUIRED_FIELDS = {
         "warning_failure_count",
         "check_ids",
         "failed_check_ids",
+    ),
+    "switchover artifacts": (
+        "schema_version",
+        "status",
+        "phase_ids",
+        "report_filename",
+    ),
+    "restore-only artifacts": (
+        "schema_version",
+        "status",
+        "phase_ids",
+        "report_filename",
+    ),
+    "decommission artifacts": (
+        "status",
+        "report_filename",
+    ),
+    "RBAC/bootstrap artifacts": (
+        "manifest_asset_count",
+        "include_decommission",
+        "report_filename",
+    ),
+    "checkpoints": (
+        "artifact_present",
+        "completed_phase_count",
+    ),
+    "report artifacts": (
+        "schema_version",
+        "source_present",
+        "safe_path_validated",
     ),
 }
 
@@ -100,6 +131,67 @@ def normalize_argocd_management(source: dict[str, Any]) -> dict[str, Any]:
         "resumed_applications": _sorted_list(source["resumed_applications"]),
         "resume_failures": _sorted_list(source["resume_failures"]),
         "conflict_allowlist_used": bool(source["conflict_allowlist_used"]),
+    }
+
+
+def _phase_status(source: dict[str, Any]) -> str:
+    if source.get("status"):
+        return str(source["status"])
+    phases = source.get("phases")
+    if not isinstance(phases, dict):
+        return "unknown"
+    statuses = [phase.get("status") for phase in phases.values() if isinstance(phase, dict)]
+    if not statuses:
+        return "unknown"
+    if any(status == "fail" for status in statuses):
+        return "fail"
+    if all(status == "pass" for status in statuses):
+        return "pass"
+    return "partial"
+
+
+def normalize_operation_artifact(source: dict[str, Any], report_filename: str) -> dict[str, Any]:
+    phases = source.get("phases") if isinstance(source.get("phases"), dict) else {}
+    return {
+        "schema_version": str(source.get("schema_version", "")),
+        "status": _phase_status(source),
+        "phase_ids": sorted(phases),
+        "report_filename": report_filename,
+    }
+
+
+def normalize_decommission_artifact(source: dict[str, Any], report_filename: str) -> dict[str, Any]:
+    return {
+        "status": str(source.get("status", "unknown")),
+        "report_filename": report_filename,
+    }
+
+
+def normalize_rbac_bootstrap_artifact(source: dict[str, Any], report_filename: str) -> dict[str, Any]:
+    assets = source.get("assets_applied") if isinstance(source.get("assets_applied"), list) else []
+    return {
+        "manifest_asset_count": len(assets),
+        "include_decommission": any("decommission" in str(asset) for asset in assets),
+        "report_filename": report_filename,
+    }
+
+
+def normalize_checkpoint_artifact(source: dict[str, Any]) -> dict[str, Any]:
+    completed = source.get("completed_phases")
+    if completed is None:
+        completed = source.get("completed_steps")
+    return {
+        "artifact_present": True,
+        "completed_phase_count": len(completed) if isinstance(completed, list) else 0,
+    }
+
+
+def normalize_report_artifact(source: dict[str, Any], report_path: str) -> dict[str, Any]:
+    path = Path(report_path)
+    return {
+        "schema_version": str(source.get("schema_version", "")),
+        "source_present": bool(source.get("source")),
+        "safe_path_validated": ".." not in path.parts and bool(path.name),
     }
 
 
