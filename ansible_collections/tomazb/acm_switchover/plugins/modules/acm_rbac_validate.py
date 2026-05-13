@@ -285,6 +285,13 @@ def _expand_permission_list(
     return result
 
 
+def _deduplicate_permissions(
+    permissions: list[tuple[str, str, str, str | None]],
+) -> list[tuple[str, str, str, str | None]]:
+    """Preserve expansion order while removing duplicate permission checks."""
+    return list(dict.fromkeys(permissions))
+
+
 def expand_rbac_requirements(
     role: str,
     include_decommission: bool,
@@ -367,7 +374,7 @@ def expand_rbac_requirements(
     if include_old_hub_finalization and not skip_observability:
         permissions.extend(_expand_permission_list(OLD_HUB_FINALIZATION_PERMISSIONS))
 
-    return permissions
+    return _deduplicate_permissions(permissions)
 
 
 def summarize_rbac_results(

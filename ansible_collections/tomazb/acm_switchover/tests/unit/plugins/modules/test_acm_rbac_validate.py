@@ -115,6 +115,29 @@ def test_old_hub_finalization_adds_mco_delete_permission():
     ) in permissions
 
 
+def test_decommission_and_old_hub_finalization_do_not_duplicate_mco_delete_permission():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=True,
+        include_old_hub_finalization=True,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+
+    assert (
+        permissions.count(
+            (
+                "observability.open-cluster-management.io",
+                "multiclusterobservabilities",
+                "delete",
+                None,
+            )
+        )
+        == 1
+    )
+
+
 def test_verified_observability_absence_skips_old_hub_mco_delete_permission():
     permissions = expand_rbac_requirements(
         role="operator",

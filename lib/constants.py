@@ -91,6 +91,10 @@ MANAGED_CLUSTER_API_GROUP = "cluster.open-cluster-management.io"
 MANAGED_CLUSTER_API_VERSION = "v1"
 MANAGED_CLUSTER_PLURAL = "managedclusters"
 
+# MultiClusterObservability API identifiers
+OBSERVABILITY_API_GROUP = "observability.open-cluster-management.io"
+MULTICLUSTEROBSERVABILITIES_PLURAL = "multiclusterobservabilities"
+
 # Hive ClusterDeployment API identifiers
 HIVE_CLUSTERDEPLOYMENT_API_GROUP = "hive.openshift.io"
 HIVE_CLUSTERDEPLOYMENT_API_VERSION = "v1"

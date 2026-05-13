@@ -289,6 +289,28 @@ class TestRBACValidator:
             not in validator.check_permission.call_args_list
         )
 
+    def test_validate_cluster_permissions_deduplicates_mco_delete_when_both_paths_request_it(self, validator):
+        """MCO delete should be checked once when decommission and finalization both require it."""
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(
+            include_decommission=True,
+            include_old_hub_finalization=True,
+        )
+
+        assert all_valid is True
+        assert errors == []
+        assert (
+            validator.check_permission.call_args_list.count(
+                call(
+                    "observability.open-cluster-management.io",
+                    "multiclusterobservabilities",
+                    "delete",
+                )
+            )
+            == 1
+        )
+
     def test_validate_namespace_permissions_success(self, validator):
         """Test validate_namespace_permissions when all permissions exist."""
         # Mock namespace_exists and check_permission

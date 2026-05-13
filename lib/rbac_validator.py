@@ -20,6 +20,8 @@ from lib.constants import (
     BACKUP_NAMESPACE,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MCE_NAMESPACE,
+    MULTICLUSTEROBSERVABILITIES_PLURAL,
+    OBSERVABILITY_API_GROUP,
     OBSERVABILITY_NAMESPACE,
 )
 from lib.exceptions import ValidationError
@@ -201,8 +203,8 @@ class RBACValidator:
     # secondary and observability was detected there.
     OLD_HUB_FINALIZATION_PERMISSIONS = [
         (
-            "observability.open-cluster-management.io",
-            "multiclusterobservabilities",
+            OBSERVABILITY_API_GROUP,
+            MULTICLUSTEROBSERVABILITIES_PLURAL,
             ["delete"],
         ),
     ]
@@ -446,14 +448,28 @@ class RBACValidator:
                         errors.append(error_msg)
                         logger.error(error_msg)
 
+        checked_extra_permissions = set()
+
         # Check decommission permissions if requested (operator role only)
-        if include_decommission and self.role == "operator":
+        if include_decommission:
+            if self.role != "operator":
+                # F7 fix: Reject this combination explicitly instead of silently skipping.
+                raise ValueError(
+                    "include_decommission=True is not valid for the validator role. "
+                    "Decommission permissions are only applicable to the operator role."
+                )
+
             for api_group, resource, verbs in self.DECOMMISSION_PERMISSIONS:
                 if skip_observability and "observability" in api_group:
                     logger.info("Skipping observability decommission permission: %s/%s", api_group, resource)
                     continue
 
                 for verb in verbs:
+                    permission_key = (api_group, resource, verb)
+                    if permission_key in checked_extra_permissions:
+                        continue
+                    checked_extra_permissions.add(permission_key)
+
                     has_perm, error = self.check_permission(api_group, resource, verb)
                     if not has_perm:
                         all_valid = False
@@ -463,30 +479,31 @@ class RBACValidator:
                             error_msg += f" - {error}"
                         errors.append(error_msg)
                         logger.error(error_msg)
-        elif include_decommission and self.role == "validator":
-            # F7 fix: Reject this combination explicitly instead of silently skipping.
-            raise ValueError(
-                "include_decommission=True is not valid for the validator role. "
-                "Decommission permissions are only applicable to the operator role."
-            )
 
-        if include_old_hub_finalization and self.role == "operator" and not skip_observability:
-            for api_group, resource, verbs in self.OLD_HUB_FINALIZATION_PERMISSIONS:
-                for verb in verbs:
-                    has_perm, error = self.check_permission(api_group, resource, verb)
-                    if not has_perm:
-                        all_valid = False
-                        group_name = api_group if api_group else "core"
-                        error_msg = f"Missing old-hub finalization permission: {verb} {group_name}/{resource}"
-                        if error:
-                            error_msg += f" - {error}"
-                        errors.append(error_msg)
-                        logger.error(error_msg)
-        elif include_old_hub_finalization and self.role == "validator":
-            raise ValueError(
-                "include_old_hub_finalization=True is not valid for the validator role. "
-                "Old-hub finalization delete permissions are only applicable to the operator role."
-            )
+        if include_old_hub_finalization:
+            if self.role != "operator":
+                raise ValueError(
+                    "include_old_hub_finalization=True is not valid for the validator role. "
+                    "Old-hub finalization delete permissions are only applicable to the operator role."
+                )
+
+            if not skip_observability:
+                for api_group, resource, verbs in self.OLD_HUB_FINALIZATION_PERMISSIONS:
+                    for verb in verbs:
+                        permission_key = (api_group, resource, verb)
+                        if permission_key in checked_extra_permissions:
+                            continue
+                        checked_extra_permissions.add(permission_key)
+
+                        has_perm, error = self.check_permission(api_group, resource, verb)
+                        if not has_perm:
+                            all_valid = False
+                            group_name = api_group if api_group else "core"
+                            error_msg = f"Missing old-hub finalization permission: {verb} {group_name}/{resource}"
+                            if error:
+                                error_msg += f" - {error}"
+                            errors.append(error_msg)
+                            logger.error(error_msg)
 
         if all_valid:
             logger.info("✓ All cluster-scoped permissions validated for role: %s", self.role)

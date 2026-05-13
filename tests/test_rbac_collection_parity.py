@@ -102,7 +102,7 @@ def _python_hub_permissions(
             raise ValueError("include_old_hub_finalization=True is not valid for the validator role.")
         permissions.extend(_expand(RBACValidator.OLD_HUB_FINALIZATION_PERMISSIONS))
 
-    return sorted(permissions)
+    return sorted(set(permissions))
 
 
 def _python_decommission_permissions(*, skip_observability):
