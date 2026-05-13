@@ -22,6 +22,15 @@ def _load_yaml(path: pathlib.Path) -> list[dict]:
     return yaml.safe_load(path.read_text())
 
 
+def _flatten_tasks(tasks: list[dict]) -> list[dict]:
+    flattened = []
+    for task in tasks:
+        flattened.append(task)
+        for section in ("block", "rescue", "always"):
+            flattened.extend(_flatten_tasks(task.get(section, []) or []))
+    return flattened
+
+
 def test_activate_restore_verifies_patch_application_after_patch():
     """activation/activate_restore.yml must verify Restore patch application with polling."""
     tasks = _load_yaml(ACTIVATION_TASKS / "activate_restore.yml")
@@ -124,6 +133,17 @@ def test_decommission_autodetects_observability_by_default_before_rbac():
     assert validate_index < includes.index("delete_observability.yml")
 
 
+def test_decommission_observability_autodetection_fails_closed():
+    """Auto detection must not convert 403/timeouts/API errors into no-observability."""
+    main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
+    namespace_task = next(
+        task for task in main_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Namespace"
+    )
+
+    assert "failed_when" not in namespace_task
+    assert "ignore_errors" not in namespace_task
+
+
 def test_decommission_playbook_exposes_precheck_role_path():
     """decommission playbook must still run through the decommission role entrypoint."""
     playbook = (PLAYBOOKS_DIR / "decommission.yml").read_text()
@@ -185,6 +205,40 @@ def test_decommission_waits_for_non_local_managed_clusters_before_mch_delete():
     assert text.index("Delete non-local ManagedClusters") < text.index(wait_task["name"])
     assert isinstance(wait_task.get("when"), list)
     assert any("_managed_cluster_delete_targets" in str(condition) for condition in wait_task["when"])
+
+
+def test_decommission_checks_clusterdeployments_before_managedcluster_delete():
+    """ManagedCluster deletion must have a just-in-time Hive preserveOnDelete safety gate."""
+    tasks = _load_yaml(DECOMMISSION_TASKS / "delete_managed_clusters.yml")
+    flattened_tasks = _flatten_tasks(tasks)
+    text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
+
+    clusterdeployment_reads = [
+        task for task in flattened_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ClusterDeployment"
+    ]
+    fail_tasks = [task for task in flattened_tasks if task.get("ansible.builtin.fail")]
+
+    assert clusterdeployment_reads, "delete_managed_clusters.yml must re-read Hive ClusterDeployments"
+    assert fail_tasks, "delete_managed_clusters.yml must fail before unsafe deletes"
+    assert text.index("List Hive ClusterDeployments before ManagedCluster deletion") < text.index(
+        "Block unsafe ManagedCluster deletion"
+    )
+    assert text.index("Block unsafe ManagedCluster deletion") < text.index("Delete non-local ManagedClusters")
+    assert "_managed_cluster_delete_targets" in text
+    assert "preserveOnDelete" in text
+    assert "local-cluster" in text
+    assert "from_json" in text
+    assert "to_json" in text
+
+
+def test_decommission_clusterdeployment_absence_must_be_verified_before_delete():
+    """Missing/no Hive CRD is acceptable only when the absence is explicitly classified."""
+    text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
+
+    assert "block:" in text and "rescue:" in text
+    assert "no matches for kind" in text
+    assert "_clusterdeployments_verified_absent" in text
+    assert "Unable to verify ClusterDeployment preserveOnDelete safety" in text
 
 
 def test_decommission_deletes_all_discovered_observability_and_mch_resources():
