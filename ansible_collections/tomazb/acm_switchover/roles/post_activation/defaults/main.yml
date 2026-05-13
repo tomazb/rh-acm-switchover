@@ -15,6 +15,9 @@ acm_switchover_execution:
   concurrency:
     klusterlet_probe_workers: 10
     klusterlet_remediation_workers: 10
+  timeouts:
+    klusterlet_request_seconds: 30
+    klusterlet_worker_seconds: 180
   checkpoint:
     enabled: false
     backend: file

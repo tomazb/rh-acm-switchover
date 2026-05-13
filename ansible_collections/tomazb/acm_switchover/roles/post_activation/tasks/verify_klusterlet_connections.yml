@@ -23,5 +23,7 @@
     managed_clusters: "{{ acm_switchover_managed_clusters | default({}) }}"
     candidate_clusters: "{{ _klusterlet_probe_candidates | default([]) }}"
     workers: "{{ acm_switchover_execution.concurrency.klusterlet_probe_workers | default(10) | int }}"
+    request_timeout: "{{ acm_switchover_execution.timeouts.klusterlet_request_seconds | default(30) | int }}"
+    future_timeout: "{{ acm_switchover_execution.timeouts.klusterlet_worker_seconds | default(180) | int }}"
   register: _klusterlet_probe_result
   when: (_klusterlet_probe_candidates | default([]) | length) > 0

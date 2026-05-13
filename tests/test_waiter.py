@@ -69,6 +69,42 @@ class TestWaitForCondition:
         mock_time.sleep.assert_called_once_with(5)
 
     @patch("lib.waiter.time")
+    def test_wait_caps_sleep_to_remaining_timeout_budget(self, mock_time, mock_logger):
+        """Polling sleeps must not overshoot the remaining wall-clock timeout budget."""
+        mock_time.time.side_effect = [0, 8, 8, 11]
+        condition = Mock(return_value=WaitConditionResult.pending("waiting"))
+
+        result = wait_for_condition(
+            description="bounded wait",
+            condition_fn=condition,
+            logger=mock_logger,
+            timeout=10,
+            interval=30,
+        )
+
+        assert result is False
+        mock_time.sleep.assert_called_once_with(2)
+
+    @patch("lib.waiter.time")
+    def test_wait_fast_interval_respects_remaining_timeout_budget(self, mock_time, mock_logger):
+        """Fast polling must still be capped by the remaining timeout budget."""
+        mock_time.time.side_effect = [0, 4, 4, 6]
+        condition = Mock(return_value=WaitConditionResult.pending("waiting"))
+
+        result = wait_for_condition(
+            description="bounded fast wait",
+            condition_fn=condition,
+            logger=mock_logger,
+            timeout=5,
+            interval=30,
+            fast_interval=10,
+            fast_timeout=20,
+        )
+
+        assert result is False
+        mock_time.sleep.assert_called_once_with(1)
+
+    @patch("lib.waiter.time")
     def test_wait_rejects_legacy_tuple_contract(self, mock_time, mock_logger):
         """Test legacy tuple results are rejected in favor of the explicit contract."""
         mock_time.time.return_value = 0

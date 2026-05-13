@@ -31,6 +31,14 @@ options:
     description: Fail the module when any cluster remediation fails.
     type: bool
     default: false
+  request_timeout:
+    description: Per Kubernetes API request timeout in seconds.
+    type: int
+    default: 30
+  future_timeout:
+    description: Maximum time to wait for each worker future in seconds.
+    type: int
+    default: 180
 """
 
 EXAMPLES = r"""
@@ -41,12 +49,18 @@ EXAMPLES = r"""
     pending_clusters: "{{ _klusterlet_remediation_candidates }}"
     workers: 10
     strict: false
+    request_timeout: 30
+    future_timeout: 180
   register: _klusterlet_remediation_result
 """
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import KLUSTERLET_DEFAULT_WORKERS
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    KLUSTERLET_DEFAULT_WORKERS,
+    KLUSTERLET_REQUEST_TIMEOUT,
+    KLUSTERLET_WORKER_TIMEOUT,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.klusterlet import remediate_klusterlets
 
 __all__ = ["remediate_klusterlets"]
@@ -60,6 +74,8 @@ def main() -> None:
             "pending_clusters": {"type": "list", "elements": "str", "default": []},
             "workers": {"type": "int", "default": KLUSTERLET_DEFAULT_WORKERS},
             "strict": {"type": "bool", "default": False},
+            "request_timeout": {"type": "int", "default": KLUSTERLET_REQUEST_TIMEOUT},
+            "future_timeout": {"type": "int", "default": KLUSTERLET_WORKER_TIMEOUT},
         },
         supports_check_mode=True,
     )
@@ -71,6 +87,8 @@ def main() -> None:
             workers=module.params["workers"],
             strict=module.params["strict"],
             check_mode=module.check_mode,
+            request_timeout=module.params.get("request_timeout", KLUSTERLET_REQUEST_TIMEOUT),
+            future_timeout=module.params.get("future_timeout", KLUSTERLET_WORKER_TIMEOUT),
         )
     except Exception as exc:
         module.fail_json(msg=str(exc))

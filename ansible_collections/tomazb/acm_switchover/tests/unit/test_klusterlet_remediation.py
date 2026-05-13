@@ -54,6 +54,8 @@ def test_verify_klusterlet_connection_probe_can_remediate_wrong_hub_secret():
 
     assert "tomazb.acm_switchover.acm_klusterlet_probe" in content
     assert "klusterlet_probe_workers" in content
+    assert "klusterlet_request_seconds" in content
+    assert "klusterlet_worker_seconds" in content
     assert "register: _klusterlet_probe_result" in content
     assert (
         "include_tasks: verify_klusterlet_connection_single.yml" not in content
@@ -66,6 +68,8 @@ def test_fix_klusterlet_uses_bounded_remediation_module():
 
     assert "tomazb.acm_switchover.acm_klusterlet_remediate" in content
     assert "klusterlet_remediation_workers" in content
+    assert "klusterlet_request_seconds" in content
+    assert "klusterlet_worker_seconds" in content
     assert "strict_remediation" in content
     assert (
         "include_tasks: fix_klusterlet_single.yml" not in content
@@ -161,6 +165,8 @@ def test_post_activation_defaults_include_klusterlet_concurrency_and_strict_mode
 
     assert defaults["acm_switchover_execution"]["concurrency"]["klusterlet_probe_workers"] == 10
     assert defaults["acm_switchover_execution"]["concurrency"]["klusterlet_remediation_workers"] == 10
+    assert defaults["acm_switchover_execution"]["timeouts"]["klusterlet_request_seconds"] == 30
+    assert defaults["acm_switchover_execution"]["timeouts"]["klusterlet_worker_seconds"] == 180
     assert defaults["acm_switchover_features"]["klusterlet"]["strict_remediation"] is False
 
 

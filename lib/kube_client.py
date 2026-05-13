@@ -211,6 +211,7 @@ class KubeClient:
         """
         self.context = context
         self.dry_run = dry_run
+        self.request_timeout = request_timeout
         self.disable_hostname_verification = disable_hostname_verification
 
         # Load config for specific context with clearer error handling
@@ -253,6 +254,10 @@ class KubeClient:
             request_timeout,
         )
 
+    def _request_timeout_kwargs(self, request_timeout: Optional[int] = None) -> Dict[str, int]:
+        """Return Kubernetes client kwargs with an explicit per-request timeout."""
+        return {"_request_timeout": request_timeout if request_timeout is not None else self.request_timeout}
+
     def _validate_resource_inputs(
         self,
         namespace: Optional[str] = None,
@@ -289,7 +294,7 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace=name)
 
-        ns = self.core_v1.read_namespace(name)
+        ns = self.core_v1.read_namespace(name, **self._request_timeout_kwargs())
         return ns.to_dict()
 
     def namespace_exists(self, name: str) -> bool:
@@ -316,7 +321,7 @@ class KubeClient:
         Raises:
             None (uses api_call decorator for error handling)
         """
-        result = self.core_v1.list_namespace()
+        result = self.core_v1.list_namespace(**self._request_timeout_kwargs())
         return [ns.to_dict() for ns in (result.items or [])]
 
     @api_call(not_found_value=None, log_on_error=False)
@@ -335,7 +340,11 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "secret")
 
-        secret = self.core_v1.read_namespaced_secret(name=name, namespace=namespace)
+        secret = self.core_v1.read_namespaced_secret(
+            name=name,
+            namespace=namespace,
+            **self._request_timeout_kwargs(),
+        )
         return secret.to_dict()
 
     def secret_exists(self, namespace: str, name: str) -> bool:
@@ -372,7 +381,11 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "ConfigMap")
 
-        cm = self.core_v1.read_namespaced_config_map(name=name, namespace=namespace)
+        cm = self.core_v1.read_namespaced_config_map(
+            name=name,
+            namespace=namespace,
+            **self._request_timeout_kwargs(),
+        )
         return cm.to_dict()
 
     def exists_configmap(self, namespace: str, name: str) -> bool:
@@ -427,14 +440,23 @@ class KubeClient:
             "data": data,
         }
         try:
-            result = self.core_v1.create_namespaced_config_map(namespace=namespace, body=create_body)
+            result = self.core_v1.create_namespaced_config_map(
+                namespace=namespace,
+                body=create_body,
+                **self._request_timeout_kwargs(),
+            )
             return result.to_dict()
         except ApiException as e:
             if e.status == 409:
                 # ConfigMap already exists (concurrent create or timeout-after-create);
                 # patch to converge to the desired state.
                 logger.debug("ConfigMap %s/%s already exists (409), patching instead", namespace, name)
-                result = self.core_v1.patch_namespaced_config_map(name=name, namespace=namespace, body={"data": data})
+                result = self.core_v1.patch_namespaced_config_map(
+                    name=name,
+                    namespace=namespace,
+                    body={"data": data},
+                    **self._request_timeout_kwargs(),
+                )
                 return result.to_dict()
             if is_retryable_error(e):
                 raise
@@ -509,6 +531,7 @@ class KubeClient:
             namespace=namespace,
             plural="routes",
             name=name,
+            **self._request_timeout_kwargs(),
         )
         return route.get("spec", {}).get("host")
 
@@ -546,9 +569,16 @@ class KubeClient:
                 namespace=namespace,
                 plural=plural,
                 name=name,
+                **self._request_timeout_kwargs(),
             )
         else:
-            resource = self.custom_api.get_cluster_custom_object(group=group, version=version, plural=plural, name=name)
+            resource = self.custom_api.get_cluster_custom_object(
+                group=group,
+                version=version,
+                plural=plural,
+                name=name,
+                **self._request_timeout_kwargs(),
+            )
         return resource
 
     def _get_custom_resource_raw(
@@ -570,12 +600,14 @@ class KubeClient:
                     namespace=namespace,
                     plural=plural,
                     name=name,
+                    **self._request_timeout_kwargs(),
                 )
             return self.custom_api.get_cluster_custom_object(
                 group=group,
                 version=version,
                 plural=plural,
                 name=name,
+                **self._request_timeout_kwargs(),
             )
         except ApiException as e:
             if e.status == 404:
@@ -636,6 +668,7 @@ class KubeClient:
                         label_selector=label_selector,
                         _continue=continue_token,
                         limit=remaining,
+                        **self._request_timeout_kwargs(),
                     )
                 else:
                     result = self.custom_api.list_cluster_custom_object(
@@ -645,6 +678,7 @@ class KubeClient:
                         label_selector=label_selector,
                         _continue=continue_token,
                         limit=remaining,
+                        **self._request_timeout_kwargs(),
                     )
             except ApiException as e:
                 if e.status == 404:
@@ -723,12 +757,18 @@ class KubeClient:
                     plural=plural,
                     name=name,
                     body=patch,
+                    **self._request_timeout_kwargs(),
                 )
                 logger.debug("KUBE_CLIENT: patch_namespaced_custom_object returned successfully")
             else:
                 logger.debug("KUBE_CLIENT: Calling patch_cluster_custom_object...")
                 result = self.custom_api.patch_cluster_custom_object(
-                    group=group, version=version, plural=plural, name=name, body=patch
+                    group=group,
+                    version=version,
+                    plural=plural,
+                    name=name,
+                    body=patch,
+                    **self._request_timeout_kwargs(),
                 )
                 logger.debug("KUBE_CLIENT: patch_cluster_custom_object returned successfully")
 
@@ -799,10 +839,15 @@ class KubeClient:
                     namespace=namespace,
                     plural=plural,
                     body=body,
+                    **self._request_timeout_kwargs(),
                 )
             else:
                 result = self.custom_api.create_cluster_custom_object(
-                    group=group, version=version, plural=plural, body=body
+                    group=group,
+                    version=version,
+                    plural=plural,
+                    body=body,
+                    **self._request_timeout_kwargs(),
                 )
             return result
         except ApiException as e:
@@ -935,7 +980,11 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "deployment")
 
-        deployment = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+        deployment = self.apps_v1.read_namespaced_deployment(
+            name=name,
+            namespace=namespace,
+            **self._request_timeout_kwargs(),
+        )
         return deployment.to_dict()
 
     @api_call(not_found_value=None, resource_desc="get statefulset")
@@ -954,7 +1003,11 @@ class KubeClient:
         """
         self._validate_resource_inputs(namespace, name, "statefulset")
 
-        statefulset = self.apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
+        statefulset = self.apps_v1.read_namespaced_stateful_set(
+            name=name,
+            namespace=namespace,
+            **self._request_timeout_kwargs(),
+        )
         return statefulset.to_dict()
 
     @retry_api_call
@@ -985,7 +1038,12 @@ class KubeClient:
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_deployment_scale(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_deployment_scale(
+                name=name,
+                namespace=namespace,
+                body=body,
+                **self._request_timeout_kwargs(),
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -1021,7 +1079,12 @@ class KubeClient:
 
         try:
             body = {"spec": {"replicas": replicas}}
-            result = self.apps_v1.patch_namespaced_stateful_set_scale(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_stateful_set_scale(
+                name=name,
+                namespace=namespace,
+                body=body,
+                **self._request_timeout_kwargs(),
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -1052,7 +1115,12 @@ class KubeClient:
         try:
             now = time.strftime("%Y%m%d%H%M%S")
             body = {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now}}}}}
-            result = self.apps_v1.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
+            result = self.apps_v1.patch_namespaced_deployment(
+                name=name,
+                namespace=namespace,
+                body=body,
+                **self._request_timeout_kwargs(),
+            )
             return result.to_dict()
         except ApiException as e:
             if is_retryable_error(e):
@@ -1080,9 +1148,11 @@ class KubeClient:
             if not label_selector.strip():
                 raise ValidationError("Label selector cannot be empty or whitespace-only")
 
-        kwargs: Dict[str, Any] = {"namespace": namespace, "label_selector": label_selector}
-        if request_timeout is not None:
-            kwargs["_request_timeout"] = request_timeout
+        kwargs: Dict[str, Any] = {
+            "namespace": namespace,
+            "label_selector": label_selector,
+            **self._request_timeout_kwargs(request_timeout),
+        }
 
         result = self.core_v1.list_namespaced_pod(**kwargs)
         return [pod.to_dict() for pod in (result.items or [])]
@@ -1155,6 +1225,7 @@ class KubeClient:
                 raise ValidationError("tail_lines must be a non-negative integer")
             kwargs["tail_lines"] = tail_lines_int
 
+        kwargs.update(self._request_timeout_kwargs())
         return self.core_v1.read_namespaced_pod_log(name=name, namespace=namespace, **kwargs) or ""
 
     def wait_for_pods_ready(

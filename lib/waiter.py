@@ -72,11 +72,14 @@ def wait_for_condition(
         else:
             logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 
+        remaining_timeout = max(0, timeout - elapsed)
         sleep_interval = interval
         if fast_interval:
             if fast_timeout <= 0 or elapsed < fast_timeout:
                 sleep_interval = fast_interval
-        time.sleep(sleep_interval)
+        sleep_interval = min(sleep_interval, remaining_timeout)
+        if sleep_interval > 0:
+            time.sleep(sleep_interval)
 
     if allow_success_after_timeout:
         result = _require_wait_condition_result(condition_fn())
