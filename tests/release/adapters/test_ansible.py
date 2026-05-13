@@ -131,6 +131,63 @@ def test_build_extra_vars_rbac_bootstrap_sets_summary_path(tmp_path: Path) -> No
     assert extra_vars["acm_switchover_rbac_bootstrap"]["include_decommission"] is True
 
 
+def test_build_extra_vars_rbac_bootstrap_disables_live_validation(tmp_path: Path) -> None:
+    """rbac-bootstrap is a dry-run scenario: validate_permissions must be False."""
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("rbac-bootstrap")
+
+    assert extra_vars["acm_switchover_rbac_bootstrap"]["validate_permissions"] is False
+    assert extra_vars["acm_switchover_operation"]["dry_run"] is True
+
+
+def test_build_extra_vars_live_rbac_certification_enables_validation(tmp_path: Path) -> None:
+    """live-rbac-certification must enable validate_permissions and include all flows."""
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("live-rbac-certification")
+
+    bootstrap = extra_vars["acm_switchover_rbac_bootstrap"]
+    assert bootstrap["validate_permissions"] is True
+    assert bootstrap["include_decommission"] is True
+    assert bootstrap["include_old_hub_finalization"] is True
+
+
+def test_build_extra_vars_live_rbac_certification_sets_execute_mode(tmp_path: Path) -> None:
+    """live-rbac-certification must not use dry-run mode."""
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("live-rbac-certification")
+
+    assert extra_vars["acm_switchover_execution"]["mode"] == "execute"
+    # live-rbac-certification does not set dry_run on the operation block
+    assert extra_vars["acm_switchover_operation"].get("dry_run") is False
+
+
+def test_build_extra_vars_live_rbac_certification_sets_summary_path(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("live-rbac-certification")
+
+    assert extra_vars["summary_path"].endswith(
+        "live-rbac-certification/ansible/live-rbac-certification-report.json"
+    )
+
+
+def test_ansible_adapter_discovers_live_rbac_certification_report(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+    scenario_dir = adapter.scenario_dir("live-rbac-certification")
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "live-rbac-certification-report.json").write_text(
+        '{"status": "passed"}', encoding="utf-8"
+    )
+
+    reports = adapter.discover_reports("live-rbac-certification")
+
+    assert len(reports) == 1
+    assert reports[0].type == "rbac-certification"
+
+
 def test_build_command_raises_for_unknown_scenario(tmp_path: Path) -> None:
     adapter = _make_adapter(tmp_path)
 

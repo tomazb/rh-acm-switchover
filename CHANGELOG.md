@@ -9,7 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- None.
+- Live RBAC bootstrap certification scenario (`live-rbac-certification`) gated by
+  `ACM_ENABLE_LIVE_RBAC_CERTIFICATION=1`.  The scenario validates applied RBAC
+  permissions end-to-end via SubjectAccessReview/SelfSubjectAccessReview checks and
+  specifically confirms the `delete` permission on
+  `observability.open-cluster-management.io/multiclusterobservabilities` required by
+  old-hub Observability finalization and decommission.
+- `tests/test_rbac_live_certification.py`: opt-in pytest test module covering operator
+  cluster-scoped permissions, hub namespace permissions, old-hub MCO finalization, and
+  decommission flows against a live cluster context.
+- `ansible_collections/tomazb/acm_switchover/playbooks/live_rbac_certification.yml`:
+  Ansible playbook that runs the `rbac_bootstrap` role with `validate_permissions: true`,
+  `include_decommission: true`, and `include_old_hub_finalization: true`.
+- `docs/development/rbac-live-certification.md`: documentation for running and
+  configuring the live RBAC certification.
+- `live_rbac_certification` pytest marker registered in `setup.cfg`.
+- `include_old_hub_finalization` parameter threaded through the `rbac_bootstrap` role
+  defaults and `validate_permissions.yml` task so that old-hub finalization permissions
+  (MCO delete) can be verified during bootstrap validation.
 
 ### Changed
 

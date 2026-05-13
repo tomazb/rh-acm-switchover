@@ -1,0 +1,25 @@
+---
+# Live RBAC certification playbook.
+#
+# Runs the rbac_bootstrap role with validate_permissions: true,
+# include_decommission: true, and include_old_hub_finalization: true so that
+# SubjectAccessReview checks are executed against the live cluster for the full
+# operator permission surface: normal switchover, old-hub MCO finalisation, and
+# the opt-in decommission extension.
+#
+# Prerequisites:
+#   * RBAC manifests (deploy/rbac/) must already be applied on the target cluster.
+#   * The opt-in decommission ClusterRole (deploy/rbac/extensions/decommission/)
+#     must be applied when include_decommission is true.
+#   * The kubeconfig supplied for primary hub must belong to a service account
+#     or user with cluster-admin (needed to run SubjectAccessReview as a subject).
+#
+# Gating:
+#   This playbook is only executed when the release profile selects the
+#   live-rbac-certification scenario.  Never add it to required scenarios or
+#   run it against production hubs.
+- name: Live RBAC bootstrap certification
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: tomazb.acm_switchover.rbac_bootstrap

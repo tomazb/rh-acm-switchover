@@ -23,6 +23,7 @@ PLAYBOOKS: dict[str, str] = {
     "argocd-managed-switchover": f"{_COLLECTION_PLAYBOOKS_PREFIX}/switchover.yml",
     "decommission": f"{_COLLECTION_PLAYBOOKS_PREFIX}/decommission.yml",
     "rbac-bootstrap": f"{_COLLECTION_PLAYBOOKS_PREFIX}/rbac_bootstrap.yml",
+    "live-rbac-certification": f"{_COLLECTION_PLAYBOOKS_PREFIX}/live_rbac_certification.yml",
 }
 
 REPORT_NAMES: dict[str, tuple[str, str]] = {
@@ -32,6 +33,7 @@ REPORT_NAMES: dict[str, tuple[str, str]] = {
     "argocd-managed-switchover": ("switchover", "switchover-report.json"),
     "decommission": ("decommission", "decommission-report.json"),
     "rbac-bootstrap": ("rbac-bootstrap", "rbac-bootstrap-report.json"),
+    "live-rbac-certification": ("rbac-certification", "live-rbac-certification-report.json"),
 }
 
 
@@ -127,8 +129,22 @@ class AnsibleAdapter:
             extra_vars["acm_switchover_rbac_bootstrap"] = {
                 "role": "operator",
                 "include_decommission": True,
+                "include_old_hub_finalization": False,
                 "generate_kubeconfigs": False,
                 "validate_permissions": False,
+                "output_dir": str(self.scenario_dir(scenario_id) / "kubeconfigs"),
+            }
+        if scenario_id == "live-rbac-certification":
+            extra_vars["acm_switchover_execution"]["mode"] = "execute"
+            extra_vars["summary_path"] = str(
+                self.scenario_dir(scenario_id) / "live-rbac-certification-report.json"
+            )
+            extra_vars["acm_switchover_rbac_bootstrap"] = {
+                "role": "operator",
+                "include_decommission": True,
+                "include_old_hub_finalization": True,
+                "generate_kubeconfigs": False,
+                "validate_permissions": True,
                 "output_dir": str(self.scenario_dir(scenario_id) / "kubeconfigs"),
             }
         if scenario_id == "decommission":

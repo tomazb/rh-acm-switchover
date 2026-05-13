@@ -22,6 +22,7 @@
     hub: primary
     role: "{{ acm_switchover_rbac_bootstrap.role }}"
     include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
+    include_old_hub_finalization: "{{ acm_switchover_rbac_bootstrap.include_old_hub_finalization | default(false) }}"
     argocd_mode: "{{ 'manage' if acm_switchover_rbac_bootstrap.role == 'operator' else 'check' }}"
     argocd_install_type: operator
     denied_permissions: []
@@ -80,6 +81,7 @@
     hub: primary
     role: "{{ acm_switchover_rbac_bootstrap.role }}"
     include_decommission: "{{ acm_switchover_rbac_bootstrap.include_decommission }}"
+    include_old_hub_finalization: "{{ acm_switchover_rbac_bootstrap.include_old_hub_finalization | default(false) }}"
     argocd_mode: "{{ 'manage' if acm_switchover_rbac_bootstrap.role == 'operator' else 'check' }}"
     argocd_install_type: operator
     denied_permissions: "{{ _rbac_denied_permissions | default([]) }}"

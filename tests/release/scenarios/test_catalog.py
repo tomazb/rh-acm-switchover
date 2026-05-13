@@ -45,6 +45,22 @@ def test_catalog_contains_optional_resilience_artifact_scenarios() -> None:
     assert selected.scenarios[6].streams == ("ansible",)
 
 
+def test_catalog_contains_live_rbac_certification_scenario() -> None:
+    selected = select_release_matrix(
+        enabled_streams=("ansible",),
+        scenario_filters=("live-rbac-certification",),
+        stream_filters=(),
+    )
+
+    assert "live-rbac-certification" in selected.scenario_ids
+    live_def = next(s for s in selected.scenarios if s.id == "live-rbac-certification")
+    # live-rbac-certification is optional, ansible-only, and non-mutating for
+    # purposes of runtime-parity (no cross-stream comparison)
+    assert live_def.required is False
+    assert live_def.streams == ("ansible",)
+    assert live_def.runtime_parity_required is False
+
+
 def test_mutating_filter_adds_prerequisites_and_final_checks() -> None:
     selected = select_release_matrix(
         enabled_streams=("python", "ansible"),

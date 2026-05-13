@@ -29,6 +29,7 @@ ANSIBLE_SCENARIOS = {
     "argocd-managed-switchover",
     "decommission",
     "rbac-bootstrap",
+    "live-rbac-certification",
 }
 BASH_SCENARIOS = {"preflight", "bash-discovery", "bash-postflight"}
 
