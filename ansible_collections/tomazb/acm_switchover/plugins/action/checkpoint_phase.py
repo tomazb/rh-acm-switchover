@@ -77,7 +77,10 @@ class ActionModule(ActionBase):
         operational_data = self._task.args.get("operational_data") or {}
         execution = task_vars.get("acm_switchover_execution") or {}
         execution_mode = execution.get("mode", "dry_run")
-        is_non_mutating = execution_mode in {"dry_run", "validate"}
+        is_check_mode = (
+            task_vars.get("ansible_check_mode") is True or getattr(self._play_context, "check_mode", False) is True
+        )
+        is_non_mutating = is_check_mode or execution_mode in {"dry_run", "validate"}
 
         backend = checkpoint_config.get("backend", "file")
         path = checkpoint_config.get("path", ".state/checkpoint.json")
@@ -174,11 +177,15 @@ class ActionModule(ActionBase):
             }
 
         if is_non_mutating:
-            return {
+            result = {
                 "changed": False,
                 "checkpoint": checkpoint_data,
-                execution_mode: True,
             }
+            if is_check_mode:
+                result["check_mode"] = True
+            if execution_mode in {"dry_run", "validate"}:
+                result[execution_mode] = True
+            return result
 
         transition = build_phase_transition(checkpoint_data, phase, status)
         checkpoint_data["completed_phases"] = transition["completed_phases"]

@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Collection checkpoint resumes now rediscover primary prep, activation, and finalization resources with phase-owned facts so skipped preflight data cannot go stale across resumed runs.
 - Collection activation now re-reads live Restore resources at activation time, ignores stale preflight Restore facts, fails before mutation when the selected passive Restore is not ready, and includes Restore `resourceVersion` in activation patches when available.
 - Documented collection Argo CD resume-on-failure checkpoint retry safety: retries reset from `primary_prep`, prune downstream completed phases, and keep resume scoped to the current run ID without adding a force-resume variable.
+- Python phase orchestration now fails instead of reporting completion when a successful handler leaves state in an unexpected phase, and collection checkpoints now remain non-mutating under native Ansible check mode.
 
 ### Removed
 

@@ -11,6 +11,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint i
     should_resume_phase,
     validate_operation_identity,
 )
+from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_checkpoint import (
+    main,
+)
 
 
 def test_build_operation_identity_captures_hub_and_operation_inputs():
@@ -194,3 +197,33 @@ def test_is_unsafe_legacy_checkpoint_requires_reset_for_completed_legacy_state()
     assert is_unsafe_legacy_checkpoint({"schema_version": "1.0", "completed_phases": ["preflight"]}) is True
     assert is_unsafe_legacy_checkpoint({"schema_version": "1.0", "completed_phases": []}) is False
     assert is_unsafe_legacy_checkpoint({"schema_version": "2.0", "completed_phases": ["preflight"]}) is False
+
+
+def test_acm_checkpoint_check_mode_returns_record_without_change(monkeypatch):
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["supports_check_mode"] is True
+            self.params = {
+                "phase": "activation",
+                "operational_data": {"method": "passive"},
+            }
+            self.check_mode = True
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+
+        def fail_json(self, **kwargs):
+            raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_checkpoint.AnsibleModule",
+        FakeModule,
+    )
+
+    main()
+
+    assert captured["exit"]["changed"] is False
+    assert captured["exit"]["checkpoint"]["phase"] == "activation"
+    assert captured["exit"]["checkpoint"]["operational_data"] == {"method": "passive"}
