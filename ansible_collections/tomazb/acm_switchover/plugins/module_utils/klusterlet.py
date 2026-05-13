@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import base64
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Callable, Protocol
 
@@ -15,23 +15,23 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
     HUB_KUBECONFIG_SECRET_NAME,
     KLUSTERLET_DEFAULT_WORKERS,
+    KLUSTERLET_REQUEST_TIMEOUT,
+    KLUSTERLET_WORKER_TIMEOUT,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
+    WORKER_TIMEOUT_REASON_TEMPLATE,
 )
 
+
 class CoreV1Client(Protocol):
-    def read_namespaced_secret(self, name: str, namespace: str) -> dict | object:
-        ...
+    def read_namespaced_secret(self, name: str, namespace: str, **kwargs) -> dict | object: ...
 
-    def delete_namespaced_secret(self, name: str, namespace: str) -> object:
-        ...
+    def delete_namespaced_secret(self, name: str, namespace: str, **kwargs) -> object: ...
 
-    def create_namespaced_secret(self, namespace: str, body: dict) -> object:
-        ...
+    def create_namespaced_secret(self, namespace: str, body: dict, **kwargs) -> object: ...
 
 
 class AppsV1Client(Protocol):
-    def patch_namespaced_deployment(self, name: str, namespace: str, body: dict) -> object:
-        ...
+    def patch_namespaced_deployment(self, name: str, namespace: str, body: dict, **kwargs) -> object: ...
 
 
 CoreClientFactory = Callable[[str, str | None], CoreV1Client]
@@ -50,7 +50,21 @@ def normalize_workers(workers: int | None) -> int:
     return worker_count
 
 
-def build_core_v1_client(kubeconfig: str, context: str | None = None):
+def normalize_timeout(timeout: int | float | None, field_name: str) -> int | float:
+    if timeout is None:
+        return KLUSTERLET_REQUEST_TIMEOUT if field_name == "request_timeout" else KLUSTERLET_WORKER_TIMEOUT
+    try:
+        timeout_value = float(timeout)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a positive number") from exc
+    if timeout_value <= 0:
+        raise ValueError(f"{field_name} must be a positive number")
+    if timeout_value.is_integer():
+        return int(timeout_value)
+    return timeout_value
+
+
+def build_core_v1_client(kubeconfig: str, context: str | None = None, request_timeout: int | float | None = None):
     if not kubeconfig:
         raise ValueError("kubeconfig is required")
 
@@ -60,10 +74,11 @@ def build_core_v1_client(kubeconfig: str, context: str | None = None):
     if context:
         kwargs["context"] = context
     api_client = config.new_client_from_config(**kwargs)
+    api_client.configuration.timeout = normalize_timeout(request_timeout, "request_timeout")
     return client.CoreV1Api(api_client=api_client)
 
 
-def build_apps_v1_client(kubeconfig: str, context: str | None = None):
+def build_apps_v1_client(kubeconfig: str, context: str | None = None, request_timeout: int | float | None = None):
     if not kubeconfig:
         raise ValueError("kubeconfig is required")
 
@@ -73,12 +88,30 @@ def build_apps_v1_client(kubeconfig: str, context: str | None = None):
     if context:
         kwargs["context"] = context
     api_client = config.new_client_from_config(**kwargs)
+    api_client.configuration.timeout = normalize_timeout(request_timeout, "request_timeout")
     return client.AppsV1Api(api_client=api_client)
 
 
-def read_secret(core_client: CoreV1Client, namespace: str, name: str) -> dict | object | None:
+def request_timeout_kwargs(request_timeout: int | float | None) -> dict:
+    return {"_request_timeout": normalize_timeout(request_timeout, "request_timeout")}
+
+
+def worker_timeout_reason(timeout: int | float) -> str:
+    return WORKER_TIMEOUT_REASON_TEMPLATE.format(timeout=timeout)
+
+
+def read_secret(
+    core_client: CoreV1Client,
+    namespace: str,
+    name: str,
+    request_timeout: int | float | None = None,
+) -> dict | object | None:
     try:
-        return core_client.read_namespaced_secret(name=name, namespace=namespace)
+        return core_client.read_namespaced_secret(
+            name=name,
+            namespace=namespace,
+            **request_timeout_kwargs(request_timeout),
+        )
     except Exception as exc:
         if getattr(exc, "status", None) == 404:
             return None
@@ -139,17 +172,41 @@ def bootstrap_kubeconfig_from_import(import_yaml_b64: str) -> str:
     return doc.get("data", {}).get("kubeconfig", "") or ""
 
 
-def ordered_bounded_map(items: list[str], workers: int, fn: Callable[[str], dict]) -> list[dict]:
+def ordered_bounded_map(
+    items: list[str],
+    workers: int,
+    fn: Callable[[str], dict],
+    future_timeout: int | float | None = None,
+    timeout_result: Callable[[str], dict] | None = None,
+) -> list[dict]:
     if not items:
         return []
-    if workers == 1:
-        return [fn(item) for item in items]
 
     results: list[dict | None] = [None] * len(items)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    timeout = normalize_timeout(future_timeout, "future_timeout")
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {executor.submit(fn, item): index for index, item in enumerate(items)}
-        for future, index in futures.items():
+        done, not_done = wait(futures, timeout=timeout)
+
+        for future in done:
+            index = futures[future]
             results[index] = future.result()
+
+        for future in not_done:
+            index = futures[future]
+            item = items[index]
+            future.cancel()
+            if timeout_result:
+                results[index] = timeout_result(item)
+            else:
+                results[index] = {
+                    "cluster": item,
+                    "status": "failed",
+                    "reason": worker_timeout_reason(timeout),
+                }
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     return [item for item in results if item is not None]
 
 
@@ -158,6 +215,7 @@ def probe_one_cluster(
     secondary_client: CoreV1Client | None,
     managed_clusters: dict,
     core_client_factory: CoreClientFactory,
+    request_timeout: int | float | None = None,
 ) -> dict:
     managed = managed_clusters.get(cluster_name) or {}
     kubeconfig = managed.get("kubeconfig") or ""
@@ -171,12 +229,14 @@ def probe_one_cluster(
             managed_client,
             MANAGED_CLUSTER_AGENT_NAMESPACE,
             HUB_KUBECONFIG_SECRET_NAME,
+            request_timeout=request_timeout,
         )
         if current_secret is None:
             current_secret = read_secret(
                 managed_client,
                 MANAGED_CLUSTER_AGENT_NAMESPACE,
                 BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+                request_timeout=request_timeout,
             )
         current_kubeconfig = secret_data(current_secret).get("kubeconfig", "")
         if not current_kubeconfig:
@@ -185,7 +245,12 @@ def probe_one_cluster(
         if secondary_client is None:
             return {"cluster": cluster_name, "status": "skipped", "reason": "secondary_hub_client_unavailable"}
 
-        import_secret = read_secret(secondary_client, cluster_name, f"{cluster_name}-import")
+        import_secret = read_secret(
+            secondary_client,
+            cluster_name,
+            f"{cluster_name}-import",
+            request_timeout=request_timeout,
+        )
         import_yaml = secret_data(import_secret).get("import.yaml", "")
         expected_kubeconfig = bootstrap_kubeconfig_from_import(import_yaml)
         if not expected_kubeconfig:
@@ -219,9 +284,13 @@ def probe_klusterlet_connections(
     managed_clusters: dict,
     candidate_clusters: list[str] | None = None,
     workers: int | None = None,
+    request_timeout: int | float | None = None,
+    future_timeout: int | float | None = None,
     core_client_factory: CoreClientFactory = build_core_v1_client,
 ) -> dict:
     worker_count = normalize_workers(workers)
+    request_timeout_value = normalize_timeout(request_timeout, "request_timeout")
+    future_timeout_value = normalize_timeout(future_timeout, "future_timeout")
     candidates = list(candidate_clusters if candidate_clusters is not None else managed_clusters.keys())
     secondary_client: CoreV1Client | None = None
     if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
@@ -229,16 +298,30 @@ def probe_klusterlet_connections(
     results = ordered_bounded_map(
         candidates,
         worker_count,
-        lambda cluster: probe_one_cluster(cluster, secondary_client, managed_clusters, core_client_factory),
+        lambda cluster: probe_one_cluster(
+            cluster,
+            secondary_client,
+            managed_clusters,
+            core_client_factory,
+            request_timeout=request_timeout_value,
+        ),
+        future_timeout=future_timeout_value,
+        timeout_result=lambda cluster: {
+            "cluster": cluster,
+            "status": "failed",
+            "reason": worker_timeout_reason(future_timeout_value),
+        },
     )
+    failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
     return {
         "changed": False,
-        "failed": False,
+        "failed": bool(failed_clusters),
         "workers": worker_count,
         "results": results,
         "verified_clusters": [item["cluster"] for item in results if item["status"] == "verified"],
         "wrong_hub_clusters": [item["cluster"] for item in results if item["status"] == "wrong_hub"],
         "skipped_clusters": [item["cluster"] for item in results if item["status"] == "skipped"],
+        "failed_clusters": failed_clusters,
     }
 
 
@@ -264,6 +347,7 @@ def remediate_one_cluster(
     managed_clusters: dict,
     core_client_factory: CoreClientFactory,
     apps_client_factory: AppsClientFactory,
+    request_timeout: int | float | None = None,
 ) -> dict:
     steps = {
         "import_secret_read": "pending",
@@ -279,7 +363,12 @@ def remediate_one_cluster(
         return _result(cluster_name, "skipped", steps, reason="no_managed_cluster_kubeconfig")
 
     try:
-        import_secret = read_secret(secondary_client, cluster_name, f"{cluster_name}-import")
+        import_secret = read_secret(
+            secondary_client,
+            cluster_name,
+            f"{cluster_name}-import",
+            request_timeout=request_timeout,
+        )
         import_yaml = secret_data(import_secret).get("import.yaml", "")
         if not import_yaml:
             steps["import_secret_read"] = "missing"
@@ -304,6 +393,7 @@ def remediate_one_cluster(
             managed_core.delete_namespaced_secret(
                 name=BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
                 namespace=bootstrap_namespace,
+                **request_timeout_kwargs(request_timeout),
             )
             steps["bootstrap_secret_deleted"] = "ok"
             changed = True
@@ -321,7 +411,11 @@ def remediate_one_cluster(
                 )
 
         try:
-            managed_core.create_namespaced_secret(namespace=bootstrap_namespace, body=bootstrap_doc)
+            managed_core.create_namespaced_secret(
+                namespace=bootstrap_namespace,
+                body=bootstrap_doc,
+                **request_timeout_kwargs(request_timeout),
+            )
             steps["bootstrap_secret_applied"] = "ok"
             changed = True
         except Exception as exc:
@@ -354,6 +448,7 @@ def remediate_one_cluster(
                 name="klusterlet",
                 namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                 body=patch,
+                **request_timeout_kwargs(request_timeout),
             )
             steps["klusterlet_restarted"] = "ok"
             changed = True
@@ -375,10 +470,14 @@ def remediate_klusterlets(
     workers: int | None = None,
     strict: bool = False,
     check_mode: bool = False,
+    request_timeout: int | float | None = None,
+    future_timeout: int | float | None = None,
     core_client_factory: CoreClientFactory = build_core_v1_client,
     apps_client_factory: AppsClientFactory = build_apps_v1_client,
 ) -> dict:
     worker_count = normalize_workers(workers)
+    request_timeout_value = normalize_timeout(request_timeout, "request_timeout")
+    future_timeout_value = normalize_timeout(future_timeout, "future_timeout")
     candidates = list(pending_clusters or [])
     if check_mode:
         results = []
@@ -413,6 +512,12 @@ def remediate_klusterlets(
     secondary_client = None
     if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
         secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
+    timeout_steps = {
+        "import_secret_read": "timeout",
+        "bootstrap_secret_deleted": "not_run",
+        "bootstrap_secret_applied": "not_run",
+        "klusterlet_restarted": "not_run",
+    }
     results = ordered_bounded_map(
         candidates,
         worker_count,
@@ -422,12 +527,22 @@ def remediate_klusterlets(
             managed_clusters,
             core_client_factory,
             apps_client_factory,
+            request_timeout=request_timeout_value,
+        ),
+        future_timeout=future_timeout_value,
+        timeout_result=lambda cluster: _result(
+            cluster,
+            "failed",
+            dict(timeout_steps),
+            reason=worker_timeout_reason(future_timeout_value),
         ),
     )
     failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
     skipped_clusters = [item["cluster"] for item in results if item["status"] == "skipped"]
     changed = any(item.get("changed") for item in results)
-    failed = strict and bool(failed_clusters)
+    worker_timeout_prefix = WORKER_TIMEOUT_REASON_TEMPLATE.partition("{")[0]
+    worker_timeout_failures = any(item.get("reason", "").startswith(worker_timeout_prefix) for item in results)
+    failed = worker_timeout_failures or (strict and bool(failed_clusters))
     result = {
         "changed": changed,
         "failed": failed,

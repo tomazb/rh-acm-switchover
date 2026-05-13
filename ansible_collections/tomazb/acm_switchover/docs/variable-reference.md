@@ -64,6 +64,8 @@
 | `checkpoint.reset_from` | phase name or empty string | `""` | Remove the named phase and every downstream phase from `completed_phases`; used for safe retries such as Argo CD resume-on-failure |
 | `concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
 | `concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
+| `timeouts.klusterlet_request_seconds` | int | `30` | Per Kubernetes API request timeout for direct klusterlet probe/remediation calls |
+| `timeouts.klusterlet_worker_seconds` | int | `180` | Worker future timeout window for each parallel klusterlet probe/remediation batch |
 
 The full variable name is `acm_switchover_execution.checkpoint.reset_from`.
 Checkpoint `reset_from` accepts `preflight`, `primary_prep`, `activation`, `post_activation`, or `finalization`.
@@ -116,6 +118,8 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | `acm_switchover_managed_clusters` | dict | `{}` | Optional managed-cluster kubeconfigs used for klusterlet probe and remediation |
 | `acm_switchover_execution.concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
 | `acm_switchover_execution.concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
+| `acm_switchover_execution.timeouts.klusterlet_request_seconds` | int | `30` | Per Kubernetes API request timeout for direct klusterlet probe/remediation calls |
+| `acm_switchover_execution.timeouts.klusterlet_worker_seconds` | int | `180` | Worker future timeout window for each parallel klusterlet probe/remediation batch |
 | `acm_switchover_features.klusterlet.strict_remediation` | bool | `false` | Module-level immediate failure toggle. Leave `false` for the role's normal remediation, re-check, then fail behavior |
 
 Post-activation klusterlet probing is stricter than best-effort status logging:
@@ -126,6 +130,10 @@ direct klusterlet probing/remediation because the collection has no managed
 cluster kubeconfig to reach them. That skip is non-fatal only when
 ManagedCluster readiness already passed; if the cluster is still pending, the
 ManagedCluster verification result remains the blocking failure.
+
+Klusterlet worker future timeouts are treated as failed cluster results even when
+`klusterlet.strict_remediation` is `false`, because a timed-out worker means the
+module could not establish the cluster's post-switchover state.
 
 When `acm_switchover_features.skip_observability_checks` is `false` and
 Observability is detected, Observability failures block the workflow by default:

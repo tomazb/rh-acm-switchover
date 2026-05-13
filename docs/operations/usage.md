@@ -93,6 +93,12 @@ python acm_switchover.py \
 - Finalization: depends on BackupSchedule cadence (typical 5-10 minutes; longer for hourly/daily schedules)
 - **Total: ~30-45 minutes**
 
+Kubernetes API requests made by the Python workflow are bounded with explicit
+per-call timeouts. The default API request timeout is 30 seconds; transient
+5xx/429 and network timeout errors still use the existing retry policy.
+Polling waits cap each sleep to the remaining timeout budget, so a final poll
+interval cannot overshoot the configured phase deadline.
+
 > **Safety warning:** Do **NOT** re-enable Thanos Compactor or Observatorium API on the old hub after switchover.
 > Both hubs share the same object storage backend; re-enabling on the old hub can cause data corruption and split-brain.
 > Only re-enable on the old hub if you are switching back and have shut down these components on the current primary first.
@@ -195,6 +201,14 @@ Clusters without a managed-cluster kubeconfig are explicitly skipped for direct
 klusterlet probing/remediation. That skip is non-fatal only when the
 ManagedCluster readiness checks already passed; if the same cluster remains not
 joined or unavailable, the post-activation ManagedCluster gate still fails.
+
+In the Ansible collection, direct klusterlet probes and remediations default to
+10 worker threads, 30-second Kubernetes request timeouts, and 180-second
+worker future timeout windows for each probe/remediation batch. Override these with
+`acm_switchover_execution.concurrency.klusterlet_probe_workers`,
+`acm_switchover_execution.concurrency.klusterlet_remediation_workers`,
+`acm_switchover_execution.timeouts.klusterlet_request_seconds`, and
+`acm_switchover_execution.timeouts.klusterlet_worker_seconds`.
 
 **Advantages:**
 - Faster activation (data already restored)

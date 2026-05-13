@@ -209,9 +209,18 @@ Wraps Kubernetes API operations with:
 - per-context client loading
 - dry-run-aware mutators
 - retry behavior for transient failures
+- explicit per-request timeouts for read, list, create, patch, scale, and log calls
 - common helpers for Deployments, StatefulSets, Pods, and custom resources
 
-This layer centralizes Kubernetes interaction so workflow modules can stay focused on ACM behavior.
+This layer centralizes Kubernetes interaction so workflow modules can stay focused on ACM behavior. The default
+request timeout is 30 seconds. Tenacity remains the retry layer for wrapped helpers, while urllib3 client retries stay
+disabled to avoid multiplying retry attempts below the workflow code.
+
+### `lib/waiter.py`
+
+Provides explicit polling contracts through `WaitConditionResult`. Polling sleeps are capped to the remaining timeout
+budget, including fast-poll intervals, so wait loops do not exceed their configured deadline because of a final
+oversized sleep.
 
 ### `lib/validation.py`
 
@@ -292,6 +301,10 @@ Important activation-related flags:
 - re-enabling or recreating `BackupSchedule`
 - verifying new backups after promotion
 - handling old-hub-as-secondary or old-hub decommission prep
+
+BackupSchedule collision repair deletes and recreates the schedule to refresh backup ownership. After delete, it polls
+for schedule absence with a 30-second timeout and 2-second interval before recreating the schedule, preserving UID
+change safety checks without relying on a fixed sleep.
 
 Important finalization-related flags:
 
@@ -441,6 +454,7 @@ The collection uses a fundamentally different architecture from the Python CLI:
 - **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
 - **Report artifacts** use schema version `1.0` across preflight, switchover, restore-only, and decommission paths; Python and collection reports preserve aligned status/report contracts without requiring identical top-level fields for every report type
 - **Decommission observability** defaults to namespace autodetection in the collection, with explicit `true`/`false` overrides for known environments
+- **Klusterlet helpers** use bounded direct Kubernetes requests and worker futures. Defaults are 10 workers, 30-second per-request timeouts, and 180-second worker future timeout windows for each probe/remediation batch; worker future timeouts are reported as failed cluster results.
 - **Constants isolation**: `plugins/module_utils/constants.py` is the collection's constants file — it cannot import from `lib/constants.py`
 
 The collection architecture is fully detailed in the [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md). Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.

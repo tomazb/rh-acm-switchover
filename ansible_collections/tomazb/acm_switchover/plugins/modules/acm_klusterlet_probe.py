@@ -26,6 +26,14 @@ options:
     description: Maximum concurrent workers. Use C(1) for sequential behavior.
     type: int
     default: 10
+  request_timeout:
+    description: Per Kubernetes API request timeout in seconds.
+    type: int
+    default: 30
+  future_timeout:
+    description: Maximum worker future wait window for the probe batch in seconds.
+    type: int
+    default: 180
 """
 
 EXAMPLES = r"""
@@ -35,12 +43,18 @@ EXAMPLES = r"""
     managed_clusters: "{{ acm_switchover_managed_clusters }}"
     candidate_clusters: "{{ _klusterlet_probe_candidates }}"
     workers: 10
+    request_timeout: 30
+    future_timeout: 180
   register: _klusterlet_probe_result
 """
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import KLUSTERLET_DEFAULT_WORKERS
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    KLUSTERLET_DEFAULT_WORKERS,
+    KLUSTERLET_REQUEST_TIMEOUT,
+    KLUSTERLET_WORKER_TIMEOUT,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.klusterlet import probe_klusterlet_connections
 
 __all__ = ["probe_klusterlet_connections"]
@@ -53,6 +67,8 @@ def main() -> None:
             "managed_clusters": {"type": "dict", "default": {}},
             "candidate_clusters": {"type": "list", "elements": "str", "required": False},
             "workers": {"type": "int", "default": KLUSTERLET_DEFAULT_WORKERS},
+            "request_timeout": {"type": "int", "default": KLUSTERLET_REQUEST_TIMEOUT},
+            "future_timeout": {"type": "int", "default": KLUSTERLET_WORKER_TIMEOUT},
         },
         supports_check_mode=True,
     )
@@ -62,6 +78,8 @@ def main() -> None:
             managed_clusters=module.params["managed_clusters"],
             candidate_clusters=module.params.get("candidate_clusters"),
             workers=module.params["workers"],
+            request_timeout=module.params.get("request_timeout", KLUSTERLET_REQUEST_TIMEOUT),
+            future_timeout=module.params.get("future_timeout", KLUSTERLET_WORKER_TIMEOUT),
         )
     except Exception as exc:
         module.fail_json(msg=str(exc))

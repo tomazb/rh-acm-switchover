@@ -724,18 +724,16 @@ class TestFinalization:
             acm_version="2.14.0",
         )
 
-        with patch.object(fin, "_enable_backup_schedule"), patch.object(
-            fin, "_verify_backup_schedule_enabled"
-        ), patch.object(fin, "_fix_backup_schedule_collision"), patch.object(fin, "_verify_new_backups"), patch.object(
-            fin, "_verify_backup_integrity"
-        ), patch.object(
-            fin, "_verify_multiclusterhub_health"
-        ), patch.object(
-            fin, "_ensure_auto_import_default", return_value=True
-        ) as reset_auto_import, patch.object(
-            fin, "_handle_old_hub"
-        ), patch.object(
-            fin, "_get_backup_verify_timeout", return_value=600
+        with (
+            patch.object(fin, "_enable_backup_schedule"),
+            patch.object(fin, "_verify_backup_schedule_enabled"),
+            patch.object(fin, "_fix_backup_schedule_collision"),
+            patch.object(fin, "_verify_new_backups"),
+            patch.object(fin, "_verify_backup_integrity"),
+            patch.object(fin, "_verify_multiclusterhub_health"),
+            patch.object(fin, "_ensure_auto_import_default", return_value=True) as reset_auto_import,
+            patch.object(fin, "_handle_old_hub"),
+            patch.object(fin, "_get_backup_verify_timeout", return_value=600),
         ):
             assert fin.finalize() is True
 
@@ -1068,6 +1066,44 @@ class TestFinalization:
 
         mock_secondary_client.delete_custom_resource.assert_called_once()
         mock_secondary_client.create_custom_resource.assert_not_called()
+
+    @patch("modules.finalization.wait_for_condition", return_value=True)
+    @patch("modules.finalization.time.sleep")
+    def test_fix_backup_schedule_collision_polls_for_delete_before_create(
+        self, mock_sleep, mock_wait, finalization, mock_secondary_client
+    ):
+        """Collision repair should poll for absence instead of using a fixed delete sleep."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "schedule", "uid": "uid-old"},
+                "spec": {"veleroSchedule": "*/15 * * * *"},
+                "status": {"phase": "Enabled"},
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": "schedule", "uid": "uid-old"},
+            "spec": {"veleroSchedule": "*/15 * * * *"},
+        }
+
+        finalization._fix_backup_schedule_collision()
+
+        mock_wait.assert_called_once()
+        wait_kwargs = mock_wait.call_args.kwargs
+        assert wait_kwargs["timeout"] > 0
+        assert wait_kwargs["interval"] > 0
+        mock_sleep.assert_not_called()
+        mock_secondary_client.create_custom_resource.assert_called_once()
+
+    @patch("modules.finalization.wait_for_condition", return_value=False)
+    def test_wait_for_backup_schedule_deletion_accepts_absent_final_reread(
+        self, mock_wait, finalization, mock_secondary_client
+    ):
+        """If the final re-check sees absence after timeout, deletion completed."""
+        mock_secondary_client.get_custom_resource.return_value = None
+
+        finalization._wait_for_backup_schedule_deletion("schedule", "uid-old", timeout=1, interval=1)
+
+        mock_wait.assert_called_once()
 
     @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_treats_409_with_healthy_schedule_as_success(
@@ -1596,9 +1632,10 @@ class TestFinalization:
             old_hub_action="bogus",
         )
 
-        with patch.object(fin, "_setup_old_hub_as_secondary") as setup_old_hub, patch.object(
-            fin, "_decommission_old_hub"
-        ) as decommission_old_hub:
+        with (
+            patch.object(fin, "_setup_old_hub_as_secondary") as setup_old_hub,
+            patch.object(fin, "_decommission_old_hub") as decommission_old_hub,
+        ):
             with pytest.raises(SwitchoverError, match="Unknown old_hub_action 'bogus'"):
                 fin._handle_old_hub()
 

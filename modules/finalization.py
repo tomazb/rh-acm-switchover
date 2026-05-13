@@ -21,7 +21,8 @@ from lib.constants import (
     BACKUP_NAMESPACE,
     BACKUP_POLL_INTERVAL,
     BACKUP_SCHEDULE_DEFAULT_NAME,
-    BACKUP_SCHEDULE_DELETE_WAIT,
+    BACKUP_SCHEDULE_DELETE_INTERVAL,
+    BACKUP_SCHEDULE_DELETE_TIMEOUT,
     BACKUP_VERIFY_TIMEOUT,
     CLEANUP_BEFORE_RESTORE_VALUE,
     DELETE_REQUEST_TIMEOUT,
@@ -1313,31 +1314,7 @@ class Finalization:
                 else:
                     raise
 
-        # Wait a moment for deletion to complete (even if already deleted, wait for API sync)
-        time.sleep(BACKUP_SCHEDULE_DELETE_WAIT)
-
-        # Re-check before create to avoid racing with external controllers/processes
-        schedule_after_delete = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
-            name=schedule_name,
-            namespace=BACKUP_NAMESPACE,
-        )
-        if schedule_after_delete:
-            after_uid = schedule_after_delete.get("metadata", {}).get("uid")
-            self._cached_schedules = None
-            if schedule_uid and after_uid and after_uid != schedule_uid:
-                raise SwitchoverError(
-                    "BackupSchedule %s reappeared with a different uid (%s, previous=%s) after deletion. "
-                    "Manual verification is required before retrying collision repair."
-                    % (schedule_name, after_uid, schedule_uid)
-                )
-            raise SwitchoverError(
-                "BackupSchedule %s still present (uid=%s) after deletion attempt. "
-                "Deletion has not completed; manual verification is required before retrying collision repair."
-                % (schedule_name, after_uid or "unknown")
-            )
+            self._wait_for_backup_schedule_deletion(schedule_name, schedule_uid)
 
         # Recreate the schedule
         try:
@@ -1406,6 +1383,64 @@ class Finalization:
                 )
         except Exception as e:
             raise SwitchoverError(f"Failed to recreate BackupSchedule {schedule_name}: {e}") from e
+
+    def _wait_for_backup_schedule_deletion(
+        self,
+        schedule_name: str,
+        schedule_uid: Optional[str],
+        timeout: int = BACKUP_SCHEDULE_DELETE_TIMEOUT,
+        interval: int = BACKUP_SCHEDULE_DELETE_INTERVAL,
+    ) -> None:
+        """Wait until a deleted BackupSchedule is absent before recreating it."""
+
+        def _poll_schedule_absence() -> WaitConditionResult:
+            schedule = self.secondary.get_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="backupschedules",
+                name=schedule_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not schedule:
+                return WaitConditionResult.complete("absent")
+
+            current_uid = schedule.get("metadata", {}).get("uid")
+            if schedule_uid and current_uid and current_uid != schedule_uid:
+                raise SwitchoverError(
+                    "BackupSchedule %s reappeared with a different uid (%s, previous=%s) after deletion. "
+                    "Manual verification is required before retrying collision repair."
+                    % (schedule_name, current_uid, schedule_uid)
+                )
+            return WaitConditionResult.pending("still present (uid=%s)" % (current_uid or "unknown"))
+
+        deleted = wait_for_condition(
+            f"BackupSchedule {schedule_name} deletion",
+            _poll_schedule_absence,
+            timeout=timeout,
+            interval=interval,
+            logger=logger,
+        )
+        if deleted:
+            return
+
+        self._cached_schedules = None
+        schedule_after_delete = self.secondary.get_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name=schedule_name,
+            namespace=BACKUP_NAMESPACE,
+        )
+        if not schedule_after_delete:
+            logger.info("BackupSchedule %s deleted after final re-check", schedule_name)
+            return
+
+        after_uid = (schedule_after_delete or {}).get("metadata", {}).get("uid")
+        raise SwitchoverError(
+            "BackupSchedule %s still present (uid=%s) after deletion attempt. "
+            "Deletion has not completed; manual verification is required before retrying collision repair."
+            % (schedule_name, after_uid or "unknown")
+        )
 
     def _verify_old_hub_state(self):
         """Run regression checks on the old (primary) hub."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import builtins
 import threading
+import time
 from typing import NoReturn
 
 import pytest
@@ -20,6 +21,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.klusterlet import (
     build_apps_v1_client,
     build_core_v1_client,
+    ordered_bounded_map,
 )
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_klusterlet_probe import (
     probe_klusterlet_connections,
@@ -42,20 +44,24 @@ class FakeCoreClient:
         self.fail_create = fail_create
         self.deleted: list[tuple[str, str]] = []
         self.created: list[tuple[str, str, dict]] = []
+        self.request_timeouts: list[int | None] = []
 
-    def read_namespaced_secret(self, name: str, namespace: str):
+    def read_namespaced_secret(self, name: str, namespace: str, **kwargs):
+        self.request_timeouts.append(kwargs.get("_request_timeout"))
         secret = self.secrets.get((namespace, name))
         if secret is None:
             raise FakeApiError(404, "Not Found")
         return secret
 
-    def delete_namespaced_secret(self, name: str, namespace: str):
+    def delete_namespaced_secret(self, name: str, namespace: str, **kwargs):
+        self.request_timeouts.append(kwargs.get("_request_timeout"))
         self.deleted.append((namespace, name))
         if (namespace, name) not in self.secrets:
             raise FakeApiError(404, "Not Found")
         self.secrets.pop((namespace, name), None)
 
-    def create_namespaced_secret(self, namespace: str, body: dict):
+    def create_namespaced_secret(self, namespace: str, body: dict, **kwargs):
+        self.request_timeouts.append(kwargs.get("_request_timeout"))
         if self.fail_create:
             raise FakeApiError(500, "create failed")
         self.created.append((namespace, body["metadata"]["name"], body))
@@ -65,8 +71,10 @@ class FakeCoreClient:
 class FakeAppsClient:
     def __init__(self):
         self.patched: list[tuple[str, str, dict]] = []
+        self.request_timeouts: list[int | None] = []
 
-    def patch_namespaced_deployment(self, name: str, namespace: str, body: dict):
+    def patch_namespaced_deployment(self, name: str, namespace: str, body: dict, **kwargs):
+        self.request_timeouts.append(kwargs.get("_request_timeout"))
         self.patched.append((namespace, name, body))
 
 
@@ -390,11 +398,13 @@ def test_remediation_uses_bounded_worker_threads():
             ("cluster-b", "cluster-b-import"): _import_secret("https://new.example:6443"),
         }
     )
-    seen_threads: set[int] = set()
+    managed_threads: set[int] = set()
 
     def core_client_factory(kubeconfig: str, context: str | None = None):
-        seen_threads.add(threading.get_ident())
-        return secondary if kubeconfig == "hub" else FakeCoreClient()
+        if kubeconfig == "hub":
+            return secondary
+        managed_threads.add(threading.get_ident())
+        return FakeCoreClient()
 
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},
@@ -410,7 +420,91 @@ def test_remediation_uses_bounded_worker_threads():
 
     assert result["workers"] == 1
     assert result["failed_clusters"] == []
-    assert len(seen_threads) == 1
+    assert len(managed_threads) == 1
+
+
+def test_probe_passes_bounded_request_timeout_to_secret_reads():
+    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    managed = FakeCoreClient(
+        {
+            (
+                MANAGED_CLUSTER_AGENT_NAMESPACE,
+                HUB_KUBECONFIG_SECRET_NAME,
+            ): _hub_secret("https://new.example:6443")
+        }
+    )
+
+    def core_client_factory(kubeconfig: str, context: str | None = None) -> FakeCoreClient:
+        return secondary if kubeconfig == "hub" else managed
+
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        candidate_clusters=["cluster-a"],
+        workers=1,
+        request_timeout=7,
+        core_client_factory=core_client_factory,
+    )
+
+    assert result["failed"] is False
+    assert secondary.request_timeouts == [7]
+    assert managed.request_timeouts == [7]
+
+
+def test_worker_future_timeout_surfaces_as_failed_result():
+    def slow_worker(cluster_name: str) -> dict:
+        time.sleep(0.05)
+        return {"cluster": cluster_name, "status": "verified"}
+
+    results = ordered_bounded_map(
+        ["cluster-a"],
+        workers=2,
+        fn=slow_worker,
+        future_timeout=0.001,
+        timeout_result=lambda cluster: {"cluster": cluster, "status": "failed", "reason": "worker_timeout"},
+    )
+
+    assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
+
+
+def test_single_worker_future_timeout_surfaces_as_failed_result():
+    def slow_worker(cluster_name: str) -> dict:
+        time.sleep(0.05)
+        return {"cluster": cluster_name, "status": "verified"}
+
+    started_at = time.monotonic()
+    results = ordered_bounded_map(
+        ["cluster-a"],
+        workers=1,
+        fn=slow_worker,
+        future_timeout=0.001,
+        timeout_result=lambda cluster: {"cluster": cluster, "status": "failed", "reason": "worker_timeout"},
+    )
+
+    assert time.monotonic() - started_at < 0.04
+    assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
+
+
+def test_worker_future_timeout_uses_one_batch_deadline():
+    def slow_worker(cluster_name: str) -> dict:
+        time.sleep(0.05)
+        return {"cluster": cluster_name, "status": "verified"}
+
+    started_at = time.monotonic()
+    results = ordered_bounded_map(
+        ["cluster-a", "cluster-b", "cluster-c"],
+        workers=3,
+        fn=slow_worker,
+        future_timeout=0.01,
+        timeout_result=lambda cluster: {"cluster": cluster, "status": "failed", "reason": "worker_timeout"},
+    )
+
+    assert time.monotonic() - started_at < 0.04
+    assert results == [
+        {"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"},
+        {"cluster": "cluster-b", "status": "failed", "reason": "worker_timeout"},
+        {"cluster": "cluster-c", "status": "failed", "reason": "worker_timeout"},
+    ]
 
 
 class _ExitJson(Exception):

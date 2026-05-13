@@ -190,6 +190,18 @@ class TestPostActivationVerification:
                 "unavailableReplicas": 0,
             },
         }
+        mock_secondary_client.get_statefulset.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "availableReplicas": 1,
+                "readyReplicas": 1,
+                "unavailableReplicas": 0,
+            },
+        }
         mock_secondary_client.rollout_restart_deployment.return_value = {"status": "ok"}
 
         result = post_verify_with_obs.verify()
@@ -677,6 +689,30 @@ class TestPostActivationVerification:
                 },
             }
         ]
+        mock_secondary_client.get_deployment.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 2,
+                "updatedReplicas": 2,
+                "availableReplicas": 2,
+                "readyReplicas": 2,
+                "unavailableReplicas": 0,
+            },
+        }
+        mock_secondary_client.get_statefulset.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "availableReplicas": 1,
+                "readyReplicas": 1,
+                "unavailableReplicas": 0,
+            },
+        }
 
         with patch.object(verify, "_restart_observatorium_api") as mock_restart:
             verify.verify()
@@ -945,6 +981,18 @@ class TestPostActivationVerificationIntegration:
             }
         ]
         mock_secondary_client.get_deployment.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "availableReplicas": 1,
+                "readyReplicas": 1,
+                "unavailableReplicas": 0,
+            },
+        }
+        mock_secondary_client.get_statefulset.return_value = {
             "metadata": {"generation": 1},
             "spec": {"replicas": 1},
             "status": {
