@@ -183,6 +183,18 @@ def test_collection_rejects_validator_decommission_like_python():
         )
 
 
+def test_collection_rejects_validator_old_hub_finalization_like_python():
+    with pytest.raises(ValueError, match="include_old_hub_finalization"):
+        expand_rbac_requirements(
+            role="validator",
+            include_decommission=False,
+            include_old_hub_finalization=True,
+            skip_observability=False,
+            argocd_mode="none",
+            argocd_install_type="unknown",
+        )
+
+
 def test_collection_rejects_validator_argocd_manage_like_python():
     with pytest.raises(ValueError, match="validator.*manage"):
         expand_rbac_requirements(

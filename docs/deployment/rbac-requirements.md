@@ -227,6 +227,7 @@ Most delete permissions for old-hub teardown are intentionally separated from th
 - **Additional verbs**:
   - `delete` on `managedclusters`
   - `delete` on cluster-scoped `multiclusterhubs`
+  - `delete` on `multiclusterobservabilities` (also present in the baseline operator role for normal finalization)
 
 The baseline operator Role includes only `list` on namespaced `multiclusterhubs` in `open-cluster-management`.
 ManagedCluster and MultiClusterHub delete access remains in the opt-in decommission extension so ordinary switchover operators do not receive hub teardown privileges.
