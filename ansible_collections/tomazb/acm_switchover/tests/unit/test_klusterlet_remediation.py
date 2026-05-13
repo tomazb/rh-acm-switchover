@@ -77,7 +77,75 @@ def test_verify_klusterlet_records_module_remediation_attempts():
     content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
 
     assert "_klusterlet_remediation_result is defined" in content
-    assert "_klusterlet_probe_result.wrong_hub_clusters" in content
+    assert "_klusterlet_initial_probe_result | default({})" in content
+    assert "wrong_hub_clusters" in content
+
+
+def test_verify_klusterlet_reprobes_after_remediation():
+    """Wrong-hub remediation must be followed by a second klusterlet probe."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+
+    fix_index = next(
+        index for index, task in enumerate(tasks) if task.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml"
+    )
+    preprobe_indexes = [
+        index
+        for index, task in enumerate(tasks)
+        if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml" and index < fix_index
+    ]
+    reprobe_indexes = [
+        index
+        for index, task in enumerate(tasks)
+        if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml" and index > fix_index
+    ]
+
+    assert preprobe_indexes, "verify_klusterlet.yml must probe before remediation"
+    assert reprobe_indexes, "verify_klusterlet.yml must re-probe after remediation"
+
+
+def test_verify_klusterlet_resets_stale_probe_result_before_recheck():
+    """Post-remediation re-check must not reuse stale initial probe results if the re-probe is skipped."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+
+    reprobe_index = next(
+        index
+        for index, task in enumerate(tasks)
+        if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml"
+        and index
+        > next(i for i, item in enumerate(tasks) if item.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml")
+    )
+    reset_tasks = [
+        task
+        for task in tasks[:reprobe_index]
+        if task.get("ansible.builtin.set_fact", {}).get("_klusterlet_probe_result") == {}
+    ]
+
+    assert reset_tasks, "verify_klusterlet.yml must clear stale probe results before post-remediation re-check"
+
+
+def test_verify_klusterlet_fails_failed_or_persistent_wrong_hub_after_recheck():
+    """Failed fixes and persistent wrong-hub probes must become fatal after re-check."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+
+    fail_tasks = [task for task in tasks if "ansible.builtin.fail" in task]
+    assert fail_tasks, "verify_klusterlet.yml must fail strict remediation errors"
+
+    strict_fail_task = next(
+        (
+            task
+            for task in fail_tasks
+            if "_klusterlet_remediation_result.failed_clusters" in _when_text(task)
+            and "_klusterlet_post_remediation_probe_result | default({})" in _when_text(task)
+            and "wrong_hub_clusters" in _when_text(task)
+        ),
+        None,
+    )
+    assert strict_fail_task is not None, "strict remediation fail condition must exist"
+    fail_when = _when_text(strict_fail_task)
+    assert "_klusterlet_remediation_result.failed_clusters" in fail_when
+    assert "_klusterlet_post_remediation_probe_result | default({})" in fail_when
+    assert "wrong_hub_clusters" in fail_when
+    assert "_klusterlet_post_remediation_probe_result.skipped_clusters" not in fail_when
 
 
 def test_fix_klusterlet_filters_candidates_to_clusters_with_kubeconfigs():

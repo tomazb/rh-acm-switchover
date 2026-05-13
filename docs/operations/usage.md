@@ -181,6 +181,19 @@ python acm_switchover.py \
 > activation. Use `--min-managed-clusters N` to provide an explicit minimum instead;
 > `N` must be non-negative, and explicit `0` allows an empty hub.
 
+**Post-activation klusterlet remediation:**
+After activation, the tool verifies that managed clusters are joined and
+available, then checks whether each reachable klusterlet still points at the old
+hub. Wrong-hub klusterlets are remediated by re-applying the new hub bootstrap
+kubeconfig and restarting the klusterlet deployment. The remediation is then
+re-checked; a failed remediation or a klusterlet that still points at the wrong
+hub fails post-activation instead of reporting success.
+
+Clusters without a managed-cluster kubeconfig are explicitly skipped for direct
+klusterlet probing/remediation. That skip is non-fatal only when the
+ManagedCluster readiness checks already passed; if the same cluster remains not
+joined or unavailable, the post-activation ManagedCluster gate still fails.
+
 **Advantages:**
 - Faster activation (data already restored)
 - Lower risk (passive sync proven working)

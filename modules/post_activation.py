@@ -737,7 +737,10 @@ class PostActivationVerification:
         3. Restarting the klusterlet deployment
 
         If we can't connect to a managed cluster (no context available), we log a
-        warning but don't fail the switchover.
+        warning but don't fail the switchover. If a wrong-hub klusterlet is
+        remediated, the post-remediation re-check is strict: failed remediation,
+        persistent wrong-hub state, or an unverifiable re-check fails
+        post-activation instead of reporting success.
         """
 
         logger.info("Verifying klusterlet connections to new hub...")
@@ -820,6 +823,15 @@ class PostActivationVerification:
             success = self._force_klusterlet_reconnect(cluster_name, context_name)
             return (cluster_name, success)
 
+        def recheck_cluster(cluster_name: str, context_name: str) -> tuple:
+            """Re-check a remediated cluster's klusterlet connection."""
+            try:
+                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
+                return (cluster_name, result)
+            except Exception as e:
+                logger.debug("Error re-checking klusterlet for %s: %s", cluster_name, e)
+                return (cluster_name, "unreachable")
+
         # Fix clusters connected to wrong hub (also in parallel)
         if wrong_hub:
             logger.warning(
@@ -853,6 +865,33 @@ class PostActivationVerification:
                     len(fix_failed),
                     ", ".join(fix_failed),
                 )
+
+            post_remediation_wrong_hub = []
+            post_remediation_unverified = []
+            with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
+                futures = [executor.submit(recheck_cluster, name, ctx) for name, ctx in wrong_hub]
+                for future in as_completed(futures):
+                    cluster_name, result = future.result()
+                    if result == "wrong_hub":
+                        post_remediation_wrong_hub.append(cluster_name)
+                    elif result != "verified":
+                        post_remediation_unverified.append(cluster_name)
+
+            fatal_messages = []
+            if fix_failed:
+                fatal_messages.append(f"Klusterlet remediation failed for cluster(s): {', '.join(fix_failed)}")
+            if post_remediation_wrong_hub:
+                fatal_messages.append(
+                    "Klusterlet still connected to the wrong hub after remediation: "
+                    f"{', '.join(post_remediation_wrong_hub)}"
+                )
+            if post_remediation_unverified:
+                fatal_messages.append(
+                    "Klusterlet remediation could not be verified for cluster(s): "
+                    f"{', '.join(post_remediation_unverified)}"
+                )
+            if fatal_messages:
+                raise SwitchoverError("; ".join(fatal_messages))
 
         if unreachable:
             logger.info(
