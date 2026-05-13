@@ -30,7 +30,7 @@ _postflight_check_complete() {
     fi
 
     if [[ "$cur" == -* ]]; then
-        local opts="--new-hub-context --old-hub-context --help -h"
+        local opts="--new-hub-context --old-hub-context --skip-gitops-check --help -h"
         _acm_complete_from_list "$opts"
         return
     fi

@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -14,6 +14,7 @@ from lib.constants import (
     IMPORT_CONTROLLER_CONFIGMAP,
     MCE_NAMESPACE,
 )
+from lib.exceptions import SwitchoverError
 from lib.utils import StateManager
 from modules.activation import SecondaryActivation
 from modules.finalization import Finalization
@@ -89,6 +90,47 @@ class TestActivationManageFlag:
         assert kwargs["name"] == IMPORT_CONTROLLER_CONFIGMAP
         assert kwargs["data"][AUTO_IMPORT_STRATEGY_KEY] == AUTO_IMPORT_STRATEGY_SYNC
         assert state.get_config("auto_import_strategy_set") is True
+
+    def test_raises_when_explicit_management_fails(self, tmp_path):
+        """Explicit autoImportStrategy management should fail closed on patch errors."""
+        state = StateManager(str(tmp_path / "state.json"))
+        state.set_config("secondary_version", "2.14.2")
+
+        client = Mock()
+        client.list_custom_resources.return_value = [{"metadata": {"name": "cluster-a"}}]
+        client.get_configmap.return_value = None
+        client.create_or_patch_configmap.side_effect = RuntimeError("permission denied")
+
+        act = SecondaryActivation(
+            secondary_client=client,
+            state_manager=state,
+            method="passive",
+            manage_auto_import_strategy=True,
+        )
+
+        with pytest.raises(SwitchoverError, match="autoImportStrategy"):
+            act._maybe_set_auto_import_strategy()
+
+    def test_detect_only_logs_warning_when_strategy_lookup_fails(self, tmp_path):
+        """Detect-only mode should remain non-fatal when strategy lookup fails."""
+        state = StateManager(str(tmp_path / "state.json"))
+        state.set_config("secondary_version", "2.14.2")
+
+        client = Mock()
+        client.list_custom_resources.return_value = [{"metadata": {"name": "cluster-a"}}]
+        client.get_configmap.side_effect = RuntimeError("temporary API error")
+
+        act = SecondaryActivation(
+            secondary_client=client,
+            state_manager=state,
+            method="passive",
+            manage_auto_import_strategy=False,
+        )
+
+        with patch("modules.activation.logger") as logger:
+            act._maybe_set_auto_import_strategy()
+
+        logger.warning.assert_called_once()
 
 
 @pytest.mark.unit

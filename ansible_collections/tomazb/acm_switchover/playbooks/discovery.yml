@@ -1,0 +1,6 @@
+---
+- name: Discover ACM hubs
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: tomazb.acm_switchover.discovery

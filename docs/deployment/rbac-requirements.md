@@ -1,7 +1,7 @@
 # RBAC Requirements for ACM Switchover
 
 **Version**: 1.0.0  
-**Last Updated**: December 7, 2024
+**Last Updated**: May 13, 2026
 
 ## Overview
 
@@ -15,6 +15,10 @@ The RBAC model is designed following the principle of least privilege:
 - **Read-only by default**: Write operations are explicitly granted only where needed
 - **No wildcard permissions**: All resource types and verbs are explicitly enumerated
 
+Release 1.7.10 keeps RBAC bootstrap parity under automated guardrails: Python
+RBAC validation, collection RBAC expansion, root manifests, collection-bundled
+manifests, and Helm templates must stay aligned when permissions change.
+
 ## User Roles
 
 ### 1. ACM Switchover Operator
@@ -25,7 +29,7 @@ The RBAC model is designed following the principle of least privilege:
 - Container-based deployments running as pods
 - Service accounts in production environments
 
-**Permission Level**: Baseline switchover permissions (read, create, patch) without cluster-scoped decommission deletes
+**Permission Level**: Baseline switchover permissions, including old-hub `MultiClusterObservability` cleanup, without `ManagedCluster` or `MultiClusterHub` decommission deletes
 
 ### 2. ACM Switchover Validator
 **Purpose**: Read-only service account for validation and dry-run operations
@@ -86,6 +90,12 @@ The RBAC model is designed following the principle of least privilege:
 
 #### StatefulSets
 - **Resources**: `statefulsets`
+- **Verbs**: `get`, `patch`
+- **Scope**: Namespace-scoped (`open-cluster-management-observability`)
+- **Purpose**: Scale Thanos compactor during primary hub preparation
+
+#### StatefulSet Scale Subresource
+- **Resources**: `statefulsets/scale`
 - **Verbs**: `get`, `patch`
 - **Scope**: Namespace-scoped (`open-cluster-management-observability`)
 - **Purpose**: Scale Thanos compactor during primary hub preparation
@@ -155,32 +165,34 @@ The RBAC model is designed following the principle of least privilege:
 
 #### MultiClusterHubs
 - **Resources**: `multiclusterhubs`
-- **Verbs**: `get`, `list`
-- **Scope**: Cluster-wide
+- **Verbs**: `get`, `list` cluster-wide; `list` in `open-cluster-management` for namespaced discovery
+- **Scope**: Cluster-wide and namespace-scoped (`open-cluster-management`)
 - **Purpose**: 
   - Detect ACM version
   - Verify ACM operator installation
+  - Discover namespaced `MultiClusterHub` resources before decommission
 
 ### Observability API Group (observability.open-cluster-management.io)
 
 #### MultiClusterObservabilities
 - **Resources**: `multiclusterobservabilities`
-- **Verbs**: `get`, `list`
+- **Verbs**: `get`, `list`, `delete`
 - **Scope**: Cluster-wide
 - **Purpose**: 
   - Auto-detect observability component presence
+  - Delete old-hub `MultiClusterObservability` during normal finalization when the old hub is kept as secondary
 
 ### Route API Group (route.openshift.io/v1) - OpenShift Only
 
 #### Routes
 - **Resources**: `routes`
-- **Verbs**: `get`, `list`
-- **Scope**: Namespace-scoped (various)
+- **Verbs**: `get`
+- **Scope**: Namespace-scoped (`open-cluster-management-observability`)
 - **Purpose**: Retrieve route hostnames for connectivity verification
 
-### Argo CD API Groups (validated automatically when ArgoCD CRD is detected; additional write permissions required with `--argocd-manage`)
+### Argo CD API Groups (validated automatically when Argo CD detection is enabled; additional write permissions required with `--argocd-manage`)
 
-These permissions are validated during preflight only when Argo CD detection is requested. The exact permissions required depend on the Argo CD install type detected on the cluster:
+These permissions are validated during preflight when GitOps checks are enabled. The validator first checks for `applications.argoproj.io` to distinguish "no Argo CD installed" from a vanilla install, then uses `argocds.argoproj.io` to detect operator-managed installs. The exact permissions required depend on the Argo CD install type detected on the cluster:
 
 #### All Argo CD installs (vanilla and operator)
 - **Resources**: `applications.argoproj.io` (get, list)
@@ -197,7 +209,8 @@ These permissions are validated during preflight only when Argo CD detection is 
 - **Scope**: Cluster-wide
 - **Purpose**: Remove auto-sync from ACM-touching Applications
 
-> **Note**: On vanilla Argo CD installs (no `argocds` CRD), `argocds` permissions are **not** required. The preflight RBAC validator automatically detects the install type and skips the `argocds` check when appropriate.
+> **Note**: On vanilla Argo CD installs (no `argocds` CRD), `argocds` permissions are **not** required. When `applications.argoproj.io` is also absent, Argo CD RBAC checks are skipped entirely. The Python CLI and Ansible collection now follow the same install-type detection rules.
+> RBAC bootstrap validation checks the permissions shipped by the selected manifests. For the operator role this includes `patch` on `applications.argoproj.io`, because the baseline operator role supports `--argocd-manage`.
 
 ## Namespace-Scoped vs Cluster-Scoped Permissions
 
@@ -206,21 +219,27 @@ These resources require ClusterRole and ClusterRoleBinding:
 - `namespaces` (validation only)
 - `managedclusters` (ACM-wide operations)
 - `multiclusterhubs` (ACM version detection)
-- `multiclusterobservabilities` (auto-detection)
+- `multiclusterobservabilities` (auto-detection and old-hub finalization cleanup)
 - `clusterdeployments` (safety validation)
 
 ### Optional Decommission Extension
 
-Delete permissions for old-hub teardown are intentionally separated from the default operator role.
+Most delete permissions for old-hub teardown are intentionally separated from the default operator role. The baseline operator role includes `delete` on `multiclusterobservabilities` because normal finalization deletes old-hub MCO when observability was detected and the old hub is kept as secondary.
 
 - **ClusterRole**: `acm-switchover-decommission`
 - **ClusterRoleBinding**: `acm-switchover-decommission`
 - **Additional verbs**:
   - `delete` on `managedclusters`
-  - `delete` on `multiclusterhubs`
-  - `delete` on `multiclusterobservabilities`
+  - `delete` on cluster-scoped `multiclusterhubs`
+  - `delete` on `multiclusterobservabilities` (also present in the baseline operator role for normal finalization)
+
+The baseline operator Role includes only `list` on namespaced `multiclusterhubs` in `open-cluster-management`.
+ManagedCluster and MultiClusterHub delete access remains in the opt-in decommission extension so ordinary switchover operators do not receive hub teardown privileges.
 
 Grant this extension only to service accounts that are allowed to run `--decommission`. The baseline operator role is sufficient for validation, switchover, and post-activation/finalization work.
+Validator/read-only roles must not request this extension.
+
+RBAC validators construct access reviews using Kubernetes API semantics: resources with subresources, such as `statefulsets/scale`, are checked as `resource=statefulsets` and `subresource=scale`.
 
 ### Namespace-Scoped Resources
 These resources use Role and RoleBinding for specific namespaces:
@@ -239,12 +258,25 @@ These resources use Role and RoleBinding for specific namespaces:
 - `pods` (get, list)
 - `deployments` (get, patch)
 - `statefulsets` (get, patch)
+- `statefulsets/scale` (get, patch)
+- `routes` (get)
 
 #### multicluster-engine
 - `configmaps` (get, create, patch, delete)
 
 #### open-cluster-management (if needed)
-- Additional namespace-scoped operations as required
+- `pods` (get, list)
+- `multiclusterhubs` (list - operator.open-cluster-management.io) for namespaced ACM hub discovery
+
+### Managed-Cluster (Spoke) RBAC
+
+Managed-cluster klusterlet remediation uses a separate RBAC surface in the `open-cluster-management-agent` namespace on spoke clusters:
+
+- `secrets` (`get`, `create`, `delete`) for operator remediation
+- `deployments` (`get`, `patch`) for operator remediation
+- `secrets` (`get`) and `deployments` (`get`) for validator/read-only inspection
+
+This spoke RBAC is a separate prerequisite from hub preflight validation. Hub preflight validates only hub-cluster access; it does not prove that managed-cluster kubeconfigs have the optional klusterlet remediation permissions.
 
 ## Security Considerations
 
@@ -264,12 +296,13 @@ These resources use Role and RoleBinding for specific namespaces:
      - No wildcard permissions granted
      - No access to RoleBindings or ClusterRoleBindings
      - Read-only validator role for non-destructive operations
-     - ManagedCluster patch permissions limited to specific annotations
+     - The automation only patches documented `ManagedCluster` annotations, but Kubernetes RBAC cannot restrict `patch` to specific JSON paths, fields, annotations, or subfields. Use admission policy and audit controls if your environment requires field-level enforcement.
 
 3. **Data Deletion**
    - **Risk**: Accidental or malicious deletion of critical resources
    - **Mitigation**: 
-     - Cluster-scoped delete permissions are isolated in an opt-in decommission-only role
+     - `ManagedCluster` and `MultiClusterHub` delete permissions are isolated in an opt-in decommission-only role
+     - Baseline `MultiClusterObservability` delete is required for normal old-hub finalization and is validated only when observability was detected; verified absence avoids the requirement
      - Pre-flight checks verify `preserveOnDelete=true` on ClusterDeployments
      - State tracking prevents repeat destructive operations
      - Dry-run mode available for validation

@@ -1,0 +1,17 @@
+---
+- name: Write preflight report artifact
+  tomazb.acm_switchover.acm_preflight_report:
+    phase: preflight
+    hubs: "{{ acm_switchover_hubs }}"
+    results: "{{ acm_switchover_validation_results | default([]) }}"
+    path: "{{ (acm_switchover_execution.report_dir | default('./artifacts')) ~ '/preflight-report.json' }}"
+  register: acm_switchover_preflight_report
+
+- name: Publish stable role result contract
+  ansible.builtin.set_fact:
+    acm_switchover_preflight_result:
+      phase: preflight
+      status: "{{ acm_switchover_preflight_report.report.status }}"
+      changed: "{{ acm_switchover_preflight_report.changed }}"
+      report: "{{ acm_switchover_preflight_report.report }}"
+      path: "{{ acm_switchover_preflight_report.path }}"

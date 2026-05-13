@@ -1,0 +1,58 @@
+---
+- name: Check for oc or kubectl on the controller
+  ansible.builtin.command: sh -c 'command -v oc || command -v kubectl'
+  changed_when: false
+  failed_when: false
+  register: acm_controller_cluster_cli_check
+
+- name: Check for jq on the controller
+  ansible.builtin.command: sh -c 'command -v jq'
+  changed_when: false
+  failed_when: false
+  register: acm_controller_jq_check
+
+- name: Record controller cluster CLI advisory
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-tooling-cluster-cli",
+            "severity": "warning",
+            "status": "pass" if acm_controller_cluster_cli_check.rc == 0 else "fail",
+            "message": "oc or kubectl is available on the Ansible controller"
+              if acm_controller_cluster_cli_check.rc == 0
+              else "oc or kubectl is not available on the Ansible controller",
+            "details": {
+              "path": acm_controller_cluster_cli_check.stdout | default("")
+            },
+            "recommended_action": "Install oc or kubectl on the controller for parity with Python CLI preflight tooling checks and manual recovery commands"
+              if acm_controller_cluster_cli_check.rc != 0
+              else None
+          }
+        ]
+      }}
+
+- name: Record controller jq advisory
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-tooling-jq",
+            "severity": "warning",
+            "status": "pass" if acm_controller_jq_check.rc == 0 else "fail",
+            "message": "jq is available on the Ansible controller"
+              if acm_controller_jq_check.rc == 0
+              else "jq is not available on the Ansible controller",
+            "details": {
+              "path": acm_controller_jq_check.stdout | default("")
+            },
+            "recommended_action": "Install jq on the controller for parity with Python CLI optional tooling guidance"
+              if acm_controller_jq_check.rc != 0
+              else None
+          }
+        ]
+      }}

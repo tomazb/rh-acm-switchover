@@ -6,7 +6,7 @@ Secondary hub activation module for ACM switchover.
 
 import logging
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from kubernetes.client.rest import ApiException
 
@@ -24,6 +24,7 @@ from lib.constants import (
     MCE_NAMESPACE,
     PATCH_VERIFY_MAX_RETRIES,
     PATCH_VERIFY_RETRY_DELAY,
+    PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
     RESTORE_ALREADY_AVAILABLE_MARKER,
     RESTORE_FAST_POLL_INTERVAL,
     RESTORE_FAST_POLL_TIMEOUT,
@@ -39,8 +40,8 @@ from lib.constants import (
 from lib.exceptions import FatalError, SwitchoverError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
-from lib.utils import StateManager, is_acm_version_ge
-from lib.waiter import wait_for_condition
+from lib.utils import Phase, StateManager, is_acm_version_ge
+from lib.waiter import WaitConditionResult, wait_for_condition
 
 from .restore_discovery import find_passive_sync_restore
 
@@ -63,6 +64,8 @@ class SecondaryActivation:
         manage_auto_import_strategy: bool = False,
         old_hub_action: str = "secondary",
         min_managed_clusters: int = MIN_MANAGED_CLUSTERS,
+        expected_managed_cluster_names: Optional[List[str]] = None,
+        enforce_expected_managed_cluster_names: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -71,9 +74,12 @@ class SecondaryActivation:
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.old_hub_action = old_hub_action
         self.min_managed_clusters = min_managed_clusters
+        self.expected_managed_cluster_names = sorted(expected_managed_cluster_names or [])
+        self.enforce_expected_managed_cluster_names = enforce_expected_managed_cluster_names
         # Cache for discovered passive sync restore name
         self._passive_sync_restore_name: Optional[str] = None
         self._activation_restore_name: Optional[str] = None
+        self._require_new_velero_restore_signal = True
 
     def _get_passive_sync_restore_name(self) -> str:
         """
@@ -154,11 +160,11 @@ class SecondaryActivation:
 
         except SwitchoverError as e:
             logger.error("Secondary hub activation failed: %s", e)
-            self.state.add_error(str(e), "activation")
+            self.state.add_error(str(e), Phase.ACTIVATION.value)
             return False
         except (RuntimeError, ValueError) as e:
             logger.error("Unexpected error during activation: %s", e)
-            self.state.add_error(f"Unexpected: {str(e)}", "activation")
+            self.state.add_error(f"Unexpected: {str(e)}", Phase.ACTIVATION.value)
             return False
         except Exception as e:
             # Log programming errors but re-raise so they're not hidden
@@ -225,7 +231,15 @@ class SecondaryActivation:
         restore_before = self._get_restore_or_raise(restore_name)
 
         if self._activation_already_applied(restore_before):
+            self.state.set_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+            self._require_new_velero_restore_signal = False
             return
+
+        self.state.set_config(
+            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
+            restore_before.get("status", {}).get("veleroManagedClustersRestoreName"),
+        )
+        self._require_new_velero_restore_signal = True
 
         patch = self._build_activation_patch()
         logger.info("PATCHING: Applying patch = %s", patch)
@@ -255,6 +269,8 @@ class SecondaryActivation:
         logger.info("Activating managed clusters via activation restore (Option B)...")
 
         self._activation_restore_name = MANAGED_CLUSTER_RESTORE_NAME
+        self.state.set_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+        self._require_new_velero_restore_signal = False
 
         # Discover passive sync restore if it still exists; tolerate missing restore on resume
         restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
@@ -263,7 +279,6 @@ class SecondaryActivation:
         passive_restore_deleted = False
 
         if restore_name:
-            assert restore is not None  # Guaranteed by restore_name extraction
             passive_restore_snapshot = self._build_restore_snapshot(restore)
             try:
                 logger.info("Deleting passive sync restore %s before activation restore", restore_name)
@@ -405,10 +420,10 @@ class SecondaryActivation:
             )
 
             if not restore:
-                return True, "deleted"
+                return WaitConditionResult.complete("deleted")
 
             phase = restore.get("status", {}).get("phase", "unknown")
-            return False, f"still present (phase={phase})"
+            return WaitConditionResult.pending(f"still present (phase={phase})")
 
         completed = wait_for_condition(
             f"deletion of restore {restore_name}",
@@ -626,6 +641,8 @@ class SecondaryActivation:
             )
             self.state.set_config("auto_import_strategy_set", True)
         except Exception as e:
+            if self.manage_auto_import_strategy:
+                raise SwitchoverError(f"Failed to manage autoImportStrategy on destination hub: {e}") from e
             logger.warning("Unable to manage auto-import strategy: %s", e)
 
     def _get_auto_import_strategy(self) -> str:
@@ -740,8 +757,11 @@ class SecondaryActivation:
         # Delete any existing passive-sync restore first — ACM only allows one active
         # Restore resource at a time; a full restore will be rejected if one is active.
         passive_restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
+        passive_restore_snapshot: Optional[Dict] = None
+        passive_restore_deleted = False
         if passive_restore:
             passive_name = passive_restore["metadata"]["name"]
+            passive_restore_snapshot = self._build_restore_snapshot(passive_restore)
             logger.info(
                 "Deleting existing passive sync restore %s before creating full restore",
                 passive_name,
@@ -755,6 +775,7 @@ class SecondaryActivation:
                     namespace=BACKUP_NAMESPACE,
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
                 )
+                passive_restore_deleted = True
                 self._wait_for_restore_deletion(passive_name)
             except ApiException as e:
                 if getattr(e, "status", None) == 404:
@@ -791,13 +812,29 @@ class SecondaryActivation:
             },
         }
 
-        self.secondary.create_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
-            body=restore_body,
-            namespace=BACKUP_NAMESPACE,
-        )
+        try:
+            self.secondary.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body=restore_body,
+                namespace=BACKUP_NAMESPACE,
+            )
+        except Exception as e:
+            if passive_restore_deleted and passive_restore_snapshot:
+                passive_name = passive_restore_snapshot.get("metadata", {}).get("name", RESTORE_PASSIVE_SYNC_NAME)
+                try:
+                    self._recreate_restore_from_snapshot(passive_restore_snapshot)
+                except Exception as rollback_error:
+                    raise FatalError(
+                        f"Failed to create full restore {RESTORE_FULL_NAME}: {e}. "
+                        f"Rollback failed to recreate passive sync restore {passive_name}: {rollback_error}"
+                    ) from e
+                raise FatalError(
+                    f"Failed to create full restore {RESTORE_FULL_NAME}: {e}. "
+                    f"Recreated passive sync restore {passive_name} as rollback."
+                ) from e
+            raise FatalError(f"Failed to create full restore {RESTORE_FULL_NAME}: {e}") from e
 
         logger.info("Created %s resource", RESTORE_FULL_NAME)
 
@@ -839,9 +876,9 @@ class SecondaryActivation:
             # For passive sync, "Enabled" means the restore is actively syncing - this is the success state
             # For full restore, "Finished"/"Completed" mean the restore completed
             if self.method == "passive" and phase == "Enabled":
-                return True, message or "passive sync enabled and running"
+                return WaitConditionResult.complete("phase=Enabled")
             if phase in ("Finished", "Completed"):
-                return True, message or "restore completed"
+                return WaitConditionResult.complete(f"phase={phase}")
             if phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
                 if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
@@ -852,12 +889,12 @@ class SecondaryActivation:
                         restore_name,
                         "; ".join(messages),
                     )
-                    return True, message or "restore completed (clusters already available)"
+                    return WaitConditionResult.complete("phase=FinishedWithErrors (clusters already available)")
                 raise FatalError(f"Restore failed: {phase} - {message}")
-            if phase in ("Error", "Failed", "PartiallyFailed", "FailedWithErrors"):
+            if phase in ("Error", "Failed", "PartiallyFailed"):
                 raise FatalError(f"Restore failed: {phase} - {message}")
 
-            return False, f"phase={phase} message={message}"
+            return WaitConditionResult.pending(f"phase={phase}")
 
         completed = wait_for_condition(
             f"restore {restore_name}",
@@ -872,13 +909,17 @@ class SecondaryActivation:
         if not completed:
             raise FatalError(f"Timeout waiting for restore to complete after {timeout}s")
 
-        # For passive sync, wait for the managed clusters Velero restore to actually complete
+        # For passive sync, wait for the managed clusters Velero restore to actually complete.
+        # For full restore, the ACM Restore completion is the terminal signal; then enforce
+        # the ManagedCluster count contract exposed by --min-managed-clusters.
         if self.method == "passive":
             # Skip waiting for Velero restore in dry-run mode since the patch wasn't applied
             if self.secondary.dry_run:
                 logger.info("[DRY-RUN] Skipping wait for Velero managed clusters restore")
             else:
                 self._wait_for_managed_clusters_velero_restore(restore_name, timeout)
+        else:
+            self._wait_for_managed_clusters_restored(timeout)
 
     def _wait_for_managed_clusters_velero_restore(self, restore_name: str, timeout: int = 300):
         """
@@ -894,6 +935,11 @@ class SecondaryActivation:
         the new backups won't contain the managed clusters!
         """
         logger.info("Waiting for managed clusters Velero restore to complete...")
+        previous_velero_restore_name = (
+            self.state.get_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+            if self._require_new_velero_restore_signal
+            else None
+        )
 
         def _poll_velero_restore():
             # Get the ACM restore to find the Velero restore name
@@ -906,13 +952,16 @@ class SecondaryActivation:
             )
 
             if not restore:
-                return False, "ACM restore not found"
+                return WaitConditionResult.pending("ACM restore not found")
 
             status = restore.get("status", {})
             velero_mc_restore_name = status.get("veleroManagedClustersRestoreName")
 
             if not velero_mc_restore_name:
-                return False, "Velero managed clusters restore not yet created"
+                return WaitConditionResult.pending("Velero managed clusters restore not yet created")
+
+            if previous_velero_restore_name and velero_mc_restore_name == previous_velero_restore_name:
+                return WaitConditionResult.pending("waiting for new Velero managed clusters restore")
 
             # Check the Velero restore status
             velero_restore = self.secondary.get_custom_resource(
@@ -924,7 +973,7 @@ class SecondaryActivation:
             )
 
             if not velero_restore:
-                return False, f"Velero restore {velero_mc_restore_name} not found"
+                return WaitConditionResult.pending(f"waiting for Velero restore {velero_mc_restore_name}")
 
             velero_phase = velero_restore.get("status", {}).get("phase", "unknown")
 
@@ -934,11 +983,11 @@ class SecondaryActivation:
                     "Velero managed clusters restore completed: %s items restored",
                     items_restored,
                 )
-                return True, f"completed ({items_restored} items)"
+                return WaitConditionResult.complete(f"phase=Completed ({items_restored} items)")
             if velero_phase in ("Failed", "PartiallyFailed"):
                 raise FatalError(f"Velero managed clusters restore failed: {velero_phase}")
 
-            return False, f"Velero restore phase: {velero_phase}"
+            return WaitConditionResult.pending(f"phase={velero_phase}")
 
         completed = wait_for_condition(
             "Velero managed clusters restore",
@@ -956,6 +1005,54 @@ class SecondaryActivation:
         # Verify ManagedCluster resources actually exist
         self._verify_managed_clusters_restored()
 
+    def _list_restored_managed_cluster_names(self) -> list[str]:
+        """Return non-local ManagedCluster names currently visible on the secondary hub."""
+        managed_clusters = self.secondary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+        names = []
+        for mc in managed_clusters:
+            name = mc.get("metadata", {}).get("name")
+            if name and name != LOCAL_CLUSTER_NAME:
+                names.append(name)
+        return names
+
+    def _wait_for_managed_clusters_restored(self, timeout: int) -> None:
+        """Wait for full-restore ManagedCluster resources before enforcing the minimum."""
+        if self.min_managed_clusters == 0:
+            self._verify_managed_clusters_restored()
+            return
+
+        def _poll_managed_clusters():
+            non_local_clusters = self._list_restored_managed_cluster_names()
+            count = len(non_local_clusters)
+            missing_expected = sorted(set(self.expected_managed_cluster_names) - set(non_local_clusters))
+            if self.enforce_expected_managed_cluster_names and missing_expected:
+                return WaitConditionResult.pending(
+                    f"found {count}/{self.min_managed_clusters} ManagedCluster(s); "
+                    f"missing expected: {missing_expected}"
+                )
+            if count >= self.min_managed_clusters:
+                return WaitConditionResult.complete(f"found {count} ManagedCluster(s): {', '.join(non_local_clusters)}")
+            return WaitConditionResult.pending(
+                f"found {count}/{self.min_managed_clusters} ManagedCluster(s): {non_local_clusters}"
+            )
+
+        completed = wait_for_condition(
+            "full-restore ManagedCluster resources",
+            _poll_managed_clusters,
+            timeout=timeout,
+            interval=RESTORE_POLL_INTERVAL,
+            fast_interval=RESTORE_FAST_POLL_INTERVAL,
+            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
+            logger=logger,
+        )
+
+        if not completed:
+            self._verify_managed_clusters_restored()
+
     def _verify_managed_clusters_restored(self):
         """
         Verify that ManagedCluster resources were actually restored.
@@ -964,21 +1061,21 @@ class SecondaryActivation:
         the managed clusters before we proceed with creating a BackupSchedule.
         """
         logger.info("Verifying ManagedCluster resources were restored...")
-
-        managed_clusters = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
-        )
-
-        # Count non-local clusters
-        non_local_clusters = [
-            mc.get("metadata", {}).get("name")
-            for mc in managed_clusters
-            if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
-        ]
-
+        non_local_clusters = self._list_restored_managed_cluster_names()
         count = len(non_local_clusters)
+
+        missing_expected = sorted(set(self.expected_managed_cluster_names) - set(non_local_clusters))
+        if self.enforce_expected_managed_cluster_names and missing_expected:
+            raise FatalError(
+                "Missing expected ManagedCluster(s) after restore: "
+                f"{', '.join(missing_expected)}. Found {count}: {non_local_clusters}"
+            )
+
+        if self.enforce_expected_managed_cluster_names and count < self.min_managed_clusters:
+            raise FatalError(
+                f"Expected {self.min_managed_clusters} ManagedCluster(s) from primary preflight after restore, "
+                f"but found only {count}: {non_local_clusters}"
+            )
 
         if self.min_managed_clusters == 0:
             if count == 0:

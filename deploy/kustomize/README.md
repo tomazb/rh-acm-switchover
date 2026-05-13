@@ -27,6 +27,8 @@ kubectl apply -k deploy/kustomize/base/
 kubectl get sa,clusterrole,role,clusterrolebinding,rolebinding -n acm-switchover
 ```
 
+This base applies the baseline operator/validator RBAC only. It does **not** include the optional decommission extension.
+
 ### Deploy with Production Overlay
 
 ```bash
@@ -71,6 +73,17 @@ Roles created in the following namespaces:
 
 ### RoleBindings
 - Binds namespace-scoped Roles to ServiceAccounts
+
+### Optional Decommission Extension
+
+Old-hub teardown permissions are split out of the baseline Kustomize base. If the same operator service account must also run `--decommission`, apply the optional decommission extension separately:
+
+```bash
+kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
+kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
+```
+
+This keeps the default Kustomize deployment least-privilege while still supporting the decommission workflow when explicitly requested.
 
 ## Using Service Accounts
 
@@ -188,6 +201,13 @@ kubectl get rolebinding -n open-cluster-management-observability
 kubectl get rolebinding -n multicluster-engine
 ```
 
+If you applied the optional decommission extension, also verify:
+
+```bash
+kubectl get clusterrole acm-switchover-operator-decommission
+kubectl get clusterrolebinding acm-switchover-operator-decommission
+```
+
 ### Verify Permissions
 
 ```bash
@@ -205,6 +225,13 @@ kubectl auth can-i get backupschedules \
   --as=system:serviceaccount:acm-switchover:acm-switchover-validator \
   -n open-cluster-management-backup
 # Should return "yes"
+```
+
+If you applied the optional decommission extension, verify one of the teardown-only permissions too:
+
+```bash
+kubectl auth can-i delete managedclusters.cluster.open-cluster-management.io \
+  --as=system:serviceaccount:acm-switchover:acm-switchover-operator
 ```
 
 ## Cleanup

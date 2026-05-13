@@ -7,10 +7,28 @@ import logging
 from typing import Any, Dict, List
 
 from lib.constants import BACKUP_NAMESPACE
+from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, is_acm_version_ge
 
 logger = logging.getLogger("acm_switchover")
+
+
+def _backup_schedule_names(schedules: List[Dict[str, Any]]) -> str:
+    names = [schedule.get("metadata", {}).get("name") or "<unnamed>" for schedule in schedules]
+    return ", ".join(names)
+
+
+def fail_on_multiple_backup_schedules(schedules: List[Dict[str, Any]], hub_label: str) -> None:
+    """Reject ambiguous BackupSchedule state before choosing one."""
+    if len(schedules) <= 1:
+        return
+
+    raise SwitchoverError(
+        "Multiple BackupSchedules found on "
+        f"{hub_label}: {_backup_schedule_names(schedules)}. "
+        "Refusing to choose one automatically."
+    )
 
 
 class BackupScheduleManager:
@@ -31,6 +49,7 @@ class BackupScheduleManager:
     def ensure_enabled(self, acm_version: str) -> None:
         """Ensure a BackupSchedule exists and is not paused."""
         schedules = self._list_schedules()
+        fail_on_multiple_backup_schedules(schedules, self.hub_label)
         if not schedules:
             self._restore_saved_schedule()
             return
@@ -86,7 +105,7 @@ class BackupScheduleManager:
             version="v1beta1",
             plural="backupschedules",
             namespace=BACKUP_NAMESPACE,
-            max_items=1,
+            max_items=2,
         )
 
     def _restore_saved_schedule(self) -> None:

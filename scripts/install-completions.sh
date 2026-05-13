@@ -25,6 +25,17 @@ SRC_DIR="${REPO_ROOT}/completions"
 SYSTEM_DIR="/usr/share/bash-completion/completions"
 USER_DIR="${HOME}/.local/share/bash-completion/completions"
 MODE="auto"
+EXPECTED_COMPLETION_FILES=(
+    "_acm_completion_lib.sh"
+    "acm_switchover.py"
+    "check_rbac.py"
+    "discover-hub.sh"
+    "generate-merged-kubeconfig.sh"
+    "generate-sa-kubeconfig.sh"
+    "postflight-check.sh"
+    "preflight-check.sh"
+    "show_state.py"
+)
 
 print_help() {
     sed -n '1,25p' "$0"
@@ -62,7 +73,15 @@ test_completion() {
     local found=0
     local locations=("${SYSTEM_DIR}" "${USER_DIR}")
     for dir in "${locations[@]}"; do
-        if [[ -f "${dir}/acm_switchover.py" && -f "${dir}/_acm_completion_lib.sh" ]]; then
+        local all_present=1
+        local file=""
+        for file in "${EXPECTED_COMPLETION_FILES[@]}"; do
+            if [[ ! -f "${dir}/${file}" ]]; then
+                all_present=0
+                break
+            fi
+        done
+        if [[ $all_present -eq 1 ]]; then
             echo "Found completions in ${dir}"
             found=1
         fi

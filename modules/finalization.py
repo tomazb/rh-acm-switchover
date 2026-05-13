@@ -5,11 +5,10 @@
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from kubernetes.client.rest import ApiException
 
-from lib import argocd as argocd_lib
 from lib.constants import (
     ACM_BACKUP_NAME_RE,
     ACM_BACKUP_SCHEDULE_TYPE_LABEL,
@@ -22,7 +21,8 @@ from lib.constants import (
     BACKUP_NAMESPACE,
     BACKUP_POLL_INTERVAL,
     BACKUP_SCHEDULE_DEFAULT_NAME,
-    BACKUP_SCHEDULE_DELETE_WAIT,
+    BACKUP_SCHEDULE_DELETE_INTERVAL,
+    BACKUP_SCHEDULE_DELETE_TIMEOUT,
     BACKUP_VERIFY_TIMEOUT,
     CLEANUP_BEFORE_RESTORE_VALUE,
     DELETE_REQUEST_TIMEOUT,
@@ -34,21 +34,23 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
-    OBSERVATORIUM_API_DEPLOYMENT,
+    RESTORE_FAST_POLL_INTERVAL,
+    RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_PASSIVE_SYNC_NAME,
+    RESTORE_POLL_INTERVAL,
+    RESTORE_WAIT_TIMEOUT,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
-    THANOS_COMPACTOR_STATEFULSET,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
 )
-from lib.exceptions import SwitchoverError, TransientError
+from lib.exceptions import FatalError, SwitchoverError, TransientError
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient, is_retryable_error
-from lib.utils import StateManager, dry_run_skip, is_acm_version_ge
-from lib.waiter import wait_for_condition
+from lib.utils import Phase, StateManager, dry_run_skip, is_acm_version_ge
+from lib.waiter import WaitConditionResult, wait_for_condition
 
-from .backup_schedule import BackupScheduleManager
+from .backup_schedule import BackupScheduleManager, fail_on_multiple_backup_schedules
 from .decommission import Decommission
 
 logger = logging.getLogger("acm_switchover")
@@ -68,7 +70,7 @@ class Finalization:
         old_hub_action: str = "secondary",
         manage_auto_import_strategy: bool = False,
         disable_observability_on_secondary: bool = False,
-        argocd_resume_after_switchover: bool = False,
+        restore_only: bool = False,
     ):
         self.secondary = secondary_client
         self.state = state_manager
@@ -79,7 +81,7 @@ class Finalization:
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
         self.disable_observability_on_secondary = disable_observability_on_secondary
-        self.argocd_resume_after_switchover = argocd_resume_after_switchover
+        self.restore_only = restore_only
         self.backup_manager = BackupScheduleManager(
             secondary_client,
             state_manager,
@@ -189,8 +191,8 @@ class Finalization:
         logger.info("Starting finalization...")
 
         try:
-            # Optional: Disable Observability on the old primary hub before enabling backups
-            if self.disable_observability_on_secondary:
+            # When the old hub remains as a secondary, the runbook requires MCO deletion.
+            if self.primary and self.old_hub_action == "secondary" and self.primary_has_observability:
                 with self.state.step("disable_observability_on_secondary", logger) as should_run:
                     if should_run:
                         self._disable_observability_on_old_hub()
@@ -235,26 +237,16 @@ class Finalization:
                     if should_run:
                         self._verify_old_hub_state()
 
-            # Optional: Restore Argo CD auto-sync only after all finalization work is finished.
-            if self.argocd_resume_after_switchover:
-                if self.old_hub_action == "decommission":
-                    raise SwitchoverError(
-                        "--argocd-resume-after-switchover cannot be used with --old-hub-action decommission"
-                    )
-                with self.state.step("resume_argocd_apps", logger) as should_run:
-                    if should_run:
-                        self._resume_argocd_apps()
-
             logger.info("Finalization completed successfully")
             return True
 
         except SwitchoverError as e:
             logger.error("Finalization failed: %s", e)
-            self.state.add_error(str(e), "finalization")
+            self.state.add_error(str(e), Phase.FINALIZATION.value)
             return False
         except Exception as e:
             logger.error("Unexpected error during finalization: %s", e)
-            self.state.add_error(f"Unexpected: {str(e)}", "finalization")
+            self.state.add_error(f"Unexpected: {str(e)}", Phase.FINALIZATION.value)
             return False
 
     def _enable_backup_schedule(self):
@@ -397,6 +389,12 @@ class Finalization:
         Args:
             timeout: Maximum wait time in seconds
         """
+
+        if self._restore_only_missing_backup_schedule():
+            logger.warning(
+                "Skipping backup continuity verification in restore-only mode because no BackupSchedule exists yet"
+            )
+            return
 
         logger.info("Verifying new backups are being created...")
 
@@ -700,6 +698,12 @@ class Finalization:
         Falls back to the latest-by-timestamp backup (with a warning) only when no
         recorded name is available (e.g. during a dry-run).
         """
+        if self._restore_only_missing_backup_schedule():
+            logger.warning(
+                "Skipping backup integrity verification in restore-only mode because no BackupSchedule exists yet"
+            )
+            return
+
         logger.info("Verifying backup integrity...")
         effective_max_age_seconds = self._get_backup_max_age_seconds(max_age_seconds)
 
@@ -759,7 +763,7 @@ class Finalization:
             if phase in ("New", "InProgress", "Finalizing"):
                 backup_verify_timeout = self._get_backup_verify_timeout()
 
-                def _poll_backup_completion() -> Tuple[bool, str]:
+                def _poll_backup_completion() -> WaitConditionResult:
                     backup = self.secondary.get_custom_resource(
                         group="velero.io",
                         version="v1",
@@ -771,10 +775,10 @@ class Finalization:
                         raise SwitchoverError(f"Backup {backup_name} disappeared during integrity check")
                     poll_phase = backup.get("status", {}).get("phase", "unknown")
                     if poll_phase == "Completed":
-                        return True, "completed"
+                        return WaitConditionResult.complete("phase=Completed")
                     if poll_phase in ("Failed", "PartiallyFailed"):
                         raise SwitchoverError(f"Latest backup {backup_name} failed (phase={poll_phase})")
-                    return False, f"phase={poll_phase}"
+                    return WaitConditionResult.pending(f"phase={poll_phase}")
 
                 completed = wait_for_condition(
                     f"backup {backup_name} completion",
@@ -864,9 +868,18 @@ class Finalization:
                 version="v1beta1",
                 plural="backupschedules",
                 namespace=BACKUP_NAMESPACE,
-                max_items=1,
+                max_items=2,
             )
+        fail_on_multiple_backup_schedules(self._cached_schedules, "secondary hub")
         return self._cached_schedules
+
+    def _restore_only_missing_backup_schedule(self, schedules: Optional[List[Dict]] = None) -> bool:
+        """Return True when restore-only finalization should tolerate no BackupSchedule."""
+        if not self.restore_only:
+            return False
+        if schedules is None:
+            schedules = self._get_backup_schedules()
+        return not schedules
 
     @dry_run_skip(message="Skipping BackupSchedule verification")
     def _verify_backup_schedule_enabled(self):
@@ -875,10 +888,15 @@ class Finalization:
         schedules = self._get_backup_schedules()
 
         if not schedules:
+            if self._restore_only_missing_backup_schedule(schedules):
+                logger.warning(
+                    "No BackupSchedule found during restore-only finalization; manual backup setup is required"
+                )
+                return
             raise SwitchoverError("No BackupSchedule found while verifying finalization")
 
         schedule = schedules[0]
-        schedule_name = schedule.get("metadata", {}).get("name", "schedule-rhacm")
+        schedule_name = schedule.get("metadata", {}).get("name", BACKUP_SCHEDULE_DEFAULT_NAME)
         paused = schedule.get("spec", {}).get("paused", False)
 
         if paused:
@@ -1015,11 +1033,10 @@ class Finalization:
             return
 
         def _observability_terminated():
-            assert self.primary is not None  # Guaranteed by guard at method entry
             pods = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
             if not pods:
-                return True, "no observability pods remaining"
-            return False, f"{len(pods)} pod(s) remaining"
+                return WaitConditionResult.complete("no observability pods remaining")
+            return WaitConditionResult.pending(f"{len(pods)} pod(s) remaining")
 
         success = wait_for_condition(
             "observability pod termination on old hub",
@@ -1032,10 +1049,10 @@ class Finalization:
         if not success:
             remaining = self.primary.get_pods(namespace=OBSERVABILITY_NAMESPACE)
             if remaining:
-                logger.warning(
-                    "Observability pods still running after MCO deletion (%s pods). "
-                    "If GitOps is not recreating MCO, this may indicate a product bug.",
-                    len(remaining),
+                raise SwitchoverError(
+                    "Observability pods still running after MCO deletion "
+                    f"({len(remaining)} pods). If GitOps is not recreating MCO, "
+                    "this may indicate a product bug."
                 )
 
     def _handle_old_hub(self):
@@ -1114,7 +1131,9 @@ class Finalization:
 
         logger.info("Setting up old primary hub as new secondary...")
 
-        # Check if restore already exists
+        # Always delete and recreate the passive-sync restore. Even when the spec
+        # already says "skip", stale status/controller state can leave the old hub
+        # without a usable passive-sync restore for the next failback.
         existing_restore = self.primary.get_custom_resource(
             group="cluster.open-cluster-management.io",
             version="v1beta1",
@@ -1124,8 +1143,25 @@ class Finalization:
         )
 
         if existing_restore:
-            logger.info("Passive sync restore already exists on old primary")
-            return
+            mc_backup = existing_restore.get("spec", {}).get(SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME)
+            logger.info(
+                "Existing passive sync restore on old primary has veleroManagedClustersBackupName=%s; "
+                "deleting it so finalization creates a fresh passive-sync restore",
+                mc_backup or "unknown",
+            )
+            try:
+                self.primary.delete_custom_resource(
+                    group="cluster.open-cluster-management.io",
+                    version="v1beta1",
+                    plural="restores",
+                    name=RESTORE_PASSIVE_SYNC_NAME,
+                    namespace=BACKUP_NAMESPACE,
+                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
+                )
+            except ApiException as e:
+                raise SwitchoverError("Failed to delete stale passive sync restore on old primary hub") from e
+
+            self._wait_for_primary_restore_deletion(RESTORE_PASSIVE_SYNC_NAME)
 
         # Create passive sync restore on old primary
         restore_body = {
@@ -1157,6 +1193,37 @@ class Finalization:
             raise SwitchoverError("Failed to create passive sync restore on old primary hub") from e
         logger.info("Created passive sync restore on old primary hub")
 
+    def _wait_for_primary_restore_deletion(self, restore_name: str, timeout: int = RESTORE_WAIT_TIMEOUT) -> None:
+        """Wait until a restore resource is fully deleted from the old primary hub."""
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping wait for deletion of %s on primary", restore_name)
+            return
+
+        def _poll():
+            restore = self.primary.get_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                name=restore_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not restore:
+                return WaitConditionResult.complete("deleted")
+            phase = restore.get("status", {}).get("phase", "unknown")
+            return WaitConditionResult.pending(f"still present (phase={phase})")
+
+        completed = wait_for_condition(
+            f"deletion of restore {restore_name} on primary",
+            _poll,
+            timeout=timeout,
+            interval=RESTORE_POLL_INTERVAL,
+            fast_interval=RESTORE_FAST_POLL_INTERVAL,
+            fast_timeout=RESTORE_FAST_POLL_TIMEOUT,
+            logger=logger,
+        )
+        if not completed:
+            raise FatalError(f"Timeout waiting for restore {restore_name} to be deleted on primary after {timeout}s")
+
     @dry_run_skip(message="Would recreate BackupSchedule to prevent collision")
     def _fix_backup_schedule_collision(self):
         """
@@ -1175,6 +1242,11 @@ class Finalization:
         schedules = self._get_backup_schedules(force_refresh=True)
 
         if not schedules:
+            if self._restore_only_missing_backup_schedule(schedules):
+                logger.warning(
+                    "Skipping BackupSchedule collision repair in restore-only mode because no BackupSchedule exists yet"
+                )
+                return
             raise SwitchoverError("No BackupSchedule found on new primary while repairing collision state")
 
         schedule = schedules[0]
@@ -1242,31 +1314,7 @@ class Finalization:
                 else:
                     raise
 
-        # Wait a moment for deletion to complete (even if already deleted, wait for API sync)
-        time.sleep(BACKUP_SCHEDULE_DELETE_WAIT)
-
-        # Re-check before create to avoid racing with external controllers/processes
-        schedule_after_delete = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
-            name=schedule_name,
-            namespace=BACKUP_NAMESPACE,
-        )
-        if schedule_after_delete:
-            after_uid = schedule_after_delete.get("metadata", {}).get("uid")
-            self._cached_schedules = None
-            if schedule_uid and after_uid and after_uid != schedule_uid:
-                raise SwitchoverError(
-                    "BackupSchedule %s reappeared with a different uid (%s, previous=%s) after deletion. "
-                    "Manual verification is required before retrying collision repair."
-                    % (schedule_name, after_uid, schedule_uid)
-                )
-            raise SwitchoverError(
-                "BackupSchedule %s still present (uid=%s) after deletion attempt. "
-                "Deletion has not completed; manual verification is required before retrying collision repair."
-                % (schedule_name, after_uid or "unknown")
-            )
+            self._wait_for_backup_schedule_deletion(schedule_name, schedule_uid)
 
         # Recreate the schedule
         try:
@@ -1336,6 +1384,64 @@ class Finalization:
         except Exception as e:
             raise SwitchoverError(f"Failed to recreate BackupSchedule {schedule_name}: {e}") from e
 
+    def _wait_for_backup_schedule_deletion(
+        self,
+        schedule_name: str,
+        schedule_uid: Optional[str],
+        timeout: int = BACKUP_SCHEDULE_DELETE_TIMEOUT,
+        interval: int = BACKUP_SCHEDULE_DELETE_INTERVAL,
+    ) -> None:
+        """Wait until a deleted BackupSchedule is absent before recreating it."""
+
+        def _poll_schedule_absence() -> WaitConditionResult:
+            schedule = self.secondary.get_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="backupschedules",
+                name=schedule_name,
+                namespace=BACKUP_NAMESPACE,
+            )
+            if not schedule:
+                return WaitConditionResult.complete("absent")
+
+            current_uid = schedule.get("metadata", {}).get("uid")
+            if schedule_uid and current_uid and current_uid != schedule_uid:
+                raise SwitchoverError(
+                    "BackupSchedule %s reappeared with a different uid (%s, previous=%s) after deletion. "
+                    "Manual verification is required before retrying collision repair."
+                    % (schedule_name, current_uid, schedule_uid)
+                )
+            return WaitConditionResult.pending("still present (uid=%s)" % (current_uid or "unknown"))
+
+        deleted = wait_for_condition(
+            f"BackupSchedule {schedule_name} deletion",
+            _poll_schedule_absence,
+            timeout=timeout,
+            interval=interval,
+            logger=logger,
+        )
+        if deleted:
+            return
+
+        self._cached_schedules = None
+        schedule_after_delete = self.secondary.get_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name=schedule_name,
+            namespace=BACKUP_NAMESPACE,
+        )
+        if not schedule_after_delete:
+            logger.info("BackupSchedule %s deleted after final re-check", schedule_name)
+            return
+
+        after_uid = (schedule_after_delete or {}).get("metadata", {}).get("uid")
+        raise SwitchoverError(
+            "BackupSchedule %s still present (uid=%s) after deletion attempt. "
+            "Deletion has not completed; manual verification is required before retrying collision repair."
+            % (schedule_name, after_uid or "unknown")
+        )
+
     def _verify_old_hub_state(self):
         """Run regression checks on the old (primary) hub."""
         if not self.primary:
@@ -1382,170 +1488,6 @@ class Finalization:
                 logger.info("Old hub BackupSchedule remains paused as expected")
             else:
                 logger.warning("Old hub BackupSchedule is not paused")
-
-        if self.primary_has_observability:
-            self._scale_down_old_hub_observability()
-
-    def _scale_down_old_hub_observability(self) -> None:
-        """
-        Scale down observability components on the old primary hub.
-
-        Scales thanos-compact and observatorium-api to 0 replicas, then waits
-        for pods to terminate with polling. Reports status of scale-down operation.
-        """
-        assert self.primary is not None  # Guaranteed by guard at _verify_old_hub_state entry
-        # Check both thanos-compact and observatorium-api pods
-        compactor_pods = self.primary.get_pods(
-            namespace=OBSERVABILITY_NAMESPACE,
-            label_selector="app.kubernetes.io/name=thanos-compact",
-        )
-        api_pods = self.primary.get_pods(
-            namespace=OBSERVABILITY_NAMESPACE,
-            label_selector="app.kubernetes.io/name=observatorium-api",
-        )
-
-        # Issue scale-down commands (dry-run aware)
-        if not self.dry_run:
-            if compactor_pods:
-                logger.info("Scaling down thanos-compact on old hub")
-                self.primary.scale_statefulset(THANOS_COMPACTOR_STATEFULSET, OBSERVABILITY_NAMESPACE, 0)
-
-            if api_pods:
-                logger.info("Scaling down observatorium-api on old hub")
-                self.primary.scale_deployment(OBSERVATORIUM_API_DEPLOYMENT, OBSERVABILITY_NAMESPACE, 0)
-
-        # Wait for pods to terminate with polling
-        compactor_pods_after, api_pods_after = self._wait_for_observability_scale_down(compactor_pods, api_pods)
-
-        # Report status
-        self._report_observability_scale_down_status(compactor_pods, api_pods, compactor_pods_after, api_pods_after)
-
-    def _wait_for_observability_scale_down(
-        self,
-        compactor_pods: List[Dict],
-        api_pods: List[Dict],
-    ) -> Tuple[List[Dict], List[Dict]]:
-        """
-        Wait for observability pods to scale down with polling.
-
-        Args:
-            compactor_pods: Initial thanos-compact pods
-            api_pods: Initial observatorium-api pods
-
-        Returns:
-            Tuple of (compactor_pods_after, api_pods_after) after waiting
-        """
-        assert self.primary is not None  # Guaranteed by guard at _verify_old_hub_state entry
-        compactor_pods_after = []
-        api_pods_after = []
-
-        if not self.dry_run and (compactor_pods or api_pods):
-            logger.debug(
-                "Waiting for observability pods to scale down (timeout=%ds, interval=%ds)",
-                OBSERVABILITY_TERMINATE_TIMEOUT,
-                OBSERVABILITY_TERMINATE_INTERVAL,
-            )
-            start_time = time.time()
-
-            while time.time() - start_time < OBSERVABILITY_TERMINATE_TIMEOUT:
-                if compactor_pods:
-                    compactor_pods_after = self.primary.get_pods(
-                        namespace=OBSERVABILITY_NAMESPACE,
-                        label_selector="app.kubernetes.io/name=thanos-compact",
-                    )
-                if api_pods:
-                    api_pods_after = self.primary.get_pods(
-                        namespace=OBSERVABILITY_NAMESPACE,
-                        label_selector="app.kubernetes.io/name=observatorium-api",
-                    )
-
-                # Check if both are scaled down
-                compactor_done = not compactor_pods or not compactor_pods_after
-                api_done = not api_pods or not api_pods_after
-
-                if compactor_done and api_done:
-                    break
-
-                time.sleep(OBSERVABILITY_TERMINATE_INTERVAL)
-
-        return compactor_pods_after, api_pods_after
-
-    def _report_observability_scale_down_status(
-        self,
-        compactor_pods: List[Dict],
-        api_pods: List[Dict],
-        compactor_pods_after: List[Dict],
-        api_pods_after: List[Dict],
-    ) -> None:
-        """
-        Report the status of observability scale-down on old hub.
-
-        Args:
-            compactor_pods: Initial thanos-compact pods
-            api_pods: Initial observatorium-api pods
-            compactor_pods_after: Remaining thanos-compact pods after wait
-            api_pods_after: Remaining observatorium-api pods after wait
-        """
-        if self.dry_run:
-            if compactor_pods:
-                logger.info("[DRY-RUN] Would scale down thanos-compact on old hub")
-            if api_pods:
-                logger.info("[DRY-RUN] Would scale down observatorium-api on old hub")
-            return
-
-        # Report individual component status
-        self._log_component_scale_status("Thanos compactor", compactor_pods, compactor_pods_after)
-        self._log_component_scale_status("Observatorium API", api_pods, api_pods_after)
-
-        # Report overall status
-        if compactor_pods_after or api_pods_after:
-            logger.warning(
-                "Old hub: MultiClusterObservability is still active (%s). Scale both to 0 or remove MCO.",
-                f"thanos-compact={len(compactor_pods_after)}, observatorium-api={len(api_pods_after)}",
-            )
-        else:
-            logger.info("All observability components scaled down on old hub")
-
-    def _log_component_scale_status(
-        self,
-        component_name: str,
-        initial_pods: List[Dict],
-        remaining_pods: List[Dict],
-    ) -> None:
-        """Log scale-down status for a single observability component."""
-        if not initial_pods:
-            return
-
-        if remaining_pods:
-            logger.warning(
-                "%s still running on old hub (%s pod(s)) after waiting",
-                component_name,
-                len(remaining_pods),
-            )
-        else:
-            logger.info("%s is scaled down on old hub", component_name)
-
-    @dry_run_skip(message="Would resume Argo CD auto-sync for paused apps")
-    def _resume_argocd_apps(self) -> None:
-        """Restore auto-sync for Argo CD Applications recorded in state (only when --argocd-resume-after-switchover)."""
-        if self.state.get_config("argocd_pause_dry_run", False):
-            raise SwitchoverError(
-                "Argo CD auto-sync resume requested, but the pause step was run in dry-run mode. "
-                "Re-run pause without --dry-run to generate resumable state."
-            )
-        run_id = self.state.get_config("argocd_run_id")
-        paused_apps = self.state.get_config("argocd_paused_apps") or []
-        if not run_id or not paused_apps:
-            logger.info("No Argo CD paused apps in state; skipping resume")
-            return
-        logger.info(
-            "Resuming Argo CD auto-sync for %d Application(s) (run_id=%s)",
-            len(paused_apps),
-            run_id,
-        )
-        summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, self.primary, self.secondary, logger)
-        if summary.failed:
-            raise SwitchoverError(f"Argo CD auto-sync restore failed for {summary.failed} Application(s)")
 
     def _run_reset_auto_import_strategy_step(self) -> None:
         """Execute the explicit reset_auto_import_strategy step when applicable."""

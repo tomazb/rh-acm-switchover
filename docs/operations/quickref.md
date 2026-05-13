@@ -53,6 +53,11 @@ python acm_switchover.py \
 
 Argo CD detection runs automatically during preflight when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable all GitOps detection including Argo CD deep dive.
 
+In 1.7.10, production safety checks fail closed by default: Observability
+verification blocks unless explicitly skipped, Argo CD managed pause blocks
+unsafe auto-sync cases, and omitted `--min-managed-clusters` derives the
+expected non-local ManagedCluster set from preflight.
+
 ### Switchover Execution
 
 ```bash
@@ -110,6 +115,35 @@ python acm_switchover.py \
   --decommission \
   --primary-context <old-hub> \
   --non-interactive
+
+```
+
+Decommission re-checks matching Hive `ClusterDeployment` resources immediately
+before non-local `ManagedCluster` deletion. Any matching ClusterDeployment
+without `spec.preserveOnDelete=true` (unset or `false`) and Hive API lookup
+errors block deletion; only verified Hive API absence or no matching
+ClusterDeployments is treated as safe.
+
+### Restore-Only (Single Hub)
+
+```bash
+
+# Validate new hub readiness
+python acm_switchover.py \
+  --restore-only \
+  --validate-only \
+  --secondary-context <new-hub>
+
+# Dry-run
+python acm_switchover.py \
+  --restore-only \
+  --dry-run \
+  --secondary-context <new-hub>
+
+# Execute restore
+python acm_switchover.py \
+  --restore-only \
+  --secondary-context <new-hub>
 
 ```
 
@@ -199,6 +233,10 @@ oc --context <secondary> get backup -n open-cluster-management-backup \
 oc --context <secondary> get pods -n open-cluster-management-observability
 ```
 
+Observability failures are blocking by default when Observability is detected.
+Use `--skip-observability-checks` only as an explicit bypass when the operator
+will handle Observability separately.
+
 ## Argo CD / GitOps
 
 ```bash
@@ -208,13 +246,13 @@ python acm_switchover.py --validate-only --primary-context <p> --secondary-conte
 # Pause ACM-touching Applications during switchover
 python acm_switchover.py ... --argocd-manage
 
-# Resume after updating Git for new hub (during run or standalone)
-python acm_switchover.py ... --argocd-resume-after-switchover
-# Or later:
+# Resume after updating Git for new hub (standalone)
 python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-context <s>
 ```
 
-Bash: `./scripts/preflight-check.sh` (Argo CD detection is automatic), `./scripts/argocd-manage.sh --mode pause|resume`. See [scripts/README.md](../scripts/README.md).
+Bash (deprecated): `./scripts/argocd-manage.sh` is deprecated. Use the Python CLI or Ansible collection instead.
+
+Safety: Managed pause blocks ApplicationSet-managed child Applications, auto-sync Applications with empty or stale `status.resources`, and any Application that still has auto-sync after the pause patch is re-read. Remediate ApplicationSet cases by pausing/updating the parent ApplicationSet, generator, or template, not the child Application.
 
 Note: Resume treats already-resumed apps as idempotent no-ops and fails only when an Application cannot be restored for actionable reasons. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
 
@@ -250,20 +288,20 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--activation-method {patch,restore}` | Activation method for passive restores (default: patch) |
 | `--min-managed-clusters N` | Require at least `N` non-local `ManagedCluster` resources after restore; `N` must be non-negative and `0` keeps the check informational |
 | `--validate-only` | Run validation checks only, no changes |
-| `--dry-run` | Show planned actions without executing |
+| `--dry-run` | Show planned actions without executing or advancing resume state |
 | `--decommission` | Decommission old hub (interactive) |
+| `--restore-only` | Restore managed clusters from S3 backups onto a single hub (no primary needed; implies `--method full`) |
 | `--setup` | Deploy RBAC resources and optionally generate kubeconfigs |
 | `--include-decommission` | With `--setup`, also deploy the opt-in decommission RBAC extension |
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
 | `--reset-state` | Reset state file and start fresh |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
-| `--skip-observability-checks` | Skip Observability steps even if detected |
-| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
+| `--skip-observability-checks` | Explicitly bypass blocking Observability steps even if detected |
+| `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--skip-gitops-check` | Disable all GitOps detection including Argo CD deep dive |
 | `--argocd-manage` | Pause auto-sync on ACM-touching Argo CD Applications during switchover (left paused by default; with `--validate-only` it is ignored with a warning; not valid with `--argocd-resume-only`) |
-| `--argocd-resume-after-switchover` | Restore auto-sync during finalization (opt-in; requires `--argocd-manage`; not valid with `--validate-only`, `--argocd-resume-only`, or `--old-hub-action decommission`) |
-| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; auto-discovers a swapped-context state file when unambiguous; not valid with `--validate-only`, `--argocd-manage`, `--argocd-resume-after-switchover`, `--decommission`, or `--setup`) |
+| `--argocd-resume-only` | Restore Argo CD auto-sync from state and exit (requires `--secondary-context`; auto-discovers a swapped-context state file when unambiguous; not valid with `--validate-only`, `--argocd-manage`, `--decommission`, or `--setup`) |
 | `--verbose, -v` | Enable verbose logging |
 
 For `--setup`, `--include-decommission` requires `--role operator` or `--role both`.
@@ -298,6 +336,7 @@ For `--setup`, `--include-decommission` requires `--role operator` or `--role bo
 - [ ] Validated with `--validate-only`
 - [ ] Previewed with `--dry-run`
 - [ ] All ClusterDeployments have `preserveOnDelete=true`
+- [ ] Decommission Hive safety lookup can list ClusterDeployments or verify the Hive API is absent
 - [ ] All ManagedClusters included in latest backup
 - [ ] Latest backup completed successfully
 - [ ] ACM versions match between hubs
@@ -427,7 +466,7 @@ podman run -it --rm \
 | `--activation-method {patch,restore}` | Activation option for passive method |
 | `--min-managed-clusters N` | Enforce a non-negative minimum restored non-local `ManagedCluster` count (`0` = informational only) |
 | `--old-hub-action` | Action for old hub: `secondary`, `decommission`, or `none` (required) |
-| `--disable-observability-on-secondary` | Delete MCO on old hub when keeping it as secondary |
+| `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--verbose` | Enable debug logging |
 
 ### Container Aliases (Optional)

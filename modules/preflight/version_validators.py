@@ -4,7 +4,7 @@ import base64
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from lib.constants import (
     ACM_NAMESPACE,
@@ -38,18 +38,21 @@ class KubeconfigValidator(BaseValidator):
     # Warn if token expires within this many hours
     TOKEN_EXPIRY_WARNING_HOURS = 4
 
-    def run(self, primary: KubeClient, secondary: KubeClient, method: str = "passive") -> None:
+    def run(self, primary: Optional[KubeClient], secondary: KubeClient, method: str = "passive") -> None:
         """Run kubeconfig validation checks."""
         self.method = method
         # Check connectivity (implicitly validated by KubeClient init, but verify)
-        self._check_connectivity(primary, "primary")
+        if primary is not None:
+            self._check_connectivity(primary, "primary")
         self._check_connectivity(secondary, "secondary")
 
         # Check for duplicate users in merged kubeconfig
-        self._check_duplicate_users(primary, secondary)
+        if primary is not None:
+            self._check_duplicate_users(primary, secondary)
 
         # Check token expiration
-        self._check_token_expiration(primary, "primary")
+        if primary is not None:
+            self._check_token_expiration(primary, "primary")
         self._check_token_expiration(secondary, "secondary")
 
     def _check_connectivity(self, client: KubeClient, hub_label: str) -> None:
@@ -249,19 +252,20 @@ class KubeconfigValidator(BaseValidator):
 class VersionValidator(BaseValidator):
     """Detects ACM versions and ensures they match between hubs."""
 
-    def run(self, primary: KubeClient, secondary: KubeClient) -> Tuple[str, str]:
+    def run(self, primary: Optional[KubeClient], secondary: KubeClient) -> Tuple[str, str]:
         """Run version validation with both clients.
 
         Args:
-            primary: Primary hub KubeClient instance
+            primary: Primary hub KubeClient instance (None in restore-only mode)
             secondary: Secondary hub KubeClient instance
 
         Returns:
             Tuple of (primary_version, secondary_version)
         """
-        primary_version = self._detect_version(primary, "primary")
+        primary_version = self._detect_version(primary, "primary") if primary else "unknown"
         secondary_version = self._detect_version(secondary, "secondary")
-        self._validate_match(primary_version, secondary_version)
+        if primary is not None:
+            self._validate_match(primary_version, secondary_version)
         return primary_version, secondary_version
 
     def _detect_version(self, kube_client: KubeClient, hub_name: str) -> str:
@@ -534,7 +538,7 @@ class AutoImportStrategyValidator(BaseValidator):
 
     def run(
         self,
-        primary: KubeClient,
+        primary: Optional[KubeClient],
         secondary: KubeClient,
         primary_version: str,
         secondary_version: str,
@@ -542,13 +546,13 @@ class AutoImportStrategyValidator(BaseValidator):
         """Run auto-import strategy validation.
 
         Args:
-            primary: Primary hub KubeClient instance
+            primary: Primary hub KubeClient instance (None in restore-only mode)
             secondary: Secondary hub KubeClient instance
             primary_version: ACM version on primary hub
             secondary_version: ACM version on secondary hub
         """
         # Primary hub
-        if is_acm_version_ge(primary_version, "2.14.0"):
+        if primary is not None and is_acm_version_ge(primary_version, "2.14.0"):
             strategy = self._strategy_for(primary)
             if strategy == "error":
                 self.add_result(

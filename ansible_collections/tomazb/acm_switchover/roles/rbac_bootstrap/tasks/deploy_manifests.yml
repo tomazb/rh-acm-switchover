@@ -1,0 +1,15 @@
+---
+- name: Announce manifest deployment (dry_run)
+  ansible.builtin.debug:
+    msg: >-
+      [dry_run] Would apply {{ _rbac_plan.role }} RBAC resources from:
+      {{ _rbac_plan.assets | join(', ') }}
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Apply RBAC manifests
+  ansible.builtin.include_tasks: apply_manifest_file.yml
+  loop: "{{ _rbac_plan.assets }}"
+  loop_control:
+    loop_var: _rbac_manifest_file
+    label: "{{ _rbac_manifest_file }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'

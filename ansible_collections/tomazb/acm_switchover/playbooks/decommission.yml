@@ -1,0 +1,6 @@
+---
+- name: Decommission old ACM hub
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: tomazb.acm_switchover.decommission

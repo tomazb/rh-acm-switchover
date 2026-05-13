@@ -19,10 +19,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
         
@@ -42,7 +42,7 @@ jobs:
         
     - name: Run unit tests with coverage
       run: |
-        python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=html --cov-report=term
+        python -m pytest tests/ -v -m "not e2e" --cov=. --cov-report=xml --cov-report=html --cov-report=term
         
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
@@ -65,10 +65,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
         
@@ -91,15 +91,15 @@ jobs:
         
     - name: Check code formatting with black
       run: |
-        black --check --line-length 120 --diff . --exclude '(^|/)completions(/|$)'
+        black --check --line-length 120 --diff acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests
         
     - name: Check import sorting with isort
       run: |
-        isort --check-only --profile black --line-length 120 .
+        isort --check-only --profile black --line-length 120 acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests
         
     - name: Run type checking with mypy
       run: |
-        mypy acm_switchover.py lib/ modules/ --ignore-missing-imports --no-strict-optional
+        mypy --explicit-package-bases acm_switchover.py lib/ modules/ ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests --ignore-missing-imports --no-strict-optional
         
     - name: Run bandit security linter
       run: |
@@ -122,10 +122,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
         
@@ -176,10 +176,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
         
@@ -202,7 +202,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Check documentation files exist
       run: |
@@ -251,10 +251,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
         
@@ -272,7 +272,7 @@ jobs:
         
     - name: Test version display
       run: |
-        grep -q "version.*1.0.0" acm_switchover.py || echo "Warning: Version string check"
+        python -c "from lib import __version__, __version_date__; print(f'ACM Switchover {__version__} ({__version_date__})')"
         
     - name: Validate state file structure
       run: |
@@ -297,7 +297,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -325,7 +325,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Check version consistency
       run: |

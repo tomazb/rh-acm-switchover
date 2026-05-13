@@ -1,0 +1,16 @@
+acm_switchover_argocd_mock_apps:
+  - metadata:
+      namespace: argocd
+      name: child-app
+      ownerReferences:
+        - kind: ApplicationSet
+          name: parent-set
+    spec:
+      syncPolicy:
+        automated:
+          prune: true
+    status:
+      resources:
+        - kind: BackupSchedule
+          namespace: open-cluster-management-backup
+          name: schedule

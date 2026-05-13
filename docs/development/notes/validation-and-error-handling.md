@@ -603,18 +603,17 @@ class InputValidator:
 ### Roadmap
 
 ```mermaid
-gantt
-    title Validation Maintenance Roadmap
-    dateFormat  YYYY-MM-DD
-    section Historical
-    Core Validation Implementation   :done,    hist1, 2024-11-01, 2024-12-10
-    Shell Security Hardening         :done,    hist2, 2024-11-16, 2024-12-20
-    section Current Maintenance
-    CLI Rule Updates and Docs Sync   :active,  curr1, 2026-03-01, 21d
-    Exception Hierarchy Refresh      :active,  curr2, 2026-03-09, 14d
-    section Future
-    Performance Review of Validation :         fut1, 2026-04-01, 21d
-    Additional Security Patterns     :         fut2, 2026-04-15, 30d
+flowchart LR
+    A[Maintain CLI and resource validators] --> B[Keep docs and tests in sync]
+    B --> C[Review exception hierarchy and state errors]
+    C --> D[Review shell-safety patterns]
+    D --> E[Assess performance and batching needs]
+    E --> F[Add security validation only when concrete risks appear]
+    F --> B
+
+    style A fill:#e1f5fe
+    style B fill:#fff3e0
+    style F fill:#f3e5f5
 ```
 
 ## Conclusion

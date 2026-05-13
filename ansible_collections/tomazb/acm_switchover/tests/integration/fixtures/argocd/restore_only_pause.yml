@@ -1,0 +1,29 @@
+---
+# Restore-only scenario: apps discovered from secondary hub, Policy kind.
+acm_switchover_argocd_mock_apps:
+  - metadata:
+      name: acm-policies
+      namespace: argocd
+      annotations: {}
+    spec:
+      syncPolicy:
+        automated:
+          prune: true
+    status:
+      resources:
+        - kind: Policy
+          namespace: open-cluster-management
+
+acm_switchover_argocd_mock_apps_for_resume:
+  - metadata:
+      name: acm-policies
+      namespace: argocd
+      annotations:
+        acm-switchover.argoproj.io/paused-by: test-run-restore
+        acm-switchover.argoproj.io/original-sync-policy: '{"automated":{"prune":true}}'
+    spec:
+      syncPolicy: {}
+    status:
+      resources:
+        - kind: Policy
+          namespace: open-cluster-management

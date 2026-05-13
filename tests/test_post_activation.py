@@ -29,6 +29,7 @@ from lib.constants import (
     OBSERVABILITY_NAMESPACE,
 )
 from lib.exceptions import SwitchoverError
+from lib.waiter import WaitConditionResult
 
 PostActivationVerification = post_activation_module.PostActivationVerification
 
@@ -106,7 +107,10 @@ class TestPostActivationVerification:
         core_v1 = Mock(name="core_v1")
         apps_v1 = Mock(name="apps_v1")
 
-        with patch("modules.post_activation.config.new_client_from_config", return_value=api_client) as new_client:
+        with patch(
+            "modules.post_activation.config.new_client_from_config",
+            return_value=api_client,
+        ) as new_client:
             with patch("modules.post_activation.client.CoreV1Api", return_value=core_v1) as core_ctor:
                 with patch("modules.post_activation.client.AppsV1Api", return_value=apps_v1) as apps_ctor:
                     result = verify._build_managed_cluster_clients("managed-context")
@@ -174,6 +178,30 @@ class TestPostActivationVerification:
             [{"metadata": {"name": "metrics-pod"}}],
         ]
 
+        mock_secondary_client.get_deployment.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 2,
+                "updatedReplicas": 2,
+                "availableReplicas": 2,
+                "readyReplicas": 2,
+                "unavailableReplicas": 0,
+            },
+        }
+        mock_secondary_client.get_statefulset.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "availableReplicas": 1,
+                "readyReplicas": 1,
+                "unavailableReplicas": 0,
+            },
+        }
         mock_secondary_client.rollout_restart_deployment.return_value = {"status": "ok"}
 
         result = post_verify_with_obs.verify()
@@ -244,6 +272,73 @@ class TestPostActivationVerification:
 
         # Should complete successfully
         assert mock_wait.called
+
+    @patch("modules.post_activation.wait_for_condition")
+    def test_verify_managed_clusters_requires_derived_expected_names(
+        self, mock_wait, mock_secondary_client, mock_state_manager
+    ):
+        """Post-activation must not pass when a preflight-observed cluster is missing."""
+        verifier = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+            expected_managed_cluster_names=["cluster-a", "cluster-b"],
+            min_managed_clusters=2,
+            enforce_expected_managed_cluster_names=True,
+        )
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "cluster-a"},
+                "status": {
+                    "conditions": [
+                        {"type": "ManagedClusterConditionAvailable", "status": "True"},
+                        {"type": "ManagedClusterJoined", "status": "True"},
+                    ]
+                },
+            },
+            {"metadata": {"name": LOCAL_CLUSTER_NAME}},
+        ]
+
+        def capture_wait(*args, **kwargs):
+            condition_fn = kwargs.get("condition_fn", args[1])
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is False
+            assert "missing expected ManagedCluster(s): cluster-b" in result.public_detail
+            return False
+
+        mock_wait.side_effect = capture_wait
+
+        with pytest.raises(SwitchoverError, match="Missing expected ManagedCluster"):
+            verifier._verify_managed_clusters_connected(timeout=1)
+
+    @patch("modules.post_activation.wait_for_condition")
+    def test_verify_managed_clusters_explicit_zero_allows_empty_hub(
+        self, mock_wait, mock_secondary_client, mock_state_manager
+    ):
+        """Explicit --min-managed-clusters 0 preserves the empty-hub opt-out."""
+        verifier = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+            expected_managed_cluster_names=["cluster-a"],
+            min_managed_clusters=0,
+            enforce_expected_managed_cluster_names=False,
+        )
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": LOCAL_CLUSTER_NAME}},
+        ]
+
+        def capture_wait(*args, **kwargs):
+            condition_fn = kwargs.get("condition_fn", args[1])
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is True
+            return True
+
+        mock_wait.side_effect = capture_wait
+
+        verifier._verify_managed_clusters_connected(timeout=1)
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_managed_clusters_timeout(self, mock_wait, post_verify_with_obs, mock_secondary_client):
@@ -318,7 +413,16 @@ class TestPostActivationVerification:
     def test_verify_no_clusters(self, mock_wait, post_verify_with_obs, mock_secondary_client):
         """Test when no managed clusters exist - should timeout waiting for clusters."""
         mock_secondary_client.list_custom_resources.return_value = []
-        mock_wait.return_value = False  # Simulate timeout (no clusters found)
+
+        def capture_wait(*args, **kwargs):
+            condition_fn = kwargs.get("condition_fn", args[1])
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is False
+            assert result.public_detail == "no ManagedClusters found"
+            return False
+
+        mock_wait.side_effect = capture_wait
 
         # Should raise SwitchoverError with timeout message
         with pytest.raises(SwitchoverError, match="Timeout waiting for ManagedClusters"):
@@ -331,9 +435,72 @@ class TestPostActivationVerification:
         assert call_args[1]["timeout"] == 1
         assert call_args[1]["interval"] == CLUSTER_VERIFY_INTERVAL
 
-    def test_restart_observatorium_api(self, post_verify_with_obs, mock_secondary_client):
-        """Test restarting observatorium API deployment."""
-        mock_secondary_client.wait_for_pods_ready.return_value = True
+    @patch("modules.post_activation.wait_for_condition")
+    def test_wait_for_secret_visibility_returns_public_wait_result(
+        self, mock_wait, post_verify_no_obs, mock_secondary_client
+    ):
+        """Secret visibility poller should return an explicit public wait result."""
+        mock_v1 = Mock()
+        mock_v1.read_namespaced_secret.side_effect = ApiException(status=404)
+
+        def capture_wait(*_args, **kwargs):
+            condition_fn = kwargs["condition_fn"]
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is False
+            assert result.public_detail == "secret not found"
+            return False
+
+        mock_wait.side_effect = capture_wait
+
+        with pytest.raises(SwitchoverError, match="bootstrap-hub-kubeconfig secret not visible"):
+            post_verify_no_obs._wait_for_secret_visibility(mock_v1, "cluster-a")
+
+        mock_wait.assert_called_once()
+
+    @patch("modules.post_activation.time.sleep")
+    def test_restart_observatorium_api_waits_for_full_deployment_rollout(
+        self, mock_sleep, post_verify_with_obs, mock_secondary_client
+    ):
+        """Restart gate must wait for the full Deployment replica target, not just one ready pod."""
+        mock_secondary_client.get_deployment.side_effect = [
+            {
+                "metadata": {"generation": 2},
+                "spec": {"replicas": 2},
+                "status": {
+                    "observedGeneration": 1,
+                    "replicas": 2,
+                    "updatedReplicas": 1,
+                    "availableReplicas": 1,
+                    "readyReplicas": 1,
+                    "unavailableReplicas": 1,
+                },
+            },
+            {
+                "metadata": {"generation": 2},
+                "spec": {"replicas": 2},
+                "status": {
+                    "observedGeneration": 2,
+                    "replicas": 2,
+                    "updatedReplicas": 0,
+                    "availableReplicas": 2,
+                    "readyReplicas": 2,
+                    "unavailableReplicas": 0,
+                },
+            },
+            {
+                "metadata": {"generation": 2},
+                "spec": {"replicas": 2},
+                "status": {
+                    "observedGeneration": 2,
+                    "replicas": 2,
+                    "updatedReplicas": 2,
+                    "availableReplicas": 2,
+                    "readyReplicas": 2,
+                    "unavailableReplicas": 0,
+                },
+            },
+        ]
         mock_secondary_client.get_pods.return_value = [
             {
                 "metadata": {"name": "api"},
@@ -348,7 +515,47 @@ class TestPostActivationVerification:
             namespace=OBSERVABILITY_NAMESPACE,
             name=post_activation_module.OBSERVATORIUM_API_DEPLOYMENT,
         )
+        assert mock_secondary_client.get_deployment.call_count == 3
+        mock_secondary_client.wait_for_pods_ready.assert_not_called()
         mock_secondary_client.get_pods.assert_called()
+        assert mock_sleep.call_count == 2
+
+    def test_restart_observatorium_api_404_blocks_when_observability_enabled(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
+        """Missing observatorium-api should block when Observability checks are enabled."""
+        mock_secondary_client.rollout_restart_deployment.side_effect = ApiException(status=404)
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            post_verify_with_obs._restart_observatorium_api()
+
+        assert "observatorium-api deployment not found" in str(exc_info.value)
+
+    def test_restart_observatorium_api_non_404_with_not_found_text_reraises(
+        self, post_verify_with_obs, mock_secondary_client
+    ):
+        """ApiException with non-404 status containing 'not found' in reason must re-raise.
+
+        Bug: current code checks 'not found' in str(e).lower() — a 403 with 'namespace not found'
+        in the reason is incorrectly swallowed. Fix: check e.status == 404 instead.
+        """
+        exc = ApiException(status=403, reason="namespace not found in service account token")
+        mock_secondary_client.rollout_restart_deployment.side_effect = exc
+
+        with pytest.raises(ApiException) as exc_info:
+            post_verify_with_obs._restart_observatorium_api()
+
+        assert exc_info.value.status == 403
+
+    def test_restart_observatorium_api_wraps_unexpected_errors(self, post_verify_with_obs, mock_secondary_client):
+        """Unexpected restart errors should be classified as SwitchoverError."""
+        mock_secondary_client.rollout_restart_deployment.side_effect = RuntimeError("rollout API failed")
+
+        with pytest.raises(SwitchoverError) as exc_info:
+            post_verify_with_obs._restart_observatorium_api()
+
+        assert "Failed to restart observatorium-api" in str(exc_info.value)
+        assert "rollout API failed" in str(exc_info.value)
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_observability_pods_all_ready(self, mock_wait, post_verify_with_obs, mock_secondary_client):
@@ -375,10 +582,10 @@ class TestPostActivationVerification:
         mock_wait.return_value = False
         mock_secondary_client.get_pods.return_value = []
 
-        # Should handle gracefully with warning, not raise exception
-        post_verify_with_obs._verify_observability_pods()
+        with pytest.raises(SwitchoverError) as exc_info:
+            post_verify_with_obs._verify_observability_pods()
 
-        # Verify get_pods was called
+        assert "No Observability pods found" in str(exc_info.value)
         mock_secondary_client.get_pods.assert_called_once()
 
     @patch("modules.post_activation.logger")
@@ -407,13 +614,10 @@ class TestPostActivationVerification:
             }
         ]
 
-        post_verify_with_obs._verify_observability_pods()
+        with pytest.raises(SwitchoverError) as exc_info:
+            post_verify_with_obs._verify_observability_pods()
 
-        # With lazy logging, format string is args[0] and values are args[1:]
-        # Check all args for CrashLoopBackOff
-        assert any(
-            any("CrashLoopBackOff" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
-        )
+        assert "CrashLoopBackOff" in str(exc_info.value)
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_metrics_collection(self, mock_wait, post_verify_with_obs, mock_secondary_client):
@@ -485,6 +689,30 @@ class TestPostActivationVerification:
                 },
             }
         ]
+        mock_secondary_client.get_deployment.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 2},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 2,
+                "updatedReplicas": 2,
+                "availableReplicas": 2,
+                "readyReplicas": 2,
+                "unavailableReplicas": 0,
+            },
+        }
+        mock_secondary_client.get_statefulset.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "availableReplicas": 1,
+                "readyReplicas": 1,
+                "unavailableReplicas": 0,
+            },
+        }
 
         with patch.object(verify, "_restart_observatorium_api") as mock_restart:
             verify.verify()
@@ -600,6 +828,64 @@ data:
 
         assert result is False
 
+    def test_force_klusterlet_reconnect_fails_on_bootstrap_secret_create_error(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Non-conflict bootstrap secret creation failures must fail remediation clearly."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        mock_v1.create_namespaced_secret.side_effect = ApiException(status=403, reason="Forbidden")
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is False
+        mock_apps_v1.patch_namespaced_deployment.assert_not_called()
+
+    def test_force_klusterlet_reconnect_fails_when_bootstrap_secret_never_visible(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """A secret visibility timeout must fail remediation instead of continuing to restart."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=False):
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is False
+        mock_apps_v1.patch_namespaced_deployment.assert_not_called()
+
     def test_parallel_workers_use_isolated_clients(self, mock_secondary_client, mock_state_manager):
         """Each parallel worker must receive its own ApiClient; no global context mutation."""
         import threading
@@ -685,7 +971,39 @@ class TestPostActivationVerificationIntegration:
                 },
             }
         ]
-        mock_secondary_client.get_pods.return_value = [{"metadata": {"name": "pod1"}, "status": {"phase": "Running"}}]
+        mock_secondary_client.get_pods.return_value = [
+            {
+                "metadata": {"name": "pod1"},
+                "status": {
+                    "phase": "Running",
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            }
+        ]
+        mock_secondary_client.get_deployment.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "availableReplicas": 1,
+                "readyReplicas": 1,
+                "unavailableReplicas": 0,
+            },
+        }
+        mock_secondary_client.get_statefulset.return_value = {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "availableReplicas": 1,
+                "readyReplicas": 1,
+                "unavailableReplicas": 0,
+            },
+        }
         mock_secondary_client.rollout_restart_deployment.return_value = {"status": "ok"}
 
         result = verify.verify()
@@ -842,7 +1160,12 @@ def _make_pav(secondary, state, obs=False, dry_run=False):
 
 def _kubeconfig_yaml(clusters=None, contexts=None):
     """Build a minimal kubeconfig YAML string."""
-    data = {"apiVersion": "v1", "clusters": clusters or [], "contexts": contexts or [], "users": []}
+    data = {
+        "apiVersion": "v1",
+        "clusters": clusters or [],
+        "contexts": contexts or [],
+        "users": [],
+    }
     return yaml.dump(data)
 
 
@@ -865,7 +1188,11 @@ class TestKlusterletParallelVerification:
         ]
 
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
-            with patch.object(pav, "_load_kubeconfig_data", return_value={"contexts": [], "clusters": []}):
+            with patch.object(
+                pav,
+                "_load_kubeconfig_data",
+                return_value={"contexts": [], "clusters": []},
+            ):
                 with patch.object(pav, "_check_klusterlet_connection") as mock_check:
                     pav._verify_klusterlet_connections()
 
@@ -903,8 +1230,12 @@ class TestKlusterletParallelVerification:
             ],
         }
 
+        c2_results = iter(["wrong_hub", "verified"])
+
         def fake_check(ctx, name, hub):
-            return {"c1": "verified", "c2": "wrong_hub", "c3": "unreachable"}[name]
+            if name == "c2":
+                return next(c2_results)
+            return {"c1": "verified", "c3": "unreachable"}[name]
 
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
@@ -915,6 +1246,58 @@ class TestKlusterletParallelVerification:
         # wrong_hub cluster c2 should be fixed
         mock_fix.assert_called_once()
         assert mock_fix.call_args[0][0] == "c2"
+
+    def test_wrong_hub_remaining_after_remediation_is_fatal(self, mock_secondary_client, mock_state_manager):
+        """Wrong-hub klusterlet state must fail when remediation does not move it."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+        kube_data = {
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
+        }
+
+        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
+                    with patch.object(
+                        pav,
+                        "_check_klusterlet_connection",
+                        side_effect=["wrong_hub", "wrong_hub"],
+                    ):
+                        with pytest.raises(SwitchoverError, match="still connected to the wrong hub"):
+                            pav._verify_klusterlet_connections()
+
+    def test_failed_remediation_is_fatal_after_recheck(self, mock_secondary_client, mock_state_manager):
+        """A failed klusterlet remediation attempt must not be logged as success."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+        kube_data = {
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
+        }
+
+        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(pav, "_force_klusterlet_reconnect", return_value=False):
+                    with patch.object(
+                        pav,
+                        "_check_klusterlet_connection",
+                        side_effect=["wrong_hub", "wrong_hub"],
+                    ):
+                        with pytest.raises(SwitchoverError, match="Klusterlet remediation failed"):
+                            pav._verify_klusterlet_connections()
 
     def test_no_hub_api_server_skips(self, mock_secondary_client, mock_state_manager):
         """If hub API server can't be determined, skip verification."""
@@ -974,7 +1357,11 @@ class TestKlusterletParallelVerification:
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(pav, "_find_context_by_api_url", return_value="ctx-c1"):
-                    with patch.object(pav, "_check_klusterlet_connection", side_effect=RuntimeError("boom")):
+                    with patch.object(
+                        pav,
+                        "_check_klusterlet_connection",
+                        side_effect=RuntimeError("boom"),
+                    ):
                         # Should not raise; c1 lands in unreachable bucket
                         pav._verify_klusterlet_connections()
 
@@ -1174,7 +1561,10 @@ class TestFindContextByApiUrl:
 
         kube_data = {
             "clusters": [
-                {"name": "kc-prod", "cluster": {"server": "https://api.prod.example.com:6443"}},
+                {
+                    "name": "kc-prod",
+                    "cluster": {"server": "https://api.prod.example.com:6443"},
+                },
             ],
             "contexts": [
                 {"name": "admin@prod", "context": {"cluster": "kc-prod"}},
@@ -1190,7 +1580,10 @@ class TestFindContextByApiUrl:
 
         kube_data = {
             "clusters": [
-                {"name": "kc-a", "cluster": {"server": "https://api.a.example.com:6443"}},
+                {
+                    "name": "kc-a",
+                    "cluster": {"server": "https://api.a.example.com:6443"},
+                },
             ],
             "contexts": [
                 {"name": "ctx-a", "context": {"cluster": "kc-a"}},
@@ -1206,7 +1599,10 @@ class TestFindContextByApiUrl:
 
         kube_data = {
             "clusters": [
-                {"name": "kc-x", "cluster": {"server": "https://api.x.example.com:6443"}},
+                {
+                    "name": "kc-x",
+                    "cluster": {"server": "https://api.x.example.com:6443"},
+                },
             ],
             "contexts": [
                 {"name": "ctx-x", "context": {"cluster": "kc-x"}},
@@ -1221,7 +1617,10 @@ class TestFindContextByApiUrl:
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         with patch("modules.post_activation.config.list_kube_config_contexts") as mock_list:
-            mock_list.return_value = ([{"name": "prod-cluster"}], {"name": "prod-cluster"})
+            mock_list.return_value = (
+                [{"name": "prod-cluster"}],
+                {"name": "prod-cluster"},
+            )
             result = pav._find_context_by_api_url({}, "", "prod-cluster")
 
         assert result == "prod-cluster"
@@ -1254,7 +1653,10 @@ class TestFindContextByApiUrl:
 
         kube_data = {
             "clusters": [
-                {"name": "orphan-cluster", "cluster": {"server": "https://api.orphan:6443"}},
+                {
+                    "name": "orphan-cluster",
+                    "cluster": {"server": "https://api.orphan:6443"},
+                },
             ],
             "contexts": [
                 {"name": "ctx-other", "context": {"cluster": "different-cluster"}},
@@ -1460,68 +1862,77 @@ class TestScaleUpObservability:
         mock_secondary_client.scale_statefulset.assert_not_called()
         mock_secondary_client.wait_for_pods_ready.assert_not_called()
 
-    def test_deployment_not_found(self, mock_secondary_client, mock_state_manager):
-        """Missing deployment should be skipped, statefulset still checked."""
+    def test_deployment_not_found_blocks(self, mock_secondary_client, mock_state_manager):
+        """Missing observatorium-api should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.return_value = None
         mock_secondary_client.get_statefulset.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
 
+        assert "observatorium-api deployment not found" in str(exc_info.value)
         mock_secondary_client.scale_deployment.assert_not_called()
-        mock_secondary_client.scale_statefulset.assert_called_once()
+        mock_secondary_client.scale_statefulset.assert_not_called()
 
-    def test_statefulset_not_found(self, mock_secondary_client, mock_state_manager):
-        """Missing statefulset should be skipped, deployment still checked."""
+    def test_statefulset_not_found_blocks(self, mock_secondary_client, mock_state_manager):
+        """Missing thanos-compact should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.get_statefulset.return_value = None
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
 
         mock_secondary_client.scale_deployment.assert_called_once()
+        assert "thanos-compact StatefulSet not found" in str(exc_info.value)
         mock_secondary_client.scale_statefulset.assert_not_called()
 
-    def test_deployment_exception_continues(self, mock_secondary_client, mock_state_manager):
-        """ApiException on deployment should not prevent statefulset check."""
+    def test_deployment_exception_blocks(self, mock_secondary_client, mock_state_manager):
+        """ApiException on deployment should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.side_effect = ApiException(status=500)
         mock_secondary_client.get_statefulset.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
 
-        mock_secondary_client.scale_statefulset.assert_called_once()
+        assert "Failed to check/scale observatorium-api" in str(exc_info.value)
+        mock_secondary_client.scale_statefulset.assert_not_called()
 
-    def test_statefulset_exception_continues(self, mock_secondary_client, mock_state_manager):
-        """ApiException on statefulset should not prevent wait for deployment."""
+    def test_statefulset_exception_blocks(self, mock_secondary_client, mock_state_manager):
+        """ApiException on statefulset should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.get_statefulset.side_effect = ApiException(status=500)
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
 
         mock_secondary_client.scale_deployment.assert_called_once()
-        # Only deployment should be waited on
-        assert mock_secondary_client.wait_for_pods_ready.call_count == 1
+        assert "Failed to check/scale thanos-compact" in str(exc_info.value)
+        mock_secondary_client.wait_for_pods_ready.assert_not_called()
 
-    def test_pods_not_ready_warns(self, mock_secondary_client, mock_state_manager):
-        """Pods failing to become ready should not raise, just warn."""
+    def test_pods_not_ready_blocks(self, mock_secondary_client, mock_state_manager):
+        """Pods failing to become ready should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.get_statefulset.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.wait_for_pods_ready.return_value = False
 
-        # Should not raise
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
+
+        assert "observatorium-api pods did not become ready in time" in str(exc_info.value)
 
 
 # ========================================================================
@@ -1551,9 +1962,10 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(any("OOMKilled" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
+
+        assert "OOMKilled" in str(exc_info.value)
 
     def test_failed_phase_detected(self, mock_secondary_client, mock_state_manager):
         """Pod in Failed phase should be flagged."""
@@ -1570,9 +1982,10 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(any("Failed" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
+
+        assert "Failed" in str(exc_info.value)
 
     def test_unknown_phase_detected(self, mock_secondary_client, mock_state_manager):
         """Pod in Unknown phase should be flagged."""
@@ -1589,9 +2002,10 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(any("Unknown" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
+
+        assert "Unknown" in str(exc_info.value)
 
     def test_nonzero_exit_code_detected(self, mock_secondary_client, mock_state_manager):
         """Non-zero exit code with unknown reason should be flagged."""
@@ -1613,9 +2027,10 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(any("exit=1" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
+
+        assert "exit=1" in str(exc_info.value)
 
     def test_image_pull_backoff_detected(self, mock_secondary_client, mock_state_manager):
         """ImagePullBackOff should be reported."""
@@ -1637,14 +2052,13 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(
-                any("ImagePullBackOff" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
-            )
 
-    def test_low_readiness_warns(self, mock_secondary_client, mock_state_manager):
-        """Below POD_READINESS_TOLERANCE should trigger warning about readiness."""
+        assert "ImagePullBackOff" in str(exc_info.value)
+
+    def test_low_readiness_blocks(self, mock_secondary_client, mock_state_manager):
+        """Below POD_READINESS_TOLERANCE should block Observability verification."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         # 5 pods, only 1 ready (20%) < 80% tolerance
@@ -1664,11 +2078,10 @@ class TestVerifyObservabilityPods:
 
         mock_secondary_client.get_pods.return_value = pods
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(
-                any("ready" in str(arg).lower() for arg in call.args) for call in mock_logger.warning.call_args_list
-            )
+
+        assert "Only 1/5 Observability pods ready" in str(exc_info.value)
 
 
 # ========================================================================
@@ -1752,7 +2165,10 @@ class TestGetHubApiServer:
                 {"name": "secondary-ctx", "context": {"cluster": "hub-cluster"}},
             ],
             "clusters": [
-                {"name": "hub-cluster", "cluster": {"server": "https://api.hub.example.com:6443"}},
+                {
+                    "name": "hub-cluster",
+                    "cluster": {"server": "https://api.hub.example.com:6443"},
+                },
             ],
         }
 

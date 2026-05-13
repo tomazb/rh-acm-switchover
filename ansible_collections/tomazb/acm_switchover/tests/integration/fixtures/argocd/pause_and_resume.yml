@@ -1,0 +1,29 @@
+---
+# Mock Argo CD Application for pause (no pause annotations yet).
+acm_switchover_argocd_mock_apps:
+  - metadata:
+      name: acm-app
+      namespace: argocd
+    spec:
+      syncPolicy:
+        automated:
+          prune: true
+    status:
+      resources:
+        - kind: BackupSchedule
+          namespace: open-cluster-management-backup
+
+# Mock Argo CD Application for resume (pause annotations already applied).
+acm_switchover_argocd_mock_apps_for_resume:
+  - metadata:
+      name: acm-app
+      namespace: argocd
+      annotations:
+        acm-switchover.argoproj.io/paused-by: test-run-001
+        acm-switchover.argoproj.io/original-sync-policy: '{"automated": {"prune": true}}'
+    spec:
+      syncPolicy: {}
+    status:
+      resources:
+        - kind: BackupSchedule
+          namespace: open-cluster-management-backup

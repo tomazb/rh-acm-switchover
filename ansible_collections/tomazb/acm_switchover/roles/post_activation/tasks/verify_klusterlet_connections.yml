@@ -1,0 +1,29 @@
+---
+- name: Build klusterlet connection probe candidates
+  ansible.builtin.set_fact:
+    _klusterlet_probe_candidates: >-
+      {{
+        (
+          acm_secondary_managed_clusters_info.resources
+          | default([])
+          | rejectattr('metadata.name', 'equalto', 'local-cluster')
+          | map(attribute='metadata.name')
+          | select('in', acm_switchover_managed_clusters.keys() | list)
+          | list
+        )
+        if acm_secondary_managed_clusters_info is defined
+        else (acm_switchover_managed_clusters.keys() | list)
+      }}
+
+- name: Probe managed cluster klusterlet hub secrets
+  tomazb.acm_switchover.acm_klusterlet_probe:
+    secondary_hub:
+      kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+      context: "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+    managed_clusters: "{{ acm_switchover_managed_clusters | default({}) }}"
+    candidate_clusters: "{{ _klusterlet_probe_candidates | default([]) }}"
+    workers: "{{ acm_switchover_execution.concurrency.klusterlet_probe_workers | default(10) | int }}"
+    request_timeout: "{{ acm_switchover_execution.timeouts.klusterlet_request_seconds | default(30) | int }}"
+    future_timeout: "{{ acm_switchover_execution.timeouts.klusterlet_worker_seconds | default(180) | int }}"
+  register: _klusterlet_probe_result
+  when: (_klusterlet_probe_candidates | default([]) | length) > 0

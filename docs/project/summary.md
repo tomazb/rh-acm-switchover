@@ -15,6 +15,8 @@ A comprehensive Python-based automation tool for executing Red Hat Advanced Clus
 - Simpler than Go while maintaining flexibility
 - Rich ecosystem for YAML, JSON, and logging
 
+> **Note**: An Ansible Collection rewrite is approved for planning and will deliver core parity as a second form factor. The Python CLI remains the production implementation during the coexistence period. See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md).
+
 ### Idempotency via State Management
 
 **Resume capability implemented through:**
@@ -188,7 +190,7 @@ Validation Summary: 15/15 checks passed
 1. Enable BackupSchedule on secondary hub
 2. Verify new backups being created
 3. Handle old hub based on `--old-hub-action`:
-   - `secondary`: Set up passive sync restore for reverse switchover
+   - `secondary`: Set up passive sync restore for reverse switchover and delete `MultiClusterObservability`
    - `decommission`: Remove ACM components automatically
    - `none`: Leave unchanged for manual handling
 4. Generate completion report
@@ -379,3 +381,5 @@ The modular architecture supports both continuous passive restore and one-time f
 With complete documentation including quick reference, detailed usage examples, and architecture details, the tool is ready for production use while maintaining extensibility for future enhancements.
 
 **Project Status: Complete and Ready for Use** ✅
+
+An Ansible Collection rewrite is approved for planning and will deliver core parity as a second form factor targeting `ansible-core` CLI and AAP. See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md).

@@ -45,6 +45,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "${SCRIPT_DIR}/constants.sh"
 source "${SCRIPT_DIR}/lib-common.sh"
 
+echo "WARNING: setup-rbac.sh is deprecated. Use 'ansible-playbook playbooks/rbac_bootstrap.yml' instead." >&2
+
 # =============================================================================
 # Configuration
 # =============================================================================

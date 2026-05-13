@@ -7,10 +7,13 @@ Welcome to the ACM Switchover Automation documentation.
 | I want to... | Go to... |
 |--------------|----------|
 | Get started quickly | [Installation Guide](getting-started/install.md) |
+| Skim the operational flow | [Runbook TL;DR](ACM_SWITCHOVER_RUNBOOK_TLDR.md) |
 | Run a switchover | [Quick Reference](operations/quickref.md) |
 | Use the container image | [Container Guide](getting-started/container.md) |
 | Deploy RBAC | [RBAC Deployment](deployment/rbac-deployment.md) |
+| Understand the collection form factor | [Ansible Collection Feature Inventory](ansible-collection/feature-inventory.md) |
 | Understand the architecture | [Architecture](development/architecture.md) |
+| Deep-dive into the code | [Code Walkthrough](development/code-walkthrough.md) |
 | Contribute to the project | [Contributing](../CONTRIBUTING.md) |
 
 ---
@@ -21,6 +24,7 @@ Day-to-day usage and operations.
 
 - **[Quick Reference](operations/quickref.md)** - Command cheat sheet (includes container usage)
 - **[Usage Guide](operations/usage.md)** - Detailed usage examples and scenarios
+- **[Runbook TL;DR](ACM_SWITCHOVER_RUNBOOK_TLDR.md)** - Short operator checklist for the main switchover paths
 - **[ACM Switchover Runbook](ACM_SWITCHOVER_RUNBOOK.md)** - Comprehensive operational runbook
 
 ---
@@ -39,6 +43,14 @@ Installation, configuration, and RBAC setup.
 - **[RBAC Requirements](deployment/rbac-requirements.md)** - Complete RBAC permissions documentation
 - **[RBAC Deployment Guide](deployment/rbac-deployment.md)** - Step-by-step RBAC deployment
 
+### Ansible Collection
+
+- **[Feature Inventory](ansible-collection/feature-inventory.md)** - Current collection capability map
+- **[Behavior Map](ansible-collection/behavior-map.md)** - Python-to-collection behavior mapping
+- **[Parity Matrix](ansible-collection/parity-matrix.md)** - Phase and feature parity status
+- **[Scenario Catalog](ansible-collection/scenario-catalog.md)** - Supported operational scenarios
+- **[CLI Migration Map](../ansible_collections/tomazb/acm_switchover/docs/cli-migration-map.md)** - CLI-to-collection flag and variable mapping
+
 ---
 
 ## For Developers
@@ -48,6 +60,7 @@ Architecture, testing, and contribution guidelines.
 ### Core Documentation
 
 - **[Architecture](development/architecture.md)** - Design principles and implementation details
+- **[Code Walkthrough](development/code-walkthrough.md)** - Deep explanation of Python, Ansible, and Bash implementation flows with Mermaid diagrams
 - **[Testing Guide](development/testing.md)** - How to run tests and CI/CD pipelines
 - **[CI/CD Setup](development/ci.md)** - GitHub Actions pipeline configuration
 - **[RBAC Implementation](development/rbac-implementation.md)** - Overview of RBAC features
@@ -88,7 +101,9 @@ Project planning and management documentation.
 ```
 docs/
 ├── README.md                    # This file
+├── ACM_SWITCHOVER_RUNBOOK_TLDR.md # Short operator checklist
 ├── ACM_SWITCHOVER_RUNBOOK.md    # Operational runbook (protected)
+├── ansible-collection/          # Collection parity and migration docs
 ├── getting-started/
 │   ├── install.md               # Installation guide
 │   └── container.md             # Container usage guide
@@ -102,6 +117,7 @@ docs/
 │   └── validation-rules.md      # Validation rules reference
 ├── development/
 │   ├── architecture.md          # Architecture documentation
+│   ├── code-walkthrough.md      # Deep implementation walkthrough
 │   ├── testing.md               # Testing guide
 │   ├── ci.md                    # CI/CD setup
 │   ├── rbac-implementation.md   # RBAC implementation details

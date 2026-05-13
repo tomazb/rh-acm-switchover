@@ -2,8 +2,8 @@
 
 ## ACM Hub Switchover Automation
 
-**Version**: 1.5.10  
-**Date**: 2026-03-08  
+**Version**: 1.6.3  
+**Date**: 2026-04-10  
 **Status**: Feature-complete, ongoing hardening and operational validation  
 **Owner**: Platform Engineering Team
 
@@ -12,6 +12,8 @@
 ## Executive Summary
 
 ACM Hub Switchover Automation is a Python CLI for performing controlled failover, migration, and decommission workflows between a primary and secondary Red Hat Advanced Cluster Management (ACM) hub. The product emphasizes operator safety, resumable execution, and explicit validation over maximum automation.
+
+An Ansible Collection (`tomazb.acm_switchover`) has been implemented as a production-ready second form factor delivering the same core capabilities, targeting both `ansible-core` CLI and Ansible Automation Platform (AAP). See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md) for the design. Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.
 
 The current product supports:
 
@@ -100,7 +102,7 @@ Manual ACM hub switchover is operationally expensive:
 - GitOps ownership markers are reported before execution
 - ACM-touching Argo CD Applications are auto-detected when ArgoCD CRD is present
 - Auto-sync can be paused with `--argocd-manage`
-- Auto-sync can be resumed later with `--argocd-resume-after-switchover` or `--argocd-resume-only`
+- Auto-sync can be resumed later with `--argocd-resume-only` (standalone mode, after Git is retargeted)
 
 ### UC-4: Safe dry-run or validation-only rehearsal
 
@@ -178,8 +180,8 @@ The product must complete the switchover and make the requested old-hub outcome 
 - Re-enable or recreate `BackupSchedule` on the new primary
 - Verify that post-switchover backups resume correctly
 - Support `--old-hub-action secondary`, `decommission`, and `none`
-- Optionally delete `MultiClusterObservability` on the old hub when keeping it as a secondary via `--disable-observability-on-secondary`
-- Resume Argo CD auto-sync when `--argocd-resume-after-switchover` is requested
+- Delete `MultiClusterObservability` on the old hub automatically when keeping it as a secondary; `--disable-observability-on-secondary` remains as a deprecated compatibility flag
+- Advise operator to resume Argo CD auto-sync after retargeting Git (via `--argocd-resume-only`)
 - Provide a completion summary with next-step guidance
 
 ### FR-6: Decommission workflow
@@ -254,18 +256,31 @@ Cross-argument validation must remain strict and documented.
 
 The PRD must stay aligned with the current user-facing CLI, especially:
 
+The Ansible Collection design maps these flags to grouped collection variables; see [CLI migration map](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md) §11.2 for the mapping.
+
 - `--method {passive,full}`
 - `--activation-method {patch,restore}`
 - `--old-hub-action {secondary,decommission,none}`
 - `--manage-auto-import-strategy`
 - `--min-managed-clusters`
+- `--report-dir`
+- `--restore-only`
+- `--decommission`
 - `--skip-gitops-check`
+- `--skip-rbac-validation`
+- `--skip-observability-checks`
 - `--argocd-manage`
-- `--argocd-resume-after-switchover`
 - `--argocd-resume-only`
+- `--argocd-resume-on-failure`
 - `--setup`
+- `--admin-kubeconfig`
 - `--include-decommission`
-- `--disable-observability-on-secondary`
+- `--role {operator,validator,both}`
+- `--token-duration`
+- `--output-dir`
+- `--disable-observability-on-secondary` (deprecated compatibility flag)
+
+Both production form factors must emit machine-readable report artifacts with schema version `1.0` for preflight, switchover, restore-only, and decommission workflows when report output is requested.
 
 ## Constraints and Caveats
 
@@ -281,3 +296,15 @@ The PRD should limit future work to areas not already delivered in the repo.
 - Broader real-world operational validation and measurement of timing/error-rate goals
 - Additional observability and reporting around switchover outcomes
 - Potential future expansion of GitOps-aware workflows beyond detection and Argo CD auto-sync coordination
+
+### Ansible Collection
+
+The Ansible Collection (`tomazb.acm_switchover`) has been implemented and is a production-ready second form factor. Remaining work relates to broader operational validation and AAP execution-environment packaging rather than core feature delivery. Key architectural differences from the Python CLI:
+
+- Ansible-native idempotency by default, with optional persistent checkpoints for long-running or interrupted switchovers
+- Collection-first architecture with roles, playbooks, and thin custom plugins instead of a monolithic Python CLI
+- Grouped variable model (`acm_switchover_hubs`, `acm_switchover_operation`, etc.) replacing flat CLI flags
+- Shared report schema with collection report artifact modules and Python `--report-dir`
+- Execution-environment packaging for AAP alongside `ansible-galaxy` distribution
+
+See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md) for the full design.

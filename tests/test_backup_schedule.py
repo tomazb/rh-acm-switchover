@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.backup_schedule as backup_module
 from lib.constants import BACKUP_NAMESPACE
+from lib.exceptions import SwitchoverError
 
 BackupScheduleManager = backup_module.BackupScheduleManager
 
@@ -86,6 +87,19 @@ class TestBackupScheduleManager:
             namespace=BACKUP_NAMESPACE,
         )
 
+    def test_multiple_schedules_fail_fast(self, schedule_manager, mock_kube_client):
+        """Finalization must not choose an arbitrary BackupSchedule when multiple exist."""
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-a"}, "spec": {"paused": False}},
+            {"metadata": {"name": "schedule-b"}, "spec": {"paused": True}},
+        ]
+
+        with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
+            schedule_manager.ensure_enabled("2.12.0")
+
+        mock_kube_client.patch_custom_resource.assert_not_called()
+        mock_kube_client.create_custom_resource.assert_not_called()
+
     def test_unpause_schedule_acm_211(self, schedule_manager, mock_kube_client):
         """Test handling paused schedule for ACM < 2.12.0."""
         mock_kube_client.list_custom_resources.return_value = [
@@ -145,18 +159,17 @@ class TestBackupScheduleManager:
         else:
             mock_kube_client.patch_custom_resource.assert_not_called()
 
-    def test_multiple_schedules_uses_first(self, schedule_manager, mock_kube_client):
-        """Test that when multiple schedules exist, first one is used."""
+    def test_multiple_schedules_fail_without_patching(self, schedule_manager, mock_kube_client):
+        """Multiple schedules are ambiguous and must fail without patching either one."""
         mock_kube_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-1"}, "spec": {"paused": True}},
             {"metadata": {"name": "schedule-2"}, "spec": {"paused": False}},
         ]
 
-        schedule_manager.ensure_enabled("2.12.0")
+        with pytest.raises(SwitchoverError, match="Multiple BackupSchedules"):
+            schedule_manager.ensure_enabled("2.12.0")
 
-        # Should patch the first schedule
-        call_args = mock_kube_client.patch_custom_resource.call_args
-        assert call_args[1]["name"] == "schedule-1"
+        mock_kube_client.patch_custom_resource.assert_not_called()
 
 
 @pytest.mark.integration

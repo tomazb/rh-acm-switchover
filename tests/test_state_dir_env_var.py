@@ -91,3 +91,20 @@ def test_resume_only_keeps_current_order_when_reversed_file_missing(monkeypatch:
     )
 
     assert resolved == os.path.join(str(tmp_path), "switchover-primary-a__secondary-b.json")
+
+
+def test_restore_only_produces_correct_state_filename(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Regression: --restore-only forbids --primary-context, so primary_ctx=None.
+
+    _resolve_state_file must produce 'switchover-restore-only__<secondary>.json'
+    without needing an explicit restore_only parameter.
+    """
+    monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+
+    resolved = _resolve_state_file(
+        requested_path=None,
+        primary_ctx=None,
+        secondary_ctx="secondary-hub",
+    )
+
+    assert resolved == os.path.join(str(tmp_path), "switchover-restore-only__secondary-hub.json")

@@ -1,0 +1,123 @@
+- name: valid passive patch operation
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+    execution:
+      mode: execute
+    features:
+      argocd:
+        manage: false
+  expected:
+    passed: true
+
+- name: resume_on_failure requires argocd manage
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+    execution:
+      mode: execute
+    features:
+      argocd:
+        manage: false
+        resume_on_failure: true
+  expected:
+    passed: false
+    contains: "argocd"
+
+- name: resume_on_failure rejected in validate mode
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+    execution:
+      mode: validate
+    features:
+      argocd:
+        manage: true
+        resume_on_failure: true
+  expected:
+    passed: false
+    contains: "validate"
+
+- name: resume_on_failure valid with argocd manage
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+    execution:
+      mode: execute
+    features:
+      argocd:
+        manage: true
+        resume_on_failure: true
+  expected:
+    passed: true
+
+- name: argocd manage valid in validate mode
+  kind: operation
+  input:
+    operation:
+      restore_only: false
+      method: passive
+      activation_method: patch
+      old_hub_action: secondary
+    execution:
+      mode: validate
+    features:
+      argocd:
+        manage: true
+        resume_on_failure: false
+  expected:
+    passed: true
+
+- name: valid relative path
+  kind: path
+  input:
+    path: .state/switchover-state.json
+  expected:
+    passed: true
+
+- name: valid tmp absolute path
+  kind: path
+  input:
+    path: /tmp/acm-switchover/state.json
+  expected:
+    passed: true
+
+- name: disallowed absolute root rejected
+  kind: path
+  input:
+    path: /etc/acm-switchover/state.json
+  expected:
+    passed: false
+    contains: "allowed"
+
+- name: tilde path rejected
+  kind: path
+  input:
+    path: ~/.kube/config
+  expected:
+    passed: false
+    contains: "unsafe characters"
+
+- name: traversal path rejected
+  kind: path
+  input:
+    path: ./artifacts/../outside/report.json
+  expected:
+    passed: false
+    contains: "Path traversal attempt"

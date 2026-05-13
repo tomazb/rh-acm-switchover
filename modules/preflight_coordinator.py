@@ -3,12 +3,18 @@
 # Runbook: Step 0 (pre-flight validation)
 
 import logging
-from typing import Tuple, TypedDict
+from typing import List, Optional, Tuple, TypedDict
 
 from kubernetes.client.rest import ApiException
 
 from lib import argocd as argocd_lib
-from lib.constants import OBSERVABILITY_NAMESPACE
+from lib.constants import (
+    LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
+    OBSERVABILITY_NAMESPACE,
+)
 from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
@@ -40,6 +46,8 @@ class PreflightConfig(TypedDict):
     primary_observability_detected: bool
     secondary_observability_detected: bool
     has_observability: bool
+    expected_managed_cluster_names: List[str]
+    expected_managed_cluster_count: int
 
 
 class PreflightValidator:
@@ -47,21 +55,25 @@ class PreflightValidator:
 
     def __init__(
         self,
-        primary_client: KubeClient,
+        primary_client: Optional[KubeClient],
         secondary_client: KubeClient,
         method: str = "passive",
         skip_rbac_validation: bool = False,
         include_decommission: bool = False,
+        include_old_hub_finalization: bool = False,
         argocd_manage: bool = False,
         skip_gitops_check: bool = False,
+        restore_only: bool = False,
     ) -> None:
         self.primary = primary_client
         self.secondary = secondary_client
         self.method = method
         self.skip_rbac_validation = skip_rbac_validation
         self.include_decommission = include_decommission
+        self.include_old_hub_finalization = include_old_hub_finalization
         self.argocd_manage = argocd_manage
         self.skip_gitops_check = skip_gitops_check
+        self.restore_only = restore_only
 
         self.reporter = ValidationReporter()
         self.kubeconfig_validator = KubeconfigValidator(self.reporter)
@@ -139,7 +151,10 @@ class PreflightValidator:
 
         # RBAC validation (unless explicitly skipped)
         if not self.skip_rbac_validation:
-            logger.info("Validating RBAC permissions...")
+            if self.restore_only:
+                logger.info("Restore-only mode: validating RBAC on secondary hub only")
+            else:
+                logger.info("Validating RBAC permissions...")
             try:
                 # F6 fix: Wrap the entire RBAC block so routine API failures
                 # (from namespace_exists, Argo CD discovery, or RBAC checks)
@@ -147,7 +162,7 @@ class PreflightValidator:
                 # escaping as uncaught exceptions.
                 # Check if observability namespace exists on either hub
                 # If not installed, skip observability permission checks
-                primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE)
+                primary_has_obs = self.primary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.primary else False
                 secondary_has_obs = (
                     self.secondary.namespace_exists(OBSERVABILITY_NAMESPACE) if self.secondary else False
                 )
@@ -166,6 +181,9 @@ class PreflightValidator:
                     primary_client=self.primary,
                     secondary_client=self.secondary,
                     include_decommission=self.include_decommission,
+                    include_old_hub_finalization=(
+                        self.include_old_hub_finalization and primary_has_obs and not self.include_decommission
+                    ),
                     skip_observability=skip_obs,
                     argocd_mode=effective_argocd_mode,
                     argocd_install_type=primary_argocd_install_type,
@@ -223,17 +241,29 @@ class PreflightValidator:
             secondary_version,
         )
 
-        for label, client in (("primary", self.primary), ("secondary", self.secondary)):
-            self.hub_component_validator.run(client, label)
+        if self.restore_only:
+            # Restore-only: only validate secondary hub components
+            self.hub_component_validator.run(self.secondary, "secondary")
+        else:
+            for label, client in (("primary", self.primary), ("secondary", self.secondary)):
+                self.hub_component_validator.run(client, label)
 
-        self.backup_validator.run(self.primary)
-        self.backup_schedule_validator.run(self.primary)
-        self.backup_storage_location_validator.run(self.primary, "primary")
+        if self.restore_only:
+            # Restore-only still needs proof that backup artifacts exist on the
+            # destination hub before activation asks ACM to restore "latest".
+            self.backup_validator.run(self.secondary)
+        else:
+            # Primary-only validators: skip entirely in restore-only mode
+            self.backup_validator.run(self.primary)
+            self.backup_schedule_validator.run(self.primary)
+            self.backup_storage_location_validator.run(self.primary, "primary")
+            self.cluster_deployment_validator.run(self.primary)
+            self.managed_cluster_backup_validator.run(self.primary)
+
+        # BSL on secondary is always checked (required for restore)
         self.backup_storage_location_validator.run(self.secondary, "secondary")
-        self.cluster_deployment_validator.run(self.primary)
-        self.managed_cluster_backup_validator.run(self.primary)
 
-        if self.method == "passive":
+        if self.method == "passive" and not self.restore_only:
             self.passive_sync_validator.run(self.secondary)
 
         primary_observability, secondary_observability = self.observability_detector.detect(
@@ -244,6 +274,8 @@ class PreflightValidator:
         if secondary_observability:
             self.observability_prereq_validator.run(self.secondary)
 
+        expected_managed_cluster_names = self._derive_expected_managed_cluster_names()
+
         self.reporter.print_summary()
 
         config: PreflightConfig = {
@@ -252,7 +284,44 @@ class PreflightValidator:
             "primary_observability_detected": primary_observability,
             "secondary_observability_detected": secondary_observability,
             "has_observability": primary_observability or secondary_observability,
+            "expected_managed_cluster_names": expected_managed_cluster_names,
+            "expected_managed_cluster_count": len(expected_managed_cluster_names),
         }
 
         critical_failures = self.reporter.critical_failures()
         return len(critical_failures) == 0, config
+
+    def _derive_expected_managed_cluster_names(self) -> List[str]:
+        """Return expected ManagedCluster names and record API failures as validation results."""
+        try:
+            return self._expected_managed_cluster_names()
+        except ApiException as e:
+            self.reporter.add_result(
+                "ManagedCluster inventory",
+                False,
+                f"Failed to list primary ManagedClusters for restore expectation: {e.status} {e.reason}",
+                critical=True,
+            )
+            logger.warning(
+                "Unable to list primary ManagedClusters for restore expectation (%s %s).",
+                e.status,
+                e.reason,
+            )
+            return []
+
+    def _expected_managed_cluster_names(self) -> List[str]:
+        """Return non-local ManagedCluster names observed on the primary during preflight."""
+        if self.restore_only or self.primary is None:
+            return []
+
+        managed_clusters = self.primary.list_custom_resources(
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
+        )
+        names = [
+            item.get("metadata", {}).get("name")
+            for item in managed_clusters
+            if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
+        ]
+        return sorted(names)

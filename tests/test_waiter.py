@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from lib.waiter import wait_for_condition
+from lib.waiter import WaitConditionResult, wait_for_condition
 
 
 @pytest.fixture
@@ -22,17 +22,19 @@ class TestWaitForCondition:
     """Tests for wait_for_condition function."""
 
     @patch("lib.waiter.time")
-    def test_wait_success_immediate(self, mock_time, mock_logger):
-        """Test condition succeeds immediately."""
+    def test_wait_success_immediate_logs_description_and_public_detail(self, mock_time, mock_logger):
+        """Test condition succeeds immediately and logs explicit public detail."""
         mock_time.time.return_value = 0
 
         def condition():
-            return True, "done"
+            return WaitConditionResult.complete("done")
 
         result = wait_for_condition(description="test wait", condition_fn=condition, logger=mock_logger)
 
         assert result is True
-        mock_logger.info.assert_called_with("%s complete: %s", "test wait", "done")
+        mock_logger.info.assert_any_call("Waiting for %s...", "test wait")
+        mock_logger.info.assert_any_call("%s complete: %s", "test wait", "done")
+        mock_logger.debug.assert_not_called()
         mock_time.sleep.assert_not_called()
 
     @patch("lib.waiter.time")
@@ -46,7 +48,12 @@ class TestWaitForCondition:
         mock_time.time.side_effect = [0, 10, 10, 20]
 
         # condition() calls: fail, success
-        condition = Mock(side_effect=[(False, "waiting"), (True, "done")])
+        condition = Mock(
+            side_effect=[
+                WaitConditionResult.pending("waiting"),
+                WaitConditionResult.complete("done"),
+            ]
+        )
 
         result = wait_for_condition(
             description="test retry",
@@ -57,36 +64,84 @@ class TestWaitForCondition:
 
         assert result is True
         assert condition.call_count == 2
+        mock_logger.debug.assert_called_once_with("%s in progress: %s (elapsed: %ss)", "test retry", "waiting", 10)
+        mock_logger.info.assert_any_call("%s complete: %s", "test retry", "done")
         mock_time.sleep.assert_called_once_with(5)
 
     @patch("lib.waiter.time")
-    def test_wait_progress_logging_omits_condition_detail(self, mock_time, mock_logger):
-        """Test progress logs do not include caller-provided detail text."""
-        mock_time.time.side_effect = [0, 10, 10, 60]
-
-        condition = Mock(return_value=(False, "token=super-secret"))
+    def test_wait_caps_sleep_to_remaining_timeout_budget(self, mock_time, mock_logger):
+        """Polling sleeps must not overshoot the remaining wall-clock timeout budget."""
+        mock_time.time.side_effect = [0, 8, 8, 11]
+        condition = Mock(return_value=WaitConditionResult.pending("waiting"))
 
         result = wait_for_condition(
-            description="test progress",
+            description="bounded wait",
             condition_fn=condition,
-            timeout=50,
-            interval=5,
             logger=mock_logger,
+            timeout=10,
+            interval=30,
         )
 
         assert result is False
-        mock_logger.debug.assert_called_once_with("%s in progress (elapsed: %ss)", "test progress", 10)
+        mock_time.sleep.assert_called_once_with(2)
+
+    @patch("lib.waiter.time")
+    def test_wait_uses_float_remaining_timeout_budget(self, mock_time, mock_logger):
+        """Remaining timeout math should not truncate elapsed time before sleeping."""
+        mock_time.time.side_effect = [0, 8.75, 8.75, 10.1]
+        condition = Mock(return_value=WaitConditionResult.pending("waiting"))
+
+        result = wait_for_condition(
+            description="precise wait",
+            condition_fn=condition,
+            logger=mock_logger,
+            timeout=10,
+            interval=30,
+        )
+
+        assert result is False
+        mock_time.sleep.assert_called_once_with(1.25)
+
+    @patch("lib.waiter.time")
+    def test_wait_fast_interval_respects_remaining_timeout_budget(self, mock_time, mock_logger):
+        """Fast polling must still be capped by the remaining timeout budget."""
+        mock_time.time.side_effect = [0, 4, 4, 6]
+        condition = Mock(return_value=WaitConditionResult.pending("waiting"))
+
+        result = wait_for_condition(
+            description="bounded fast wait",
+            condition_fn=condition,
+            logger=mock_logger,
+            timeout=5,
+            interval=30,
+            fast_interval=10,
+            fast_timeout=20,
+        )
+
+        assert result is False
+        mock_time.sleep.assert_called_once_with(1)
+
+    @patch("lib.waiter.time")
+    def test_wait_rejects_legacy_tuple_contract(self, mock_time, mock_logger):
+        """Test legacy tuple results are rejected in favor of the explicit contract."""
+        mock_time.time.return_value = 0
+
+        def condition():
+            return True, "done"
+
+        with pytest.raises(TypeError, match="WaitConditionResult"):
+            wait_for_condition(description="test progress", condition_fn=condition, logger=mock_logger)
 
     @patch("lib.waiter.time")
     def test_wait_timeout(self, mock_time, mock_logger):
-        """Test condition times out."""
+        """Test condition times out without logging raw timeout configuration."""
         # time.time() calls:
         # 1. start_time = 0
         # 2. loop check = 100 (timeout exceeded)
         # 3. final elapsed check = 100
-        mock_time.time.side_effect = [0, 100, 100]
+        mock_time.time.side_effect = [0, 10, 10, 100]
 
-        condition = Mock(return_value=(False, "still waiting"))
+        condition = Mock(return_value=WaitConditionResult.pending("still waiting"))
 
         result = wait_for_condition(
             description="test timeout",
@@ -96,9 +151,9 @@ class TestWaitForCondition:
         )
 
         assert result is False
-        # Should log warning on timeout
-        assert mock_logger.warning.called
-        assert "timeout" in mock_logger.warning.call_args[0][0]
+        mock_logger.warning.assert_called_once_with(
+            "%s not complete before timeout: %s", "test timeout", "still waiting"
+        )
 
     @patch("lib.waiter.time")
     def test_wait_success_on_last_check(self, mock_time, mock_logger):
@@ -107,7 +162,7 @@ class TestWaitForCondition:
         mock_time.time.side_effect = [0, 100]
 
         # But the final check (after loop) succeeds
-        condition = Mock(return_value=(True, "just in time"))
+        condition = Mock(return_value=WaitConditionResult.complete("just in time"))
 
         result = wait_for_condition(
             description="test last chance",
@@ -118,14 +173,14 @@ class TestWaitForCondition:
         )
 
         assert result is True
-        mock_logger.info.assert_called_with("%s complete: %s", "test last chance", "just in time")
+        mock_logger.info.assert_any_call("%s complete: %s", "test last chance", "just in time")
 
     @patch("lib.waiter.time")
     def test_wait_timeout_no_last_chance(self, mock_time, mock_logger):
         """Test timeout does not succeed after loop exit by default."""
         mock_time.time.side_effect = [0, 100]
 
-        condition = Mock(return_value=(True, "late"))
+        condition = Mock(return_value=WaitConditionResult.complete("late"))
 
         result = wait_for_condition(
             description="test no last chance",
@@ -135,3 +190,4 @@ class TestWaitForCondition:
         )
 
         assert result is False
+        mock_logger.warning.assert_called_once_with("%s not complete before timeout", "test no last chance")

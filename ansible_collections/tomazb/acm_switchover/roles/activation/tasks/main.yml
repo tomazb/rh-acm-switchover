@@ -1,0 +1,87 @@
+---
+- name: Enter checkpointed phase
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: activation
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: enter
+  register: _checkpoint_enter
+  when: acm_switchover_execution.checkpoint.enabled | default(false)
+
+- name: Run activation phase
+  when: not ((_checkpoint_enter | default({})).skipped_phase | default(false))
+  block:
+    - name: Discover secondary hub resources
+      ansible.builtin.include_tasks: discover_resources.yml
+
+    - name: Verify passive sync when method is passive
+      ansible.builtin.include_tasks: verify_passive_sync.yml
+      when: acm_switchover_operation.method == 'passive'
+
+    - name: Manage auto-import strategy for ACM 2.14+
+      ansible.builtin.include_tasks: manage_auto_import.yml
+
+    - name: Activate restore
+      ansible.builtin.include_tasks: activate_restore.yml
+
+    - name: Wait for restore completion
+      ansible.builtin.include_tasks: wait_for_restore.yml
+
+    - name: Apply immediate import annotations when required
+      ansible.builtin.include_tasks: apply_immediate_import.yml
+
+    - name: Publish activation result contract
+      ansible.builtin.set_fact:
+        acm_switchover_activation_result:
+          phase: activation
+          status: pass
+          changed: "{{ acm_switchover_restore_activation_result.changed | default(true) }}"
+          method: "{{ acm_switchover_operation.method }}"
+          activation_method: "{{ acm_switchover_operation.activation_method | default('patch') }}"
+          restore: "{{ acm_switchover_restore_activation_result.restore | default({}) }}"
+          patch: "{{ acm_switchover_restore_activation_result.patch | default(omit) }}"
+          operation: "{{ acm_switchover_restore_activation_result.operation | default({}) }}"
+          wait_target: "{{ acm_switchover_restore_activation_result.wait_target | default({}) }}"
+          wait: "{{ acm_switchover_wait_for_restore_result | default({}) }}"
+          immediate_import: "{{ acm_switchover_immediate_import_result | default({}) }}"
+  rescue:
+    - name: Mark checkpoint failure
+      tomazb.acm_switchover.checkpoint_phase:
+        phase: activation
+        checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+        status: fail
+        error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
+        operational_data:
+          argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+          auto_import_strategy_changed: >-
+            {{
+              (_auto_import_strategy_changed | default(false))
+              or
+              ((_checkpoint_enter.checkpoint | default({}))
+              .get('operational_data', {})
+              .get('auto_import_strategy_changed', false))
+            }}
+      when: acm_switchover_execution.checkpoint.enabled | default(false)
+
+    - name: Re-raise failure
+      ansible.builtin.fail:
+        msg: "{{ ansible_failed_result.msg | default('Phase activation failed') }}"
+
+- name: Mark checkpoint phase completion
+  # No file artifact for activation; report_ref not applicable
+  tomazb.acm_switchover.checkpoint_phase:
+    phase: activation
+    checkpoint: "{{ acm_switchover_execution.checkpoint | default({}) }}"
+    status: pass
+    operational_data:
+      argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+      auto_import_strategy_changed: >-
+        {{
+          (_auto_import_strategy_changed | default(false))
+          or
+          ((_checkpoint_enter.checkpoint | default({}))
+          .get('operational_data', {})
+          .get('auto_import_strategy_changed', false))
+        }}
+  when:
+    - acm_switchover_execution.checkpoint.enabled | default(false)
+    - not ((_checkpoint_enter | default({})).skipped_phase | default(false))

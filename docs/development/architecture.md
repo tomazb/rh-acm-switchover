@@ -1,7 +1,7 @@
 # ACM Switchover - Architecture & Design
 
-**Version**: 1.5.10  
-**Last Updated**: 2026-03-09
+**Version**: 1.6.3  
+**Last Updated**: 2026-04-10
 
 ## Overview
 
@@ -45,7 +45,7 @@ rh-acm-switchover/
 │   ├── preflight_validators.py    # Deprecated compatibility shim
 │   └── primary_prep.py            # Old-primary preparation logic
 ├── scripts/
-│   ├── argocd-manage.sh           # Standalone Argo CD pause/resume helper
+│   ├── argocd-manage.sh           # Deprecated standalone Argo CD helper
 │   ├── discover-hub.sh            # Hub discovery and preflight launcher
 │   ├── generate-merged-kubeconfig.sh
 │   ├── generate-sa-kubeconfig.sh
@@ -55,12 +55,20 @@ rh-acm-switchover/
 │   └── lib-common.sh
 ├── deploy/                        # RBAC, kustomize, Helm, ACM policies
 ├── tests/                         # Unit, integration, and E2E-oriented pytest coverage
+├── ansible_collections/tomazb/acm_switchover/  # Ansible Collection (second form factor)
+│   ├── playbooks/                 # Operator entrypoints (switchover, preflight, decommission, …)
+│   ├── roles/                     # Phase modules (preflight, primary_prep, activation, …)
+│   ├── plugins/
+│   │   ├── modules/               # Custom Ansible modules
+│   │   ├── module_utils/          # Shared utilities (constants, argocd, gitops, …)
+│   │   └── action/                # Action plugins (checkpoint_phase)
+│   └── tests/unit/                # pytest-based unit tests for the collection
 └── docs/
 ```
 
 ## Runtime Branches
 
-The entrypoint exposes four distinct execution branches:
+The entrypoint exposes five distinct execution branches:
 
 1. **Standard switchover path**
    - Uses state tracking, two `KubeClient` instances, phased execution, and optional Argo CD management.
@@ -70,6 +78,8 @@ The entrypoint exposes four distinct execution branches:
    - Bypasses the phased switchover workflow and runs the old-hub teardown flow directly.
 4. **Argo CD resume-only path (`--argocd-resume-only`)**
    - Loads recorded pause state and resumes Application auto-sync without running switchover phases.
+5. **Restore-only path (`--restore-only`)**
+   - Single-hub restore from S3 backups. No primary hub needed. Skips PRIMARY_PREP, runs secondary-only preflight, and can optionally pause Argo CD apps on the secondary hub before activation.
 
 ```mermaid
 flowchart TD
@@ -77,10 +87,30 @@ flowchart TD
     B -->|--setup| C[Run setup-rbac.sh wrapper]
     B -->|--decommission| D[Run decommission flow]
     B -->|--argocd-resume-only| E[Load state and resume recorded Argo CD apps]
+    B -->|--restore-only| R[Initialize state and secondary client]
     B -->|standard switchover| F[Initialize state and clients]
+    C --> C1{Success?}
+    C1 -->|yes| C2[Exit 0]
+    C1 -->|no| C3[Exit 1]
     D --> D1{Success?}
     D1 -->|yes| D2[Exit 0]
     D1 -->|no| D3[Exit 1]
+    E --> E1{Success?}
+    E1 -->|yes| E2[Exit 0]
+    E1 -->|no| E3[Exit 1]
+    R --> RG[PREFLIGHT secondary-only]
+    RG --> RP{--argocd-manage?}
+    RP -->|yes| RQ[Pause ACM-touching<br/>Argo CD Applications<br/>on secondary]
+    RP -->|no| RI[ACTIVATION full restore]
+    RQ --> RI
+    RI --> RJ[POST_ACTIVATION]
+    RJ --> RM[FINALIZATION backups-only]
+    RM --> RK[COMPLETED]
+    RG --> RL[FAILED]
+    RQ --> RL
+    RI --> RL
+    RJ --> RL
+    RM --> RL
     F --> G[PREFLIGHT]
     G --> H[PRIMARY_PREP]
     H --> I[ACTIVATION]
@@ -112,6 +142,7 @@ The architecture distinguishes validation failures, recoverable API issues, and 
 - Critical preflight failures stop before mutation
 - Terminal restore states fail explicitly
 - State captures phase and error context for reruns and debugging
+- The orchestrator only reports `COMPLETED` after each successful phase handler leaves durable state in the expected resulting phase; mismatches are recorded against the expected phase and transition the run to `FAILED`
 
 ### Explicit over implicit
 
@@ -123,6 +154,7 @@ The architecture distinguishes validation failures, recoverable API issues, and 
 ### Minimize hidden side effects
 
 - `--dry-run` logs intended operations instead of mutating cluster resources
+- `--dry-run` restores the pre-run state file after rehearsal so resume/checkpoint state is not advanced
 - `--validate-only` runs checks without entering mutation phases
 - Setup mode and resume-only mode are isolated from the main switchover control flow
 
@@ -161,6 +193,14 @@ Provides the operational scaffolding:
 - error history
 
 Critical checkpoints call `flush_state()`. Non-critical changes call `save_state()`.
+Dry-run orchestration captures and restores a full `StateManager` snapshot after the run; this is separate from
+validate-only runtime checkpoints, which intentionally preserve discovered config while restoring phase and error
+state.
+
+The main switchover and restore-only phase loops assert the expected durable phase
+after each handler that returns success. This keeps resume and completion
+criteria tied to `StateManager.current_phase`, not just a handler return value,
+and prevents a stale or invalid phase from falling through to `COMPLETED`.
 
 ### `lib/kube_client.py`
 
@@ -169,9 +209,18 @@ Wraps Kubernetes API operations with:
 - per-context client loading
 - dry-run-aware mutators
 - retry behavior for transient failures
+- explicit per-request timeouts for read, list, create, patch, scale, and log calls
 - common helpers for Deployments, StatefulSets, Pods, and custom resources
 
-This layer centralizes Kubernetes interaction so workflow modules can stay focused on ACM behavior.
+This layer centralizes Kubernetes interaction so workflow modules can stay focused on ACM behavior. The default
+request timeout is 30 seconds. Tenacity remains the retry layer for wrapped helpers, while urllib3 client retries stay
+disabled to avoid multiplying retry attempts below the workflow code.
+
+### `lib/waiter.py`
+
+Provides explicit polling contracts through `WaitConditionResult`. Polling sleeps are capped to the remaining timeout
+budget, including fast-poll intervals, so wait loops do not exceed their configured deadline because of a final
+oversized sleep.
 
 ### `lib/validation.py`
 
@@ -252,13 +301,15 @@ Important activation-related flags:
 - re-enabling or recreating `BackupSchedule`
 - verifying new backups after promotion
 - handling old-hub-as-secondary or old-hub decommission prep
-- optionally resuming Argo CD auto-sync
+
+BackupSchedule collision repair deletes and recreates the schedule to refresh backup ownership. After delete, it polls
+for schedule absence with a 30-second timeout and 2-second interval before recreating the schedule, preserving UID
+change safety checks without relying on a fixed sleep.
 
 Important finalization-related flags:
 
 - `--old-hub-action`
-- `--disable-observability-on-secondary`
-- `--argocd-resume-after-switchover`
+- `--disable-observability-on-secondary` (deprecated compatibility flag)
 
 ### Decommission
 
@@ -276,6 +327,9 @@ sequenceDiagram
     participant Argo as lib.argocd / gitops_detector
 
     CLI->>State: load or initialize state
+    opt --dry-run
+        CLI->>State: capture full state snapshot
+    end
     CLI->>P: create client for primary context
     CLI->>S: create client for secondary context
     CLI->>Mods: run preflight coordinator
@@ -287,8 +341,11 @@ sequenceDiagram
     Mods->>S: patch restore or create full restore
     CLI->>Mods: run post-activation verification
     CLI->>Mods: run finalization
-    Mods->>Argo: optionally resume recorded Applications
+    Mods->>P: delete MultiClusterObservability when old hub remains secondary
     Mods->>State: persist completion and config
+    opt --dry-run
+        CLI->>State: restore pre-run state snapshot
+    end
 ```
 
 ## GitOps and Argo CD Architecture
@@ -319,6 +376,7 @@ Important state categories:
 - saved resources needed for version-specific restore/unpause behavior
 - Argo CD pause metadata such as `argocd_run_id` and `argocd_paused_apps`
 - error history
+- optional schema-versioned report artifacts written through `--report-dir`
 
 Operational guarantees:
 
@@ -326,6 +384,7 @@ Operational guarantees:
 - locking protects against concurrent modification
 - signal and exit handlers flush dirty state
 - completed-state reruns remain safe, including validate-only behavior
+- report artifact writes validate controller-side paths before creating JSON files
 
 ## Validation and Safety Model
 
@@ -345,7 +404,7 @@ The shell scripts are not alternate implementations of the full Python workflow.
 - `preflight-check.sh` / `postflight-check.sh`: standalone operational checks
 - `setup-rbac.sh`: RBAC deployment and kubeconfig generation wrapper
 - `generate-sa-kubeconfig.sh` / `generate-merged-kubeconfig.sh`: credential packaging helpers
-- `argocd-manage.sh`: standalone pause/resume control for Argo CD Applications
+- `argocd-manage.sh`: deprecated standalone Argo CD helper; prefer Python/Ansible workflows
 
 This split keeps the Python CLI focused on orchestration while leaving smaller operator tasks available as composable shell utilities.
 
@@ -381,3 +440,21 @@ Important test themes include:
 - The runbook remains the authoritative manual/operational fallback
 - GitOps support is advisory plus targeted Argo CD coordination, not full drift reconciliation
 - `modules/preflight_validators.py` remains in the tree for compatibility and should not be treated as the main implementation
+
+## Ansible Collection
+
+The Ansible Collection (`tomazb.acm_switchover`) lives at `ansible_collections/tomazb/acm_switchover/` and is a production-ready second form factor of the same switchover automation, targeting both `ansible-core` CLI and Ansible Automation Platform (AAP).
+
+The collection uses a fundamentally different architecture from the Python CLI:
+
+- **Roles** replace Python phase modules: `preflight`, `primary_prep`, `activation`, `post_activation`, `finalization`, `decommission`, `argocd_manage`, `discovery`, `rbac_bootstrap`
+- **Thin custom plugins** (`modules/`, `action/`, `module_utils/`) handle operations that need retry semantics, structured polling, or checkpoint persistence beyond what stock `kubernetes.core` modules provide
+- **Playbooks** (`switchover.yml`, `preflight.yml`, `decommission.yml`, `rbac_bootstrap.yml`, `discovery.yml`, `argocd_resume.yml`) are the operator entrypoints
+- **Grouped variables** (`acm_switchover_hubs`, `acm_switchover_operation`, `acm_switchover_features`) replace CLI flags as the primary operator interface
+- **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
+- **Report artifacts** use schema version `1.0` across preflight, switchover, restore-only, and decommission paths; Python and collection reports preserve aligned status/report contracts without requiring identical top-level fields for every report type
+- **Decommission observability** defaults to namespace autodetection in the collection, with explicit `true`/`false` overrides for known environments
+- **Klusterlet helpers** use bounded direct Kubernetes requests and worker futures. Defaults are 10 workers, 30-second per-request timeouts, and 180-second worker future timeout windows for each probe/remediation batch; worker future timeouts are reported as failed cluster results.
+- **Constants isolation**: `plugins/module_utils/constants.py` is the collection's constants file — it cannot import from `lib/constants.py`
+
+The collection architecture is fully detailed in the [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md). Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.

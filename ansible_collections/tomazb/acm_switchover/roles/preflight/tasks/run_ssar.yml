@@ -1,0 +1,61 @@
+---
+# Run SelfSubjectAccessReview for each expanded permission and collect denied ones.
+# Input:
+#   - acm_rbac_permissions (list of [api_group, resource, verb, namespace] tuples)
+#   - _ssar_target_kubeconfig (optional, defaults to acm_switchover_hubs.primary.kubeconfig)
+#   - _ssar_target_context (optional, defaults to acm_switchover_hubs.primary.context)
+# Output:
+#   - _ssar_results (raw API results)
+#   - _rbac_denied_permissions (list of denied permission dicts)
+
+- name: Determine SSAR target kubeconfig
+  ansible.builtin.set_fact:
+    _ssar_kubeconfig: "{{ _ssar_target_kubeconfig | default(acm_switchover_hubs.primary.kubeconfig) }}"
+    _ssar_context: "{{ _ssar_target_context | default(acm_switchover_hubs.primary.context) }}"
+
+- name: Run SelfSubjectAccessReview for each permission
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _ssar_kubeconfig }}"
+    context: "{{ _ssar_context }}"
+    state: present
+    definition:
+      apiVersion: authorization.k8s.io/v1
+      kind: SelfSubjectAccessReview
+      spec:
+        resourceAttributes:
+          verb: "{{ item.2 }}"
+          group: "{{ item.0 | default('', true) }}"
+          resource: "{{ item.1.split('/')[0] }}"
+          subresource: "{{ item.1.split('/')[1] | default(omit, true) }}"
+          namespace: "{{ item.3 | default(omit, true) }}"
+  register: _ssar_results
+  loop: "{{ acm_rbac_permissions }}"
+  loop_control:
+    label: "{{ item.2 }} {{ item.0 }}/{{ item.1 }}{{ ' in ' + item.3 if item.3 else '' }}"
+  changed_when: false
+  failed_when: false
+
+- name: Collect denied permissions
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions: >-
+      {%- set denied = [] -%}
+      {%- for result in _ssar_results.results | default([]) -%}
+        {%- if result.failed | default(false) or result.result is not defined or result.result.status is not defined -%}
+          {%- set _ = denied.append({
+            "api_group": result.item.0,
+            "resource": result.item.1,
+            "verb": result.item.2,
+            "namespace": result.item.3 | default(none),
+            "reason": result.msg | default("SelfSubjectAccessReview did not return a status")
+          }) -%}
+        {%- elif not (result.result.status.allowed | default(false)) -%}
+          {%- set _ = denied.append({
+            "api_group": result.item.0,
+            "resource": result.item.1,
+            "verb": result.item.2,
+            "namespace": result.item.3 | default(none),
+            "reason": result.result.status.reason | default(result.result.status.evaluationError | default("denied"))
+          }) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ denied }}

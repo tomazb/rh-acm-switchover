@@ -1,0 +1,106 @@
+---
+- name: Skip disable-auto-import cleanup in dry-run mode
+  ansible.builtin.set_fact:
+    acm_switchover_cleanup_auto_import_result:
+      changed: false
+      status: skipped
+      reason: dry_run
+  when: acm_switchover_execution.mode | default('execute') == 'dry_run'
+
+- name: Read secondary hub ManagedClusters before auto-import cleanup
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_cleanup_managed_clusters_info
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Collect ManagedClusters with stale disable-auto-import annotations
+  ansible.builtin.set_fact:
+    _acm_secondary_disable_auto_import_targets: >-
+      {%- set targets = [] -%}
+      {%- for cluster in (_acm_secondary_cleanup_managed_clusters_info.resources | default([])) -%}
+      {%- set metadata = cluster.get('metadata', {}) -%}
+      {%- set annotations = metadata.get('annotations', {}) or {} -%}
+      {%- set cluster_name = metadata.get('name', '') -%}
+      {%- if
+        cluster_name != 'local-cluster'
+        and 'import.open-cluster-management.io/disable-auto-import' in annotations
+      -%}
+      {%- set _ = targets.append(cluster_name) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ targets }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Remove stale disable-auto-import annotations from ManagedClusters
+  kubernetes.core.k8s:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    name: "{{ item }}"
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    state: patched
+    definition:
+      metadata:
+        annotations:
+          import.open-cluster-management.io/disable-auto-import: null
+  loop: "{{ _acm_secondary_disable_auto_import_targets | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  register: _acm_secondary_disable_auto_import_patch_results
+  when:
+    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - (_acm_secondary_disable_auto_import_targets | default([]) | length) > 0
+
+- name: Re-read secondary hub ManagedClusters after auto-import cleanup
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_cleanup_managed_clusters_verify_info
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Fail when stale disable-auto-import annotations remain
+  ansible.builtin.assert:
+    that:
+      - >-
+        {%- set flagged = [] -%}
+        {%- for cluster in (_acm_secondary_cleanup_managed_clusters_verify_info.resources | default([])) -%}
+        {%- set metadata = cluster.get('metadata', {}) -%}
+        {%- set annotations = metadata.get('annotations', {}) or {} -%}
+        {%- set cluster_name = metadata.get('name', '') -%}
+        {%- if
+          cluster_name != 'local-cluster'
+          and 'import.open-cluster-management.io/disable-auto-import' in annotations
+        -%}
+        {%- set _ = flagged.append(cluster_name or 'unknown') -%}
+        {%- endif -%}
+        {%- endfor -%}
+        {{ flagged | length == 0 }}
+    fail_msg: >-
+      disable-auto-import annotation still present on:
+      {%- set flagged = [] -%}
+      {%- for cluster in (_acm_secondary_cleanup_managed_clusters_verify_info.resources | default([])) -%}
+      {%- set metadata = cluster.get('metadata', {}) -%}
+      {%- set annotations = metadata.get('annotations', {}) or {} -%}
+      {%- set cluster_name = metadata.get('name', '') -%}
+      {%- if
+        cluster_name != 'local-cluster'
+        and 'import.open-cluster-management.io/disable-auto-import' in annotations
+      -%}
+      {%- set _ = flagged.append(cluster_name or 'unknown') -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ flagged | join(', ') }}
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Publish disable-auto-import cleanup result
+  ansible.builtin.set_fact:
+    acm_switchover_cleanup_auto_import_result:
+      changed: "{{ _acm_secondary_disable_auto_import_patch_results.changed | default(false) }}"
+      status: pass
+      cleaned_clusters: "{{ _acm_secondary_disable_auto_import_targets | default([]) }}"
+  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
