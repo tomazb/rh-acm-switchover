@@ -45,7 +45,7 @@
 | `skip_gitops_check` | bool | `false` | Skip read-only GitOps marker checks |
 | `skip_rbac_validation` | bool | `false` | Skip RBAC self-validation in preflight |
 | `disable_observability_on_secondary` | bool | `false` | Deprecated compatibility setting; old-hub MCO deletion is now automatic when keeping the old hub as secondary |
-| `argocd.manage` | bool | `false` | Pause ACM-touching Argo CD Applications during switchover |
+| `argocd.manage` | bool | `false` | Pause ACM-touching Argo CD Applications during switchover; blocks ApplicationSet-managed child apps, unknown/stale Application impact, and failed post-patch pause verification |
 | `argocd.resume_on_failure` | bool | `false` | Best-effort resume of Applications paused by the current run if switchover fails |
 | `klusterlet.strict_remediation` | bool | `false` | Module-level immediate failure toggle for klusterlet remediation. The role still fails after the post-remediation re-check when remediation failed or klusterlets remain on the wrong hub |
 
@@ -67,6 +67,12 @@
 
 The full variable name is `acm_switchover_execution.checkpoint.reset_from`.
 Checkpoint `reset_from` accepts `preflight`, `primary_prep`, `activation`, `post_activation`, or `finalization`.
+
+### Argo CD management safety
+
+When `acm_switchover_features.argocd.manage` is `true`, the collection refuses to patch unsafe Applications. Auto-sync Applications owned by an ApplicationSet block the run when they touch ACM resources because the parent controller can revert child changes. Remediate by pausing or updating the parent ApplicationSet, generator, or template before retrying.
+
+Auto-sync Applications also block when `status.resources` is empty or stale because the role cannot rule out ACM impact. Refresh or sync the Application until Argo CD reports current resources, or inspect and pause it manually. After patching, the role re-reads each Application and fails if `spec.syncPolicy.automated` remains enabled.
 
 ## Preflight Result Facts
 

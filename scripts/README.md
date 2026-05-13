@@ -915,6 +915,8 @@ graph TD
 
 Pause or resume auto-sync on Argo CD Applications that touch ACM namespaces/kinds, so GitOps does not revert switchover steps. Uses a JSON state file to record original sync policies and restore them safely.
 
+> **Deprecated boundary:** This legacy Bash script is not updated for the supported ApplicationSet child-Application blocker, stale or empty `status.resources` blocker, or post-patch auto-sync verification. Use the Python CLI `--argocd-manage` or the Ansible collection `argocd_manage` role for production Argo CD management.
+
 ### Usage
 
 ```bash

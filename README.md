@@ -31,6 +31,7 @@ ArgoCD integration is fully available and stable in the switchover workflow.
 - Automatic read-only ArgoCD discovery runs when the Applications CRD is present
 - Optional managed pause/resume is available through `--argocd-manage`
 - Resume-only mode is available through `--argocd-resume-only` (after updating Git for the new hub)
+- Managed pause blocks unsafe cases instead of patching child Applications that a parent ApplicationSet can revert, or Applications whose ACM impact cannot be determined from current Argo CD status
 
 For full ArgoCD behavior, constraints, and examples, see [Detailed Usage Guide](docs/operations/usage.md) and [Scripts README](scripts/README.md).
 
@@ -183,6 +184,13 @@ python acm_switchover.py \
 ```
 
 Applications are left paused by default. After updating Git/desired state for the new hub, resume explicitly with `--argocd-resume-only`.
+
+Managed pause fails closed in these cases:
+- An auto-sync Application is owned by an ApplicationSet and touches ACM resources.
+- `status.resources` is empty or stale for an auto-sync Application.
+- A live re-read shows auto-sync still enabled after patching.
+
+For ApplicationSet-managed apps, pause or update the parent ApplicationSet, generator, or template rather than the generated child Application.
 
 ### Resume from Previous Run
 

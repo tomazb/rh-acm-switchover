@@ -23,3 +23,13 @@ def test_argocd_re_pause_clobber_fixture(run_argocd_fixture):
     # At least the fresh app should be paused; already-paused app should be skipped
     assert summary["paused"] >= 1
     assert summary["restored"] >= 1
+
+
+def test_argocd_applicationset_child_blocks_managed_pause(run_argocd_fixture):
+    completed, summary = run_argocd_fixture("applicationset_blocked.yml")
+
+    assert completed.returncode != 0
+    output = completed.stdout + completed.stderr
+    assert "ApplicationSet parent-set" in output
+    assert "pause/update the ApplicationSet" in output
+    assert summary == {}

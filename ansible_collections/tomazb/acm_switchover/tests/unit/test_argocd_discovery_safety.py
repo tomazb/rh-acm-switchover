@@ -14,7 +14,9 @@ ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 
 
 def _load_discover_tasks():
-    return yaml.safe_load((ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml").read_text())
+    return yaml.safe_load(
+        (ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml").read_text()
+    )
 
 
 def _get_discovery_block(tasks):
@@ -22,7 +24,9 @@ def _get_discovery_block(tasks):
     for task in tasks:
         if task.get("name", "") == "Discover Argo CD Applications from cluster":
             return task
-    raise AssertionError("Could not find 'Discover Argo CD Applications from cluster' block")
+    raise AssertionError(
+        "Could not find 'Discover Argo CD Applications from cluster' block"
+    )
 
 
 def _get_rescue_tasks(tasks):
@@ -31,6 +35,15 @@ def _get_rescue_tasks(tasks):
     rescue = block.get("rescue")
     assert rescue is not None, "Discovery block must have a rescue section"
     return rescue
+
+
+def _walk_tasks(tasks):
+    """Yield task dictionaries from a task list, including nested block/rescue/always entries."""
+    for task in tasks:
+        yield task
+        for nested_key in ("block", "rescue", "always"):
+            for nested in task.get(nested_key, []) or []:
+                yield from _walk_tasks([nested])
 
 
 class TestDiscoverRescueBlockExists:
@@ -45,7 +58,8 @@ class TestDiscoverRescueBlockExists:
         """Rescue must have more than one task (not just a blanket set_fact)."""
         rescue = _get_rescue_tasks(_load_discover_tasks())
         assert len(rescue) > 1, (
-            "Rescue block must have more than one task to distinguish " "CRD-absent from unexpected errors"
+            "Rescue block must have more than one task to distinguish "
+            "CRD-absent from unexpected errors"
         )
 
 
@@ -57,7 +71,10 @@ class TestMarkNotInstalledIsConditional:
             sf = task.get("ansible.builtin.set_fact", {})
             if isinstance(sf, dict) and "acm_switchover_argocd_installed" in sf:
                 return task
-        raise AssertionError("Rescue block must contain a set_fact task for " "acm_switchover_argocd_installed")
+        raise AssertionError(
+            "Rescue block must contain a set_fact task for "
+            "acm_switchover_argocd_installed"
+        )
 
     def test_mark_not_installed_has_when(self):
         rescue = _get_rescue_tasks(_load_discover_tasks())
@@ -86,7 +103,8 @@ class TestFailOnUnexpectedError:
             if "ansible.builtin.fail" in task:
                 return task
         raise AssertionError(
-            "Rescue block must contain an ansible.builtin.fail task " "for unexpected (non-CRD) errors"
+            "Rescue block must contain an ansible.builtin.fail task "
+            "for unexpected (non-CRD) errors"
         )
 
     def test_fail_task_exists(self):
@@ -97,7 +115,8 @@ class TestFailOnUnexpectedError:
         rescue = _get_rescue_tasks(_load_discover_tasks())
         task = self._find_fail_task(rescue)
         assert "when" in task, (
-            "The fail task must have a 'when' condition " "(inverse of the mark-not-installed condition)"
+            "The fail task must have a 'when' condition "
+            "(inverse of the mark-not-installed condition)"
         )
 
     def test_fail_task_when_is_inverse_of_mark_not_installed(self):
@@ -132,7 +151,8 @@ class TestFailOnUnexpectedError:
         task = self._find_fail_task(rescue)
         msg = str(task["ansible.builtin.fail"].get("msg", ""))
         assert "_argocd_discovery_error" in msg, (
-            "Fail task msg must include {{ _argocd_discovery_error }} " "so operators can diagnose the real failure"
+            "Fail task msg must include {{ _argocd_discovery_error }} "
+            "so operators can diagnose the real failure"
         )
 
 
@@ -145,5 +165,64 @@ class TestErrorCapture:
         first = rescue[0]
         sf = first.get("ansible.builtin.set_fact", {})
         assert isinstance(sf, dict) and "_argocd_discovery_error" in sf, (
-            "First rescue task must capture the error into " "_argocd_discovery_error via set_fact"
+            "First rescue task must capture the error into "
+            "_argocd_discovery_error via set_fact"
         )
+
+
+class TestUnsafeApplicationBlocking:
+    """Argo CD management must block Applications that cannot be safely paused."""
+
+    def _find_blocker_fail_task(self, tasks):
+        for task in _walk_tasks(tasks):
+            fail = task.get("ansible.builtin.fail")
+            if isinstance(fail, dict) and "unsafe for automated pause" in str(
+                fail.get("msg", "")
+            ):
+                return task
+        raise AssertionError(
+            "discover.yml must fail when acm_argocd_filter reports blocked Applications"
+        )
+
+    def test_discover_fails_when_filter_reports_blocked_applications(self):
+        tasks = _load_discover_tasks()
+        task = self._find_blocker_fail_task(tasks)
+
+        assert "when" in task
+        when_text = str(task["when"])
+        assert "acm_switchover_argocd_blocked_apps" in when_text
+        assert "== 'pause'" in when_text
+        assert "acm_switchover_argocd_blocked_apps" in str(
+            task["ansible.builtin.fail"]["msg"]
+        )
+
+    def test_pause_rereads_applications_after_patch(self):
+        pause_tasks = yaml.safe_load(
+            (ROLES_DIR / "argocd_manage" / "tasks" / "pause.yml").read_text()
+        )
+
+        reread_tasks = [
+            task
+            for task in _walk_tasks(pause_tasks)
+            if task.get("name") == "Re-read Applications after Argo CD pause"
+            and "kubernetes.core.k8s_info" in task
+        ]
+        assert (
+            reread_tasks
+        ), "pause.yml must re-read Applications after patching auto-sync"
+
+    def test_pause_fails_when_autosync_remains_enabled(self):
+        pause_tasks = yaml.safe_load(
+            (ROLES_DIR / "argocd_manage" / "tasks" / "pause.yml").read_text()
+        )
+
+        fail_tasks = [
+            task
+            for task in _walk_tasks(pause_tasks)
+            if "ansible.builtin.fail" in task
+            and "auto-sync remains enabled after pause"
+            in str(task["ansible.builtin.fail"].get("msg", ""))
+        ]
+        assert (
+            fail_tasks
+        ), "pause.yml must fail if a re-read Application still has automated sync enabled"

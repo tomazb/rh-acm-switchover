@@ -247,6 +247,8 @@ python acm_switchover.py --argocd-resume-only --primary-context <p> --secondary-
 
 Bash (deprecated): `./scripts/argocd-manage.sh` is deprecated. Use the Python CLI or Ansible collection instead.
 
+Safety: Managed pause blocks ApplicationSet-managed child Applications, auto-sync Applications with empty or stale `status.resources`, and any Application that still has auto-sync after the pause patch is re-read. Remediate ApplicationSet cases by pausing/updating the parent ApplicationSet, generator, or template, not the child Application.
+
 Note: Resume treats already-resumed apps as idempotent no-ops and fails only when an Application cannot be restored for actionable reasons. If pause was run with `--dry-run`, resume is blocked until a non-dry-run pause is executed.
 
 ## Troubleshooting Commands

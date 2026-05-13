@@ -60,6 +60,38 @@
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
         - "(item.spec.syncPolicy | default({})).automated | default(none) is not none"
 
+    - name: Re-read Applications after Argo CD pause
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
+        context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ item.metadata.namespace }}"
+        name: "{{ item.metadata.name }}"
+      loop: "{{ acm_switchover_argocd_acm_apps }}"
+      loop_control:
+        label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+      register: acm_argocd_post_pause_apps
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - "(item.spec.syncPolicy | default({})).automated | default(none) is not none"
+
+    - name: Fail when auto-sync remains enabled after pause
+      ansible.builtin.fail:
+        msg: >-
+          Argo CD Application {{ item.item.metadata.namespace }}/{{ item.item.metadata.name }}
+          auto-sync remains enabled after pause. Check for Argo CD controller reconciliation,
+          ApplicationSet management, or RBAC/patch conflicts before retrying.
+      loop: "{{ acm_argocd_post_pause_apps.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.metadata.namespace }}/{{ item.item.metadata.name }}"
+      when:
+        - acm_switchover_argocd_mock_apps is not defined
+        - not (item.skipped | default(false))
+        - item.resources | default([])
+        - ((item.resources[0].spec.syncPolicy | default({})).automated | default(none)) is not none
+
     - name: Record pause summary
       ansible.builtin.set_fact:
         acm_switchover_argocd_summary: >-
