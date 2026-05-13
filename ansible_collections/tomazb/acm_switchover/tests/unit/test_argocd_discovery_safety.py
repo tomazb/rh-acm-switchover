@@ -38,6 +38,7 @@ def _get_rescue_tasks(tasks):
 
 
 def _walk_tasks(tasks):
+    """Yield task dictionaries from a task list, including nested block/rescue/always entries."""
     for task in tasks:
         yield task
         for nested_key in ("block", "rescue", "always"):
@@ -190,6 +191,7 @@ class TestUnsafeApplicationBlocking:
         assert "when" in task
         when_text = str(task["when"])
         assert "acm_switchover_argocd_blocked_apps" in when_text
+        assert "== 'pause'" in when_text
         assert "acm_switchover_argocd_blocked_apps" in str(
             task["ansible.builtin.fail"]["msg"]
         )

@@ -114,6 +114,7 @@ class PauseResult:
     name: str
     original_sync_policy: Dict[str, Any]
     patched: bool
+    patch_applied: bool = False
     skip_reason: Optional[str] = None
     error: Optional[str] = None
 
@@ -567,6 +568,7 @@ def resume_recorded_applications(
         name=(app.get("metadata", {}) or {}).get("name", ""),
         original_sync_policy=dict((app.get("spec", {}) or {}).get("syncPolicy") or {}),
         patched="automated" in ((app.get("spec", {}) or {}).get("syncPolicy") or {}),
+        patch_applied=False,
     ),
 )
 def pause_autosync(
@@ -650,6 +652,7 @@ def pause_autosync(
             name=name,
             original_sync_policy=original,
             patched=False,
+            patch_applied=True,
             error=f"pause verification failed: {detail}",
         )
     current_policy = ((current or {}).get("spec", {}) or {}).get("syncPolicy") or {}
@@ -664,10 +667,15 @@ def pause_autosync(
             name=name,
             original_sync_policy=original,
             patched=False,
+            patch_applied=True,
             error=message,
         )
     return PauseResult(
-        namespace=ns, name=name, original_sync_policy=original, patched=True
+        namespace=ns,
+        name=name,
+        original_sync_policy=original,
+        patched=True,
+        patch_applied=True,
     )
 
 

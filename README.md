@@ -185,7 +185,12 @@ python acm_switchover.py \
 
 Applications are left paused by default. After updating Git/desired state for the new hub, resume explicitly with `--argocd-resume-only`.
 
-Managed pause fails closed when an auto-sync Application is owned by an ApplicationSet and touches ACM resources, when `status.resources` is empty or stale for an auto-sync Application, or when a live re-read shows auto-sync still enabled after patching. For ApplicationSet-managed apps, pause or update the parent ApplicationSet, generator, or template rather than the generated child Application.
+Managed pause fails closed in these cases:
+- An auto-sync Application is owned by an ApplicationSet and touches ACM resources.
+- `status.resources` is empty or stale for an auto-sync Application.
+- A live re-read shows auto-sync still enabled after patching.
+
+For ApplicationSet-managed apps, pause or update the parent ApplicationSet, generator, or template rather than the generated child Application.
 
 ### Resume from Previous Run
 

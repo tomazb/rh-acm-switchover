@@ -89,4 +89,6 @@
       Argo CD Applications are unsafe for automated pause:
       {{ acm_switchover_argocd_blocked_apps | default([]) }}.
       Remediate the reported ApplicationSet parents or refresh stale Application status before retrying.
-  when: (acm_switchover_argocd_blocked_apps | default([]) | length | int) > 0
+  when:
+    - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'pause'
+    - acm_switchover_argocd_blocked_apps | default([])

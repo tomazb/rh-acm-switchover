@@ -474,6 +474,49 @@ class TestErrorHandling:
         # Failed entry should be removed from paused_apps
         assert paused_apps == []
 
+    def test_verification_failure_preserves_pause_state_for_resume(self):
+        state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
+        client = Mock()
+        app = _make_app("argocd", "app-1")
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[app],
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[_make_impact(app)],
+            ),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+        ):
+            mock_pause.return_value = argocd_lib.PauseResult(
+                namespace="argocd",
+                name="app-1",
+                original_sync_policy={"automated": {}},
+                patched=False,
+                patch_applied=True,
+                error="pause verification failed: 500 Internal Server Error",
+            )
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+
+        assert failures == 1
+        assert paused_apps == [
+            {
+                "hub": "primary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+                "pause_applied": True,
+            }
+        ]
+        assert state._config["argocd_paused_apps"] == paused_apps
+
     def test_detection_failure_propagates(self):
         """ArgoCD detection errors should propagate to the caller."""
         state = _make_state_manager({})

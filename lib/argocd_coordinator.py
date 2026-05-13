@@ -232,8 +232,17 @@ class ArgoCDPauseCoordinator:
                         )
                     self._persist_paused_apps(paused_apps)
                 elif result.error:
-                    self._remove_pause_entry(paused_apps, hub_label, namespace, name)
-                    self._persist_paused_apps(paused_apps)
+                    if result.patch_applied:
+                        entry["original_sync_policy"] = result.original_sync_policy
+                        entry["pause_applied"] = True
+                        if not self.dry_run:
+                            entry.pop("dry_run", None)
+                        self._persist_paused_apps(paused_apps)
+                    else:
+                        self._remove_pause_entry(
+                            paused_apps, hub_label, namespace, name
+                        )
+                        self._persist_paused_apps(paused_apps)
                     pause_failures += 1
                 else:
                     self._remove_pause_entry(paused_apps, hub_label, namespace, name)

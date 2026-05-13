@@ -386,6 +386,7 @@ class TestPauseAutosync:
         result = argocd_lib.pause_autosync(client, app, "run-1")
 
         assert result.patched is False
+        assert result.patch_applied is True
         assert result.error is not None
         assert "auto-sync remains enabled after pause" in result.error
         client.patch_custom_resource.assert_called_once()
