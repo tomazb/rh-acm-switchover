@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tests.release.adapters.common import ReportArtifact
 from tests.release.adapters.python_cli import PythonCliAdapter
 from tests.release.test_release_certification import execute_python_scenarios
@@ -311,6 +313,13 @@ def test_python_decommission_command_uses_decommission_flag(tmp_path: Path) -> N
     assert "--secondary-context" not in command
     assert "--primary-context" in command
     assert "--report-dir" in command
+
+
+def test_python_adapter_rejects_rbac_bootstrap_release_scenario(tmp_path: Path) -> None:
+    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+
+    with pytest.raises(ValueError, match="Unknown Python CLI release scenario"):
+        adapter.build_command("rbac-bootstrap")
 
 
 def test_python_full_restore_command_forces_method_full(tmp_path: Path) -> None:

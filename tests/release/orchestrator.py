@@ -41,7 +41,12 @@ from tests.release.scenarios.catalog import ScenarioDefinition, select_release_m
 from tests.release.scenarios.runtime_parity import (
     CAPABILITY_REQUIRED_FIELDS,
     compare_normalized_records,
+    normalize_checkpoint_artifact,
+    normalize_decommission_artifact,
+    normalize_operation_artifact,
     normalize_preflight,
+    normalize_rbac_bootstrap_artifact,
+    normalize_report_artifact,
     runtime_parity_not_applicable,
     write_runtime_parity_artifact,
 )
@@ -315,16 +320,61 @@ def _load_report(path: str) -> dict | None:
         return None
 
 
+def _result_artifact_dir(result: dict) -> Path | None:
+    for key in ("stdout_path", "stderr_path"):
+        if result.get(key):
+            return Path(result[key]).parent
+    for report in result.get("reports", []):
+        if report.get("path"):
+            return Path(report["path"]).parent
+    return None
+
+
+def _add_checkpoint_source(sources: dict[str, dict[str, dict]], result: dict) -> None:
+    artifact_dir = _result_artifact_dir(result)
+    if artifact_dir is None:
+        return
+    for filename in ("checkpoint.json", "state.json"):
+        payload = _load_report(str(artifact_dir / filename))
+        if payload:
+            sources.setdefault("checkpoints", {})[result["stream"]] = normalize_checkpoint_artifact(payload)
+            return
+
+
 def _normalized_runtime_sources(results: list[dict]) -> dict[str, dict[str, dict]]:
     sources: dict[str, dict[str, dict]] = {}
     for result in results:
+        if result.get("stream") in {"python", "ansible"}:
+            _add_checkpoint_source(sources, result)
         for report in result.get("reports", []):
             report_type = report.get("type")
-            payload = _load_report(report.get("path", ""))
+            report_path = report.get("path", "")
+            payload = _load_report(report_path)
             if not payload:
                 continue
+            filename = Path(report_path).name
             if report_type == "preflight":
                 sources.setdefault("preflight validation", {})[result["stream"]] = normalize_preflight(payload)
+            if report_type == "switchover":
+                sources.setdefault("switchover artifacts", {})[result["stream"]] = normalize_operation_artifact(
+                    payload, filename
+                )
+            if report_type == "restore":
+                sources.setdefault("restore-only artifacts", {})[result["stream"]] = normalize_operation_artifact(
+                    payload, filename
+                )
+            if report_type == "decommission":
+                sources.setdefault("decommission artifacts", {})[result["stream"]] = normalize_decommission_artifact(
+                    payload, filename
+                )
+            if report_type == "rbac-bootstrap":
+                sources.setdefault("RBAC/bootstrap artifacts", {})[result["stream"]] = (
+                    normalize_rbac_bootstrap_artifact(payload, filename)
+                )
+            if report_type in {"preflight", "switchover", "restore", "decommission", "rbac-bootstrap"}:
+                sources.setdefault("report artifacts", {}).setdefault(
+                    result["stream"], normalize_report_artifact(payload, report_path)
+                )
     return sources
 
 

@@ -31,6 +31,7 @@ REPORT_NAMES: dict[str, tuple[str, str]] = {
     "ansible-restore-only": ("restore", "restore-only-report.json"),
     "argocd-managed-switchover": ("switchover", "switchover-report.json"),
     "decommission": ("decommission", "decommission-report.json"),
+    "rbac-bootstrap": ("rbac-bootstrap", "rbac-bootstrap-report.json"),
 }
 
 
@@ -122,6 +123,7 @@ class AnsibleAdapter:
         if scenario_id == "rbac-bootstrap":
             extra_vars["acm_switchover_operation"]["dry_run"] = True
             extra_vars["acm_switchover_execution"]["mode"] = "dry_run"
+            extra_vars["summary_path"] = str(self.scenario_dir(scenario_id) / "rbac-bootstrap-report.json")
             extra_vars["acm_switchover_rbac_bootstrap"] = {
                 "role": "operator",
                 "include_decommission": True,
@@ -132,6 +134,7 @@ class AnsibleAdapter:
         if scenario_id == "decommission":
             extra_vars["acm_switchover_operation"]["dry_run"] = True
             extra_vars["acm_switchover_execution"]["mode"] = "dry_run"
+            extra_vars["summary_path"] = str(self.scenario_dir(scenario_id) / "decommission-report.json")
             extra_vars["acm_switchover_decommission"] = {
                 "confirm": True,
                 "has_observability": "auto",

@@ -41,6 +41,8 @@ def test_catalog_contains_optional_resilience_artifact_scenarios() -> None:
         "runtime-parity",
         "final-baseline-check",
     )
+    assert selected.scenarios[6].id == "rbac-bootstrap"
+    assert selected.scenarios[6].streams == ("ansible",)
 
 
 def test_mutating_filter_adds_prerequisites_and_final_checks() -> None:

@@ -84,6 +84,10 @@ class PythonCliAdapter:
         return self.artifact_dir / "scenarios" / scenario_id / "python"
 
     def build_command(self, scenario_id: str, extra_args: tuple[str, ...] = ()) -> list[str]:
+        if scenario_id not in REPORT_NAMES:
+            raise ValueError(
+                f"Unknown Python CLI release scenario: {scenario_id!r}. Known scenarios: {sorted(REPORT_NAMES)}"
+            )
         scenario_dir = self.scenario_dir(scenario_id)
         state_file = scenario_dir / "state.json"
         report_dir = scenario_dir
@@ -115,25 +119,6 @@ class PythonCliAdapter:
                 str(report_dir),
                 "--decommission",
                 "--non-interactive",
-            ] + list(extra_args)
-
-        if scenario_id == "rbac-bootstrap":
-            return [
-                sys.executable,
-                "acm_switchover.py",
-                "--primary-context",
-                self.primary_context,
-                "--state-file",
-                str(state_file),
-                "--setup",
-                "--admin-kubeconfig",
-                self.primary_kubeconfig,
-                "--role",
-                "operator",
-                "--include-decommission",
-                "--output-dir",
-                str(scenario_dir / "kubeconfigs"),
-                "--skip-kubeconfig-generation",
             ] + list(extra_args)
 
         # full-restore forces --method full regardless of the adapter method field

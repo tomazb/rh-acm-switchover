@@ -114,6 +114,23 @@ def test_build_extra_vars_sets_method_full_for_restore_only(tmp_path: Path) -> N
     assert extra_vars["acm_switchover_operation"]["restore_only"] is True
 
 
+def test_build_extra_vars_decommission_sets_summary_path(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("decommission")
+
+    assert extra_vars["summary_path"].endswith("decommission/ansible/decommission-report.json")
+
+
+def test_build_extra_vars_rbac_bootstrap_sets_summary_path(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("rbac-bootstrap")
+
+    assert extra_vars["summary_path"].endswith("rbac-bootstrap/ansible/rbac-bootstrap-report.json")
+    assert extra_vars["acm_switchover_rbac_bootstrap"]["include_decommission"] is True
+
+
 def test_build_command_raises_for_unknown_scenario(tmp_path: Path) -> None:
     adapter = _make_adapter(tmp_path)
 
@@ -180,6 +197,18 @@ def test_ansible_adapter_discovers_decommission_report(tmp_path: Path) -> None:
 
     assert reports[0].schema_version == "1.0"
     assert reports[0].type == "decommission"
+
+
+def test_ansible_adapter_discovers_rbac_bootstrap_report(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+    scenario_dir = adapter.scenario_dir("rbac-bootstrap")
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "rbac-bootstrap-report.json").write_text('{"status": "passed"}', encoding="utf-8")
+
+    reports = adapter.discover_reports("rbac-bootstrap")
+
+    assert reports[0].schema_version is None
+    assert reports[0].type == "rbac-bootstrap"
 
 
 def test_ansible_adapter_failed_command_sets_failed_status(monkeypatch, tmp_path: Path) -> None:

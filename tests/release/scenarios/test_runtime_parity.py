@@ -3,13 +3,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tests.release.orchestrator import _normalized_runtime_sources
 from tests.release.reporting.artifacts import ReleaseArtifacts
 from tests.release.scenarios.runtime_parity import (
     CAPABILITY_REQUIRED_FIELDS,
     ComparisonRecord,
     compare_normalized_records,
+    normalize_checkpoint_artifact,
+    normalize_decommission_artifact,
     normalize_argocd_management,
+    normalize_operation_artifact,
     normalize_preflight,
+    normalize_rbac_bootstrap_artifact,
+    normalize_report_artifact,
     runtime_parity_not_applicable,
     write_runtime_parity_artifact,
 )
@@ -99,6 +105,122 @@ def test_normalize_argocd_management_uses_discovered_application_sets() -> None:
     )
 
     assert normalized["selected_applications"] == ["app-a", "app-b"]
+
+
+def test_normalize_release_artifact_guardrails_ignore_implementation_metadata(tmp_path: Path) -> None:
+    operation = normalize_operation_artifact(
+        {
+            "schema_version": 1,
+            "source": "python-cli",
+            "status": "pass",
+            "generated_at": "2026-05-12T00:00:00Z",
+            "phases": {"activation": {"status": "pass"}, "finalization": {"status": "pass"}},
+        },
+        "switchover-report.json",
+    )
+    decommission = normalize_decommission_artifact({"status": "passed"}, "decommission-report.json")
+    rbac = normalize_rbac_bootstrap_artifact(
+        {"assets_applied": ["operator.yaml", "decommission.yaml"]}, "rbac-bootstrap-report.json"
+    )
+    checkpoint = normalize_checkpoint_artifact({"completed_steps": ["preflight", "activation"]})
+    report = normalize_report_artifact({"schema_version": "1.0", "source": "tomazb.acm_switchover"}, str(tmp_path))
+
+    assert operation == {
+        "schema_version": "1",
+        "status": "pass",
+        "phase_ids": ["activation", "finalization"],
+        "report_filename": "switchover-report.json",
+    }
+    assert decommission == {"status": "passed", "report_filename": "decommission-report.json"}
+    assert rbac == {
+        "manifest_asset_count": 2,
+        "include_decommission": True,
+        "report_filename": "rbac-bootstrap-report.json",
+    }
+    assert checkpoint == {"artifact_present": True, "completed_phase_count": 2}
+    assert report == {"schema_version": "1.0", "source_present": True, "safe_path_validated": True}
+
+
+def test_normalized_runtime_sources_populates_release_artifact_guardrails(tmp_path: Path) -> None:
+    python_dir = tmp_path / "python"
+    ansible_dir = tmp_path / "ansible"
+    rbac_dir = tmp_path / "rbac"
+    python_dir.mkdir()
+    ansible_dir.mkdir()
+    rbac_dir.mkdir()
+    (python_dir / "switchover-report.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "source": "acm_switchover.py",
+                "status": "pass",
+                "phases": {"activation": {"status": "pass"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ansible_dir / "switchover-report.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "source": "tomazb.acm_switchover",
+                "phases": {"activation": {"status": "pass"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (python_dir / "state.json").write_text(json.dumps({"completed_steps": ["activation"]}), encoding="utf-8")
+    (ansible_dir / "checkpoint.json").write_text(json.dumps({"completed_phases": ["activation"]}), encoding="utf-8")
+    (rbac_dir / "rbac-bootstrap-report.json").write_text(
+        json.dumps({"assets_applied": ["operator.yaml", "decommission.yaml"]}), encoding="utf-8"
+    )
+
+    sources = _normalized_runtime_sources(
+        [
+            {
+                "stream": "python",
+                "scenario_id": "python-passive-switchover",
+                "stdout_path": str(python_dir / "stdout.txt"),
+                "reports": [
+                    {
+                        "type": "switchover",
+                        "path": str(python_dir / "switchover-report.json"),
+                    }
+                ],
+            },
+            {
+                "stream": "ansible",
+                "scenario_id": "ansible-passive-switchover",
+                "stdout_path": str(ansible_dir / "stdout.txt"),
+                "reports": [
+                    {
+                        "type": "switchover",
+                        "path": str(ansible_dir / "switchover-report.json"),
+                    }
+                ],
+            },
+            {
+                "stream": "ansible",
+                "scenario_id": "rbac-bootstrap",
+                "stdout_path": str(rbac_dir / "stdout.txt"),
+                "reports": [
+                    {
+                        "type": "rbac-bootstrap",
+                        "path": str(rbac_dir / "rbac-bootstrap-report.json"),
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert sources["switchover artifacts"]["python"] == sources["switchover artifacts"]["ansible"]
+    assert sources["checkpoints"]["python"] == sources["checkpoints"]["ansible"]
+    assert sources["report artifacts"]["python"] == sources["report artifacts"]["ansible"]
+    assert sources["RBAC/bootstrap artifacts"]["ansible"] == {
+        "manifest_asset_count": 2,
+        "include_decommission": True,
+        "report_filename": "rbac-bootstrap-report.json",
+    }
 
 
 def test_write_runtime_parity_artifact_sets_failed_status(tmp_path: Path) -> None:
