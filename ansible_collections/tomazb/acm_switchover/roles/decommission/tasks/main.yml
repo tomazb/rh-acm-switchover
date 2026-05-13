@@ -16,7 +16,6 @@
     kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
   register: _decommission_observability_namespace
-  failed_when: false
   when: (acm_switchover_decommission.has_observability | default('auto') | string | lower) == 'auto'
 
 - name: Publish effective observability setting

@@ -388,6 +388,14 @@ Delete MultiClusterHub resource? (This will remove all ACM components) [y/N]: y
 - Delete ManagedClusters: 1-2 minutes
 - Delete MultiClusterHub: 15-20 minutes
 
+**ManagedCluster deletion safety gate:**
+Before deleting any non-local `ManagedCluster`, decommission re-reads Hive
+`ClusterDeployment` resources on the old hub and blocks deletion when a matching
+ClusterDeployment does not have `spec.preserveOnDelete=true`. If the Hive API
+lookup fails with a permissions, timeout, or other API error, decommission fails
+closed before deleting ManagedClusters. A verified absence of the Hive
+ClusterDeployment API, or no matching ClusterDeployments, remains acceptable.
+
 **Non-interactive mode (automation):**
 ```bash
 python acm_switchover.py \

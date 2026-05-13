@@ -119,7 +119,13 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 |-----|------|---------|-------------|
 | `confirmed` | bool | `false` | Must be `true` to proceed outside `dry_run` mode |
 | `interactive` | bool | `false` | Reserved for future interactive prompting |
-| `has_observability` | `auto`, `true`, `false` | `auto` | Auto-detect `open-cluster-management-observability` by default; `true`/`false` force the observability deletion path on or off |
+| `has_observability` | `auto`, `true`, `false` | `auto` | Auto-detect `open-cluster-management-observability` by default; `true`/`false` force the observability deletion path on or off. Auto-detection fails closed on API errors; only a successful lookup with no namespace disables Observability deletion/checks. |
+
+Decommission always re-checks matching Hive `ClusterDeployment` resources before
+live non-local `ManagedCluster` deletion. Matching ClusterDeployments must have
+`spec.preserveOnDelete=true`; unsafe values or unclassified Hive API lookup
+errors stop the role before ManagedClusters are deleted. A verified missing Hive
+ClusterDeployment API, or no matching ClusterDeployments, is accepted.
 
 ### `acm_switchover_rbac_bootstrap`
 

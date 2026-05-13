@@ -24,6 +24,68 @@
       }}
   when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
+- name: Verify ClusterDeployment preserveOnDelete safety before ManagedCluster deletion
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - (_managed_cluster_delete_targets | default([]) | length) > 0
+  block:
+    - name: List Hive ClusterDeployments before ManagedCluster deletion
+      kubernetes.core.k8s_info:
+        kind: ClusterDeployment
+        api_version: hive.openshift.io/v1
+        kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+        context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
+      register: _decommission_clusterdeployments
+  rescue:
+    - name: Record verified absence of Hive ClusterDeployment API
+      ansible.builtin.set_fact:
+        _clusterdeployments_verified_absent: true
+        _decommission_clusterdeployments:
+          resources: []
+      when: >-
+        {{
+          'no matches for kind' in (ansible_failed_result.msg | default('') | lower)
+          or 'failed to find exact match' in (ansible_failed_result.msg | default('') | lower)
+          or 'could not find the requested resource' in (ansible_failed_result.msg | default('') | lower)
+        }}
+
+    - name: Fail when ClusterDeployment safety cannot be verified
+      ansible.builtin.fail:
+        msg: >-
+          Unable to verify ClusterDeployment preserveOnDelete safety before deleting ManagedClusters:
+          {{ ansible_failed_result.msg | default('unknown API error') }}
+      when: not (_clusterdeployments_verified_absent | default(false) | bool)
+
+- name: Identify unsafe matching ClusterDeployments before ManagedCluster deletion
+  ansible.builtin.set_fact:
+    _unsafe_clusterdeployments_for_managedcluster_delete: >-
+      {%- set unsafe = [] -%}
+      {%- set target_names = _managed_cluster_delete_targets | default([]) | map(attribute='metadata.name') | list -%}
+      {%- for cd in (_decommission_clusterdeployments.resources | default([])) -%}
+      {%- set metadata = cd.get('metadata', {}) -%}
+      {%- set spec = cd.get('spec', {}) -%}
+      {%- set cd_name = metadata.get('name', '') -%}
+      {%- set cluster_name = spec.get('clusterName', '') -%}
+      {%- if (cd_name in target_names or cluster_name in target_names) and not (spec.get('preserveOnDelete', false) | bool) -%}
+      {%- set _ = unsafe.append(metadata.get('namespace', 'unknown') ~ '/' ~ metadata.get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ unsafe }}
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - (_managed_cluster_delete_targets | default([]) | length) > 0
+
+- name: Block unsafe ManagedCluster deletion
+  ansible.builtin.fail:
+    msg: >-
+      Cannot delete non-local ManagedClusters because matching Hive ClusterDeployments
+      do not have spec.preserveOnDelete=true: {{
+        _unsafe_clusterdeployments_for_managedcluster_delete | default([]) | join(', ')
+      }}. Set preserveOnDelete=true before decommission.
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - (_unsafe_clusterdeployments_for_managedcluster_delete | default([]) | length) > 0
+
 - name: Delete non-local ManagedClusters
   kubernetes.core.k8s:
     kind: ManagedCluster
