@@ -95,7 +95,7 @@ spec:
                     verbs: ["get", "list"]
                   - apiGroups: ["observability.open-cluster-management.io"]
                     resources: ["multiclusterobservabilities"]
-                    verbs: ["get", "list"]
+                    verbs: ["get", "list", "delete"]
                   - apiGroups: ["argoproj.io"]
                     resources: ["applications"]
                     verbs: ["get", "list", "patch"]

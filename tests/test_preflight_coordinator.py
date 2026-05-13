@@ -21,6 +21,7 @@ def _build_validator(
     secondary = Mock()
     primary.namespace_exists.return_value = True
     secondary.namespace_exists.return_value = True
+    primary.list_custom_resources.return_value = []
 
     validator = PreflightValidator(
         primary_client=primary,
@@ -112,6 +113,7 @@ def test_validate_all_passes_expected_argocd_rbac_mode(argocd_manage, skip_gitop
         primary_client=validator.primary,
         secondary_client=validator.secondary,
         include_decommission=False,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode=expected_mode,
         argocd_install_type="vanilla" if expected_mode != "none" else "unknown",
@@ -144,6 +146,7 @@ def test_validate_all_skips_argocd_rbac_when_applications_crd_missing():
         primary_client=validator.primary,
         secondary_client=validator.secondary,
         include_decommission=False,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",
@@ -176,6 +179,7 @@ def test_validate_all_includes_decommission_permissions_when_requested():
         primary_client=validator.primary,
         secondary_client=validator.secondary,
         include_decommission=True,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",
@@ -230,6 +234,7 @@ def test_validate_all_uses_requested_argocd_mode_when_discovery_is_forbidden():
         primary_client=validator.primary,
         secondary_client=validator.secondary,
         include_decommission=False,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode="check",
         argocd_install_type="unknown",
@@ -316,6 +321,7 @@ def test_validate_all_skips_argocd_when_skip_gitops_check_set():
         primary_client=validator.primary,
         secondary_client=validator.secondary,
         include_decommission=False,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",
@@ -355,6 +361,7 @@ def test_validate_all_passes_per_hub_argocd_install_types():
         primary_client=validator.primary,
         secondary_client=validator.secondary,
         include_decommission=False,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode="check",
         argocd_install_type="operator",
@@ -416,6 +423,7 @@ def test_restore_only_validates_secondary_rbac():
         primary_client=None,
         secondary_client=validator.secondary,
         include_decommission=False,
+        include_old_hub_finalization=False,
         skip_observability=False,
         argocd_mode="none",
         argocd_install_type="unknown",

@@ -20,6 +20,8 @@ from lib.constants import (
     BACKUP_NAMESPACE,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MCE_NAMESPACE,
+    MULTICLUSTEROBSERVABILITIES_PLURAL,
+    OBSERVABILITY_API_GROUP,
     OBSERVABILITY_NAMESPACE,
 )
 from lib.exceptions import ValidationError
@@ -193,6 +195,16 @@ class RBACValidator:
         (
             "observability.open-cluster-management.io",
             "multiclusterobservabilities",
+            ["delete"],
+        ),
+    ]
+
+    # Permissions required by normal finalization when the old hub remains as
+    # secondary and observability was detected there.
+    OLD_HUB_FINALIZATION_PERMISSIONS = [
+        (
+            OBSERVABILITY_API_GROUP,
+            MULTICLUSTEROBSERVABILITIES_PLURAL,
             ["delete"],
         ),
     ]
@@ -372,6 +384,7 @@ class RBACValidator:
     def validate_cluster_permissions(
         self,
         include_decommission: bool = False,
+        include_old_hub_finalization: bool = False,
         skip_observability: bool = False,
         argocd_mode: str = "none",
         argocd_install_type: str = "unknown",
@@ -381,6 +394,8 @@ class RBACValidator:
 
         Args:
             include_decommission: Whether to check decommission permissions (operator only)
+            include_old_hub_finalization: Whether to check old-hub finalization
+                permissions used when normal finalization deletes MCO
             skip_observability: Whether to skip observability permission checks
             argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
             argocd_install_type: 'vanilla', 'operator', or 'unknown'
@@ -433,10 +448,28 @@ class RBACValidator:
                         errors.append(error_msg)
                         logger.error(error_msg)
 
+        checked_extra_permissions = set()
+
         # Check decommission permissions if requested (operator role only)
-        if include_decommission and self.role == "operator":
+        if include_decommission:
+            if self.role != "operator":
+                # F7 fix: Reject this combination explicitly instead of silently skipping.
+                raise ValueError(
+                    "include_decommission=True is not valid for the validator role. "
+                    "Decommission permissions are only applicable to the operator role."
+                )
+
             for api_group, resource, verbs in self.DECOMMISSION_PERMISSIONS:
+                if skip_observability and "observability" in api_group:
+                    logger.info("Skipping observability decommission permission: %s/%s", api_group, resource)
+                    continue
+
                 for verb in verbs:
+                    permission_key = (api_group, resource, verb)
+                    if permission_key in checked_extra_permissions:
+                        continue
+                    checked_extra_permissions.add(permission_key)
+
                     has_perm, error = self.check_permission(api_group, resource, verb)
                     if not has_perm:
                         all_valid = False
@@ -446,12 +479,31 @@ class RBACValidator:
                             error_msg += f" - {error}"
                         errors.append(error_msg)
                         logger.error(error_msg)
-        elif include_decommission and self.role == "validator":
-            # F7 fix: Reject this combination explicitly instead of silently skipping.
-            raise ValueError(
-                "include_decommission=True is not valid for the validator role. "
-                "Decommission permissions are only applicable to the operator role."
-            )
+
+        if include_old_hub_finalization:
+            if self.role != "operator":
+                raise ValueError(
+                    "include_old_hub_finalization=True is not valid for the validator role. "
+                    "Old-hub finalization delete permissions are only applicable to the operator role."
+                )
+
+            if not skip_observability:
+                for api_group, resource, verbs in self.OLD_HUB_FINALIZATION_PERMISSIONS:
+                    for verb in verbs:
+                        permission_key = (api_group, resource, verb)
+                        if permission_key in checked_extra_permissions:
+                            continue
+                        checked_extra_permissions.add(permission_key)
+
+                        has_perm, error = self.check_permission(api_group, resource, verb)
+                        if not has_perm:
+                            all_valid = False
+                            group_name = api_group if api_group else "core"
+                            error_msg = f"Missing old-hub finalization permission: {verb} {group_name}/{resource}"
+                            if error:
+                                error_msg += f" - {error}"
+                            errors.append(error_msg)
+                            logger.error(error_msg)
 
         if all_valid:
             logger.info("✓ All cluster-scoped permissions validated for role: %s", self.role)
@@ -580,6 +632,7 @@ class RBACValidator:
     def validate_all_permissions(
         self,
         include_decommission: bool = False,
+        include_old_hub_finalization: bool = False,
         skip_observability: bool = False,
         argocd_mode: str = "none",
         argocd_install_type: str = "unknown",
@@ -589,6 +642,8 @@ class RBACValidator:
 
         Args:
             include_decommission: Whether to check decommission permissions
+            include_old_hub_finalization: Whether to check old-hub finalization
+                permissions used when normal finalization deletes MCO
             skip_observability: Whether to skip observability checks
             argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
             argocd_install_type: 'vanilla', 'operator', or 'unknown'
@@ -604,6 +659,7 @@ class RBACValidator:
         # Validate cluster permissions
         cluster_valid, cluster_errors = self.validate_cluster_permissions(
             include_decommission=include_decommission,
+            include_old_hub_finalization=include_old_hub_finalization,
             skip_observability=skip_observability,
             argocd_mode=argocd_mode,
             argocd_install_type=argocd_install_type,
@@ -720,6 +776,7 @@ class RBACValidator:
     def generate_permission_report(
         self,
         include_decommission: bool = False,
+        include_old_hub_finalization: bool = False,
         skip_observability: bool = False,
         argocd_mode: str = "none",
         argocd_install_type: str = "unknown",
@@ -729,6 +786,8 @@ class RBACValidator:
 
         Args:
             include_decommission: Whether to check decommission permissions
+            include_old_hub_finalization: Whether to check old-hub finalization
+                permissions used when normal finalization deletes MCO
             skip_observability: Whether to skip observability checks
             argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
             argocd_install_type: 'vanilla', 'operator', or 'unknown'
@@ -738,6 +797,7 @@ class RBACValidator:
         """
         all_valid, all_errors = self.validate_all_permissions(
             include_decommission=include_decommission,
+            include_old_hub_finalization=include_old_hub_finalization,
             skip_observability=skip_observability,
             argocd_mode=argocd_mode,
             argocd_install_type=argocd_install_type,
@@ -789,6 +849,7 @@ def validate_rbac_permissions(
     primary_client: Optional[KubeClient] = None,
     secondary_client: Optional[KubeClient] = None,
     include_decommission: bool = False,
+    include_old_hub_finalization: bool = False,
     skip_observability: bool = False,
     argocd_mode: str = "none",
     argocd_install_type: str = "unknown",
@@ -805,6 +866,8 @@ def validate_rbac_permissions(
         primary_client: Optional KubeClient for primary hub
         secondary_client: Optional KubeClient for secondary hub
         include_decommission: Whether to check decommission permissions (requires primary_client)
+        include_old_hub_finalization: Whether to check old-hub finalization
+            permissions used when normal finalization deletes MCO on the primary hub
         skip_observability: Whether to skip observability checks
         argocd_mode: Argo CD RBAC mode ('none', 'check', or 'manage')
         argocd_install_type: 'vanilla', 'operator', or 'unknown'
@@ -830,6 +893,7 @@ def validate_rbac_permissions(
         try:
             primary_valid, primary_errors = primary_validator.validate_all_permissions(
                 include_decommission=include_decommission,
+                include_old_hub_finalization=include_old_hub_finalization,
                 skip_observability=skip_observability,
                 argocd_mode=argocd_mode,
                 argocd_install_type=argocd_install_type,
@@ -840,6 +904,7 @@ def validate_rbac_permissions(
         if not primary_valid:
             report = primary_validator.generate_permission_report(
                 include_decommission=include_decommission,
+                include_old_hub_finalization=include_old_hub_finalization,
                 skip_observability=skip_observability,
                 argocd_mode=argocd_mode,
                 argocd_install_type=argocd_install_type,
@@ -857,6 +922,7 @@ def validate_rbac_permissions(
         try:
             secondary_valid, secondary_errors = secondary_validator.validate_all_permissions(
                 include_decommission=False,  # Decommission only on primary
+                include_old_hub_finalization=False,  # Old-hub finalization delete only applies to primary
                 skip_observability=skip_observability,
                 argocd_mode=argocd_mode,
                 argocd_install_type=secondary_install_type,
@@ -867,6 +933,7 @@ def validate_rbac_permissions(
         if not secondary_valid:
             report = secondary_validator.generate_permission_report(
                 include_decommission=False,
+                include_old_hub_finalization=False,
                 skip_observability=skip_observability,
                 argocd_mode=argocd_mode,
                 argocd_install_type=secondary_install_type,

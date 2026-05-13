@@ -2128,11 +2128,53 @@ class TestPreflightPhase:
             "passive",
             skip_rbac_validation=False,
             include_decommission=False,
+            include_old_hub_finalization=True,
             argocd_manage=True,
             skip_gitops_check=False,
             restore_only=False,
         )
         report_argocd_impact.assert_called_once_with(primary, secondary, logger, argocd_manage=True)
+
+    def test_run_phase_preflight_honors_skip_observability_for_old_hub_finalization_rbac(self):
+        args = SimpleNamespace(
+            method="passive",
+            old_hub_action="secondary",
+            skip_rbac_validation=False,
+            argocd_manage=False,
+            skip_gitops_check=False,
+            skip_observability_checks=True,
+            validate_only=False,
+        )
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+        config = {
+            "primary_version": "2.14.0",
+            "secondary_version": "2.14.0",
+            "primary_observability_detected": True,
+            "secondary_observability_detected": False,
+            "has_observability": True,
+        }
+
+        with patch("acm_switchover.PreflightValidator") as validator_class, patch(
+            "acm_switchover._report_argocd_acm_impact"
+        ):
+            validator_class.return_value.validate_all.return_value = (True, config)
+            result = _run_phase_preflight(args, state, primary, secondary, logger)
+
+        assert result is True
+        validator_class.assert_called_once_with(
+            primary,
+            secondary,
+            "passive",
+            skip_rbac_validation=False,
+            include_decommission=False,
+            include_old_hub_finalization=False,
+            argocd_manage=False,
+            skip_gitops_check=False,
+            restore_only=False,
+        )
 
     def test_run_phase_preflight_passes_decommission_intent_to_preflight_validator(
         self,
@@ -2171,6 +2213,7 @@ class TestPreflightPhase:
             "passive",
             skip_rbac_validation=False,
             include_decommission=True,
+            include_old_hub_finalization=False,
             argocd_manage=False,
             skip_gitops_check=False,
             restore_only=False,

@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Python and collection RBAC validation and bootstrap manifests now include `MultiClusterObservability` delete permission for normal old-hub finalization when observability is detected, while keeping `ManagedCluster` and `MultiClusterHub` teardown deletes in the opt-in decommission extension.
 - Python and collection decommission now fail closed before non-local `ManagedCluster` deletion when matching Hive `ClusterDeployment` resources are unsafe or cannot be verified, while still allowing verified absence of Hive ClusterDeployments.
 - Collection preflight now emits read-only Argo CD ACM-impact advisory details comparable to the Python CLI while keeping discovery failures non-blocking.
 - Collection primary prep now checks Thanos compactor pods after scale-down and emits a non-fatal warning when pods remain.

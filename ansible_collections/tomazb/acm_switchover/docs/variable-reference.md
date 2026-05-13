@@ -132,7 +132,7 @@ ClusterDeployment API, or no matching ClusterDeployments, is accepted.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `role` | str | `operator` | Role profile: `operator` (write) or `validator` (read-only) |
-| `include_decommission` | bool | `false` | Append decommission-scoped ClusterRole manifests |
+| `include_decommission` | bool | `false` | Append decommission-scoped ClusterRole manifests for `ManagedCluster` and `MultiClusterHub` delete; these assets also include `MultiClusterObservability` delete, which baseline operator RBAC already grants for normal old-hub finalization |
 | `generate_kubeconfigs` | bool | `false` | Generate kubeconfigs after manifest apply |
 | `validate_permissions` | bool | `false` | Run `acm_rbac_validate` after apply |
 | `token_duration` | str | `48h` | Token validity duration for generated service account kubeconfigs |

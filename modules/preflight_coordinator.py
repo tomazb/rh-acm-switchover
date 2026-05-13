@@ -60,6 +60,7 @@ class PreflightValidator:
         method: str = "passive",
         skip_rbac_validation: bool = False,
         include_decommission: bool = False,
+        include_old_hub_finalization: bool = False,
         argocd_manage: bool = False,
         skip_gitops_check: bool = False,
         restore_only: bool = False,
@@ -69,6 +70,7 @@ class PreflightValidator:
         self.method = method
         self.skip_rbac_validation = skip_rbac_validation
         self.include_decommission = include_decommission
+        self.include_old_hub_finalization = include_old_hub_finalization
         self.argocd_manage = argocd_manage
         self.skip_gitops_check = skip_gitops_check
         self.restore_only = restore_only
@@ -179,6 +181,9 @@ class PreflightValidator:
                     primary_client=self.primary,
                     secondary_client=self.secondary,
                     include_decommission=self.include_decommission,
+                    include_old_hub_finalization=(
+                        self.include_old_hub_finalization and primary_has_obs and not self.include_decommission
+                    ),
                     skip_observability=skip_obs,
                     argocd_mode=effective_argocd_mode,
                     argocd_install_type=primary_argocd_install_type,

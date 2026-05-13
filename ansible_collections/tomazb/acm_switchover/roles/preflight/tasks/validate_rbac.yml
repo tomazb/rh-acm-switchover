@@ -80,10 +80,24 @@
     - not (acm_switchover_operation.restore_only | default(false))
     - _rbac_requested_argocd_mode != 'none'
 
+- name: Determine primary old-hub finalization RBAC requirement
+  ansible.builtin.set_fact:
+    _rbac_include_old_hub_finalization_primary: >-
+      {{
+        (acm_switchover_operation.old_hub_action | default('secondary')) == 'secondary'
+        and not (acm_switchover_features.skip_observability_checks | default(false) | bool)
+        and 'open-cluster-management-observability' in (
+          acm_primary_namespace_names
+          | default((acm_primary_namespace_info.resources | default([])) | map(attribute='metadata.name') | list)
+        )
+      }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
 - name: Expand required RBAC permissions for primary hub
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
     include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
+    include_old_hub_finalization: "{{ _rbac_include_old_hub_finalization_primary }}"
     skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
     argocd_mode: "{{ _rbac_requested_argocd_mode }}"
     argocd_install_type: "{{ _rbac_argocd_install_type_primary | default('unknown') }}"
@@ -107,6 +121,7 @@
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
     include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
+    include_old_hub_finalization: "{{ _rbac_include_old_hub_finalization_primary }}"
     skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
     argocd_mode: "{{ _rbac_requested_argocd_mode }}"
     argocd_install_type: "{{ _rbac_argocd_install_type_primary | default('unknown') }}"

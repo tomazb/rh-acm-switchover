@@ -26,6 +26,10 @@ options:
     description: Whether to include delete permissions required for hub decommission.
     type: bool
     default: false
+  include_old_hub_finalization:
+    description: Whether to include delete permissions required when normal finalization deletes old-hub MCO.
+    type: bool
+    default: false
   decommission_only:
     description:
       - Whether to expand only the standalone decommission permission surface.
@@ -226,6 +230,14 @@ DECOMMISSION_PERMISSIONS = [
     ),
 ]
 
+OLD_HUB_FINALIZATION_PERMISSIONS = [
+    (
+        OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO,
+        "multiclusterobservabilities",
+        ["delete"],
+    ),
+]
+
 DECOMMISSION_CLUSTER_PERMISSIONS = [
     ("", "namespaces", ["get"]),
     (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["list", "delete"]),
@@ -273,12 +285,20 @@ def _expand_permission_list(
     return result
 
 
+def _deduplicate_permissions(
+    permissions: list[tuple[str, str, str, str | None]],
+) -> list[tuple[str, str, str, str | None]]:
+    """Preserve expansion order while removing duplicate permission checks."""
+    return list(dict.fromkeys(permissions))
+
+
 def expand_rbac_requirements(
     role: str,
     include_decommission: bool,
     skip_observability: bool,
     argocd_mode: str,
     argocd_install_type: str,
+    include_old_hub_finalization: bool = False,
     decommission_only: bool = False,
 ) -> list[tuple[str, str, str, str | None]]:
     """Return the full flat list of (api_group, resource, verb, namespace) tuples for a given configuration.
@@ -307,6 +327,9 @@ def expand_rbac_requirements(
 
     if include_decommission and role != "operator":
         raise ValueError("include_decommission is only valid for the operator role")
+
+    if include_old_hub_finalization and role != "operator":
+        raise ValueError("include_old_hub_finalization is only valid for the operator role")
 
     if role == "validator" and argocd_mode == "manage":
         raise ValueError("validator role cannot use argocd_mode=manage")
@@ -341,9 +364,17 @@ def expand_rbac_requirements(
 
     # Decommission extras
     if include_decommission:
-        permissions.extend(_expand_permission_list(DECOMMISSION_PERMISSIONS))
+        filtered_decommission = [
+            (g, r, v)
+            for g, r, v in DECOMMISSION_PERMISSIONS
+            if not (skip_observability and g == OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO)
+        ]
+        permissions.extend(_expand_permission_list(filtered_decommission))
 
-    return permissions
+    if include_old_hub_finalization and not skip_observability:
+        permissions.extend(_expand_permission_list(OLD_HUB_FINALIZATION_PERMISSIONS))
+
+    return _deduplicate_permissions(permissions)
 
 
 def summarize_rbac_results(
@@ -395,6 +426,7 @@ def main() -> None:
                 "choices": list(VALID_ROLES),
             },
             "include_decommission": {"type": "bool", "default": False},
+            "include_old_hub_finalization": {"type": "bool", "default": False},
             "decommission_only": {"type": "bool", "default": False},
             "skip_observability": {"type": "bool", "default": False},
             "argocd_mode": {
@@ -416,6 +448,7 @@ def main() -> None:
         permissions = expand_rbac_requirements(
             role=module.params["role"],
             include_decommission=module.params["include_decommission"],
+            include_old_hub_finalization=module.params["include_old_hub_finalization"],
             skip_observability=module.params["skip_observability"],
             argocd_mode=module.params["argocd_mode"],
             argocd_install_type=module.params["argocd_install_type"],

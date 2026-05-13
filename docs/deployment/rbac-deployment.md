@@ -59,7 +59,7 @@ cd rh-acm-switchover
 #   generates: kubeconfigs/admin_api-prod.example.com_6443-operator.yaml
 ```
 
-This bootstrap path deploys the baseline operator role only.
+This bootstrap path deploys the baseline operator role only. The baseline role includes the `MultiClusterObservability` delete permission used by normal old-hub finalization when observability is present; it does not include `ManagedCluster` or `MultiClusterHub` delete permissions for decommission.
 
 For multi-hub setup:
 
@@ -175,7 +175,7 @@ kubectl apply -f deploy/rbac/role.yaml
 kubectl apply -f deploy/rbac/rolebinding.yaml
 ```
 
-If the operator service account also needs old-hub teardown permissions, apply the optional decommission extension too:
+If the operator service account also needs old-hub teardown permissions for `ManagedCluster` and `MultiClusterHub` removal, apply the optional decommission extension too:
 
 ```bash
 kubectl apply -f deploy/rbac/extensions/decommission/clusterrole.yaml
@@ -183,7 +183,9 @@ kubectl apply -f deploy/rbac/extensions/decommission/clusterrolebinding.yaml
 ```
 
 The baseline namespace Roles include only the `open-cluster-management`
-namespaced `multiclusterhubs` list rule; the optional extension adds the
+namespaced `multiclusterhubs` list rule. The baseline ClusterRole includes
+`delete` on `multiclusterobservabilities` for normal finalization cleanup, and
+the optional extension also carries that MCO delete rule alongside the
 cluster-scoped delete permissions needed to complete decommission.
 
 #### Step 4: Verify
@@ -345,7 +347,8 @@ python check_rbac.py \
   --secondary-context secondary-hub \
   --role operator
 
-# Include decommission permissions (requires the optional decommission RBAC extension)
+# Include decommission permissions for ManagedCluster and MultiClusterHub teardown
+# (requires the optional decommission RBAC extension)
 # Note: --include-decommission is only valid with --role operator.
 # Combining it with --role validator is rejected with an explicit error.
 python check_rbac.py --include-decommission --role operator

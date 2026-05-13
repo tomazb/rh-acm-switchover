@@ -1,7 +1,7 @@
 # RBAC Requirements for ACM Switchover
 
 **Version**: 1.0.0  
-**Last Updated**: December 7, 2024
+**Last Updated**: May 13, 2026
 
 ## Overview
 
@@ -25,7 +25,7 @@ The RBAC model is designed following the principle of least privilege:
 - Container-based deployments running as pods
 - Service accounts in production environments
 
-**Permission Level**: Baseline switchover permissions (read, create, patch) without cluster-scoped decommission deletes
+**Permission Level**: Baseline switchover permissions, including old-hub `MultiClusterObservability` cleanup, without `ManagedCluster` or `MultiClusterHub` decommission deletes
 
 ### 2. ACM Switchover Validator
 **Purpose**: Read-only service account for validation and dry-run operations
@@ -172,10 +172,11 @@ The RBAC model is designed following the principle of least privilege:
 
 #### MultiClusterObservabilities
 - **Resources**: `multiclusterobservabilities`
-- **Verbs**: `get`, `list`
+- **Verbs**: `get`, `list`, `delete`
 - **Scope**: Cluster-wide
 - **Purpose**: 
   - Auto-detect observability component presence
+  - Delete old-hub `MultiClusterObservability` during normal finalization when the old hub is kept as secondary
 
 ### Route API Group (route.openshift.io/v1) - OpenShift Only
 
@@ -214,22 +215,22 @@ These resources require ClusterRole and ClusterRoleBinding:
 - `namespaces` (validation only)
 - `managedclusters` (ACM-wide operations)
 - `multiclusterhubs` (ACM version detection)
-- `multiclusterobservabilities` (auto-detection)
+- `multiclusterobservabilities` (auto-detection and old-hub finalization cleanup)
 - `clusterdeployments` (safety validation)
 
 ### Optional Decommission Extension
 
-Delete permissions for old-hub teardown are intentionally separated from the default operator role.
+Most delete permissions for old-hub teardown are intentionally separated from the default operator role. The baseline operator role includes `delete` on `multiclusterobservabilities` because normal finalization deletes old-hub MCO when observability was detected and the old hub is kept as secondary.
 
 - **ClusterRole**: `acm-switchover-decommission`
 - **ClusterRoleBinding**: `acm-switchover-decommission`
 - **Additional verbs**:
   - `delete` on `managedclusters`
   - `delete` on cluster-scoped `multiclusterhubs`
-  - `delete` on `multiclusterobservabilities`
+  - `delete` on `multiclusterobservabilities` (also present in the baseline operator role for normal finalization)
 
 The baseline operator Role includes only `list` on namespaced `multiclusterhubs` in `open-cluster-management`.
-Delete access remains in the opt-in decommission extension so ordinary switchover operators do not receive teardown privileges.
+ManagedCluster and MultiClusterHub delete access remains in the opt-in decommission extension so ordinary switchover operators do not receive hub teardown privileges.
 
 Grant this extension only to service accounts that are allowed to run `--decommission`. The baseline operator role is sufficient for validation, switchover, and post-activation/finalization work.
 Validator/read-only roles must not request this extension.
@@ -291,12 +292,13 @@ This spoke RBAC is a separate prerequisite from hub preflight validation. Hub pr
      - No wildcard permissions granted
      - No access to RoleBindings or ClusterRoleBindings
      - Read-only validator role for non-destructive operations
-     - ManagedCluster patch permissions limited to specific annotations
+     - The automation only patches documented `ManagedCluster` annotations, but Kubernetes RBAC cannot restrict `patch` to specific JSON paths, fields, annotations, or subfields. Use admission policy and audit controls if your environment requires field-level enforcement.
 
 3. **Data Deletion**
    - **Risk**: Accidental or malicious deletion of critical resources
    - **Mitigation**: 
-     - Cluster-scoped delete permissions are isolated in an opt-in decommission-only role
+     - `ManagedCluster` and `MultiClusterHub` delete permissions are isolated in an opt-in decommission-only role
+     - Baseline `MultiClusterObservability` delete is required for normal old-hub finalization and is validated only when observability was detected; verified absence avoids the requirement
      - Pre-flight checks verify `preserveOnDelete=true` on ClusterDeployments
      - State tracking prevents repeat destructive operations
      - Dry-run mode available for validation
