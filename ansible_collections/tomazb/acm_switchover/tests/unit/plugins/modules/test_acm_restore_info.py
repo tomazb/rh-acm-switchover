@@ -139,7 +139,7 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
                     "resourceVersion": "42",
                 },
                 "spec": {"syncRestoreWithNewBackups": True},
-                "status": {"phase": "Enabled"},
+                "status": {"phase": "Enabled", "veleroManagedClustersRestoreName": "velero-mc-old"},
             }
         ],
         backup_name="latest",
@@ -155,6 +155,7 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
     assert plan["wait_target"]["velero_restore_required"] is True
     assert plan["wait_target"]["velero_restore_status_field"] == "veleroManagedClustersRestoreName"
     assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
+    assert plan["wait_target"]["previous_velero_restore_name"] == "velero-mc-old"
     assert plan["restore_ready"] is True
     assert plan["restore_ready_reason"] == "Passive Restore phase Enabled is ready."
     assert plan["restore_phase"] == "Enabled"

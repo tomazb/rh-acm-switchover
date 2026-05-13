@@ -262,6 +262,73 @@ class TestPostActivationVerification:
         assert mock_wait.called
 
     @patch("modules.post_activation.wait_for_condition")
+    def test_verify_managed_clusters_requires_derived_expected_names(
+        self, mock_wait, mock_secondary_client, mock_state_manager
+    ):
+        """Post-activation must not pass when a preflight-observed cluster is missing."""
+        verifier = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+            expected_managed_cluster_names=["cluster-a", "cluster-b"],
+            min_managed_clusters=2,
+            enforce_expected_managed_cluster_names=True,
+        )
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "cluster-a"},
+                "status": {
+                    "conditions": [
+                        {"type": "ManagedClusterConditionAvailable", "status": "True"},
+                        {"type": "ManagedClusterJoined", "status": "True"},
+                    ]
+                },
+            },
+            {"metadata": {"name": LOCAL_CLUSTER_NAME}},
+        ]
+
+        def capture_wait(*args, **kwargs):
+            condition_fn = kwargs.get("condition_fn", args[1])
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is False
+            assert "missing expected ManagedCluster(s): cluster-b" in result.public_detail
+            return False
+
+        mock_wait.side_effect = capture_wait
+
+        with pytest.raises(SwitchoverError, match="Missing expected ManagedCluster"):
+            verifier._verify_managed_clusters_connected(timeout=1)
+
+    @patch("modules.post_activation.wait_for_condition")
+    def test_verify_managed_clusters_explicit_zero_allows_empty_hub(
+        self, mock_wait, mock_secondary_client, mock_state_manager
+    ):
+        """Explicit --min-managed-clusters 0 preserves the empty-hub opt-out."""
+        verifier = PostActivationVerification(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            has_observability=False,
+            expected_managed_cluster_names=["cluster-a"],
+            min_managed_clusters=0,
+            enforce_expected_managed_cluster_names=False,
+        )
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": LOCAL_CLUSTER_NAME}},
+        ]
+
+        def capture_wait(*args, **kwargs):
+            condition_fn = kwargs.get("condition_fn", args[1])
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is True
+            return True
+
+        mock_wait.side_effect = capture_wait
+
+        verifier._verify_managed_clusters_connected(timeout=1)
+
+    @patch("modules.post_activation.wait_for_condition")
     def test_verify_managed_clusters_timeout(self, mock_wait, post_verify_with_obs, mock_secondary_client):
         """Test timeout while waiting for clusters."""
         mock_wait.return_value = False  # Timeout

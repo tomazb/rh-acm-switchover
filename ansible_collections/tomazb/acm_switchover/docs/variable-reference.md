@@ -33,7 +33,7 @@
 | `method` | `passive`, `full` | `passive` | Switchover activation strategy |
 | `old_hub_action` | `secondary`, `decommission`, `none` | `secondary` | Finalization action for the old hub |
 | `activation_method` | `patch`, `restore` | `patch` | Passive activation mechanism; `restore` is valid only with `method=passive` |
-| `min_managed_clusters` | int | `0` | Minimum non-local ManagedClusters required after activation |
+| `min_managed_clusters` | int or null | null | Omitted/null derives expected non-local ManagedCluster names/count from preflight; explicit `0` allows an empty hub; positive values enforce that minimum count |
 | `restore_only` | bool | `false` | Set by `playbooks/restore_only.yml`; direct role invocations must set it explicitly |
 
 ### `acm_switchover_features`
@@ -76,6 +76,8 @@ Checkpoint `reset_from` accepts `preflight`, `primary_prep`, `activation`, `post
 | `acm_switchover_preflight_summary.passed` | bool | False when any critical finding fails |
 | `acm_switchover_preflight_result.report` | dict | Structured preflight report payload |
 | `acm_switchover_preflight_result.path` | string | Path to the written JSON report |
+| `acm_switchover_expected_managed_cluster_names` | list[str] | Non-local ManagedCluster names observed on the primary during preflight; empty for restore-only |
+| `acm_switchover_expected_managed_cluster_count` | int | Count derived from `acm_switchover_expected_managed_cluster_names`; `0` for restore-only |
 
 ## Execution Phase Result Facts
 

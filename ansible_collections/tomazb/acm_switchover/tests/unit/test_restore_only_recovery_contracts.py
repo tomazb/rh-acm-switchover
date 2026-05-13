@@ -69,6 +69,13 @@ def test_activation_checkpoint_persists_argocd_run_id():
     assert "argocd_run_id:" in text, "activation/main.yml must persist argocd_run_id in checkpoint operational_data"
 
 
+def test_activation_wait_rejects_stale_velero_restore_signal():
+    """Activation wait must require a new managed-clusters Velero restore name when one existed before activation."""
+    text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
+    assert "previous_velero_restore_name" in text
+    assert "waiting for a new managed-clusters Velero restore" in text
+
+
 def test_primary_prep_checkpoint_persists_argocd_run_id():
     """primary_prep checkpoint writes must preserve the generated Argo CD run_id."""
     text = (PRIMARY_PREP_TASKS / "main.yml").read_text()

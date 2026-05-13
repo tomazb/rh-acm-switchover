@@ -3,12 +3,12 @@
 # Runbook: Step 0 (pre-flight validation)
 
 import logging
-from typing import Optional, Tuple, TypedDict
+from typing import List, Optional, Tuple, TypedDict
 
 from kubernetes.client.rest import ApiException
 
 from lib import argocd as argocd_lib
-from lib.constants import OBSERVABILITY_NAMESPACE
+from lib.constants import LOCAL_CLUSTER_NAME, OBSERVABILITY_NAMESPACE
 from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
@@ -40,6 +40,8 @@ class PreflightConfig(TypedDict):
     primary_observability_detected: bool
     secondary_observability_detected: bool
     has_observability: bool
+    expected_managed_cluster_names: List[str]
+    expected_managed_cluster_count: int
 
 
 class PreflightValidator:
@@ -263,13 +265,34 @@ class PreflightValidator:
 
         self.reporter.print_summary()
 
+        expected_managed_cluster_names = self._expected_managed_cluster_names()
+
         config: PreflightConfig = {
             "primary_version": primary_version,
             "secondary_version": secondary_version,
             "primary_observability_detected": primary_observability,
             "secondary_observability_detected": secondary_observability,
             "has_observability": primary_observability or secondary_observability,
+            "expected_managed_cluster_names": expected_managed_cluster_names,
+            "expected_managed_cluster_count": len(expected_managed_cluster_names),
         }
 
         critical_failures = self.reporter.critical_failures()
         return len(critical_failures) == 0, config
+
+    def _expected_managed_cluster_names(self) -> List[str]:
+        """Return non-local ManagedCluster names observed on the primary during preflight."""
+        if self.restore_only or self.primary is None:
+            return []
+
+        managed_clusters = self.primary.list_custom_resources(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+        )
+        names = [
+            item.get("metadata", {}).get("name")
+            for item in managed_clusters
+            if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
+        ]
+        return sorted(names)

@@ -198,6 +198,12 @@ def build_wait_target(
     return target
 
 
+def previous_managed_clusters_velero_restore_name(restore: dict | None) -> str:
+    if restore is None:
+        return ""
+    return restore.get("status", {}).get("veleroManagedClustersRestoreName", "") or ""
+
+
 def build_activation_restore_body(backup_name: str) -> dict:
     return {
         "apiVersion": "cluster.open-cluster-management.io/v1beta1",
@@ -287,6 +293,7 @@ def build_restore_activation_plan(
                     passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
                     velero_restore_required=True,
                     velero_restore_status_field="veleroManagedClustersRestoreName",
+                    previous_velero_restore_name=previous_managed_clusters_velero_restore_name(passive_restore),
                     velero_success_phases=["Completed"],
                     velero_failure_phases=["Failed", "PartiallyFailed"],
                 )

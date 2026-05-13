@@ -35,6 +35,12 @@
 | `--token-duration` | `acm_switchover_rbac_bootstrap.token_duration` |
 | `--output-dir` | `acm_switchover_rbac_bootstrap.output_dir` |
 
+`--min-managed-clusters` semantics match the Python CLI: leave
+`acm_switchover_operation.min_managed_clusters` unset or null to derive the
+expected non-local ManagedCluster names/count from preflight, set it to `0` to
+allow an empty restore target, or set a positive value to enforce that explicit
+minimum count.
+
 ## Phase 5 Capability Status
 
 | Python / CLI Capability | Collection Phase 5 Status |

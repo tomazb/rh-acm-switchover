@@ -234,6 +234,35 @@ class TestSecondaryActivation:
         assert len(create_calls) == 1
         assert create_calls[0][1]["body"]["metadata"]["name"] == "restore-acm-full"
 
+    def test_full_restore_rolls_back_passive_restore_on_create_failure(self, activation_full, mock_secondary_client):
+        """Full restore create failure after passive deletion should recreate the passive restore."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {
+                    "name": RESTORE_PASSIVE_SYNC_NAME,
+                    "namespace": BACKUP_NAMESPACE,
+                    "labels": {"managed-by": "test"},
+                },
+                "spec": {
+                    SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True,
+                    SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_SKIP,
+                },
+            }
+        ]
+        mock_secondary_client.get_custom_resource.return_value = None
+        mock_secondary_client.create_custom_resource.side_effect = [Exception("full create failed"), None]
+
+        with patch.object(activation_full, "_wait_for_restore_deletion", return_value=None):
+            with pytest.raises(FatalError, match="Recreated passive sync restore"):
+                activation_full._create_full_restore()
+
+        assert mock_secondary_client.create_custom_resource.call_count == 2
+        rollback_body = mock_secondary_client.create_custom_resource.call_args_list[1].kwargs["body"]
+        assert rollback_body["metadata"]["name"] == RESTORE_PASSIVE_SYNC_NAME
+        assert rollback_body["metadata"]["namespace"] == BACKUP_NAMESPACE
+        assert rollback_body["metadata"]["labels"] == {"managed-by": "test"}
+        assert rollback_body["spec"][SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS] is True
+
     def test_verify_passive_sync_failure(self, activation_passive, mock_secondary_client):
         """Test failure when passive sync restore is not found."""
         # No restores discovered and fallback name lookup also fails
@@ -728,6 +757,35 @@ class TestSecondaryActivation:
             with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
                 activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
 
+    def test_poll_velero_restore_rejects_stale_pre_activation_restore_name(
+        self, activation_passive, mock_secondary_client, mock_state_manager
+    ):
+        """Activation must wait for a new Velero managed-clusters restore signal after patching."""
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            "pre_activation_velero_managed_clusters_restore_name": "velero-mc-old",
+        }.get(key, default)
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "status": {
+                "phase": "Enabled",
+                "veleroManagedClustersRestoreName": "velero-mc-old",
+            },
+        }
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+
+            def side_effect(_desc, callback, **_kwargs):
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                assert result.done is False
+                assert result.public_detail == "waiting for new Velero managed clusters restore"
+                return result.done
+
+            mock_wait.side_effect = side_effect
+
+            with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
+                activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
+
     @patch("modules.activation.wait_for_condition")
     def test_activate_passive_restore_method(self, mock_wait, mock_secondary_client, mock_state_manager):
         """Test passive activation using restore-acm-activate (Option B)."""
@@ -1119,6 +1177,36 @@ class TestMinManagedClusters:
 
         with pytest.raises(FatalError, match="Expected at least 1"):
             act._verify_managed_clusters_restored()
+
+    def test_derived_expected_names_are_enforced(self, mock_secondary_client, mock_state_manager):
+        """Derived preflight names must be present after activation."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster-a"}},
+            {"metadata": {"name": "local-cluster"}},
+        ]
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=2,
+            expected_managed_cluster_names=["cluster-a", "cluster-b"],
+            enforce_expected_managed_cluster_names=True,
+        )
+
+        with pytest.raises(FatalError, match="Missing expected ManagedCluster"):
+            act._verify_managed_clusters_restored()
+
+    def test_explicit_zero_disables_expected_name_enforcement(self, mock_secondary_client, mock_state_manager):
+        """Explicit --min-managed-clusters 0 should allow an empty hub even if preflight saw clusters."""
+        mock_secondary_client.list_custom_resources.return_value = []
+        act = SecondaryActivation(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            min_managed_clusters=0,
+            expected_managed_cluster_names=["cluster-a"],
+            enforce_expected_managed_cluster_names=False,
+        )
+
+        act._verify_managed_clusters_restored()
 
 
 @pytest.mark.unit
