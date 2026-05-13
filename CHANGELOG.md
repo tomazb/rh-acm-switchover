@@ -9,41 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added a release certification orchestrator that wires real release profiles through static gates, lab readiness, baseline snapshots, stream adapters, runtime parity, final baseline checks, summary generation, and durable release artifacts.
-- Added bounded-concurrency Ansible klusterlet probe and remediation modules with per-cluster structured results, 10-worker defaults, and optional strict remediation failure behavior.
+- None.
 
 ### Changed
 
-- GitHub Actions workflows now use Node 24-backed `actions/checkout@v6` and `actions/setup-python@v6` to avoid the Node 20 action runtime deprecation.
-- MyPy checks now cover Ansible collection plugins and collection tests with explicit package bases to avoid local package-name collisions.
-- Local `run_tests.sh` now excludes the release validation framework by default; run `python -m pytest tests/release -q` for framework tests and supply `--release-profile` for live release certification.
-- Refreshed collection migration and variable reference docs for the current checkpoint, validate/dry-run, safe-path, RBAC bootstrap, and klusterlet concurrency interfaces. Protected runbook and `.claude/skills` updates remain draft-only because those files require explicit operator approval and synchronized review before editing.
-- Clarified report artifact documentation so Python and collection reports share schema version `1.0` and aligned contracts without promising identical top-level fields for every report type.
-- Changed the Python CLI and Ansible collection `min_managed_clusters` default so an omitted value derives expected non-local ManagedCluster names/count from preflight; explicit `0` still allows an empty hub, and restore-only pins the expectation to `0`.
-- Observability verification is now blocking by default in both the Python CLI and Ansible collection when Observability checks are enabled. Thanos scale-down, post-activation Observability scale-up/readiness/restart checks, and old-hub Observability termination must succeed unless `--skip-observability-checks` or `acm_switchover_features.skip_observability_checks` is set.
+- None.
 
 ### Fixed
 
-- Bounded Python Kubernetes API read/list/create/patch/scale/log requests with explicit per-call timeouts, capped generic polling sleeps to remaining timeout budget, and replaced BackupSchedule collision repair's fixed delete sleep with bounded deletion polling.
+- None.
+
+### Removed
+
+- None.
+
+## [1.7.10] - 2026-05-12
+
+### Added
+
+- Added a release certification framework with static gates, lab readiness, baseline snapshots, Python/Ansible/Bash stream adapters, runtime parity comparison, final baseline checks, summary generation, and durable release artifacts.
+- Added release parity guardrails for switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifacts so shared production contracts are checked before certification.
+- Added bounded-concurrency Ansible klusterlet probe and remediation modules with per-cluster structured results, 10-worker defaults, request timeouts, worker future timeouts, and optional strict remediation failure behavior.
+
+### Changed
+
+- Public interface: omitted `min_managed_clusters` now derives expected non-local ManagedCluster names/count from preflight in both the Python CLI and Ansible collection; explicit `0` still allows an empty hub, and restore-only pins the expectation to `0`.
+- Public interface: Observability verification is blocking by default when Observability checks are enabled. Thanos scale-down, post-activation Observability scale-up/readiness/restart checks, and old-hub Observability termination must succeed unless `--skip-observability-checks` or `acm_switchover_features.skip_observability_checks` is set.
+- Public interface: post-activation klusterlet remediation is stricter in both implementations. Wrong-hub klusterlets are re-checked after remediation and fail the workflow if remediation failed or the klusterlet still points at the wrong hub; missing managed-cluster kubeconfigs remain explicit non-fatal skips when ManagedCluster readiness is healthy.
+- Local `run_tests.sh` now excludes the release validation framework by default; run `python -m pytest tests/release -q` for framework tests and supply `--release-profile` for live release certification.
+- GitHub Actions workflows now use Node 24-backed `actions/checkout@v6` and `actions/setup-python@v6`, and MyPy checks cover Ansible collection plugins/tests with explicit package bases.
+- Refreshed collection migration, artifact, variable reference, RBAC, and operator usage docs for checkpoint, validate/dry-run, safe-path, RBAC bootstrap, timeout, report artifact, and klusterlet concurrency interfaces.
+
+### Fixed
+
+- Bounded Python Kubernetes API read/list/create/patch/scale/log requests with explicit per-call timeouts, capped generic polling sleeps to the remaining timeout budget, and replaced BackupSchedule collision repair's fixed delete sleep with bounded deletion polling.
 - Bounded collection klusterlet probe/remediation Kubernetes requests and worker futures so stalled managed-cluster API calls produce failed worker results instead of hanging indefinitely.
-- Python CLI and Ansible collection Argo CD management now fail closed for unsafe auto-sync cases, including ApplicationSet-managed child Applications that touch ACM resources, auto-sync Applications with empty or stale `status.resources`, and Applications that still have auto-sync after pause verification.
-- Python and collection RBAC validation and bootstrap manifests now include `MultiClusterObservability` delete permission for normal old-hub finalization when observability is detected, while keeping `ManagedCluster` and `MultiClusterHub` teardown deletes in the opt-in decommission extension.
-- Python and collection decommission now fail closed before non-local `ManagedCluster` deletion when matching Hive `ClusterDeployment` resources are unsafe or cannot be verified, while still allowing verified absence of Hive ClusterDeployments.
-- Collection preflight now emits read-only Argo CD ACM-impact advisory details comparable to the Python CLI while keeping discovery failures non-blocking.
-- Collection primary prep now checks Thanos compactor pods after scale-down and fails when pods remain.
-- RBAC requirements documentation now matches the enforced observability route and `statefulsets/scale` permissions.
-- Collection input validation now rejects unknown `acm_switchover_execution.mode` values before role tasks can treat a typo as live execution.
-- Collection finalization now runs the decommission role when `old_hub_action: decommission` is selected during switchover, while preserving the standalone decommission confirmation gate and avoiding completed/changed reporting for dry-run or no-op decommission paths.
-- Collection Argo CD pause now re-patches Applications that still have automated sync even when a stale switchover pause marker is present.
-- Python and collection validation now share a parity fixture covering Argo CD resume-on-failure rules and safe-path policy; collection validation now rejects `~/` paths and enforces `argocd.resume_on_failure` combinations consistently with the Python CLI.
-- Collection decommission summaries now use the shared report artifact writer so `summary_path` is validated by the safe-path policy before writing.
-- Collection checkpoint resumes now rediscover primary prep, activation, and finalization resources with phase-owned facts so skipped preflight data cannot go stale across resumed runs.
-- Collection activation now re-reads live Restore resources at activation time, ignores stale preflight Restore facts, fails before mutation when the selected passive Restore is not ready, and includes Restore `resourceVersion` in activation patches when available.
-- Documented collection Argo CD resume-on-failure checkpoint retry safety: retries reset from `primary_prep`, prune downstream completed phases, and keep resume scoped to the current run ID without adding a force-resume variable.
-- Python phase orchestration now fails instead of reporting completion when a successful handler leaves state in an unexpected phase, and collection checkpoints now remain non-mutating under native Ansible check mode.
-- Python and collection activation now reject stale managed-clusters Velero restore signals after activation, and Python full restore now recreates a deleted passive-sync Restore if full Restore creation fails.
-- Python and collection post-activation checks now enforce preflight-derived expected ManagedCluster names/count when the operator omits `min_managed_clusters`, preventing false success when restored hubs contain fewer clusters than preflight observed.
-- Python and collection post-activation klusterlet remediation is now stricter. It re-checks wrong-hub clusters after remediation and fails if remediation failed or the klusterlet still points at the wrong hub. Missing managed-cluster kubeconfigs are treated as explicit skips, which is non-fatal unless ManagedCluster readiness is unhealthy.
+- Hardened Python CLI and Ansible collection Argo CD management to fail closed for unsafe auto-sync cases, including ApplicationSet-managed child Applications, empty or stale `status.resources`, and Applications that still have auto-sync after pause verification.
+- Updated Python and collection RBAC validation/bootstrap manifests to include `MultiClusterObservability` delete permission for normal old-hub finalization when observability is detected, while keeping `ManagedCluster` and `MultiClusterHub` teardown deletes in the opt-in decommission extension.
+- Hardened Python and collection decommission to fail closed before non-local `ManagedCluster` deletion when matching Hive `ClusterDeployment` resources are unsafe or cannot be verified.
+- Fixed collection preflight, primary prep, finalization, checkpoint resume, validation, report writing, activation, and decommission paths to preserve Python CLI parity and fail before unsafe mutation.
+- Fixed Python phase orchestration to fail instead of reporting completion when a successful handler leaves state in an unexpected phase.
 
 ### Removed
 
@@ -1279,7 +1284,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pod readiness: 5 seconds
 - Backup creation: 30 seconds
 
-[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.9...HEAD
+[Unreleased]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.10...HEAD
+[1.7.10]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.9...v1.7.10
 [1.7.9]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.8...v1.7.9
 [1.7.8]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.7...v1.7.8
 [1.7.7]: https://github.com/tomazb/rh-acm-switchover/compare/v1.7.6...v1.7.7

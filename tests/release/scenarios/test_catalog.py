@@ -23,6 +23,26 @@ def test_full_matrix_contains_required_scenarios_in_order() -> None:
     assert len(selected.matrix_hash) == 64
 
 
+def test_catalog_contains_optional_resilience_artifact_scenarios() -> None:
+    selected = select_release_matrix(
+        enabled_streams=("python", "ansible"),
+        scenario_filters=("full-restore", "checkpoint-resume", "decommission", "rbac-bootstrap"),
+        stream_filters=(),
+    )
+
+    assert selected.scenario_ids == (
+        "static-gates",
+        "lab-readiness",
+        "baseline-check",
+        "full-restore",
+        "checkpoint-resume",
+        "decommission",
+        "rbac-bootstrap",
+        "runtime-parity",
+        "final-baseline-check",
+    )
+
+
 def test_mutating_filter_adds_prerequisites_and_final_checks() -> None:
     selected = select_release_matrix(
         enabled_streams=("python", "ansible"),

@@ -1,6 +1,6 @@
 # ACM Hub Switchover Automation
 
-**Version 1.7.9** (2026-05-05)
+**Version 1.7.10** (2026-05-12)
 
 Automated, idempotent tool for switching over Red Hat Advanced Cluster Management (ACM) from a primary hub to a secondary hub cluster. Available in two form factors:
 
@@ -21,6 +21,14 @@ Automated, idempotent tool for switching over Red Hat Advanced Cluster Managemen
 - ✅ **Two methods supported** - Continuous passive restore (Method 1) or one-time full restore (Method 2)
 - ✅ **Restore-only mode** - Restore managed clusters from S3 backups onto a new hub when the old hub is gone
 - ✅ **Multi-deployment support** - RBAC via Kustomize, Helm, or ACM Policies
+
+## Production Resilience Hardening In 1.7.10
+
+- Kubernetes API calls, polling waits, and collection klusterlet worker batches are bounded so stalled APIs fail with actionable results instead of hanging indefinitely.
+- Observability checks are blocking by default unless explicitly skipped with `--skip-observability-checks` or `acm_switchover_features.skip_observability_checks`.
+- Argo CD managed pause fails closed for ApplicationSet-managed child Applications, unknown/stale Application impact, and failed post-patch pause verification.
+- Post-activation enforces preflight-derived ManagedCluster expectations when `--min-managed-clusters` is omitted and fails if klusterlet remediation does not converge.
+- Release parity guardrails cover switchover, restore-only, decommission, RBAC/bootstrap, checkpoint, and report artifacts across the Python CLI and Ansible collection where practical.
 
 ---
 

@@ -43,6 +43,7 @@ V1_SCENARIOS: tuple[ScenarioDefinition, ...] = (
     ScenarioDefinition("full-restore", False, ("python", "ansible"), True, True),
     ScenarioDefinition("checkpoint-resume", False, ("python", "ansible"), True, True),
     ScenarioDefinition("decommission", False, ("python", "ansible"), True, True),
+    ScenarioDefinition("rbac-bootstrap", False, ("python", "ansible"), True, True),
     ScenarioDefinition("failure-injection", False, ("python", "ansible"), True, False),
     ScenarioDefinition("soak", False, ("python", "ansible"), True, True),
 )

@@ -22,7 +22,14 @@ PYTHON_SCENARIOS = frozenset(scenario_id for scenario_id, defn in SCENARIOS_BY_I
 # V1 Ansible scenarios executed by AnsibleAdapter.
 # When adding a new Ansible scenario, update PLAYBOOKS and REPORT_NAMES
 # in tests/release/adapters/ansible.py.
-ANSIBLE_SCENARIOS = {"preflight", "ansible-passive-switchover", "ansible-restore-only", "argocd-managed-switchover"}
+ANSIBLE_SCENARIOS = {
+    "preflight",
+    "ansible-passive-switchover",
+    "ansible-restore-only",
+    "argocd-managed-switchover",
+    "decommission",
+    "rbac-bootstrap",
+}
 BASH_SCENARIOS = {"preflight", "bash-discovery", "bash-postflight"}
 
 

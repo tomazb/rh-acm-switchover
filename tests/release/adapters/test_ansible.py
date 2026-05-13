@@ -168,6 +168,20 @@ def test_ansible_adapter_discovers_preflight_report(tmp_path: Path) -> None:
     assert reports[0].type == "preflight"
 
 
+def test_ansible_adapter_discovers_decommission_report(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+    scenario_dir = adapter.scenario_dir("decommission")
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "decommission-report.json").write_text(
+        '{"schema_version": "1.0", "status": "passed"}', encoding="utf-8"
+    )
+
+    reports = adapter.discover_reports("decommission")
+
+    assert reports[0].schema_version == "1.0"
+    assert reports[0].type == "decommission"
+
+
 def test_ansible_adapter_failed_command_sets_failed_status(monkeypatch, tmp_path: Path) -> None:
     def fake_run(command, cwd, text, capture_output, check, timeout, env):
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="error output\n")
@@ -298,7 +312,7 @@ def test_execute_ansible_scenarios_filters_ansible_ids() -> None:
 
     results = execute_ansible_scenarios(
         adapter=FakeAnsibleAdapter(),
-        scenario_ids=("preflight", "python-passive-switchover", "ansible-passive-switchover"),
+        scenario_ids=("preflight", "python-passive-switchover", "ansible-passive-switchover", "decommission"),
     )
 
-    assert [item["scenario_id"] for item in results] == ["preflight", "ansible-passive-switchover"]
+    assert [item["scenario_id"] for item in results] == ["preflight", "ansible-passive-switchover", "decommission"]

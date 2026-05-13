@@ -1,6 +1,6 @@
 # Test Migration Catalog
 
-Date: 2026-05-04
+Date: 2026-05-12
 Purpose: Triage the existing Python-oriented test suite into collection-era test layers
 
 ## Target Layers
@@ -35,6 +35,8 @@ Purpose: Triage the existing Python-oriented test suite into collection-era test
 | `tests/test_scripts_integration.py` | partial drop, partial bridge docs | only bridge behavior retained |
 | `tests/test_rbac_validator.py` | parity, collection unit | SSAR shape, dry-run validation, and manifest/policy alignment are shared contracts |
 | `tests/release/adapters/test_python_cli.py` | release adapter | Python scenario commands must pass `--report-dir` |
+| `tests/release/adapters/test_ansible.py` | release adapter | Collection scenario commands and discovered report artifacts must include decommission coverage |
+| `tests/release/scenarios/test_runtime_parity.py` | parity | Runtime parity required fields cover release artifact contracts |
 
 ## Current Test Baseline
 
@@ -47,6 +49,6 @@ Current boundary tests should verify:
 
 ## Current Safety-Parity Coverage
 
-- Restore-only, Argo CD, discovery, decommission, RBAC bootstrap, report artifacts, and runtime parity now have collection unit or shared parity tests.
+- Restore-only, Argo CD, discovery, decommission, RBAC bootstrap, checkpoint, report artifacts, and runtime parity now have collection unit, release adapter, or shared parity tests.
 - Bridge-only script behavior remains tested only where the script is still the supported bridge, especially full hub context enumeration through `scripts/discover-hub.sh`.
 - New parity-sensitive changes should add tests in both the Python suite and `ansible_collections/tomazb/acm_switchover/tests/unit/` unless the parity matrix records an approved divergence.

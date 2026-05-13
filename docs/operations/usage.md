@@ -99,6 +99,10 @@ per-call timeouts. The default API request timeout is 30 seconds; transient
 Polling waits cap each sleep to the remaining timeout budget, so a final poll
 interval cannot overshoot the configured phase deadline.
 
+Release 1.7.10 also adds collection-side klusterlet request and worker future
+timeouts, plus release parity guardrails for switchover, restore-only,
+decommission, RBAC/bootstrap, checkpoint, and report artifacts.
+
 > **Safety warning:** Do **NOT** re-enable Thanos Compactor or Observatorium API on the old hub after switchover.
 > Both hubs share the same object storage backend; re-enabling on the old hub can cause data corruption and split-brain.
 > Only re-enable on the old hub if you are switching back and have shut down these components on the current primary first.

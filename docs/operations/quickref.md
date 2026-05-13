@@ -53,6 +53,11 @@ python acm_switchover.py \
 
 Argo CD detection runs automatically during preflight when the Applications CRD is found on either hub. Use `--skip-gitops-check` to disable all GitOps detection including Argo CD deep dive.
 
+In 1.7.10, production safety checks fail closed by default: Observability
+verification blocks unless explicitly skipped, Argo CD managed pause blocks
+unsafe auto-sync cases, and omitted `--min-managed-clusters` derives the
+expected non-local ManagedCluster set from preflight.
+
 ### Switchover Execution
 
 ```bash

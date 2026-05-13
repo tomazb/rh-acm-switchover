@@ -1,11 +1,15 @@
 profile_version: 1
 name: lab-passive-release
 release:
-  expected_version: 1.7.9
+  expected_version: 1.7.10
   metadata_files:
     - README.md
     - CHANGELOG.md
     - setup.cfg
+    - lib/__init__.py
+    - scripts/constants.sh
+    - container-bootstrap/Containerfile
+    - deploy/helm/acm-switchover-rbac/Chart.yaml
     - ansible_collections/tomazb/acm_switchover/galaxy.yml
 hubs:
   primary:

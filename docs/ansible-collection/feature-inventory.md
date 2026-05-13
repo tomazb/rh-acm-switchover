@@ -1,6 +1,6 @@
 # ACM Switchover Feature Inventory
 
-Date: 2026-04-10
+Date: 2026-05-12
 Source: `acm_switchover.py`, `lib/validation.py`, `scripts/`
 
 ## Purpose
@@ -14,7 +14,8 @@ collection migration must account for.
 - `acm_switchover_operation`
 - `acm_switchover_features`
 - `acm_switchover_execution`
-- `acm_switchover_rbac`
+- `acm_switchover_decommission`
+- `acm_switchover_rbac_bootstrap`
 
 ## Core Switchover and Validation Inputs
 
@@ -39,16 +40,16 @@ Deferred phase numbers refer to later Ansible Collection rewrite implementation 
 
 | Current CLI Flag | Collection Variable | Deferred Phase | Notes |
 | --- | --- | --- | --- |
-| `--decommission` | `acm_switchover_execution.mode=decommission` | 6 | Separate playbook later |
-| `--setup` | `acm_switchover_execution.mode=setup` | 6 | Becomes `rbac_bootstrap` content |
-| `--argocd-manage` | `acm_switchover_features.argocd.manage` | 5 | Runtime behavior deferred |
-| `--argocd-resume-only` | `acm_switchover_execution.mode=argocd_resume` | 5 | Playbook deferred |
-| `--admin-kubeconfig` | `acm_switchover_rbac.admin_kubeconfig` | 6 | RBAC bootstrap only |
-| `--role` | `acm_switchover_rbac.role` | 6 | RBAC bootstrap only |
-| `--token-duration` | `acm_switchover_rbac.token_duration` | 6 | RBAC bootstrap only |
-| `--output-dir` | `acm_switchover_rbac.output_dir` | 6 | RBAC bootstrap only |
-| `--skip-kubeconfig-generation` | `acm_switchover_rbac.skip_kubeconfig_generation` | 6 | RBAC bootstrap only |
-| `--include-decommission` | `acm_switchover_rbac.include_decommission` | 6 | RBAC bootstrap only |
+| `--decommission` | `playbooks/decommission.yml` plus `acm_switchover_decommission` | 6 | Implemented as a standalone playbook |
+| `--setup` | `playbooks/rbac_bootstrap.yml` plus `acm_switchover_rbac_bootstrap` | 6 | Implemented as RBAC bootstrap content |
+| `--argocd-manage` | `acm_switchover_features.argocd.manage` | 5 | Implemented in core playbooks and `argocd_resume.yml` |
+| `--argocd-resume-only` | `playbooks/argocd_resume.yml` | 5 | Implemented as explicit resume playbook |
+| `--admin-kubeconfig` | `acm_switchover_hubs.primary.kubeconfig` | 6 | RBAC bootstrap target credential |
+| `--role` | `acm_switchover_rbac_bootstrap.role` | 6 | RBAC bootstrap only |
+| `--token-duration` | `acm_switchover_rbac_bootstrap.token_duration` | 6 | RBAC bootstrap only |
+| `--output-dir` | `acm_switchover_rbac_bootstrap.output_dir` | 6 | RBAC bootstrap only |
+| `--skip-kubeconfig-generation` | `acm_switchover_rbac_bootstrap.generate_kubeconfigs=false` | 6 | RBAC bootstrap only |
+| `--include-decommission` | `acm_switchover_rbac_bootstrap.include_decommission` | 6 | RBAC bootstrap only |
 
 ## Validation Rules Preserved Conceptually
 
@@ -56,7 +57,7 @@ Deferred phase numbers refer to later Ansible Collection rewrite implementation 
 - `activation_method=restore` requires `method=passive`
 - path validation must still block traversal and shell metacharacters
 - AAP survey values and `extra_vars` are untrusted inputs
-- RBAC self-validation remains part of core parity even though bootstrap is deferred
+- RBAC self-validation and bootstrap remain dual-supported parity contracts
 
 ## Execution Modes
 
@@ -66,8 +67,8 @@ Supported in current documentation and stubs:
 - `validate`
 - `dry_run`
 
-Deferred:
+Standalone playbooks:
 
 - `decommission`
-- `setup`
 - `argocd_resume`
+- `rbac_bootstrap`

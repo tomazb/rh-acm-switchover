@@ -117,6 +117,25 @@ class PythonCliAdapter:
                 "--non-interactive",
             ] + list(extra_args)
 
+        if scenario_id == "rbac-bootstrap":
+            return [
+                sys.executable,
+                "acm_switchover.py",
+                "--primary-context",
+                self.primary_context,
+                "--state-file",
+                str(state_file),
+                "--setup",
+                "--admin-kubeconfig",
+                self.primary_kubeconfig,
+                "--role",
+                "operator",
+                "--include-decommission",
+                "--output-dir",
+                str(scenario_dir / "kubeconfigs"),
+                "--skip-kubeconfig-generation",
+            ] + list(extra_args)
+
         # full-restore forces --method full regardless of the adapter method field
         method = "full" if scenario_id == "full-restore" else self.method
         base = [

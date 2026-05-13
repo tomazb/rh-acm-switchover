@@ -13,6 +13,38 @@ CAPABILITY_REQUIRED_FIELDS = {
         "check_ids",
         "failed_check_ids",
     ),
+    "switchover artifacts": (
+        "schema_version",
+        "status",
+        "phase_ids",
+        "report_filename",
+    ),
+    "restore-only artifacts": (
+        "schema_version",
+        "status",
+        "phase_ids",
+        "report_filename",
+    ),
+    "decommission artifacts": (
+        "schema_version",
+        "status",
+        "report_filename",
+    ),
+    "RBAC/bootstrap artifacts": (
+        "manifest_asset_count",
+        "include_decommission",
+        "validation_result_id",
+    ),
+    "checkpoints": (
+        "schema_version",
+        "phase",
+        "completed_phases",
+    ),
+    "report artifacts": (
+        "schema_version",
+        "source",
+        "safe_path_validated",
+    ),
 }
 
 

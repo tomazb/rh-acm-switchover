@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tests.release.reporting.artifacts import ReleaseArtifacts
 from tests.release.scenarios.runtime_parity import (
+    CAPABILITY_REQUIRED_FIELDS,
     ComparisonRecord,
     compare_normalized_records,
     normalize_argocd_management,
@@ -31,6 +32,18 @@ def test_comparison_record_serializes_required_fields() -> None:
     assert payload["capability"] == "preflight validation"
     assert payload["streams"] == ["python", "ansible"]
     assert payload["required_fields"] == ["status", "check_ids"]
+
+
+def test_runtime_parity_required_fields_cover_release_1710_guardrails() -> None:
+    assert {
+        "preflight validation",
+        "switchover artifacts",
+        "restore-only artifacts",
+        "decommission artifacts",
+        "RBAC/bootstrap artifacts",
+        "checkpoints",
+        "report artifacts",
+    }.issubset(CAPABILITY_REQUIRED_FIELDS)
 
 
 def test_compare_normalized_records_passes_equal_required_fields() -> None:
