@@ -81,15 +81,6 @@
           .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field, '')
         ) | length > 0
       )
-      and
-      (
-        (
-          (_restore_velero_source_info.resources | first | default({}))
-          .get('status', {})
-          .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field, '')
-        )
-        != (acm_switchover_restore_activation_result.wait_target.previous_velero_restore_name | default(''))
-      )
     }}
   when:
     - acm_switchover_restore_activation_result.wait_target.velero_restore_required | default(false)

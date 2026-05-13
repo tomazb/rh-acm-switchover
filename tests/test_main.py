@@ -32,7 +32,15 @@ from acm_switchover import (
     validate_args,
 )
 from lib import argocd as argocd_lib
-from lib.constants import EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS
+from lib.constants import (
+    EXIT_FAILURE,
+    EXIT_INTERRUPT,
+    EXIT_SUCCESS,
+    MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+    MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
+    MANAGED_CLUSTER_EXPECTATION_KEY,
+    MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
+)
 from lib.validation import ValidationError
 
 
@@ -1946,6 +1954,22 @@ class TestDecommissionAndSetupHelpers:
 
 @pytest.mark.unit
 class TestPreflightPhase:
+    def test_preflight_records_critical_result_when_expected_cluster_inventory_fails(self):
+        from modules.preflight import ValidationReporter
+        from modules.preflight_coordinator import PreflightValidator
+
+        validator = PreflightValidator.__new__(PreflightValidator)
+        validator.restore_only = False
+        validator.primary = Mock()
+        validator.primary.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
+        validator.reporter = ValidationReporter()
+
+        assert validator._derive_expected_managed_cluster_names() == []
+        failures = validator.reporter.critical_failures()
+        assert len(failures) == 1
+        assert failures[0]["check"] == "ManagedCluster inventory"
+        assert "403 Forbidden" in failures[0]["message"]
+
     def test_run_phase_preflight_persists_expected_managed_clusters_from_primary(self):
         args = SimpleNamespace(
             method="passive",
@@ -1979,7 +2003,10 @@ class TestPreflightPhase:
         assert result is True
         state.set_config.assert_any_call("expected_managed_cluster_names", ["cluster-a", "cluster-b"])
         state.set_config.assert_any_call("expected_managed_cluster_count", 2)
-        state.set_config.assert_any_call("managed_cluster_expectation_mode", "derived_from_preflight")
+        state.set_config.assert_any_call(
+            MANAGED_CLUSTER_EXPECTATION_KEY,
+            MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+        )
 
     def test_restore_only_preflight_persists_empty_expected_managed_clusters(self):
         args = SimpleNamespace(
@@ -2010,7 +2037,10 @@ class TestPreflightPhase:
         assert result is True
         state.set_config.assert_any_call("expected_managed_cluster_names", [])
         state.set_config.assert_any_call("expected_managed_cluster_count", 0)
-        state.set_config.assert_any_call("managed_cluster_expectation_mode", "restore_only")
+        state.set_config.assert_any_call(
+            MANAGED_CLUSTER_EXPECTATION_KEY,
+            MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
+        )
 
     def test_run_phase_activation_uses_derived_expected_count_when_min_omitted(self):
         args = SimpleNamespace(
@@ -2024,7 +2054,7 @@ class TestPreflightPhase:
         state.get_config.side_effect = lambda key, default=None: {
             "expected_managed_cluster_names": ["cluster-a", "cluster-b"],
             "expected_managed_cluster_count": 2,
-            "managed_cluster_expectation_mode": "derived_from_preflight",
+            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
         }.get(key, default)
         secondary = Mock()
 
@@ -2050,7 +2080,7 @@ class TestPreflightPhase:
         state.get_config.side_effect = lambda key, default=None: {
             "expected_managed_cluster_names": ["cluster-a"],
             "expected_managed_cluster_count": 1,
-            "managed_cluster_expectation_mode": "explicit_empty_allowed",
+            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
         }.get(key, default)
         secondary = Mock()
 

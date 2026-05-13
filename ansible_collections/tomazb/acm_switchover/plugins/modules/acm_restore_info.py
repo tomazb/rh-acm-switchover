@@ -287,17 +287,22 @@ def build_restore_activation_plan(
                     }
         else:
             if passive_restore is not None:
+                current_backup = passive_restore.get("spec", {}).get("veleroManagedClustersBackupName")
+                wait_target_extra = {}
+                if current_backup != backup_name:
+                    wait_target_extra["previous_velero_restore_name"] = previous_managed_clusters_velero_restore_name(
+                        passive_restore
+                    )
                 wait_target = build_wait_target(
                     passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
                     ["Enabled", "Finished", "Completed"],
                     passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
                     velero_restore_required=True,
                     velero_restore_status_field="veleroManagedClustersRestoreName",
-                    previous_velero_restore_name=previous_managed_clusters_velero_restore_name(passive_restore),
                     velero_success_phases=["Completed"],
                     velero_failure_phases=["Failed", "PartiallyFailed"],
+                    **wait_target_extra,
                 )
-                current_backup = passive_restore.get("spec", {}).get("veleroManagedClustersBackupName")
                 if current_backup != backup_name:
                     operation = {
                         "action": "patch",

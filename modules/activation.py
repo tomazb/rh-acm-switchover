@@ -24,6 +24,7 @@ from lib.constants import (
     MCE_NAMESPACE,
     PATCH_VERIFY_MAX_RETRIES,
     PATCH_VERIFY_RETRY_DELAY,
+    PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
     RESTORE_FAST_POLL_INTERVAL,
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_FULL_NAME,
@@ -77,6 +78,7 @@ class SecondaryActivation:
         # Cache for discovered passive sync restore name
         self._passive_sync_restore_name: Optional[str] = None
         self._activation_restore_name: Optional[str] = None
+        self._require_new_velero_restore_signal = True
 
     def _get_passive_sync_restore_name(self) -> str:
         """
@@ -196,10 +198,6 @@ class SecondaryActivation:
         )
 
         status = restore.get("status", {})
-        self.state.set_config(
-            "pre_activation_velero_managed_clusters_restore_name",
-            status.get("veleroManagedClustersRestoreName"),
-        )
         phase = status.get("phase", "unknown")
         message = status.get("lastMessage", "")
 
@@ -232,7 +230,15 @@ class SecondaryActivation:
         restore_before = self._get_restore_or_raise(restore_name)
 
         if self._activation_already_applied(restore_before):
+            self.state.set_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+            self._require_new_velero_restore_signal = False
             return
+
+        self.state.set_config(
+            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
+            restore_before.get("status", {}).get("veleroManagedClustersRestoreName"),
+        )
+        self._require_new_velero_restore_signal = True
 
         patch = self._build_activation_patch()
         logger.info("PATCHING: Applying patch = %s", patch)
@@ -262,6 +268,8 @@ class SecondaryActivation:
         logger.info("Activating managed clusters via activation restore (Option B)...")
 
         self._activation_restore_name = MANAGED_CLUSTER_RESTORE_NAME
+        self.state.set_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+        self._require_new_velero_restore_signal = False
 
         # Discover passive sync restore if it still exists; tolerate missing restore on resume
         restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
@@ -926,9 +934,10 @@ class SecondaryActivation:
         the new backups won't contain the managed clusters!
         """
         logger.info("Waiting for managed clusters Velero restore to complete...")
-        previous_velero_restore_name = self.state.get_config(
-            "pre_activation_velero_managed_clusters_restore_name",
-            None,
+        previous_velero_restore_name = (
+            self.state.get_config(PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME, None)
+            if self._require_new_velero_restore_signal
+            else None
         )
 
         def _poll_velero_restore():

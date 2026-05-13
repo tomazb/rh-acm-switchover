@@ -23,6 +23,7 @@ from lib.constants import (
     IMMEDIATE_IMPORT_ANNOTATION,
     MANAGED_CLUSTER_RESTORE_NAME,
     PATCH_VERIFY_RETRY_DELAY,
+    PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME,
@@ -762,7 +763,7 @@ class TestSecondaryActivation:
     ):
         """Activation must wait for a new Velero managed-clusters restore signal after patching."""
         mock_state_manager.get_config.side_effect = lambda key, default=None: {
-            "pre_activation_velero_managed_clusters_restore_name": "velero-mc-old",
+            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME: "velero-mc-old",
         }.get(key, default)
         mock_secondary_client.get_custom_resource.return_value = {
             "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
@@ -785,6 +786,77 @@ class TestSecondaryActivation:
 
             with pytest.raises(FatalError, match="Timeout waiting for Velero managed clusters restore"):
                 activation_passive._wait_for_managed_clusters_velero_restore("restore-acm-passive-sync", timeout=1)
+
+    def test_poll_velero_restore_allows_existing_signal_when_activation_already_applied(
+        self, activation_passive, mock_secondary_client, mock_state_manager
+    ):
+        """Idempotent passive reruns must not reject the existing Velero restore signal as stale."""
+        activation_passive._require_new_velero_restore_signal = False
+        mock_state_manager.get_config.side_effect = lambda key, default=None: {
+            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME: "velero-mc-existing",
+        }.get(key, default)
+
+        def get_custom_resource_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
+                return {
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                    "status": {
+                        "phase": "Enabled",
+                        "veleroManagedClustersRestoreName": "velero-mc-existing",
+                    },
+                }
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "velero.io":
+                return {
+                    "metadata": {"name": "velero-mc-existing"},
+                    "status": {
+                        "phase": "Completed",
+                        "progress": {"itemsRestored": 7},
+                    },
+                }
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "local-cluster"}},
+            {"metadata": {"name": "cluster-a"}},
+        ]
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+
+            def side_effect(_desc, callback, **_kwargs):
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                assert result.done is True
+                assert "phase=Completed" in result.public_detail
+                return result.done
+
+            mock_wait.side_effect = side_effect
+
+            activation_passive._wait_for_managed_clusters_velero_restore(
+                RESTORE_PASSIVE_SYNC_NAME,
+                timeout=1,
+            )
+
+    def test_activate_already_applied_clears_stale_pre_activation_signal(
+        self, activation_passive, mock_secondary_client, mock_state_manager
+    ):
+        """Already-applied passive activation must clear stale signal enforcement for idempotent reruns."""
+        restore_before = {
+            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+            "spec": {SPEC_VELERO_MANAGED_CLUSTERS_BACKUP_NAME: VELERO_BACKUP_LATEST},
+            "status": {"veleroManagedClustersRestoreName": "velero-mc-existing"},
+        }
+        activation_passive._passive_sync_restore_name = RESTORE_PASSIVE_SYNC_NAME
+        mock_secondary_client.get_custom_resource.return_value = restore_before
+
+        activation_passive._activate_via_passive_sync()
+
+        mock_secondary_client.patch_custom_resource.assert_not_called()
+        mock_state_manager.set_config.assert_any_call(
+            PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
+            None,
+        )
+        assert activation_passive._require_new_velero_restore_signal is False
 
     @patch("modules.activation.wait_for_condition")
     def test_activate_passive_restore_method(self, mock_wait, mock_secondary_client, mock_state_manager):

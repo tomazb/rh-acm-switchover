@@ -8,7 +8,13 @@ from typing import List, Optional, Tuple, TypedDict
 from kubernetes.client.rest import ApiException
 
 from lib import argocd as argocd_lib
-from lib.constants import LOCAL_CLUSTER_NAME, OBSERVABILITY_NAMESPACE
+from lib.constants import (
+    LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
+    OBSERVABILITY_NAMESPACE,
+)
 from lib.exceptions import ValidationError
 from lib.kube_client import KubeClient
 from lib.rbac_validator import validate_rbac_permissions
@@ -263,9 +269,9 @@ class PreflightValidator:
         if secondary_observability:
             self.observability_prereq_validator.run(self.secondary)
 
-        self.reporter.print_summary()
+        expected_managed_cluster_names = self._derive_expected_managed_cluster_names()
 
-        expected_managed_cluster_names = self._expected_managed_cluster_names()
+        self.reporter.print_summary()
 
         config: PreflightConfig = {
             "primary_version": primary_version,
@@ -280,15 +286,33 @@ class PreflightValidator:
         critical_failures = self.reporter.critical_failures()
         return len(critical_failures) == 0, config
 
+    def _derive_expected_managed_cluster_names(self) -> List[str]:
+        """Return expected ManagedCluster names and record API failures as validation results."""
+        try:
+            return self._expected_managed_cluster_names()
+        except ApiException as e:
+            self.reporter.add_result(
+                "ManagedCluster inventory",
+                False,
+                f"Failed to list primary ManagedClusters for restore expectation: {e.status} {e.reason}",
+                critical=True,
+            )
+            logger.warning(
+                "Unable to list primary ManagedClusters for restore expectation (%s %s).",
+                e.status,
+                e.reason,
+            )
+            return []
+
     def _expected_managed_cluster_names(self) -> List[str]:
         """Return non-local ManagedCluster names observed on the primary during preflight."""
         if self.restore_only or self.primary is None:
             return []
 
         managed_clusters = self.primary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
         )
         names = [
             item.get("metadata", {}).get("name")

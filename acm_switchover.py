@@ -37,9 +37,16 @@ from lib import (
 )
 from lib.argocd_coordinator import ArgoCDPauseCoordinator
 from lib.constants import (
+    EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
+    EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
     EXIT_FAILURE,
     EXIT_INTERRUPT,
     EXIT_SUCCESS,
+    MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
+    MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
+    MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM,
+    MANAGED_CLUSTER_EXPECTATION_KEY,
+    MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
     STALE_STATE_THRESHOLD,
 )
@@ -923,17 +930,17 @@ def _run_phase_preflight(
         state.get_config("primary_has_observability", False) or secondary_obs_enabled,
     )
     expected_managed_cluster_count = len(expected_managed_cluster_names)
-    state.set_config("expected_managed_cluster_names", expected_managed_cluster_names)
-    state.set_config("expected_managed_cluster_count", expected_managed_cluster_count)
+    state.set_config(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, expected_managed_cluster_names)
+    state.set_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, expected_managed_cluster_count)
     if is_restore_only:
-        expectation_mode = "restore_only"
+        expectation_mode = MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
     elif getattr(args, "min_managed_clusters", None) is None:
-        expectation_mode = "derived_from_preflight"
+        expectation_mode = MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT
     elif getattr(args, "min_managed_clusters", 0) == 0:
-        expectation_mode = "explicit_empty_allowed"
+        expectation_mode = MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED
     else:
-        expectation_mode = "explicit_minimum"
-    state.set_config("managed_cluster_expectation_mode", expectation_mode)
+        expectation_mode = MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM
+    state.set_config(MANAGED_CLUSTER_EXPECTATION_KEY, expectation_mode)
 
     if not getattr(args, "skip_gitops_check", False):
         _report_argocd_acm_impact(
@@ -1123,8 +1130,8 @@ def _resolve_managed_cluster_expectation(
 ) -> tuple[int, list[str], bool]:
     """Return effective ManagedCluster count/name enforcement for activation phases."""
     raw_min = getattr(args, "min_managed_clusters", None)
-    expected_names = list(state.get_config("expected_managed_cluster_names", []) or [])
-    expected_count = int(state.get_config("expected_managed_cluster_count", len(expected_names)) or 0)
+    expected_names = list(state.get_config(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, []) or [])
+    expected_count = int(state.get_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, len(expected_names)) or 0)
 
     if raw_min is None:
         return expected_count, expected_names, bool(expected_names)
