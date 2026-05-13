@@ -204,7 +204,7 @@ joined or unavailable, the post-activation ManagedCluster gate still fails.
 
 In the Ansible collection, direct klusterlet probes and remediations default to
 10 worker threads, 30-second Kubernetes request timeouts, and 180-second
-per-worker future timeouts. Override these with
+worker future timeout windows for each probe/remediation batch. Override these with
 `acm_switchover_execution.concurrency.klusterlet_probe_workers`,
 `acm_switchover_execution.concurrency.klusterlet_remediation_workers`,
 `acm_switchover_execution.timeouts.klusterlet_request_seconds`, and

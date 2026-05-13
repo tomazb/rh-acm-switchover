@@ -66,13 +66,14 @@ def wait_for_condition(
                 logger.info("%s complete", description)
             return True
 
-        elapsed = int(time.time() - start_time)
+        elapsed_seconds = time.time() - start_time
+        elapsed = int(elapsed_seconds)
         if result.public_detail:
             logger.debug("%s in progress: %s (elapsed: %ss)", description, result.public_detail, elapsed)
         else:
             logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 
-        remaining_timeout = max(0, timeout - elapsed)
+        remaining_timeout = max(0.0, timeout - elapsed_seconds)
         sleep_interval = interval
         if fast_interval:
             if fast_timeout <= 0 or elapsed < fast_timeout:

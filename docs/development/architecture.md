@@ -454,7 +454,7 @@ The collection uses a fundamentally different architecture from the Python CLI:
 - **Optional checkpoint backend** replaces `StateManager` for long-running or interrupted runs; Ansible-native idempotency handles the default case
 - **Report artifacts** use schema version `1.0` across preflight, switchover, restore-only, and decommission paths; Python and collection reports preserve aligned status/report contracts without requiring identical top-level fields for every report type
 - **Decommission observability** defaults to namespace autodetection in the collection, with explicit `true`/`false` overrides for known environments
-- **Klusterlet helpers** use bounded direct Kubernetes requests and worker futures. Defaults are 10 workers, 30-second per-request timeouts, and 180-second per-worker future timeouts; worker future timeouts are reported as failed cluster results.
+- **Klusterlet helpers** use bounded direct Kubernetes requests and worker futures. Defaults are 10 workers, 30-second per-request timeouts, and 180-second worker future timeout windows for each probe/remediation batch; worker future timeouts are reported as failed cluster results.
 - **Constants isolation**: `plugins/module_utils/constants.py` is the collection's constants file — it cannot import from `lib/constants.py`
 
 The collection architecture is fully detailed in the [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md). Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.

@@ -31,7 +31,7 @@ options:
     type: int
     default: 30
   future_timeout:
-    description: Maximum time to wait for each worker future in seconds.
+    description: Maximum worker future wait window for the probe batch in seconds.
     type: int
     default: 180
 """

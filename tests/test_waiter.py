@@ -86,6 +86,23 @@ class TestWaitForCondition:
         mock_time.sleep.assert_called_once_with(2)
 
     @patch("lib.waiter.time")
+    def test_wait_uses_float_remaining_timeout_budget(self, mock_time, mock_logger):
+        """Remaining timeout math should not truncate elapsed time before sleeping."""
+        mock_time.time.side_effect = [0, 8.75, 8.75, 10.1]
+        condition = Mock(return_value=WaitConditionResult.pending("waiting"))
+
+        result = wait_for_condition(
+            description="precise wait",
+            condition_fn=condition,
+            logger=mock_logger,
+            timeout=10,
+            interval=30,
+        )
+
+        assert result is False
+        mock_time.sleep.assert_called_once_with(1.25)
+
+    @patch("lib.waiter.time")
     def test_wait_fast_interval_respects_remaining_timeout_budget(self, mock_time, mock_logger):
         """Fast polling must still be capped by the remaining timeout budget."""
         mock_time.time.side_effect = [0, 4, 4, 6]

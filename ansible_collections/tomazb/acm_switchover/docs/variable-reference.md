@@ -65,7 +65,7 @@
 | `concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
 | `concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
 | `timeouts.klusterlet_request_seconds` | int | `30` | Per Kubernetes API request timeout for direct klusterlet probe/remediation calls |
-| `timeouts.klusterlet_worker_seconds` | int | `180` | Per-worker future timeout for parallel klusterlet probe/remediation tasks |
+| `timeouts.klusterlet_worker_seconds` | int | `180` | Worker future timeout window for each parallel klusterlet probe/remediation batch |
 
 The full variable name is `acm_switchover_execution.checkpoint.reset_from`.
 Checkpoint `reset_from` accepts `preflight`, `primary_prep`, `activation`, `post_activation`, or `finalization`.
@@ -119,7 +119,7 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 | `acm_switchover_execution.concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
 | `acm_switchover_execution.concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
 | `acm_switchover_execution.timeouts.klusterlet_request_seconds` | int | `30` | Per Kubernetes API request timeout for direct klusterlet probe/remediation calls |
-| `acm_switchover_execution.timeouts.klusterlet_worker_seconds` | int | `180` | Per-worker future timeout for parallel klusterlet probe/remediation tasks |
+| `acm_switchover_execution.timeouts.klusterlet_worker_seconds` | int | `180` | Worker future timeout window for each parallel klusterlet probe/remediation batch |
 | `acm_switchover_features.klusterlet.strict_remediation` | bool | `false` | Module-level immediate failure toggle. Leave `false` for the role's normal remediation, re-check, then fail behavior |
 
 Post-activation klusterlet probing is stricter than best-effort status logging:

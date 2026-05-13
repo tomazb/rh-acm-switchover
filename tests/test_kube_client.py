@@ -558,7 +558,7 @@ class TestKubeClientRequestTimeouts:
         mock_k8s_apis["apps_api"].patch_namespaced_deployment_scale.return_value = scale_response
         mock_k8s_apis["core_api"].read_namespaced_pod_log.return_value = "log output"
 
-        kube_client.scale_deployment("deploy", "ns", 2)
+        kube_client.scale_deployment("ns", "deploy", 2)
         kube_client.get_pod_logs("pod", "ns", container="main", tail_lines=10)
 
         assert mock_k8s_apis["apps_api"].patch_namespaced_deployment_scale.call_args.kwargs["_request_timeout"] == 30

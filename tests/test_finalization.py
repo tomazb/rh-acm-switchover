@@ -1094,6 +1094,17 @@ class TestFinalization:
         mock_sleep.assert_not_called()
         mock_secondary_client.create_custom_resource.assert_called_once()
 
+    @patch("modules.finalization.wait_for_condition", return_value=False)
+    def test_wait_for_backup_schedule_deletion_accepts_absent_final_reread(
+        self, mock_wait, finalization, mock_secondary_client
+    ):
+        """If the final re-check sees absence after timeout, deletion completed."""
+        mock_secondary_client.get_custom_resource.return_value = None
+
+        finalization._wait_for_backup_schedule_deletion("schedule", "uid-old", timeout=1, interval=1)
+
+        mock_wait.assert_called_once()
+
     @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_treats_409_with_healthy_schedule_as_success(
         self, mock_sleep, finalization, mock_secondary_client

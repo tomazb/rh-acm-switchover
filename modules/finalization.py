@@ -1431,6 +1431,10 @@ class Finalization:
             name=schedule_name,
             namespace=BACKUP_NAMESPACE,
         )
+        if not schedule_after_delete:
+            logger.info("BackupSchedule %s deleted after final re-check", schedule_name)
+            return
+
         after_uid = (schedule_after_delete or {}).get("metadata", {}).get("uid")
         raise SwitchoverError(
             "BackupSchedule %s still present (uid=%s) after deletion attempt. "

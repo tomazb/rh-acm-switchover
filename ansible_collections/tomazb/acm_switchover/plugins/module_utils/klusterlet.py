@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import base64
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Callable, Protocol
 
@@ -18,6 +18,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     KLUSTERLET_REQUEST_TIMEOUT,
     KLUSTERLET_WORKER_TIMEOUT,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
+    WORKER_TIMEOUT_REASON_TEMPLATE,
 )
 
 
@@ -93,6 +94,10 @@ def build_apps_v1_client(kubeconfig: str, context: str | None = None, request_ti
 
 def request_timeout_kwargs(request_timeout: int | float | None) -> dict:
     return {"_request_timeout": normalize_timeout(request_timeout, "request_timeout")}
+
+
+def worker_timeout_reason(timeout: int | float) -> str:
+    return WORKER_TIMEOUT_REASON_TEMPLATE.format(timeout=timeout)
 
 
 def read_secret(
@@ -176,27 +181,30 @@ def ordered_bounded_map(
 ) -> list[dict]:
     if not items:
         return []
-    if workers == 1:
-        return [fn(item) for item in items]
 
     results: list[dict | None] = [None] * len(items)
     timeout = normalize_timeout(future_timeout, "future_timeout")
     executor = ThreadPoolExecutor(max_workers=workers)
     try:
         futures = {executor.submit(fn, item): index for index, item in enumerate(items)}
-        for future, index in futures.items():
+        done, not_done = wait(futures, timeout=timeout)
+
+        for future in done:
+            index = futures[future]
+            results[index] = future.result()
+
+        for future in not_done:
+            index = futures[future]
             item = items[index]
-            try:
-                results[index] = future.result(timeout=timeout)
-            except FutureTimeoutError:
-                if timeout_result:
-                    results[index] = timeout_result(item)
-                else:
-                    results[index] = {
-                        "cluster": item,
-                        "status": "failed",
-                        "reason": f"worker_timeout_after_{timeout}s",
-                    }
+            future.cancel()
+            if timeout_result:
+                results[index] = timeout_result(item)
+            else:
+                results[index] = {
+                    "cluster": item,
+                    "status": "failed",
+                    "reason": worker_timeout_reason(timeout),
+                }
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
     return [item for item in results if item is not None]
@@ -301,7 +309,7 @@ def probe_klusterlet_connections(
         timeout_result=lambda cluster: {
             "cluster": cluster,
             "status": "failed",
-            "reason": f"worker_timeout_after_{future_timeout_value}s",
+            "reason": worker_timeout_reason(future_timeout_value),
         },
     )
     failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
@@ -526,13 +534,14 @@ def remediate_klusterlets(
             cluster,
             "failed",
             dict(timeout_steps),
-            reason=f"worker_timeout_after_{future_timeout_value}s",
+            reason=worker_timeout_reason(future_timeout_value),
         ),
     )
     failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
     skipped_clusters = [item["cluster"] for item in results if item["status"] == "skipped"]
     changed = any(item.get("changed") for item in results)
-    worker_timeout_failures = any(item.get("reason", "").startswith("worker_timeout_after_") for item in results)
+    worker_timeout_prefix = WORKER_TIMEOUT_REASON_TEMPLATE.partition("{")[0]
+    worker_timeout_failures = any(item.get("reason", "").startswith(worker_timeout_prefix) for item in results)
     failed = worker_timeout_failures or (strict and bool(failed_clusters))
     result = {
         "changed": changed,

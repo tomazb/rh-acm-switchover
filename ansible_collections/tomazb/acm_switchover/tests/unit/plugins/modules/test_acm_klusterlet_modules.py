@@ -398,11 +398,13 @@ def test_remediation_uses_bounded_worker_threads():
             ("cluster-b", "cluster-b-import"): _import_secret("https://new.example:6443"),
         }
     )
-    seen_threads: set[int] = set()
+    managed_threads: set[int] = set()
 
     def core_client_factory(kubeconfig: str, context: str | None = None):
-        seen_threads.add(threading.get_ident())
-        return secondary if kubeconfig == "hub" else FakeCoreClient()
+        if kubeconfig == "hub":
+            return secondary
+        managed_threads.add(threading.get_ident())
+        return FakeCoreClient()
 
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},
@@ -418,7 +420,7 @@ def test_remediation_uses_bounded_worker_threads():
 
     assert result["workers"] == 1
     assert result["failed_clusters"] == []
-    assert len(seen_threads) == 1
+    assert len(managed_threads) == 1
 
 
 def test_probe_passes_bounded_request_timeout_to_secret_reads():
@@ -463,6 +465,46 @@ def test_worker_future_timeout_surfaces_as_failed_result():
     )
 
     assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
+
+
+def test_single_worker_future_timeout_surfaces_as_failed_result():
+    def slow_worker(cluster_name: str) -> dict:
+        time.sleep(0.05)
+        return {"cluster": cluster_name, "status": "verified"}
+
+    started_at = time.monotonic()
+    results = ordered_bounded_map(
+        ["cluster-a"],
+        workers=1,
+        fn=slow_worker,
+        future_timeout=0.001,
+        timeout_result=lambda cluster: {"cluster": cluster, "status": "failed", "reason": "worker_timeout"},
+    )
+
+    assert time.monotonic() - started_at < 0.04
+    assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
+
+
+def test_worker_future_timeout_uses_one_batch_deadline():
+    def slow_worker(cluster_name: str) -> dict:
+        time.sleep(0.05)
+        return {"cluster": cluster_name, "status": "verified"}
+
+    started_at = time.monotonic()
+    results = ordered_bounded_map(
+        ["cluster-a", "cluster-b", "cluster-c"],
+        workers=3,
+        fn=slow_worker,
+        future_timeout=0.01,
+        timeout_result=lambda cluster: {"cluster": cluster, "status": "failed", "reason": "worker_timeout"},
+    )
+
+    assert time.monotonic() - started_at < 0.04
+    assert results == [
+        {"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"},
+        {"cluster": "cluster-b", "status": "failed", "reason": "worker_timeout"},
+        {"cluster": "cluster-c", "status": "failed", "reason": "worker_timeout"},
+    ]
 
 
 class _ExitJson(Exception):
