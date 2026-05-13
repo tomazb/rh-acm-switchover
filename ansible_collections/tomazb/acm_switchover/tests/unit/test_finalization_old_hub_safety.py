@@ -87,3 +87,24 @@ def test_verify_old_hub_state_does_not_suppress_read_failures():
     assert all(
         task.get("failed_when") is not False for task in k8s_info_tasks
     ), "verify_old_hub_state.yml must not suppress old-hub read failures"
+
+
+def test_disable_old_hub_observability_blocks_when_pods_remain():
+    """Old-hub Observability termination failures must block finalization."""
+    tasks = _load_yaml("disable_old_hub_observability.yml")
+    text = (FINALIZATION_TASKS / "disable_old_hub_observability.yml").read_text()
+
+    wait_tasks = [
+        task
+        for task in tasks
+        if task.get("name") == "Wait for old hub observability pods to terminate"
+    ]
+    fail_tasks = [
+        task for task in tasks if "Observability pods are still running" in str(task.get("ansible.builtin.fail", {}))
+    ]
+
+    assert wait_tasks, "disable_old_hub_observability.yml must wait for old-hub Observability pods"
+    assert wait_tasks[0].get("failed_when") is not False
+    assert fail_tasks, "remaining old-hub Observability pods must fail finalization"
+    assert "ansible.builtin.debug" not in str(fail_tasks)
+    assert "failed_when: false" not in text

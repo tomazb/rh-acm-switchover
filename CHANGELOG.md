@@ -20,13 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refreshed collection migration and variable reference docs for the current checkpoint, validate/dry-run, safe-path, RBAC bootstrap, and klusterlet concurrency interfaces. Protected runbook and `.claude/skills` updates remain draft-only because those files require explicit operator approval and synchronized review before editing.
 - Clarified report artifact documentation so Python and collection reports share schema version `1.0` and aligned contracts without promising identical top-level fields for every report type.
 - Changed the Python CLI and Ansible collection `min_managed_clusters` default so an omitted value derives expected non-local ManagedCluster names/count from preflight; explicit `0` still allows an empty hub, and restore-only pins the expectation to `0`.
+- Observability verification is now blocking by default in both the Python CLI and Ansible collection when Observability checks are enabled. Thanos scale-down, post-activation Observability scale-up/readiness/restart checks, and old-hub Observability termination must succeed unless `--skip-observability-checks` or `acm_switchover_features.skip_observability_checks` is set.
 
 ### Fixed
 
 - Python and collection RBAC validation and bootstrap manifests now include `MultiClusterObservability` delete permission for normal old-hub finalization when observability is detected, while keeping `ManagedCluster` and `MultiClusterHub` teardown deletes in the opt-in decommission extension.
 - Python and collection decommission now fail closed before non-local `ManagedCluster` deletion when matching Hive `ClusterDeployment` resources are unsafe or cannot be verified, while still allowing verified absence of Hive ClusterDeployments.
 - Collection preflight now emits read-only Argo CD ACM-impact advisory details comparable to the Python CLI while keeping discovery failures non-blocking.
-- Collection primary prep now checks Thanos compactor pods after scale-down and emits a non-fatal warning when pods remain.
+- Collection primary prep now checks Thanos compactor pods after scale-down and fails when pods remain.
 - RBAC requirements documentation now matches the enforced observability route and `statefulsets/scale` permissions.
 - Collection input validation now rejects unknown `acm_switchover_execution.mode` values before role tasks can treat a typo as live execution.
 - Collection finalization now runs the decommission role when `old_hub_action: decommission` is selected during switchover, while preserving the standalone decommission confirmation gate and avoiding completed/changed reporting for dry-run or no-op decommission paths.

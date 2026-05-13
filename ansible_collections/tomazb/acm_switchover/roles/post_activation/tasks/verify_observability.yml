@@ -29,7 +29,7 @@
   register: _acm_secondary_thanos_compact_info
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
-- name: Record missing observability workloads as warnings
+- name: Record missing observability workloads
   ansible.builtin.set_fact:
     _acm_observability_missing_workloads: >-
       {{
@@ -138,7 +138,6 @@
         == 0
       )
     }}
-  failed_when: false
   when:
     - acm_switchover_execution.mode | default('execute') != 'dry_run'
     - (_acm_secondary_observatorium_api_info.resources | default([]) | length) > 0
@@ -180,7 +179,6 @@
     {%- endif -%}
     {%- endfor -%}
     {{ (_acm_secondary_observability_pods_info.resources | default([]) | length) > 0 and (ns.unhealthy | length) == 0 }}
-  failed_when: false
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
 - name: Summarize unhealthy observability Pods
@@ -212,19 +210,6 @@
       {{ unhealthy }}
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
 
-- name: Warn when observability checks did not fully pass
-  ansible.builtin.debug:
-    msg: >-
-      Observability verification warning. Missing workloads={{ _acm_observability_missing_workloads | default([]) | join(', ') }};
-      unhealthy pods={{ _acm_secondary_unhealthy_observability_pods | default([]) | join(', ') }}.
-      Verify metrics manually after switchover.
-  when: >-
-    acm_switchover_execution.mode | default('execute') != 'dry_run'
-    and (
-      (_acm_observability_missing_workloads | default([]) | length) > 0
-      or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
-    )
-
 - name: Publish observability verification result
   ansible.builtin.set_fact:
     acm_observability_check_result:
@@ -236,14 +221,14 @@
         }}
       status: >-
         {{
-          'warning'
+          'failed'
           if (
             (_acm_observability_missing_workloads | default([]) | length) > 0
             or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
           )
           else 'pass'
         }}
-      warnings:
+      failures:
         missing_workloads: "{{ _acm_observability_missing_workloads | default([]) }}"
         unhealthy_pods: "{{ _acm_secondary_unhealthy_observability_pods | default([]) }}"
       observatorium_ready_replicas: >-
@@ -254,3 +239,16 @@
         }}
       unhealthy_pods: "{{ _acm_secondary_unhealthy_observability_pods | default([]) }}"
   when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+
+- name: Fail when observability checks did not fully pass
+  ansible.builtin.fail:
+    msg: >-
+      Observability verification failed. Missing workloads={{ _acm_observability_missing_workloads | default([]) | join(', ') }};
+      unhealthy pods={{ _acm_secondary_unhealthy_observability_pods | default([]) | join(', ') }}.
+      Set acm_switchover_features.skip_observability_checks=true only when explicitly bypassing Observability checks.
+  when: >-
+    acm_switchover_execution.mode | default('execute') != 'dry_run'
+    and (
+      (_acm_observability_missing_workloads | default([]) | length) > 0
+      or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
+    )

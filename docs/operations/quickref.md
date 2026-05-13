@@ -228,6 +228,10 @@ oc --context <secondary> get backup -n open-cluster-management-backup \
 oc --context <secondary> get pods -n open-cluster-management-observability
 ```
 
+Observability failures are blocking by default when Observability is detected.
+Use `--skip-observability-checks` only as an explicit bypass when the operator
+will handle Observability separately.
+
 ## Argo CD / GitOps
 
 ```bash
@@ -285,7 +289,7 @@ oc rollout restart deployment/observability-observatorium-api \
 | `--state-file PATH` | Path to state file (default: .state/switchover-<primary>__<secondary>.json) |
 | `--reset-state` | Reset state file and start fresh |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
-| `--skip-observability-checks` | Skip Observability steps even if detected |
+| `--skip-observability-checks` | Explicitly bypass blocking Observability steps even if detected |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--non-interactive` | Non-interactive mode (only valid with `--decommission`) |
 | `--skip-gitops-check` | Disable all GitOps detection including Argo CD deep dive |

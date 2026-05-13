@@ -152,9 +152,8 @@ class Decommission:
         )
 
         if not success:
-            logger.warning(
-                "Some Observability pods still running after %ss",
-                OBSERVABILITY_TERMINATE_TIMEOUT,
+            raise SwitchoverError(
+                f"Observability pods still running after {OBSERVABILITY_TERMINATE_TIMEOUT}s"
             )
 
     def _delete_managed_clusters(self):

@@ -508,19 +508,16 @@ class TestPostActivationVerification:
         mock_secondary_client.get_pods.assert_called()
         assert mock_sleep.call_count == 2
 
-    def test_restart_observatorium_api_404_without_reason_is_graceful(
+    def test_restart_observatorium_api_404_blocks_when_observability_enabled(
         self, post_verify_with_obs, mock_secondary_client
     ):
-        """ApiException(status=404) without 'Not Found' in reason must be treated as not-found, not re-raised.
-
-        Bug: current code checks 'not found' in str(e).lower() — ApiException(status=404) without
-        an explicit reason contains 'Reason: None', so 'not found' is absent and the error is
-        incorrectly re-raised. Fix: check e.status == 404 instead.
-        """
+        """Missing observatorium-api should block when Observability checks are enabled."""
         mock_secondary_client.rollout_restart_deployment.side_effect = ApiException(status=404)
 
-        # Must not raise — a missing deployment should log a warning, not crash the step
-        post_verify_with_obs._restart_observatorium_api()
+        with pytest.raises(SwitchoverError) as exc_info:
+            post_verify_with_obs._restart_observatorium_api()
+
+        assert "observatorium-api deployment not found" in str(exc_info.value)
 
     def test_restart_observatorium_api_non_404_with_not_found_text_reraises(
         self, post_verify_with_obs, mock_secondary_client
@@ -563,10 +560,10 @@ class TestPostActivationVerification:
         mock_wait.return_value = False
         mock_secondary_client.get_pods.return_value = []
 
-        # Should handle gracefully with warning, not raise exception
-        post_verify_with_obs._verify_observability_pods()
+        with pytest.raises(SwitchoverError) as exc_info:
+            post_verify_with_obs._verify_observability_pods()
 
-        # Verify get_pods was called
+        assert "No Observability pods found" in str(exc_info.value)
         mock_secondary_client.get_pods.assert_called_once()
 
     @patch("modules.post_activation.logger")
@@ -595,13 +592,10 @@ class TestPostActivationVerification:
             }
         ]
 
-        post_verify_with_obs._verify_observability_pods()
+        with pytest.raises(SwitchoverError) as exc_info:
+            post_verify_with_obs._verify_observability_pods()
 
-        # With lazy logging, format string is args[0] and values are args[1:]
-        # Check all args for CrashLoopBackOff
-        assert any(
-            any("CrashLoopBackOff" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
-        )
+        assert "CrashLoopBackOff" in str(exc_info.value)
 
     @patch("modules.post_activation.wait_for_condition")
     def test_verify_metrics_collection(self, mock_wait, post_verify_with_obs, mock_secondary_client):
@@ -931,7 +925,15 @@ class TestPostActivationVerificationIntegration:
                 },
             }
         ]
-        mock_secondary_client.get_pods.return_value = [{"metadata": {"name": "pod1"}, "status": {"phase": "Running"}}]
+        mock_secondary_client.get_pods.return_value = [
+            {
+                "metadata": {"name": "pod1"},
+                "status": {
+                    "phase": "Running",
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            }
+        ]
         mock_secondary_client.get_deployment.return_value = {
             "metadata": {"generation": 1},
             "spec": {"replicas": 1},
@@ -1746,68 +1748,77 @@ class TestScaleUpObservability:
         mock_secondary_client.scale_statefulset.assert_not_called()
         mock_secondary_client.wait_for_pods_ready.assert_not_called()
 
-    def test_deployment_not_found(self, mock_secondary_client, mock_state_manager):
-        """Missing deployment should be skipped, statefulset still checked."""
+    def test_deployment_not_found_blocks(self, mock_secondary_client, mock_state_manager):
+        """Missing observatorium-api should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.return_value = None
         mock_secondary_client.get_statefulset.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
 
+        assert "observatorium-api deployment not found" in str(exc_info.value)
         mock_secondary_client.scale_deployment.assert_not_called()
-        mock_secondary_client.scale_statefulset.assert_called_once()
+        mock_secondary_client.scale_statefulset.assert_not_called()
 
-    def test_statefulset_not_found(self, mock_secondary_client, mock_state_manager):
-        """Missing statefulset should be skipped, deployment still checked."""
+    def test_statefulset_not_found_blocks(self, mock_secondary_client, mock_state_manager):
+        """Missing thanos-compact should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.get_statefulset.return_value = None
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
 
         mock_secondary_client.scale_deployment.assert_called_once()
+        assert "thanos-compact StatefulSet not found" in str(exc_info.value)
         mock_secondary_client.scale_statefulset.assert_not_called()
 
-    def test_deployment_exception_continues(self, mock_secondary_client, mock_state_manager):
-        """ApiException on deployment should not prevent statefulset check."""
+    def test_deployment_exception_blocks(self, mock_secondary_client, mock_state_manager):
+        """ApiException on deployment should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.side_effect = ApiException(status=500)
         mock_secondary_client.get_statefulset.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
 
-        mock_secondary_client.scale_statefulset.assert_called_once()
+        assert "Failed to check/scale observatorium-api" in str(exc_info.value)
+        mock_secondary_client.scale_statefulset.assert_not_called()
 
-    def test_statefulset_exception_continues(self, mock_secondary_client, mock_state_manager):
-        """ApiException on statefulset should not prevent wait for deployment."""
+    def test_statefulset_exception_blocks(self, mock_secondary_client, mock_state_manager):
+        """ApiException on statefulset should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.get_statefulset.side_effect = ApiException(status=500)
         mock_secondary_client.wait_for_pods_ready.return_value = True
 
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
 
         mock_secondary_client.scale_deployment.assert_called_once()
-        # Only deployment should be waited on
-        assert mock_secondary_client.wait_for_pods_ready.call_count == 1
+        assert "Failed to check/scale thanos-compact" in str(exc_info.value)
+        mock_secondary_client.wait_for_pods_ready.assert_not_called()
 
-    def test_pods_not_ready_warns(self, mock_secondary_client, mock_state_manager):
-        """Pods failing to become ready should not raise, just warn."""
+    def test_pods_not_ready_blocks(self, mock_secondary_client, mock_state_manager):
+        """Pods failing to become ready should block Observability scale-up."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         mock_secondary_client.get_deployment.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.get_statefulset.return_value = {"spec": {"replicas": 0}}
         mock_secondary_client.wait_for_pods_ready.return_value = False
 
-        # Should not raise
-        pav._scale_up_observability_components()
+        with pytest.raises(SwitchoverError) as exc_info:
+            pav._scale_up_observability_components()
+
+        assert "observatorium-api pods did not become ready in time" in str(exc_info.value)
 
 
 # ========================================================================
@@ -1837,9 +1848,10 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(any("OOMKilled" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
+
+        assert "OOMKilled" in str(exc_info.value)
 
     def test_failed_phase_detected(self, mock_secondary_client, mock_state_manager):
         """Pod in Failed phase should be flagged."""
@@ -1856,9 +1868,10 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(any("Failed" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
+
+        assert "Failed" in str(exc_info.value)
 
     def test_unknown_phase_detected(self, mock_secondary_client, mock_state_manager):
         """Pod in Unknown phase should be flagged."""
@@ -1875,9 +1888,10 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(any("Unknown" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
+
+        assert "Unknown" in str(exc_info.value)
 
     def test_nonzero_exit_code_detected(self, mock_secondary_client, mock_state_manager):
         """Non-zero exit code with unknown reason should be flagged."""
@@ -1899,9 +1913,10 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(any("exit=1" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list)
+
+        assert "exit=1" in str(exc_info.value)
 
     def test_image_pull_backoff_detected(self, mock_secondary_client, mock_state_manager):
         """ImagePullBackOff should be reported."""
@@ -1923,14 +1938,13 @@ class TestVerifyObservabilityPods:
             }
         ]
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(
-                any("ImagePullBackOff" in str(arg) for arg in call.args) for call in mock_logger.warning.call_args_list
-            )
 
-    def test_low_readiness_warns(self, mock_secondary_client, mock_state_manager):
-        """Below POD_READINESS_TOLERANCE should trigger warning about readiness."""
+        assert "ImagePullBackOff" in str(exc_info.value)
+
+    def test_low_readiness_blocks(self, mock_secondary_client, mock_state_manager):
+        """Below POD_READINESS_TOLERANCE should block Observability verification."""
         pav = _make_pav(mock_secondary_client, mock_state_manager, obs=True)
 
         # 5 pods, only 1 ready (20%) < 80% tolerance
@@ -1950,11 +1964,10 @@ class TestVerifyObservabilityPods:
 
         mock_secondary_client.get_pods.return_value = pods
 
-        with patch("modules.post_activation.logger") as mock_logger:
+        with pytest.raises(SwitchoverError) as exc_info:
             pav._verify_observability_pods()
-            assert any(
-                any("ready" in str(arg).lower() for arg in call.args) for call in mock_logger.warning.call_args_list
-            )
+
+        assert "Only 1/5 Observability pods ready" in str(exc_info.value)
 
 
 # ========================================================================

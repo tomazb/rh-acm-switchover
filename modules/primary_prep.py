@@ -254,7 +254,7 @@ class PrimaryPreparation:
             )
 
             if pods:
-                logger.warning("Thanos compactor still has %s pod(s) running", len(pods))
+                raise SwitchoverError(f"Thanos compactor still has {len(pods)} pod(s) running after scale-down")
             else:
                 logger.info("Thanos compactor scaled down successfully")
 
@@ -262,9 +262,9 @@ class PrimaryPreparation:
             logger.error("Failed to scale down Thanos compactor: %s", e)
             raise
         except ApiException as e:
-            # Don't fail the whole preparation if this is optional
             if e.status == 404:
-                logger.warning("Thanos compactor StatefulSet not found (may not exist)")
+                logger.error("Failed to scale down Thanos compactor: StatefulSet not found")
+                raise SwitchoverError("Thanos compactor StatefulSet not found") from e
             else:
                 logger.error("Failed to scale down Thanos compactor: %s", e)
                 raise

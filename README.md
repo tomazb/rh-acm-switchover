@@ -256,7 +256,7 @@ python acm_switchover.py --restore-only \
 | `--decommission` | Decommission old hub (interactive) |
 | `--restore-only` | Restore managed clusters from S3 backups onto a single hub (no primary needed; implies `--method full`) |
 | `--manage-auto-import-strategy` | Temporarily set ImportAndSync on destination hub (ACM 2.14+) |
-| `--skip-observability-checks` | Skip Observability-related steps even if detected |
+| `--skip-observability-checks` | Explicitly bypass Observability-related steps even if detected |
 | `--disable-observability-on-secondary` | Deprecated compatibility flag; `--old-hub-action secondary` now deletes MCO automatically |
 | `--skip-rbac-validation` | Skip RBAC permission validation during pre-flight checks |
 | `--argocd-manage` | Pause ACM-touching ArgoCD Applications during switchover (left paused by default) |
@@ -278,7 +278,7 @@ python acm_switchover.py --restore-only \
 2. **Primary Hub Preparation**
    - Pause BackupSchedule (version-aware: ACM 2.11 vs 2.12+)
    - Add disable-auto-import annotations to ManagedClusters
-   - Scale down Thanos compactor (if Observability detected)
+   - Scale down Thanos compactor (if Observability detected; failures block unless `--skip-observability-checks` is set)
 
 3. **Secondary Hub Activation**
    - Verify latest passive restore (Method 1) or create full restore (Method 2)
@@ -288,8 +288,8 @@ python acm_switchover.py --restore-only \
 
 4. **Post-Activation Verification**
    - Monitor ManagedCluster connection status (5-10 minutes)
-   - Restart observatorium-api deployment (if Observability detected)
-   - Verify Observability pod health
+   - Restart observatorium-api deployment (if Observability detected; failures block unless `--skip-observability-checks` is set)
+   - Verify Observability pod health (blocking by default)
    - Check metrics collection
 
 5. **Finalization**
@@ -301,7 +301,7 @@ python acm_switchover.py --restore-only \
      - `secondary`: Set up passive sync restore (**recommended** - enables reverse switchover)
      - `decommission`: Remove ACM components automatically
      - `none`: Leave unchanged for manual handling
-   - When `--old-hub-action secondary` is used, delete MultiClusterObservability on the old hub automatically
+   - When `--old-hub-action secondary` is used, delete MultiClusterObservability on the old hub automatically; termination failures block unless `--skip-observability-checks` is set
    - Generate completion report
 
 ### Restore-Only Flow

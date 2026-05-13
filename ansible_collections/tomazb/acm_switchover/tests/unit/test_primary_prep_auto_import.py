@@ -35,18 +35,18 @@ def test_primary_prep_uses_python_thanos_compactor_selector():
     assert "app.kubernetes.io/name=thanos-compactor" not in text
 
 
-def test_scale_observability_warns_when_thanos_pods_remain():
-    """Collection primary_prep must mirror Python's non-fatal post-scale pod guardrail."""
+def test_scale_observability_blocks_when_thanos_pods_remain():
+    """Collection primary_prep must block when Thanos pods remain after scale-down."""
     text = (PRIMARY_PREP_TASKS / "scale_observability.yml").read_text()
     tasks = _load_yaml("scale_observability.yml")
 
     pod_queries = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
-    warning_tasks = [
-        task for task in tasks if "Thanos compactor still has" in str(task.get("ansible.builtin.debug", {}))
+    fail_tasks = [
+        task for task in tasks if "Thanos compactor still has" in str(task.get("ansible.builtin.fail", {}))
     ]
 
     assert "ansible.builtin.pause" in text
     assert pod_queries, "scale_observability.yml must query Thanos compactor pods after scaling"
     assert "app.kubernetes.io/name=thanos-compact" in str(pod_queries[0])
-    assert warning_tasks, "remaining Thanos compactor pods must produce a visible non-fatal warning"
-    assert "failed_when: false" in text
+    assert fail_tasks, "remaining Thanos compactor pods must fail primary_prep"
+    assert "failed_when: false" not in text

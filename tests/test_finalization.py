@@ -1377,10 +1377,10 @@ class TestFinalization:
         primary.get_pods.assert_not_called()
 
     @patch("modules.finalization.wait_for_condition", return_value=False)
-    def test_disable_observability_on_old_hub_warns_when_pods_remain_after_mco_deletion(
+    def test_disable_observability_on_old_hub_blocks_when_pods_remain_after_mco_deletion(
         self, mock_wait, mock_secondary_client, mock_state_manager, mock_backup_manager, caplog
     ):
-        """MCO deletion should warn when observability pods remain after the wait window."""
+        """MCO deletion should block when observability pods remain after the wait window."""
         primary = Mock()
         fin = Finalization(
             secondary_client=mock_secondary_client,
@@ -1393,11 +1393,14 @@ class TestFinalization:
         primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
         primary.get_pods.return_value = [{"metadata": {"name": "obs-pod"}}]
 
-        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+        with (
+            caplog.at_level(logging.ERROR, logger="acm_switchover"),
+            pytest.raises(SwitchoverError) as exc_info,
+        ):
             fin._disable_observability_on_old_hub()
 
         mock_wait.assert_called_once()
-        assert "Observability pods still running after MCO deletion" in caplog.text
+        assert "Observability pods still running after MCO deletion" in str(exc_info.value)
 
     def test_disable_observability_on_old_hub_dry_run_only_reports_delete_intent(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
