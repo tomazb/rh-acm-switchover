@@ -33,7 +33,9 @@
       Skipped preflight checkpoint is missing expected ManagedCluster metadata
       (expected_managed_cluster_names/expected_managed_cluster_count). Re-run preflight
       so activation and post-activation can enforce the restore expectation.
-  when: (_checkpoint_enter | default({})).skipped_phase | default(false)
+  when:
+    - (_checkpoint_enter | default({})).skipped_phase | default(false)
+    - acm_switchover_execution.mode | default('execute') == 'execute'
 
 - name: Restore expected ManagedClusters from checkpoint when preflight is skipped
   ansible.builtin.set_fact:
@@ -47,7 +49,14 @@
         ((_checkpoint_enter.checkpoint | default({})).get('operational_data', {}))
         .get('expected_managed_cluster_count')
       }}
-  when: (_checkpoint_enter | default({})).skipped_phase | default(false)
+  when:
+    - (_checkpoint_enter | default({})).skipped_phase | default(false)
+    - >-
+      (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('expected_managed_cluster_names', none))
+      is not none
+    - >-
+      (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('expected_managed_cluster_count', none))
+      is not none
 
 - name: Run preflight phase
   when:

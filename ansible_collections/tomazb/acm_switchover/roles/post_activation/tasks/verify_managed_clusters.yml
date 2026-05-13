@@ -1,4 +1,25 @@
 ---
+- name: Resolve managed-cluster verification expectation
+  ansible.builtin.set_fact:
+    _acm_post_activation_min_managed_clusters: >-
+      {{
+        (acm_switchover_operation.min_managed_clusters | int)
+        if (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+        )
+        else (acm_switchover_expected_managed_cluster_count | default(0) | int)
+      }}
+    _acm_post_activation_expected_managed_cluster_names: >-
+      {{
+        []
+        if (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+        )
+        else (acm_switchover_expected_managed_cluster_names | default([]))
+      }}
+
 # After a Velero MC restore, the hub re-creates ManagedCluster objects with
 # status from the backup snapshot (often Available=True from the old primary).
 # The hub reconciler needs time to detect actual klusterlet connectivity and
@@ -18,9 +39,9 @@
 # This mirrors Python: `if not managed_clusters: return False, "no ManagedClusters found"`.
 #
 # Inner check:
-#   - If resources exist but only local-cluster: exit immediately (no managed clusters
-#     to wait for). Mirrors Python: `if total_clusters == 0: return True`.
-#   - Otherwise: wait until every non-local cluster is Available=True AND Joined=True.
+#   - Wait until the effective expected non-local count and derived names are visible.
+#   - If the effective count is 0 and resources contain only local-cluster, exit.
+#   - Otherwise: wait until every observed non-local cluster is Available=True AND Joined=True.
 - name: Wait for managed clusters to become available and joined
   kubernetes.core.k8s_info:
     api_version: cluster.open-cluster-management.io/v1
@@ -32,6 +53,30 @@
   delay: 30
   until: >-
     (acm_secondary_managed_clusters_info.resources | default([]) | length) > 0
+    and
+    (
+      (acm_secondary_managed_clusters_info.resources | default([])
+       | selectattr('metadata.name', 'ne', 'local-cluster')
+       | map(attribute='metadata.name')
+       | list
+       | length)
+      >= (_acm_post_activation_min_managed_clusters | int)
+    )
+    and
+    (
+      (_acm_post_activation_expected_managed_cluster_names | default([]) | length) == 0
+      or
+      (
+        _acm_post_activation_expected_managed_cluster_names | default([])
+        | difference(
+            acm_secondary_managed_clusters_info.resources | default([])
+            | selectattr('metadata.name', 'ne', 'local-cluster')
+            | map(attribute='metadata.name')
+            | list
+          )
+        | length
+      ) == 0
+    )
     and
     (
       (acm_secondary_managed_clusters_info.resources | default([])
@@ -80,24 +125,8 @@
 - name: Verify managed cluster group readiness
   tomazb.acm_switchover.acm_cluster_verify:
     cluster_status: "{{ cluster_status_result.cluster_status }}"
-    min_managed_clusters: >-
-      {{
-        (acm_switchover_operation.min_managed_clusters | int)
-        if (
-          acm_switchover_operation.min_managed_clusters is defined
-          and acm_switchover_operation.min_managed_clusters is not none
-        )
-        else (acm_switchover_expected_managed_cluster_count | default(0) | int)
-      }}
-    expected_names: >-
-      {{
-        []
-        if (
-          acm_switchover_operation.min_managed_clusters is defined
-          and acm_switchover_operation.min_managed_clusters is not none
-        )
-        else (acm_switchover_expected_managed_cluster_names | default([]))
-      }}
+    min_managed_clusters: "{{ _acm_post_activation_min_managed_clusters | int }}"
+    expected_names: "{{ _acm_post_activation_expected_managed_cluster_names | default([]) }}"
   register: acm_cluster_verify_result
 
 - name: Preserve soft managed-cluster wait failure for downstream remediation

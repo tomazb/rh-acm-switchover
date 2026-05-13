@@ -37,6 +37,11 @@ EXAMPLES = r"""
 - name: Verify cluster group readiness
   tomazb.acm_switchover.acm_cluster_verify:
     cluster_status: "{{ cluster_status_result.cluster_status }}"
+  register: verify_result
+
+- name: Verify preflight-derived cluster group readiness
+  tomazb.acm_switchover.acm_cluster_verify:
+    cluster_status: "{{ cluster_status_result.cluster_status }}"
     min_managed_clusters: "{{ acm_switchover_expected_managed_cluster_count | default(0) | int }}"
     expected_names: "{{ acm_switchover_expected_managed_cluster_names | default([]) }}"
   register: verify_result
