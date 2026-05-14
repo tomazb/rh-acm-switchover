@@ -1,7 +1,7 @@
 # Parity Matrix
 
-Date: 2026-05-12 (1.7.10 production resilience hardening)
-Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`
+Date: 2026-05-13 (1.7.10 + live RBAC certification)
+Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`, `release-only`
 
 Intentional parity changes require explicit operator approval before implementation. When a capability's support status changes, or approved work intentionally leaves a `dual-supported` capability divergent, record that decision here and update the related mapping/coexistence docs in the same change.
 
@@ -21,6 +21,7 @@ Intentional parity changes require explicit operator approval before implementat
 | discovery | dual-supported | dual-supported | Collection provides classification/reporting and bridge guidance; `scripts/discover-hub.sh` remains the full context-enumeration bridge |
 | decommission | dual-supported | dual-supported | Collection defaults observability detection to `auto` and waits for ACM/observability workload pods during teardown |
 | RBAC bootstrap | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/setup-rbac.sh deprecated |
+| RBAC live certification | release-only | release-only | Live permission validation via SubjectAccessReview; opt-in via `ACM_ENABLE_LIVE_RBAC_CERTIFICATION`; complements static RBAC parity checks |
 
 ## Milestone Gates
 

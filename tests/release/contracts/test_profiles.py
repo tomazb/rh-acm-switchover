@@ -76,6 +76,43 @@ def test_load_profile_returns_hash_and_normalized_model(tmp_path: Path) -> None:
     assert loaded.profile.artifacts.redaction.required is True
 
 
+def test_load_profile_parses_live_rbac_certification_scope(tmp_path: Path) -> None:
+    profile_text = VALID_PROFILE.replace(
+        "- id: final-baseline-check",
+        """- id: rbac-bootstrap-live
+    required: true
+    rbac_certification:
+      primary:
+        role: operator
+        namespace: acm-switchover-custom
+        service_account: custom-operator
+        include_decommission: true
+        include_old_hub_finalization: true
+      secondary:
+        role: validator
+        include_decommission: false
+        include_old_hub_finalization: false
+  - id: final-baseline-check""",
+    )
+    profile_path = write_profile(tmp_path / "profile.yaml", profile_text)
+
+    loaded = load_profile(profile_path)
+    scenario = next(
+        item
+        for item in loaded.profile.scenarios
+        if item.id == "rbac-bootstrap-live"
+    )
+
+    assert scenario.rbac_certification is not None
+    assert scenario.rbac_certification.primary.role == "operator"
+    assert scenario.rbac_certification.primary.namespace == "acm-switchover-custom"
+    assert scenario.rbac_certification.primary.service_account == "custom-operator"
+    assert scenario.rbac_certification.primary.include_decommission is True
+    assert scenario.rbac_certification.primary.include_old_hub_finalization is True
+    assert scenario.rbac_certification.secondary.role == "validator"
+    assert scenario.rbac_certification.secondary.include_decommission is False
+
+
 def test_load_profile_rejects_unknown_top_level_key(tmp_path: Path) -> None:
     profile_path = write_profile(tmp_path / "profile.yaml", VALID_PROFILE + "\nunknown: true\n")
 
@@ -137,6 +174,7 @@ def test_profile_rejects_pem_material(tmp_path: Path) -> None:
     "profile_name",
     [
         "full-release.example.yaml",
+        "full-release-with-rbac-cert.example.yaml",
         "argocd-release.example.yaml",
         "dev-minimal.example.yaml",
     ],

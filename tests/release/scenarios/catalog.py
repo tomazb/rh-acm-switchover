@@ -44,6 +44,7 @@ V1_SCENARIOS: tuple[ScenarioDefinition, ...] = (
     ScenarioDefinition("checkpoint-resume", False, ("python", "ansible"), True, True),
     ScenarioDefinition("decommission", False, ("python", "ansible"), True, True),
     ScenarioDefinition("rbac-bootstrap", False, ("ansible",), True, True),
+    ScenarioDefinition("rbac-bootstrap-live", False, ("local",), True, False),
     ScenarioDefinition("failure-injection", False, ("python", "ansible"), True, False),
     ScenarioDefinition("soak", False, ("python", "ansible"), True, True),
 )
@@ -105,6 +106,7 @@ def select_release_matrix(
         scenario_ids = profile_ids
     else:
         scenario_ids = tuple(item.id for item in V1_SCENARIOS if item.required)
+    requested_scenarios = set(scenario_filters)
     scenarios = []
     for scenario_id in scenario_ids:
         definition = SCENARIOS_BY_ID[scenario_id]
@@ -114,6 +116,8 @@ def select_release_matrix(
         if profile_item is not None:
             streams = profile_item.streams or streams
             required = definition.required if profile_item.required is None else bool(profile_item.required)
+        if scenario_id in requested_scenarios:
+            required = True
         if streams != ("local",):
             streams = tuple(stream for stream in streams if stream in selected_streams)
         scenarios.append(

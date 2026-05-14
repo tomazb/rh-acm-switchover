@@ -19,6 +19,8 @@ from .models import (
     ManagedClustersProfile,
     MetadataExemption,
     ProfileValidationError,
+    RBACCertificationHubProfile,
+    RBACCertificationProfile,
     RecoveryCleanupProfile,
     RecoveryProfile,
     RedactionProfile,
@@ -111,6 +113,31 @@ def _stream(raw: Mapping[str, Any]) -> StreamProfile:
     )
 
 
+def _rbac_certification_hub(raw: Mapping[str, Any] | None) -> RBACCertificationHubProfile:
+    payload = raw or {}
+    return RBACCertificationHubProfile(
+        role=str(payload.get("role", "operator")),
+        namespace=str(payload.get("namespace", "acm-switchover")),
+        service_account=str(payload.get("service_account", "acm-switchover-operator")),
+        include_decommission=bool(payload.get("include_decommission", False)),
+        include_old_hub_finalization=bool(payload.get("include_old_hub_finalization", False)),
+        include_forbidden_permissions=bool(payload.get("include_forbidden_permissions", True)),
+    )
+
+
+def _rbac_certification(raw: Mapping[str, Any] | None) -> RBACCertificationProfile | None:
+    if raw is None:
+        return None
+    return RBACCertificationProfile(
+        primary=_rbac_certification_hub(
+            require_mapping(raw.get("primary", {}), "scenarios[].rbac_certification.primary")
+        ),
+        secondary=_rbac_certification_hub(
+            require_mapping(raw.get("secondary", {}), "scenarios[].rbac_certification.secondary")
+        ),
+    )
+
+
 def _scenario(raw: Mapping[str, Any], default_timeout_minutes: int) -> ScenarioProfile:
     return ScenarioProfile(
         id=str(raw["id"]),
@@ -121,6 +148,11 @@ def _scenario(raw: Mapping[str, Any], default_timeout_minutes: int) -> ScenarioP
             int(raw["timeout_minutes"]) if raw.get("timeout_minutes") is not None else default_timeout_minutes
         ),
         skip_reason=raw.get("skip_reason"),
+        rbac_certification=_rbac_certification(
+            require_mapping(raw["rbac_certification"], "scenarios[].rbac_certification")
+            if raw.get("rbac_certification") is not None
+            else None
+        ),
     )
 
 
