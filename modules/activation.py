@@ -25,6 +25,7 @@ from lib.constants import (
     PATCH_VERIFY_MAX_RETRIES,
     PATCH_VERIFY_RETRY_DELAY,
     PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
+    RESTORE_ALREADY_AVAILABLE_MARKER,
     RESTORE_FAST_POLL_INTERVAL,
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_FULL_NAME,
@@ -208,7 +209,7 @@ class SecondaryActivation:
             logger.info("Passive sync verified (%s): %s", phase, message)
         elif phase == "FinishedWithErrors":
             messages = status.get("messages", [])
-            if messages and all("already available" in m for m in messages):
+            if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
                 logger.warning(
                     "Passive sync restore %s in %s state but all errors are"
                     " 'already available' clusters (expected for consecutive"
@@ -880,7 +881,7 @@ class SecondaryActivation:
                 return WaitConditionResult.complete(f"phase={phase}")
             if phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
-                if messages and all("already available" in m for m in messages):
+                if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
                     logger.warning(
                         "Restore %s reported FinishedWithErrors but all errors are"
                         " 'already available' clusters (expected for consecutive"

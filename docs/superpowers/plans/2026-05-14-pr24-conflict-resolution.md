@@ -4,7 +4,7 @@
 
 **Goal:** Resolve the GitHub conflict on PR #24 by merging `origin/main` into `ansible` and preserving both branches' intended behavior.
 
-**Architecture:** This is a local Git conflict-resolution task, not a feature refactor. The merge should adopt `main`'s centralized `RESTORE_ALREADY_AVAILABLE_MARKER` constant while keeping the PR branch's Ansible/e2e changes intact.
+**Architecture:** This is a local Git conflict-resolution task, not a feature refactor. The merge should adopt `main`'s centralized `RESTORE_ALREADY_AVAILABLE_MARKER` constant while keeping the PR branch's Ansible/e2e removals intact.
 
 **Tech Stack:** Git, Python, pytest, existing ACM switchover Python CLI and Ansible collection tests.
 
@@ -15,7 +15,7 @@
 - Modify: `lib/constants.py` to include `RESTORE_ALREADY_AVAILABLE_MARKER`.
 - Modify: `modules/activation.py` to import both `PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME` and `RESTORE_ALREADY_AVAILABLE_MARKER`, and to use the marker constant for restore status checks.
 - Modify: `modules/preflight/backup_validators.py` to import and use `RESTORE_ALREADY_AVAILABLE_MARKER`.
-- Modify: `tests/e2e/orchestrator.py` to preserve `argocd_resume_after_switchover`.
+- Inspect: `tests/e2e/orchestrator.py` to confirm stale `argocd_resume_after_switchover` wiring remains removed.
 - Do not modify: `docs/ACM_SWITCHOVER_RUNBOOK.md` or `.claude/skills/**/*.skill.md`.
 
 ### Task 1: Start Merge
@@ -91,19 +91,19 @@ if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
 ### Task 3: Resolve E2E Orchestrator Conflict
 
 **Files:**
-- Modify: `tests/e2e/orchestrator.py`
+- Inspect: `tests/e2e/orchestrator.py`
 
-- [ ] **Step 1: Preserve run config field**
+- [ ] **Step 1: Preserve stale field removal**
 
-Ensure `RunConfig` includes:
+Ensure `RunConfig` does not include:
 
 ```python
     argocd_resume_after_switchover: bool = False
 ```
 
-- [ ] **Step 2: Preserve constructor pass-through**
+- [ ] **Step 2: Preserve stale pass-through removal**
 
-Ensure the `E2EPhaseHandlers` call includes:
+Ensure the `E2EPhaseHandlers` call does not include:
 
 ```python
                 argocd_resume_after_switchover=self.config.argocd_resume_after_switchover,

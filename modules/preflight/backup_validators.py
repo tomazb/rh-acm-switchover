@@ -12,6 +12,7 @@ from lib.constants import (
     BACKUP_SCHEDULE_DEFAULT_NAME,
     BACKUP_VERIFY_TIMEOUT,
     LOCAL_CLUSTER_NAME,
+    RESTORE_ALREADY_AVAILABLE_MARKER,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_USE_MANAGED_SERVICE_ACCOUNT,
 )
@@ -485,7 +486,7 @@ class PassiveSyncValidator(BaseValidator):
                 )
             elif phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
-                if messages and all("already available" in m for m in messages):
+                if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
                     self.add_result(
                         "Passive sync restore",
                         True,

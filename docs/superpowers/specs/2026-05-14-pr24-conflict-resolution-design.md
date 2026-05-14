@@ -9,7 +9,7 @@ GitHub reports PR #24, `ansible` into `main`, as conflicted. Local inspection sh
 - `modules/preflight/backup_validators.py`
 - `tests/e2e/orchestrator.py`
 
-The `main` side centralizes the restore status text `"already available"` as `RESTORE_ALREADY_AVAILABLE_MARKER`. The PR branch also carries Ansible collection foundation work and e2e configuration propagation that must be preserved.
+The `main` side centralizes the restore status text `"already available"` as `RESTORE_ALREADY_AVAILABLE_MARKER`. The PR branch also carries Ansible collection foundation work and intentionally removed stale Argo CD auto-resume-after-switchover wiring that must stay removed.
 
 ## Chosen Approach
 
@@ -22,7 +22,7 @@ This keeps the long-running PR history stable and avoids rewriting commits that 
 - Keep the new `RESTORE_ALREADY_AVAILABLE_MARKER` constant from `main`.
 - Update Python restore handling to use `RESTORE_ALREADY_AVAILABLE_MARKER` instead of hard-coded string checks.
 - Preserve the PR branch's activation imports and behavior, including `PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME`.
-- Preserve the PR branch's e2e `argocd_resume_after_switchover` configuration field and pass-through.
+- Preserve the PR branch's removal of stale e2e `argocd_resume_after_switchover` configuration and pass-through wiring.
 - Do not edit protected runbook or `.claude/skills` files.
 - Keep changes limited to conflict resolution unless tests reveal a directly related issue.
 
