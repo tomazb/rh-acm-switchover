@@ -1,7 +1,7 @@
 # Parity Matrix
 
 Date: 2026-05-13 (1.7.10 + live RBAC certification)
-Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`
+Allowed statuses: `Python only`, `dual-supported`, `collection only`, `deprecated`, `release-only`
 
 Intentional parity changes require explicit operator approval before implementation. When a capability's support status changes, or approved work intentionally leaves a `dual-supported` capability divergent, record that decision here and update the related mapping/coexistence docs in the same change.
 

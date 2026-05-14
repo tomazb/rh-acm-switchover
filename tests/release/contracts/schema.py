@@ -54,6 +54,7 @@ ALLOWED_RBAC_ACTIONS = {
     "revalidate",
 }
 BASELINE_PRIMARY_VALUES = {"primary", "secondary"}
+RBAC_CERTIFICATION_ROLES = {"operator", "validator"}
 
 
 def require_mapping(value: Any, field_path: str) -> Mapping[str, Any]:
@@ -130,6 +131,33 @@ def validate_scenario(
 
     if raw.get("skip_reason") and required:
         raise ProfileValidationError(f"scenarios[{index}].skip_reason: allowed only when required is false")
+
+    if "rbac_certification" in raw:
+        if scenario_id != "rbac-bootstrap-live":
+            raise ProfileValidationError(
+                f"scenarios[{index}].rbac_certification: allowed only for rbac-bootstrap-live"
+            )
+        certification = require_mapping(raw["rbac_certification"], f"scenarios[{index}].rbac_certification")
+        for hub_name in ("primary", "secondary"):
+            hub_scope = require_mapping(
+                certification.get(hub_name, {}),
+                f"scenarios[{index}].rbac_certification.{hub_name}",
+            )
+            role = str(hub_scope.get("role", "operator"))
+            if role not in RBAC_CERTIFICATION_ROLES:
+                raise ProfileValidationError(
+                    f"scenarios[{index}].rbac_certification.{hub_name}.role: expected operator or validator"
+                )
+            if role == "validator" and bool(hub_scope.get("include_decommission", False)):
+                raise ProfileValidationError(
+                    f"scenarios[{index}].rbac_certification.{hub_name}.include_decommission: "
+                    "validator role cannot include decommission permissions"
+                )
+            if role == "validator" and bool(hub_scope.get("include_old_hub_finalization", False)):
+                raise ProfileValidationError(
+                    f"scenarios[{index}].rbac_certification.{hub_name}.include_old_hub_finalization: "
+                    "validator role cannot include old-hub finalization permissions"
+                )
 
     narrowed = set(raw.get("streams") or ())
     if not narrowed.issubset(enabled_streams):

@@ -32,6 +32,7 @@ from tests.release.checks.static_gates import (
 from tests.release.conftest import ReleaseOptions
 from tests.release.contracts.models import (
     LoadProfileResult,
+    RBACCertificationHubProfile,
     ScenarioProfile,
     StreamProfile,
 )
@@ -157,6 +158,18 @@ def _stream_profiles(
     profile_streams: tuple[StreamProfile, ...],
 ) -> dict[str, StreamProfile]:
     return {stream.id: stream for stream in profile_streams}
+
+
+def _rbac_certification_scope(
+    scenario_profiles: Mapping[str, ScenarioProfile],
+    hub_name: str,
+) -> RBACCertificationHubProfile:
+    scenario_profile = scenario_profiles.get("rbac-bootstrap-live")
+    if scenario_profile is None or scenario_profile.rbac_certification is None:
+        return RBACCertificationHubProfile()
+    if hub_name == "primary":
+        return scenario_profile.rbac_certification.primary
+    return scenario_profile.rbac_certification.secondary
 
 
 def _as_dict(value: Any) -> dict:
@@ -615,13 +628,17 @@ def _run_release_certification(
         rbac_cert_assertions = []
 
         # Certify primary hub
+        primary_scope = _rbac_certification_scope(scenario_profiles, "primary")
         primary_result = certify_rbac_permissions(
             hub=profile.hubs["primary"],
             hub_name="primary",
             artifact_dir=rbac_cert_dir / "primary",
-            role="operator",
-            include_decommission=True,
-            include_old_hub_finalization=True,
+            role=primary_scope.role,
+            namespace=primary_scope.namespace,
+            service_account=primary_scope.service_account,
+            include_decommission=primary_scope.include_decommission,
+            include_old_hub_finalization=primary_scope.include_old_hub_finalization,
+            include_forbidden_permissions=primary_scope.include_forbidden_permissions,
         )
         rbac_cert_assertions.extend(
             {
@@ -637,13 +654,17 @@ def _run_release_certification(
         )
 
         # Certify secondary hub
+        secondary_scope = _rbac_certification_scope(scenario_profiles, "secondary")
         secondary_result = certify_rbac_permissions(
             hub=profile.hubs["secondary"],
             hub_name="secondary",
             artifact_dir=rbac_cert_dir / "secondary",
-            role="operator",
-            include_decommission=False,
-            include_old_hub_finalization=False,
+            role=secondary_scope.role,
+            namespace=secondary_scope.namespace,
+            service_account=secondary_scope.service_account,
+            include_decommission=secondary_scope.include_decommission,
+            include_old_hub_finalization=secondary_scope.include_old_hub_finalization,
+            include_forbidden_permissions=secondary_scope.include_forbidden_permissions,
         )
         rbac_cert_assertions.extend(
             {

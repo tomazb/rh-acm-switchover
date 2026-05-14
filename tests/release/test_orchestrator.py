@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from tests.release.adapters.common import AssertionRecord, StreamResult
+from tests.release.checks.rbac_certification import CertificationResult
 from tests.release.checks.static_gates import GateCommand, GateResult
 from tests.release.conftest import ReleaseOptions
 from tests.release.contracts.loader import load_profile
+from tests.release.contracts.models import (
+    RBACCertificationHubProfile,
+    RBACCertificationProfile,
+    ScenarioProfile,
+)
 from tests.release.orchestrator import OcDiscoveryClient, run_release_certification
 from tests.release.reporting.artifacts import ReleaseArtifacts
 
@@ -246,6 +253,97 @@ def test_orchestrator_records_adapter_exceptions_as_failed_results(
     assert preflight["status"] == "failed"
     assert python_result["assertions"][0]["name"] == "adapter-execution"
     assert "required scenario failed: preflight" in summary["failure_reasons"]
+
+
+def test_orchestrator_uses_profile_live_rbac_certification_scope(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    certification_scope = RBACCertificationProfile(
+        primary=RBACCertificationHubProfile(
+            role="operator",
+            namespace="custom-primary-ns",
+            service_account="custom-primary-sa",
+            include_decommission=False,
+            include_old_hub_finalization=True,
+        ),
+        secondary=RBACCertificationHubProfile(
+            role="validator",
+            namespace="custom-secondary-ns",
+            service_account="custom-secondary-sa",
+            include_decommission=False,
+            include_old_hub_finalization=False,
+        ),
+    )
+    profile = replace(
+        loaded.profile,
+        scenarios=loaded.profile.scenarios
+        + (
+            ScenarioProfile(
+                id="rbac-bootstrap-live",
+                required=True,
+                rbac_certification=certification_scope,
+            ),
+        ),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    calls = []
+
+    def fake_certify(**kwargs):
+        calls.append(kwargs)
+        return CertificationResult(status="passed", assertions=[])
+
+    monkeypatch.setattr(
+        "tests.release.orchestrator.certify_rbac_permissions",
+        fake_certify,
+    )
+
+    run_release_certification(
+        release_options=replace(
+            _release_options(tmp_path),
+            scenarios=("rbac-bootstrap-live",),
+        ),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": FakeDiscoveryClient(primary=True),
+            "secondary": FakeDiscoveryClient(primary=False),
+        },
+        adapters={"python": FakeAdapter("python"), "ansible": FakeAdapter("ansible")},
+        gate_runner=_passing_gate,
+    )
+
+    assert [
+        (
+            call["hub_name"],
+            call["role"],
+            call["namespace"],
+            call["service_account"],
+            call["include_decommission"],
+            call["include_old_hub_finalization"],
+        )
+        for call in calls
+    ] == [
+        (
+            "primary",
+            "operator",
+            "custom-primary-ns",
+            "custom-primary-sa",
+            False,
+            True,
+        ),
+        (
+            "secondary",
+            "validator",
+            "custom-secondary-ns",
+            "custom-secondary-sa",
+            False,
+            False,
+        ),
+    ]
 
 
 def test_oc_discovery_client_handles_missing_oc(monkeypatch) -> None:

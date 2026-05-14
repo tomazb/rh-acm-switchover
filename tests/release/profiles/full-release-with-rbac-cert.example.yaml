@@ -38,11 +38,20 @@ scenarios:
   - id: rbac-bootstrap
     # Static RBAC manifest parity scenario (dry-run, no live cluster validation)
   - id: rbac-bootstrap-live
-    required: false
+    required: true
     # Live RBAC certification scenario
     # Validates applied permissions using SubjectAccessReview
     # Requires: ACM_ENABLE_LIVE_RBAC_CERTIFICATION=1
     # Requires: Service accounts already bootstrapped on both hubs
+    rbac_certification:
+      primary:
+        role: operator
+        include_decommission: true
+        include_old_hub_finalization: true
+      secondary:
+        role: operator
+        include_decommission: false
+        include_old_hub_finalization: false
   - id: runtime-parity
   - id: final-baseline-check
 argocd:

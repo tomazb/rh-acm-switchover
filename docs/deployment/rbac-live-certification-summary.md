@@ -9,23 +9,23 @@ Successfully implemented a live RBAC bootstrap certification scenario that valid
 ### Core Components
 
 1. **Scenario Definition** (`tests/release/scenarios/catalog.py`)
-   - Added `rbac-bootstrap-live` as optional scenario
+   - Added `rbac-bootstrap-live` as opt-in scenario; explicitly filtered runs are blocking
    - Stream: `local` (no Python/Ansible adapter required)
    - Mutates lab: `True` (applies SubjectAccessReview resources)
    - Runtime parity: `False` (release-only capability)
 
 2. **Certification Module** (`tests/release/checks/rbac_certification.py`)
-   - Permission matrix mirroring `lib/rbac_validator.py` and `acm_rbac_validate.py`
+   - Permission matrix derived from `lib/rbac_validator.py`; existing parity tests keep `acm_rbac_validate.py` aligned
    - SubjectAccessReview-based validation with service account impersonation
    - Support for operator and validator roles
    - Decommission and old-hub finalization permission flags
-   - Structured assertion results with evidence paths
+   - Structured assertion results with collision-safe SAR request/evidence paths
+   - Least-privilege deny checks for dangerous unrelated permissions
    - Schema version 1 JSON artifacts
 
 3. **Orchestrator Integration** (`tests/release/orchestrator.py`)
    - Executes after stream scenarios, before runtime parity
-   - Certifies primary hub (full permissions + decommission)
-   - Certifies secondary hub (subset permissions, no decommission)
+   - Certifies primary and secondary hubs using profile-driven RBAC scopes
    - Aggregates results into local scenario result
 
 ### Permission Coverage
@@ -57,7 +57,7 @@ Successfully implemented a live RBAC bootstrap certification scenario that valid
 
 ### Test Coverage
 
-Added 20 comprehensive tests (`tests/release/checks/test_rbac_certification.py`):
+Added and extended comprehensive tests (`tests/release/checks/test_rbac_certification.py`):
 - Permission matrix construction for operator/validator roles
 - Decommission and old-hub finalization flag handling
 - Environment variable opt-in logic
@@ -65,8 +65,12 @@ Added 20 comprehensive tests (`tests/release/checks/test_rbac_certification.py`)
 - Certification result dataclass
 - Invalid role handling
 - Skipped scenario behavior
+- RBACValidator matrix parity
+- Least-privilege deny checks
+- Collision-safe evidence artifact generation
+- Orchestrator profile-driven certification scope
 
-All 175 release framework tests pass.
+Targeted release framework tests cover the new certification path; run `python -m pytest tests/release/ -q` before using the PR as merge evidence.
 
 ## Documentation
 
@@ -105,10 +109,10 @@ All 175 release framework tests pass.
 - Included for old-hub finalization and full decommission
 
 ✅ **Skipped unless explicitly configured**
-- Controlled by `ACM_ENABLE_LIVE_RBAC_CERTIFICATION` environment variable
+- Controlled by `ACM_ENABLE_LIVE_RBAC_CERTIFICATION` environment variable and profile/CLI scenario selection
 
 ✅ **Integrates with release validation safely**
-- Executes as optional local scenario
+- Executes as opt-in local scenario; explicitly selected live certification failures are blocking
 - Does not affect ordinary unit/integration test runs
 
 ✅ **Documentation explains execution and assumptions**
@@ -148,15 +152,15 @@ All 175 release framework tests pass.
 
 3. **SubjectAccessReview over SSAR**: Uses impersonation (`user` field) rather than self-subject checks to validate the bootstrapped service account permissions, not the admin kubeconfig.
 
-4. **Primary vs secondary differentiation**: Primary hub gets full decommission permissions because it may become the old hub in a future switchover; secondary does not need these initially.
+4. **Profile-driven scope**: Primary and secondary certification scopes are declared in the release profile so baseline RBAC and optional decommission/finalization extensions can be certified separately.
 
-5. **Evidence artifacts**: Individual SAR manifests provide troubleshooting context when permissions are denied.
+5. **Evidence artifacts**: Individual SAR request and sanitized evidence files provide troubleshooting context when permissions are denied.
 
 ## Future Enhancements
 
 1. **Python CLI --setup --dry-run**: Consider adding non-mutating Python RBAC bootstrap release adapter path (blocked this issue but not required).
 
-2. **Validator role certification**: Current implementation validates operator role; add explicit validator role certification scenario.
+2. **Validator role certification**: Profile-driven certification supports the validator role; add a dedicated checked-in validator example profile if release process needs one.
 
 3. **Managed cluster RBAC**: Extend to validate spoke cluster permissions for klusterlet reconnection.
 

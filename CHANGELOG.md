@@ -17,11 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- None.
+- Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
 
 ### Fixed
 
-- None.
+- Added least-privilege deny checks to live RBAC certification so over-permissioned service accounts fail certification instead of passing solely on required allow checks.
 
 ### Removed
 

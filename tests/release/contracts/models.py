@@ -43,6 +43,22 @@ class StreamProfile:
 
 
 @dataclass(frozen=True)
+class RBACCertificationHubProfile:
+    role: str = "operator"
+    namespace: str = "acm-switchover"
+    service_account: str = "acm-switchover-operator"
+    include_decommission: bool = False
+    include_old_hub_finalization: bool = False
+    include_forbidden_permissions: bool = True
+
+
+@dataclass(frozen=True)
+class RBACCertificationProfile:
+    primary: RBACCertificationHubProfile = field(default_factory=RBACCertificationHubProfile)
+    secondary: RBACCertificationHubProfile = field(default_factory=RBACCertificationHubProfile)
+
+
+@dataclass(frozen=True)
 class ScenarioProfile:
     id: str
     required: bool | None = None
@@ -50,6 +66,7 @@ class ScenarioProfile:
     cycles: int = 1
     timeout_minutes: int | None = None
     skip_reason: str | None = None
+    rbac_certification: RBACCertificationProfile | None = None
 
 
 @dataclass(frozen=True)

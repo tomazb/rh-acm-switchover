@@ -21,10 +21,19 @@ Add the `rbac-bootstrap-live` scenario to your release profile:
 ```yaml
 scenarios:
   - id: rbac-bootstrap-live
-    required: false
+    required: true
+    rbac_certification:
+      primary:
+        role: operator
+        include_decommission: true
+        include_old_hub_finalization: true
+      secondary:
+        role: operator
+        include_decommission: false
+        include_old_hub_finalization: false
 ```
 
-The scenario is marked as optional (`required: false`) to allow release validation to proceed even when live RBAC certification is not enabled.
+Live certification is absent from normal release validation unless the profile declares it or the operator selects `--release-scenario rbac-bootstrap-live`. When explicitly selected, the scenario is treated as blocking: failed live RBAC assertions fail the release run.
 
 ## Prerequisites
 
@@ -37,7 +46,7 @@ The scenario is marked as optional (`required: false`) to allow release validati
 
 ## What Gets Validated
 
-### Primary Hub (Full Permissions)
+### Primary Hub (Profile-Driven Scope)
 
 The certification validates that the `acm-switchover-operator` service account has:
 
@@ -53,11 +62,13 @@ The certification validates that the `acm-switchover-operator` service account h
   - `open-cluster-management-observability`: statefulsets, deployments, pods, routes
   - `multicluster-engine`: configmaps
 
-### Secondary Hub (Subset Permissions)
+### Secondary Hub (Profile-Driven Scope)
 
-The certification validates the same read and write permissions, but excludes:
-- Old-hub finalization delete permissions
-- Full decommission delete permissions
+The secondary hub uses the same profile-driven role and extension flags. Baseline certification should leave decommission and old-hub finalization flags disabled; enable them only when those RBAC extensions were intentionally bootstrapped.
+
+### Least-Privilege Checks
+
+In addition to required `allowed` checks, live certification verifies a small deny matrix for dangerous unrelated permissions such as ClusterRoleBinding writes and unrelated namespace secret listing. If those permissions are allowed, certification fails because the service account is over-permissioned.
 
 ## Execution Flow
 
@@ -70,21 +81,24 @@ The certification validates the same read and write permissions, but excludes:
      - Submit via `oc create -f` with impersonation
      - Parse the `status.allowed` field
      - Record assertion (passed/failed)
-4. Write certification summary artifact
-5. Aggregate results and return status
+4. Run least-privilege deny checks for dangerous unrelated permissions
+5. Write certification summary artifact
+6. Aggregate results and return status
 
 ## Artifacts
 
 The certification produces the following artifacts in the run directory:
 
-```
+```text
 scenarios/rbac-bootstrap-live/
 ├── primary/
 │   ├── rbac-certification-primary.json      # Primary hub summary
-│   └── sar-*.json                            # Individual SAR manifests
+│   ├── sar-*-request.json                    # Individual SAR request manifests
+│   └── sar-*-evidence.json                   # Sanitized SAR response/error evidence
 └── secondary/
     ├── rbac-certification-secondary.json    # Secondary hub summary
-    └── sar-*.json                            # Individual SAR manifests
+    ├── sar-*-request.json
+    └── sar-*-evidence.json
 ```
 
 ### Summary Artifact Schema
@@ -98,8 +112,12 @@ scenarios/rbac-bootstrap-live/
   "service_account": "system:serviceaccount:acm-switchover:acm-switchover-operator",
   "include_decommission": true,
   "include_old_hub_finalization": true,
-  "total_permissions": 145,
+  "include_forbidden_permissions": true,
+  "total_permissions": 63,
   "denied_count": 0,
+  "forbidden_allowed_count": 0,
+  "error_count": 0,
+  "failed_count": 0,
   "assertions": [
     {
       "capability": "rbac-certification",
@@ -107,7 +125,7 @@ scenarios/rbac-bootstrap-live/
       "status": "passed",
       "expected": "allowed",
       "actual": "allowed",
-      "evidence_path": "/path/to/sar-managedclusters-get.json",
+      "evidence_path": "/path/to/sar-cluster-cluster.open-cluster-management.io-managedclusters-get-abc123-evidence.json",
       "message": "Permission allowed for system:serviceaccount:acm-switchover:acm-switchover-operator"
     }
   ]
@@ -127,6 +145,8 @@ The live RBAC certification is a **local scenario** (stream: `local`) that execu
 7. Final baseline check
 
 This ensures that RBAC is validated after the actual RBAC bootstrap scenario (`rbac-bootstrap`) has deployed the manifests.
+
+If `ACM_ENABLE_LIVE_RBAC_CERTIFICATION` is not set, the scenario reports `not_applicable`. If the scenario is explicitly selected and enabled, denied required permissions or allowed forbidden permissions are blocking failures.
 
 ## Comparison to Static RBAC Parity
 
@@ -191,8 +211,17 @@ pytest tests/release/test_release_certification.py \
 **Solution**:
 1. Verify the service account exists: `oc get sa -n acm-switchover`
 2. Check ClusterRoleBindings: `oc get clusterrolebinding acm-switchover-operator`
-3. Inspect SAR evidence files in `scenarios/rbac-bootstrap-live/*/sar-*.json`
+3. Inspect SAR evidence files in `scenarios/rbac-bootstrap-live/*/sar-*-evidence.json`
 4. Compare manifests in `deploy/rbac/` against applied resources
+
+### Forbidden permission assertions fail
+
+**Cause**: The service account has broader permissions than the release role requires.
+
+**Solution**:
+1. Inspect the failed assertion name and evidence file.
+2. Check whether an unintended ClusterRoleBinding or wildcard role grants the permission.
+3. Remove the broad binding or document and approve the exception before using the run as certification evidence.
 
 ### SubjectAccessReview API errors
 
@@ -205,5 +234,5 @@ pytest tests/release/test_release_certification.py \
 - [RBAC Requirements](../deployment/rbac-requirements.md)
 - [RBAC Deployment](../deployment/rbac-deployment.md)
 - [RBAC Implementation](../development/rbac-implementation.md)
-- [Release Validation Guide](release-validation.md)
+- [Release Validation Guide](../development/release-validation-framework.md)
 - [Parity Matrix](../ansible-collection/parity-matrix.md)

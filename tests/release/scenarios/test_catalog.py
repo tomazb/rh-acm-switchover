@@ -71,6 +71,17 @@ def test_unknown_scenario_fails_before_mutation() -> None:
         )
 
 
+def test_explicitly_filtered_optional_scenario_becomes_required() -> None:
+    selected = select_release_matrix(
+        enabled_streams=("python", "ansible"),
+        scenario_filters=("rbac-bootstrap-live",),
+        stream_filters=(),
+    )
+
+    scenario = next(item for item in selected.scenarios if item.id == "rbac-bootstrap-live")
+    assert scenario.required is True
+
+
 def test_profile_declared_scenarios_define_full_matrix() -> None:
     profile = load_profile(str(PROFILE_DIR / "dev-minimal.example.yaml")).profile
 
