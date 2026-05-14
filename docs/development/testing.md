@@ -35,6 +35,8 @@ tests/
 ```
 
 By default, this excludes long-running E2E tests (marked `@pytest.mark.e2e`).
+CI-equivalent quality gates (`black`, `isort`, `mypy`, and `bandit`) fail by default.
+For a local advisory-only quality pass, run `STRICT_QUALITY=0 ./run_tests.sh`.
 To include E2E tests on demand:
 
 ```bash
@@ -55,7 +57,7 @@ This script will:
 2. Install dependencies
 3. Run unit tests with coverage (excluding E2E by default)
 4. Run code quality checks (flake8, pylint, black, isort, mypy)
-5. Run security scans (bandit, safety)
+5. Run security scans (bandit, pip-audit)
 6. Validate Python syntax
 
 ### Manual Test Execution

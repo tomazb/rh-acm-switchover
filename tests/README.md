@@ -48,6 +48,7 @@ Avoid relying on hard-coded totals in this file; the suite is still expanding.
 
 This is the preferred entry point for local verification. It respects the existing virtualenv if one is active, otherwise it uses `.venv` first and falls back to `venv`.
 The default runner excludes `tests/release/`; run release framework tests explicitly when changing release validation code.
+The runner treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default. Use `STRICT_QUALITY=0 ./run_tests.sh` only when you need a local advisory pass.
 
 ### Root Tests Only
 

@@ -15,8 +15,18 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-STRICT_QUALITY="${STRICT_QUALITY:-0}"
-QUALITY_PATHS=(acm_switchover.py lib/ modules/)
+# CI-equivalent quality gates fail by default. Set STRICT_QUALITY=0 for a local
+# advisory-only quality pass while preserving test execution.
+STRICT_QUALITY="${STRICT_QUALITY:-1}"
+PYLINT_PATHS=(acm_switchover.py lib/ modules/)
+QUALITY_PATHS=(
+    acm_switchover.py
+    lib
+    modules
+    ansible_collections/tomazb/acm_switchover/plugins
+    ansible_collections/tomazb/acm_switchover/tests
+    tests
+)
 MYPY_PATHS=(
     acm_switchover.py
     lib/
@@ -25,7 +35,7 @@ MYPY_PATHS=(
     ansible_collections/tomazb/acm_switchover/tests
 )
 
-run_advisory_or_strict() {
+run_ci_quality_gate() {
     local label="$1"
     shift
 
@@ -33,12 +43,24 @@ run_advisory_or_strict() {
         return 0
     fi
 
-    if [ "$STRICT_QUALITY" = "1" ]; then
-        echo -e "${RED}${label} failed and STRICT_QUALITY=1${NC}"
-        return 1
+    if [ "$STRICT_QUALITY" = "0" ]; then
+        echo -e "${YELLOW}${label} reported issues (advisory because STRICT_QUALITY=0).${NC}"
+        return 0
     fi
 
-    echo -e "${YELLOW}${label} reported issues (advisory; set STRICT_QUALITY=1 to fail).${NC}"
+    echo -e "${RED}${label} failed. Set STRICT_QUALITY=0 only for an advisory local run.${NC}"
+    return 1
+}
+
+run_advisory_check() {
+    local label="$1"
+    shift
+
+    if "$@"; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}${label} reported issues (advisory, matching CI exit-zero behavior).${NC}"
     return 0
 }
 
@@ -88,24 +110,24 @@ echo "======================================"
 
 echo ""
 echo "--- Flake8 (Style Check) ---"
-flake8 "${QUALITY_PATHS[@]}" --count --select=E9,F63,F7,F82 --show-source --statistics
-run_advisory_or_strict "Flake8 full style check" flake8 "${QUALITY_PATHS[@]}"
+flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+run_advisory_check "Flake8 full style check" flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
 
 echo ""
 echo "--- Pylint (Code Analysis) ---"
-run_advisory_or_strict "Pylint" pylint "${QUALITY_PATHS[@]}" --max-line-length=120 --disable=C0103,C0114,C0115,C0116
+run_advisory_check "Pylint" pylint "${PYLINT_PATHS[@]}" --exit-zero --max-line-length=120 --disable=C0103,C0114,C0115,C0116
 
 echo ""
 echo "--- Black (Format Check) ---"
-run_advisory_or_strict "Black format check" black --check --line-length 120 "${QUALITY_PATHS[@]}"
+run_ci_quality_gate "Black format check" black --check --line-length 120 "${QUALITY_PATHS[@]}"
 
 echo ""
 echo "--- isort (Import Sort Check) ---"
-run_advisory_or_strict "isort import check" isort --check-only --profile black --line-length 120 "${QUALITY_PATHS[@]}"
+run_ci_quality_gate "isort import check" isort --check-only --profile black --line-length 120 "${QUALITY_PATHS[@]}"
 
 echo ""
 echo "--- MyPy (Type Check) ---"
-run_advisory_or_strict "MyPy" mypy --explicit-package-bases "${MYPY_PATHS[@]}" --ignore-missing-imports --no-strict-optional
+run_ci_quality_gate "MyPy" mypy --explicit-package-bases "${MYPY_PATHS[@]}" --ignore-missing-imports --no-strict-optional
 
 echo ""
 echo "======================================"
@@ -114,11 +136,12 @@ echo "======================================"
 
 echo ""
 echo "--- Bandit (Security Linter) ---"
-run_advisory_or_strict "Bandit security check" bandit --ini .bandit -ll
+bandit --ini .bandit -f json -o bandit-report.json || true
+run_ci_quality_gate "Bandit security check" bandit --ini .bandit -f txt
 
 echo ""
 echo "--- pip-audit (Dependency Vulnerabilities) ---"
-run_advisory_or_strict "pip-audit dependency check" pip-audit
+run_advisory_check "pip-audit dependency check" pip-audit
 
 echo ""
 echo "======================================"

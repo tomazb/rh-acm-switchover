@@ -41,8 +41,11 @@ def test_github_actions_use_node24_action_versions():
 def test_run_tests_quality_gates_are_explicit_and_scoped():
     text = RUN_TESTS.read_text()
 
-    assert "STRICT_QUALITY" in text
+    assert 'STRICT_QUALITY="${STRICT_QUALITY:-1}"' in text
     assert "QUALITY_PATHS=" in text
+    assert "ansible_collections/tomazb/acm_switchover/plugins" in text
+    assert "ansible_collections/tomazb/acm_switchover/tests" in text
+    assert "tests" in text
     assert "black --check --line-length 120 ." not in text
     assert "isort --check-only --profile black --line-length 120 ." not in text
 

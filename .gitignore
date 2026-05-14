@@ -23,6 +23,7 @@ htmlcov/
 .pytest_cache/
 coverage.xml
 *.cover
+bandit-report.json
 
 # Local environment files
 .env

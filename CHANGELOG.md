@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
+- Local `run_tests.sh` now treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default, with `STRICT_QUALITY=0` available only for advisory local runs.
 
 ### Fixed
 
