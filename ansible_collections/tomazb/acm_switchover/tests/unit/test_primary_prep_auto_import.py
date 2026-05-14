@@ -41,9 +41,7 @@ def test_scale_observability_blocks_when_thanos_pods_remain():
     tasks = _load_yaml("scale_observability.yml")
 
     pod_queries = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
-    fail_tasks = [
-        task for task in tasks if "Thanos compactor still has" in str(task.get("ansible.builtin.fail", {}))
-    ]
+    fail_tasks = [task for task in tasks if "Thanos compactor still has" in str(task.get("ansible.builtin.fail", {}))]
 
     assert "ansible.builtin.pause" in text
     assert pod_queries, "scale_observability.yml must query Thanos compactor pods after scaling"

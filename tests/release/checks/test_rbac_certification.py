@@ -15,8 +15,8 @@ from tests.release.checks.rbac_certification import (
     CertificationResult,
     PermissionCheck,
     SARCheckResult,
-    _check_permission_via_sar,
     _certification_enabled,
+    _check_permission_via_sar,
     _get_required_permissions,
     certify_rbac_permissions,
 )
@@ -39,9 +39,7 @@ def test_permission_check_as_sar_spec_cluster_scoped():
 
 def test_permission_check_as_sar_spec_namespace_scoped():
     """Namespace-scoped permission includes namespace in SAR spec."""
-    check = PermissionCheck(
-        api_group="", resource="pods", verb="list", namespace="open-cluster-management"
-    )
+    check = PermissionCheck(api_group="", resource="pods", verb="list", namespace="open-cluster-management")
     spec = check.as_sar_spec()
     assert spec["resourceAttributes"]["verb"] == "list"
     assert spec["resourceAttributes"]["resource"] == "pods"
@@ -58,19 +56,13 @@ def test_get_required_permissions_operator_basic():
     )
     # Should include managedclusters patch
     assert any(
-        p.resource == "managedclusters"
-        and p.verb == "patch"
-        and p.api_group == "cluster.open-cluster-management.io"
+        p.resource == "managedclusters" and p.verb == "patch" and p.api_group == "cluster.open-cluster-management.io"
         for p in perms
     )
 
 
 def _expand_permissions(entries, namespace=None):
-    return {
-        (api_group, resource, verb, namespace)
-        for api_group, resource, verbs in entries
-        for verb in verbs
-    }
+    return {(api_group, resource, verb, namespace) for api_group, resource, verbs in entries for verb in verbs}
 
 
 def _expected_python_hub_permissions(
@@ -124,10 +116,7 @@ def test_required_permissions_match_python_rbac_validator(
         include_old_hub_finalization=include_old_hub_finalization,
     )
 
-    assert {
-        (p.api_group, p.resource, p.verb, p.namespace)
-        for p in perms
-    } == _expected_python_hub_permissions(
+    assert {(p.api_group, p.resource, p.verb, p.namespace) for p in perms} == _expected_python_hub_permissions(
         role,
         include_decommission=include_decommission,
         include_old_hub_finalization=include_old_hub_finalization,
@@ -143,9 +132,7 @@ def test_get_required_permissions_validator_readonly():
     )
     # Should NOT include managedclusters patch
     assert not any(
-        p.resource == "managedclusters"
-        and p.verb == "patch"
-        and p.api_group == "cluster.open-cluster-management.io"
+        p.resource == "managedclusters" and p.verb == "patch" and p.api_group == "cluster.open-cluster-management.io"
         for p in perms
     )
 
@@ -175,16 +162,12 @@ def test_get_required_permissions_full_decommission():
     )
     # Should include managedclusters delete
     assert any(
-        p.resource == "managedclusters"
-        and p.verb == "delete"
-        and p.api_group == "cluster.open-cluster-management.io"
+        p.resource == "managedclusters" and p.verb == "delete" and p.api_group == "cluster.open-cluster-management.io"
         for p in perms
     )
     # Should include multiclusterhubs delete
     assert any(
-        p.resource == "multiclusterhubs"
-        and p.verb == "delete"
-        and p.api_group == "operator.open-cluster-management.io"
+        p.resource == "multiclusterhubs" and p.verb == "delete" and p.api_group == "operator.open-cluster-management.io"
         for p in perms
     )
     # Should include multiclusterobservabilities delete
@@ -242,9 +225,7 @@ def test_certify_rbac_permissions_skipped_when_disabled(tmp_path):
 
 def test_certify_rbac_permissions_invalid_role(tmp_path):
     """Certification fails with invalid role."""
-    with patch.dict(
-        os.environ, {"ACM_ENABLE_LIVE_RBAC_CERTIFICATION": "1"}, clear=True
-    ):
+    with patch.dict(os.environ, {"ACM_ENABLE_LIVE_RBAC_CERTIFICATION": "1"}, clear=True):
         hub = HubProfile(
             kubeconfig="/path/to/kubeconfig",
             context="test-context",
@@ -321,7 +302,6 @@ def test_sar_evidence_paths_are_unique_and_include_response(monkeypatch, tmp_pat
     assert payload["result"]["response"]["status"]["allowed"] is True
 
 
-
 def test_certification_reports_sar_operational_errors(monkeypatch, tmp_path):
     """Operational SAR failures are distinct from RBAC denials."""
 
@@ -343,9 +323,7 @@ def test_certification_reports_sar_operational_errors(monkeypatch, tmp_path):
         lambda: [],
     )
 
-    with patch.dict(
-        os.environ, {"ACM_ENABLE_LIVE_RBAC_CERTIFICATION": "1"}, clear=True
-    ):
+    with patch.dict(os.environ, {"ACM_ENABLE_LIVE_RBAC_CERTIFICATION": "1"}, clear=True):
         hub = HubProfile(
             kubeconfig="/path/to/kubeconfig",
             context="test-context",
@@ -362,6 +340,7 @@ def test_certification_reports_sar_operational_errors(monkeypatch, tmp_path):
     assert result.assertions[0].actual == "error"
     assert "SAR check failed" in result.assertions[0].message
 
+
 def test_certification_fails_when_forbidden_permission_is_allowed(monkeypatch, tmp_path):
     """Live certification rejects over-permissioned service accounts."""
 
@@ -376,9 +355,7 @@ def test_certification_fails_when_forbidden_permission_is_allowed(monkeypatch, t
         fake_check_permission,
     )
 
-    with patch.dict(
-        os.environ, {"ACM_ENABLE_LIVE_RBAC_CERTIFICATION": "1"}, clear=True
-    ):
+    with patch.dict(os.environ, {"ACM_ENABLE_LIVE_RBAC_CERTIFICATION": "1"}, clear=True):
         hub = HubProfile(
             kubeconfig="/path/to/kubeconfig",
             context="test-context",
@@ -391,10 +368,7 @@ def test_certification_fails_when_forbidden_permission_is_allowed(monkeypatch, t
         )
 
     assert result.status == "failed"
-    assert any(
-        assertion.expected == "denied" and assertion.actual == "allowed"
-        for assertion in result.assertions
-    )
+    assert any(assertion.expected == "denied" and assertion.actual == "allowed" for assertion in result.assertions)
 
 
 def test_get_required_permissions_includes_namespace_scoped():
@@ -409,6 +383,5 @@ def test_get_required_permissions_includes_namespace_scoped():
     assert len(backup_perms) > 0
     # Should include pods get in backup namespace
     assert any(
-        p.resource == "pods" and p.verb == "get" and p.namespace == "open-cluster-management-backup"
-        for p in perms
+        p.resource == "pods" and p.verb == "get" and p.namespace == "open-cluster-management-backup" for p in perms
     )

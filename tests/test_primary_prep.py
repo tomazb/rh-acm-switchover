@@ -762,9 +762,7 @@ class TestPrimaryPreparation:
         mock_primary_client.get_pods.assert_not_called()
 
     @patch("time.sleep")
-    def test_scale_down_thanos_pods_remaining_blocks(
-        self, mock_sleep, primary_prep_with_obs, mock_primary_client
-    ):
+    def test_scale_down_thanos_pods_remaining_blocks(self, mock_sleep, primary_prep_with_obs, mock_primary_client):
         """Thanos pods still running after scale-down should block primary prep."""
         mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
         mock_primary_client.get_pods.return_value = [{"metadata": {"name": "thanos-compact-0"}}]

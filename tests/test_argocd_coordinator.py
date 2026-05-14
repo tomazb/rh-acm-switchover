@@ -17,12 +17,8 @@ def _make_state_manager(config=None):
     """Create a mock StateManager backed by a real dict for config tracking."""
     state_config = config or {}
     mock = Mock()
-    mock.get_config.side_effect = lambda key, default=None: copy.deepcopy(
-        state_config.get(key, default)
-    )
-    mock.set_config.side_effect = lambda key, value: state_config.__setitem__(
-        key, copy.deepcopy(value)
-    )
+    mock.get_config.side_effect = lambda key, default=None: copy.deepcopy(state_config.get(key, default))
+    mock.set_config.side_effect = lambda key, value: state_config.__setitem__(key, copy.deepcopy(value))
     mock._config = state_config
     return mock
 
@@ -31,9 +27,7 @@ def _make_app(namespace, name, *, automated=True, resources=None):
     """Build a minimal Argo CD Application dict."""
     sync_policy = {"automated": {}} if automated else {}
     if resources is None:
-        resources = [
-            {"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}
-        ]
+        resources = [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}]
     return {
         "metadata": {"namespace": namespace, "name": name},
         "spec": {"syncPolicy": sync_policy},
@@ -427,9 +421,7 @@ class TestErrorHandling:
                 "lib.argocd_coordinator.argocd_lib.find_argocd_pause_blockers",
                 return_value=[blocker],
             ),
-            patch(
-                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps"
-            ) as mock_find_acm,
+            patch("lib.argocd_coordinator.argocd_lib.find_acm_touching_apps") as mock_find_acm,
             patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
         ):
             coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
@@ -629,9 +621,7 @@ class TestStatePersistence:
         assert len(run_id) == 12
 
     def test_existing_run_id_preserved(self):
-        state = _make_state_manager(
-            {"argocd_run_id": "existing-run", "argocd_paused_apps": []}
-        )
+        state = _make_state_manager({"argocd_run_id": "existing-run", "argocd_paused_apps": []})
         client = Mock()
 
         with (
@@ -694,11 +684,7 @@ class TestStatePersistence:
         assert len(paused_apps) == 2
 
         # Verify set_config was called multiple times (provisional + confirmed for each app)
-        paused_calls = [
-            call
-            for call in state.set_config.call_args_list
-            if call.args[0] == "argocd_paused_apps"
-        ]
+        paused_calls = [call for call in state.set_config.call_args_list if call.args[0] == "argocd_paused_apps"]
         # 2 apps × 2 persists each (provisional + confirmed) = 4
         assert len(paused_calls) == 4
 

@@ -97,11 +97,7 @@ def test_load_profile_parses_live_rbac_certification_scope(tmp_path: Path) -> No
     profile_path = write_profile(tmp_path / "profile.yaml", profile_text)
 
     loaded = load_profile(profile_path)
-    scenario = next(
-        item
-        for item in loaded.profile.scenarios
-        if item.id == "rbac-bootstrap-live"
-    )
+    scenario = next(item for item in loaded.profile.scenarios if item.id == "rbac-bootstrap-live")
 
     assert scenario.rbac_certification is not None
     assert scenario.rbac_certification.primary.role == "operator"

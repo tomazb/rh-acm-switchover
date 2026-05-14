@@ -23,8 +23,8 @@ options:
 from ansible.module_utils.basic import AnsibleModule
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.argocd import (
-    find_argocd_pause_blockers,
     filter_acm_applications,
+    find_argocd_pause_blockers,
 )
 
 

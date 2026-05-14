@@ -134,9 +134,7 @@ def validate_scenario(
 
     if "rbac_certification" in raw:
         if scenario_id != "rbac-bootstrap-live":
-            raise ProfileValidationError(
-                f"scenarios[{index}].rbac_certification: allowed only for rbac-bootstrap-live"
-            )
+            raise ProfileValidationError(f"scenarios[{index}].rbac_certification: allowed only for rbac-bootstrap-live")
         certification = require_mapping(raw["rbac_certification"], f"scenarios[{index}].rbac_certification")
         for hub_name in ("primary", "secondary"):
             hub_scope = require_mapping(

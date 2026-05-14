@@ -94,11 +94,7 @@ def test_disable_old_hub_observability_blocks_when_pods_remain():
     tasks = _load_yaml("disable_old_hub_observability.yml")
     text = (FINALIZATION_TASKS / "disable_old_hub_observability.yml").read_text()
 
-    wait_tasks = [
-        task
-        for task in tasks
-        if task.get("name") == "Wait for old hub observability pods to terminate"
-    ]
+    wait_tasks = [task for task in tasks if task.get("name") == "Wait for old hub observability pods to terminate"]
     fail_tasks = [
         task for task in tasks if "Observability pods are still running" in str(task.get("ansible.builtin.fail", {}))
     ]

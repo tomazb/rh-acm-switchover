@@ -412,9 +412,7 @@ def certify_rbac_permissions(
             reason=str(exc),
         )
 
-    sa_full_name = RBAC_SERVICE_ACCOUNT_FORMAT.format(
-        namespace=namespace, name=service_account
-    )
+    sa_full_name = RBAC_SERVICE_ACCOUNT_FORMAT.format(namespace=namespace, name=service_account)
 
     assertions: list[CertificationAssertion] = []
     denied_count = 0
@@ -553,8 +551,6 @@ def certify_rbac_permissions(
             for a in assertions
         ],
     }
-    (artifact_dir / f"rbac-certification-{hub_name}.json").write_text(
-        json.dumps(summary, indent=2), encoding="utf-8"
-    )
+    (artifact_dir / f"rbac-certification-{hub_name}.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     return CertificationResult(status=status, assertions=assertions, reason=reason)
