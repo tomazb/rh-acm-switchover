@@ -410,7 +410,7 @@ def _unknown_impact_message(namespace: str, name: str) -> str:
 
 def _applicationset_message(namespace: str, name: str, parent: str) -> str:
     return (
-        f"Application {namespace}/{name} is managed by ApplicationSet {parent}; patching the child Application "
+        f"Application {namespace}/{name} is managed by ApplicationSet {parent}; patching the child Application "  # nosec B608
         "can be reverted by the ApplicationSet controller. Remediate: pause/update the ApplicationSet or its "
         "generator/template, then retry the switchover."
     )

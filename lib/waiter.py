@@ -74,7 +74,7 @@ def wait_for_condition(
             logger.debug("%s in progress (elapsed: %ss)", description, elapsed)
 
         remaining_timeout = max(0.0, timeout - elapsed_seconds)
-        sleep_interval = interval
+        sleep_interval: float = interval
         if fast_interval:
             if fast_timeout <= 0 or elapsed < fast_timeout:
                 sleep_interval = fast_interval
