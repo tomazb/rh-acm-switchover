@@ -25,7 +25,7 @@ Both tools automate the same phased workflow for migrating from a primary ACM hu
 
 The Python CLI and the Ansible collection are independent codebases, but many operator-facing capabilities remain **dual-supported** during coexistence. Drift is not allowed by default.
 
-- **Status authority**: [`docs/ansible-collection/parity-matrix.md`](docs/ansible-collection/parity-matrix.md) defines whether a capability is `dual-supported`, `Python only`, `collection only`, or `deprecated`.
+- **Status authority**: [`docs/ansible-collection/parity-matrix.md`](docs/ansible-collection/parity-matrix.md) defines whether a capability is `dual-supported`, `Python only`, `collection only`, `deprecated`, or `release-only`.
 - **Behavior mapping authority**: [`docs/ansible-collection/behavior-map.md`](docs/ansible-collection/behavior-map.md) maps Python sources to the collection target that must be reviewed for parity.
 - **Coexistence policy**: [`ansible_collections/tomazb/acm_switchover/docs/coexistence.md`](ansible_collections/tomazb/acm_switchover/docs/coexistence.md) defines the shared-behavior contract during the coexistence period.
 - **Default rule**: If a capability is documented as `dual-supported`, update both implementations and their tests/docs together unless an intentional divergence is explicitly approved and documented first.
@@ -55,7 +55,7 @@ Treat these as parity-sensitive unless the parity matrix says otherwise:
 This approval gate applies when a planned change would:
 
 - leave a `dual-supported` capability intentionally different between Python and the collection
-- change a capability's documented parity status (`dual-supported`, `Python only`, `collection only`, `deprecated`)
+- change a capability's documented parity status (`dual-supported`, `Python only`, `collection only`, `deprecated`, `release-only`)
 - knowingly defer realignment of the other implementation as follow-up work
 
 Do **not** use this gate for ordinary parity-preserving bug fixes where both implementations are updated together.
@@ -408,6 +408,8 @@ When doing similar refactoring work:
 ## Version Management
 
 **IMPORTANT**: Python and Bash versions MUST always be in sync. When making changes to either Python or Bash code, update BOTH version files to the same version.
+
+**REQUIRED**: Creating and pushing a git tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) is a mandatory step of the release process. A version bump without a corresponding git tag is an incomplete release. The CHANGELOG `[Unreleased]` compare link must reference the new tag.
 
 Container image and Helm chart metadata follow the same version: the Containerfile `version` label and the Helm chart `appVersion` should match the Python/Bash tool version; bump the Helm chart `version` alongside releases.
 
