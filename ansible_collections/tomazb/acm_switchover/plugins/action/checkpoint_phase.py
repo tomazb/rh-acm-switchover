@@ -31,7 +31,7 @@ def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
 
     Appends *phase* to ``completed_phases`` when *status* is ``"pass"`` and the
     phase has not already been recorded. Removes *phase* when *status* is
-    ``"reset"`` so a later retry can execute the phase again.
+    ``"reset"`` or ``"fail"`` so a later retry can execute the phase again.
 
     .. warning::
         This returns only ``completed_phases`` and ``phase_status``. Callers are
@@ -42,7 +42,7 @@ def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
     completed = list(checkpoint.get("completed_phases", []))
     if status == "pass" and phase not in completed:
         completed.append(phase)
-    elif status == "reset":
+    elif status in {"fail", "reset"}:
         completed = [completed_phase for completed_phase in completed if completed_phase != phase]
     return {
         "completed_phases": completed,
@@ -350,7 +350,10 @@ class ActionModule(ActionBase):
                 os.makedirs(dir_path, exist_ok=True)
             with open(temp_path, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(temp_path, path)
+            self._fsync_parent_directory(path)
         except OSError as e:
             if os.path.exists(temp_path):
                 try:
@@ -362,6 +365,24 @@ class ActionModule(ActionBase):
                 "msg": f"Cannot write checkpoint file '{path}': {e}.",
             }
         return None
+
+    def _fsync_parent_directory(self, path: str) -> None:
+        dir_path = os.path.dirname(path) or "."
+        dir_fd = None
+        try:
+            dir_fd = os.open(dir_path, os.O_RDONLY)
+            os.fsync(dir_fd)
+        except OSError:
+            # Some platforms/filesystems do not support opening or fsyncing
+            # directories. The checkpoint file itself was already fsynced before
+            # replace; directory fsync is a best-effort durability improvement.
+            return
+        finally:
+            if dir_fd is not None:
+                try:
+                    os.close(dir_fd)
+                except OSError:
+                    pass
 
     def _build_temp_checkpoint_path(self, path: str) -> str:
         dir_path = os.path.dirname(path) or "."

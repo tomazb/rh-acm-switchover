@@ -4,7 +4,7 @@
 import json
 import os
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
     ActionModule,
@@ -87,6 +87,36 @@ def test_build_phase_transition_does_not_mark_on_fail():
     )
     assert transition["completed_phases"] == ["preflight"]
     assert transition["phase_status"] == "fail"
+
+
+def test_build_phase_transition_removes_failed_phase_from_completed_phases():
+    transition = build_phase_transition(
+        checkpoint={"completed_phases": ["preflight", "primary_prep", "activation"]},
+        phase="activation",
+        status="fail",
+    )
+    assert transition["completed_phases"] == ["preflight", "primary_prep"]
+    assert transition["phase_status"] == "fail"
+
+
+def test_build_phase_transition_fail_preserves_unrelated_completed_phases():
+    transition = build_phase_transition(
+        checkpoint={
+            "completed_phases": [
+                "preflight",
+                "primary_prep",
+                "activation",
+                "post_activation",
+            ]
+        },
+        phase="activation",
+        status="fail",
+    )
+    assert transition["completed_phases"] == [
+        "preflight",
+        "primary_prep",
+        "post_activation",
+    ]
 
 
 def test_build_phase_transition_resets_completed_phase():
@@ -330,6 +360,43 @@ def test_action_module_persists_phase_status_on_fail(tmp_path):
     assert "activation" not in result["checkpoint"]["completed_phases"]
 
 
+def test_action_module_fail_prunes_previously_completed_phase(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "completed_phases": ["preflight", "primary_prep", "activation"],
+                "operational_data": {},
+                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+
+    action = _make_checkpoint_action(
+        {
+            "phase": "activation",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "fail",
+            "error": "activation retry failed",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_for_mode("execute"))
+
+    assert result["checkpoint"]["phase_status"] == "fail"
+    assert result["checkpoint"]["completed_phases"] == ["preflight", "primary_prep"]
+    saved = json.loads(checkpoint_file.read_text())
+    assert saved["completed_phases"] == ["preflight", "primary_prep"]
+
+
 def test_action_module_persists_checkpoint_reset_without_error(tmp_path):
     """status=reset should remove the phase from completed_phases and persist it."""
     import json
@@ -422,7 +489,9 @@ def test_action_module_check_mode_pass_leaves_existing_checkpoint_unchanged(tmp_
     assert checkpoint_file.read_bytes() == original_bytes
 
 
-def test_action_module_play_context_check_mode_fail_leaves_existing_checkpoint_unchanged(tmp_path):
+def test_action_module_play_context_check_mode_fail_leaves_existing_checkpoint_unchanged(
+    tmp_path,
+):
     checkpoint_file = tmp_path / "checkpoint.json"
     original = {
         "schema_version": "2.0",
@@ -1354,6 +1423,13 @@ def test_save_checkpoint_writes_with_utf8_encoding():
     ) as makedirs, patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"
     ) as mocked_replace, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.open",
+        return_value=77,
+    ), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close"
+    ), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.fsync"
+    ), patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.open",
         mock_open(),
         create=True,
@@ -1367,6 +1443,65 @@ def test_save_checkpoint_writes_with_utf8_encoding():
     assert os.path.dirname(temp_path) == "/tmp/state"
     mocked_open.assert_called_once_with(temp_path, "w", encoding="utf-8")
     mocked_replace.assert_called_once_with(temp_path, "/tmp/state/checkpoint.json")
+
+
+def test_save_checkpoint_fsyncs_file_before_replace_and_directory_after_replace():
+    action = ActionModule.__new__(ActionModule)
+    events = []
+
+    with patch("ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.makedirs"), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"
+    ) as mocked_replace, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.open",
+        return_value=77,
+    ) as mocked_os_open, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close"
+    ) as mocked_close, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.fsync"
+    ) as mocked_fsync, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.open",
+        mock_open(),
+        create=True,
+    ) as mocked_open:
+        mocked_fsync.side_effect = lambda fd: events.append(("fsync", fd))
+        mocked_replace.side_effect = lambda src, dst: events.append(("replace", src, dst))
+        result = action._save_checkpoint("/tmp/state/checkpoint.json", {"schema_version": "2.0"})
+
+    assert result is None
+    temp_path = mocked_open.call_args.args[0]
+    temp_fileno = mocked_open().fileno.return_value
+    mocked_replace.assert_called_once_with(temp_path, "/tmp/state/checkpoint.json")
+    mocked_os_open.assert_called_once_with("/tmp/state", os.O_RDONLY)
+    mocked_fsync.assert_any_call(temp_fileno)
+    mocked_fsync.assert_any_call(77)
+    assert mocked_fsync.call_args_list.index(call(temp_fileno)) < mocked_fsync.call_args_list.index(call(77))
+    file_fsync_index = events.index(("fsync", temp_fileno))
+    replace_index = events.index(("replace", temp_path, "/tmp/state/checkpoint.json"))
+    dir_fsync_index = events.index(("fsync", 77))
+    assert file_fsync_index < replace_index < dir_fsync_index
+    mocked_close.assert_called_once_with(77)
+
+
+def test_save_checkpoint_ignores_unsupported_directory_fsync():
+    action = ActionModule.__new__(ActionModule)
+
+    with patch("ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.open",
+        return_value=77,
+    ), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close"
+    ) as mocked_close, patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.fsync",
+        side_effect=[None, OSError("directory fsync unsupported")],
+    ), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.open",
+        mock_open(),
+        create=True,
+    ):
+        result = action._save_checkpoint("/tmp/state/checkpoint.json", {"schema_version": "2.0"})
+
+    assert result is None
+    mocked_close.assert_called_once_with(77)
 
 
 def test_build_report_ref_accepts_custom_kind():
