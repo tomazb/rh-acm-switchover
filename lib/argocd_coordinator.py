@@ -41,7 +41,7 @@ class ArgoCDPauseCoordinator:
     @staticmethod
     def _pause_marker_matches(app: Dict[str, Any], run_id: str) -> bool:
         """Return True when the live Application carries this run's pause marker."""
-        annotations = ((app.get("metadata") or {}).get("annotations") or {})
+        annotations = (app.get("metadata") or {}).get("annotations") or {}
         return annotations.get(argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION) == run_id
 
     def _find_pause_entry(
