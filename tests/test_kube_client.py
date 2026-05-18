@@ -426,15 +426,18 @@ class TestKubeClient:
         mock_sleep.assert_not_called()
 
     @patch("lib.kube_client.time.sleep")
+    @patch("lib.kube_client.time.time")
     def test_wait_for_pods_ready_does_not_succeed_when_no_pods_exist_and_count_unspecified(
-        self, mock_sleep, kube_client, mock_k8s_apis
+        self, mock_time, mock_sleep, kube_client, mock_k8s_apis
     ):
         """Empty pod lists must not be treated as ready unless zero pods are explicitly expected."""
         mock_k8s_apis["core_api"].list_namespaced_pod.return_value = MagicMock(items=[])
+        mock_time.side_effect = chain([100.0, 100.0, 100.0, 104.9, 105.1], repeat(105.1))
 
         result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=5)
 
         assert result is False
+        mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once()
 
     @patch("lib.kube_client.time.sleep")
     def test_wait_for_pods_ready_succeeds_when_zero_pods_explicitly_expected(
@@ -449,8 +452,9 @@ class TestKubeClient:
         mock_sleep.assert_not_called()
 
     @patch("lib.kube_client.time.sleep")
+    @patch("lib.kube_client.time.time")
     def test_wait_for_pods_ready_with_expected_count_waits_for_enough_pods(
-        self, mock_sleep, kube_client, mock_k8s_apis
+        self, mock_time, mock_sleep, kube_client, mock_k8s_apis
     ):
         """expected_count > 0 must not pass when fewer pods are present."""
         pod_ready = MagicMock()
@@ -459,10 +463,12 @@ class TestKubeClient:
             "status": {"conditions": [{"type": "Ready", "status": "True"}]},
         }
         mock_k8s_apis["core_api"].list_namespaced_pod.return_value = MagicMock(items=[pod_ready])
+        mock_time.side_effect = chain([100.0, 100.0, 100.0, 104.9, 105.1], repeat(105.1))
 
         result = kube_client.wait_for_pods_ready("test-ns", "app=test", expected_count=2, timeout=5)
 
         assert result is False
+        mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once()
 
     @patch("lib.kube_client.time.sleep")
     @patch("lib.kube_client.time.time")
@@ -704,7 +710,10 @@ class TestMutatorIdempotency:
 
         assert exc_info.value.status == 409
 
-    def test_create_custom_resource_retries_named_retryable_create_and_reconciles(self, kube_client, mock_k8s_apis):
+    @patch("lib.kube_client.time.sleep")
+    def test_create_custom_resource_retries_named_retryable_create_and_reconciles(
+        self, mock_sleep, kube_client, mock_k8s_apis
+    ):
         """Named resources may retry retryable create errors and reconcile a later 409."""
         body = {
             "apiVersion": "cluster.open-cluster-management.io/v1beta1",

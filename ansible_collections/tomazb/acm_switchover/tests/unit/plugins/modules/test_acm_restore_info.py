@@ -1,5 +1,8 @@
 """Tests for the acm_restore_info collection module."""
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    PASSIVE_RESTORE_CONVENTIONAL_NAME_FALLBACK_REASON,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_restore_info import (
     build_activation_patch,
     build_restore_activation_plan,
@@ -91,7 +94,7 @@ def test_select_passive_sync_restore_falls_back_to_conventional_name_only_when_e
     assert restore["metadata"]["name"] == "restore-acm-passive-sync"
     assert diagnostics["restore_count"] == 1
     assert diagnostics["sync_enabled_count"] == 0
-    assert diagnostics["reason"] == "conventional_name_fallback"
+    assert diagnostics["reason"] == PASSIVE_RESTORE_CONVENTIONAL_NAME_FALLBACK_REASON
 
 
 def test_select_passive_sync_restore_rejects_explicit_sync_false_conventional_name():

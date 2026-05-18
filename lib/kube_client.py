@@ -1265,6 +1265,11 @@ class KubeClient:
         start_time = time.time()
         poll_interval = 5
 
+        def sleep_remaining_budget() -> None:
+            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
         while time.time() - start_time < timeout:
             elapsed = time.time() - start_time
             remaining_budget = timeout - elapsed
@@ -1282,26 +1287,20 @@ class KubeClient:
                     pods = []
                 elif is_retryable_error(exc):
                     logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
-                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
+                    sleep_remaining_budget()
                     continue
                 else:
                     raise
             except Exception as exc:
                 if is_retryable_error(exc):
                     logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
-                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
+                    sleep_remaining_budget()
                     continue
                 raise
 
             if expected_count is not None and len(pods) < expected_count:
                 logger.debug("Waiting for %s pods, found %s", expected_count, len(pods))
-                sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                sleep_remaining_budget()
                 continue
 
             if expected_count == 0:
@@ -1309,9 +1308,7 @@ class KubeClient:
                     logger.info("No pods expected in %s and none found", namespace)
                     return True
                 logger.debug("Waiting for zero pods in %s, found %s", namespace, len(pods))
-                sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                sleep_remaining_budget()
                 continue
 
             ready_count = 0
@@ -1338,9 +1335,7 @@ class KubeClient:
                     return True
 
             logger.debug("%s/%s pods ready in %s", ready_count, len(pods), namespace)
-            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            sleep_remaining_budget()
 
         logger.error("Timeout waiting for pods in %s", namespace)
         return False

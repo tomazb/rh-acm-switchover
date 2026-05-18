@@ -67,8 +67,10 @@ from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
     ACTIVATION_RESTORE_NAME,
     BACKUP_NAMESPACE,
+    BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN,
     CLEANUP_BEFORE_RESTORE_VALUE,
     FULL_RESTORE_NAME,
+    PASSIVE_RESTORE_CONVENTIONAL_NAME_FALLBACK_REASON,
     PASSIVE_SYNC_RESTORE_NAME,
     VELERO_BACKUP_LATEST,
     VELERO_BACKUP_SKIP,
@@ -76,7 +78,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 )
 
 PASSIVE_PREFLIGHT_READY_PHASES = ("Enabled", "Finished", "Completed", "Running")
-BENIGN_ALREADY_AVAILABLE_MESSAGE = re.compile(r"^ManagedCluster [^ ]+ already available$")
+BENIGN_ALREADY_AVAILABLE_MESSAGE = re.compile(BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN)
 
 
 def is_benign_already_available_message(message: object) -> bool:
@@ -130,7 +132,7 @@ def select_passive_sync_restore(
             None,
         )
         if conventional_restore is not None:
-            diagnostics["reason"] = "conventional_name_fallback"
+            diagnostics["reason"] = PASSIVE_RESTORE_CONVENTIONAL_NAME_FALLBACK_REASON
             return conventional_restore, diagnostics
 
     diagnostics["reason"] = "no_sync_restore"

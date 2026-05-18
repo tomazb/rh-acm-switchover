@@ -11,6 +11,9 @@ import pathlib
 import pytest
 import yaml
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    NO_MANAGED_CLUSTERS_PENDING_REASON,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
     ValidationError,
     validate_operation_inputs,
@@ -234,7 +237,7 @@ class TestNegativeMinManagedClusters:
         """min_managed_clusters=0 alone must not silently allow an empty restore target."""
         result = summarize_cluster_group([], min_managed_clusters=0)
         assert result["passed"] is False
-        assert "no-managed-clusters" in result["pending"]
+        assert NO_MANAGED_CLUSTERS_PENDING_REASON in result["pending"]
 
     def test_cluster_verify_zero_with_pending_clusters_fails(self):
         """min_managed_clusters=0 with pending clusters should fail."""

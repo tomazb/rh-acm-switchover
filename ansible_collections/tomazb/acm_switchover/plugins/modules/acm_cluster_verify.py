@@ -55,6 +55,10 @@ EXAMPLES = r"""
 
 from ansible.module_utils.basic import AnsibleModule
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    NO_MANAGED_CLUSTERS_PENDING_REASON,
+)
+
 
 def summarize_cluster_group(
     clusters: list[dict],
@@ -72,7 +76,7 @@ def summarize_cluster_group(
         len(clusters) == 0 and min_managed_clusters == 0 and not expected_names and not allow_zero_managed_clusters
     )
     if zero_without_expectation:
-        pending.append("no-managed-clusters")
+        pending.append(NO_MANAGED_CLUSTERS_PENDING_REASON)
     return {
         "passed": (
             not zero_without_expectation and len(clusters) >= min_managed_clusters and not pending and not missing
