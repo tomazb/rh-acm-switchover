@@ -248,6 +248,18 @@ class TestFindArgocdPauseBlockers:
 
         assert argocd_lib.find_argocd_pause_blockers(apps) == []
 
+    def test_does_not_block_null_automated_autosync(self):
+        apps = [
+            {
+                "metadata": {"namespace": "argocd", "name": "null-auto-app"},
+                "spec": {"syncPolicy": {"automated": None}},
+                "status": {"resources": []},
+            }
+        ]
+
+        assert argocd_lib.is_autosync_enabled(apps[0]) is False
+        assert argocd_lib.find_argocd_pause_blockers(apps) == []
+
 
 @pytest.mark.unit
 class TestPauseAutosync:
@@ -298,18 +310,109 @@ class TestPauseAutosync:
         assert patch["spec"]["syncPolicy"].get("syncOptions") == []
         client.get_custom_resource.assert_called_once()
 
-    def test_api_exception_on_patch_returns_patched_false(self):
-        """ApiException during patch (e.g. 403 Forbidden) must return patched=False and preserve original policy."""
+    def test_patch_failure_rereads_ground_truth_when_pause_was_applied(self):
+        """A patch exception after server-side apply must be classified from the re-read state."""
+        client = MagicMock()
+        client.patch_custom_resource.side_effect = ApiException(status=500, reason="Internal Server Error")
+        client.get_custom_resource.return_value = {
+            "metadata": {
+                "namespace": "argocd",
+                "name": "app",
+                "resourceVersion": "1002",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+            },
+            "spec": {"syncPolicy": {"syncOptions": []}},
+        }
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app"},
+            "spec": {"syncPolicy": {"automated": {"prune": True}, "syncOptions": []}},
+        }
+
+        result = argocd_lib.pause_autosync(client, app, "run-1")
+
+        assert result.patched is True
+        assert result.patch_applied is True
+        assert result.error is None
+        client.get_custom_resource.assert_called_once()
+
+    def test_patch_failure_treats_automated_null_ground_truth_as_paused(self):
+        client = MagicMock()
+        client.patch_custom_resource.side_effect = ApiException(status=500, reason="Internal Server Error")
+        client.get_custom_resource.return_value = {
+            "metadata": {
+                "namespace": "argocd",
+                "name": "app",
+                "resourceVersion": "1002",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+            },
+            "spec": {"syncPolicy": {"automated": None, "syncOptions": []}},
+        }
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app"},
+            "spec": {"syncPolicy": {"automated": {"prune": True}, "syncOptions": []}},
+        }
+
+        result = argocd_lib.pause_autosync(client, app, "run-1")
+
+        assert result.patched is True
+        assert result.patch_applied is True
+        assert result.error is None
+
+    def test_patch_failure_rereads_ground_truth_when_pause_was_not_applied(self):
+        """A patch exception with unchanged server state must report an unapplied pause."""
         client = MagicMock()
         client.patch_custom_resource.side_effect = ApiException(status=403, reason="Forbidden")
+        client.get_custom_resource.return_value = {
+            "metadata": {"namespace": "argocd", "name": "app", "resourceVersion": "1002", "annotations": {}},
+            "spec": {"syncPolicy": {"automated": {"prune": True}}},
+        }
         app = {
             "metadata": {"namespace": "argocd", "name": "app"},
             "spec": {"syncPolicy": {"automated": {"prune": True}}},
         }
+
         result = argocd_lib.pause_autosync(client, app, "run-1")
+
         assert result.patched is False
-        assert result.error == "403 Forbidden"
+        assert result.patch_applied is False
+        assert result.error is not None
+        assert "403 Forbidden" in result.error
+        assert "not applied" in result.error
         assert result.original_sync_policy == {"automated": {"prune": True}}
+        client.get_custom_resource.assert_called_once()
+
+    def test_patch_failure_reports_unknown_when_ground_truth_reread_fails(self):
+        """A patch exception plus failed re-read must report unknown state, not definitely unpatched."""
+        client = MagicMock()
+        client.patch_custom_resource.side_effect = ApiException(status=500, reason="Internal Server Error")
+        client.get_custom_resource.side_effect = ApiException(status=503, reason="Service Unavailable")
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app"},
+            "spec": {"syncPolicy": {"automated": {"prune": True}}},
+        }
+
+        result = argocd_lib.pause_autosync(client, app, "run-1")
+
+        assert result.patched is False
+        assert result.patch_applied is None
+        assert result.error is not None
+        assert "patch state unknown" in result.error
+        assert "500 Internal Server Error" in result.error
+        assert "503 Service Unavailable" in result.error
+        client.get_custom_resource.assert_called_once()
+
+    def test_returns_patched_false_when_automated_is_null(self):
+        client = MagicMock()
+        app = {
+            "metadata": {"namespace": "argocd", "name": "app"},
+            "spec": {"syncPolicy": {"automated": None}},
+        }
+
+        result = argocd_lib.pause_autosync(client, app, "run-1")
+
+        assert result.patched is False
+        assert result.skip_reason == argocd_lib.PAUSE_SKIP_REASON_AUTOSYNC_DISABLED
+        client.patch_custom_resource.assert_not_called()
 
     def test_patches_when_automated_is_empty_map(self):
         client = MagicMock()

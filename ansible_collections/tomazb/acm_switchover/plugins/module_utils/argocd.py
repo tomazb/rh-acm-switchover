@@ -30,7 +30,8 @@ def _sync_policy(app: dict) -> dict:
 
 def is_autosync_enabled(app: dict) -> bool:
     """Return True when the Application has automated sync configured."""
-    return "automated" in _sync_policy(app)
+    sync_policy = _sync_policy(app)
+    return "automated" in sync_policy and sync_policy["automated"] is not None
 
 
 def _status_resources(app: dict) -> Optional[list[dict]]:

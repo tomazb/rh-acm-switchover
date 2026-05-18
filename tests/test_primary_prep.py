@@ -534,7 +534,11 @@ class TestPrimaryPreparation:
             install_type="vanilla",
         )
         app = {
-            "metadata": {"namespace": "argocd", "name": "app-1"},
+            "metadata": {
+                "namespace": "argocd",
+                "name": "app-1",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+            },
             "spec": {"syncPolicy": {"syncOptions": ["CreateNamespace=true"]}},
             "status": {"resources": [{"kind": "Restore", "namespace": "open-cluster-management-backup"}]},
         }
