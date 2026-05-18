@@ -446,7 +446,7 @@ def remediate_one_cluster(
         try:
             apps_client.patch_namespaced_deployment(
                 name="klusterlet",
-                namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                namespace=bootstrap_namespace,
                 body=patch,
                 **request_timeout_kwargs(request_timeout),
             )

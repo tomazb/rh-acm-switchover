@@ -69,12 +69,15 @@ class FakeCoreClient:
 
 
 class FakeAppsClient:
-    def __init__(self):
+    def __init__(self, fail_patch: bool = False):
+        self.fail_patch = fail_patch
         self.patched: list[tuple[str, str, dict]] = []
         self.request_timeouts: list[int | None] = []
 
     def patch_namespaced_deployment(self, name: str, namespace: str, body: dict, **kwargs):
         self.request_timeouts.append(kwargs.get("_request_timeout"))
+        if self.fail_patch:
+            raise FakeApiError(500, "restart failed")
         self.patched.append((namespace, name, body))
 
 
@@ -263,7 +266,7 @@ def test_remediation_reports_missing_import_secret_as_best_effort_failure():
     assert "pending" not in result["results"][0]["steps"].values()
 
 
-def test_remediation_deletes_reapplies_and_restarts_klusterlet():
+def test_remediation_deletes_reapplies_and_restarts_klusterlet_in_default_namespace():
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
     managed = FakeCoreClient(
         {
@@ -309,6 +312,7 @@ def test_remediation_deletes_bootstrap_secret_from_manifest_namespace():
     managed = FakeCoreClient(
         {(custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): _hub_secret("https://old.example:6443")}
     )
+    apps = FakeAppsClient()
 
     def core_client_factory(kubeconfig: str, context: str | None = None):
         return secondary if kubeconfig == "hub" else managed
@@ -319,11 +323,45 @@ def test_remediation_deletes_bootstrap_secret_from_manifest_namespace():
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=_new_fake_apps_client,
+        apps_client_factory=lambda kubeconfig, context=None: apps,
     )
 
     assert result["failed_clusters"] == []
     assert (custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME) in managed.deleted
+    assert managed.created[0][0:2] == (custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME)
+    assert apps.patched[0][0:2] == (custom_namespace, "klusterlet")
+
+
+def test_remediation_reports_restart_failure():
+    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    managed = FakeCoreClient(
+        {
+            (MANAGED_CLUSTER_AGENT_NAMESPACE, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): _hub_secret(
+                "https://old.example:6443",
+                name=BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+            )
+        }
+    )
+    apps = FakeAppsClient(fail_patch=True)
+
+    def core_client_factory(kubeconfig: str, context: str | None = None):
+        return secondary if kubeconfig == "hub" else managed
+
+    result = remediate_klusterlets(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        pending_clusters=["cluster-a"],
+        workers=1,
+        strict=False,
+        core_client_factory=core_client_factory,
+        apps_client_factory=lambda kubeconfig, context=None: apps,
+    )
+
+    assert result["failed"] is False
+    assert result["failed_clusters"] == ["cluster-a"]
+    assert result["results"][0]["status"] == "failed"
+    assert result["results"][0]["steps"]["klusterlet_restarted"] == "failed"
+    assert "restart failed" in result["results"][0]["reason"]
 
 
 def test_remediation_preserves_best_effort_partial_failure():

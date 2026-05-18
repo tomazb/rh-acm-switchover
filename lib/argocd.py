@@ -114,7 +114,7 @@ class PauseResult:
     name: str
     original_sync_policy: Dict[str, Any]
     patched: bool
-    patch_applied: bool = False
+    patch_applied: Optional[bool] = False
     skip_reason: Optional[str] = None
     error: Optional[str] = None
 
@@ -172,6 +172,15 @@ def _log_patch_failure(namespace: str, name: str, action: str, exc: Exception) -
         detail,
     )
     return detail
+
+
+def _pause_ground_truth_applied(app: Optional[Dict[str, Any]], run_id: str) -> bool:
+    """Return True when a re-read Application proves this run's pause is applied."""
+    if not app:
+        return False
+    annotations = ((app.get("metadata") or {}).get("annotations") or {})
+    sync_policy = ((app.get("spec") or {}).get("syncPolicy") or {})
+    return "automated" not in sync_policy and annotations.get(ARGOCD_PAUSED_BY_ANNOTATION) == run_id
 
 
 def _get_crd_presence(
@@ -613,12 +622,46 @@ def pause_autosync(
         )
     except Exception as e:
         detail = _log_patch_failure(ns, name, "pause auto-sync", e)
+        try:
+            current = client.get_custom_resource(
+                group=ARGOCD_APP_GROUP,
+                version=ARGOCD_APP_VERSION,
+                plural=ARGOCD_APP_PLURAL,
+                name=name,
+                namespace=ns or None,
+            )
+        except Exception as read_exc:
+            read_detail = _format_exception_detail(read_exc)
+            unknown = f"patch failed: {detail}; patch state unknown: failed to re-read Application: {read_detail}"
+            logger.warning("Unable to determine Argo CD Application %s/%s pause state: %s", ns, name, unknown)
+            return PauseResult(
+                namespace=ns,
+                name=name,
+                original_sync_policy=original,
+                patched=False,
+                patch_applied=None,
+                error=unknown,
+            )
+        if _pause_ground_truth_applied(current, run_id):
+            logger.info(
+                "Application %s/%s pause was applied despite patch error; recovered from ground truth",
+                ns,
+                name,
+            )
+            return PauseResult(
+                namespace=ns,
+                name=name,
+                original_sync_policy=original,
+                patched=True,
+                patch_applied=True,
+            )
         return PauseResult(
             namespace=ns,
             name=name,
             original_sync_policy=original,
             patched=False,
-            error=detail,
+            patch_applied=False,
+            error=f"patch failed: {detail}; pause not applied after re-read",
         )
     try:
         current = client.get_custom_resource(
