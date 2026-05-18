@@ -57,9 +57,9 @@ def test_verify_passive_sync_requires_passive_restore_candidate():
         "verify_passive_sync.yml must still reject stale activation restores "
         "when no passive restore candidate is present"
     )
-    assert "conventional_name_fallback" in text, (
-        "verify_passive_sync.yml must accept the conventional passive restore name "
-        "when ACM omits spec.syncRestoreWithNewBackups"
+    assert "allow_conventional_passive_restore_fallback" in text, (
+        "verify_passive_sync.yml must put conventional-name passive restore compatibility "
+        "behind an explicit opt-in variable"
     )
 
 
@@ -83,6 +83,14 @@ def test_activation_wait_rejects_stale_velero_restore_signal():
     )
     assert "previous_velero_restore_name" in stale_assert["ansible.builtin.assert"]["that"][0]
     assert "waiting for a new managed-clusters Velero restore" in stale_assert["ansible.builtin.assert"]["fail_msg"]
+
+
+def test_restore_wait_uses_exact_benign_finished_with_errors_matching():
+    """FinishedWithErrors compatibility must not use loose substring matching."""
+    text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
+
+    assert "match', '^ManagedCluster [^ ]+ already available$'" in text
+    assert "reject('search', 'already available')" not in text
 
 
 def test_preflight_skipped_checkpoint_requires_expected_managedcluster_metadata():
@@ -154,6 +162,15 @@ def test_restore_only_persists_argocd_run_id_in_checkpoint_after_pause():
     assert (
         "operational_data" in text and "argocd_run_id" in text
     ), "restore_only.yml must persist operational_data.argocd_run_id for standalone argocd_resume.yml"
+
+
+def test_restore_only_does_not_default_to_zero_managed_clusters():
+    """Restore-only must not silently pass with local-cluster or zero restored ManagedClusters."""
+    text = (PLAYBOOKS / "restore_only.yml").read_text()
+
+    assert "'min_managed_clusters': 0" not in text
+    assert "allow_zero_managed_clusters" in text
+    assert "default(false)" in text
 
 
 def test_argocd_manage_test_only_writes_summary_when_requested():

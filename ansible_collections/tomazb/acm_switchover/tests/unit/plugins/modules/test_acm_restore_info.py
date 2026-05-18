@@ -57,7 +57,7 @@ def test_select_passive_sync_restore_no_sync_enabled():
     assert diagnostics["reason"] == "no_sync_restore"
 
 
-def test_select_passive_sync_restore_falls_back_to_conventional_name():
+def test_select_passive_sync_restore_rejects_conventional_name_by_default():
     restore, diagnostics = select_passive_sync_restore(
         [
             {
@@ -68,6 +68,25 @@ def test_select_passive_sync_restore_falls_back_to_conventional_name():
                 "spec": {},
             }
         ]
+    )
+    assert restore is None
+    assert diagnostics["restore_count"] == 1
+    assert diagnostics["sync_enabled_count"] == 0
+    assert diagnostics["reason"] == "no_sync_restore"
+
+
+def test_select_passive_sync_restore_falls_back_to_conventional_name_only_when_explicitly_allowed():
+    restore, diagnostics = select_passive_sync_restore(
+        [
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "creationTimestamp": "2026-04-10T10:00:00Z",
+                },
+                "spec": {},
+            }
+        ],
+        allow_conventional_name_fallback=True,
     )
     assert restore["metadata"]["name"] == "restore-acm-passive-sync"
     assert diagnostics["restore_count"] == 1
@@ -258,11 +277,34 @@ def test_passive_restore_ready_accepts_benign_finished_with_errors():
     )
 
 
+def test_passive_restore_ready_accepts_only_anchored_benign_messages():
+    restore = {
+        "status": {
+            "phase": "FinishedWithErrors",
+            "messages": ["ManagedCluster cluster-a not already available"],
+        }
+    }
+
+    assert passive_restore_ready_for_preflight(restore) is False
+
+
 def test_passive_restore_ready_rejects_non_benign_finished_with_errors():
     restore = {
         "status": {
             "phase": "FinishedWithErrors",
             "messages": ["Velero restore failed validation"],
+        }
+    }
+
+    assert passive_restore_ready_for_preflight(restore) is False
+    assert passive_restore_ready_reason(restore) == "Passive Restore FinishedWithErrors contains non-benign errors."
+
+
+def test_passive_restore_ready_rejects_non_string_finished_with_errors_messages():
+    restore = {
+        "status": {
+            "phase": "FinishedWithErrors",
+            "messages": ["ManagedCluster cluster-a already available", {"message": "already available"}],
         }
     }
 

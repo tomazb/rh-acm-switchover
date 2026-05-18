@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 
 DOCUMENTATION = r"""
@@ -39,6 +40,12 @@ options:
     description: Backup name to embed in the activation patch. Use C(latest) to pick the newest backup.
     type: str
     default: latest
+  allow_conventional_name_fallback:
+    description:
+      - Allow selecting C(restore-acm-passive-sync) when C(syncRestoreWithNewBackups) is omitted.
+      - This is a compatibility fallback for older Restore objects and defaults to fail-closed.
+    type: bool
+    default: false
 """
 
 EXAMPLES = r"""
@@ -69,9 +76,23 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 )
 
 PASSIVE_PREFLIGHT_READY_PHASES = ("Enabled", "Finished", "Completed", "Running")
+BENIGN_ALREADY_AVAILABLE_MESSAGE = re.compile(r"^ManagedCluster [^ ]+ already available$")
 
 
-def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict[str, object]]:
+def is_benign_already_available_message(message: object) -> bool:
+    return isinstance(message, str) and BENIGN_ALREADY_AVAILABLE_MESSAGE.fullmatch(message) is not None
+
+
+def restore_messages_are_benign_already_available(messages: object) -> bool:
+    return (
+        isinstance(messages, list) and bool(messages) and all(is_benign_already_available_message(m) for m in messages)
+    )
+
+
+def select_passive_sync_restore(
+    restores: list[dict],
+    allow_conventional_name_fallback: bool = False,
+) -> tuple[dict | None, dict[str, object]]:
     """Select the best passive sync restore and return diagnostics.
 
     Returns:
@@ -98,18 +119,19 @@ def select_passive_sync_restore(restores: list[dict]) -> tuple[dict | None, dict
         )
         return candidates[0], diagnostics
 
-    conventional_restore = next(
-        (
-            item
-            for item in restores
-            if item.get("metadata", {}).get("name") == PASSIVE_SYNC_RESTORE_NAME
-            and item.get("spec", {}).get("syncRestoreWithNewBackups") is not False
-        ),
-        None,
-    )
-    if conventional_restore is not None:
-        diagnostics["reason"] = "conventional_name_fallback"
-        return conventional_restore, diagnostics
+    if allow_conventional_name_fallback:
+        conventional_restore = next(
+            (
+                item
+                for item in restores
+                if item.get("metadata", {}).get("name") == PASSIVE_SYNC_RESTORE_NAME
+                and item.get("spec", {}).get("syncRestoreWithNewBackups") is not False
+            ),
+            None,
+        )
+        if conventional_restore is not None:
+            diagnostics["reason"] = "conventional_name_fallback"
+            return conventional_restore, diagnostics
 
     diagnostics["reason"] = "no_sync_restore"
     return None, diagnostics
@@ -127,7 +149,7 @@ def passive_restore_ready_for_preflight(restore: dict | None) -> bool:
         return True
     if phase == "FinishedWithErrors":
         messages = (restore or {}).get("status", {}).get("messages", [])
-        return bool(messages) and all("already available" in message for message in messages)
+        return restore_messages_are_benign_already_available(messages)
     return False
 
 
@@ -139,7 +161,7 @@ def passive_restore_ready_reason(restore: dict | None) -> str:
         return f"Passive Restore phase {phase} is ready."
     if phase == "FinishedWithErrors":
         messages = (restore or {}).get("status", {}).get("messages", [])
-        if messages and all("already available" in message for message in messages):
+        if restore_messages_are_benign_already_available(messages):
             return "Passive Restore FinishedWithErrors only contains " "already-available messages."
         return "Passive Restore FinishedWithErrors contains non-benign errors."
     if phase in WAIT_FAILURE_PHASES:
@@ -243,9 +265,13 @@ def build_restore_activation_plan(
     activation_method: str,
     restores: list[dict],
     backup_name: str | None,
+    allow_conventional_name_fallback: bool = False,
 ) -> dict:
     backup_name = backup_name or VELERO_BACKUP_LATEST
-    passive_restore, diagnostics = select_passive_sync_restore(restores)
+    passive_restore, diagnostics = select_passive_sync_restore(
+        restores,
+        allow_conventional_name_fallback=allow_conventional_name_fallback,
+    )
     activation_restore = select_restore_by_name(restores, ACTIVATION_RESTORE_NAME)
     full_restore = select_restore_by_name(restores, FULL_RESTORE_NAME)
 
@@ -374,6 +400,7 @@ def main() -> None:
                 "required": False,
                 "default": VELERO_BACKUP_LATEST,
             },
+            "allow_conventional_name_fallback": {"type": "bool", "default": False},
         },
         supports_check_mode=True,
     )
@@ -382,6 +409,7 @@ def main() -> None:
         activation_method=module.params["activation_method"],
         restores=module.params["restores"],
         backup_name=module.params["backup_name"],
+        allow_conventional_name_fallback=module.params["allow_conventional_name_fallback"],
     )
     module.exit_json(**plan)
 

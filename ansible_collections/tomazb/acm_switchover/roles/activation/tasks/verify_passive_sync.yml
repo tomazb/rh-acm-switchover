@@ -2,6 +2,7 @@
 - name: Select passive sync restore
   tomazb.acm_switchover.acm_restore_info:
     activation_method: "{{ acm_switchover_operation.activation_method | default('patch') }}"
+    allow_conventional_name_fallback: "{{ acm_switchover_operation.allow_conventional_passive_restore_fallback | default(false) }}"
     restores: >-
       {{ acm_activation_restores_info.resources | default([]) }}
   register: acm_passive_restore_selection
@@ -13,11 +14,15 @@
       - acm_passive_restore_selection.restore_ready | default(false)
       - >-
         (acm_passive_restore_selection.sync_enabled_count | default(0) | int) > 0
-        or (acm_passive_restore_selection.reason | default('')) == 'conventional_name_fallback'
+        or (
+          acm_switchover_operation.allow_conventional_passive_restore_fallback | default(false) | bool
+          and (acm_passive_restore_selection.reason | default('')) == 'conventional_name_fallback'
+        )
     fail_msg: >-
       Passive switchover requires a secondary passive Restore resource with
-      syncRestoreWithNewBackups=true or named restore-acm-passive-sync, and
-      it must be activation-ready.
+      syncRestoreWithNewBackups=true, and it must be activation-ready.
+      The conventional restore-acm-passive-sync fallback is accepted only when
+      acm_switchover_operation.allow_conventional_passive_restore_fallback=true.
       {{ acm_passive_restore_selection.restore_ready_reason | default('No readiness reason was reported.') }}
 
 - name: Publish passive restore selection

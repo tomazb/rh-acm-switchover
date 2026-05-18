@@ -796,7 +796,6 @@ class KubeClient:
             )
             raise
 
-    @retry_api_call
     def create_custom_resource(
         self,
         group: str,
@@ -831,6 +830,22 @@ class KubeClient:
             )
             return body
 
+        if resource_name:
+            create_once = retry_api_call(self._create_custom_resource_once)
+            return create_once(group, version, plural, body, namespace, resource_name)
+
+        return self._create_custom_resource_once(group, version, plural, body, namespace, resource_name)
+
+    def _create_custom_resource_once(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        body: Dict[str, Any],
+        namespace: Optional[str],
+        resource_name: Optional[str],
+    ) -> Dict:
+        """Create a custom resource once, reconciling named 409 conflicts."""
         try:
             if namespace:
                 result = self.custom_api.create_namespaced_custom_object(
@@ -1289,6 +1304,16 @@ class KubeClient:
                     time.sleep(sleep_time)
                 continue
 
+            if expected_count == 0:
+                if len(pods) == 0:
+                    logger.info("No pods expected in %s and none found", namespace)
+                    return True
+                logger.debug("Waiting for zero pods in %s, found %s", namespace, len(pods))
+                sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                continue
+
             ready_count = 0
             for pod in pods:
                 conditions = pod.get("status", {}).get("conditions", [])
@@ -1298,7 +1323,7 @@ class KubeClient:
                         break
 
             if expected_count is None:
-                if ready_count == len(pods):
+                if pods and ready_count == len(pods):
                     logger.info("All %s pods ready in %s", ready_count, namespace)
                     return True
             else:
