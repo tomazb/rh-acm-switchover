@@ -180,7 +180,8 @@ def _pause_ground_truth_applied(app: Optional[Dict[str, Any]], run_id: str) -> b
         return False
     annotations = ((app.get("metadata") or {}).get("annotations") or {})
     sync_policy = ((app.get("spec") or {}).get("syncPolicy") or {})
-    return "automated" not in sync_policy and annotations.get(ARGOCD_PAUSED_BY_ANNOTATION) == run_id
+    autosync_disabled = "automated" not in sync_policy or sync_policy.get("automated") is None
+    return autosync_disabled and annotations.get(ARGOCD_PAUSED_BY_ANNOTATION) == run_id
 
 
 def _get_crd_presence(
@@ -360,7 +361,8 @@ def _sync_policy(app: Dict[str, Any]) -> Dict[str, Any]:
 
 def is_autosync_enabled(app: Dict[str, Any]) -> bool:
     """Return True when the Application has automated sync configured."""
-    return "automated" in _sync_policy(app)
+    sync_policy = _sync_policy(app)
+    return "automated" in sync_policy and sync_policy["automated"] is not None
 
 
 def has_applicationset_owner(app: Dict[str, Any]) -> bool:
@@ -562,7 +564,7 @@ def resume_recorded_applications(
         namespace=(app.get("metadata", {}) or {}).get("namespace", ""),
         name=(app.get("metadata", {}) or {}).get("name", ""),
         original_sync_policy=dict((app.get("spec", {}) or {}).get("syncPolicy") or {}),
-        patched="automated" in ((app.get("spec", {}) or {}).get("syncPolicy") or {}),
+        patched=is_autosync_enabled(app),
         patch_applied=False,
     ),
 )
@@ -588,7 +590,7 @@ def pause_autosync(
     spec = app.get("spec", {})
     sync_policy = spec.get("syncPolicy") or {}
     original = dict(sync_policy)
-    if "automated" not in sync_policy:
+    if not is_autosync_enabled(app):
         return PauseResult(
             namespace=ns,
             name=name,
@@ -683,7 +685,7 @@ def pause_autosync(
             error=f"pause verification failed: {detail}",
         )
     current_policy = ((current or {}).get("spec", {}) or {}).get("syncPolicy") or {}
-    if "automated" in current_policy:
+    if current_policy.get("automated") is not None:
         message = (
             f"Application {ns}/{name} auto-sync remains enabled after pause. "
             "Check for Argo CD controller reconciliation, ApplicationSet management, or RBAC/patch conflicts before retrying."
@@ -783,7 +785,7 @@ def resume_autosync(
         # marker with one from an older backup.  If auto-sync is already
         # enabled the app is functional — just remove the stale marker.
         current_policy = (current.get("spec") or {}).get("syncPolicy") or {}
-        if "automated" in current_policy:
+        if current_policy.get("automated") is not None:
             logger.info(
                 "Application %s/%s has stale marker %s (expected %s) " "but auto-sync is already enabled; cleaning up",
                 namespace,

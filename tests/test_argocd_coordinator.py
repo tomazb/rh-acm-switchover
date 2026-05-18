@@ -23,13 +23,13 @@ def _make_state_manager(config=None):
     return mock
 
 
-def _make_app(namespace, name, *, automated=True, resources=None):
+def _make_app(namespace, name, *, automated=True, resources=None, annotations=None):
     """Build a minimal Argo CD Application dict."""
     sync_policy = {"automated": {}} if automated else {}
     if resources is None:
         resources = [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}]
     return {
-        "metadata": {"namespace": namespace, "name": name},
+        "metadata": {"namespace": namespace, "name": name, "annotations": annotations or {}},
         "spec": {"syncPolicy": sync_policy},
         "status": {"resources": resources},
     }
@@ -308,7 +308,7 @@ class TestIdempotentRepause:
         assert paused_apps[0]["pause_applied"] is True
 
     def test_recovers_pending_entry_when_app_already_paused(self):
-        """Entry with pause_applied=False should be confirmed when live app lacks automated sync."""
+        """Entry with pause_applied=False should be confirmed when live app has this run's pause marker."""
         state = _make_state_manager(
             {
                 "argocd_run_id": "run-1",
@@ -319,6 +319,57 @@ class TestIdempotentRepause:
                         "name": "app-1",
                         "original_sync_policy": {"automated": {"prune": True}},
                         "pause_applied": False,
+                    }
+                ],
+            }
+        )
+        client = Mock()
+        app = _make_app(
+            "argocd",
+            "app-1",
+            automated=False,
+            annotations={argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+        )
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[app],
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[_make_impact(app)],
+            ),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+
+        mock_pause.assert_not_called()
+        assert failures == 0
+        assert paused_apps[0]["pause_applied"] is True
+        # Verify state was persisted with confirmed entry
+        persisted = state._config["argocd_paused_apps"]
+        assert persisted[0]["pause_applied"] is True
+
+    def test_does_not_recover_pending_entry_without_matching_marker(self):
+        """An unconfirmed entry must not be treated as ours when the live marker is absent."""
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [
+                    {
+                        "hub": "primary",
+                        "namespace": "argocd",
+                        "name": "app-1",
+                        "original_sync_policy": {"automated": {"prune": True}},
+                        "pause_applied": False,
+                        "pause_state": "unknown",
+                        "pause_run_id": "run-1",
                     }
                 ],
             }
@@ -346,10 +397,56 @@ class TestIdempotentRepause:
 
         mock_pause.assert_not_called()
         assert failures == 0
+        assert paused_apps == []
+        assert state._config["argocd_paused_apps"] == []
+
+    def test_recovers_unknown_entry_only_with_matching_marker(self):
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [
+                    {
+                        "hub": "primary",
+                        "namespace": "argocd",
+                        "name": "app-1",
+                        "original_sync_policy": {"automated": {"prune": True}},
+                        "pause_applied": False,
+                        "pause_state": "unknown",
+                        "pause_run_id": "run-1",
+                    }
+                ],
+            }
+        )
+        client = Mock()
+        app = _make_app(
+            "argocd",
+            "app-1",
+            automated=False,
+            annotations={argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "run-1"},
+        )
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[app],
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[_make_impact(app)],
+            ),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+
+        mock_pause.assert_not_called()
+        assert failures == 0
         assert paused_apps[0]["pause_applied"] is True
-        # Verify state was persisted with confirmed entry
-        persisted = state._config["argocd_paused_apps"]
-        assert persisted[0]["pause_applied"] is True
+        assert "pause_state" not in paused_apps[0]
 
 
 @pytest.mark.unit
@@ -505,6 +602,51 @@ class TestErrorHandling:
                 "name": "app-1",
                 "original_sync_policy": {"automated": {}},
                 "pause_applied": True,
+            }
+        ]
+        assert state._config["argocd_paused_apps"] == paused_apps
+
+    def test_unknown_patch_state_persists_unconfirmed_entry(self):
+        state = _make_state_manager({"argocd_run_id": "run-1", "argocd_paused_apps": []})
+        client = Mock()
+        app = _make_app("argocd", "app-1")
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[app],
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[_make_impact(app)],
+            ),
+            patch("lib.argocd_coordinator.argocd_lib.pause_autosync") as mock_pause,
+        ):
+            mock_pause.return_value = argocd_lib.PauseResult(
+                namespace="argocd",
+                name="app-1",
+                original_sync_policy={"automated": {}},
+                patched=False,
+                patch_applied=None,
+                error="patch state unknown",
+            )
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            paused_apps, failures = coordinator.pause_hubs([(client, "primary")])
+
+        assert failures == 1
+        assert paused_apps == [
+            {
+                "hub": "primary",
+                "namespace": "argocd",
+                "name": "app-1",
+                "original_sync_policy": {"automated": {}},
+                "pause_applied": False,
+                "pause_state": "unknown",
+                "pause_run_id": "run-1",
             }
         ]
         assert state._config["argocd_paused_apps"] == paused_apps
