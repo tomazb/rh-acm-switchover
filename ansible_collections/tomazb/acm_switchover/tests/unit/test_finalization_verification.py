@@ -83,6 +83,28 @@ def test_repair_backup_schedule_collision_deletes_and_recreates_schedule():
     assert "restore_only_no_backup_schedule" in text
 
 
+def test_repair_backup_schedule_collision_preserves_body_before_delete():
+    """Collision repair must save a reusable body before deleting the schedule."""
+    text = (FINALIZATION_TASKS / "repair_backup_schedule_collision.yml").read_text()
+    assert text.index("Save BackupSchedule body for collision repair") < text.index(
+        "Delete BackupSchedule for collision repair"
+    )
+    assert "_backup_schedule_collision_repair_body" in text
+
+
+def test_repair_backup_schedule_collision_rescue_fails_loudly_if_restore_fails():
+    """A failed rescue restore must not be hidden after collision repair delete/recreate fails."""
+    tasks = _load_yaml("repair_backup_schedule_collision.yml")
+    recreate_block = next(task for task in tasks if task.get("name") == "Recreate BackupSchedule for collision repair")
+    rescue_text = str(recreate_block.get("rescue", []))
+
+    assert "ignore_errors" not in rescue_text
+    assert "Capture BackupSchedule collision repair failure" in rescue_text
+    assert "Fail after BackupSchedule collision repair and restore failure" in rescue_text
+    assert "_backup_schedule_collision_repair_failure" in rescue_text
+    assert "_backup_schedule_collision_repair_body" in rescue_text
+
+
 def test_repair_backup_schedule_collision_validates_cardinality_in_dry_run():
     """Dry-run must still fail fast when BackupSchedule cardinality is unsafe."""
     tasks = _load_yaml("repair_backup_schedule_collision.yml")

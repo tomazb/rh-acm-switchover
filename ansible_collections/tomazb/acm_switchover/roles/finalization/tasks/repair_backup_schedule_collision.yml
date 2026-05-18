@@ -98,22 +98,40 @@
         context: "{{ acm_switchover_hubs.secondary.context }}"
       register: _backup_schedule_collision_create
   rescue:
+    - name: Capture BackupSchedule collision repair failure
+      ansible.builtin.set_fact:
+        _backup_schedule_collision_repair_failure: "{{ ansible_failed_result }}"
+
     - name: Restore BackupSchedule after failed collision repair
-      kubernetes.core.k8s:
-        api_version: cluster.open-cluster-management.io/v1beta1
-        kind: BackupSchedule
-        state: present
-        definition: "{{ _backup_schedule_collision_repair_body }}"
-        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-        context: "{{ acm_switchover_hubs.secondary.context }}"
-      register: _backup_schedule_collision_restore
-      ignore_errors: true
+      block:
+        - name: Restore BackupSchedule from saved body after failed collision repair
+          kubernetes.core.k8s:
+            api_version: cluster.open-cluster-management.io/v1beta1
+            kind: BackupSchedule
+            state: present
+            definition: "{{ _backup_schedule_collision_repair_body }}"
+            kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+            context: "{{ acm_switchover_hubs.secondary.context }}"
+          register: _backup_schedule_collision_restore
+      rescue:
+        - name: Fail after BackupSchedule collision repair and restore failure
+          ansible.builtin.fail:
+            msg: >-
+              BackupSchedule collision repair failed and restore from the saved
+              body also failed. Original repair error:
+              {{ _backup_schedule_collision_repair_failure.msg | default('unknown repair failure') }}.
+              Restore error: {{ ansible_failed_result.msg | default('unknown restore failure') }}.
+              Saved schedule name:
+              {{ _backup_schedule_collision_repair_body.metadata.name | default('unknown') }}.
 
     - name: Fail after BackupSchedule collision repair failure
       ansible.builtin.fail:
         msg: >-
-          BackupSchedule collision repair failed after attempting best-effort restore:
-          {{ ansible_failed_result.msg | default('unknown failure') }}
+          BackupSchedule collision repair failed. Restore from the saved
+          BackupSchedule body completed; rerun after resolving the repair
+          failure. Original repair error:
+          {{ _backup_schedule_collision_repair_failure.msg | default('unknown repair failure') }}.
+          Restore result: {{ _backup_schedule_collision_restore | default({}) }}.
 
 - name: Refresh BackupSchedule facts after collision repair
   kubernetes.core.k8s_info:
