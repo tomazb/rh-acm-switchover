@@ -1447,6 +1447,7 @@ def test_save_checkpoint_writes_with_utf8_encoding():
 
 def test_save_checkpoint_fsyncs_file_before_replace_and_directory_after_replace():
     action = ActionModule.__new__(ActionModule)
+    events = []
 
     with patch("ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.makedirs"), patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"
@@ -1462,6 +1463,8 @@ def test_save_checkpoint_fsyncs_file_before_replace_and_directory_after_replace(
         mock_open(),
         create=True,
     ) as mocked_open:
+        mocked_fsync.side_effect = lambda fd: events.append(("fsync", fd))
+        mocked_replace.side_effect = lambda src, dst: events.append(("replace", src, dst))
         result = action._save_checkpoint("/tmp/state/checkpoint.json", {"schema_version": "2.0"})
 
     assert result is None
@@ -1472,6 +1475,10 @@ def test_save_checkpoint_fsyncs_file_before_replace_and_directory_after_replace(
     mocked_fsync.assert_any_call(temp_fileno)
     mocked_fsync.assert_any_call(77)
     assert mocked_fsync.call_args_list.index(call(temp_fileno)) < mocked_fsync.call_args_list.index(call(77))
+    file_fsync_index = events.index(("fsync", temp_fileno))
+    replace_index = events.index(("replace", temp_path, "/tmp/state/checkpoint.json"))
+    dir_fsync_index = events.index(("fsync", 77))
+    assert file_fsync_index < replace_index < dir_fsync_index
     mocked_close.assert_called_once_with(77)
 
 
@@ -1481,7 +1488,9 @@ def test_save_checkpoint_ignores_unsupported_directory_fsync():
     with patch("ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"), patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.open",
         return_value=77,
-    ), patch("ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close"), patch(
+    ), patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.close"
+    ) as mocked_close, patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.fsync",
         side_effect=[None, OSError("directory fsync unsupported")],
     ), patch(
@@ -1492,6 +1501,7 @@ def test_save_checkpoint_ignores_unsupported_directory_fsync():
         result = action._save_checkpoint("/tmp/state/checkpoint.json", {"schema_version": "2.0"})
 
     assert result is None
+    mocked_close.assert_called_once_with(77)
 
 
 def test_build_report_ref_accepts_custom_kind():
