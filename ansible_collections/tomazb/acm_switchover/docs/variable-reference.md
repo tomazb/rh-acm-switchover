@@ -21,8 +21,8 @@
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `primary.context` | str | required for switchover | Primary hub kubeconfig context |
-| `primary.kubeconfig` | str | caller environment | Primary hub kubeconfig path |
+| `primary.context` | str | required for switchover and decommission | Primary hub kubeconfig context |
+| `primary.kubeconfig` | str | required for decommission; caller environment for other flows | Primary hub kubeconfig path |
 | `secondary.context` | str | required for switchover and restore-only | Secondary or restore target hub kubeconfig context |
 | `secondary.kubeconfig` | str | caller environment | Secondary or restore target hub kubeconfig path |
 
@@ -158,12 +158,17 @@ live non-local `ManagedCluster` deletion. Matching ClusterDeployments must have
 errors stop the role before ManagedClusters are deleted. A verified missing Hive
 ClusterDeployment API, or no matching ClusterDeployments, is accepted.
 
+Standalone decommission requires non-empty
+`acm_switchover_hubs.primary.kubeconfig` and
+`acm_switchover_hubs.primary.context`. The role refuses to rely on Ansible's
+implicit or default kube context before any Kubernetes operation runs.
+
 ### `acm_switchover_rbac_bootstrap`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `role` | str | `operator` | Role profile: `operator` (write) or `validator` (read-only) |
-| `include_decommission` | bool | `false` | Append decommission-scoped ClusterRole manifests for `ManagedCluster` and `MultiClusterHub` delete; these assets also include `MultiClusterObservability` delete, which baseline operator RBAC already grants for normal old-hub finalization |
+| `include_decommission` | bool | `false` | Append decommission-scoped ClusterRole manifests for `ClusterDeployment` list safety validation plus `ManagedCluster`, `MultiClusterHub`, and `MultiClusterObservability` delete; baseline operator RBAC already grants `MultiClusterObservability` delete for normal old-hub finalization |
 | `generate_kubeconfigs` | bool | `false` | Generate kubeconfigs after manifest apply |
 | `validate_permissions` | bool | `false` | Run `acm_rbac_validate` after apply |
 | `token_duration` | str | `48h` | Token validity duration for generated service account kubeconfigs |

@@ -90,6 +90,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
     BACKUP_NAMESPACE,
     CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO,
     CONFIG_OPENSHIFT_IO,
+    HIVE_CLUSTERDEPLOYMENT_RESOURCE,
     HIVE_OPENSHIFT_IO,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MCE_NAMESPACE,
@@ -240,6 +241,7 @@ OLD_HUB_FINALIZATION_PERMISSIONS = [
 
 DECOMMISSION_CLUSTER_PERMISSIONS = [
     ("", "namespaces", ["get"]),
+    (HIVE_OPENSHIFT_IO, HIVE_CLUSTERDEPLOYMENT_RESOURCE, ["list"]),
     (CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO, "managedclusters", ["list", "delete"]),
     (OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO, "multiclusterhubs", ["list", "delete"]),
     (

@@ -1,8 +1,10 @@
 """Tests for high-signal Ansible resilience contracts."""
 
+import json
 import pathlib
 
 import yaml
+from jinja2 import Environment
 
 COLLECTION_DIR = pathlib.Path(__file__).resolve().parents[2]
 ROLES_DIR = COLLECTION_DIR / "roles"
@@ -103,6 +105,29 @@ def test_decommission_validates_rbac_before_destructive_steps():
     assert "include_decommission: true" in validate_text
     assert "decommission_only: true" in validate_text
     assert "run_ssar" in validate_text, "decommission validate_rbac.yml must execute SSAR checks before proceeding"
+
+
+def test_decommission_asserts_explicit_primary_hub_before_kubernetes_operations():
+    """Decommission must not fall through to the implicit kube context when primary input is empty."""
+    main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
+    flattened_tasks = _flatten_tasks(main_tasks)
+    first_k8s_index = next(
+        index
+        for index, task in enumerate(flattened_tasks)
+        if "kubernetes.core.k8s_info" in task or "kubernetes.core.k8s" in task
+    )
+    assert_tasks = [
+        (index, task)
+        for index, task in enumerate(flattened_tasks)
+        if "ansible.builtin.assert" in task and index < first_k8s_index
+    ]
+
+    assert assert_tasks, "decommission/main.yml must assert primary hub inputs before Kubernetes calls"
+    assert_text = "\n".join(str(task["ansible.builtin.assert"]) for _, task in assert_tasks)
+    assert "acm_switchover_hubs.primary.kubeconfig" in assert_text
+    assert "acm_switchover_hubs.primary.context" in assert_text
+    assert "| length) > 0" in assert_text
+    assert "default kube context" in assert_text
 
 
 def test_decommission_autodetects_observability_by_default_before_rbac():
@@ -226,9 +251,106 @@ def test_decommission_checks_clusterdeployments_before_managedcluster_delete():
     assert text.index("Block unsafe ManagedCluster deletion") < text.index("Delete non-local ManagedClusters")
     assert "_managed_cluster_delete_targets" in text
     assert "preserveOnDelete" in text
+    assert "clusterMetadata" in text
+    assert "clusterInstallRef" in text
+    assert "Cannot verify ManagedCluster relationship" in text
     assert "local-cluster" in text
     assert "from_json" in text
     assert "to_json" in text
+
+
+def _render_clusterdeployment_delete_safety(clusterdeployments: list[dict], target_names: list[str]) -> dict:
+    tasks = _load_yaml(DECOMMISSION_TASKS / "delete_managed_clusters.yml")
+    classify_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Classify matching ClusterDeployments before ManagedCluster deletion"
+    )
+    expression = classify_task["vars"]["_clusterdeployment_delete_safety_json"]
+    environment = Environment()
+    environment.filters["bool"] = bool
+    environment.filters["to_json"] = json.dumps
+    environment.filters["unique"] = lambda values: list(dict.fromkeys(values))
+    rendered = environment.from_string(expression).render(
+        _decommission_clusterdeployments={"resources": clusterdeployments},
+        _managed_cluster_delete_targets=[{"metadata": {"name": name}} for name in target_names],
+    )
+
+    return json.loads(rendered)
+
+
+def test_decommission_clusterdeployment_safety_classifier_behavior():
+    """The actual Jinja classifier must preserve safe matches and fail closed on ambiguous relationships."""
+    by_metadata_name = {
+        "metadata": {"namespace": "hive-ns", "name": "cluster-a"},
+        "spec": {"preserveOnDelete": False},
+    }
+    by_spec_cluster_name = {
+        "metadata": {"namespace": "hive-ns", "name": "install-b"},
+        "spec": {"clusterName": "cluster-b", "preserveOnDelete": False},
+    }
+    by_cluster_metadata = {
+        "metadata": {"namespace": "hive-ns", "name": "install-c"},
+        "spec": {
+            "clusterMetadata": {"clusterName": "cluster-c"},
+            "preserveOnDelete": False,
+        },
+    }
+    by_install_ref_convention = {
+        "metadata": {"namespace": "cluster-d", "name": "install-d"},
+        "spec": {"clusterInstallRef": {"name": "cluster-d"}, "preserveOnDelete": False},
+    }
+    preserved = {
+        "metadata": {"namespace": "hive-ns", "name": "cluster-e"},
+        "spec": {"preserveOnDelete": True},
+    }
+    ambiguous = {
+        "metadata": {"namespace": "cluster-g", "name": "cluster-f"},
+        "spec": {"preserveOnDelete": True},
+    }
+    plausible = {
+        "metadata": {"namespace": "cluster-h", "name": "install-h"},
+        "spec": {"preserveOnDelete": True},
+    }
+
+    safety = _render_clusterdeployment_delete_safety(
+        [
+            by_metadata_name,
+            by_spec_cluster_name,
+            by_cluster_metadata,
+            by_install_ref_convention,
+            preserved,
+            ambiguous,
+            plausible,
+        ],
+        [
+            "cluster-a",
+            "cluster-b",
+            "cluster-c",
+            "cluster-d",
+            "cluster-e",
+            "cluster-f",
+            "cluster-g",
+            "cluster-h",
+        ],
+    )
+
+    assert "cluster-a (hive-ns/cluster-a)" in safety["unsafe"]
+    assert "cluster-b (hive-ns/install-b)" in safety["unsafe"]
+    assert "cluster-c (hive-ns/install-c)" in safety["unsafe"]
+    assert "cluster-d (cluster-d/install-d)" in safety["unsafe"]
+    assert not any("cluster-e" in item for item in safety["unsafe"])
+    assert any(
+        "cluster-g/cluster-f: conflicting ManagedCluster identifiers" in item
+        and "metadata.name=cluster-f" in item
+        and "metadata.namespace=cluster-g" in item
+        for item in safety["unverified"]
+    )
+    assert any(
+        "cluster-h/install-h: plausible but unverified ManagedCluster relationship" in item
+        and "metadata.namespace=cluster-h" in item
+        for item in safety["unverified"]
+    )
 
 
 def test_decommission_clusterdeployment_absence_must_be_verified_before_delete():

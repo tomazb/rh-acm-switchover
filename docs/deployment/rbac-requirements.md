@@ -229,6 +229,7 @@ Most delete permissions for old-hub teardown are intentionally separated from th
 - **ClusterRole**: `acm-switchover-decommission`
 - **ClusterRoleBinding**: `acm-switchover-decommission`
 - **Additional verbs**:
+  - `list` on `clusterdeployments` for the just-in-time `preserveOnDelete` decommission safety check
   - `delete` on `managedclusters`
   - `delete` on cluster-scoped `multiclusterhubs`
   - `delete` on `multiclusterobservabilities` (also present in the baseline operator role for normal finalization)

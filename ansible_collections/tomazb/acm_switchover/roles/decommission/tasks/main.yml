@@ -8,6 +8,17 @@
     not (acm_switchover_decommission.confirmed | default(false) | bool)
     and (acm_switchover_execution.mode | default('dry_run') != 'dry_run')
 
+- name: Require explicit primary hub target before decommission
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_hubs is mapping
+      - acm_switchover_hubs.primary is mapping
+      - (acm_switchover_hubs.primary.kubeconfig | default('', true) | string | trim | length) > 0
+      - (acm_switchover_hubs.primary.context | default('', true) | string | trim | length) > 0
+    fail_msg: >-
+      Decommission requires non-empty acm_switchover_hubs.primary.kubeconfig and
+      acm_switchover_hubs.primary.context. Refusing to use an implicit/default kube context.
+
 - name: Detect observability namespace when configured for auto
   kubernetes.core.k8s_info:
     kind: Namespace

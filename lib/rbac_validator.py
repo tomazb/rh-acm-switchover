@@ -18,6 +18,8 @@ from lib import KubeClient
 from lib.constants import (
     ACM_NAMESPACE,
     BACKUP_NAMESPACE,
+    HIVE_CLUSTERDEPLOYMENT_API_GROUP,
+    HIVE_CLUSTERDEPLOYMENT_PLURAL,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MCE_NAMESPACE,
     MULTICLUSTEROBSERVABILITIES_PLURAL,
@@ -212,6 +214,7 @@ class RBACValidator:
     # Standalone decommission only needs the teardown surface used by modules/decommission.py.
     DECOMMISSION_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
+        (HIVE_CLUSTERDEPLOYMENT_API_GROUP, HIVE_CLUSTERDEPLOYMENT_PLURAL, ["list"]),
         ("cluster.open-cluster-management.io", "managedclusters", ["list", "delete"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
         (

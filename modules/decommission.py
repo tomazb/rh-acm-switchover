@@ -261,11 +261,18 @@ class Decommission:
 
         managed_cluster_name_set = set(managed_cluster_names)
         unsafe_matches = set()
+        unverified_relationships = set()
         for cluster_deployment in cluster_deployments:
-            matching_cluster_name = self._matching_managed_cluster_name(
+            matching_cluster_name, unverified_reason = self._cluster_deployment_relationship(
                 cluster_deployment,
                 managed_cluster_name_set,
             )
+            if unverified_reason:
+                metadata = cluster_deployment.get("metadata") or {}
+                namespace = metadata.get("namespace", "unknown")
+                name = metadata.get("name", "unknown")
+                unverified_relationships.add(f"{namespace}/{name}: {unverified_reason}")
+                continue
             if not matching_cluster_name:
                 continue
 
@@ -276,6 +283,14 @@ class Decommission:
                 namespace = metadata.get("namespace", "unknown")
                 name = metadata.get("name", "unknown")
                 unsafe_matches.add(f"{matching_cluster_name} ({namespace}/{name})")
+
+        if unverified_relationships:
+            raise SwitchoverError(
+                "Cannot verify ManagedCluster relationship for Hive ClusterDeployments before deleting "
+                "ManagedClusters: "
+                f"{', '.join(sorted(unverified_relationships))}. "
+                "Review the ClusterDeployment ownership and set explicit clusterName metadata before decommission."
+            )
 
         if unsafe_matches:
             raise SwitchoverError(
@@ -290,14 +305,67 @@ class Decommission:
         )
 
     @staticmethod
-    def _matching_managed_cluster_name(cluster_deployment: dict, managed_cluster_names: set[str]) -> str | None:
-        """Return the ManagedCluster name represented by a Hive ClusterDeployment."""
+    def _cluster_deployment_relationship(
+        cluster_deployment: dict,
+        managed_cluster_names: set[str],
+    ) -> tuple[str | None, str | None]:
+        """Classify a ClusterDeployment relationship to a ManagedCluster.
+
+        Returns (matching_cluster_name, unverified_reason). A non-empty unverified_reason
+        means the resource has a plausible relationship to a delete target but cannot be
+        classified safely enough to proceed.
+        """
         metadata = cluster_deployment.get("metadata") or {}
         spec = cluster_deployment.get("spec") or {}
-        for candidate in (metadata.get("name"), spec.get("clusterName")):
+        cluster_metadata = spec.get("clusterMetadata") or {}
+        if not isinstance(cluster_metadata, dict):
+            cluster_metadata = {}
+        cluster_install_ref = spec.get("clusterInstallRef") or {}
+        if not isinstance(cluster_install_ref, dict):
+            cluster_install_ref = {}
+
+        confirmed_candidates = []
+        for source, candidate in (
+            ("metadata.name", metadata.get("name")),
+            ("spec.clusterName", spec.get("clusterName")),
+            ("spec.clusterMetadata.clusterName", cluster_metadata.get("clusterName")),
+        ):
             if candidate in managed_cluster_names:
-                return candidate
-        return None
+                confirmed_candidates.append((source, candidate))
+
+        namespace = metadata.get("namespace")
+        install_ref_name = cluster_install_ref.get("name")
+        if namespace in managed_cluster_names and install_ref_name == namespace:
+            confirmed_candidates.append(("metadata.namespace/spec.clusterInstallRef.name", namespace))
+
+        confirmed_names = sorted({candidate for _, candidate in confirmed_candidates})
+        if len(confirmed_names) == 1:
+            confirmed_name = confirmed_names[0]
+            conflicting_plausible = []
+            if namespace in managed_cluster_names and namespace != confirmed_name:
+                conflicting_plausible.append(f"metadata.namespace={namespace}")
+            if install_ref_name in managed_cluster_names and install_ref_name != confirmed_name:
+                conflicting_plausible.append(f"spec.clusterInstallRef.name={install_ref_name}")
+            if conflicting_plausible:
+                sources = ", ".join(f"{source}={candidate}" for source, candidate in confirmed_candidates)
+                return (
+                    None,
+                    "conflicting ManagedCluster identifiers " f"({sources}; {', '.join(conflicting_plausible)})",
+                )
+            return confirmed_names[0], None
+        if len(confirmed_names) > 1:
+            sources = ", ".join(f"{source}={candidate}" for source, candidate in confirmed_candidates)
+            return None, f"conflicting ManagedCluster identifiers ({sources})"
+
+        plausible_sources = []
+        if namespace in managed_cluster_names:
+            plausible_sources.append(f"metadata.namespace={namespace}")
+        if install_ref_name in managed_cluster_names:
+            plausible_sources.append(f"spec.clusterInstallRef.name={install_ref_name}")
+        if plausible_sources:
+            return None, f"plausible but unverified identifier(s) ({', '.join(plausible_sources)})"
+
+        return None, None
 
     def _delete_multiclusterhub(self):
         """Delete MultiClusterHub resource."""

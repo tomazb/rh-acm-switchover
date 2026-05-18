@@ -40,6 +40,7 @@ WAIT_FAILURE_PHASES = ["FinishedWithErrors", "Error", "Failed", "PartiallyFailed
 CONFIG_OPENSHIFT_IO = "config.openshift.io"
 CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO = "cluster.open-cluster-management.io"
 HIVE_OPENSHIFT_IO = "hive.openshift.io"
+HIVE_CLUSTERDEPLOYMENT_RESOURCE = "clusterdeployments"
 OPERATOR_OPEN_CLUSTER_MANAGEMENT_IO = "operator.open-cluster-management.io"
 OBSERVABILITY_OPEN_CLUSTER_MANAGEMENT_IO = "observability.open-cluster-management.io"
 VELERO_IO = "velero.io"

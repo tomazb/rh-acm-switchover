@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import yaml
+from jinja2 import Environment
 
 ROLES_DIR = Path(__file__).resolve().parents[2] / "roles"
 RBAC_BOOTSTRAP_TASKS = ROLES_DIR / "rbac_bootstrap" / "tasks"
@@ -41,3 +42,71 @@ def test_validate_permissions_impersonates_bootstrapped_service_account():
     assert "SelfSubjectAccessReview" not in text
     assert "system:serviceaccount:acm-switchover:" in text
     assert "include_role" not in text
+
+
+def test_manifest_filter_uses_positive_role_or_common_labels_only():
+    """RBAC bootstrap must not apply unlabeled role-specific resources by default."""
+    text = (RBAC_BOOTSTRAP_TASKS / "apply_manifest_file.yml").read_text()
+
+    assert "app.kubernetes.io/role" in text
+    assert "app.kubernetes.io/part-of" in text
+    assert "common" in text
+    assert "item.metadata is not defined" not in text
+    assert "item.metadata.labels is not defined" not in text
+    assert "| default('')) in ['', _rbac_plan.role]" not in text
+
+
+def _manifest_filter_applies(item: dict, role: str) -> bool:
+    tasks = _load_tasks("apply_manifest_file.yml")
+    apply_task = next(task for task in tasks if task.get("name") == "Apply filtered RBAC resources from manifest file")
+    expression = Environment().compile_expression(apply_task["when"])
+
+    return bool(expression(item=item, _rbac_plan={"role": role}))
+
+
+def test_manifest_filter_positive_matching_behavior():
+    """The runtime manifest filter must apply only selected role or explicitly common resources."""
+    assert _manifest_filter_applies(
+        {
+            "metadata": {
+                "labels": {
+                    "app.kubernetes.io/role": "operator",
+                }
+            }
+        },
+        "operator",
+    )
+    assert not _manifest_filter_applies(
+        {
+            "metadata": {
+                "labels": {
+                    "app.kubernetes.io/role": "validator",
+                }
+            }
+        },
+        "operator",
+    )
+    assert _manifest_filter_applies(
+        {
+            "metadata": {
+                "labels": {
+                    "app.kubernetes.io/role": "common",
+                    "app.kubernetes.io/part-of": "acm-switchover-rbac",
+                }
+            }
+        },
+        "operator",
+    )
+    assert not _manifest_filter_applies(
+        {
+            "metadata": {
+                "labels": {
+                    "app.kubernetes.io/role": "common",
+                }
+            }
+        },
+        "operator",
+    )
+    assert not _manifest_filter_applies({"metadata": {"labels": {}}}, "operator")
+    assert not _manifest_filter_applies({"metadata": None}, "operator")
+    assert not _manifest_filter_applies({}, "operator")
