@@ -14,11 +14,11 @@
       }}
   when: >-
     (
-      (((item.metadata | default({})).labels | default({}))['app.kubernetes.io/role'] | default(''))
+      ((item.get('metadata') or {}).get('labels') or {}).get('app.kubernetes.io/role', '')
       == _rbac_plan.role
     )
     or (
-      (((item.metadata | default({})).labels | default({}))['app.kubernetes.io/role'] | default('')) == 'common'
-      and (((item.metadata | default({})).labels | default({}))['app.kubernetes.io/part-of'] | default(''))
+      ((item.get('metadata') or {}).get('labels') or {}).get('app.kubernetes.io/role', '') == 'common'
+      and ((item.get('metadata') or {}).get('labels') or {}).get('app.kubernetes.io/part-of', '')
       == 'acm-switchover-rbac'
     )

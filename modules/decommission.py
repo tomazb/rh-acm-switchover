@@ -305,15 +305,6 @@ class Decommission:
         )
 
     @staticmethod
-    def _matching_managed_cluster_name(cluster_deployment: dict, managed_cluster_names: set[str]) -> str | None:
-        """Return the ManagedCluster name represented by a Hive ClusterDeployment."""
-        matching_cluster_name, _ = Decommission._cluster_deployment_relationship(
-            cluster_deployment,
-            managed_cluster_names,
-        )
-        return matching_cluster_name
-
-    @staticmethod
     def _cluster_deployment_relationship(
         cluster_deployment: dict,
         managed_cluster_names: set[str],

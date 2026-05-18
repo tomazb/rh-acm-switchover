@@ -207,6 +207,14 @@ class TestRBACManifestConsistency:
         return path.read_text(encoding="utf-8")
 
     @pytest.fixture
+    def helm_namespace_content(self) -> str:
+        """Read Helm namespace template as text."""
+        path = Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "namespace.yaml"
+        if not path.exists():
+            pytest.skip("Helm namespace.yaml not found")
+        return path.read_text(encoding="utf-8")
+
+    @pytest.fixture
     def decommission_clusterrole_path(self) -> Path:
         """Get the static decommission ClusterRole manifest path."""
         return Path(__file__).parent.parent / "deploy" / "rbac" / "extensions" / "decommission" / "clusterrole.yaml"
@@ -486,9 +494,11 @@ class TestRBACManifestConsistency:
             'resources: ["managedclusters"]\n    verbs: ["delete"]',
             'resources: ["multiclusterhubs"]\n    verbs: ["delete"]',
             'resources: ["multiclusterobservabilities"]\n    verbs: ["delete"]',
+            'resources: ["clusterdeployments"]\n    verbs: ["list"]',
         ]
         for snippet in required_snippets:
             assert snippet in content
+        assert 'resources: ["clusterdeployments"]\n    verbs: ["get", "list"]' not in content
 
     def test_static_decommission_clusterrolebinding_exists(self, decommission_clusterrolebinding_path):
         """Test that static decommission binding exists for opt-in operator escalation."""
@@ -499,14 +509,24 @@ class TestRBACManifestConsistency:
 
     def test_helm_clusterrole_supports_optional_decommission_role(self, helm_clusterrole_content):
         """Test that Helm templates expose an opt-in decommission ClusterRole."""
+        decommission_block = helm_clusterrole_content.split("# ClusterRole for ACM Switchover Decommission", 1)[
+            1
+        ].split("# ClusterRole for ACM Switchover Validator", 1)[0]
         required_snippets = [
-            ".Values.rbac.includeDecommissionClusterRole",
             ".Values.clusterRole.decommission.name",
             'resources: ["managedclusters"]',
             'verbs: ["delete"]',
+            'resources: ["clusterdeployments"]\n    verbs: ["list"]',
         ]
+        assert ".Values.rbac.includeDecommissionClusterRole" in helm_clusterrole_content
         for snippet in required_snippets:
-            assert snippet in helm_clusterrole_content
+            assert snippet in decommission_block
+        assert 'resources: ["clusterdeployments"]\n    verbs: ["get", "list"]' not in decommission_block
+
+    def test_helm_namespace_template_marks_shared_resource_common(self, helm_namespace_content):
+        """Helm namespace output must carry the same common marker used by role filtering."""
+        assert "app.kubernetes.io/part-of: acm-switchover-rbac" in helm_namespace_content
+        assert "app.kubernetes.io/role: common" in helm_namespace_content
 
 
 class TestRBACValidatorPermissionStructure:

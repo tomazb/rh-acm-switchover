@@ -24,8 +24,8 @@ from `deploy/rbac/`.
 The bundled baseline operator RBAC includes `delete` on
 `observability.open-cluster-management.io/multiclusterobservabilities` because
 normal finalization deletes old-hub MCO when observability is present. The
-optional decommission assets are still required for `ManagedCluster` and
-`MultiClusterHub` teardown permissions.
+optional decommission assets are still required for `ClusterDeployment` list
+safety validation and `ManagedCluster`/`MultiClusterHub` teardown permissions.
 
 ## AAP Contract
 

@@ -80,30 +80,42 @@
       {%- set cluster_metadata_name = cluster_metadata.get('clusterName', '') -%}
       {%- set install_ref_name = cluster_install_ref.get('name', '') -%}
       {%- set matches = [] -%}
+      {%- set match_sources = [] -%}
       {%- if cd_name in target_names -%}
       {%- set _ = matches.append(cd_name) -%}
+      {%- set _ = match_sources.append('metadata.name=' ~ cd_name) -%}
       {%- endif -%}
       {%- if cluster_name in target_names -%}
       {%- set _ = matches.append(cluster_name) -%}
+      {%- set _ = match_sources.append('spec.clusterName=' ~ cluster_name) -%}
       {%- endif -%}
       {%- if cluster_metadata_name in target_names -%}
       {%- set _ = matches.append(cluster_metadata_name) -%}
+      {%- set _ = match_sources.append('spec.clusterMetadata.clusterName=' ~ cluster_metadata_name) -%}
       {%- endif -%}
       {%- if namespace in target_names and install_ref_name == namespace -%}
       {%- set _ = matches.append(namespace) -%}
+      {%- set _ = match_sources.append('metadata.namespace/spec.clusterInstallRef.name=' ~ namespace) -%}
       {%- endif -%}
       {%- set unique_matches = matches | unique | list -%}
       {%- set resource = metadata.get('namespace', 'unknown') ~ '/' ~ metadata.get('name', 'unknown') -%}
+      {%- set plausible_sources = [] -%}
+      {%- if namespace in target_names and namespace not in unique_matches -%}
+      {%- set _ = plausible_sources.append('metadata.namespace=' ~ namespace) -%}
+      {%- endif -%}
+      {%- if install_ref_name in target_names and install_ref_name not in unique_matches -%}
+      {%- set _ = plausible_sources.append('spec.clusterInstallRef.name=' ~ install_ref_name) -%}
+      {%- endif -%}
       {%- if unique_matches | length > 1 -%}
-      {%- set _ = safety.unverified.append(resource ~ ': conflicting ManagedCluster identifiers') -%}
+      {%- set _ = safety.unverified.append(resource ~ ': conflicting ManagedCluster identifiers (' ~ (match_sources | join(', ')) ~ ')') -%}
       {%- elif unique_matches | length == 1 -%}
-      {%- if (namespace in target_names and namespace != unique_matches[0]) or (install_ref_name in target_names and install_ref_name != unique_matches[0]) -%}
-      {%- set _ = safety.unverified.append(resource ~ ': conflicting ManagedCluster identifiers') -%}
+      {%- if plausible_sources | length > 0 -%}
+      {%- set _ = safety.unverified.append(resource ~ ': conflicting ManagedCluster identifiers (' ~ ((match_sources + plausible_sources) | join(', ')) ~ ')') -%}
       {%- elif not (spec.get('preserveOnDelete', false) | bool) -%}
       {%- set _ = safety.unsafe.append(unique_matches[0] ~ ' (' ~ resource ~ ')') -%}
       {%- endif -%}
-      {%- elif namespace in target_names or install_ref_name in target_names -%}
-      {%- set _ = safety.unverified.append(resource ~ ': plausible but unverified ManagedCluster relationship') -%}
+      {%- elif plausible_sources | length > 0 -%}
+      {%- set _ = safety.unverified.append(resource ~ ': plausible but unverified ManagedCluster relationship (' ~ (plausible_sources | join(', ')) ~ ')') -%}
       {%- endif -%}
       {%- endfor -%}
       {{ safety | to_json }}

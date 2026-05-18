@@ -186,7 +186,7 @@ The baseline namespace Roles include only the `open-cluster-management`
 namespaced `multiclusterhubs` list rule. The baseline ClusterRole includes
 `delete` on `multiclusterobservabilities` for normal finalization cleanup, and
 the optional extension also carries the Hive `clusterdeployments` read used by
-the decommission `preserveOnDelete` safety gate plus the cluster-scoped delete
+the decommission `preserveOnDelete` safety gate as `list` plus the cluster-scoped delete
 permissions needed to complete decommission.
 
 #### Step 4: Verify
