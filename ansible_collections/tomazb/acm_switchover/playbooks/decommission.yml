@@ -2,5 +2,16 @@
 - name: Decommission old ACM hub
   hosts: localhost
   gather_facts: false
+  pre_tasks:
+    - name: Require explicit primary hub target for decommission playbook
+      ansible.builtin.assert:
+        that:
+          - acm_switchover_hubs is mapping
+          - acm_switchover_hubs.primary is mapping
+          - (acm_switchover_hubs.primary.kubeconfig | default('', true) | string | trim | length) > 0
+          - (acm_switchover_hubs.primary.context | default('', true) | string | trim | length) > 0
+        fail_msg: >-
+          Decommission requires non-empty acm_switchover_hubs.primary.kubeconfig and
+          acm_switchover_hubs.primary.context. Refusing to use an implicit/default kube context.
   roles:
     - role: tomazb.acm_switchover.decommission

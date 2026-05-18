@@ -56,21 +56,80 @@
           {{ ansible_failed_result.msg | default('unknown API error') }}
       when: not (_clusterdeployments_verified_absent | default(false) | bool)
 
+- name: Classify matching ClusterDeployments before ManagedCluster deletion
+  ansible.builtin.set_fact:
+    _clusterdeployment_delete_safety: "{{ _clusterdeployment_delete_safety_json | from_json }}"
+  vars:
+    _clusterdeployment_delete_safety_json: >-
+      {%- set safety = {'unsafe': [], 'unverified': []} -%}
+      {%- set target_names = _managed_cluster_delete_targets | default([]) | map(attribute='metadata.name') | list -%}
+      {%- for cd in (_decommission_clusterdeployments.resources | default([])) -%}
+      {%- set metadata = cd.get('metadata', {}) -%}
+      {%- set spec = cd.get('spec') or {} -%}
+      {%- set cluster_metadata = spec.get('clusterMetadata') or {} -%}
+      {%- set cluster_install_ref = spec.get('clusterInstallRef') or {} -%}
+      {%- if cluster_metadata is not mapping -%}
+      {%- set cluster_metadata = {} -%}
+      {%- endif -%}
+      {%- if cluster_install_ref is not mapping -%}
+      {%- set cluster_install_ref = {} -%}
+      {%- endif -%}
+      {%- set cd_name = metadata.get('name', '') -%}
+      {%- set namespace = metadata.get('namespace', '') -%}
+      {%- set cluster_name = spec.get('clusterName', '') -%}
+      {%- set cluster_metadata_name = cluster_metadata.get('clusterName', '') -%}
+      {%- set install_ref_name = cluster_install_ref.get('name', '') -%}
+      {%- set matches = [] -%}
+      {%- if cd_name in target_names -%}
+      {%- set _ = matches.append(cd_name) -%}
+      {%- endif -%}
+      {%- if cluster_name in target_names -%}
+      {%- set _ = matches.append(cluster_name) -%}
+      {%- endif -%}
+      {%- if cluster_metadata_name in target_names -%}
+      {%- set _ = matches.append(cluster_metadata_name) -%}
+      {%- endif -%}
+      {%- if namespace in target_names and install_ref_name == namespace -%}
+      {%- set _ = matches.append(namespace) -%}
+      {%- endif -%}
+      {%- set unique_matches = matches | unique | list -%}
+      {%- set resource = metadata.get('namespace', 'unknown') ~ '/' ~ metadata.get('name', 'unknown') -%}
+      {%- if unique_matches | length > 1 -%}
+      {%- set _ = safety.unverified.append(resource ~ ': conflicting ManagedCluster identifiers') -%}
+      {%- elif unique_matches | length == 1 -%}
+      {%- if (namespace in target_names and namespace != unique_matches[0]) or (install_ref_name in target_names and install_ref_name != unique_matches[0]) -%}
+      {%- set _ = safety.unverified.append(resource ~ ': conflicting ManagedCluster identifiers') -%}
+      {%- elif not (spec.get('preserveOnDelete', false) | bool) -%}
+      {%- set _ = safety.unsafe.append(unique_matches[0] ~ ' (' ~ resource ~ ')') -%}
+      {%- endif -%}
+      {%- elif namespace in target_names or install_ref_name in target_names -%}
+      {%- set _ = safety.unverified.append(resource ~ ': plausible but unverified ManagedCluster relationship') -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ safety | to_json }}
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - (_managed_cluster_delete_targets | default([]) | length) > 0
+
+- name: Block unverified ClusterDeployment relationships before ManagedCluster deletion
+  ansible.builtin.fail:
+    msg: >-
+      Cannot verify ManagedCluster relationship for Hive ClusterDeployments before deleting
+      ManagedClusters: {{
+        (_clusterdeployment_delete_safety.unverified | default([])) | join(', ')
+      }}. Review ClusterDeployment ownership and set explicit clusterName metadata before decommission.
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - ((_clusterdeployment_delete_safety.unverified | default([])) | length) > 0
+
 - name: Identify unsafe matching ClusterDeployments before ManagedCluster deletion
   ansible.builtin.set_fact:
     _unsafe_clusterdeployments_for_managedcluster_delete: "{{ _unsafe_clusterdeployments_for_managedcluster_delete_json | from_json }}"
   vars:
     _unsafe_clusterdeployments_for_managedcluster_delete_json: >-
       {%- set unsafe = [] -%}
-      {%- set target_names = _managed_cluster_delete_targets | default([]) | map(attribute='metadata.name') | list -%}
-      {%- for cd in (_decommission_clusterdeployments.resources | default([])) -%}
-      {%- set metadata = cd.get('metadata', {}) -%}
-      {%- set spec = cd.get('spec') or {} -%}
-      {%- set cd_name = metadata.get('name', '') -%}
-      {%- set cluster_name = spec.get('clusterName', '') -%}
-      {%- if (cd_name in target_names or cluster_name in target_names) and not (spec.get('preserveOnDelete', false) | bool) -%}
-      {%- set _ = unsafe.append(metadata.get('namespace', 'unknown') ~ '/' ~ metadata.get('name', 'unknown')) -%}
-      {%- endif -%}
+      {%- for item in (_clusterdeployment_delete_safety.unsafe | default([])) -%}
+      {%- set _ = unsafe.append(item) -%}
       {%- endfor -%}
       {{ unsafe | to_json }}
   when:

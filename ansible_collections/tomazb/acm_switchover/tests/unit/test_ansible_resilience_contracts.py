@@ -105,6 +105,29 @@ def test_decommission_validates_rbac_before_destructive_steps():
     assert "run_ssar" in validate_text, "decommission validate_rbac.yml must execute SSAR checks before proceeding"
 
 
+def test_decommission_asserts_explicit_primary_hub_before_kubernetes_operations():
+    """Decommission must not fall through to the implicit kube context when primary input is empty."""
+    main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
+    flattened_tasks = _flatten_tasks(main_tasks)
+    first_k8s_index = next(
+        index
+        for index, task in enumerate(flattened_tasks)
+        if "kubernetes.core.k8s_info" in task or "kubernetes.core.k8s" in task
+    )
+    assert_tasks = [
+        (index, task)
+        for index, task in enumerate(flattened_tasks)
+        if "ansible.builtin.assert" in task and index < first_k8s_index
+    ]
+
+    assert assert_tasks, "decommission/main.yml must assert primary hub inputs before Kubernetes calls"
+    assert_text = "\n".join(str(task["ansible.builtin.assert"]) for _, task in assert_tasks)
+    assert "acm_switchover_hubs.primary.kubeconfig" in assert_text
+    assert "acm_switchover_hubs.primary.context" in assert_text
+    assert "| length) > 0" in assert_text
+    assert "default kube context" in assert_text
+
+
 def test_decommission_autodetects_observability_by_default_before_rbac():
     """Decommission should derive observability from the namespace unless explicitly overridden."""
     defaults = yaml.safe_load((ROLES_DIR / "decommission" / "defaults" / "main.yml").read_text())
@@ -226,6 +249,9 @@ def test_decommission_checks_clusterdeployments_before_managedcluster_delete():
     assert text.index("Block unsafe ManagedCluster deletion") < text.index("Delete non-local ManagedClusters")
     assert "_managed_cluster_delete_targets" in text
     assert "preserveOnDelete" in text
+    assert "clusterMetadata" in text
+    assert "clusterInstallRef" in text
+    assert "Cannot verify ManagedCluster relationship" in text
     assert "local-cluster" in text
     assert "from_json" in text
     assert "to_json" in text

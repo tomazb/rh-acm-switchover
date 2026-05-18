@@ -212,6 +212,7 @@ class RBACValidator:
     # Standalone decommission only needs the teardown surface used by modules/decommission.py.
     DECOMMISSION_CLUSTER_PERMISSIONS = [
         ("", "namespaces", ["get"]),
+        ("hive.openshift.io", "clusterdeployments", ["get", "list"]),
         ("cluster.open-cluster-management.io", "managedclusters", ["list", "delete"]),
         ("operator.open-cluster-management.io", "multiclusterhubs", ["list", "delete"]),
         (

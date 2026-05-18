@@ -86,3 +86,23 @@ def test_packaged_rbac_manifests_match_repo_assets():
     for repo_file in repo_files:
         packaged_file = PACKAGED_RBAC_ROOT / repo_file.relative_to(REPO_RBAC_ROOT)
         assert packaged_file.read_text() == repo_file.read_text()
+
+
+def test_shared_rbac_manifest_resources_are_explicitly_marked_common():
+    """Role filtering must have an explicit marker for shared bootstrap resources."""
+    shared_resources = {
+        ("Namespace", "acm-switchover"),
+    }
+
+    for manifest_file in sorted(REPO_RBAC_ROOT.rglob("*.yaml")):
+        for resource in yaml.safe_load_all(manifest_file.read_text()):
+            if not resource:
+                continue
+            metadata = resource.get("metadata") or {}
+            labels = metadata.get("labels") or {}
+            identity = (resource.get("kind"), metadata.get("name"))
+            if identity in shared_resources:
+                assert labels.get("app.kubernetes.io/part-of") == "acm-switchover-rbac"
+                assert labels.get("app.kubernetes.io/role") == "common"
+            else:
+                assert labels.get("app.kubernetes.io/role") in {"operator", "validator"}

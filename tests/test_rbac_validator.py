@@ -808,6 +808,9 @@ class TestValidateDecommissionPermissions:
             call("operator.open-cluster-management.io", "multiclusterhubs", "list", None)
             in validator.check_permission.call_args_list
         )
+        assert (
+            call("hive.openshift.io", "clusterdeployments", "list", None) in validator.check_permission.call_args_list
+        )
         assert call("", "pods", "get", OBSERVABILITY_NAMESPACE) in validator.check_permission.call_args_list
 
     def test_validate_decommission_rbac_succeeds_when_acm_namespace_missing(self, mock_primary_client):

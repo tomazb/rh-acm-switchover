@@ -212,6 +212,12 @@ def test_decommission_only_excludes_switchover_permissions():
         "delete",
         "open-cluster-management",
     ) not in permissions
+    assert (
+        "hive.openshift.io",
+        "clusterdeployments",
+        "list",
+        None,
+    ) in permissions
 
 
 def test_summary_reports_failure_when_permission_missing():

@@ -41,3 +41,15 @@ def test_validate_permissions_impersonates_bootstrapped_service_account():
     assert "SelfSubjectAccessReview" not in text
     assert "system:serviceaccount:acm-switchover:" in text
     assert "include_role" not in text
+
+
+def test_manifest_filter_uses_positive_role_or_common_labels_only():
+    """RBAC bootstrap must not apply unlabeled role-specific resources by default."""
+    text = (RBAC_BOOTSTRAP_TASKS / "apply_manifest_file.yml").read_text()
+
+    assert "app.kubernetes.io/role" in text
+    assert "app.kubernetes.io/part-of" in text
+    assert "common" in text
+    assert "item.metadata is not defined" not in text
+    assert "item.metadata.labels is not defined" not in text
+    assert "| default('')) in ['', _rbac_plan.role]" not in text

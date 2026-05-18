@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Added least-privilege deny checks to live RBAC certification so over-permissioned service accounts fail certification instead of passing solely on required allow checks.
+- Tightened decommission safety checks so ClusterDeployment matching considers additional explicit cluster identifiers, fails closed for plausible unverified relationships, requires explicit collection primary hub inputs, and keeps decommission RBAC bootstrap filtering label-positive.
 
 ### Removed
 

@@ -6,3 +6,5 @@ metadata:
   labels:
     app.kubernetes.io/name: acm-switchover
     app.kubernetes.io/component: automation
+    app.kubernetes.io/part-of: acm-switchover-rbac
+    app.kubernetes.io/role: common
