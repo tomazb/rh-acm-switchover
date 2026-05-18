@@ -4,6 +4,7 @@
 import json
 import os
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import MagicMock, call, mock_open, patch
 
 from ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase import (
@@ -1447,7 +1448,7 @@ def test_save_checkpoint_writes_with_utf8_encoding():
 
 def test_save_checkpoint_fsyncs_file_before_replace_and_directory_after_replace():
     action = ActionModule.__new__(ActionModule)
-    events = []
+    events: list[tuple[Any, ...]] = []
 
     with patch("ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.makedirs"), patch(
         "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.os.replace"

@@ -317,13 +317,16 @@ def test_remediation_deletes_bootstrap_secret_from_manifest_namespace():
     def core_client_factory(kubeconfig: str, context: str | None = None):
         return secondary if kubeconfig == "hub" else managed
 
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},
         managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
         pending_clusters=["cluster-a"],
         workers=1,
         core_client_factory=core_client_factory,
-        apps_client_factory=lambda kubeconfig, context=None: apps,
+        apps_client_factory=apps_client_factory,
     )
 
     assert result["failed_clusters"] == []
@@ -347,6 +350,9 @@ def test_remediation_reports_restart_failure():
     def core_client_factory(kubeconfig: str, context: str | None = None):
         return secondary if kubeconfig == "hub" else managed
 
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
     result = remediate_klusterlets(
         secondary_hub={"kubeconfig": "hub"},
         managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
@@ -354,7 +360,7 @@ def test_remediation_reports_restart_failure():
         workers=1,
         strict=False,
         core_client_factory=core_client_factory,
-        apps_client_factory=lambda kubeconfig, context=None: apps,
+        apps_client_factory=apps_client_factory,
     )
 
     assert result["failed"] is False

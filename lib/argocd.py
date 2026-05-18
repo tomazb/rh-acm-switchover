@@ -178,8 +178,8 @@ def _pause_ground_truth_applied(app: Optional[Dict[str, Any]], run_id: str) -> b
     """Return True when a re-read Application proves this run's pause is applied."""
     if not app:
         return False
-    annotations = ((app.get("metadata") or {}).get("annotations") or {})
-    sync_policy = ((app.get("spec") or {}).get("syncPolicy") or {})
+    annotations = (app.get("metadata") or {}).get("annotations") or {}
+    sync_policy = (app.get("spec") or {}).get("syncPolicy") or {}
     autosync_disabled = "automated" not in sync_policy or sync_policy.get("automated") is None
     return autosync_disabled and annotations.get(ARGOCD_PAUSED_BY_ANNOTATION) == run_id
 
