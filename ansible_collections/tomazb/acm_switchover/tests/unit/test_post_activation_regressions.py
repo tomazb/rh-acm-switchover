@@ -11,6 +11,9 @@ import pathlib
 import pytest
 import yaml
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    NO_MANAGED_CLUSTERS_PENDING_REASON,
+)
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
     ValidationError,
     validate_operation_inputs,
@@ -106,6 +109,11 @@ class TestVerifyManagedClustersPolling:
 
         assert "_acm_post_activation_min_managed_clusters" in str(module_args["min_managed_clusters"])
         assert "_acm_post_activation_expected_managed_cluster_names" in str(module_args["expected_names"])
+
+    def test_preflight_zero_cluster_compatibility_excludes_restore_only(self):
+        """A preflight-derived zero count may allow non-restore switchovers, but not restore-only."""
+        assert "not (acm_switchover_operation.restore_only | default(false) | bool)" in self.content
+        assert "acm_switchover_expected_managed_cluster_count is defined" in self.content
 
 
 # ── Issue 2: Re-verification after klusterlet remediation ──
@@ -225,10 +233,11 @@ class TestNegativeMinManagedClusters:
                 min_managed_clusters=-1,
             )
 
-    def test_cluster_verify_zero_with_no_clusters_passes(self):
-        """min_managed_clusters=0 with empty list should pass (no pending)."""
+    def test_cluster_verify_zero_with_no_clusters_fails_without_explicit_allow(self):
+        """min_managed_clusters=0 alone must not silently allow an empty restore target."""
         result = summarize_cluster_group([], min_managed_clusters=0)
-        assert result["passed"] is True
+        assert result["passed"] is False
+        assert NO_MANAGED_CLUSTERS_PENDING_REASON in result["pending"]
 
     def test_cluster_verify_zero_with_pending_clusters_fails(self):
         """min_managed_clusters=0 with pending clusters should fail."""
@@ -249,11 +258,12 @@ class TestNegativeMinManagedClusters:
         assert result["passed"] is False
         assert "cluster-b" in result["missing"]
 
-    def test_cluster_verify_zero_can_disable_expected_names(self):
-        """Explicit min_managed_clusters=0 must allow empty restore targets."""
+    def test_cluster_verify_zero_can_disable_expected_names_when_explicitly_allowed(self):
+        """allow_zero_managed_clusters is the explicit opt-in for empty restore targets."""
         result = summarize_cluster_group(
             [],
             min_managed_clusters=0,
             expected_names=[],
+            allow_zero_managed_clusters=True,
         )
         assert result["passed"] is True

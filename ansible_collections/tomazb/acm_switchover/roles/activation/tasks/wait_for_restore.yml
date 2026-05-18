@@ -37,7 +37,13 @@
         and ((_restore_wait_info.resources | first | default({})).get('status', {}).get('messages', []) | length) > 0
         and (
           ((_restore_wait_info.resources | first | default({})).get('status', {}).get('messages', [])
-          | reject('search', 'already available') | list | length) == 0
+          | select('string') | list | length)
+          ==
+          ((_restore_wait_info.resources | first | default({})).get('status', {}).get('messages', []) | length)
+        )
+        and (
+          ((_restore_wait_info.resources | first | default({})).get('status', {}).get('messages', [])
+          | reject('match', '^ManagedCluster [^ ]+ already available$') | list | length) == 0
         )
       }}
   when:

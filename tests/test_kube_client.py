@@ -426,16 +426,49 @@ class TestKubeClient:
         mock_sleep.assert_not_called()
 
     @patch("lib.kube_client.time.sleep")
-    def test_wait_for_pods_ready_succeeds_when_no_pods_exist_and_count_unspecified(
-        self, mock_sleep, kube_client, mock_k8s_apis
+    @patch("lib.kube_client.time.time")
+    def test_wait_for_pods_ready_does_not_succeed_when_no_pods_exist_and_count_unspecified(
+        self, mock_time, mock_sleep, kube_client, mock_k8s_apis
     ):
-        """Namespace readiness checks should treat zero pods as ready when no count is required."""
+        """Empty pod lists must not be treated as ready unless zero pods are explicitly expected."""
         mock_k8s_apis["core_api"].list_namespaced_pod.return_value = MagicMock(items=[])
+        mock_time.side_effect = chain([100.0, 100.0, 100.0, 104.9, 105.1], repeat(105.1))
 
         result = kube_client.wait_for_pods_ready("test-ns", "app=test", timeout=5)
 
+        assert result is False
+        mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once()
+
+    @patch("lib.kube_client.time.sleep")
+    def test_wait_for_pods_ready_succeeds_when_zero_pods_explicitly_expected(
+        self, mock_sleep, kube_client, mock_k8s_apis
+    ):
+        """expected_count=0 is the explicit opt-in for zero-pod readiness."""
+        mock_k8s_apis["core_api"].list_namespaced_pod.return_value = MagicMock(items=[])
+
+        result = kube_client.wait_for_pods_ready("test-ns", "app=test", expected_count=0, timeout=5)
+
         assert result is True
         mock_sleep.assert_not_called()
+
+    @patch("lib.kube_client.time.sleep")
+    @patch("lib.kube_client.time.time")
+    def test_wait_for_pods_ready_with_expected_count_waits_for_enough_pods(
+        self, mock_time, mock_sleep, kube_client, mock_k8s_apis
+    ):
+        """expected_count > 0 must not pass when fewer pods are present."""
+        pod_ready = MagicMock()
+        pod_ready.to_dict.return_value = {
+            "metadata": {"name": "pod1"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }
+        mock_k8s_apis["core_api"].list_namespaced_pod.return_value = MagicMock(items=[pod_ready])
+        mock_time.side_effect = chain([100.0, 100.0, 100.0, 104.9, 105.1], repeat(105.1))
+
+        result = kube_client.wait_for_pods_ready("test-ns", "app=test", expected_count=2, timeout=5)
+
+        assert result is False
+        mock_k8s_apis["core_api"].list_namespaced_pod.assert_called_once()
 
     @patch("lib.kube_client.time.sleep")
     @patch("lib.kube_client.time.time")
@@ -676,6 +709,64 @@ class TestMutatorIdempotency:
             )
 
         assert exc_info.value.status == 409
+
+    @patch("lib.kube_client.time.sleep")
+    def test_create_custom_resource_retries_named_retryable_create_and_reconciles(
+        self, mock_sleep, kube_client, mock_k8s_apis
+    ):
+        """Named resources may retry retryable create errors and reconcile a later 409."""
+        body = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns"},
+            "spec": {"veleroManagedClustersBackupName": "latest"},
+        }
+        existing = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"name": "test-restore", "namespace": "test-ns", "resourceVersion": "1"},
+            "spec": {"veleroManagedClustersBackupName": "latest"},
+        }
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = [
+            ApiException(status=500),
+            ApiException(status=409),
+        ]
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.return_value = existing
+
+        result = kube_client.create_custom_resource(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="restores",
+            body=body,
+            namespace="test-ns",
+        )
+
+        assert result == existing
+        assert mock_k8s_apis["custom_api"].create_namespaced_custom_object.call_count == 2
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.assert_called_once()
+
+    def test_create_custom_resource_does_not_retry_unnamed_retryable_create(self, kube_client, mock_k8s_apis):
+        """Generated-name creates must fail after the first retryable create error to avoid duplicates."""
+        body = {
+            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "kind": "Restore",
+            "metadata": {"generateName": "restore-"},
+            "spec": {"veleroManagedClustersBackupName": "latest"},
+        }
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.side_effect = ApiException(status=500)
+
+        with pytest.raises(ApiException) as exc_info:
+            kube_client.create_custom_resource(
+                group="cluster.open-cluster-management.io",
+                version="v1beta1",
+                plural="restores",
+                body=body,
+                namespace="test-ns",
+            )
+
+        assert exc_info.value.status == 500
+        mock_k8s_apis["custom_api"].create_namespaced_custom_object.assert_called_once()
+        mock_k8s_apis["custom_api"].get_namespaced_custom_object.assert_not_called()
 
     def test_create_or_patch_configmap_creates_when_absent(self, kube_client, mock_k8s_apis):
         """ConfigMap upsert creates when the resource does not yet exist."""

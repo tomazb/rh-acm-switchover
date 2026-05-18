@@ -1,6 +1,27 @@
 ---
 - name: Resolve managed-cluster verification expectation
   ansible.builtin.set_fact:
+    _acm_post_activation_configured_managed_cluster_names: >-
+      {{
+        acm_switchover_managed_clusters | default({})
+        | dict2items
+        | map(attribute='key')
+        | list
+        | sort
+      }}
+    _acm_post_activation_allow_zero_managed_clusters: >-
+      {{
+        (acm_switchover_operation.allow_zero_managed_clusters | default(false) | bool)
+        or (
+          not (acm_switchover_operation.restore_only | default(false) | bool)
+          and acm_switchover_expected_managed_cluster_count is defined
+          and acm_switchover_expected_managed_cluster_count is not none
+          and (acm_switchover_expected_managed_cluster_count | int) == 0
+        )
+      }}
+
+- name: Resolve managed-cluster verification threshold
+  ansible.builtin.set_fact:
     _acm_post_activation_min_managed_clusters: >-
       {{
         (acm_switchover_operation.min_managed_clusters | int)
@@ -8,7 +29,22 @@
           acm_switchover_operation.min_managed_clusters is defined
           and acm_switchover_operation.min_managed_clusters is not none
         )
-        else (acm_switchover_expected_managed_cluster_count | default(0) | int)
+        else (
+          acm_switchover_expected_managed_cluster_count | default(0) | int
+          if (acm_switchover_expected_managed_cluster_count | default(0) | int) > 0
+          else (
+            _acm_post_activation_configured_managed_cluster_names | length
+            if (
+              acm_switchover_operation.restore_only | default(false) | bool
+              and (_acm_post_activation_configured_managed_cluster_names | length) > 0
+            )
+            else (
+              0
+              if (_acm_post_activation_allow_zero_managed_clusters | bool)
+              else 1
+            )
+          )
+        )
       }}
     _acm_post_activation_expected_managed_cluster_names: >-
       {{
@@ -17,7 +53,18 @@
           acm_switchover_operation.min_managed_clusters is defined
           and acm_switchover_operation.min_managed_clusters is not none
         )
-        else (acm_switchover_expected_managed_cluster_names | default([]))
+        else (
+          acm_switchover_expected_managed_cluster_names
+          if (acm_switchover_expected_managed_cluster_names | default([]) | length) > 0
+          else (
+            _acm_post_activation_configured_managed_cluster_names
+            if (
+              acm_switchover_operation.restore_only | default(false) | bool
+              and (_acm_post_activation_configured_managed_cluster_names | length) > 0
+            )
+            else []
+          )
+        )
       }}
 
 # After a Velero MC restore, the hub re-creates ManagedCluster objects with
@@ -127,6 +174,7 @@
     cluster_status: "{{ cluster_status_result.cluster_status }}"
     min_managed_clusters: "{{ _acm_post_activation_min_managed_clusters | int }}"
     expected_names: "{{ _acm_post_activation_expected_managed_cluster_names | default([]) }}"
+    allow_zero_managed_clusters: "{{ _acm_post_activation_allow_zero_managed_clusters | bool }}"
   register: acm_cluster_verify_result
 
 - name: Preserve soft managed-cluster wait failure for downstream remediation

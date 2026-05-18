@@ -796,7 +796,6 @@ class KubeClient:
             )
             raise
 
-    @retry_api_call
     def create_custom_resource(
         self,
         group: str,
@@ -831,6 +830,22 @@ class KubeClient:
             )
             return body
 
+        if resource_name:
+            create_once = retry_api_call(self._create_custom_resource_once)
+            return create_once(group, version, plural, body, namespace, resource_name)
+
+        return self._create_custom_resource_once(group, version, plural, body, namespace, resource_name)
+
+    def _create_custom_resource_once(
+        self,
+        group: str,
+        version: str,
+        plural: str,
+        body: Dict[str, Any],
+        namespace: Optional[str],
+        resource_name: Optional[str],
+    ) -> Dict:
+        """Create a custom resource once, reconciling named 409 conflicts."""
         try:
             if namespace:
                 result = self.custom_api.create_namespaced_custom_object(
@@ -1250,6 +1265,11 @@ class KubeClient:
         start_time = time.time()
         poll_interval = 5
 
+        def sleep_remaining_budget() -> None:
+            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
         while time.time() - start_time < timeout:
             elapsed = time.time() - start_time
             remaining_budget = timeout - elapsed
@@ -1267,26 +1287,28 @@ class KubeClient:
                     pods = []
                 elif is_retryable_error(exc):
                     logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
-                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
+                    sleep_remaining_budget()
                     continue
                 else:
                     raise
             except Exception as exc:
                 if is_retryable_error(exc):
                     logger.debug("Transient error while listing pods in %s: %s", namespace, exc)
-                    sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
+                    sleep_remaining_budget()
                     continue
                 raise
 
             if expected_count is not None and len(pods) < expected_count:
                 logger.debug("Waiting for %s pods, found %s", expected_count, len(pods))
-                sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                sleep_remaining_budget()
+                continue
+
+            if expected_count == 0:
+                if len(pods) == 0:
+                    logger.info("No pods expected in %s and none found", namespace)
+                    return True
+                logger.debug("Waiting for zero pods in %s, found %s", namespace, len(pods))
+                sleep_remaining_budget()
                 continue
 
             ready_count = 0
@@ -1298,7 +1320,7 @@ class KubeClient:
                         break
 
             if expected_count is None:
-                if ready_count == len(pods):
+                if pods and ready_count == len(pods):
                     logger.info("All %s pods ready in %s", ready_count, namespace)
                     return True
             else:
@@ -1313,9 +1335,7 @@ class KubeClient:
                     return True
 
             logger.debug("%s/%s pods ready in %s", ready_count, len(pods), namespace)
-            sleep_time = min(poll_interval, max(0.0, timeout - (time.time() - start_time)))
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            sleep_remaining_budget()
 
         logger.error("Timeout waiting for pods in %s", namespace)
         return False

@@ -28,6 +28,9 @@ ARGOCD_RESUME_ON_FAILURE_VALIDATE_MODE_MESSAGE = "argocd.resume_on_failure is no
 PASSIVE_SYNC_RESTORE_NAME = "restore-acm-passive-sync"
 ACTIVATION_RESTORE_NAME = "restore-acm-activate"
 FULL_RESTORE_NAME = "restore-acm-full"
+BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN = r"^ManagedCluster [^ ]+ already available$"
+PASSIVE_RESTORE_CONVENTIONAL_NAME_FALLBACK_REASON = "conventional_name_fallback"
+NO_MANAGED_CLUSTERS_PENDING_REASON = "no-managed-clusters"
 
 VELERO_BACKUP_LATEST = "latest"
 VELERO_BACKUP_SKIP = "skip"

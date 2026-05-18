@@ -26,6 +26,12 @@ options:
     type: list
     elements: str
     default: []
+  allow_zero_managed_clusters:
+    description:
+      - Explicitly allow an empty non-local ManagedCluster set.
+      - Defaults to false so restore-only cannot pass with only local-cluster by accident.
+    type: bool
+    default: false
 """
 
 EXAMPLES = r"""
@@ -49,11 +55,16 @@ EXAMPLES = r"""
 
 from ansible.module_utils.basic import AnsibleModule
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    NO_MANAGED_CLUSTERS_PENDING_REASON,
+)
+
 
 def summarize_cluster_group(
     clusters: list[dict],
     min_managed_clusters: int,
     expected_names: list[str] | None = None,
+    allow_zero_managed_clusters: bool = False,
 ) -> dict:
     if min_managed_clusters < 0:
         raise ValueError("min_managed_clusters must be a non-negative integer")
@@ -61,8 +72,15 @@ def summarize_cluster_group(
     observed_names = sorted(item["name"] for item in clusters)
     pending = [item["name"] for item in clusters if not (item["joined"] and item["available"])]
     missing = sorted(set(expected_names) - set(observed_names))
+    zero_without_expectation = (
+        len(clusters) == 0 and min_managed_clusters == 0 and not expected_names and not allow_zero_managed_clusters
+    )
+    if zero_without_expectation:
+        pending.append(NO_MANAGED_CLUSTERS_PENDING_REASON)
     return {
-        "passed": len(clusters) >= min_managed_clusters and not pending and not missing,
+        "passed": (
+            not zero_without_expectation and len(clusters) >= min_managed_clusters and not pending and not missing
+        ),
         "total": len(clusters),
         "pending": pending,
         "missing": missing,
@@ -75,6 +93,7 @@ def main() -> None:
             "cluster_status": {"type": "list", "elements": "dict", "default": []},
             "min_managed_clusters": {"type": "int", "default": 1},
             "expected_names": {"type": "list", "elements": "str", "default": []},
+            "allow_zero_managed_clusters": {"type": "bool", "default": False},
         },
         supports_check_mode=True,
     )
@@ -85,6 +104,7 @@ def main() -> None:
         module.params["cluster_status"],
         min_mc,
         module.params["expected_names"],
+        module.params["allow_zero_managed_clusters"],
     )
     module.exit_json(changed=False, **result)
 

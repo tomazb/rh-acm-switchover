@@ -358,6 +358,7 @@
 
 - name: Analyze passive sync restores on secondary hub
   tomazb.acm_switchover.acm_restore_info:
+    allow_conventional_name_fallback: "{{ acm_switchover_operation.allow_conventional_passive_restore_fallback | default(false) }}"
     restores: "{{ acm_secondary_restore_info.resources | default([]) }}"
   register: acm_preflight_passive_restore_analysis
   when: acm_switchover_operation.method != 'full'
