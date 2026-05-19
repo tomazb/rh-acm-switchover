@@ -45,6 +45,25 @@ def test_preflight_discovers_dpa_velero_and_managed_clusters():
     assert "kind: ManagedCluster" in text, "discover_resources.yml must query ManagedClusters"
 
 
+def test_preflight_persists_observability_detection_for_later_phases():
+    """Collection preflight must carry Python-equivalent Observability detection through checkpoints."""
+    text = (PREFLIGHT_TASKS / "main.yml").read_text()
+
+    assert "acm_switchover_primary_has_observability" in text
+    assert "acm_switchover_secondary_has_observability" in text
+    assert "primary_has_observability" in text
+    assert "secondary_has_observability" in text
+
+
+def test_preflight_skip_requires_observability_checkpoint_data():
+    """Skipped preflight checkpoints must not lose post-activation Observability gating inputs."""
+    text = (PREFLIGHT_TASKS / "main.yml").read_text()
+
+    assert "Skipped preflight checkpoint is missing required operational metadata" in text
+    assert "expected_managed_cluster_names/expected_managed_cluster_count" in text
+    assert "primary_has_observability/secondary_has_observability" in text
+
+
 def test_preflight_runs_auto_import_strategy_validator_after_version_checks():
     """Collection preflight must keep Python's ACM 2.14+ auto-import advisory."""
     main = _load_yaml("main.yml")

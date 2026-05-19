@@ -115,6 +115,11 @@ class TestVerifyManagedClustersPolling:
         assert "not (acm_switchover_operation.restore_only | default(false) | bool)" in self.content
         assert "acm_switchover_expected_managed_cluster_count is defined" in self.content
 
+    def test_explicit_min_zero_allows_empty_hub_like_python_cli(self):
+        """Role-level min_managed_clusters=0 must be the CLI-equivalent empty-target opt-in."""
+        assert "acm_switchover_operation.min_managed_clusters is defined" in self.content
+        assert "(acm_switchover_operation.min_managed_clusters | int) == 0" in self.content
+
 
 # ── Issue 2: Re-verification after klusterlet remediation ──
 

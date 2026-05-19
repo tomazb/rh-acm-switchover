@@ -20,7 +20,7 @@
     - acm_switchover_execution.checkpoint.enabled | default(false)
     - acm_switchover_preflight_summary.passed
 
-- name: Validate expected ManagedCluster checkpoint data when preflight is skipped
+- name: Validate required checkpoint data when preflight is skipped
   ansible.builtin.assert:
     that:
       - >-
@@ -29,15 +29,22 @@
       - >-
         (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('expected_managed_cluster_count', none))
         is not none
+      - >-
+        (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('primary_has_observability', none))
+        is not none
+      - >-
+        (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('secondary_has_observability', none))
+        is not none
     fail_msg: >-
-      Skipped preflight checkpoint is missing expected ManagedCluster metadata
-      (expected_managed_cluster_names/expected_managed_cluster_count). Re-run preflight
-      so activation and post-activation can enforce the restore expectation.
+      Skipped preflight checkpoint is missing required operational metadata
+      (expected_managed_cluster_names/expected_managed_cluster_count and
+      primary_has_observability/secondary_has_observability). Re-run preflight
+      so activation and post-activation can enforce the restore and Observability expectations.
   when:
     - (_checkpoint_enter | default({})).skipped_phase | default(false)
     - acm_switchover_execution.mode | default('execute') == 'execute'
 
-- name: Restore expected ManagedClusters from checkpoint when preflight is skipped
+- name: Restore operational facts from checkpoint when preflight is skipped
   ansible.builtin.set_fact:
     acm_switchover_expected_managed_cluster_names: >-
       {{
@@ -49,6 +56,16 @@
         ((_checkpoint_enter.checkpoint | default({})).get('operational_data', {}))
         .get('expected_managed_cluster_count')
       }}
+    acm_switchover_primary_has_observability: >-
+      {{
+        ((_checkpoint_enter.checkpoint | default({})).get('operational_data', {}))
+        .get('primary_has_observability')
+      }}
+    acm_switchover_secondary_has_observability: >-
+      {{
+        ((_checkpoint_enter.checkpoint | default({})).get('operational_data', {}))
+        .get('secondary_has_observability')
+      }}
   when:
     - (_checkpoint_enter | default({})).skipped_phase | default(false)
     - >-
@@ -56,6 +73,12 @@
       is not none
     - >-
       (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('expected_managed_cluster_count', none))
+      is not none
+    - >-
+      (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('primary_has_observability', none))
+      is not none
+    - >-
+      (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('secondary_has_observability', none))
       is not none
 
 - name: Run preflight phase
@@ -120,6 +143,21 @@
       ansible.builtin.include_tasks: validate_namespaces.yml
       when: acm_switchover_preflight_summary.passed
 
+    - name: Record effective Observability detection
+      ansible.builtin.set_fact:
+        acm_switchover_primary_has_observability: >-
+          {{
+            not (acm_switchover_operation.restore_only | default(false) | bool)
+            and not (acm_switchover_features.skip_observability_checks | default(false) | bool)
+            and 'open-cluster-management-observability' in (acm_primary_namespace_names | default([]))
+          }}
+        acm_switchover_secondary_has_observability: >-
+          {{
+            not (acm_switchover_features.skip_observability_checks | default(false) | bool)
+            and 'open-cluster-management-observability' in (acm_secondary_namespace_names | default([]))
+          }}
+      when: acm_switchover_preflight_summary.passed
+
     - name: Validate RBAC permissions when enabled
       ansible.builtin.include_tasks: validate_rbac.yml
       when:
@@ -171,6 +209,8 @@
     operational_data:
       expected_managed_cluster_names: "{{ acm_switchover_expected_managed_cluster_names | default([]) }}"
       expected_managed_cluster_count: "{{ acm_switchover_expected_managed_cluster_count | default(0) }}"
+      primary_has_observability: "{{ acm_switchover_primary_has_observability | default(false) | bool }}"
+      secondary_has_observability: "{{ acm_switchover_secondary_has_observability | default(false) | bool }}"
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)
     - acm_switchover_preflight_summary.passed

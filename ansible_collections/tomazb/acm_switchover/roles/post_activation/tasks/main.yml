@@ -50,6 +50,7 @@
       ansible.builtin.include_tasks: verify_observability.yml
       when:
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+        - acm_switchover_secondary_has_observability | default(false) | bool
         - not (acm_switchover_features.skip_observability_checks | default(false))
 
     - name: Publish post activation result

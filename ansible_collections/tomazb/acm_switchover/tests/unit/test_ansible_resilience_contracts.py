@@ -386,6 +386,7 @@ def test_decommission_waits_for_observability_and_acm_workload_pods():
     """Collection decommission must wait for workload pods like Python does."""
     obs_text = (DECOMMISSION_TASKS / "delete_observability.yml").read_text()
     mch_text = (DECOMMISSION_TASKS / "delete_multiclusterhub.yml").read_text()
+    mch_tasks = _load_yaml(DECOMMISSION_TASKS / "delete_multiclusterhub.yml")
 
     assert "kind: Pod" in obs_text
     assert "until" in obs_text
@@ -395,7 +396,15 @@ def test_decommission_waits_for_observability_and_acm_workload_pods():
     assert "open-cluster-management-observability" in obs_text
     assert "kind: Pod" in mch_text
     assert "until" in mch_text
+    assert "failed_when" in mch_text
+    assert "Some ACM pods still running" in mch_text
     assert "multiclusterhub-operator" in mch_text
+    pod_wait = next(
+        task
+        for task in mch_tasks
+        if task.get("name") == "Wait for ACM workload pods to terminate after MultiClusterHub deletion"
+    )
+    assert pod_wait.get("failed_when") is False
 
 
 def test_decommission_result_reports_actual_delete_changes():

@@ -13,6 +13,11 @@
       {{
         (acm_switchover_operation.allow_zero_managed_clusters | default(false) | bool)
         or (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+          and (acm_switchover_operation.min_managed_clusters | int) == 0
+        )
+        or (
           not (acm_switchover_operation.restore_only | default(false) | bool)
           and acm_switchover_expected_managed_cluster_count is defined
           and acm_switchover_expected_managed_cluster_count is not none

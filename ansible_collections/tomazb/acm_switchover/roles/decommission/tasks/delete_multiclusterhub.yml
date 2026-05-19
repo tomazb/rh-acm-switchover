@@ -50,6 +50,30 @@
         | length
       ) == 0
     }}
+  failed_when: false
   when:
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - (_multiclusterhub_resources.resources | default([]) | length) > 0
+
+- name: Warn when ACM workload pods remain after MultiClusterHub deletion
+  ansible.builtin.debug:
+    msg: >-
+      Some ACM pods still running after MultiClusterHub deletion wait.
+      Non-operator pod count={{
+        _acm_pods_after_mch_delete.resources
+        | default([])
+        | rejectattr('metadata.name', 'match', '^multiclusterhub-operator')
+        | list
+        | length
+      }}.
+  when:
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+    - _acm_pods_after_mch_delete is defined
+    - >-
+      (
+        _acm_pods_after_mch_delete.resources
+        | default([])
+        | rejectattr('metadata.name', 'match', '^multiclusterhub-operator')
+        | list
+        | length
+      ) > 0

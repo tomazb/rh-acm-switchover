@@ -40,8 +40,8 @@
 expected non-local ManagedCluster names/count from preflight. In restore-only,
 the omitted value requires at least one restored non-local ManagedCluster unless
 `acm_switchover_operation.allow_zero_managed_clusters=true` is set. Set
-`min_managed_clusters` to `0` only with that explicit empty-target opt-in, or set
-a positive value to enforce that explicit minimum count.
+`min_managed_clusters` to `0` to opt into an empty non-local ManagedCluster
+target, or set a positive value to enforce that explicit minimum count.
 
 ## Phase 5 Capability Status
 
@@ -55,7 +55,7 @@ a positive value to enforce that explicit minimum count.
 | Python / CLI Capability | Collection Phase 6 Status | Playbook | Notes |
 |-------------------------|---------------------------|----------|-------|
 | Hub discovery | dual-supported | `playbooks/discovery.yml` | `scripts/discover-hub.sh` remains supported bridge for context enumeration |
-| Decommission old hub | dual-supported | `playbooks/decommission.yml` | Requires explicit non-empty primary kubeconfig/context plus `acm_switchover_decommission.confirmed: true` or `mode: dry_run` |
+| Decommission old hub | dual-supported | `playbooks/decommission.yml` | Requires explicit non-empty primary kubeconfig/context plus `acm_switchover_decommission.confirmed: true` or `mode: dry_run`; warns and continues if non-operator ACM pods remain after the bounded MultiClusterHub deletion wait |
 | RBAC bootstrap | dual-supported | `playbooks/rbac_bootstrap.yml` | Replaces `scripts/setup-rbac.sh` |
 
 ## Phase 2 Capability Status

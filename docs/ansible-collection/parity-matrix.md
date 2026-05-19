@@ -19,7 +19,7 @@ Intentional parity changes require explicit operator approval before implementat
 | optional checkpoints | dual-supported | dual-supported | Phase 4 collection implementation complete |
 | Argo CD management | dual-supported | dual-supported | Phase 5 collection implementation complete |
 | discovery | dual-supported | dual-supported | Collection provides classification/reporting and bridge guidance; `scripts/discover-hub.sh` remains the full context-enumeration bridge |
-| decommission | dual-supported | dual-supported | Collection defaults observability detection to `auto` and waits for ACM/observability workload pods during teardown |
+| decommission | dual-supported | dual-supported | Collection defaults observability detection to `auto`, waits for ACM/observability workload pods during teardown, and warns if ACM workload pods remain after the bounded MultiClusterHub deletion wait |
 | RBAC bootstrap | dual-supported | dual-supported | Phase 6 collection implementation complete; scripts/setup-rbac.sh deprecated |
 | RBAC live certification | release-only | release-only | Live permission validation via SubjectAccessReview; opt-in via `ACM_ENABLE_LIVE_RBAC_CERTIFICATION`; complements static RBAC parity checks |
 

@@ -39,6 +39,17 @@ def test_main_cleans_auto_import_annotations_before_observability():
     ), "cleanup_auto_import_annotations.yml must run before verify_observability.yml"
 
 
+def test_main_runs_observability_only_when_secondary_observability_was_detected():
+    """post_activation must mirror Python and skip Observability when secondary lacks it."""
+    observability_task = next(
+        task for task in _main_block_tasks() if task.get("ansible.builtin.include_tasks") == "verify_observability.yml"
+    )
+    when_text = "\n".join(observability_task.get("when", []))
+
+    assert "acm_switchover_secondary_has_observability" in when_text
+    assert "skip_observability_checks" in when_text
+
+
 def test_verify_observability_performs_real_health_checks():
     """verify_observability.yml must query Kubernetes health and block unhealthy Observability."""
     tasks = _load_yaml("verify_observability.yml")

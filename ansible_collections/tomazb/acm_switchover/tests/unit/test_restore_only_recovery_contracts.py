@@ -97,12 +97,12 @@ def test_preflight_skipped_checkpoint_requires_expected_managedcluster_metadata(
     restore_index = next(
         idx
         for idx, task in enumerate(tasks)
-        if task.get("name") == "Restore expected ManagedClusters from checkpoint when preflight is skipped"
+        if task.get("name") == "Restore operational facts from checkpoint when preflight is skipped"
     )
     assert restore_index > 0
 
     validation_task = tasks[restore_index - 1]
-    assert validation_task.get("name") == "Validate expected ManagedCluster checkpoint data when preflight is skipped"
+    assert validation_task.get("name") == "Validate required checkpoint data when preflight is skipped"
     validation = validation_task["ansible.builtin.assert"]
     validation_text = "\n".join(validation["that"])
     assert "expected_managed_cluster_names" in validation_text

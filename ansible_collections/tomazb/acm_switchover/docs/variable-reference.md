@@ -33,7 +33,7 @@
 | `method` | `passive`, `full` | `passive` | Switchover activation strategy |
 | `old_hub_action` | `secondary`, `decommission`, `none` | `secondary` | Finalization action for the old hub |
 | `activation_method` | `patch`, `restore` | `patch` | Passive activation mechanism; `restore` is valid only with `method=passive` |
-| `min_managed_clusters` | int or null | null | Omitted/null derives expected non-local ManagedCluster names/count from preflight; restore-only omitted requires at least one restored non-local ManagedCluster unless `allow_zero_managed_clusters` is explicitly enabled; positive values enforce that minimum count |
+| `min_managed_clusters` | int or null | null | Omitted/null derives expected non-local ManagedCluster names/count from preflight; restore-only omitted requires at least one restored non-local ManagedCluster unless `allow_zero_managed_clusters` is explicitly enabled; explicit `0` opts into an empty non-local ManagedCluster target like the Python CLI; positive values enforce that minimum count |
 | `restore_only` | bool | `false` | Set by `playbooks/restore_only.yml`; direct role invocations must set it explicitly |
 
 ### `acm_switchover_features`
@@ -88,6 +88,8 @@ Auto-sync Applications also block when `status.resources` is empty or stale beca
 | `acm_switchover_preflight_result.path` | string | Path to the written JSON report |
 | `acm_switchover_expected_managed_cluster_names` | list[str] | Non-local ManagedCluster names observed on the primary during preflight; empty for restore-only because no primary is available |
 | `acm_switchover_expected_managed_cluster_count` | int | Count derived from `acm_switchover_expected_managed_cluster_names`; restore-only records `0` here but post-activation still requires a restored non-local ManagedCluster unless `allow_zero_managed_clusters` is explicitly enabled |
+| `acm_switchover_primary_has_observability` | bool | Effective primary Observability detection after `skip_observability_checks`; persisted in checkpoints for old-hub finalization behavior |
+| `acm_switchover_secondary_has_observability` | bool | Effective secondary Observability detection after `skip_observability_checks`; persisted in checkpoints for post-activation Observability verification |
 
 ## Execution Phase Result Facts
 
@@ -166,6 +168,10 @@ Standalone decommission requires non-empty
 `acm_switchover_hubs.primary.kubeconfig` and
 `acm_switchover_hubs.primary.context`. The role refuses to rely on Ansible's
 implicit or default kube context before any Kubernetes operation runs.
+
+After deleting `MultiClusterHub` resources, decommission waits for non-operator
+ACM workload pods to terminate. If pods remain after the bounded wait, the role
+warns and continues so the result matches the Python CLI's warning behavior.
 
 ### `acm_switchover_rbac_bootstrap`
 
