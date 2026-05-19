@@ -40,3 +40,17 @@ tests/release/profiles/local/
 e2e-15-switchover/
 artifacts/
 opus-review.md
+
+# IDE
+.vscode/
+
+# Type-check cache
+.mypy_cache/
+
+# Generated knowledge graph (graphify skill output)
+graphify-out/
+
+# AI tooling local state
+.agents/
+.claude/settings.local.json
+.claude/agent-memory-local/
