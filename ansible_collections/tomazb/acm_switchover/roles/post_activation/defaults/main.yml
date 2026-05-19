@@ -18,6 +18,8 @@ acm_switchover_execution:
   timeouts:
     klusterlet_request_seconds: 30
     klusterlet_worker_seconds: 180
+    klusterlet_recheck_seconds: 300
+    klusterlet_recheck_interval_seconds: 10
   checkpoint:
     enabled: false
     backend: file

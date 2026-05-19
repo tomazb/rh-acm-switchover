@@ -16,6 +16,8 @@ CONSTANT_PAIRS = {
     "BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME": "BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME",
     "SECRET_VISIBILITY_TIMEOUT": "SECRET_VISIBILITY_TIMEOUT",
     "SECRET_VISIBILITY_INTERVAL": "SECRET_VISIBILITY_INTERVAL",
+    "KLUSTERLET_RECHECK_TIMEOUT": "KLUSTERLET_RECHECK_TIMEOUT",
+    "KLUSTERLET_RECHECK_INTERVAL": "KLUSTERLET_RECHECK_INTERVAL",
     "CLUSTER_VERIFY_MAX_WORKERS": "KLUSTERLET_DEFAULT_WORKERS",
     # Restore resource names (different naming convention)
     "RESTORE_PASSIVE_SYNC_NAME": "PASSIVE_SYNC_RESTORE_NAME",
@@ -54,7 +56,9 @@ def test_shared_constants_parity():
         elif ans_val is _MISSING:
             mismatches.append(f"Ansible missing: {ans_name}")
         elif py_val != ans_val:
-            mismatches.append(f"{py_name}={py_val!r} (Python) != {ans_name}={ans_val!r} (Ansible)")
+            mismatches.append(
+                f"{py_name}={py_val!r} (Python) != {ans_name}={ans_val!r} (Ansible)"
+            )
 
     assert not mismatches, "Constants drift detected:\n  " + "\n  ".join(mismatches)
 

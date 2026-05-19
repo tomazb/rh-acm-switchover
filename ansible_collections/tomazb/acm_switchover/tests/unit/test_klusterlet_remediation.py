@@ -30,20 +30,31 @@ def test_verify_klusterlet_includes_remediation():
     """verify_klusterlet.yml must include fix_klusterlet.yml for auto-remediation."""
     content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
     assert "fix_klusterlet.yml" in content, "Must include fix_klusterlet.yml"
-    assert "acm_switchover_managed_clusters" in content, "Must guard on managed_clusters"
+    assert (
+        "acm_switchover_managed_clusters" in content
+    ), "Must guard on managed_clusters"
 
 
 def test_verify_klusterlet_probes_connections_even_when_cluster_status_is_green():
     """Green ManagedCluster conditions can be stale, so klusterlet secrets still need probing."""
-    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    tasks = yaml.safe_load(
+        (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
+    )
 
     probe_tasks = [
-        task for task in tasks if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml"
+        task
+        for task in tasks
+        if task.get("ansible.builtin.include_tasks")
+        == "verify_klusterlet_connections.yml"
     ]
-    assert probe_tasks, "verify_klusterlet.yml must include the green-path klusterlet probe"
+    assert (
+        probe_tasks
+    ), "verify_klusterlet.yml must include the green-path klusterlet probe"
     probe_when = _when_text(probe_tasks[0])
     assert "acm_switchover_managed_clusters" in probe_when
-    assert "pending" not in probe_when, "green-path probe must not be gated by pending cluster status"
+    assert (
+        "pending" not in probe_when
+    ), "green-path probe must not be gated by pending cluster status"
 
 
 def test_verify_klusterlet_connection_probe_can_remediate_wrong_hub_secret():
@@ -87,49 +98,94 @@ def test_verify_klusterlet_records_module_remediation_attempts():
 
 def test_verify_klusterlet_reprobes_after_remediation():
     """Wrong-hub remediation must be followed by a second klusterlet probe."""
-    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    tasks = yaml.safe_load(
+        (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
+    )
 
     fix_index = next(
-        index for index, task in enumerate(tasks) if task.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml"
+        index
+        for index, task in enumerate(tasks)
+        if task.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml"
     )
     preprobe_indexes = [
         index
         for index, task in enumerate(tasks)
-        if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml" and index < fix_index
+        if task.get("ansible.builtin.include_tasks")
+        == "verify_klusterlet_connections.yml"
+        and index < fix_index
     ]
     reprobe_indexes = [
         index
         for index, task in enumerate(tasks)
-        if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml" and index > fix_index
+        if task.get("ansible.builtin.include_tasks")
+        == "verify_klusterlet_connections.yml"
+        and index > fix_index
     ]
 
     assert preprobe_indexes, "verify_klusterlet.yml must probe before remediation"
     assert reprobe_indexes, "verify_klusterlet.yml must re-probe after remediation"
 
 
+def test_verify_klusterlet_recheck_uses_convergence_wait_controls():
+    """Post-remediation re-probe must wait for klusterlet-updated hub-kubeconfig-secret convergence."""
+    tasks = yaml.safe_load(
+        (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
+    )
+    fix_index = next(
+        index
+        for index, task in enumerate(tasks)
+        if task.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml"
+    )
+    reprobe_task = next(
+        task
+        for index, task in enumerate(tasks)
+        if task.get("ansible.builtin.include_tasks")
+        == "verify_klusterlet_connections.yml"
+        and index > fix_index
+    )
+    vars_text = str(reprobe_task.get("vars", {}))
+
+    assert "_klusterlet_probe_wait_timeout" in vars_text
+    assert "_klusterlet_probe_wait_interval" in vars_text
+    assert "klusterlet_recheck_seconds" in vars_text
+    assert "klusterlet_recheck_interval_seconds" in vars_text
+
+
 def test_verify_klusterlet_resets_stale_probe_result_before_recheck():
     """Post-remediation re-check must not reuse stale initial probe results if the re-probe is skipped."""
-    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    tasks = yaml.safe_load(
+        (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
+    )
 
     reprobe_index = next(
         index
         for index, task in enumerate(tasks)
-        if task.get("ansible.builtin.include_tasks") == "verify_klusterlet_connections.yml"
+        if task.get("ansible.builtin.include_tasks")
+        == "verify_klusterlet_connections.yml"
         and index
-        > next(i for i, item in enumerate(tasks) if item.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml")
+        > next(
+            i
+            for i, item in enumerate(tasks)
+            if item.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml"
+        )
     )
     reset_tasks = [
         task
         for task in tasks[:reprobe_index]
-        if task.get("ansible.builtin.set_fact", {}).get("_klusterlet_probe_result") == {}
+        if task.get("ansible.builtin.set_fact", {}).get("_klusterlet_probe_result")
+        == {}
     ]
 
-    assert reset_tasks, "verify_klusterlet.yml must clear stale probe results before post-remediation re-check"
+    assert (
+        reset_tasks
+    ), "verify_klusterlet.yml must clear stale probe results before post-remediation re-check"
 
 
 def test_verify_klusterlet_fails_failed_or_persistent_wrong_hub_after_recheck():
     """Failed fixes and persistent wrong-hub probes must become fatal after re-check."""
-    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    tasks = yaml.safe_load(
+        (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
+    )
 
     fail_tasks = [task for task in tasks if "ansible.builtin.fail" in task]
     assert fail_tasks, "verify_klusterlet.yml must fail strict remediation errors"
@@ -139,7 +195,8 @@ def test_verify_klusterlet_fails_failed_or_persistent_wrong_hub_after_recheck():
             task
             for task in fail_tasks
             if "_klusterlet_remediation_result.failed_clusters" in _when_text(task)
-            and "_klusterlet_post_remediation_probe_result | default({})" in _when_text(task)
+            and "_klusterlet_post_remediation_probe_result | default({})"
+            in _when_text(task)
             and "wrong_hub_clusters" in _when_text(task)
         ),
         None,
@@ -163,36 +220,81 @@ def test_post_activation_defaults_include_klusterlet_concurrency_and_strict_mode
     """Defaults must expose worker controls and preserve non-strict behavior."""
     defaults = yaml.safe_load((POST_ACTIVATION_DEFAULTS / "main.yml").read_text())
 
-    assert defaults["acm_switchover_execution"]["concurrency"]["klusterlet_probe_workers"] == 10
-    assert defaults["acm_switchover_execution"]["concurrency"]["klusterlet_remediation_workers"] == 10
-    assert defaults["acm_switchover_execution"]["timeouts"]["klusterlet_request_seconds"] == 30
-    assert defaults["acm_switchover_execution"]["timeouts"]["klusterlet_worker_seconds"] == 180
-    assert defaults["acm_switchover_features"]["klusterlet"]["strict_remediation"] is False
+    assert (
+        defaults["acm_switchover_execution"]["concurrency"]["klusterlet_probe_workers"]
+        == 10
+    )
+    assert (
+        defaults["acm_switchover_execution"]["concurrency"][
+            "klusterlet_remediation_workers"
+        ]
+        == 10
+    )
+    assert (
+        defaults["acm_switchover_execution"]["timeouts"]["klusterlet_request_seconds"]
+        == 30
+    )
+    assert (
+        defaults["acm_switchover_execution"]["timeouts"]["klusterlet_worker_seconds"]
+        == 180
+    )
+    assert (
+        defaults["acm_switchover_execution"]["timeouts"]["klusterlet_recheck_seconds"]
+        == 300
+    )
+    assert (
+        defaults["acm_switchover_execution"]["timeouts"][
+            "klusterlet_recheck_interval_seconds"
+        ]
+        == 10
+    )
+    assert (
+        defaults["acm_switchover_features"]["klusterlet"]["strict_remediation"] is False
+    )
 
 
 def test_verify_klusterlet_connection_probe_omits_missing_secondary_context():
     """Hub import-secret reads must not require an explicit secondary context."""
-    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet_connections.yml").read_text())
-    probe_task = next(task for task in tasks if "tomazb.acm_switchover.acm_klusterlet_probe" in task)
-
-    assert probe_task["tomazb.acm_switchover.acm_klusterlet_probe"]["secondary_hub"]["context"] == (
-        "{{ acm_switchover_hubs.secondary.context | default(omit) }}"
+    tasks = yaml.safe_load(
+        (POST_ACTIVATION_TASKS / "verify_klusterlet_connections.yml").read_text()
     )
+    probe_task = next(
+        task for task in tasks if "tomazb.acm_switchover.acm_klusterlet_probe" in task
+    )
+
+    assert probe_task["tomazb.acm_switchover.acm_klusterlet_probe"]["secondary_hub"][
+        "context"
+    ] == ("{{ acm_switchover_hubs.secondary.context | default(omit) }}")
 
 
 def test_defaults_include_managed_clusters():
     """post_activation defaults must define acm_switchover_managed_clusters."""
     defaults = yaml.safe_load((POST_ACTIVATION_DEFAULTS / "main.yml").read_text())
-    assert "acm_switchover_managed_clusters" in defaults, "Defaults must define acm_switchover_managed_clusters"
-    assert defaults["acm_switchover_managed_clusters"] == {}, "Default must be empty dict"
+    assert (
+        "acm_switchover_managed_clusters" in defaults
+    ), "Defaults must define acm_switchover_managed_clusters"
+    assert (
+        defaults["acm_switchover_managed_clusters"] == {}
+    ), "Default must be empty dict"
 
 
 def test_klusterlet_module_has_required_operations():
     """The remediation module must carry the key remediation operations."""
-    module_path = pathlib.Path(__file__).resolve().parents[2] / "plugins" / "module_utils" / "klusterlet.py"
+    module_path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "plugins"
+        / "module_utils"
+        / "klusterlet.py"
+    )
     content = module_path.read_text()
 
     assert "import.yaml" in content, "Must fetch import secret from hub"
-    assert "BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME" in content, "Must handle bootstrap hub kubeconfig secret"
-    assert "patch_namespaced_deployment" in content, "Must restart klusterlet deployment"
-    assert "MANAGED_CLUSTER_AGENT_NAMESPACE" in content, "Must reference agent namespace"
+    assert (
+        "BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME" in content
+    ), "Must handle bootstrap hub kubeconfig secret"
+    assert (
+        "patch_namespaced_deployment" in content
+    ), "Must restart klusterlet deployment"
+    assert (
+        "MANAGED_CLUSTER_AGENT_NAMESPACE" in content
+    ), "Must reference agent namespace"

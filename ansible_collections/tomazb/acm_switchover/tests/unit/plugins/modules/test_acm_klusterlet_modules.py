@@ -11,6 +11,7 @@ from typing import NoReturn
 import pytest
 import yaml
 
+import ansible_collections.tomazb.acm_switchover.plugins.module_utils.klusterlet as klusterlet_utils
 import ansible_collections.tomazb.acm_switchover.plugins.modules.acm_klusterlet_probe as probe_module
 import ansible_collections.tomazb.acm_switchover.plugins.modules.acm_klusterlet_remediate as remediate_module
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
@@ -39,7 +40,11 @@ class FakeApiError(Exception):
 
 
 class FakeCoreClient:
-    def __init__(self, secrets: dict[tuple[str, str], dict] | None = None, fail_create: bool = False):
+    def __init__(
+        self,
+        secrets: dict[tuple[str, str], dict] | None = None,
+        fail_create: bool = False,
+    ):
         self.secrets = secrets or {}
         self.fail_create = fail_create
         self.deleted: list[tuple[str, str]] = []
@@ -74,7 +79,9 @@ class FakeAppsClient:
         self.patched: list[tuple[str, str, dict]] = []
         self.request_timeouts: list[int | None] = []
 
-    def patch_namespaced_deployment(self, name: str, namespace: str, body: dict, **kwargs):
+    def patch_namespaced_deployment(
+        self, name: str, namespace: str, body: dict, **kwargs
+    ):
         self.request_timeouts.append(kwargs.get("_request_timeout"))
         if self.fail_patch:
             raise FakeApiError(500, "restart failed")
@@ -85,7 +92,9 @@ def _fail_client_factory(kubeconfig: str, context: str | None = None) -> NoRetur
     pytest.fail("check mode must not build clients")
 
 
-def _new_fake_apps_client(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+def _new_fake_apps_client(
+    kubeconfig: str, context: str | None = None
+) -> FakeAppsClient:
     return FakeAppsClient()
 
 
@@ -107,7 +116,9 @@ def _import_secret(server: str) -> dict:
     }
     return {
         "data": {
-            "import.yaml": base64.b64encode(yaml.safe_dump_all([bootstrap]).encode("utf-8")).decode("ascii"),
+            "import.yaml": base64.b64encode(
+                yaml.safe_dump_all([bootstrap]).encode("utf-8")
+            ).decode("ascii"),
         }
     }
 
@@ -124,16 +135,30 @@ def _hub_secret(server: str, name: str = HUB_KUBECONFIG_SECRET_NAME) -> dict:
 def test_probe_reports_verified_wrong_hub_and_skipped_clusters():
     secondary = FakeCoreClient(
         {
-            ("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443"),
-            ("cluster-b", "cluster-b-import"): _import_secret("https://new.example:6443"),
+            ("cluster-a", "cluster-a-import"): _import_secret(
+                "https://new.example:6443"
+            ),
+            ("cluster-b", "cluster-b-import"): _import_secret(
+                "https://new.example:6443"
+            ),
         }
     )
     managed = {
         "cluster-a": FakeCoreClient(
-            {(MANAGED_CLUSTER_AGENT_NAMESPACE, HUB_KUBECONFIG_SECRET_NAME): _hub_secret("https://new.example:6443")}
+            {
+                (
+                    MANAGED_CLUSTER_AGENT_NAMESPACE,
+                    HUB_KUBECONFIG_SECRET_NAME,
+                ): _hub_secret("https://new.example:6443")
+            }
         ),
         "cluster-b": FakeCoreClient(
-            {(MANAGED_CLUSTER_AGENT_NAMESPACE, HUB_KUBECONFIG_SECRET_NAME): _hub_secret("https://old.example:6443")}
+            {
+                (
+                    MANAGED_CLUSTER_AGENT_NAMESPACE,
+                    HUB_KUBECONFIG_SECRET_NAME,
+                ): _hub_secret("https://old.example:6443")
+            }
         ),
     }
     calls = {"hub": 0}
@@ -169,9 +194,15 @@ def test_probe_reports_verified_wrong_hub_and_skipped_clusters():
 
 
 def test_probe_defaults_to_all_managed_clusters_when_candidates_are_omitted():
-    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    secondary = FakeCoreClient(
+        {("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")}
+    )
     managed = FakeCoreClient(
-        {(MANAGED_CLUSTER_AGENT_NAMESPACE, HUB_KUBECONFIG_SECRET_NAME): _hub_secret("https://new.example:6443")}
+        {
+            (MANAGED_CLUSTER_AGENT_NAMESPACE, HUB_KUBECONFIG_SECRET_NAME): _hub_secret(
+                "https://new.example:6443"
+            )
+        }
     )
 
     def core_client_factory(kubeconfig: str, context: str | None = None):
@@ -185,6 +216,48 @@ def test_probe_defaults_to_all_managed_clusters_when_candidates_are_omitted():
     )
 
     assert result["verified_clusters"] == ["cluster-a"]
+
+
+def test_probe_waits_until_wrong_hub_secret_converges(monkeypatch):
+    """Post-remediation probe polling must tolerate stale hub-kubeconfig-secret reads."""
+    secondary = FakeCoreClient(
+        {("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")}
+    )
+    attempts = {"count": 0}
+
+    class ConvergingManagedClient(FakeCoreClient):
+        def read_namespaced_secret(self, name: str, namespace: str, **kwargs):
+            self.request_timeouts.append(kwargs.get("_request_timeout"))
+            if name != HUB_KUBECONFIG_SECRET_NAME:
+                raise FakeApiError(404, "Not Found")
+            attempts["count"] += 1
+            if attempts["count"] < 2:
+                return _hub_secret("https://old.example:6443")
+            return _hub_secret("https://new.example:6443")
+
+    def core_client_factory(kubeconfig: str, context: str | None = None):
+        if kubeconfig == "secondary":
+            return secondary
+        return ConvergingManagedClient()
+
+    if hasattr(klusterlet_utils, "time"):
+        monkeypatch.setattr(klusterlet_utils.time, "sleep", lambda _seconds: None)
+
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "secondary"},
+        managed_clusters={"cluster-a": {"kubeconfig": "managed"}},
+        candidate_clusters=["cluster-a"],
+        workers=1,
+        request_timeout=30,
+        future_timeout=30,
+        wait_timeout=3,
+        wait_interval=1,
+        core_client_factory=core_client_factory,
+    )
+
+    assert result["verified_clusters"] == ["cluster-a"]
+    assert result["wrong_hub_clusters"] == []
+    assert attempts["count"] == 2
 
 
 def test_client_builders_require_explicit_kubeconfig(monkeypatch):
@@ -246,7 +319,9 @@ def test_remediation_skips_pending_cluster_without_kubeconfig():
 def test_remediation_reports_missing_import_secret_as_best_effort_failure():
     secondary = FakeCoreClient()
 
-    def core_client_factory(kubeconfig: str, context: str | None = None) -> FakeCoreClient:
+    def core_client_factory(
+        kubeconfig: str, context: str | None = None
+    ) -> FakeCoreClient:
         return secondary
 
     result = remediate_klusterlets(
@@ -267,10 +342,15 @@ def test_remediation_reports_missing_import_secret_as_best_effort_failure():
 
 
 def test_remediation_deletes_reapplies_and_restarts_klusterlet_in_default_namespace():
-    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    secondary = FakeCoreClient(
+        {("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")}
+    )
     managed = FakeCoreClient(
         {
-            (MANAGED_CLUSTER_AGENT_NAMESPACE, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): _hub_secret(
+            (
+                MANAGED_CLUSTER_AGENT_NAMESPACE,
+                BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+            ): _hub_secret(
                 "https://old.example:6443",
                 name=BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
             )
@@ -281,7 +361,9 @@ def test_remediation_deletes_reapplies_and_restarts_klusterlet_in_default_namesp
     def core_client_factory(kubeconfig: str, context: str | None = None):
         return secondary if kubeconfig == "hub" else managed
 
-    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+    def apps_client_factory(
+        kubeconfig: str, context: str | None = None
+    ) -> FakeAppsClient:
         return apps
 
     result = remediate_klusterlets(
@@ -296,8 +378,14 @@ def test_remediation_deletes_reapplies_and_restarts_klusterlet_in_default_namesp
     assert result["changed"] is True
     assert result["failed_clusters"] == []
     assert result["results"][0]["status"] == "remediated"
-    assert (MANAGED_CLUSTER_AGENT_NAMESPACE, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME) in managed.deleted
-    assert managed.created[0][0:2] == (MANAGED_CLUSTER_AGENT_NAMESPACE, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME)
+    assert (
+        MANAGED_CLUSTER_AGENT_NAMESPACE,
+        BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+    ) in managed.deleted
+    assert managed.created[0][0:2] == (
+        MANAGED_CLUSTER_AGENT_NAMESPACE,
+        BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+    )
     assert apps.patched[0][0:2] == (MANAGED_CLUSTER_AGENT_NAMESPACE, "klusterlet")
 
 
@@ -307,17 +395,25 @@ def test_remediation_deletes_bootstrap_secret_from_manifest_namespace():
     import_yaml = base64.b64decode(import_secret["data"]["import.yaml"]).decode("utf-8")
     docs = list(yaml.safe_load_all(import_yaml))
     docs[0]["metadata"]["namespace"] = custom_namespace
-    import_secret["data"]["import.yaml"] = base64.b64encode(yaml.safe_dump_all(docs).encode("utf-8")).decode("ascii")
+    import_secret["data"]["import.yaml"] = base64.b64encode(
+        yaml.safe_dump_all(docs).encode("utf-8")
+    ).decode("ascii")
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): import_secret})
     managed = FakeCoreClient(
-        {(custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): _hub_secret("https://old.example:6443")}
+        {
+            (custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): _hub_secret(
+                "https://old.example:6443"
+            )
+        }
     )
     apps = FakeAppsClient()
 
     def core_client_factory(kubeconfig: str, context: str | None = None):
         return secondary if kubeconfig == "hub" else managed
 
-    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+    def apps_client_factory(
+        kubeconfig: str, context: str | None = None
+    ) -> FakeAppsClient:
         return apps
 
     result = remediate_klusterlets(
@@ -331,15 +427,23 @@ def test_remediation_deletes_bootstrap_secret_from_manifest_namespace():
 
     assert result["failed_clusters"] == []
     assert (custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME) in managed.deleted
-    assert managed.created[0][0:2] == (custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME)
+    assert managed.created[0][0:2] == (
+        custom_namespace,
+        BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+    )
     assert apps.patched[0][0:2] == (custom_namespace, "klusterlet")
 
 
 def test_remediation_reports_restart_failure():
-    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    secondary = FakeCoreClient(
+        {("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")}
+    )
     managed = FakeCoreClient(
         {
-            (MANAGED_CLUSTER_AGENT_NAMESPACE, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): _hub_secret(
+            (
+                MANAGED_CLUSTER_AGENT_NAMESPACE,
+                BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+            ): _hub_secret(
                 "https://old.example:6443",
                 name=BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
             )
@@ -350,7 +454,9 @@ def test_remediation_reports_restart_failure():
     def core_client_factory(kubeconfig: str, context: str | None = None):
         return secondary if kubeconfig == "hub" else managed
 
-    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+    def apps_client_factory(
+        kubeconfig: str, context: str | None = None
+    ) -> FakeAppsClient:
         return apps
 
     result = remediate_klusterlets(
@@ -373,8 +479,12 @@ def test_remediation_reports_restart_failure():
 def test_remediation_preserves_best_effort_partial_failure():
     secondary = FakeCoreClient(
         {
-            ("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443"),
-            ("cluster-b", "cluster-b-import"): _import_secret("https://new.example:6443"),
+            ("cluster-a", "cluster-a-import"): _import_secret(
+                "https://new.example:6443"
+            ),
+            ("cluster-b", "cluster-b-import"): _import_secret(
+                "https://new.example:6443"
+            ),
         }
     )
     managed_clients = {
@@ -390,7 +500,9 @@ def test_remediation_preserves_best_effort_partial_failure():
             return secondary
         return managed_clients[kubeconfig]
 
-    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+    def apps_client_factory(
+        kubeconfig: str, context: str | None = None
+    ) -> FakeAppsClient:
         return apps
 
     result = remediate_klusterlets(
@@ -417,9 +529,13 @@ def test_remediation_preserves_best_effort_partial_failure():
 
 
 def test_remediation_strict_mode_fails_partial_failure():
-    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    secondary = FakeCoreClient(
+        {("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")}
+    )
 
-    def core_client_factory(kubeconfig: str, context: str | None = None) -> FakeCoreClient:
+    def core_client_factory(
+        kubeconfig: str, context: str | None = None
+    ) -> FakeCoreClient:
         return secondary if kubeconfig == "hub" else FakeCoreClient(fail_create=True)
 
     result = remediate_klusterlets(
@@ -438,8 +554,12 @@ def test_remediation_strict_mode_fails_partial_failure():
 def test_remediation_uses_bounded_worker_threads():
     secondary = FakeCoreClient(
         {
-            ("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443"),
-            ("cluster-b", "cluster-b-import"): _import_secret("https://new.example:6443"),
+            ("cluster-a", "cluster-a-import"): _import_secret(
+                "https://new.example:6443"
+            ),
+            ("cluster-b", "cluster-b-import"): _import_secret(
+                "https://new.example:6443"
+            ),
         }
     )
     managed_threads: set[int] = set()
@@ -468,7 +588,9 @@ def test_remediation_uses_bounded_worker_threads():
 
 
 def test_probe_passes_bounded_request_timeout_to_secret_reads():
-    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    secondary = FakeCoreClient(
+        {("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")}
+    )
     managed = FakeCoreClient(
         {
             (
@@ -478,7 +600,9 @@ def test_probe_passes_bounded_request_timeout_to_secret_reads():
         }
     )
 
-    def core_client_factory(kubeconfig: str, context: str | None = None) -> FakeCoreClient:
+    def core_client_factory(
+        kubeconfig: str, context: str | None = None
+    ) -> FakeCoreClient:
         return secondary if kubeconfig == "hub" else managed
 
     result = probe_klusterlet_connections(
@@ -505,10 +629,16 @@ def test_worker_future_timeout_surfaces_as_failed_result():
         workers=2,
         fn=slow_worker,
         future_timeout=0.001,
-        timeout_result=lambda cluster: {"cluster": cluster, "status": "failed", "reason": "worker_timeout"},
+        timeout_result=lambda cluster: {
+            "cluster": cluster,
+            "status": "failed",
+            "reason": "worker_timeout",
+        },
     )
 
-    assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
+    assert results == [
+        {"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}
+    ]
 
 
 def test_single_worker_future_timeout_surfaces_as_failed_result():
@@ -522,11 +652,17 @@ def test_single_worker_future_timeout_surfaces_as_failed_result():
         workers=1,
         fn=slow_worker,
         future_timeout=0.001,
-        timeout_result=lambda cluster: {"cluster": cluster, "status": "failed", "reason": "worker_timeout"},
+        timeout_result=lambda cluster: {
+            "cluster": cluster,
+            "status": "failed",
+            "reason": "worker_timeout",
+        },
     )
 
     assert time.monotonic() - started_at < 0.04
-    assert results == [{"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}]
+    assert results == [
+        {"cluster": "cluster-a", "status": "failed", "reason": "worker_timeout"}
+    ]
 
 
 def test_worker_future_timeout_uses_one_batch_deadline():
@@ -540,7 +676,11 @@ def test_worker_future_timeout_uses_one_batch_deadline():
         workers=3,
         fn=slow_worker,
         future_timeout=0.01,
-        timeout_result=lambda cluster: {"cluster": cluster, "status": "failed", "reason": "worker_timeout"},
+        timeout_result=lambda cluster: {
+            "cluster": cluster,
+            "status": "failed",
+            "reason": "worker_timeout",
+        },
     )
 
     assert time.monotonic() - started_at < 0.04

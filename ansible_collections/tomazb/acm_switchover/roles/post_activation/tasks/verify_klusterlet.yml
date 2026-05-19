@@ -35,6 +35,9 @@
 
 - name: Re-probe klusterlet hub connections after remediation
   ansible.builtin.include_tasks: verify_klusterlet_connections.yml
+  vars:
+    _klusterlet_probe_wait_timeout: "{{ acm_switchover_execution.timeouts.klusterlet_recheck_seconds | default(300) | int }}"
+    _klusterlet_probe_wait_interval: "{{ acm_switchover_execution.timeouts.klusterlet_recheck_interval_seconds | default(10) | int }}"
   when:
     - _klusterlet_remediation_result is defined
     - (acm_switchover_managed_clusters | default({}) | length) > 0

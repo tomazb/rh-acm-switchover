@@ -34,6 +34,12 @@ options:
     description: Maximum worker future wait window for the probe batch in seconds.
     type: int
     default: 180
+  wait_timeout:
+    description: Optional total wait window for post-remediation wrong-hub convergence.
+    type: int
+  wait_interval:
+    description: Poll interval for optional post-remediation wrong-hub convergence.
+    type: int
 """
 
 EXAMPLES = r"""
@@ -52,10 +58,13 @@ from ansible.module_utils.basic import AnsibleModule
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
     KLUSTERLET_DEFAULT_WORKERS,
+    KLUSTERLET_RECHECK_INTERVAL,
     KLUSTERLET_REQUEST_TIMEOUT,
     KLUSTERLET_WORKER_TIMEOUT,
 )
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.klusterlet import probe_klusterlet_connections
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.klusterlet import (
+    probe_klusterlet_connections,
+)
 
 __all__ = ["probe_klusterlet_connections"]
 
@@ -65,10 +74,16 @@ def main() -> None:
         argument_spec={
             "secondary_hub": {"type": "dict", "required": True},
             "managed_clusters": {"type": "dict", "default": {}},
-            "candidate_clusters": {"type": "list", "elements": "str", "required": False},
+            "candidate_clusters": {
+                "type": "list",
+                "elements": "str",
+                "required": False,
+            },
             "workers": {"type": "int", "default": KLUSTERLET_DEFAULT_WORKERS},
             "request_timeout": {"type": "int", "default": KLUSTERLET_REQUEST_TIMEOUT},
             "future_timeout": {"type": "int", "default": KLUSTERLET_WORKER_TIMEOUT},
+            "wait_timeout": {"type": "int", "required": False},
+            "wait_interval": {"type": "int", "default": KLUSTERLET_RECHECK_INTERVAL},
         },
         supports_check_mode=True,
     )
@@ -78,8 +93,16 @@ def main() -> None:
             managed_clusters=module.params["managed_clusters"],
             candidate_clusters=module.params.get("candidate_clusters"),
             workers=module.params["workers"],
-            request_timeout=module.params.get("request_timeout", KLUSTERLET_REQUEST_TIMEOUT),
-            future_timeout=module.params.get("future_timeout", KLUSTERLET_WORKER_TIMEOUT),
+            request_timeout=module.params.get(
+                "request_timeout", KLUSTERLET_REQUEST_TIMEOUT
+            ),
+            future_timeout=module.params.get(
+                "future_timeout", KLUSTERLET_WORKER_TIMEOUT
+            ),
+            wait_timeout=module.params.get("wait_timeout"),
+            wait_interval=module.params.get(
+                "wait_interval", KLUSTERLET_RECHECK_INTERVAL
+            ),
         )
     except Exception as exc:
         module.fail_json(msg=str(exc))
