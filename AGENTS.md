@@ -382,6 +382,40 @@ For parity-sensitive changes, do not verify only one form factor.
     - `--setup` requires `--admin-kubeconfig` and validates `--token-duration` format (e.g., `48h`, `30m`, `3600s`).
     - `--restore-only` requires `--secondary-context`, forbids `--primary-context`, `--method passive`, `--old-hub-action`, and `--decommission`. Implies `--method full`.
 
+## Code Review Guidelines
+
+Prioritize correctness and operational safety over style comments.
+
+Treat an issue as high priority when the diff introduces or preserves a credible risk of one of the following:
+
+- Mutating the wrong cluster, hub, namespace, Kubernetes context, or managed resource.
+- Running a destructive operation without explicit confirmation, safe dry-run behavior, or meaningful check-mode handling.
+- Reporting `changed=true` from an Ansible module when no mutation occurred.
+- Missing, misleading, or unsafe `check_mode` behavior.
+- Granting broad RBAC permissions that are not justified by the operation.
+- Checkpoint/resume logic that can skip unsafe phases, resume from an invalid state, or hide a partially failed switchover.
+- Argo CD auto-sync pause/resume logic that can affect the wrong Application, generated child Application, or ApplicationSet-managed resource.
+- Logging, exposing, or writing kubeconfigs, tokens, secrets, or credentials with unsafe permissions.
+- Timeout, polling, or wait logic that can hang indefinitely or silently ignore failure.
+- Behavior divergence from the existing Python CLI where parity is claimed.
+- Missing negative tests for safety-critical behavior touched by the diff.
+
+For Ansible code, specifically check:
+
+- `argument_spec` correctness.
+- Idempotence.
+- Accurate `changed_when` and `failed_when`.
+- Meaningful failure messages.
+- Bounded retries and waits.
+- Safe defaults.
+- FQCN usage where appropriate.
+- Stable module return values.
+- Useful output for Ansible Automation Platform job logs.
+
+For tests, prefer findings about missing safety coverage over superficial coverage comments. Important missing tests include wrong-context behavior, check-mode behavior, idempotence, RBAC denial, checkpoint/resume failure, stale Argo CD status, timeout failure, and destructive-operation confirmation.
+
+Do not spend review budget on cosmetic formatting unless it affects behavior, operator comprehension, generated documentation, or maintainability of a safety-critical path.
+
 ## Code Review Checklist for Future Refactoring
 
 When doing similar refactoring work:
