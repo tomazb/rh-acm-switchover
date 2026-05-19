@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed collection passive activation waiting so a stale pre-activation Velero managed-clusters restore signal remains a retryable pending state instead of failing before the ACM controller publishes the new restore name.
 - Fixed post-remediation klusterlet rechecks so Python and collection workflows wait for hub kubeconfig secret convergence before failing persistent wrong-hub results.
 - Replaced one-shot Thanos compactor scale-down checks with bounded polling, re-raised post-activation programming errors, and avoided global kubeconfig fallback/config mutation in Python client setup.
+- Fixed collection parity gaps for activation resume, passive Restore fallback, primary prep Observability gating, RBAC observability permission skipping, and validate-mode checkpoint preflight execution.
 
 ### Removed
 

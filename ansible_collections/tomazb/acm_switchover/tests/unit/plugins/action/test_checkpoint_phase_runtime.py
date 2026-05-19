@@ -1029,6 +1029,42 @@ def test_action_module_validate_mode_does_not_mutate_checkpoint_file(tmp_path):
     assert json.loads(checkpoint_file.read_text()) == original
 
 
+def test_action_module_validate_mode_does_not_skip_completed_phase_on_enter(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    original = {
+        "schema_version": "2.0",
+        "phase": "preflight",
+        "completed_phases": ["preflight"],
+        "operation_identity": build_operation_identity(
+            hubs=_task_vars_with_operation_identity()["acm_switchover_hubs"],
+            operation=_task_vars_with_operation_identity()["acm_switchover_operation"],
+        ),
+        "operational_data": {},
+        "errors": [],
+        "report_refs": [],
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    checkpoint_file.write_text(json.dumps(original))
+    action = _make_checkpoint_action(
+        {
+            "phase": "preflight",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "enter",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_with_operation_identity(mode="validate"))
+
+    assert result["changed"] is False
+    assert result["skipped_phase"] is False
+    assert result["checkpoint"]["completed_phases"] == ["preflight"]
+    assert json.loads(checkpoint_file.read_text()) == original
+
+
 def test_action_module_rejects_identity_mismatch_without_explicit_reset(tmp_path):
     checkpoint_file = tmp_path / "checkpoint.json"
     checkpoint_file.write_text(

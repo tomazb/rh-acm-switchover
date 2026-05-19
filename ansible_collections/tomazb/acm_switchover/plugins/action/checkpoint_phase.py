@@ -169,7 +169,7 @@ class ActionModule(ActionBase):
                 save_result = self._save_checkpoint(path, checkpoint_data)
                 if save_result is not None and save_result.get("failed"):
                     return save_result
-            already_done = not should_resume_phase(checkpoint_data, phase)
+            already_done = False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
             return {
                 "changed": False,
                 "checkpoint": checkpoint_data,

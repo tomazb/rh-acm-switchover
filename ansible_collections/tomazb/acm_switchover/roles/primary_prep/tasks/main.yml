@@ -55,7 +55,7 @@
 
     - name: Scale observability components when enabled
       ansible.builtin.include_tasks: scale_observability.yml
-      when: not (acm_switchover_features.skip_observability_checks | default(false))
+      when: acm_switchover_primary_has_observability | default(false) | bool
 
     - name: Publish primary_prep result contract
       ansible.builtin.set_fact:

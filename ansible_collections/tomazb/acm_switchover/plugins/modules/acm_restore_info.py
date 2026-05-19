@@ -43,9 +43,9 @@ options:
   allow_conventional_name_fallback:
     description:
       - Allow selecting C(restore-acm-passive-sync) when C(syncRestoreWithNewBackups) is omitted.
-      - This is a compatibility fallback for older Restore objects and defaults to fail-closed.
+      - This is a compatibility fallback for older Restore objects and is enabled by default.
     type: bool
-    default: false
+    default: true
 """
 
 EXAMPLES = r"""
@@ -93,7 +93,7 @@ def restore_messages_are_benign_already_available(messages: object) -> bool:
 
 def select_passive_sync_restore(
     restores: list[dict],
-    allow_conventional_name_fallback: bool = False,
+    allow_conventional_name_fallback: bool = True,
 ) -> tuple[dict | None, dict[str, object]]:
     """Select the best passive sync restore and return diagnostics.
 
@@ -267,7 +267,7 @@ def build_restore_activation_plan(
     activation_method: str,
     restores: list[dict],
     backup_name: str | None,
-    allow_conventional_name_fallback: bool = False,
+    allow_conventional_name_fallback: bool = True,
 ) -> dict:
     backup_name = backup_name or VELERO_BACKUP_LATEST
     passive_restore, diagnostics = select_passive_sync_restore(
@@ -313,6 +313,14 @@ def build_restore_activation_plan(
                         "action": "create",
                         "create_restore": create_restore,
                     }
+            elif passive_restore is not None:
+                operation = {
+                    "action": "delete",
+                    "delete_restore": {
+                        "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
+                        "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
+                    },
+                }
         else:
             if passive_restore is not None:
                 current_backup = passive_restore.get("spec", {}).get("veleroManagedClustersBackupName")
@@ -367,6 +375,14 @@ def build_restore_activation_plan(
                     "action": "create",
                     "create_restore": create_restore,
                 }
+        elif passive_restore is not None:
+            operation = {
+                "action": "delete",
+                "delete_restore": {
+                    "name": passive_restore.get("metadata", {}).get("name", PASSIVE_SYNC_RESTORE_NAME),
+                    "namespace": passive_restore.get("metadata", {}).get("namespace", BACKUP_NAMESPACE),
+                },
+            }
 
     return {
         "changed": operation["action"] != "none",
@@ -402,7 +418,7 @@ def main() -> None:
                 "required": False,
                 "default": VELERO_BACKUP_LATEST,
             },
-            "allow_conventional_name_fallback": {"type": "bool", "default": False},
+            "allow_conventional_name_fallback": {"type": "bool", "default": True},
         },
         supports_check_mode=True,
     )

@@ -5,6 +5,17 @@
       changed: false
       scaled: false
 
+- name: Fail when Observability was detected but thanos-compactor is missing
+  ansible.builtin.fail:
+    msg: >-
+      Thanos compactor StatefulSet was not found in
+      open-cluster-management-observability after Observability was detected.
+      Set acm_switchover_features.skip_observability_checks=true only when
+      Observability will be handled separately.
+  when:
+    - (acm_primary_compactor_info.resources | default([]) | length) == 0
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
 - name: Scale thanos-compactor when a fixture or discovery result provides it
   kubernetes.core.k8s_scale:
     api_version: apps/v1

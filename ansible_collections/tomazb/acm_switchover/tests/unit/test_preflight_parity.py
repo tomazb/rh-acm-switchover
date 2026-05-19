@@ -55,6 +55,16 @@ def test_preflight_persists_observability_detection_for_later_phases():
     assert "secondary_has_observability" in text
 
 
+def test_preflight_rbac_skips_observability_permissions_when_observability_absent():
+    """Collection RBAC checks must mirror Python's automatic Observability absence handling."""
+    text = (PREFLIGHT_TASKS / "validate_rbac.yml").read_text()
+
+    assert "_rbac_skip_observability" in text
+    assert "not (acm_switchover_primary_has_observability | default(false) | bool)" in text
+    assert "not (acm_switchover_secondary_has_observability | default(false) | bool)" in text
+    assert 'skip_observability: "{{ _rbac_skip_observability }}"' in text
+
+
 def test_preflight_skip_requires_observability_checkpoint_data():
     """Skipped preflight checkpoints must not lose post-activation Observability gating inputs."""
     text = (PREFLIGHT_TASKS / "main.yml").read_text()

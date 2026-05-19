@@ -12,6 +12,14 @@ def _load_yaml(name: str) -> list[dict]:
     return yaml.safe_load((PRIMARY_PREP_TASKS / name).read_text())
 
 
+def _walk_tasks(tasks: list[dict]):
+    for task in tasks:
+        yield task
+        for key in ("block", "rescue", "always"):
+            if key in task:
+                yield from _walk_tasks(task[key])
+
+
 def test_primary_prep_manage_auto_import_patches_managed_clusters():
     """primary_prep must add disable-auto-import annotations before activation."""
     tasks = _load_yaml("manage_auto_import.yml")
@@ -33,6 +41,28 @@ def test_primary_prep_uses_python_thanos_compactor_selector():
 
     assert "app.kubernetes.io/name=thanos-compact" in text
     assert "app.kubernetes.io/name=thanos-compactor" not in text
+
+
+def test_primary_prep_scales_observability_only_when_primary_observability_was_detected():
+    tasks = list(_walk_tasks(_load_yaml("main.yml")))
+    scale_tasks = [task for task in tasks if task.get("ansible.builtin.include_tasks") == "scale_observability.yml"]
+
+    assert scale_tasks, "primary_prep must include scale_observability.yml"
+    assert "acm_switchover_primary_has_observability" in str(scale_tasks[0].get("when", ""))
+
+
+def test_scale_observability_fails_when_detected_but_compactor_is_missing():
+    tasks = _load_yaml("scale_observability.yml")
+    fail_tasks = [
+        task
+        for task in tasks
+        if "Thanos compactor StatefulSet was not found" in str(task.get("ansible.builtin.fail", {}))
+    ]
+
+    assert fail_tasks, "detected Observability with no Thanos compactor must fail primary_prep"
+    fail_when = str(fail_tasks[0].get("when", ""))
+    assert "(acm_primary_compactor_info.resources | default([]) | length) == 0" in fail_when
+    assert "acm_switchover_execution.mode" in fail_when
 
 
 def test_scale_observability_blocks_when_thanos_pods_remain():

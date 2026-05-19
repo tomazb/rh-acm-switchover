@@ -93,12 +93,23 @@
       }}
   when: not (acm_switchover_operation.restore_only | default(false))
 
+- name: Determine Observability RBAC skip state
+  ansible.builtin.set_fact:
+    _rbac_skip_observability: >-
+      {{
+        (acm_switchover_features.skip_observability_checks | default(false) | bool)
+        or (
+          not (acm_switchover_primary_has_observability | default(false) | bool)
+          and not (acm_switchover_secondary_has_observability | default(false) | bool)
+        )
+      }}
+
 - name: Expand required RBAC permissions for primary hub
   tomazb.acm_switchover.acm_rbac_validate:
     hub: primary
     include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
     include_old_hub_finalization: "{{ _rbac_include_old_hub_finalization_primary }}"
-    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    skip_observability: "{{ _rbac_skip_observability }}"
     argocd_mode: "{{ _rbac_requested_argocd_mode }}"
     argocd_install_type: "{{ _rbac_argocd_install_type_primary | default('unknown') }}"
   register: _rbac_expanded_primary
@@ -122,7 +133,7 @@
     hub: primary
     include_decommission: "{{ acm_switchover_operation.old_hub_action | default('secondary') == 'decommission' }}"
     include_old_hub_finalization: "{{ _rbac_include_old_hub_finalization_primary }}"
-    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    skip_observability: "{{ _rbac_skip_observability }}"
     argocd_mode: "{{ _rbac_requested_argocd_mode }}"
     argocd_install_type: "{{ _rbac_argocd_install_type_primary | default('unknown') }}"
     denied_permissions: "{{ _rbac_denied_permissions_primary | default([]) }}"
@@ -192,7 +203,7 @@
   tomazb.acm_switchover.acm_rbac_validate:
     hub: secondary
     include_decommission: false  # secondary hub never runs decommission
-    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    skip_observability: "{{ _rbac_skip_observability }}"
     argocd_mode: "{{ _rbac_requested_argocd_mode }}"
     argocd_install_type: "{{ _rbac_argocd_install_type_secondary | default('unknown') }}"
   register: _rbac_expanded_secondary
@@ -212,7 +223,7 @@
   tomazb.acm_switchover.acm_rbac_validate:
     hub: secondary
     include_decommission: false
-    skip_observability: "{{ acm_switchover_features.skip_observability_checks | default(false) }}"
+    skip_observability: "{{ _rbac_skip_observability }}"
     argocd_mode: "{{ _rbac_requested_argocd_mode }}"
     argocd_install_type: "{{ _rbac_argocd_install_type_secondary | default('unknown') }}"
     denied_permissions: "{{ _rbac_denied_permissions_secondary | default([]) }}"

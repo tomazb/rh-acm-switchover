@@ -60,7 +60,7 @@ def test_select_passive_sync_restore_no_sync_enabled():
     assert diagnostics["reason"] == "no_sync_restore"
 
 
-def test_select_passive_sync_restore_rejects_conventional_name_by_default():
+def test_select_passive_sync_restore_falls_back_to_conventional_name_by_default():
     restore, diagnostics = select_passive_sync_restore(
         [
             {
@@ -72,13 +72,13 @@ def test_select_passive_sync_restore_rejects_conventional_name_by_default():
             }
         ]
     )
-    assert restore is None
+    assert restore["metadata"]["name"] == "restore-acm-passive-sync"
     assert diagnostics["restore_count"] == 1
     assert diagnostics["sync_enabled_count"] == 0
-    assert diagnostics["reason"] == "no_sync_restore"
+    assert diagnostics["reason"] == PASSIVE_RESTORE_CONVENTIONAL_NAME_FALLBACK_REASON
 
 
-def test_select_passive_sync_restore_falls_back_to_conventional_name_only_when_explicitly_allowed():
+def test_select_passive_sync_restore_rejects_conventional_name_when_explicitly_disabled():
     restore, diagnostics = select_passive_sync_restore(
         [
             {
@@ -89,12 +89,12 @@ def test_select_passive_sync_restore_falls_back_to_conventional_name_only_when_e
                 "spec": {},
             }
         ],
-        allow_conventional_name_fallback=True,
+        allow_conventional_name_fallback=False,
     )
-    assert restore["metadata"]["name"] == "restore-acm-passive-sync"
+    assert restore is None
     assert diagnostics["restore_count"] == 1
     assert diagnostics["sync_enabled_count"] == 0
-    assert diagnostics["reason"] == PASSIVE_RESTORE_CONVENTIONAL_NAME_FALLBACK_REASON
+    assert diagnostics["reason"] == "no_sync_restore"
 
 
 def test_select_passive_sync_restore_rejects_explicit_sync_false_conventional_name():
@@ -161,7 +161,10 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
                     "resourceVersion": "42",
                 },
                 "spec": {"syncRestoreWithNewBackups": True},
-                "status": {"phase": "Enabled", "veleroManagedClustersRestoreName": "velero-mc-old"},
+                "status": {
+                    "phase": "Enabled",
+                    "veleroManagedClustersRestoreName": "velero-mc-old",
+                },
             }
         ],
         backup_name="latest",
@@ -307,7 +310,10 @@ def test_passive_restore_ready_rejects_non_string_finished_with_errors_messages(
     restore = {
         "status": {
             "phase": "FinishedWithErrors",
-            "messages": ["ManagedCluster cluster-a already available", {"message": "already available"}],
+            "messages": [
+                "ManagedCluster cluster-a already available",
+                {"message": "already available"},
+            ],
         }
     }
 
@@ -387,6 +393,42 @@ def test_build_restore_activation_plan_passive_restore_activation():
     assert plan["wait_target"]["velero_success_phases"] == ["Completed"]
 
 
+def test_build_restore_activation_plan_passive_restore_activation_cleans_stale_passive_on_resume():
+    """Resume must still remove passive sync restore after activation Restore was created."""
+    plan = build_restore_activation_plan(
+        method="passive",
+        activation_method="restore",
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                    "labels": {"managed-by": "test"},
+                },
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {"phase": "Enabled"},
+            },
+            {
+                "metadata": {
+                    "name": "restore-acm-activate",
+                    "namespace": "open-cluster-management-backup",
+                },
+                "spec": {"veleroManagedClustersBackupName": "latest"},
+                "status": {
+                    "phase": "Finished",
+                    "veleroManagedClustersRestoreName": "velero-managed-clusters",
+                },
+            },
+        ],
+        backup_name="latest",
+    )
+
+    assert plan["operation"]["action"] == "delete"
+    assert plan["operation"]["delete_restore"]["name"] == "restore-acm-passive-sync"
+    assert "create_restore" not in plan["operation"]
+    assert plan["wait_target"]["name"] == "restore-acm-activate"
+
+
 def test_build_restore_activation_plan_for_full_restore_mode():
     plan = build_restore_activation_plan(
         method="full",
@@ -447,3 +489,42 @@ def test_build_restore_activation_plan_for_full_restore_preserves_passive_restor
     assert plan["operation"]["create_restore"]["metadata"]["name"] == "restore-acm-full"
     assert plan["operation"]["rollback_restore"]["metadata"]["name"] == "restore-acm-passive-sync"
     assert plan["operation"]["rollback_restore"]["metadata"]["labels"] == {"managed-by": "test"}
+
+
+def test_build_restore_activation_plan_for_full_restore_cleans_stale_passive_on_resume():
+    """Resume must still remove passive sync restore after full Restore was created."""
+    plan = build_restore_activation_plan(
+        method="full",
+        activation_method="patch",
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                    "labels": {"managed-by": "test"},
+                },
+                "spec": {
+                    "syncRestoreWithNewBackups": True,
+                    "veleroManagedClustersBackupName": "latest",
+                },
+                "status": {"phase": "Enabled"},
+            },
+            {
+                "metadata": {
+                    "name": "restore-acm-full",
+                    "namespace": "open-cluster-management-backup",
+                },
+                "spec": {"veleroManagedClustersBackupName": "latest"},
+                "status": {
+                    "phase": "Finished",
+                    "veleroManagedClustersRestoreName": "velero-managed-clusters",
+                },
+            },
+        ],
+        backup_name="latest",
+    )
+
+    assert plan["operation"]["action"] == "delete"
+    assert plan["operation"]["delete_restore"]["name"] == "restore-acm-passive-sync"
+    assert "create_restore" not in plan["operation"]
+    assert plan["wait_target"]["name"] == "restore-acm-full"
