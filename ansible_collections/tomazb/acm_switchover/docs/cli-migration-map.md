@@ -37,9 +37,11 @@
 
 `--min-managed-clusters` semantics match the Python CLI: leave
 `acm_switchover_operation.min_managed_clusters` unset or null to derive the
-expected non-local ManagedCluster names/count from preflight, set it to `0` to
-allow an empty restore target, or set a positive value to enforce that explicit
-minimum count.
+expected non-local ManagedCluster names/count from preflight. In restore-only,
+the omitted value requires at least one restored non-local ManagedCluster unless
+`acm_switchover_operation.allow_zero_managed_clusters=true` is set. Set
+`min_managed_clusters` to `0` only with that explicit empty-target opt-in, or set
+a positive value to enforce that explicit minimum count.
 
 ## Phase 5 Capability Status
 

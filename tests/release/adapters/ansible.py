@@ -95,7 +95,7 @@ class AnsibleAdapter:
                 "method": "full" if scenario_id == "ansible-restore-only" else "passive",
                 "old_hub_action": "secondary",
                 "activation_method": "patch",
-                "min_managed_clusters": 0,
+                "min_managed_clusters": None,
                 "dry_run": False,
             },
             "acm_switchover_execution": {

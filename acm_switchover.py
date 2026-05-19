@@ -1138,6 +1138,9 @@ def _resolve_managed_cluster_expectation(
     expected_count = int(state.get_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, len(expected_names)) or 0)
 
     if raw_min is None:
+        expectation_mode = state.get_config(MANAGED_CLUSTER_EXPECTATION_KEY, None)
+        if expectation_mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
+            return 1, [], False
         return expected_count, expected_names, bool(expected_names)
     if raw_min == 0:
         return 0, [], False

@@ -73,16 +73,14 @@ def test_activation_wait_rejects_stale_velero_restore_signal():
     """Activation wait must require a new managed-clusters Velero restore name when one existed before activation."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "wait_for_restore.yml").read_text())
     wait_task = next(t for t in tasks if t.get("name") == "Wait for managed-clusters Velero restore to be created")
-    stale_assert = next(
-        t for t in tasks if t.get("name") == "Fail when managed-clusters Velero restore signal is stale"
-    )
+    stale_asserts = [t for t in tasks if t.get("name") == "Fail when managed-clusters Velero restore signal is stale"]
 
-    assert "previous_velero_restore_name" not in wait_task["until"], (
-        "wait_for_restore.yml must wait for the status field to appear first, then let the "
-        "dedicated stale-signal assertion produce the operator-facing failure"
+    assert "previous_velero_restore_name" in wait_task["until"], (
+        "wait_for_restore.yml must keep polling while the Restore still reports the "
+        "pre-activation managed-clusters Velero restore signal"
     )
-    assert "previous_velero_restore_name" in stale_assert["ansible.builtin.assert"]["that"][0]
-    assert "waiting for a new managed-clusters Velero restore" in stale_assert["ansible.builtin.assert"]["fail_msg"]
+    assert "!=" in wait_task["until"]
+    assert stale_asserts == []
 
 
 def test_restore_wait_uses_exact_benign_finished_with_errors_matching():

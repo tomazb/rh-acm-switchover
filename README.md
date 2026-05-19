@@ -264,7 +264,7 @@ python acm_switchover.py --restore-only \
 | `--secondary-context` | Kubernetes context for secondary hub (required for switchover) |
 | `--method` | Switchover method: `passive` or `full` (required) |
 | `--activation-method` | Activation option for passive method: `patch` (default) or `restore` |
-| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; omitted derives the expected names/count from primary preflight, explicit `0` allows an empty hub |
+| `--min-managed-clusters` | Minimum restored non-local `ManagedCluster` count to enforce after activation; omitted derives the expected names/count from primary preflight, restore-only omitted defaults to `1`, and explicit `0` allows an empty hub |
 | `--old-hub-action` | Action for old hub: `secondary` (**recommended** - enables reverse switchover), `decommission`, or `none` (required) |
 | `--validate-only` | Run validation checks only, no changes |
 | `--dry-run` | Show planned actions without executing |
@@ -340,7 +340,7 @@ flowchart LR
 1. **Preflight** — validates target hub only (ACM version, BSL credentials, namespaces)
 2. **Optional Argo CD pause** — with `--argocd-manage`, pauses ACM-touching Applications on the target hub before activation
 3. **Activation** — creates a one-time full Restore from the latest S3 backup
-4. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents
+4. **Post-Activation** — waits for ManagedClusters to connect, verifies klusterlet agents, and requires at least one restored non-local ManagedCluster unless `--min-managed-clusters 0` is explicitly set
 5. **Finalization** — enables BackupSchedule on the new hub
 
 ### State Management

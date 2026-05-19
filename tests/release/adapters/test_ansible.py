@@ -112,6 +112,15 @@ def test_build_extra_vars_sets_method_full_for_restore_only(tmp_path: Path) -> N
 
     assert extra_vars["acm_switchover_operation"]["method"] == "full"
     assert extra_vars["acm_switchover_operation"]["restore_only"] is True
+    assert extra_vars["acm_switchover_operation"]["min_managed_clusters"] is None
+
+
+def test_build_extra_vars_leaves_min_managed_clusters_unset_by_default(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("ansible-passive-switchover")
+
+    assert extra_vars["acm_switchover_operation"]["min_managed_clusters"] is None
 
 
 def test_build_extra_vars_decommission_sets_summary_path(tmp_path: Path) -> None:

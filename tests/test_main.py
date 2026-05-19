@@ -24,6 +24,7 @@ from acm_switchover import (
     _report_argocd_acm_impact,
     _run_phase_activation,
     _run_phase_finalization,
+    _run_phase_post_activation,
     _run_phase_preflight,
     main,
     parse_args,
@@ -2090,6 +2091,54 @@ class TestPreflightPhase:
 
         kwargs = activation_class.call_args.kwargs
         assert kwargs["min_managed_clusters"] == 0
+        assert kwargs["expected_managed_cluster_names"] == []
+        assert kwargs["enforce_expected_managed_cluster_names"] is False
+
+    def test_run_phase_activation_restore_only_defaults_to_one_when_min_omitted(self):
+        args = SimpleNamespace(
+            method="full",
+            activation_method="patch",
+            manage_auto_import_strategy=False,
+            old_hub_action=None,
+            min_managed_clusters=None,
+        )
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "expected_managed_cluster_names": [],
+            "expected_managed_cluster_count": 0,
+            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
+        }.get(key, default)
+        secondary = Mock()
+
+        with patch("acm_switchover.SecondaryActivation") as activation_class:
+            activation_class.return_value.activate.return_value = True
+            assert _run_phase_activation(args, state, None, secondary, Mock()) is True
+
+        kwargs = activation_class.call_args.kwargs
+        assert kwargs["min_managed_clusters"] == 1
+        assert kwargs["expected_managed_cluster_names"] == []
+        assert kwargs["enforce_expected_managed_cluster_names"] is False
+
+    def test_run_phase_post_activation_restore_only_defaults_to_one_when_min_omitted(self):
+        args = SimpleNamespace(
+            dry_run=False,
+            min_managed_clusters=None,
+        )
+        state = Mock()
+        state.get_config.side_effect = lambda key, default=None: {
+            "expected_managed_cluster_names": [],
+            "expected_managed_cluster_count": 0,
+            MANAGED_CLUSTER_EXPECTATION_KEY: MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
+            "secondary_has_observability": False,
+        }.get(key, default)
+        secondary = Mock()
+
+        with patch("acm_switchover.PostActivationVerification") as verification_class:
+            verification_class.return_value.verify.return_value = True
+            assert _run_phase_post_activation(args, state, None, secondary, Mock()) is True
+
+        kwargs = verification_class.call_args.kwargs
+        assert kwargs["min_managed_clusters"] == 1
         assert kwargs["expected_managed_cluster_names"] == []
         assert kwargs["enforce_expected_managed_cluster_names"] is False
 

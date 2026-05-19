@@ -87,27 +87,20 @@
           .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field, '')
         ) | length > 0
       )
-    }}
-  when:
-    - acm_switchover_restore_activation_result.wait_target.velero_restore_required | default(false)
-    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-
-- name: Fail when managed-clusters Velero restore signal is stale
-  ansible.builtin.assert:
-    that:
-      - >-
+      and
+      (
+        (acm_switchover_restore_activation_result.wait_target.previous_velero_restore_name | default('') | length) == 0
+        or
         (
           (_restore_velero_source_info.resources | first | default({}))
           .get('status', {})
           .get(acm_switchover_restore_activation_result.wait_target.velero_restore_status_field, '')
         )
         != (acm_switchover_restore_activation_result.wait_target.previous_velero_restore_name | default(''))
-    fail_msg: >-
-      Restore {{ acm_switchover_restore_activation_result.wait_target.name }} is still reporting the
-      pre-activation managed-clusters Velero restore signal; waiting for a new managed-clusters Velero restore.
+      )
+    }}
   when:
     - acm_switchover_restore_activation_result.wait_target.velero_restore_required | default(false)
-    - (acm_switchover_restore_activation_result.wait_target.previous_velero_restore_name | default('')) | length > 0
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Poll managed-clusters Velero restore to completion

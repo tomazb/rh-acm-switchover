@@ -190,8 +190,10 @@ python acm_switchover.py \
 > **Note:** `--activation-method` applies only to `--method passive`.
 > When `--min-managed-clusters` is omitted, the tool derives the expected non-local
 > ManagedCluster names/count from primary preflight and enforces that set after
-> activation. Use `--min-managed-clusters N` to provide an explicit minimum instead;
-> `N` must be non-negative, and explicit `0` allows an empty hub.
+> activation. In `--restore-only` mode, omitted `--min-managed-clusters` defaults
+> to at least one restored non-local ManagedCluster because no primary inventory is
+> available. Use `--min-managed-clusters N` to provide an explicit minimum instead;
+> `N` must be non-negative, and explicit `0` opts into an empty restore target.
 
 **Post-activation klusterlet remediation:**
 After activation, the tool verifies that managed clusters are joined and
