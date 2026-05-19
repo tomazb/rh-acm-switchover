@@ -25,23 +25,15 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 
 
 class CoreV1Client(Protocol):
-    def read_namespaced_secret(
-        self, name: str, namespace: str, **kwargs
-    ) -> dict | object: ...
+    def read_namespaced_secret(self, name: str, namespace: str, **kwargs) -> dict | object: ...
 
-    def delete_namespaced_secret(
-        self, name: str, namespace: str, **kwargs
-    ) -> object: ...
+    def delete_namespaced_secret(self, name: str, namespace: str, **kwargs) -> object: ...
 
-    def create_namespaced_secret(
-        self, namespace: str, body: dict, **kwargs
-    ) -> object: ...
+    def create_namespaced_secret(self, namespace: str, body: dict, **kwargs) -> object: ...
 
 
 class AppsV1Client(Protocol):
-    def patch_namespaced_deployment(
-        self, name: str, namespace: str, body: dict, **kwargs
-    ) -> object: ...
+    def patch_namespaced_deployment(self, name: str, namespace: str, body: dict, **kwargs) -> object: ...
 
 
 CoreClientFactory = Callable[[str, str | None], CoreV1Client]
@@ -62,11 +54,7 @@ def normalize_workers(workers: int | None) -> int:
 
 def normalize_timeout(timeout: int | float | None, field_name: str) -> int | float:
     if timeout is None:
-        return (
-            KLUSTERLET_REQUEST_TIMEOUT
-            if field_name == "request_timeout"
-            else KLUSTERLET_WORKER_TIMEOUT
-        )
+        return KLUSTERLET_REQUEST_TIMEOUT if field_name == "request_timeout" else KLUSTERLET_WORKER_TIMEOUT
     try:
         timeout_value = float(timeout)
     except (TypeError, ValueError) as exc:
@@ -92,9 +80,7 @@ def build_core_v1_client(
     if context:
         kwargs["context"] = context
     api_client = config.new_client_from_config(**kwargs)
-    api_client.configuration.timeout = normalize_timeout(
-        request_timeout, "request_timeout"
-    )
+    api_client.configuration.timeout = normalize_timeout(request_timeout, "request_timeout")
     return client.CoreV1Api(api_client=api_client)
 
 
@@ -112,9 +98,7 @@ def build_apps_v1_client(
     if context:
         kwargs["context"] = context
     api_client = config.new_client_from_config(**kwargs)
-    api_client.configuration.timeout = normalize_timeout(
-        request_timeout, "request_timeout"
-    )
+    api_client.configuration.timeout = normalize_timeout(request_timeout, "request_timeout")
     return client.AppsV1Api(api_client=api_client)
 
 
@@ -181,20 +165,12 @@ def server_host(server: str) -> str:
 def import_manifest_docs(import_yaml_b64: str) -> list[dict]:
     if not import_yaml_b64:
         return []
-    return [
-        doc
-        for doc in yaml.safe_load_all(decode_b64_text(import_yaml_b64))
-        if isinstance(doc, dict)
-    ]
+    return [doc for doc in yaml.safe_load_all(decode_b64_text(import_yaml_b64)) if isinstance(doc, dict)]
 
 
 def bootstrap_secret_doc(import_yaml_b64: str) -> dict | None:
     for doc in import_manifest_docs(import_yaml_b64):
-        if (
-            doc.get("kind") == "Secret"
-            and doc.get("metadata", {}).get("name")
-            == BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME
-        ):
+        if doc.get("kind") == "Secret" and doc.get("metadata", {}).get("name") == BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME:
             return doc
     return None
 
@@ -347,19 +323,10 @@ def probe_klusterlet_connections(
     worker_count = normalize_workers(workers)
     request_timeout_value = normalize_timeout(request_timeout, "request_timeout")
     future_timeout_value = normalize_timeout(future_timeout, "future_timeout")
-    candidates = list(
-        candidate_clusters
-        if candidate_clusters is not None
-        else managed_clusters.keys()
-    )
+    candidates = list(candidate_clusters if candidate_clusters is not None else managed_clusters.keys())
     secondary_client: CoreV1Client | None = None
-    if any(
-        (managed_clusters.get(cluster) or {}).get("kubeconfig")
-        for cluster in candidates
-    ):
-        secondary_client = core_client_factory(
-            secondary_hub.get("kubeconfig", ""), secondary_hub.get("context")
-        )
+    if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
+        secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
 
     def run_probe_once() -> dict:
         results = ordered_bounded_map(
@@ -379,23 +346,15 @@ def probe_klusterlet_connections(
                 "reason": worker_timeout_reason(future_timeout_value),
             },
         )
-        failed_clusters = [
-            item["cluster"] for item in results if item["status"] == "failed"
-        ]
+        failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
         return {
             "changed": False,
             "failed": bool(failed_clusters),
             "workers": worker_count,
             "results": results,
-            "verified_clusters": [
-                item["cluster"] for item in results if item["status"] == "verified"
-            ],
-            "wrong_hub_clusters": [
-                item["cluster"] for item in results if item["status"] == "wrong_hub"
-            ],
-            "skipped_clusters": [
-                item["cluster"] for item in results if item["status"] == "skipped"
-            ],
+            "verified_clusters": [item["cluster"] for item in results if item["status"] == "verified"],
+            "wrong_hub_clusters": [item["cluster"] for item in results if item["status"] == "wrong_hub"],
+            "skipped_clusters": [item["cluster"] for item in results if item["status"] == "skipped"],
             "failed_clusters": failed_clusters,
         }
 
@@ -419,9 +378,7 @@ def probe_klusterlet_connections(
         time.sleep(min(wait_interval_value, remaining))
 
 
-def _result(
-    cluster_name: str, status: str, steps: dict, reason: str = "", changed: bool = False
-) -> dict:
+def _result(cluster_name: str, status: str, steps: dict, reason: str = "", changed: bool = False) -> dict:
     result = {
         "cluster": cluster_name,
         "status": status,
@@ -434,10 +391,7 @@ def _result(
 
 
 def _mark_pending_not_run(steps: dict) -> dict:
-    return {
-        key: ("not_run" if value == "pending" else value)
-        for key, value in steps.items()
-    }
+    return {key: ("not_run" if value == "pending" else value) for key, value in steps.items()}
 
 
 def remediate_one_cluster(
@@ -459,9 +413,7 @@ def remediate_one_cluster(
     context = managed.get("context")
     if not kubeconfig:
         steps = {key: "skipped" for key in steps}
-        return _result(
-            cluster_name, "skipped", steps, reason="no_managed_cluster_kubeconfig"
-        )
+        return _result(cluster_name, "skipped", steps, reason="no_managed_cluster_kubeconfig")
 
     try:
         import_secret = read_secret(
@@ -490,10 +442,7 @@ def remediate_one_cluster(
                 _mark_pending_not_run(steps),
                 reason="bootstrap_secret_missing_from_import",
             )
-        bootstrap_namespace = (
-            bootstrap_doc.get("metadata", {}).get("namespace")
-            or MANAGED_CLUSTER_AGENT_NAMESPACE
-        )
+        bootstrap_namespace = bootstrap_doc.get("metadata", {}).get("namespace") or MANAGED_CLUSTER_AGENT_NAMESPACE
 
         managed_core = core_client_factory(kubeconfig, context)
         apps_client = apps_client_factory(kubeconfig, context)
@@ -623,29 +572,20 @@ def remediate_klusterlets(
                         reason="no_managed_cluster_kubeconfig",
                     )
                 )
-        planned_clusters = [
-            item["cluster"] for item in results if item["status"] == "planned"
-        ]
+        planned_clusters = [item["cluster"] for item in results if item["status"] == "planned"]
         return {
             "changed": bool(planned_clusters),
             "failed": False,
             "workers": worker_count,
             "results": results,
             "failed_clusters": [],
-            "skipped_clusters": [
-                item["cluster"] for item in results if item["status"] == "skipped"
-            ],
+            "skipped_clusters": [item["cluster"] for item in results if item["status"] == "skipped"],
             "remediated_clusters": [],
             "planned_clusters": planned_clusters,
         }
     secondary_client = None
-    if any(
-        (managed_clusters.get(cluster) or {}).get("kubeconfig")
-        for cluster in candidates
-    ):
-        secondary_client = core_client_factory(
-            secondary_hub.get("kubeconfig", ""), secondary_hub.get("context")
-        )
+    if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
+        secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
     timeout_steps = {
         "import_secret_read": "timeout",
         "bootstrap_secret_deleted": "not_run",
@@ -671,17 +611,11 @@ def remediate_klusterlets(
             reason=worker_timeout_reason(future_timeout_value),
         ),
     )
-    failed_clusters = [
-        item["cluster"] for item in results if item["status"] == "failed"
-    ]
-    skipped_clusters = [
-        item["cluster"] for item in results if item["status"] == "skipped"
-    ]
+    failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
+    skipped_clusters = [item["cluster"] for item in results if item["status"] == "skipped"]
     changed = any(item.get("changed") for item in results)
     worker_timeout_prefix = WORKER_TIMEOUT_REASON_TEMPLATE.partition("{")[0]
-    worker_timeout_failures = any(
-        item.get("reason", "").startswith(worker_timeout_prefix) for item in results
-    )
+    worker_timeout_failures = any(item.get("reason", "").startswith(worker_timeout_prefix) for item in results)
     failed = worker_timeout_failures or (strict and bool(failed_clusters))
     result = {
         "changed": changed,
@@ -690,12 +624,8 @@ def remediate_klusterlets(
         "results": results,
         "failed_clusters": failed_clusters,
         "skipped_clusters": skipped_clusters,
-        "remediated_clusters": [
-            item["cluster"] for item in results if item["status"] == "remediated"
-        ],
+        "remediated_clusters": [item["cluster"] for item in results if item["status"] == "remediated"],
     }
     if failed:
-        result["msg"] = "Klusterlet remediation failed for cluster(s): " + ", ".join(
-            failed_clusters
-        )
+        result["msg"] = "Klusterlet remediation failed for cluster(s): " + ", ".join(failed_clusters)
     return result

@@ -56,9 +56,7 @@ def test_shared_constants_parity():
         elif ans_val is _MISSING:
             mismatches.append(f"Ansible missing: {ans_name}")
         elif py_val != ans_val:
-            mismatches.append(
-                f"{py_name}={py_val!r} (Python) != {ans_name}={ans_val!r} (Ansible)"
-            )
+            mismatches.append(f"{py_name}={py_val!r} (Python) != {ans_name}={ans_val!r} (Ansible)")
 
     assert not mismatches, "Constants drift detected:\n  " + "\n  ".join(mismatches)
 

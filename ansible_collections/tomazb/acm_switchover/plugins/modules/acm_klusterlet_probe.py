@@ -93,16 +93,10 @@ def main() -> None:
             managed_clusters=module.params["managed_clusters"],
             candidate_clusters=module.params.get("candidate_clusters"),
             workers=module.params["workers"],
-            request_timeout=module.params.get(
-                "request_timeout", KLUSTERLET_REQUEST_TIMEOUT
-            ),
-            future_timeout=module.params.get(
-                "future_timeout", KLUSTERLET_WORKER_TIMEOUT
-            ),
+            request_timeout=module.params.get("request_timeout", KLUSTERLET_REQUEST_TIMEOUT),
+            future_timeout=module.params.get("future_timeout", KLUSTERLET_WORKER_TIMEOUT),
             wait_timeout=module.params.get("wait_timeout"),
-            wait_interval=module.params.get(
-                "wait_interval", KLUSTERLET_RECHECK_INTERVAL
-            ),
+            wait_interval=module.params.get("wait_interval", KLUSTERLET_RECHECK_INTERVAL),
         )
     except Exception as exc:
         module.fail_json(msg=str(exc))
