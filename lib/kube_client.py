@@ -214,21 +214,22 @@ class KubeClient:
         self.request_timeout = request_timeout
         self.disable_hostname_verification = disable_hostname_verification
 
-        # Load config for specific context with clearer error handling
+        # Build an ApiClient for this context without mutating global Kubernetes configuration.
         try:
-            config.load_kube_config(context=context)
+            api_client = config.new_client_from_config(context=context, persist_config=False)
         except ConfigException as exc:
             logger.error("Failed to load kubeconfig for context %s: %s", context or "default", exc)
             raise
 
-        # Create per-instance configuration to avoid affecting other clients
-        configuration = client.Configuration.get_default_copy()
+        # Configure only this per-context ApiClient instance.
+        configuration = api_client.configuration
         # Tenacity handles retries for API calls; disable urllib3 retries to avoid double retry layers.
         # NOTE: With this setting, the underlying HTTP client will not retry failed requests on its own.
         #       Any operation that is not wrapped by the Tenacity-based retry decorator (e.g., @retry_api_call),
         #       or if Tenacity is disabled/misconfigured, will perform no automatic retries and may fail on
         #       transient network or server errors.
         configuration.retries = 0
+        configuration.timeout = request_timeout
 
         if disable_hostname_verification and hasattr(configuration, "assert_hostname"):
             configuration.assert_hostname = False
@@ -238,7 +239,6 @@ class KubeClient:
             )
 
         # Create API clients with this specific configuration
-        api_client = client.ApiClient(configuration)
         self.core_v1 = client.CoreV1Api(api_client)
         self.apps_v1 = client.AppsV1Api(api_client)
         self.custom_api = client.CustomObjectsApi(api_client)

@@ -63,15 +63,9 @@ class PostActivationVerification:
         self.has_observability = has_observability
         self.dry_run = dry_run
         self.min_managed_clusters = min_managed_clusters
-        self.expected_managed_cluster_names = sorted(
-            expected_managed_cluster_names or []
-        )
-        self.enforce_expected_managed_cluster_names = (
-            enforce_expected_managed_cluster_names
-        )
-        self._cached_managed_clusters: Optional[List[Dict]] = (
-            None  # Cache for managed clusters
-        )
+        self.expected_managed_cluster_names = sorted(expected_managed_cluster_names or [])
+        self.enforce_expected_managed_cluster_names = enforce_expected_managed_cluster_names
+        self._cached_managed_clusters: Optional[List[Dict]] = None  # Cache for managed clusters
         # Kubeconfig caching to reduce repeated file I/O (findings #10)
         self._kubeconfig_cache: Optional[Dict] = None
         self._kubeconfig_paths: List[str] = []
@@ -123,10 +117,17 @@ class PostActivationVerification:
             logger.error("Post-activation verification failed: %s", e)
             self.state.add_error(str(e), Phase.POST_ACTIVATION.value)
             return False
-        except Exception as e:
+        except (RuntimeError, ValueError) as e:
             logger.error("Unexpected error during post-activation verification: %s", e)
             self.state.add_error(f"Unexpected: {str(e)}", Phase.POST_ACTIVATION.value)
             return False
+        except Exception as e:
+            logger.error(
+                "Programming error during post-activation verification: %s: %s",
+                type(e).__name__,
+                e,
+            )
+            raise
 
     def _verify_cluster_connections(self) -> None:
         """
@@ -141,29 +142,21 @@ class PostActivationVerification:
             if should_run:
                 try:
                     # Initial brief wait - clusters may connect automatically
-                    self._verify_managed_clusters_connected(
-                        timeout=INITIAL_CLUSTER_WAIT_TIMEOUT
-                    )
+                    self._verify_managed_clusters_connected(timeout=INITIAL_CLUSTER_WAIT_TIMEOUT)
                 except SwitchoverError as e:
                     # Timeout - clusters not connected yet
                     logger.warning(
                         "ManagedClusters not connected after initial wait: %s",
                         e,
                     )
-                    logger.info(
-                        "Checking if klusterlets need to be fixed (may be pointing to old hub)..."
-                    )
-                    with self.state.step(
-                        "verify_klusterlet_connections", logger
-                    ) as should_run_fix:
+                    logger.info("Checking if klusterlets need to be fixed (may be pointing to old hub)...")
+                    with self.state.step("verify_klusterlet_connections", logger) as should_run_fix:
                         klusterlet_step_checked = True
                         if should_run_fix:
                             self._verify_klusterlet_connections()
 
                     # Now wait longer for clusters to reconnect after fix
-                    logger.info(
-                        "Waiting for ManagedClusters to reconnect after klusterlet fix..."
-                    )
+                    logger.info("Waiting for ManagedClusters to reconnect after klusterlet fix...")
                     self._verify_managed_clusters_connected()
 
         # Optional: Verify klusterlet connections (non-blocking)
@@ -243,14 +236,11 @@ class PostActivationVerification:
                 conditions = mc.get("status", {}).get("conditions", [])
 
                 is_available = any(
-                    c.get("type") == "ManagedClusterConditionAvailable"
-                    and c.get("status") == "True"
+                    c.get("type") == "ManagedClusterConditionAvailable" and c.get("status") == "True"
                     for c in conditions
                 )
                 is_joined = any(
-                    c.get("type") == "ManagedClusterJoined"
-                    and c.get("status") == "True"
-                    for c in conditions
+                    c.get("type") == "ManagedClusterJoined" and c.get("status") == "True" for c in conditions
                 )
 
                 if is_available:
@@ -267,20 +257,13 @@ class PostActivationVerification:
                 "pending": pending_clusters,
             }
 
-            missing_expected = sorted(
-                set(self.expected_managed_cluster_names) - set(observed_names)
-            )
+            missing_expected = sorted(set(self.expected_managed_cluster_names) - set(observed_names))
             if self.enforce_expected_managed_cluster_names and missing_expected:
                 pending_clusters.extend(missing_expected)
                 latest_status["pending"] = pending_clusters
-                return WaitConditionResult.pending(
-                    "missing expected ManagedCluster(s): " + ", ".join(missing_expected)
-                )
+                return WaitConditionResult.pending("missing expected ManagedCluster(s): " + ", ".join(missing_expected))
 
-            if (
-                self.min_managed_clusters > 0
-                and total_clusters < self.min_managed_clusters
-            ):
+            if self.min_managed_clusters > 0 and total_clusters < self.min_managed_clusters:
                 return WaitConditionResult.pending(
                     f"found {total_clusters}/{self.min_managed_clusters} expected ManagedCluster(s)"
                 )
@@ -291,14 +274,8 @@ class PostActivationVerification:
                     "No non-local ManagedClusters to verify (only local-cluster exists)"
                 )
 
-            is_ready = (
-                available_clusters == total_clusters
-                and joined_clusters == total_clusters
-            )
-            detail = (
-                f"available={available_clusters}/{total_clusters}, "
-                f"joined={joined_clusters}/{total_clusters}"
-            )
+            is_ready = available_clusters == total_clusters and joined_clusters == total_clusters
+            detail = f"available={available_clusters}/{total_clusters}, " f"joined={joined_clusters}/{total_clusters}"
             if is_ready:
                 return WaitConditionResult.complete(detail)
             return WaitConditionResult.pending(detail)
@@ -313,13 +290,11 @@ class PostActivationVerification:
 
         if not success:
             missing_expected = sorted(
-                set(self.expected_managed_cluster_names)
-                - set(self._non_local_managed_cluster_names())
+                set(self.expected_managed_cluster_names) - set(self._non_local_managed_cluster_names())
             )
             if self.enforce_expected_managed_cluster_names and missing_expected:
                 raise SwitchoverError(
-                    "Missing expected ManagedCluster(s) after activation: "
-                    + ", ".join(missing_expected)
+                    "Missing expected ManagedCluster(s) after activation: " + ", ".join(missing_expected)
                 )
             raise SwitchoverError(
                 "Timeout waiting for ManagedClusters to connect. "
@@ -337,8 +312,7 @@ class PostActivationVerification:
         return sorted(
             item.get("metadata", {}).get("name")
             for item in clusters
-            if item.get("metadata", {}).get("name")
-            and item.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
+            if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME
         )
 
     @dry_run_skip(message="Skipping scale-up of observability components")
@@ -382,9 +356,7 @@ class PostActivationVerification:
                         namespace=OBSERVABILITY_NAMESPACE,
                         replicas=OBSERVATORIUM_API_REPLICAS,
                     )
-                    scaled_components.append(
-                        ("observatorium-api", OBSERVATORIUM_API_REPLICAS)
-                    )
+                    scaled_components.append(("observatorium-api", OBSERVATORIUM_API_REPLICAS))
                 else:
                     logger.info(
                         "observatorium-api already has %d replica(s), no scale-up needed",
@@ -393,9 +365,7 @@ class PostActivationVerification:
         except Exception as e:
             if isinstance(e, SwitchoverError):
                 raise
-            raise SwitchoverError(
-                f"Failed to check/scale observatorium-api: {e}"
-            ) from e
+            raise SwitchoverError(f"Failed to check/scale observatorium-api: {e}") from e
 
         # Check and scale thanos-compact StatefulSet
         try:
@@ -418,9 +388,7 @@ class PostActivationVerification:
                         namespace=OBSERVABILITY_NAMESPACE,
                         replicas=THANOS_COMPACT_REPLICAS,
                     )
-                    scaled_components.append(
-                        ("thanos-compact", THANOS_COMPACT_REPLICAS)
-                    )
+                    scaled_components.append(("thanos-compact", THANOS_COMPACT_REPLICAS))
                 else:
                     logger.info(
                         "thanos-compact already has %d replica(s), no scale-up needed",
@@ -437,11 +405,7 @@ class PostActivationVerification:
 
             # Wait for observatorium-api if it was scaled
             if any(name == "observatorium-api" for name, _ in scaled_components):
-                target = next(
-                    count
-                    for name, count in scaled_components
-                    if name == "observatorium-api"
-                )
+                target = next(count for name, count in scaled_components if name == "observatorium-api")
                 logger.info("Waiting for observatorium-api pods to be ready...")
                 ready = self.secondary.wait_for_pods_ready(
                     namespace=OBSERVABILITY_NAMESPACE,
@@ -452,17 +416,11 @@ class PostActivationVerification:
                 if ready:
                     logger.info("observatorium-api pods are ready")
                 else:
-                    raise SwitchoverError(
-                        "observatorium-api pods did not become ready in time"
-                    )
+                    raise SwitchoverError("observatorium-api pods did not become ready in time")
 
             # Wait for thanos-compact if it was scaled
             if any(name == "thanos-compact" for name, _ in scaled_components):
-                target = next(
-                    count
-                    for name, count in scaled_components
-                    if name == "thanos-compact"
-                )
+                target = next(count for name, count in scaled_components if name == "thanos-compact")
                 logger.info("Waiting for thanos-compact pods to be ready...")
                 ready = self.secondary.wait_for_pods_ready(
                     namespace=OBSERVABILITY_NAMESPACE,
@@ -473,9 +431,7 @@ class PostActivationVerification:
                 if ready:
                     logger.info("thanos-compact pods are ready")
                 else:
-                    raise SwitchoverError(
-                        "thanos-compact pods did not become ready in time"
-                    )
+                    raise SwitchoverError("thanos-compact pods did not become ready in time")
         else:
             logger.info("No components needed scale-up")
 
@@ -496,9 +452,7 @@ class PostActivationVerification:
                 logger.info("[DRY-RUN] Skipping wait for observatorium-api pods")
                 return
 
-            logger.info(
-                "Waiting for observatorium-api Deployment rollout to stabilize..."
-            )
+            logger.info("Waiting for observatorium-api Deployment rollout to stabilize...")
             ready = self._wait_for_observatorium_api_rollout()
 
             if ready:
@@ -508,9 +462,7 @@ class PostActivationVerification:
                     label_selector="app.kubernetes.io/name=observatorium-api",
                 )
                 start_times = [
-                    pod.get("status", {}).get("startTime")
-                    for pod in pods
-                    if pod.get("status", {}).get("startTime")
+                    pod.get("status", {}).get("startTime") for pod in pods if pod.get("status", {}).get("startTime")
                 ]
                 if start_times:
                     logger.info(
@@ -518,9 +470,7 @@ class PostActivationVerification:
                         ", ".join(start_times),
                     )
             else:
-                raise SwitchoverError(
-                    "observatorium-api deployment rollout did not become ready in time"
-                )
+                raise SwitchoverError("observatorium-api deployment rollout did not become ready in time")
 
         except ApiException as e:
             logger.error("Failed to restart observatorium-api: %s", e)
@@ -584,9 +534,7 @@ class PostActivationVerification:
                     unavailable_replicas,
                 )
             else:
-                logger.debug(
-                    "Waiting for observatorium-api rollout: deployment not found yet"
-                )
+                logger.debug("Waiting for observatorium-api rollout: deployment not found yet")
 
             remaining = deadline - time.time()
             if remaining <= 0:
@@ -634,10 +582,7 @@ class PostActivationVerification:
             # Check ready condition
             conditions = pod.get("status", {}).get("conditions", [])
             for condition in conditions:
-                if (
-                    condition.get("type") == "Ready"
-                    and condition.get("status") == "True"
-                ):
+                if condition.get("type") == "Ready" and condition.get("status") == "True":
                     ready_pods += 1
                     break
 
@@ -657,12 +602,8 @@ class PostActivationVerification:
                 if terminated_state:
                     reason = terminated_state.get("reason", "terminated")
                     exit_code = terminated_state.get("exitCode")
-                    if reason in critical_terminated_reasons or (
-                        exit_code is not None and exit_code != 0
-                    ):
-                        pod_errors.append(
-                            f"{container_name} terminated ({reason}, exit={exit_code})"
-                        )
+                    if reason in critical_terminated_reasons or (exit_code is not None and exit_code != 0):
+                        pod_errors.append(f"{container_name} terminated ({reason}, exit={exit_code})")
 
             if pod_errors:
                 error_pods.append(f"{pod_name}: " + "; ".join(pod_errors))
@@ -676,9 +617,7 @@ class PostActivationVerification:
         )
 
         if error_pods:
-            raise SwitchoverError(
-                "Observability pods in error state: " + ", ".join(error_pods)
-            )
+            raise SwitchoverError("Observability pods in error state: " + ", ".join(error_pods))
 
         if ready_pods < len(pods) * POD_READINESS_TOLERANCE:
             raise SwitchoverError(
@@ -738,9 +677,7 @@ class PostActivationVerification:
 
         # Skip verification in dry-run mode since annotations weren't actually cleared
         if self.dry_run:
-            logger.info(
-                "[DRY-RUN] Skipping disable-auto-import annotation verification"
-            )
+            logger.info("[DRY-RUN] Skipping disable-auto-import annotation verification")
             return
 
         logger.info("Ensuring disable-auto-import annotations are cleared...")
@@ -758,11 +695,7 @@ class PostActivationVerification:
             annotations = mc.get("metadata", {}).get("annotations") or {}
             if DISABLE_AUTO_IMPORT_ANNOTATION in annotations:
                 try:
-                    patch = {
-                        "metadata": {
-                            "annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: None}
-                        }
-                    }
+                    patch = {"metadata": {"annotations": {DISABLE_AUTO_IMPORT_ANNOTATION: None}}}
                     self.secondary.patch_custom_resource(
                         group="cluster.open-cluster-management.io",
                         version="v1",
@@ -796,9 +729,7 @@ class PostActivationVerification:
                 flagged.append(mc_name or "unknown")
 
         if flagged:
-            raise SwitchoverError(
-                "disable-auto-import annotation still present on: " + ", ".join(flagged)
-            )
+            raise SwitchoverError("disable-auto-import annotation still present on: " + ", ".join(flagged))
 
         logger.info("All ManagedClusters cleared of disable-auto-import annotation")
 
@@ -826,18 +757,14 @@ class PostActivationVerification:
         # Get the new hub's API server URL
         new_hub_server = self._get_hub_api_server()
         if not new_hub_server:
-            logger.warning(
-                "Could not determine new hub API server URL, skipping klusterlet verification"
-            )
+            logger.warning("Could not determine new hub API server URL, skipping klusterlet verification")
             return
 
         # Load kubeconfig data for context lookup
         # Use max_size=0 to bypass size check for critical klusterlet verification
         kubeconfig_data = self._load_kubeconfig_data(max_size=0)
         if not kubeconfig_data:
-            logger.warning(
-                "Could not load kubeconfig, skipping klusterlet verification"
-            )
+            logger.warning("Could not load kubeconfig, skipping klusterlet verification")
             return
 
         # Get list of managed clusters with their API server URLs
@@ -849,9 +776,7 @@ class PostActivationVerification:
             name = mc.get("metadata", {}).get("name")
             if name and name != LOCAL_CLUSTER_NAME:
                 # Get API server URL from ManagedCluster spec
-                client_configs = mc.get("spec", {}).get(
-                    "managedClusterClientConfigs", []
-                )
+                client_configs = mc.get("spec", {}).get("managedClusterClientConfigs", [])
                 api_url = client_configs[0].get("url", "") if client_configs else ""
                 cluster_info.append((name, api_url))
 
@@ -863,15 +788,11 @@ class PostActivationVerification:
         def check_cluster(cluster_name: str, cluster_api_url: str) -> tuple:
             """Check a single cluster's klusterlet connection. Returns (cluster_name, result, context_name)."""
             try:
-                context_name = self._find_context_by_api_url(
-                    kubeconfig_data, cluster_api_url, cluster_name
-                )
+                context_name = self._find_context_by_api_url(kubeconfig_data, cluster_api_url, cluster_name)
                 if not context_name:
                     return (cluster_name, "no_context", None)
 
-                result = self._check_klusterlet_connection(
-                    context_name, cluster_name, new_hub_server
-                )
+                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
                 return (cluster_name, result, context_name)
             except Exception as e:
                 logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
@@ -888,10 +809,7 @@ class PostActivationVerification:
         unreachable = []
 
         with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-            futures = [
-                executor.submit(check_cluster, name, api_url)
-                for name, api_url in cluster_info
-            ]
+            futures = [executor.submit(check_cluster, name, api_url) for name, api_url in cluster_info]
             for future in as_completed(futures):
                 cluster_name, result, context_name = future.result()
                 if result == "verified":
@@ -917,9 +835,7 @@ class PostActivationVerification:
         def recheck_cluster(cluster_name: str, context_name: str) -> tuple:
             """Re-check a remediated cluster's klusterlet connection."""
             try:
-                result = self._check_klusterlet_connection(
-                    context_name, cluster_name, new_hub_server
-                )
+                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
                 return (cluster_name, result)
             except Exception as e:
                 logger.debug("Error re-checking klusterlet for %s: %s", cluster_name, e)
@@ -938,9 +854,7 @@ class PostActivationVerification:
             fix_failed = []
 
             with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-                futures = [
-                    executor.submit(fix_cluster, name, ctx) for name, ctx in wrong_hub
-                ]
+                futures = [executor.submit(fix_cluster, name, ctx) for name, ctx in wrong_hub]
                 for future in as_completed(futures):
                     cluster_name, success = future.result()
                     if success:
@@ -967,13 +881,8 @@ class PostActivationVerification:
                 """Poll remediated clusters until klusterlet updates hub-kubeconfig-secret."""
                 current_wrong_hub = []
                 current_unverified = []
-                with ThreadPoolExecutor(
-                    max_workers=CLUSTER_VERIFY_MAX_WORKERS
-                ) as executor:
-                    futures = [
-                        executor.submit(recheck_cluster, name, ctx)
-                        for name, ctx in wrong_hub
-                    ]
+                with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
+                    futures = [executor.submit(recheck_cluster, name, ctx) for name, ctx in wrong_hub]
                     for future in as_completed(futures):
                         cluster_name, result = future.result()
                         if result == "wrong_hub":
@@ -985,19 +894,13 @@ class PostActivationVerification:
                 post_remediation_state["unverified"] = current_unverified
 
                 if not current_wrong_hub and not current_unverified:
-                    return WaitConditionResult.complete(
-                        "all remediated klusterlets verified"
-                    )
+                    return WaitConditionResult.complete("all remediated klusterlets verified")
 
                 pending_details = []
                 if current_wrong_hub:
-                    pending_details.append(
-                        f"still wrong hub: {', '.join(current_wrong_hub)}"
-                    )
+                    pending_details.append(f"still wrong hub: {', '.join(current_wrong_hub)}")
                 if current_unverified:
-                    pending_details.append(
-                        f"unverified: {', '.join(current_unverified)}"
-                    )
+                    pending_details.append(f"unverified: {', '.join(current_unverified)}")
                 return WaitConditionResult.pending("; ".join(pending_details))
 
             wait_for_condition(
@@ -1012,9 +915,7 @@ class PostActivationVerification:
 
             fatal_messages = []
             if fix_failed:
-                fatal_messages.append(
-                    f"Klusterlet remediation failed for cluster(s): {', '.join(fix_failed)}"
-                )
+                fatal_messages.append(f"Klusterlet remediation failed for cluster(s): {', '.join(fix_failed)}")
             if post_remediation_wrong_hub:
                 fatal_messages.append(
                     "Klusterlet still connected to the wrong hub after remediation: "
@@ -1059,9 +960,7 @@ class PostActivationVerification:
             True if successful, False otherwise
         """
         try:
-            logger.info(
-                "Force-reconnecting klusterlet for %s to new hub...", cluster_name
-            )
+            logger.info("Force-reconnecting klusterlet for %s to new hub...", cluster_name)
 
             # Step 1: Get the import secret from the new hub
             import_yaml = self._get_import_secret(cluster_name)
@@ -1086,9 +985,7 @@ class PostActivationVerification:
             return True
 
         except Exception as e:
-            logger.warning(
-                "Failed to force-reconnect klusterlet for %s: %s", cluster_name, e
-            )
+            logger.warning("Failed to force-reconnect klusterlet for %s: %s", cluster_name, e)
             return False
 
     def _build_managed_cluster_clients(self, context_name: str) -> tuple:
@@ -1106,12 +1003,8 @@ class PostActivationVerification:
         Raises:
             config.ConfigException: If context does not exist in kubeconfig
         """
-        api_client = config.new_client_from_config(
-            context=context_name, persist_config=False
-        )
-        return client.CoreV1Api(api_client=api_client), client.AppsV1Api(
-            api_client=api_client
-        )
+        api_client = config.new_client_from_config(context=context_name, persist_config=False)
+        return client.CoreV1Api(api_client=api_client), client.AppsV1Api(api_client=api_client)
 
     def _get_import_secret(self, cluster_name: str) -> Optional[str]:
         """Get and decode the import secret from the new hub.
@@ -1152,13 +1045,9 @@ class PostActivationVerification:
             logger.debug("Deleted bootstrap-hub-kubeconfig secret on %s", cluster_name)
         except ApiException as e:
             if e.status != 404:
-                logger.warning(
-                    "Failed to delete bootstrap secret on %s: %s", cluster_name, e
-                )
+                logger.warning("Failed to delete bootstrap secret on %s: %s", cluster_name, e)
 
-    def _apply_import_manifest(
-        self, v1: client.CoreV1Api, import_yaml: str, cluster_name: str
-    ) -> None:
+    def _apply_import_manifest(self, v1: client.CoreV1Api, import_yaml: str, cluster_name: str) -> None:
         """Apply the import manifest to recreate the bootstrap secret.
 
         Args:
@@ -1204,9 +1093,7 @@ class PostActivationVerification:
                         f"reason={getattr(e, 'reason', None)}"
                     ) from e
 
-    def _wait_for_secret_visibility(
-        self, v1: client.CoreV1Api, cluster_name: str
-    ) -> None:
+    def _wait_for_secret_visibility(self, v1: client.CoreV1Api, cluster_name: str) -> None:
         """Wait for the bootstrap-hub-kubeconfig secret to be visible.
 
         Args:
@@ -1225,9 +1112,7 @@ class PostActivationVerification:
             except ApiException as e:
                 if e.status == 404:
                     return WaitConditionResult.pending("secret not found")
-                return WaitConditionResult.pending(
-                    f"api status={getattr(e, 'status', 'unknown')}"
-                )
+                return WaitConditionResult.pending(f"api status={getattr(e, 'status', 'unknown')}")
 
         secret_ready = wait_for_condition(
             description=f"bootstrap-hub-kubeconfig secret on {cluster_name}",
@@ -1243,8 +1128,7 @@ class PostActivationVerification:
                 cluster_name,
             )
             raise SwitchoverError(
-                "bootstrap-hub-kubeconfig secret not visible on "
-                f"{cluster_name} after {SECRET_VISIBILITY_TIMEOUT}s"
+                "bootstrap-hub-kubeconfig secret not visible on " f"{cluster_name} after {SECRET_VISIBILITY_TIMEOUT}s"
             )
 
     def _restart_klusterlet(self, apps_v1: client.AppsV1Api, cluster_name: str) -> None:
@@ -1260,13 +1144,7 @@ class PostActivationVerification:
             # Trigger a rollout restart by patching the deployment
             patch = {
                 "spec": {
-                    "template": {
-                        "metadata": {
-                            "annotations": {
-                                "acm-switchover/restart": str(int(time_module.time()))
-                            }
-                        }
-                    }
+                    "template": {"metadata": {"annotations": {"acm-switchover/restart": str(int(time_module.time()))}}}
                 }
             }
             apps_v1.patch_namespaced_deployment(
@@ -1304,9 +1182,7 @@ class PostActivationVerification:
 
         return ""
 
-    def _load_kubeconfig_data(
-        self, max_size: Optional[int] = None, force_reload: bool = False
-    ) -> dict:  # noqa: C901
+    def _load_kubeconfig_data(self, max_size: Optional[int] = None, force_reload: bool = False) -> dict:  # noqa: C901
         """Load and merge kubeconfig data from all KUBECONFIG paths.
 
         Handles the KUBECONFIG environment variable which can contain multiple
@@ -1423,9 +1299,7 @@ class PostActivationVerification:
             self._kubeconfig_cache = merged
             self._kubeconfig_paths = [os.path.expanduser(p) for p in paths]
             self._kubeconfig_mtime = {
-                path: os.path.getmtime(path)
-                for path in self._kubeconfig_paths
-                if os.path.exists(path)
+                path: os.path.getmtime(path) for path in self._kubeconfig_paths if os.path.exists(path)
             }
 
             return merged
@@ -1434,9 +1308,7 @@ class PostActivationVerification:
             logger.debug("Error loading kubeconfig: %s", e)
             return {}
 
-    def _find_context_by_api_url(
-        self, kubeconfig_data: dict, api_url: str, cluster_name: str
-    ) -> str:
+    def _find_context_by_api_url(self, kubeconfig_data: dict, api_url: str, cluster_name: str) -> str:
         """
         Find a kubeconfig context that matches the given API server URL.
 
@@ -1454,18 +1326,9 @@ class PostActivationVerification:
         if not api_url:
             # Fallback to name-based matching if no API URL
             logger.debug("No API URL for %s, trying name-based matching", cluster_name)
-            try:
-                contexts, _ = config.list_kube_config_contexts()
-                for ctx in contexts:
-                    if ctx.get("name") == cluster_name:
-                        return cluster_name
-            except (config.ConfigException, Exception) as e:
-                # Failed to match context by name; returning empty string as fallback
-                logger.debug(
-                    "Exception during name-based context matching for %s: %s",
-                    cluster_name,
-                    e,
-                )
+            for ctx in kubeconfig_data.get("contexts", []):
+                if ctx.get("name") == cluster_name:
+                    return cluster_name
             return ""
 
         # Normalize the API URL for comparison (extract host)

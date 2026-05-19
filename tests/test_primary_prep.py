@@ -17,8 +17,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import modules.primary_prep as primary_prep_module
 from lib import argocd as argocd_lib
-from lib.constants import DISABLE_AUTO_IMPORT_ANNOTATION, OBSERVABILITY_NAMESPACE, THANOS_SCALE_DOWN_WAIT
+from lib.constants import (
+    DISABLE_AUTO_IMPORT_ANNOTATION,
+    OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_TERMINATE_INTERVAL,
+    OBSERVABILITY_TERMINATE_TIMEOUT,
+)
 from lib.exceptions import SwitchoverError
+from lib.waiter import WaitConditionResult
 
 PrimaryPreparation = primary_prep_module.PrimaryPreparation
 
@@ -726,11 +732,12 @@ class TestPrimaryPreparation:
 
         mock_primary_client.patch_managed_cluster.assert_not_called()
 
-    @patch("time.sleep")
-    def test_scale_down_thanos(self, mock_sleep, primary_prep_with_obs, mock_primary_client):
+    @patch("modules.primary_prep.wait_for_condition")
+    def test_scale_down_thanos(self, mock_wait, primary_prep_with_obs, mock_primary_client):
         """Test scaling down Thanos compactor."""
         mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
         mock_primary_client.get_pods.return_value = []  # No pods after scaling down
+        mock_wait.return_value = True
 
         primary_prep_with_obs._scale_down_thanos_compactor()
 
@@ -739,7 +746,11 @@ class TestPrimaryPreparation:
             name="observability-thanos-compact",
             replicas=0,
         )
-        mock_sleep.assert_called_once_with(THANOS_SCALE_DOWN_WAIT)
+        mock_wait.assert_called_once()
+        _, condition_fn = mock_wait.call_args.args[:2]
+        assert mock_wait.call_args.kwargs["timeout"] == OBSERVABILITY_TERMINATE_TIMEOUT
+        assert mock_wait.call_args.kwargs["interval"] == OBSERVABILITY_TERMINATE_INTERVAL
+        assert condition_fn() == WaitConditionResult.complete("all Thanos compactor pods terminated")
 
     def test_prepare_with_thanos_404_blocks(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog
@@ -765,17 +776,18 @@ class TestPrimaryPreparation:
         assert "Failed to scale down Thanos compactor" in caplog.text
         mock_primary_client.get_pods.assert_not_called()
 
-    @patch("time.sleep")
-    def test_scale_down_thanos_pods_remaining_blocks(self, mock_sleep, primary_prep_with_obs, mock_primary_client):
+    @patch("modules.primary_prep.wait_for_condition")
+    def test_scale_down_thanos_pods_remaining_blocks(self, mock_wait, primary_prep_with_obs, mock_primary_client):
         """Thanos pods still running after scale-down should block primary prep."""
         mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
         mock_primary_client.get_pods.return_value = [{"metadata": {"name": "thanos-compact-0"}}]
+        mock_wait.return_value = False
 
         with pytest.raises(SwitchoverError) as exc_info:
             primary_prep_with_obs._scale_down_thanos_compactor()
 
-        assert "Thanos compactor still has 1 pod(s) running" in str(exc_info.value)
-        mock_sleep.assert_called_once_with(THANOS_SCALE_DOWN_WAIT)
+        assert "Thanos compactor still has 1 pod(s) running after scale-down timeout" in str(exc_info.value)
+        mock_wait.assert_called_once()
 
     def test_prepare_with_thanos_api_exception_fails_as_real_error(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog

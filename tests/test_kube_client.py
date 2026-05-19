@@ -17,14 +17,21 @@ from lib.kube_client import KubeClient, api_call, is_retryable_error
 @pytest.fixture
 def mock_k8s_apis():
     """Mock Kubernetes API clients."""
-    with patch("lib.kube_client.config.load_kube_config") as mock_config, patch(
-        "lib.kube_client.client.CustomObjectsApi"
-    ) as mock_custom_cls, patch("lib.kube_client.client.CoreV1Api") as mock_core_cls, patch(
+    with patch("lib.kube_client.config.new_client_from_config") as mock_new_client, patch(
+        "lib.kube_client.config.load_kube_config"
+    ) as mock_load_config, patch("lib.kube_client.client.CustomObjectsApi") as mock_custom_cls, patch(
+        "lib.kube_client.client.CoreV1Api"
+    ) as mock_core_cls, patch(
         "lib.kube_client.client.AppsV1Api"
     ) as mock_apps_cls:
+        api_client = MagicMock(name="api_client")
+        api_client.configuration = MagicMock(name="api_client_configuration")
+        mock_new_client.return_value = api_client
 
         yield {
-            "config": mock_config,
+            "new_client": mock_new_client,
+            "load_config": mock_load_config,
+            "api_client": api_client,
             "custom_api": mock_custom_cls.return_value,
             "core_api": mock_core_cls.return_value,
             "apps_api": mock_apps_cls.return_value,
@@ -810,20 +817,56 @@ class TestKubeClientInitialization:
     """Test cases for KubeClient initialization."""
 
     @patch("lib.kube_client.config.load_kube_config")
-    def test_init_with_context(self, mock_load_config):
+    @patch("lib.kube_client.config.new_client_from_config")
+    def test_init_with_context(self, mock_new_client, mock_load_config):
         """Test initializing with a specific context."""
+        api_client = MagicMock()
+        api_client.configuration = MagicMock()
+        mock_new_client.return_value = api_client
+
         kc = KubeClient(context="test-context")
+
         assert kc.context == "test-context"
         assert kc.dry_run is False
-        mock_load_config.assert_called_once_with(context="test-context")
+        mock_new_client.assert_called_once_with(context="test-context", persist_config=False)
+        mock_load_config.assert_not_called()
 
     @patch("lib.kube_client.config.load_kube_config")
-    def test_init_without_context(self, mock_load_config):
+    @patch("lib.kube_client.config.new_client_from_config")
+    def test_init_without_context(self, mock_new_client, mock_load_config):
         """Test initializing without a context."""
+        api_client = MagicMock()
+        api_client.configuration = MagicMock()
+        mock_new_client.return_value = api_client
+
         kc = KubeClient()
+
         assert kc.context is None
         assert kc.dry_run is False
-        mock_load_config.assert_called_once_with(context=None)
+        mock_new_client.assert_called_once_with(context=None, persist_config=False)
+        mock_load_config.assert_not_called()
+
+    @patch("lib.kube_client.client.CustomObjectsApi")
+    @patch("lib.kube_client.client.AppsV1Api")
+    @patch("lib.kube_client.client.CoreV1Api")
+    @patch("lib.kube_client.config.new_client_from_config")
+    def test_init_uses_isolated_api_client_configuration(
+        self, mock_new_client, mock_core_cls, mock_apps_cls, mock_custom_cls
+    ):
+        """KubeClient should configure the isolated ApiClient returned for the context."""
+        api_client = MagicMock()
+        api_client.configuration = MagicMock()
+        api_client.configuration.assert_hostname = True
+        mock_new_client.return_value = api_client
+
+        KubeClient(context="ctx-a", request_timeout=45, disable_hostname_verification=True)
+
+        assert api_client.configuration.retries == 0
+        assert api_client.configuration.timeout == 45
+        assert api_client.configuration.assert_hostname is False
+        mock_core_cls.assert_called_once_with(api_client)
+        mock_apps_cls.assert_called_once_with(api_client)
+        mock_custom_cls.assert_called_once_with(api_client)
 
 
 @pytest.mark.unit

@@ -17,9 +17,12 @@ from lib.kube_client import KubeClient, is_retryable_error
 @pytest.fixture
 def kube_client():
     """Fixture to provide a mocked KubeClient."""
-    with patch("kubernetes.config.load_kube_config"), patch("kubernetes.client.CoreV1Api"), patch(
-        "kubernetes.client.AppsV1Api"
-    ), patch("kubernetes.client.CustomObjectsApi"):
+    with patch("kubernetes.config.new_client_from_config") as mock_new_client, patch(
+        "kubernetes.client.CoreV1Api"
+    ), patch("kubernetes.client.AppsV1Api"), patch("kubernetes.client.CustomObjectsApi"):
+        api_client = MagicMock()
+        api_client.configuration = MagicMock()
+        mock_new_client.return_value = api_client
         yield KubeClient(context="test-context")
 
 

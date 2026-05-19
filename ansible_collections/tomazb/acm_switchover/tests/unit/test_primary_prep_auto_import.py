@@ -43,12 +43,18 @@ def test_scale_observability_blocks_when_thanos_pods_remain():
     pod_queries = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Pod"]
     fail_tasks = [task for task in tasks if "Thanos compactor still has" in str(task.get("ansible.builtin.fail", {}))]
 
-    assert "ansible.builtin.pause" in text
+    assert "ansible.builtin.pause" not in text
     assert pod_queries, "scale_observability.yml must query Thanos compactor pods after scaling"
     assert "app.kubernetes.io/name=thanos-compact" in str(pod_queries[0])
+    assert pod_queries[0].get("retries") == 30
+    assert pod_queries[0].get("delay") == 10
+    assert pod_queries[0].get("failed_when") is False
+    assert "(acm_primary_compactor_pods_after_scale.resources | default([]) | length) == 0" in str(
+        pod_queries[0].get("until", "")
+    )
     assert fail_tasks, "remaining Thanos compactor pods must fail primary_prep"
     fail_when = str(fail_tasks[0].get("when", ""))
     assert "acm_primary_compactor_pods_after_scale is defined" in fail_when
     assert "acm_primary_compactor_scale is defined" in fail_when
+    assert "acm_primary_compactor_pods_after_scale is failed" in fail_when
     assert "acm_switchover_execution.mode" in fail_when
-    assert "failed_when: false" not in text

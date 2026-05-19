@@ -5,7 +5,6 @@ Primary hub preparation module for ACM switchover.
 # Runbook: Steps 1-3 (Method 1) / F1-F3 (Method 2)
 
 import logging
-import time
 from typing import Optional
 
 from kubernetes.client.rest import ApiException
@@ -16,13 +15,15 @@ from lib.constants import (
     DISABLE_AUTO_IMPORT_ANNOTATION,
     LOCAL_CLUSTER_NAME,
     OBSERVABILITY_NAMESPACE,
+    OBSERVABILITY_TERMINATE_INTERVAL,
+    OBSERVABILITY_TERMINATE_TIMEOUT,
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
-    THANOS_SCALE_DOWN_WAIT,
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import Phase, StateManager, is_acm_version_ge
+from lib.waiter import WaitConditionResult, wait_for_condition
 
 from .backup_schedule import fail_on_multiple_backup_schedules
 
@@ -245,18 +246,34 @@ class PrimaryPreparation:
                 logger.info("[DRY-RUN] Skipping Thanos compactor pod verification")
                 return
 
-            # Wait a moment and verify no pods running
-            time.sleep(THANOS_SCALE_DOWN_WAIT)
+            def _thanos_compactor_terminated():
+                pods = self.primary.get_pods(
+                    namespace=OBSERVABILITY_NAMESPACE,
+                    label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+                )
+                if not pods:
+                    return WaitConditionResult.complete("all Thanos compactor pods terminated")
+                return WaitConditionResult.pending(f"{len(pods)} pod(s) remaining")
 
-            pods = self.primary.get_pods(
-                namespace=OBSERVABILITY_NAMESPACE,
-                label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+            success = wait_for_condition(
+                "Thanos compactor pod termination",
+                _thanos_compactor_terminated,
+                timeout=OBSERVABILITY_TERMINATE_TIMEOUT,
+                interval=OBSERVABILITY_TERMINATE_INTERVAL,
+                logger=logger,
             )
 
-            if pods:
-                raise SwitchoverError(f"Thanos compactor still has {len(pods)} pod(s) running after scale-down")
-            else:
-                logger.info("Thanos compactor scaled down successfully")
+            if not success:
+                pods = self.primary.get_pods(
+                    namespace=OBSERVABILITY_NAMESPACE,
+                    label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+                )
+                if pods:
+                    raise SwitchoverError(
+                        f"Thanos compactor still has {len(pods)} pod(s) running after scale-down timeout"
+                    )
+
+            logger.info("Thanos compactor scaled down successfully")
 
         except (RuntimeError, ValueError) as e:
             logger.error("Failed to scale down Thanos compactor: %s", e)

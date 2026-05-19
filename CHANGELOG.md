@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tightened decommission safety checks so ClusterDeployment matching considers additional explicit cluster identifiers, fails closed for plausible unverified relationships, requires explicit collection primary hub inputs, and keeps decommission RBAC bootstrap filtering label-positive.
 - Fixed collection passive activation waiting so a stale pre-activation Velero managed-clusters restore signal remains a retryable pending state instead of failing before the ACM controller publishes the new restore name.
 - Fixed post-remediation klusterlet rechecks so Python and collection workflows wait for hub kubeconfig secret convergence before failing persistent wrong-hub results.
+- Replaced one-shot Thanos compactor scale-down checks with bounded polling, re-raised post-activation programming errors, and avoided global kubeconfig fallback/config mutation in Python client setup.
 
 ### Removed
 
