@@ -875,7 +875,7 @@ class PostActivationVerification:
                     ", ".join(fix_failed),
                 )
 
-            post_remediation_state = {"wrong_hub": [], "unverified": []}
+            post_remediation_state: Dict[str, List[str]] = {"wrong_hub": [], "unverified": []}
 
             def recheck_remediated_clusters() -> WaitConditionResult:
                 """Poll remediated clusters until klusterlet updates hub-kubeconfig-secret."""
