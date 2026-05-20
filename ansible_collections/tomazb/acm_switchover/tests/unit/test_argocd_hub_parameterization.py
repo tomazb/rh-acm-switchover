@@ -281,14 +281,35 @@ def test_standalone_argocd_resume_guards_checkpoint_load_by_enabled_flag():
 
 
 def test_standalone_argocd_resume_validates_checkpoint_path_before_file_reads():
-    """argocd_resume.yml must validate checkpoint.path before stat/slurp."""
-    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
-    validate_index = text.find("tomazb.acm_switchover.acm_safe_path_validate")
-    stat_index = text.find("ansible.builtin.stat")
+    """argocd_resume.yml must artifact-validate checkpoint.path before stat/slurp."""
+    playbook = yaml.safe_load((PLAYBOOKS_DIR / "argocd_resume.yml").read_text())
+    pre_tasks = playbook[0].get("pre_tasks", [])
+    validate_indices = [
+        idx
+        for idx, task in enumerate(pre_tasks)
+        if "tomazb.acm_switchover.acm_safe_path_validate" in task
+    ]
+    stat_indices = [
+        idx for idx, task in enumerate(pre_tasks) if "ansible.builtin.stat" in task
+    ]
 
-    assert validate_index != -1, "argocd_resume.yml must validate checkpoint.path before touching controller files"
-    assert stat_index != -1, "argocd_resume.yml should still inspect the checkpoint file after validation"
-    assert validate_index < stat_index, "argocd_resume.yml must validate checkpoint.path before stat/slurp"
+    assert (
+        validate_indices
+    ), "argocd_resume.yml must validate checkpoint.path before touching controller files"
+    assert (
+        stat_indices
+    ), "argocd_resume.yml should still inspect the checkpoint file after validation"
+    assert (
+        validate_indices[0] < stat_indices[0]
+    ), "argocd_resume.yml must validate checkpoint.path before stat/slurp"
+
+    validate_task = pre_tasks[validate_indices[0]][
+        "tomazb.acm_switchover.acm_safe_path_validate"
+    ]
+    assert validate_task.get("path_type") == "artifact", (
+        "argocd_resume.yml must use artifact path validation before reading persisted checkpoints "
+        "so symlink escapes are rejected"
+    )
 
 
 def test_discover_run_id_gated_by_resume_mode():

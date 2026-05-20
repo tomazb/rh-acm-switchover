@@ -29,6 +29,7 @@
     - name: Validate persisted checkpoint path
       tomazb.acm_switchover.acm_safe_path_validate:
         path: "{{ _argocd_resume_checkpoint_path_abs }}"
+        path_type: artifact
       when:
         - (acm_switchover_argocd.run_id | default('')) | length == 0
         - ((acm_switchover_execution | default({})).get('run_id', '') | length) == 0

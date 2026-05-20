@@ -20,7 +20,7 @@ options:
     description:
       - Validation policy to apply.
       - C(safe) checks path syntax and allowed absolute roots.
-      - C(artifact) also rejects symlink escapes before controller-side file writes.
+      - C(artifact) also rejects symlink escapes before controller-side artifact reads or writes.
     type: str
     choices: [safe, artifact]
     default: safe
@@ -30,6 +30,7 @@ EXAMPLES = r"""
 - name: Validate checkpoint path before reading it on the controller
   tomazb.acm_switchover.acm_safe_path_validate:
     path: "{{ _argocd_resume_checkpoint_path_abs }}"
+    path_type: artifact
 """
 
 from ansible.module_utils.basic import AnsibleModule  # noqa: E402
