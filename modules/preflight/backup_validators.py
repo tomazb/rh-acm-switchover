@@ -12,15 +12,15 @@ from lib.constants import (
     BACKUP_SCHEDULE_DEFAULT_NAME,
     BACKUP_VERIFY_TIMEOUT,
     LOCAL_CLUSTER_NAME,
-    RESTORE_ALREADY_AVAILABLE_MARKER,
     RESTORE_PASSIVE_SYNC_NAME,
+    SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_USE_MANAGED_SERVICE_ACCOUNT,
 )
 from lib.gitops_detector import safe_record_gitops_markers
 from lib.kube_client import KubeClient
 from lib.validation import InputValidator, ValidationError
 
-from ..restore_discovery import find_passive_sync_restore
+from ..restore_discovery import find_passive_sync_restore, restore_messages_are_benign_already_available
 from .base_validator import BaseValidator
 
 logger = logging.getLogger("acm_switchover")
@@ -451,7 +451,7 @@ class PassiveSyncValidator(BaseValidator):
                     "Passive sync restore",
                     False,
                     "No passive sync restore found on secondary hub (required for passive method). "
-                    f"Expected a Restore with spec.syncRestoreWithNewBackups=true or named '{RESTORE_PASSIVE_SYNC_NAME}'. "
+                    f"Expected a sync-enabled passive Restore with spec.{SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true. "
                     f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get restore.cluster.open-cluster-management.io -o wide",
                     critical=True,
                 )
@@ -486,7 +486,7 @@ class PassiveSyncValidator(BaseValidator):
                 )
             elif phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
-                if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
+                if restore_messages_are_benign_already_available(messages):
                     self.add_result(
                         "Passive sync restore",
                         True,

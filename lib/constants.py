@@ -129,9 +129,9 @@ VELERO_BACKUP_LATEST = "latest"
 VELERO_BACKUP_SKIP = "skip"
 CLEANUP_BEFORE_RESTORE_VALUE = "CleanupRestored"
 
-# Restore status message marker for clusters that are already available
+# Restore status message pattern for clusters that are already available
 # (expected when running consecutive switchovers)
-RESTORE_ALREADY_AVAILABLE_MARKER = "already available"
+BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN = r"^ManagedCluster [^ ]+ already available$"
 
 # Patch verification settings
 PATCH_VERIFY_MAX_RETRIES = 5

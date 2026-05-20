@@ -475,11 +475,20 @@ class TestSecondaryActivation:
 
         mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
 
-        # Mock list_custom_resources for managed clusters
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "cluster1"}},
-            {"metadata": {"name": "local-cluster"}},
-        ]
+        def list_custom_resources_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores":
+                return [
+                    {
+                        "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                        "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                    }
+                ]
+            return [
+                {"metadata": {"name": "cluster1"}},
+                {"metadata": {"name": "local-cluster"}},
+            ]
+
+        mock_secondary_client.list_custom_resources.side_effect = list_custom_resources_side_effect
 
         with patch("modules.activation.wait_for_condition") as mock_wait:
             # Define side effect to execute the callback passed to wait_for_condition
@@ -501,7 +510,7 @@ class TestSecondaryActivation:
     def test_poll_restore_finished_with_errors_clusters_already_available(
         self, activation_passive, mock_secondary_client
     ):
-        """FinishedWithErrors with 'already available' messages should succeed for consecutive switchovers."""
+        """FinishedWithErrors with exact ManagedCluster already-available messages should succeed."""
         call_count = [0]
 
         def get_custom_resource_side_effect(**kwargs):
@@ -513,9 +522,9 @@ class TestSecondaryActivation:
                         "phase": "FinishedWithErrors",
                         "lastMessage": "Velero restores have run to completion but encountered 1+ errors",
                         "messages": [
-                            "managed cluster prod1 already available",
-                            "managed cluster prod2 already available",
-                            "managed cluster prod3 already available",
+                            "ManagedCluster prod1 already available",
+                            "ManagedCluster prod2 already available",
+                            "ManagedCluster prod3 already available",
                         ],
                         "veleroManagedClustersRestoreName": "test-velero-mc-restore",
                     },
@@ -525,12 +534,23 @@ class TestSecondaryActivation:
             return None
 
         mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
-        mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "prod1"}},
-            {"metadata": {"name": "prod2"}},
-            {"metadata": {"name": "prod3"}},
-            {"metadata": {"name": "local-cluster"}},
-        ]
+
+        def list_custom_resources_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores":
+                return [
+                    {
+                        "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                        "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True},
+                    }
+                ]
+            return [
+                {"metadata": {"name": "prod1"}},
+                {"metadata": {"name": "prod2"}},
+                {"metadata": {"name": "prod3"}},
+                {"metadata": {"name": "local-cluster"}},
+            ]
+
+        mock_secondary_client.list_custom_resources.side_effect = list_custom_resources_side_effect
 
         with patch("modules.activation.wait_for_condition") as mock_wait:
 
@@ -544,6 +564,41 @@ class TestSecondaryActivation:
 
             # Should NOT raise - FinishedWithErrors with "already available" is treated as success
             activation_passive._wait_for_restore_completion()
+
+    def test_poll_restore_finished_with_errors_loose_already_available_message_raises(
+        self, activation_passive, mock_secondary_client
+    ):
+        """Loose already-available substrings are not benign FinishedWithErrors messages."""
+
+        def get_custom_resource_side_effect(**kwargs):
+            if kwargs.get("plural") == "restores" and kwargs.get("group") == "cluster.open-cluster-management.io":
+                return {
+                    "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME, "resourceVersion": "300"},
+                    "status": {
+                        "phase": "FinishedWithErrors",
+                        "lastMessage": "Velero restores failed",
+                        "messages": ["managed cluster prod1 already available"],
+                    },
+                }
+            return None
+
+        mock_secondary_client.get_custom_resource.side_effect = get_custom_resource_side_effect
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": RESTORE_PASSIVE_SYNC_NAME}, "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: True}},
+        ]
+
+        with patch("modules.activation.wait_for_condition") as mock_wait:
+
+            def side_effect(desc, callback, **kwargs):
+                result = callback()
+                assert isinstance(result, WaitConditionResult)
+                return result.done
+
+            mock_wait.side_effect = side_effect
+            activation_passive.state.is_step_completed.side_effect = lambda step: step != "wait_restore_completion"
+
+            with pytest.raises(FatalError, match="Restore failed: FinishedWithErrors"):
+                activation_passive._wait_for_restore_completion()
 
     def test_poll_restore_finished_with_errors_real_errors_raises(self, activation_passive, mock_secondary_client):
         """FinishedWithErrors with non-'already available' messages should still raise."""
@@ -1138,24 +1193,23 @@ class TestFindPassiveSyncRestore:
         # Should not have called get_custom_resource since found via list
         mock_secondary_client.get_custom_resource.assert_not_called()
 
-    def test_find_fallback_to_well_known_name(self, mock_secondary_client):
-        """Test discovery falls back to well-known name if no syncRestoreWithNewBackups."""
+    def test_find_rejects_well_known_name_without_sync_restore_flag(self, mock_secondary_client):
+        """Conventional restore name is not enough without syncRestoreWithNewBackups=true."""
         mock_secondary_client.list_custom_resources.return_value = [
             {
-                "metadata": {"name": "some-other-restore"},
-                "spec": {"someOtherField": True},
-            }
+                "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
+                "spec": {},
+            },
+            {
+                "metadata": {"name": "sync-disabled-restore"},
+                "spec": {SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS: False},
+            },
         ]
-        mock_secondary_client.get_custom_resource.return_value = {
-            "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
-            "spec": {},
-        }
 
         result = activation_module.find_passive_sync_restore(mock_secondary_client)
 
-        assert result is not None
-        assert result["metadata"]["name"] == RESTORE_PASSIVE_SYNC_NAME
-        mock_secondary_client.get_custom_resource.assert_called_once()
+        assert result is None
+        mock_secondary_client.get_custom_resource.assert_not_called()
 
     def test_find_no_restore_found(self, mock_secondary_client):
         """Test discovery returns None when no restore found."""
@@ -1165,6 +1219,7 @@ class TestFindPassiveSyncRestore:
         result = activation_module.find_passive_sync_restore(mock_secondary_client)
 
         assert result is None
+        mock_secondary_client.get_custom_resource.assert_not_called()
 
     def test_find_prefers_sync_restore_over_well_known(self, mock_secondary_client):
         """Test that syncRestoreWithNewBackups is preferred over well-known name."""
@@ -1421,7 +1476,7 @@ class TestVerifyPassiveSyncFinishedWithErrors:
             activation_passive._verify_passive_sync()
 
     def test_finished_with_errors_mixed_messages_raises(self, activation_passive, mock_secondary_client):
-        """FinishedWithErrors with a mix of 'already available' and real errors raises."""
+        """FinishedWithErrors with a mix of exact already-available and real errors raises."""
         mock_secondary_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": RESTORE_PASSIVE_SYNC_NAME},
@@ -1434,7 +1489,7 @@ class TestVerifyPassiveSyncFinishedWithErrors:
                 "phase": "FinishedWithErrors",
                 "lastMessage": "Some errors",
                 "messages": [
-                    "managed cluster prod1 already available",
+                    "ManagedCluster prod1 already available",
                     "restore of configmap abc failed",
                 ],
             },
@@ -1448,7 +1503,7 @@ class TestVerifyPassiveSyncFinishedWithErrors:
     def test_finished_with_errors_all_already_available_proceeds(
         self, mock_wait, mock_sleep, activation_passive, mock_secondary_client
     ):
-        """FinishedWithErrors with only 'already available' messages should proceed."""
+        """FinishedWithErrors with only exact ManagedCluster already-available messages should proceed."""
         mock_wait.return_value = True
         mock_sleep.return_value = None
 
@@ -1473,8 +1528,8 @@ class TestVerifyPassiveSyncFinishedWithErrors:
                         "phase": "FinishedWithErrors",
                         "lastMessage": "Some clusters already available",
                         "messages": [
-                            "managed cluster prod1 already available",
-                            "managed cluster prod2 already available",
+                            "ManagedCluster prod1 already available",
+                            "ManagedCluster prod2 already available",
                         ],
                     },
                     "spec": spec,

@@ -953,10 +953,13 @@ class TestPassiveSyncValidator:
     def test_passive_sync_enabled(self, reporter, mock_kube_client):
         """Test success when passive sync is enabled."""
         validator = PassiveSyncValidator(reporter)
-        mock_kube_client.list_custom_resources.return_value = []
-        mock_kube_client.get_custom_resource.return_value = {
-            "status": {"phase": "Enabled", "lastMessage": "Sync active"}
-        }
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {"phase": "Enabled", "lastMessage": "Sync active"},
+            }
+        ]
 
         validator.run(mock_kube_client)
 
@@ -968,10 +971,13 @@ class TestPassiveSyncValidator:
     def test_passive_sync_finished(self, reporter, mock_kube_client):
         """Test success when passive sync finished."""
         validator = PassiveSyncValidator(reporter)
-        mock_kube_client.list_custom_resources.return_value = []
-        mock_kube_client.get_custom_resource.return_value = {
-            "status": {"phase": "Finished", "lastMessage": "Sync completed"}
-        }
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {"phase": "Finished", "lastMessage": "Sync completed"},
+            }
+        ]
 
         validator.run(mock_kube_client)
 
@@ -982,10 +988,13 @@ class TestPassiveSyncValidator:
     def test_passive_sync_running(self, reporter, mock_kube_client):
         """Test success when passive sync is actively running (transient state during sync)."""
         validator = PassiveSyncValidator(reporter)
-        mock_kube_client.list_custom_resources.return_value = []
-        mock_kube_client.get_custom_resource.return_value = {
-            "status": {"phase": "Running", "lastMessage": "Velero restore executing"}
-        }
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {"phase": "Running", "lastMessage": "Velero restore executing"},
+            }
+        ]
 
         validator.run(mock_kube_client)
 
@@ -997,10 +1006,13 @@ class TestPassiveSyncValidator:
     def test_passive_sync_unknown_is_not_activation_ready(self, reporter, mock_kube_client):
         """Unknown is not activation-ready and must not pass preflight."""
         validator = PassiveSyncValidator(reporter)
-        mock_kube_client.list_custom_resources.return_value = []
-        mock_kube_client.get_custom_resource.return_value = {
-            "status": {"phase": "Unknown", "lastMessage": "Unknown status for Velero restore"}
-        }
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {"phase": "Unknown", "lastMessage": "Unknown status for Velero restore"},
+            }
+        ]
 
         validator.run(mock_kube_client)
 
@@ -1013,14 +1025,16 @@ class TestPassiveSyncValidator:
     def test_passive_restore_finished_with_errors_already_available_is_benign(self, reporter, mock_kube_client):
         """Test benign FinishedWithErrors restore messages are treated as ready."""
         validator = PassiveSyncValidator(reporter)
-        mock_kube_client.list_custom_resources.return_value = []
-        mock_kube_client.get_custom_resource.return_value = {
-            "metadata": {"name": "restore-acm-passive-sync"},
-            "status": {
-                "phase": "FinishedWithErrors",
-                "messages": ["cluster already available"],
-            },
-        }
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {
+                    "phase": "FinishedWithErrors",
+                    "messages": ["ManagedCluster cluster-a already available"],
+                },
+            }
+        ]
 
         validator.run(mock_kube_client)
 
@@ -1030,18 +1044,44 @@ class TestPassiveSyncValidator:
         assert results[0]["passed"] is True
         assert "clusters already available" in results[0]["message"]
 
+    def test_passive_restore_finished_with_errors_loose_already_available_is_critical(self, reporter, mock_kube_client):
+        """Loose already-available substrings are not benign FinishedWithErrors messages."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {
+                    "phase": "FinishedWithErrors",
+                    "lastMessage": "Velero restore failed",
+                    "messages": ["cluster already available"],
+                },
+            }
+        ]
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "Passive sync restore"
+        assert results[0]["passed"] is False
+        assert results[0]["critical"] is True
+        assert "FinishedWithErrors" in results[0]["message"]
+
     def test_passive_restore_finished_with_errors_real_failure_is_critical(self, reporter, mock_kube_client):
         """Test real FinishedWithErrors restore messages remain critical failures."""
         validator = PassiveSyncValidator(reporter)
-        mock_kube_client.list_custom_resources.return_value = []
-        mock_kube_client.get_custom_resource.return_value = {
-            "metadata": {"name": "restore-acm-passive-sync"},
-            "status": {
-                "phase": "FinishedWithErrors",
-                "lastMessage": "PVC restore failed",
-                "messages": ["PVC restore failed"],
-            },
-        }
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {
+                    "phase": "FinishedWithErrors",
+                    "lastMessage": "PVC restore failed",
+                    "messages": ["PVC restore failed"],
+                },
+            }
+        ]
 
         validator.run(mock_kube_client)
 
@@ -1056,6 +1096,27 @@ class TestPassiveSyncValidator:
         assert len(critical_failures) == 1
         assert critical_failures[0]["check"] == "Passive sync restore"
         assert critical_failures[0]["message"] == results[0]["message"]
+
+    def test_passive_sync_conventional_name_without_sync_flag_not_found(self, reporter, mock_kube_client):
+        """Conventional restore name is rejected unless syncRestoreWithNewBackups is true."""
+        validator = PassiveSyncValidator(reporter)
+        mock_kube_client.context = "secondary"
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {},
+                "status": {"phase": "Enabled", "lastMessage": "Sync active"},
+            }
+        ]
+
+        validator.run(mock_kube_client)
+
+        results = reporter.results
+        assert len(results) == 1
+        assert results[0]["check"] == "Passive sync restore"
+        assert results[0]["passed"] is False
+        assert "No passive sync restore found" in results[0]["message"]
+        assert "spec.syncRestoreWithNewBackups=true" in results[0]["message"]
 
     def test_passive_sync_not_found(self, reporter, mock_kube_client):
         """Test critical failure when passive sync restore not found."""
@@ -1075,10 +1136,13 @@ class TestPassiveSyncValidator:
     def test_passive_sync_unexpected_phase(self, reporter, mock_kube_client):
         """Test critical failure when passive sync in unexpected state."""
         validator = PassiveSyncValidator(reporter)
-        mock_kube_client.list_custom_resources.return_value = []
-        mock_kube_client.get_custom_resource.return_value = {
-            "status": {"phase": "Failed", "lastMessage": "Sync failed"}
-        }
+        mock_kube_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
+                "status": {"phase": "Failed", "lastMessage": "Sync failed"},
+            }
+        ]
 
         validator.run(mock_kube_client)
 
@@ -1091,25 +1155,22 @@ class TestPassiveSyncValidator:
         """Test that Velero validation errors are surfaced when referenced by ACM restore message."""
         validator = PassiveSyncValidator(reporter)
         mock_kube_client.context = "secondary"
-        mock_kube_client.list_custom_resources.return_value = []
-
-        # First get_custom_resource call: ACM restore
-        # Second get_custom_resource call: referenced Velero restore
-        mock_kube_client.get_custom_resource.side_effect = [
+        mock_kube_client.list_custom_resources.return_value = [
             {
                 "metadata": {"name": "restore-acm-passive-sync"},
+                "spec": {"syncRestoreWithNewBackups": True},
                 "status": {
                     "phase": "Error",
                     "lastMessage": "Velero restore restore-acm-passive-sync-acm-resources-schedule-123 has failed validation",
                 },
-            },
-            {
-                "status": {
-                    "phase": "FailedValidation",
-                    "validationErrors": ["the BSL acm-backup-dpa-1 is unavailable"],
-                }
-            },
+            }
         ]
+        mock_kube_client.get_custom_resource.return_value = {
+            "status": {
+                "phase": "FailedValidation",
+                "validationErrors": ["the BSL acm-backup-dpa-1 is unavailable"],
+            }
+        }
 
         validator.run(mock_kube_client)
 

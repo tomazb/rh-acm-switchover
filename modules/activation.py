@@ -25,7 +25,6 @@ from lib.constants import (
     PATCH_VERIFY_MAX_RETRIES,
     PATCH_VERIFY_RETRY_DELAY,
     PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME,
-    RESTORE_ALREADY_AVAILABLE_MARKER,
     RESTORE_FAST_POLL_INTERVAL,
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_FULL_NAME,
@@ -43,7 +42,7 @@ from lib.kube_client import KubeClient
 from lib.utils import Phase, StateManager, is_acm_version_ge
 from lib.waiter import WaitConditionResult, wait_for_condition
 
-from .restore_discovery import find_passive_sync_restore
+from .restore_discovery import find_passive_sync_restore, restore_messages_are_benign_already_available
 
 logger = logging.getLogger("acm_switchover")
 
@@ -100,9 +99,8 @@ class SecondaryActivation:
         restore = find_passive_sync_restore(self.secondary, BACKUP_NAMESPACE)
         if not restore:
             raise FatalError(
-                f"No passive sync restore found on secondary hub. "
-                f"Expected either a restore with spec.{SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true "
-                f"or a restore named '{RESTORE_PASSIVE_SYNC_NAME}'."
+                "No sync-enabled passive Restore found on secondary hub. "
+                f"Expected a Restore with spec.{SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true."
             )
 
         restore_name = restore.get("metadata", {}).get("name")
@@ -209,7 +207,7 @@ class SecondaryActivation:
             logger.info("Passive sync verified (%s): %s", phase, message)
         elif phase == "FinishedWithErrors":
             messages = status.get("messages", [])
-            if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
+            if restore_messages_are_benign_already_available(messages):
                 logger.warning(
                     "Passive sync restore %s in %s state but all errors are"
                     " 'already available' clusters (expected for consecutive"
@@ -881,7 +879,7 @@ class SecondaryActivation:
                 return WaitConditionResult.complete(f"phase={phase}")
             if phase == "FinishedWithErrors":
                 messages = status.get("messages", [])
-                if messages and all(RESTORE_ALREADY_AVAILABLE_MARKER in m for m in messages):
+                if restore_messages_are_benign_already_available(messages):
                     logger.warning(
                         "Restore %s reported FinishedWithErrors but all errors are"
                         " 'already available' clusters (expected for consecutive"
