@@ -16,6 +16,14 @@ options:
     description: Controller-side path to validate.
     required: true
     type: str
+  path_type:
+    description:
+      - Validation policy to apply.
+      - C(safe) checks path syntax and allowed absolute roots.
+      - C(artifact) also rejects symlink escapes before controller-side file writes.
+    type: str
+    choices: [safe, artifact]
+    default: safe
 """
 
 EXAMPLES = r"""
@@ -24,10 +32,11 @@ EXAMPLES = r"""
     path: "{{ _argocd_resume_checkpoint_path_abs }}"
 """
 
-from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.basic import AnsibleModule  # noqa: E402
 
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (  # noqa: E402
     ValidationError,
+    validate_report_artifact_path,
     validate_safe_path,
 )
 
@@ -36,12 +45,20 @@ def main() -> None:
     module = AnsibleModule(
         argument_spec={
             "path": {"type": "str", "required": True},
+            "path_type": {
+                "type": "str",
+                "choices": ["safe", "artifact"],
+                "default": "safe",
+            },
         },
         supports_check_mode=True,
     )
 
     try:
-        validate_safe_path(module.params["path"])
+        if module.params["path_type"] == "artifact":
+            validate_report_artifact_path(module.params["path"])
+        else:
+            validate_safe_path(module.params["path"])
     except ValidationError as exc:
         module.fail_json(msg=str(exc))
 

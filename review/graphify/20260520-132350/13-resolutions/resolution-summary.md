@@ -22,23 +22,33 @@
 - Verification commands: pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_preflight_parity.py -q; pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_preflight_parity.py ansible_collections/tomazb/acm_switchover/tests/unit/test_restore_only_recovery_contracts.py ansible_collections/tomazb/acm_switchover/tests/unit/test_ansible_resilience_contracts.py -q; pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q; coderabbit review --prompt-only -t uncommitted
 - Result: Targeted test first failed, then passed after the fix. Broader collection unit suite passed with 598 tests. CodeRabbit returned only out-of-scope findings for files absent from this repository.
 
-## Confirmed issues not fixed
-
 ### RBAC bootstrap generated kubeconfig path is not safety-validated
 
 - Severity: Critical
 - Evidence file: review/graphify/20260520-132350/08-rbac/06b-rbac-bootstrap-decommission-query.md; review/graphify/20260520-132350/06-paths/02-sensitive-artifacts.md
-- Source files: ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/tasks/generate_kubeconfigs.yml; ansible_collections/tomazb/acm_switchover/plugins/module_utils/validation.py
-- Reason not fixed: Not included in the approved first fix batch.
-- Recommended next action: Add a failing test for unsafe output_dir/path handling, then validate the generated kubeconfig destination with the collection safe artifact path policy before directory creation and copy.
+- Source files: ansible_collections/tomazb/acm_switchover/roles/rbac_bootstrap/tasks/generate_kubeconfigs.yml; ansible_collections/tomazb/acm_switchover/plugins/modules/acm_safe_path_validate.py; ansible_collections/tomazb/acm_switchover/tests/unit/test_rbac_bootstrap_tasks.py
+- Root cause: The generated service-account kubeconfig destination was derived from operator-controlled output_dir/context/role values and used for directory creation and copy without first applying symlink-aware artifact path validation.
+- Bad scenario: A crafted output path or symlinked parent could redirect generated kubeconfig credentials outside the expected artifact tree before operators inspect the output location.
+- Fix: Extended acm_safe_path_validate with path_type=artifact and added a validation task before directory creation and kubeconfig copy.
+- Tests added/updated: Added test_generate_kubeconfigs_validates_output_path_before_writing_credentials.
+- Verification commands: ANSIBLE_LOCAL_TEMP=/tmp/ansible-local pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_rbac_bootstrap_tasks.py -q; ANSIBLE_LOCAL_TEMP=/tmp/ansible-local pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q; coderabbit review --prompt-only -t uncommitted
+- Result: Targeted test first failed before the validation task existed, then passed after the fix. Broader collection unit suite passed with 600 tests. CodeRabbit returned only out-of-scope findings for untracked Graphify output/scripts.
 
 ### Checkpoint file path uses weaker validation than artifact writes
 
 - Severity: Important
 - Evidence file: review/graphify/20260520-132350/03-state/03-checkpoint-resume-invalid-state.md; review/graphify/20260520-132350/06-paths/01-report-dir-path-safety.md
-- Source files: ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py; ansible_collections/tomazb/acm_switchover/plugins/module_utils/validation.py
-- Reason not fixed: Not included in the approved first fix batch.
-- Recommended next action: Add a failing checkpoint action test for relative symlink escape, then use symlink-aware checkpoint path validation before read, write, and corrupt-file quarantine.
+- Source files: ansible_collections/tomazb/acm_switchover/plugins/action/checkpoint_phase.py; ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py
+- Root cause: checkpoint_phase validated checkpoint.path with validate_safe_path, which rejects unsafe syntax and disallowed absolute roots but does not reject relative symlink-parent escapes before controller-side file reads, writes, and corrupt-file quarantine.
+- Bad scenario: A relative checkpoint path under a symlinked parent could write or quarantine checkpoint state outside the intended artifact tree.
+- Fix: Switched checkpoint_phase to validate_report_artifact_path before any checkpoint load/save path use.
+- Tests added/updated: Added test_action_module_rejects_checkpoint_path_relative_symlink_escape.
+- Verification commands: ANSIBLE_LOCAL_TEMP=/tmp/ansible-local pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py -q; ANSIBLE_LOCAL_TEMP=/tmp/ansible-local pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q; coderabbit review --prompt-only -t uncommitted
+- Result: Targeted test first failed because the plugin proceeded without a validation failure, then passed after the fix. Broader collection unit suite passed with 600 tests. CodeRabbit returned only out-of-scope findings for untracked Graphify output/scripts.
+
+## Confirmed issues not fixed
+
+- None.
 
 ## Needs more evidence
 

@@ -20,7 +20,9 @@ def test_generate_kubeconfigs_invokes_packaged_script_for_selected_service_accou
 
     assert "role_path" in text
     assert "files/scripts/generate-sa-kubeconfig.sh" in text
-    assert "scripts/generate-sa-kubeconfig.sh" not in text.replace("files/scripts/generate-sa-kubeconfig.sh", "")
+    assert "scripts/generate-sa-kubeconfig.sh" not in text.replace(
+        "files/scripts/generate-sa-kubeconfig.sh", ""
+    )
     assert "acm-switchover" in text
     assert "acm-switchover-operator" in text
     assert "acm-switchover-validator" in text
@@ -30,8 +32,36 @@ def test_generate_kubeconfigs_invokes_packaged_script_for_selected_service_accou
 
     copy_tasks = [task for task in tasks if task.get("ansible.builtin.copy")]
     assert copy_tasks, "generated kubeconfig stdout must be written to a durable file"
-    assert any(task["ansible.builtin.copy"].get("mode") == "0600" for task in copy_tasks)
-    assert any(task.get("no_log") is True for task in tasks), "credential output must be hidden"
+    assert any(
+        task["ansible.builtin.copy"].get("mode") == "0600" for task in copy_tasks
+    )
+    assert any(
+        task.get("no_log") is True for task in tasks
+    ), "credential output must be hidden"
+
+
+def test_generate_kubeconfigs_validates_output_path_before_writing_credentials():
+    """Generated service-account kubeconfigs must use artifact-safe path validation before writes."""
+    tasks = _load_tasks("generate_kubeconfigs.yml")
+    validate_index = next(
+        idx
+        for idx, task in enumerate(tasks)
+        if task.get("tomazb.acm_switchover.acm_safe_path_validate", {}).get("path")
+        == "{{ _rbac_bootstrap_kubeconfig_path }}"
+    )
+    file_index = next(
+        idx for idx, task in enumerate(tasks) if task.get("ansible.builtin.file")
+    )
+    copy_index = next(
+        idx for idx, task in enumerate(tasks) if task.get("ansible.builtin.copy")
+    )
+    validate_task = tasks[validate_index][
+        "tomazb.acm_switchover.acm_safe_path_validate"
+    ]
+
+    assert validate_index < file_index
+    assert validate_index < copy_index
+    assert validate_task.get("path_type") == "artifact"
 
 
 def test_validate_permissions_impersonates_bootstrapped_service_account():
@@ -58,7 +88,11 @@ def test_manifest_filter_uses_positive_role_or_common_labels_only():
 
 def _manifest_filter_applies(item: dict, role: str) -> bool:
     tasks = _load_tasks("apply_manifest_file.yml")
-    apply_task = next(task for task in tasks if task.get("name") == "Apply filtered RBAC resources from manifest file")
+    apply_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Apply filtered RBAC resources from manifest file"
+    )
     expression = Environment().compile_expression(apply_task["when"])
 
     return bool(expression(item=item, _rbac_plan={"role": role}))
