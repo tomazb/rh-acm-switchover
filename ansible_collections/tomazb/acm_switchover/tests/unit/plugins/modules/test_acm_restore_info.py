@@ -444,7 +444,8 @@ def test_build_restore_activation_plan_for_full_restore_mode():
     assert plan["operation"]["create_restore"]["spec"]["veleroResourcesBackupName"] == "latest"
     assert plan["wait_target"]["name"] == "restore-acm-full"
     assert plan["wait_target"]["success_phases"] == ["Finished", "Completed"]
-    assert plan["wait_target"]["velero_restore_required"] is True
+    assert plan["wait_target"]["velero_restore_required"] is False
+    assert plan["wait_target"]["managed_cluster_presence_required"] is True
 
 
 def test_build_restore_activation_plan_defaults_full_restore_to_latest_backup():

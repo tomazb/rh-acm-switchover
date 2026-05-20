@@ -62,9 +62,9 @@ EXAMPLES = r"""
     msg: "{{ restore_plan.patch }}"
 """
 
-from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.basic import AnsibleModule  # noqa: E402
 
-from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (  # noqa: E402
     ACTIVATION_RESTORE_NAME,
     BACKUP_NAMESPACE,
     BENIGN_ALREADY_AVAILABLE_MESSAGE_PATTERN,
@@ -352,10 +352,8 @@ def build_restore_activation_plan(
         wait_target = build_wait_target(
             FULL_RESTORE_NAME,
             ["Finished", "Completed"],
-            velero_restore_required=True,
-            velero_restore_status_field="veleroManagedClustersRestoreName",
-            velero_success_phases=["Completed"],
-            velero_failure_phases=["Failed", "PartiallyFailed"],
+            velero_restore_required=False,
+            managed_cluster_presence_required=True,
         )
         restore = full_restore or passive_restore
         if full_restore is None:

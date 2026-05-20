@@ -59,6 +59,34 @@ def test_activate_restore_verifies_patch_application_after_patch():
     ), "activate_restore.yml must verify the managed-clusters backup field after patching"
 
 
+def test_full_restore_waits_for_managed_cluster_presence_after_acm_restore():
+    """Full restore must wait for ManagedCluster resources after the ACM Restore is terminal."""
+    tasks = _load_yaml(ACTIVATION_TASKS / "wait_for_restore.yml")
+    text = (ACTIVATION_TASKS / "wait_for_restore.yml").read_text()
+
+    managed_cluster_waits = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster" and "until" in task
+    ]
+
+    assert managed_cluster_waits, "wait_for_restore.yml must poll ManagedClusters for full Restore activation"
+    wait_task = managed_cluster_waits[0]
+    until = str(wait_task["until"])
+    when = str(wait_task.get("when", ""))
+
+    assert "managed_cluster_presence_required" in when
+    assert "metadata.name', 'ne', 'local-cluster'" in until
+    assert "_acm_activation_min_managed_clusters" in until
+    assert ">= (_acm_activation_min_managed_clusters | int)" in until
+    assert "_acm_activation_expected_managed_cluster_names" in until
+    assert "difference(" in until
+    assert "acm_switchover_operation.min_managed_clusters is defined" in text
+    assert "acm_switchover_expected_managed_cluster_count" in text
+    assert "acm_switchover_operation.restore_only | default(false) | bool" in text
+    assert "1\n          if (acm_switchover_operation.restore_only | default(false) | bool)" in text
+
+
 def test_preflight_validate_rbac_detects_argocd_install_type():
     """preflight RBAC validation must detect Argo CD install type instead of hardcoding unknown."""
     tasks = _load_yaml(PREFLIGHT_TASKS / "validate_rbac.yml")

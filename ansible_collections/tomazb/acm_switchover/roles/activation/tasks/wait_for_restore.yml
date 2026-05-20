@@ -67,6 +67,79 @@
     - acm_switchover_restore_activation_result.wait_target is defined
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
+- name: Resolve full-restore managed-cluster presence expectation
+  ansible.builtin.set_fact:
+    _acm_activation_min_managed_clusters: >-
+      {{
+        (acm_switchover_operation.min_managed_clusters | int)
+        if (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+        )
+        else (
+          1
+          if (acm_switchover_operation.restore_only | default(false) | bool)
+          else (acm_switchover_expected_managed_cluster_count | default(0) | int)
+        )
+      }}
+    _acm_activation_expected_managed_cluster_names: >-
+      {{
+        []
+        if (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+        )
+        else (
+          []
+          if (acm_switchover_operation.restore_only | default(false) | bool)
+          else (acm_switchover_expected_managed_cluster_names | default([]))
+        )
+      }}
+  when:
+    - acm_switchover_restore_activation_result.wait_target.managed_cluster_presence_required | default(false)
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Wait for full-restore ManagedCluster resources
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+  register: _activation_managed_clusters_info
+  retries: 20
+  delay: 30
+  until: >-
+    {{
+      (_activation_managed_clusters_info.resources | default([]) | length) > 0
+      and
+      (
+        (_activation_managed_clusters_info.resources | default([])
+         | selectattr('metadata.name', 'ne', 'local-cluster')
+         | map(attribute='metadata.name')
+         | list
+         | length)
+        >= (_acm_activation_min_managed_clusters | int)
+      )
+      and
+      (
+        (_acm_activation_expected_managed_cluster_names | default([]) | length) == 0
+        or
+        (
+          _acm_activation_expected_managed_cluster_names | default([])
+          | difference(
+              _activation_managed_clusters_info.resources | default([])
+              | selectattr('metadata.name', 'ne', 'local-cluster')
+              | map(attribute='metadata.name')
+              | list
+            )
+          | length
+        ) == 0
+      )
+    }}
+  when:
+    - acm_switchover_restore_activation_result.wait_target.managed_cluster_presence_required | default(false)
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
 - name: Wait for managed-clusters Velero restore to be created
   kubernetes.core.k8s_info:
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
