@@ -177,6 +177,19 @@ def test_validate_backups_enforces_backup_and_cluster_parity_checks():
     ), "useManagedServiceAccount validation must be critical for full and passive non-restore-only switchovers"
 
 
+def test_validate_backups_records_remaining_in_progress_backups_after_wait():
+    """Collection preflight must fail if in-progress Velero backups remain after polling."""
+    text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
+
+    assert "preflight-backup-in-progress-after-wait" in text
+    assert "backup(s) still InProgress after waiting" in text
+    assert "_acm_primary_backup_wait_info.attempts" in text
+    assert "preflight-backup-in-progress-after-wait-restore-only" in text
+    assert "restore-only target backup(s) still InProgress after waiting" in text
+    assert "_acm_secondary_backup_wait_info.attempts" in text
+    assert "from_json" in text
+
+
 def test_validate_backups_use_managed_service_account_recommended_action_is_valid_jinja():
     """validate_backups.yml must keep the useManagedServiceAccount advisory expression parseable."""
     text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
