@@ -207,9 +207,7 @@ class TestStateManager:
     def test_get_last_error_phase_missing_phase_field(self, state_manager):
         """Test get_last_error_phase handles missing phase field."""
         # Manually add an error without phase field
-        state_manager.state["errors"].append(
-            {"error": "Test error", "timestamp": "2026-01-29T12:00:00+00:00"}
-        )
+        state_manager.state["errors"].append({"error": "Test error", "timestamp": "2026-01-29T12:00:00+00:00"})
 
         result = state_manager.get_last_error_phase()
         assert result is None
@@ -301,9 +299,7 @@ class TestStateManager:
         with pytest.raises(StateLoadError, match="Unknown phase"):
             StateManager(str(temp_state_file))
 
-    def test_restore_runtime_checkpoint_restores_phase_and_timestamp_only(
-        self, tmp_path
-    ):
+    def test_restore_runtime_checkpoint_restores_phase_and_timestamp_only(self, tmp_path):
         """Runtime checkpoint restore should preserve config updates while restoring durable state."""
         state_path = tmp_path / "runtime-checkpoint.json"
         sm = StateManager(str(state_path))
@@ -342,9 +338,7 @@ class TestStateManager:
 
         reloaded = StateManager(str(state_path))
         assert reloaded.get_current_phase() == Phase.POST_ACTIVATION
-        assert [step["name"] for step in reloaded.state["completed_steps"]] == [
-            "original_step"
-        ]
+        assert [step["name"] for step in reloaded.state["completed_steps"]] == ["original_step"]
         assert reloaded.get_config("original_key") == {"nested": ["value"]}
         assert reloaded.get_config("dry_run_key") is None
         assert reloaded.state["last_updated"] == original_timestamp
@@ -408,9 +402,7 @@ class TestStateManager:
             "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
         }
 
-    def test_ensure_hub_identities_rejects_same_context_retargeted_to_different_cluster(
-        self, tmp_path
-    ):
+    def test_ensure_hub_identities_rejects_same_context_retargeted_to_different_cluster(self, tmp_path):
         """Resume must fail when context names are unchanged but live cluster UIDs differ."""
         state_path = tmp_path / "identity-mismatch.json"
         sm = StateManager(str(state_path))
@@ -440,9 +432,7 @@ class TestStateManager:
 
         assert reloaded.get_current_phase() == Phase.PRIMARY_PREP
 
-    def test_ensure_hub_identities_requires_reset_for_legacy_in_progress_state(
-        self, tmp_path
-    ):
+    def test_ensure_hub_identities_requires_reset_for_legacy_in_progress_state(self, tmp_path):
         """In-progress legacy state without identity must not silently resume."""
         state_path = tmp_path / "identity-legacy.json"
         sm = StateManager(str(state_path))
@@ -484,13 +474,9 @@ class TestStateManager:
                 }
             )
 
-        assert (
-            reloaded.state["hub_identities"]["primary"]["cluster_uid"] == "uid-primary"
-        )
+        assert reloaded.state["hub_identities"]["primary"]["cluster_uid"] == "uid-primary"
 
-    def test_ensure_hub_identities_force_backfills_legacy_in_progress_state(
-        self, tmp_path
-    ):
+    def test_ensure_hub_identities_force_backfills_legacy_in_progress_state(self, tmp_path):
         """--force can explicitly bind a legacy in-progress state to current live identities."""
         state_path = tmp_path / "identity-force.json"
         sm = StateManager(str(state_path))
@@ -506,9 +492,7 @@ class TestStateManager:
             allow_legacy_backfill=True,
         )
 
-        assert (
-            reloaded.state["hub_identities"]["primary"]["cluster_uid"] == "uid-primary"
-        )
+        assert reloaded.state["hub_identities"]["primary"]["cluster_uid"] == "uid-primary"
 
     def test_ensure_hub_identities_can_validate_without_persisting(self, tmp_path):
         """Read-only validation should check live identity without writing a backfill."""
@@ -578,9 +562,7 @@ class TestStateManager:
         age = sm.get_state_age()
 
         assert age is None
-        mock_logging.warning.assert_called_with(
-            "State file missing last_updated timestamp"
-        )
+        mock_logging.warning.assert_called_with("State file missing last_updated timestamp")
 
     @patch("lib.utils.logging")
     def test_get_state_age_malformed_timestamp(self, mock_logging, tmp_path):
@@ -631,9 +613,7 @@ class TestStateLoadSafety:
 
         assert state_file.exists(), "Original corrupt file should keep blocking reuse"
         corrupt_files = list(tmp_path.glob("state.json.corrupt.*"))
-        assert (
-            len(corrupt_files) == 1
-        ), f"Expected one .corrupt.* file, found: {corrupt_files}"
+        assert len(corrupt_files) == 1, f"Expected one .corrupt.* file, found: {corrupt_files}"
 
     def test_corrupt_file_continues_blocking_until_removed(self, tmp_path):
         """The same corrupt state path must keep failing until the operator resets it."""
@@ -768,9 +748,7 @@ class TestStateManagerExitRegistration:
             "_cleanup_temp_files",
         ]
 
-    def test_fail_phase_helper_reuses_existing_same_phase_and_message_error(
-        self, tmp_path
-    ):
+    def test_fail_phase_helper_reuses_existing_same_phase_and_message_error(self, tmp_path):
         """_fail_phase should not append another error when the last entry matches phase and message."""
         import logging
 
@@ -789,9 +767,7 @@ class TestStateManagerExitRegistration:
         assert len(errors) == 1
         assert errors[0]["error"] == "same failure"
 
-    def test_fail_phase_helper_skips_generic_when_module_already_recorded_same_phase(
-        self, tmp_path
-    ):
+    def test_fail_phase_helper_skips_generic_when_module_already_recorded_same_phase(self, tmp_path):
         """F8: _fail_phase should NOT append a generic wrapper when the module
         already recorded a specific error for the same phase."""
         import logging
@@ -803,9 +779,7 @@ class TestStateManagerExitRegistration:
         sm.add_error("specific root cause", phase=Phase.ACTIVATION.value)
 
         logger = logging.getLogger("test")
-        result = acm_switchover._fail_phase(
-            sm, "Secondary hub activation failed!", logger
-        )
+        result = acm_switchover._fail_phase(sm, "Secondary hub activation failed!", logger)
 
         assert result is False
         assert sm.get_current_phase() == Phase.FAILED
@@ -814,9 +788,7 @@ class TestStateManagerExitRegistration:
         assert len(errors) == 1
         assert errors[-1]["error"] == "specific root cause"
 
-    def test_fail_phase_preserves_same_attempt_specific_error_without_generic_wrapper(
-        self, tmp_path
-    ):
+    def test_fail_phase_preserves_same_attempt_specific_error_without_generic_wrapper(self, tmp_path):
         """A retry should still prefer a new same-attempt specific error over the wrapper."""
         import logging
 
@@ -829,9 +801,7 @@ class TestStateManagerExitRegistration:
         sm.add_error("specific root cause", phase=Phase.ACTIVATION.value)
 
         logger = logging.getLogger("test")
-        result = acm_switchover._fail_phase(
-            sm, "Secondary hub activation failed!", logger
-        )
+        result = acm_switchover._fail_phase(sm, "Secondary hub activation failed!", logger)
 
         assert result is False
         assert sm.get_current_phase() == Phase.FAILED
@@ -1329,9 +1299,7 @@ class TestStepContext:
         with state_manager.step("logged_step", mock_logger) as should_run:
             pass
 
-        mock_logger.info.assert_called_once_with(
-            "Step already completed: %s", "logged_step"
-        )
+        mock_logger.info.assert_called_once_with("Step already completed: %s", "logged_step")
         assert should_run is False
 
     def test_step_not_marked_on_exception(self, state_manager):
@@ -1394,9 +1362,7 @@ class TestSignalAndAtexitHandlers:
         """Test that StateManager registers signal handlers for SIGTERM and SIGINT."""
         import signal
 
-        with patch("lib.utils.signal.signal") as mock_signal, patch(
-            "lib.utils.signal.getsignal"
-        ) as mock_get:
+        with patch("lib.utils.signal.signal") as mock_signal, patch("lib.utils.signal.getsignal") as mock_get:
             mock_get.return_value = signal.SIG_DFL
             sm = StateManager(str(tmp_path / "state.json"))
 
@@ -1433,9 +1399,7 @@ class TestSignalAndAtexitHandlers:
         sm = StateManager(str(tmp_path / "state.json"))
         sm._dirty = True
 
-        with patch.object(sm, "_write_state"), patch.object(
-            sm, "_forward_signal"
-        ) as mock_fwd:
+        with patch.object(sm, "_write_state"), patch.object(sm, "_forward_signal") as mock_fwd:
             sm._flush_on_signal(signal.SIGTERM, None)
 
         mock_fwd.assert_called_once_with(signal.SIGTERM, None)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 DOCUMENTATION = r"""
 ---
 module: acm_input_validate
@@ -145,12 +148,13 @@ def build_input_validation_results(params: dict) -> list[dict]:
             )
 
     # --- Path validation (skip primary kubeconfig in restore-only) ---
-    path_checks = [
+    path_checks: list[tuple[str, str, Any, bool, Callable[[str], None]]] = [
         (
             "preflight-input-secondary-kubeconfig",
             "secondary",
             secondary_kubeconfig,
             True,
+            validate_safe_path,
         )
     ]
     if not restore_only:
@@ -161,6 +165,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
                 "primary",
                 primary_kubeconfig,
                 True,
+                validate_safe_path,
             ),
         )
     if report_dir:
@@ -173,11 +178,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
         )
 
     for path_check in path_checks:
-        if len(path_check) == 4:
-            result_id, path_label, path_value, required = path_check
-            validator = validate_safe_path
-        else:
-            result_id, path_label, path_value, required, validator = path_check
+        result_id, path_label, path_value, required, validator = path_check
         if not path_value:
             if required:
                 results.append(
