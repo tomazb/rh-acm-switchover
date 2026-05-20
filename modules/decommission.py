@@ -245,11 +245,6 @@ class Decommission:
                 plural=HIVE_CLUSTERDEPLOYMENT_PLURAL,
             )
         except ApiException as exc:
-            if exc.status == 404:
-                logger.info(
-                    "Hive ClusterDeployment API not found; no ClusterDeployments require preserveOnDelete verification"
-                )
-                return
             raise SwitchoverError(
                 "Unable to verify ClusterDeployment preserveOnDelete safety before deleting ManagedClusters: "
                 f"API error {exc.status} {exc.reason}"

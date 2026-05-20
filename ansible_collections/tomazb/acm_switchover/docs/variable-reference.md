@@ -161,8 +161,8 @@ Observability will be handled separately.
 Decommission always re-checks matching Hive `ClusterDeployment` resources before
 live non-local `ManagedCluster` deletion. Matching ClusterDeployments must have
 `spec.preserveOnDelete=true`; unsafe values or unclassified Hive API lookup
-errors stop the role before ManagedClusters are deleted. A verified missing Hive
-ClusterDeployment API, or no matching ClusterDeployments, is accepted.
+errors, including a missing Hive API/CRD, stop the role before ManagedClusters
+are deleted. A successful lookup with no matching ClusterDeployments is accepted.
 
 Standalone decommission requires non-empty
 `acm_switchover_hubs.primary.kubeconfig` and

@@ -414,20 +414,20 @@ class TestDecommission:
         assert "Unable to verify ClusterDeployment preserveOnDelete safety" in str(exc_info.value)
         mock_primary_client.delete_custom_resource.assert_not_called()
 
-    @patch("modules.decommission.wait_for_condition")
-    def test_delete_managed_clusters_allows_verified_missing_hive_api(
-        self, mock_wait, decommission_with_obs, mock_primary_client
+    def test_delete_managed_clusters_missing_hive_api_blocks_destructive_deletion(
+        self, decommission_with_obs, mock_primary_client
     ):
-        """Verified missing Hive API remains acceptable for non-Hive clusters."""
-        mock_wait.return_value = True
+        """Missing Hive API fails closed before destructive ManagedCluster deletion."""
         mock_primary_client.list_managed_clusters.return_value = [
             {"metadata": {"name": "cluster1"}},
         ]
         mock_primary_client.list_custom_resources.side_effect = ApiException(status=404, reason="Not Found")
 
-        decommission_with_obs._delete_managed_clusters()
+        with pytest.raises(SwitchoverError) as exc_info:
+            decommission_with_obs._delete_managed_clusters()
 
-        mock_primary_client.delete_custom_resource.assert_called_once()
+        assert "Unable to verify ClusterDeployment preserveOnDelete safety" in str(exc_info.value)
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
     def test_delete_managed_clusters_reports_all_unsafe_clusterdeployments(
         self, decommission_with_obs, mock_primary_client

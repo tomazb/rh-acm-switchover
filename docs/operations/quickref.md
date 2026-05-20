@@ -121,8 +121,8 @@ python acm_switchover.py \
 Decommission re-checks matching Hive `ClusterDeployment` resources immediately
 before non-local `ManagedCluster` deletion. Any matching ClusterDeployment
 without `spec.preserveOnDelete=true` (unset or `false`) and Hive API lookup
-errors block deletion; only verified Hive API absence or no matching
-ClusterDeployments is treated as safe.
+errors, including a missing Hive API/CRD, block deletion; only a successful
+lookup with no matching ClusterDeployments is treated as safe.
 
 ### Restore-Only (Single Hub)
 
@@ -336,7 +336,7 @@ For `--setup`, `--include-decommission` requires `--role operator` or `--role bo
 - [ ] Validated with `--validate-only`
 - [ ] Previewed with `--dry-run`
 - [ ] All ClusterDeployments have `preserveOnDelete=true`
-- [ ] Decommission Hive safety lookup can list ClusterDeployments or verify the Hive API is absent
+- [ ] Decommission Hive safety lookup can list ClusterDeployments successfully
 - [ ] All ManagedClusters included in latest backup
 - [ ] Latest backup completed successfully
 - [ ] ACM versions match between hubs

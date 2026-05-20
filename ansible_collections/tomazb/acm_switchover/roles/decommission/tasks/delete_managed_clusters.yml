@@ -37,24 +37,11 @@
         context: "{{ acm_switchover_hubs.primary.context | default(omit) }}"
       register: _decommission_clusterdeployments
   rescue:
-    - name: Record verified absence of Hive ClusterDeployment API
-      ansible.builtin.set_fact:
-        _clusterdeployments_verified_absent: true
-        _decommission_clusterdeployments:
-          resources: []
-      when: >-
-        {{
-          'no matches for kind' in (ansible_failed_result.msg | default('') | lower)
-          or 'failed to find exact match' in (ansible_failed_result.msg | default('') | lower)
-          or 'could not find the requested resource' in (ansible_failed_result.msg | default('') | lower)
-        }}
-
     - name: Fail when ClusterDeployment safety cannot be verified
       ansible.builtin.fail:
         msg: >-
           Unable to verify ClusterDeployment preserveOnDelete safety before deleting ManagedClusters:
           {{ ansible_failed_result.msg | default('unknown API error') }}
-      when: not (_clusterdeployments_verified_absent | default(false) | bool)
 
 - name: Classify matching ClusterDeployments before ManagedCluster deletion
   ansible.builtin.set_fact:

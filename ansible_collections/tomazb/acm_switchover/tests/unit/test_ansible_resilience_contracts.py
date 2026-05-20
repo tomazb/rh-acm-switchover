@@ -353,14 +353,17 @@ def test_decommission_clusterdeployment_safety_classifier_behavior():
     )
 
 
-def test_decommission_clusterdeployment_absence_must_be_verified_before_delete():
-    """Missing/no Hive CRD is acceptable only when the absence is explicitly classified."""
+def test_decommission_missing_clusterdeployment_api_fails_before_delete():
+    """Missing Hive ClusterDeployment API must fail before ManagedCluster deletion."""
     text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
 
     assert "block:" in text and "rescue:" in text
-    assert "no matches for kind" in text
-    assert "_clusterdeployments_verified_absent" in text
+    assert "Record verified absence of Hive ClusterDeployment API" not in text
+    assert "_clusterdeployments_verified_absent" not in text
     assert "Unable to verify ClusterDeployment preserveOnDelete safety" in text
+    assert text.index("Unable to verify ClusterDeployment preserveOnDelete safety") < text.index(
+        "Delete non-local ManagedClusters"
+    )
 
 
 def test_decommission_deletes_all_discovered_observability_and_mch_resources():

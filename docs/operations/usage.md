@@ -440,9 +440,9 @@ Delete MultiClusterHub resource? (This will remove all ACM components) [y/N]: y
 Before deleting any non-local `ManagedCluster`, decommission re-reads Hive
 `ClusterDeployment` resources on the old hub and blocks deletion when a matching
 ClusterDeployment does not have `spec.preserveOnDelete=true`. If the Hive API
-lookup fails with permissions, a timeout, or another API error, decommission fails
-closed before deleting ManagedClusters. A verified absence of the Hive
-ClusterDeployment API, or no matching ClusterDeployments, remains acceptable.
+lookup fails with permissions, a timeout, a missing API/CRD, or another API
+error, decommission fails closed before deleting ManagedClusters. A successful
+lookup with no matching ClusterDeployments remains acceptable.
 
 **Non-interactive mode (automation):**
 ```bash
