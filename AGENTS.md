@@ -134,6 +134,10 @@ The following files are **safety-critical operational documents** that AI agents
 - `validation.py` - Input validation with `InputValidator` class and `SecurityValidationError`
 - `rbac_validator.py` - RBAC permission checks for operator/validator roles
 - `waiter.py` - Generic polling/wait utilities for async conditions
+- `argocd.py` - Argo CD detection and pause/resume of Application auto-sync (supports operator and vanilla installs)
+- `argocd_coordinator.py` - Centralizes ArgoCD pause coordination across hubs; used by PrimaryPrep and restore-only mode
+- `gitops_detector.py` - GitOps marker detection for resources (Argo CD, Flux) to warn operators before mutations
+- `report_artifacts.py` - Machine-readable report artifact helpers for the Python CLI
 
 **Workflow Modules** (`modules/`):
 - `preflight/` - Modular pre-flight validators
@@ -145,6 +149,7 @@ The following files are **safety-critical operational documents** that AI agents
 - `post_activation.py` - Verify cluster connections, fix klusterlet agents
 - `finalization.py` - Set up old hub as secondary or prepare for decommission; accepts `restore_only=True` to warn (not fail) when BackupSchedule is absent
 - `decommission.py` - Remove ACM from old hub
+- `restore_discovery.py` - Shared restore discovery helpers (passive sync restore lookup)
 
 ## Phase Flow
 
@@ -257,10 +262,9 @@ The collection lives at `ansible_collections/tomazb/acm_switchover/`. It is a co
 | `rbac_bootstrap` | RBAC setup scripts | Create service accounts, roles, and kubeconfigs |
 
 **Plugins** (in `plugins/`):
-- `modules/` — custom modules: `acm_backup_schedule`, `acm_checkpoint`, `acm_cluster_verify`, `acm_discovery`, `acm_input_validate`, `acm_managedcluster_status`, `acm_preflight_report`, `acm_rbac_bootstrap`, `acm_rbac_validate`, `acm_restore_info`, `acm_argocd_filter`, `acm_safe_path_validate`
-- `module_utils/` — shared utilities: `argocd`, `artifacts`, `checkpoint`, `constants`, `gitops`, `result`, `validation`
+- `modules/` — custom modules: `acm_backup_schedule`, `acm_checkpoint`, `acm_cluster_verify`, `acm_discovery`, `acm_input_validate`, `acm_klusterlet_probe`, `acm_klusterlet_remediate`, `acm_kubeconfig_inspect`, `acm_managedcluster_status`, `acm_preflight_report`, `acm_rbac_bootstrap`, `acm_rbac_validate`, `acm_report_artifact`, `acm_restore_info`, `acm_argocd_filter`, `acm_safe_path_validate`
+- `module_utils/` — shared utilities: `argocd`, `artifacts`, `checkpoint`, `constants`, `gitops`, `klusterlet`, `result`, `validation`
 - `action/checkpoint_phase.py` — action plugin for phase checkpointing
-- `callback/` — progress and reporting callbacks
 
 ### Key Ansible Patterns
 
@@ -381,6 +385,30 @@ For parity-sensitive changes, do not verify only one form factor.
     - `--argocd-resume-on-failure` requires `--argocd-manage` and cannot be combined with `--argocd-resume-only` or `--validate-only`. Best-effort resume of paused ArgoCD Applications when a switchover fails.
     - `--setup` requires `--admin-kubeconfig` and validates `--token-duration` format (e.g., `48h`, `30m`, `3600s`).
     - `--restore-only` requires `--secondary-context`, forbids `--primary-context`, `--method passive`, `--old-hub-action`, and `--decommission`. Implies `--method full`.
+
+## Graphify-assisted review
+
+Use Graphify as a hypothesis generator for deep cross-file review.
+
+Before reviewing large, safety-sensitive, or parity-sensitive changes, ask
+Graphify targeted questions about:
+
+- Python CLI vs Ansible collection parity
+- checkpoint/resume and phase-transition behavior
+- wrong-cluster, wrong-context, and wrong-namespace mutation risks
+- destructive operations and fail-closed behavior
+- RBAC scope and generated permissions
+- Argo CD Application/ApplicationSet handling
+- kubeconfig, token, secret, and report-path handling
+- tests that claim to cover safety behavior but do not reach the relevant implementation
+
+Important: Graphify relationships marked INFERRED or AMBIGUOUS are leads, not facts.
+Verify every relationship against source code and tests before reporting it as a
+review finding.
+
+When using Codex review, convert Graphify output into concrete findings only when
+the source code demonstrates a credible correctness, safety, idempotence, parity,
+RBAC, check_mode, or destructive-operation risk.
 
 ## Code Review Guidelines
 
@@ -504,27 +532,18 @@ Location: `CHANGELOG.md`
 
 ### Version Update Checklist
 
-When making script changes:
-1. [ ] Update `SCRIPT_VERSION` in `scripts/constants.sh`
-2. [ ] Update `SCRIPT_VERSION_DATE` to current date
-3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
-4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
-5. [ ] Update version in `README.md` (top of file)
-6. [ ] Add changelog entry in `CHANGELOG.md`
-7. [ ] Update the CHANGELOG reference-link block (`[Unreleased]` and the new `[X.Y.Z]` link, plus any missing recent release links)
-8. [ ] Update `scripts/README.md` if new features/checks added
-9. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+For every version bump (apply all steps regardless of whether the change is to Bash scripts or Python):
 
-When making Python code changes:
-1. [ ] Update `__version__` in `lib/__init__.py`
-2. [ ] Update `__version_date__` to current date
-3. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
-4. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
-5. [ ] Update version in `README.md` (top of file)
-6. [ ] Add changelog entry in `CHANGELOG.md`
-7. [ ] Update the CHANGELOG reference-link block (`[Unreleased]` and the new `[X.Y.Z]` link, plus any missing recent release links)
-8. [ ] Keep Python and Bash versions in sync if changes affect both
-9. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
+1. [ ] Update `SCRIPT_VERSION` and `SCRIPT_VERSION_DATE` in `scripts/constants.sh`
+2. [ ] Update `__version__` and `__version_date__` in `lib/__init__.py`
+3. [ ] Keep Python and Bash versions in sync (they must always match)
+4. [ ] Update container image label version in [container-bootstrap/Containerfile](container-bootstrap/Containerfile)
+5. [ ] Update Helm chart `version` and `appVersion` (appVersion = tool version) in [deploy/helm/acm-switchover-rbac/Chart.yaml](deploy/helm/acm-switchover-rbac/Chart.yaml)
+6. [ ] Update version badge in `README.md` (top of file)
+7. [ ] Add changelog entry in `CHANGELOG.md`
+8. [ ] Update the CHANGELOG reference-link block (`[Unreleased]` and the new `[X.Y.Z]` link, plus any missing recent release links)
+9. [ ] Update `scripts/README.md` if new script features/checks were added
+10. [ ] Create and push a git tag for the new version (e.g., `git tag vX.Y.Z && git push origin vX.Y.Z`)
 
 ## Claude SKILLS
 
