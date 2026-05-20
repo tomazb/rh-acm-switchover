@@ -8,7 +8,8 @@ module: acm_preflight_report
 short_description: Build and write a preflight report artifact
 description:
   - Aggregates preflight validation results into a structured JSON report and
-    optionally writes it to disk. Supports check mode (skips file write).
+    optionally writes it to disk. Supports check mode by validating the path and
+    reporting whether the artifact would change without writing the file.
 author:
   - ACM Switchover Contributors (@tomazb)
 options:
@@ -82,17 +83,17 @@ def build_preflight_report(phase: str, results: list[dict], hubs: dict) -> dict:
     }
 
 
-def write_report(report: dict, destination: str) -> tuple[str, str | None]:
+def write_report(report: dict, destination: str, check_mode: bool = False) -> tuple[str, bool, str | None]:
     """Write report to destination path.
 
     Returns:
-        Tuple of (path, error_message). error_message is None on success.
+        Tuple of (path, changed, error_message). error_message is None on success.
     """
     try:
-        path, _changed = write_json_artifact(report=report, destination=destination)
+        path, changed = write_json_artifact(report=report, destination=destination, check_mode=check_mode)
     except (ArtifactWriteError, ValidationError) as exc:
-        return destination, str(exc)
-    return path, None
+        return destination, False, str(exc)
+    return path, changed, None
 
 
 def main() -> None:
@@ -112,14 +113,15 @@ def main() -> None:
         hubs=module.params["hubs"],
     )
     output_path = None
+    changed = False
     write_error = None
-    if module.params["path"] and not module.check_mode:
-        output_path, write_error = write_report(report, module.params["path"])
+    if module.params["path"]:
+        output_path, changed, write_error = write_report(report, module.params["path"], check_mode=module.check_mode)
         if write_error:
             module.fail_json(msg=write_error, report=report, path=output_path)
             return
 
-    module.exit_json(changed=bool(output_path), report=report, path=output_path)
+    module.exit_json(changed=changed, report=report, path=output_path)
 
 
 if __name__ == "__main__":
