@@ -285,27 +285,15 @@ def test_standalone_argocd_resume_validates_checkpoint_path_before_file_reads():
     playbook = yaml.safe_load((PLAYBOOKS_DIR / "argocd_resume.yml").read_text())
     pre_tasks = playbook[0].get("pre_tasks", [])
     validate_indices = [
-        idx
-        for idx, task in enumerate(pre_tasks)
-        if "tomazb.acm_switchover.acm_safe_path_validate" in task
+        idx for idx, task in enumerate(pre_tasks) if "tomazb.acm_switchover.acm_safe_path_validate" in task
     ]
-    stat_indices = [
-        idx for idx, task in enumerate(pre_tasks) if "ansible.builtin.stat" in task
-    ]
+    stat_indices = [idx for idx, task in enumerate(pre_tasks) if "ansible.builtin.stat" in task]
 
-    assert (
-        validate_indices
-    ), "argocd_resume.yml must validate checkpoint.path before touching controller files"
-    assert (
-        stat_indices
-    ), "argocd_resume.yml should still inspect the checkpoint file after validation"
-    assert (
-        validate_indices[0] < stat_indices[0]
-    ), "argocd_resume.yml must validate checkpoint.path before stat/slurp"
+    assert validate_indices, "argocd_resume.yml must validate checkpoint.path before touching controller files"
+    assert stat_indices, "argocd_resume.yml should still inspect the checkpoint file after validation"
+    assert validate_indices[0] < stat_indices[0], "argocd_resume.yml must validate checkpoint.path before stat/slurp"
 
-    validate_task = pre_tasks[validate_indices[0]][
-        "tomazb.acm_switchover.acm_safe_path_validate"
-    ]
+    validate_task = pre_tasks[validate_indices[0]]["tomazb.acm_switchover.acm_safe_path_validate"]
     assert validate_task.get("path_type") == "artifact", (
         "argocd_resume.yml must use artifact path validation before reading persisted checkpoints "
         "so symlink escapes are rejected"
