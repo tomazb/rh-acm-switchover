@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hardened Python CLI and Ansible collection report artifact writes to reject symlinked artifact destinations that escape the controller workspace and to route optional collection summaries through the shared artifact writer.
 - Added least-privilege deny checks to live RBAC certification so over-permissioned service accounts fail certification instead of passing solely on required allow checks.
 - Tightened decommission safety checks so ClusterDeployment matching considers additional explicit cluster identifiers, fails closed for plausible unverified relationships, requires explicit collection primary hub inputs, and keeps decommission RBAC bootstrap filtering label-positive.
 - Tightened Python and collection decommission safety checks to fail closed before non-local ManagedCluster deletion when the Hive ClusterDeployment API/CRD is missing.

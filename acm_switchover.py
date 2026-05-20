@@ -53,7 +53,7 @@ from lib.constants import (
 from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
-from lib.report_artifacts import build_operation_report, write_json_report_artifact
+from lib.report_artifacts import build_operation_report, validate_report_artifact_directory, write_json_report_artifact
 from lib.validation import InputValidator, ValidationError
 from modules import (
     Decommission,
@@ -358,7 +358,7 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
             InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
 
         if getattr(args, "report_dir", None):
-            InputValidator.validate_safe_filesystem_path(args.report_dir, "--report-dir")
+            validate_report_artifact_directory(args.report_dir, "--report-dir")
 
         if getattr(args, "validate_only", False) and getattr(args, "argocd_manage", False):
             logger.warning("--argocd-manage has no effect with --validate-only; continuing without Argo CD management.")

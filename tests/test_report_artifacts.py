@@ -87,3 +87,32 @@ def test_write_json_report_artifact_allows_nested_absolute_report_dirs(tmp_path)
 def test_write_json_report_artifact_rejects_unsafe_paths():
     with pytest.raises(SecurityValidationError):
         write_json_report_artifact({"schema_version": "1.0"}, "./artifacts/../outside/report.json")
+
+
+def test_write_json_report_artifact_rejects_relative_parent_symlink_escape(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    monkeypatch.chdir(workspace)
+    (workspace / "artifacts").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SecurityValidationError, match="symlink"):
+        write_json_report_artifact({"schema_version": "1.0"}, "artifacts/report.json")
+
+    assert not (outside / "report.json").exists()
+
+
+def test_write_json_report_artifact_rejects_final_file_symlink(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    monkeypatch.chdir(workspace)
+    (workspace / "artifacts").mkdir()
+    (workspace / "artifacts" / "report.json").symlink_to(outside / "report.json")
+
+    with pytest.raises(SecurityValidationError, match="symlink"):
+        write_json_report_artifact({"schema_version": "1.0"}, "artifacts/report.json")
+
+    assert not (outside / "report.json").exists()

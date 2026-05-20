@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation import (
-    validate_safe_path,
+    validate_report_artifact_path,
 )
 
 
@@ -38,7 +38,7 @@ def write_json_artifact(
 ) -> tuple[str, bool]:
     """Validate and optionally write a JSON artifact on the controller."""
     file_mode = _parse_file_mode(mode)
-    validate_safe_path(destination)
+    validate_report_artifact_path(destination)
 
     path = Path(destination)
     content = json.dumps(report, indent=2, sort_keys=True) + "\n"
@@ -52,10 +52,14 @@ def write_json_artifact(
             return str(path), changed
 
         path.parent.mkdir(parents=True, exist_ok=True)
+        validate_report_artifact_path(destination)
         if path.exists() and current_mode != file_mode:
             path.chmod(file_mode)
 
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, file_mode)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(path), flags, file_mode)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
         path.chmod(file_mode)

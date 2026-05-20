@@ -209,6 +209,56 @@ def test_decommission_summary_uses_report_artifact_safe_path_policy():
     ), "decommission summary writes must not bypass artifact path validation"
 
 
+def test_discovery_summary_uses_report_artifact_safe_path_policy():
+    """Optional discovery summaries must use the shared report artifact writer."""
+    main_tasks = _load_yaml(ROLES_DIR / "discovery" / "tasks" / "main.yml")
+    summary_tasks = [task for task in main_tasks if task.get("name") == "Write summary when requested"]
+
+    assert summary_tasks, "discovery/main.yml must write the optional summary"
+    summary_task = summary_tasks[0]
+    artifact_args = summary_task.get("tomazb.acm_switchover.acm_report_artifact")
+    assert artifact_args, "discovery summary writes must use acm_report_artifact"
+    assert artifact_args["path"] == "{{ _acm_summary_path_abs }}"
+    assert artifact_args["report"] == "{{ acm_switchover_discovery_result }}"
+    assert artifact_args["mode"] == "0644"
+    assert not any(
+        task.get("ansible.builtin.copy", {}).get("dest") == "{{ _acm_summary_path_abs }}" for task in main_tasks
+    ), "discovery summary writes must not bypass artifact path validation"
+
+
+def test_rbac_bootstrap_summary_uses_report_artifact_safe_path_policy():
+    """Optional RBAC bootstrap summaries must use the shared report artifact writer."""
+    main_tasks = _load_yaml(ROLES_DIR / "rbac_bootstrap" / "tasks" / "main.yml")
+    summary_tasks = [task for task in main_tasks if task.get("name") == "Write summary when requested"]
+
+    assert summary_tasks, "rbac_bootstrap/main.yml must write the optional summary"
+    summary_task = summary_tasks[0]
+    artifact_args = summary_task.get("tomazb.acm_switchover.acm_report_artifact")
+    assert artifact_args, "rbac_bootstrap summary writes must use acm_report_artifact"
+    assert artifact_args["path"] == "{{ _acm_summary_path_abs }}"
+    assert artifact_args["report"] == "{{ acm_switchover_rbac_bootstrap_result }}"
+    assert artifact_args["mode"] == "0644"
+    assert not any(
+        task.get("ansible.builtin.copy", {}).get("dest") == "{{ _acm_summary_path_abs }}" for task in main_tasks
+    ), "rbac_bootstrap summary writes must not bypass artifact path validation"
+
+
+def test_argocd_manage_test_summary_uses_report_artifact_safe_path_policy():
+    """The optional Argo CD test summary must use the shared report artifact writer."""
+    play_tasks = _flatten_tasks(_load_yaml(PLAYBOOKS_DIR / "argocd_manage_test.yml")[0]["tasks"])
+    summary_tasks = [task for task in play_tasks if task.get("name") == "Write summary file"]
+
+    assert summary_tasks, "argocd_manage_test.yml must write the optional summary"
+    summary_task = summary_tasks[0]
+    artifact_args = summary_task.get("tomazb.acm_switchover.acm_report_artifact")
+    assert artifact_args, "argocd_manage_test summary writes must use acm_report_artifact"
+    assert artifact_args["path"] == "{{ _acm_summary_path_abs }}"
+    assert artifact_args["mode"] == "0644"
+    assert not any(
+        task.get("ansible.builtin.copy", {}).get("dest") == "{{ _acm_summary_path_abs }}" for task in play_tasks
+    ), "argocd_manage_test summary writes must not bypass artifact path validation"
+
+
 def test_decommission_waits_for_non_local_managed_clusters_before_mch_delete():
     """ManagedCluster finalizers must drain before MultiClusterHub deletion starts."""
     tasks = _load_yaml(DECOMMISSION_TASKS / "delete_managed_clusters.yml")

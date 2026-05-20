@@ -257,6 +257,43 @@ def test_write_json_artifact_rejects_traversal_path(monkeypatch, tmp_path):
         )
 
 
+def test_write_json_artifact_rejects_relative_parent_symlink_escape(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    monkeypatch.chdir(workspace)
+    (workspace / "artifacts").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValidationError, match="symlink"):
+        write_json_artifact(
+            report={"phase": "decommission"},
+            destination="artifacts/decommission-summary.json",
+            mode="0644",
+        )
+
+    assert not (outside / "decommission-summary.json").exists()
+
+
+def test_write_json_artifact_rejects_final_file_symlink(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    monkeypatch.chdir(workspace)
+    (workspace / "artifacts").mkdir()
+    (workspace / "artifacts" / "report.json").symlink_to(outside / "report.json")
+
+    with pytest.raises(ValidationError, match="symlink"):
+        write_json_artifact(
+            report={"phase": "decommission"},
+            destination="artifacts/report.json",
+            mode="0644",
+        )
+
+    assert not (outside / "report.json").exists()
+
+
 def test_write_json_artifact_rejects_invalid_mode_before_writing(tmp_path):
     destination = tmp_path / "artifacts" / "decommission-summary.json"
 

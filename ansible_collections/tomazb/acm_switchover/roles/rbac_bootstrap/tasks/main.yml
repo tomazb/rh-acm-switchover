@@ -38,8 +38,8 @@
   when: summary_path is defined
 
 - name: Write summary when requested
-  ansible.builtin.copy:
-    content: "{{ acm_switchover_rbac_bootstrap_result | to_json }}"
-    dest: "{{ _acm_summary_path_abs }}"
+  tomazb.acm_switchover.acm_report_artifact:
+    path: "{{ _acm_summary_path_abs }}"
+    report: "{{ acm_switchover_rbac_bootstrap_result }}"
     mode: "0644"
   when: summary_path is defined

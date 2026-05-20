@@ -359,6 +359,39 @@ def test_report_dir_must_be_a_safe_path():
     assert "Path traversal attempt" in report_dir_result["message"]
 
 
+def test_report_dir_rejects_relative_symlink_escape(tmp_path, monkeypatch):
+    """Report output must not follow relative symlinks outside the workspace."""
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    monkeypatch.chdir(workspace)
+    (workspace / "artifacts").symlink_to(outside, target_is_directory=True)
+
+    results = build_input_validation_results(
+        {
+            "hubs": {
+                "primary": {"context": "primary-hub", "kubeconfig": "./kubeconfigs/hub.kubeconfig"},
+                "secondary": {
+                    "context": "secondary-hub",
+                    "kubeconfig": "./kubeconfigs/hub.kubeconfig",
+                },
+            },
+            "operation": {"method": "passive", "activation_method": "patch"},
+            "execution": {
+                "mode": "execute",
+                "report_dir": "artifacts",
+                "checkpoint": {"enabled": True, "path": ".state/run.json"},
+            },
+            "features": {"argocd": {"manage": False}},
+        }
+    )
+
+    report_dir_result = next(r for r in results if r["id"] == "preflight-input-report-dir")
+    assert report_dir_result["status"] == "fail"
+    assert "symlink" in report_dir_result["message"]
+
+
 def test_checkpoint_enabled_requires_a_checkpoint_path():
     """Enabled checkpointing without a path should fail early with an actionable error."""
     results = build_input_validation_results(

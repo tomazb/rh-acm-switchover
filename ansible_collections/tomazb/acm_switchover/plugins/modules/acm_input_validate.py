@@ -49,6 +49,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
     ValidationError,
     validate_context_name,
     validate_operation_inputs,
+    validate_report_artifact_directory,
     validate_safe_path,
 )
 
@@ -90,7 +91,6 @@ def build_input_validation_results(params: dict) -> list[dict]:
     checkpoint_path = checkpoint.get("path")
     checkpoint_enabled = checkpoint.get("enabled", False)
     report_dir = execution.get("report_dir", "")
-    mode = execution.get("mode", "execute")
 
     # --- Primary context validation ---
     if restore_only:
@@ -164,11 +164,20 @@ def build_input_validation_results(params: dict) -> list[dict]:
             ),
         )
     if report_dir:
-        path_checks.append(("preflight-input-report-dir", "report", report_dir, False))
+        path_checks.append(
+            ("preflight-input-report-dir", "report", report_dir, False, validate_report_artifact_directory)
+        )
     if checkpoint_path:
-        path_checks.append(("preflight-input-checkpoint-path", "checkpoint", checkpoint_path, False))
+        path_checks.append(
+            ("preflight-input-checkpoint-path", "checkpoint", checkpoint_path, False, validate_safe_path)
+        )
 
-    for result_id, path_label, path_value, required in path_checks:
+    for path_check in path_checks:
+        if len(path_check) == 4:
+            result_id, path_label, path_value, required = path_check
+            validator = validate_safe_path
+        else:
+            result_id, path_label, path_value, required, validator = path_check
         if not path_value:
             if required:
                 results.append(
@@ -180,7 +189,7 @@ def build_input_validation_results(params: dict) -> list[dict]:
                 )
             continue
         try:
-            validate_safe_path(path_value)
+            validator(path_value)
             results.append(_pass_result(result_id, f"{result_id} is safe", {"path": path_value}))
         except ValidationError as exc:
             results.append(
