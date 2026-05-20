@@ -10,6 +10,9 @@
 - name: Validate controller-side inputs
   ansible.builtin.include_tasks: validate_inputs.yml
 
+- name: Discover live hub identities for checkpoint safety
+  ansible.builtin.include_tasks: discover_hub_identities.yml
+
 - name: Enter checkpointed phase
   tomazb.acm_switchover.checkpoint_phase:
     phase: preflight

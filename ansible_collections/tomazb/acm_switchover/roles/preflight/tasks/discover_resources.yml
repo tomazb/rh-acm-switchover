@@ -28,8 +28,10 @@
     context: "{{ acm_switchover_hubs.primary.context }}"
   register: acm_primary_mch_info
   when:
-    - acm_primary_mch_info is not defined
     - not (acm_switchover_operation.restore_only | default(false))
+    - >-
+      (acm_switchover_execution.mode | default('dry_run') == 'execute')
+      or (acm_primary_mch_info is not defined)
 
 - name: Read secondary MultiClusterHub when not pre-seeded by tests
   kubernetes.core.k8s_info:
@@ -39,7 +41,9 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: acm_secondary_mch_info
-  when: acm_secondary_mch_info is not defined
+  when: >-
+    (acm_switchover_execution.mode | default('dry_run') == 'execute')
+    or (acm_secondary_mch_info is not defined)
 
 - name: Read primary hub backups when not pre-seeded by tests
   kubernetes.core.k8s_info:

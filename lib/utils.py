@@ -34,6 +34,10 @@ T = TypeVar("T")
 _RUN_LOCK_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
 
+class StateIdentityMismatch(RuntimeError):
+    """Raised when persisted state belongs to different live hub identities."""
+
+
 def dry_run_skip(
     message: str = "Skipping in dry-run mode",
     return_value: Any = None,
@@ -84,7 +88,8 @@ def dry_run_skip(
                     # Safe default: skip execution to avoid unintended changes.
                     logger = logging.getLogger("acm_switchover")
                     logger.warning(
-                        "[DRY-RUN] Cannot resolve attribute path '%s' on %s; " "skipping for safety",
+                        "[DRY-RUN] Cannot resolve attribute path '%s' on %s; "
+                        "skipping for safety",
                         dry_run_attr,
                         type(root).__name__,
                     )
@@ -133,7 +138,9 @@ class StateManager:
         self.state_file = state_file
         self._dirty = False  # Track if state has pending writes
         self._active_temp_files: Set[str] = set()  # Track active temp files for cleanup
-        self._flushing = False  # Track if we're currently flushing to avoid double-write
+        self._flushing = (
+            False  # Track if we're currently flushing to avoid double-write
+        )
         self._previous_signal_handlers: Dict[int, Any] = {}
         self._run_lock_path = os.path.realpath(self.state_file) + ".run.lock"
         self._run_lock_handle: Optional[Any] = None
@@ -203,7 +210,9 @@ class StateManager:
 
         lock_handle.seek(0)
         lock_handle.truncate()
-        lock_handle.write(f"pid={os.getpid()}\nstate_file={os.path.abspath(self.state_file)}\n")
+        lock_handle.write(
+            f"pid={os.getpid()}\nstate_file={os.path.abspath(self.state_file)}\n"
+        )
         lock_handle.flush()
 
         _RUN_LOCK_REGISTRY[self._run_lock_path] = {"handle": lock_handle, "refcount": 1}
@@ -226,11 +235,15 @@ class StateManager:
                 if fcntl:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             except OSError as exc:
-                logging.debug("Failed to unlock state run lock %s: %s", self._run_lock_path, exc)
+                logging.debug(
+                    "Failed to unlock state run lock %s: %s", self._run_lock_path, exc
+                )
             try:
                 handle.close()
             except OSError as exc:
-                logging.debug("Failed to close state run lock %s: %s", self._run_lock_path, exc)
+                logging.debug(
+                    "Failed to close state run lock %s: %s", self._run_lock_path, exc
+                )
             _RUN_LOCK_REGISTRY.pop(self._run_lock_path, None)
 
         self._run_lock_handle = None
@@ -326,6 +339,7 @@ class StateManager:
             "errors": [],
             "last_updated": _utc_timestamp(),
             "contexts": {"primary": None, "secondary": None},
+            "hub_identities": {},
         }
 
     def _ensure_state_dir(self) -> None:
@@ -445,7 +459,11 @@ class StateManager:
 
     def get_retry_error_baseline(self) -> Optional[Dict[str, Any]]:
         """Return the current retry error baseline, if any."""
-        return dict(self._retry_error_baseline) if self._retry_error_baseline is not None else None
+        return (
+            dict(self._retry_error_baseline)
+            if self._retry_error_baseline is not None
+            else None
+        )
 
     def capture_runtime_checkpoint(self) -> Dict[str, Any]:
         """Capture the durable state fields that validate-only must preserve."""
@@ -484,14 +502,18 @@ class StateManager:
     def mark_step_completed(self, step_name: str) -> None:
         """Mark a step as completed."""
         if not self.is_step_completed(step_name):
-            self.state["completed_steps"].append({"name": step_name, "timestamp": _utc_timestamp()})
+            self.state["completed_steps"].append(
+                {"name": step_name, "timestamp": _utc_timestamp()}
+            )
             self._dirty = True
             self.save_state()
 
     def clear_step_completed(self, step_name: str) -> None:
         """Clear a completed step marker so the step can run again."""
         completed_steps = self.state.get("completed_steps", [])
-        filtered_steps = [step for step in completed_steps if step.get("name") != step_name]
+        filtered_steps = [
+            step for step in completed_steps if step.get("name") != step_name
+        ]
         if len(filtered_steps) != len(completed_steps):
             self.state["completed_steps"] = filtered_steps
             self._dirty = True
@@ -501,7 +523,9 @@ class StateManager:
         """Check if a step was already completed."""
         return any(s["name"] == step_name for s in self.state["completed_steps"])
 
-    def step(self, step_name: str, logger: Optional[logging.Logger] = None) -> "StepContext":
+    def step(
+        self, step_name: str, logger: Optional[logging.Logger] = None
+    ) -> "StepContext":
         """Context manager for idempotent step execution.
 
         This helper consolidates the common pattern of checking if a step is
@@ -617,7 +641,9 @@ class StateManager:
             logging.warning("Could not parse state timestamp: %s", e)
             return None
 
-    def ensure_contexts(self, primary_context: str, secondary_context: Optional[str]) -> None:
+    def ensure_contexts(
+        self, primary_context: str, secondary_context: Optional[str]
+    ) -> None:
         """Ensure stored contexts match the ones provided on the CLI."""
         stored = self.state.get("contexts") or {}
         desired = {"primary": primary_context, "secondary": secondary_context}
@@ -657,6 +683,67 @@ class StateManager:
 
         if state_changed:
             self.flush_state()  # Context changes are critical checkpoints
+
+    def _has_progress(self) -> bool:
+        """Return True when this state has progressed beyond a fresh run."""
+        return (
+            bool(self.state.get("completed_steps"))
+            or bool(self.state.get("errors"))
+            or (self.state.get("current_phase") not in (None, Phase.INIT.value))
+        )
+
+    def ensure_hub_identities(
+        self,
+        identities: Dict[str, Dict[str, Optional[str]]],
+        *,
+        allow_legacy_backfill: bool = False,
+        persist: bool = True,
+    ) -> None:
+        """Ensure stored hub identities match the live cluster identities."""
+        normalized = {
+            role: {
+                "context": (identity or {}).get("context"),
+                "cluster_uid": str((identity or {}).get("cluster_uid") or "").strip(),
+            }
+            for role, identity in (identities or {}).items()
+            if identity is not None
+        }
+        if not normalized:
+            return
+
+        for role, desired in normalized.items():
+            if not desired.get("cluster_uid"):
+                raise StateIdentityMismatch(
+                    f"{role} hub identity is missing a live cluster UID. "
+                    "Refusing to bind or resume state because the target cluster cannot be verified."
+                )
+
+        stored = self.state.get("hub_identities") or {}
+
+        if stored:
+            for role, desired in normalized.items():
+                previous = stored.get(role) or {}
+                previous_uid = previous.get("cluster_uid")
+                desired_uid = desired.get("cluster_uid")
+                if previous_uid and desired_uid and previous_uid != desired_uid:
+                    raise StateIdentityMismatch(
+                        f"{role} hub identity changed for context {desired.get('context')}: "
+                        f"recorded cluster UID {previous_uid}, current cluster UID {desired_uid}. "
+                        "Refusing to resume against a different live cluster. "
+                        "Use --reset-state to start over after manual verification."
+                    )
+
+        if not stored and self._has_progress() and not allow_legacy_backfill:
+            raise StateIdentityMismatch(
+                "State file is missing hub identity data for an in-progress switchover. "
+                "Refusing to resume because context names alone cannot prove the same live clusters. "
+                "Use --reset-state to start over, or --force to bind this legacy state to the current hubs "
+                "after manual verification."
+            )
+
+        if persist and stored != normalized:
+            self.state["hub_identities"] = normalized
+            self.flush_state()
 
     def _flush_on_signal(self, signum: int, frame: Any) -> None:
         """Flush pending state changes on termination signal (signal handler).
@@ -744,7 +831,9 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_record = {
-            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(
+                record.created, timezone.utc
+            ).isoformat(),
             "level": record.levelname,
             "message": record.getMessage(),
             "logger": record.name,

@@ -16,7 +16,7 @@ Intentional parity changes require explicit operator approval before implementat
 | finalization | dual-supported | dual-supported | core parity requirement |
 | RBAC self-validation | dual-supported | dual-supported | core parity requirement |
 | machine-readable reports | dual-supported | dual-supported | Python and collection both write schema version `1.0` report artifacts |
-| optional checkpoints | dual-supported | dual-supported | Phase 4 collection implementation complete |
+| optional checkpoints | dual-supported | dual-supported | Phase 4 collection implementation complete; Python state and collection checkpoints both bind resume validation to hub context plus live cluster UID |
 | Argo CD management | dual-supported | dual-supported | Phase 5 collection implementation complete |
 | discovery | dual-supported | dual-supported | Collection provides classification/reporting and bridge guidance; `scripts/discover-hub.sh` remains the full context-enumeration bridge |
 | decommission | dual-supported | dual-supported | Collection defaults observability detection to `auto`, waits for ACM/observability workload pods during teardown, and warns if ACM workload pods remain after the bounded MultiClusterHub deletion wait |

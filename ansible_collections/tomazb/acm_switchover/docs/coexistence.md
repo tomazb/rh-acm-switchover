@@ -45,6 +45,19 @@ pass/fail/reset checkpoint transitions, so they cannot make a later live run
 skip phases. Check mode remains non-mutating even when
 `acm_switchover_execution.mode: execute` is set.
 
+Live execute-mode runs bind resumable state to the current hub identities. The
+Python CLI persists each hub context with the Kubernetes `kube-system` namespace
+UID in its state file and rejects a resumed run if the same stored context now
+targets a different cluster. Legacy in-progress Python state without hub
+identity data must be reset or explicitly backfilled with `--force`.
+
+The collection records the same live cluster UIDs in checkpoint operation
+identity data. Preflight discovers these UIDs before checkpoint entry, and the
+checkpoint action plugin rejects resume when the stored context and current
+cluster UID do not match. Execute-mode collection preflight also refreshes
+MultiClusterHub discovery even if discovery variables were pre-seeded, so stale
+cached MCH status cannot authorize a later live mutation.
+
 ## GitOps Integration Boundary
 
 Generic GitOps marker detection in the collection is **read-only and warning-oriented**.

@@ -1,0 +1,65 @@
+---
+- name: Read primary kube-system namespace identity
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: kube-system
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_primary_identity_namespace
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - >-
+      (acm_switchover_execution.mode | default('dry_run') == 'execute')
+      or (acm_switchover_hub_identities is not defined)
+
+- name: Read secondary kube-system namespace identity
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: kube-system
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_identity_namespace
+  when: >-
+    (acm_switchover_execution.mode | default('dry_run') == 'execute')
+    or (acm_switchover_hub_identities is not defined)
+
+- name: Publish live hub identities
+  ansible.builtin.set_fact:
+    acm_switchover_hub_identities:
+      primary:
+        context: "{{ (acm_switchover_hubs.primary | default({})).context | default('') }}"
+        cluster_uid: >-
+          {{
+            (((_acm_primary_identity_namespace | default({})).resources | default([]) | first | default({}))
+            .get('metadata', {})).get('uid', '')
+          }}
+      secondary:
+        context: "{{ acm_switchover_hubs.secondary.context | default('') }}"
+        cluster_uid: >-
+          {{
+            (((_acm_secondary_identity_namespace | default({})).resources | default([]) | first | default({}))
+            .get('metadata', {})).get('uid', '')
+          }}
+  when:
+    - >-
+      (_acm_primary_identity_namespace is defined and not (_acm_primary_identity_namespace.skipped | default(false)))
+      or (_acm_secondary_identity_namespace is defined and not (_acm_secondary_identity_namespace.skipped | default(false)))
+
+- name: Require secondary hub identity
+  ansible.builtin.assert:
+    that:
+      - (acm_switchover_hub_identities.secondary.cluster_uid | default('', true) | string | length) > 0
+    fail_msg: >-
+      Unable to determine secondary hub cluster identity from kube-system namespace UID.
+      Refusing to continue because checkpoint resume cannot prove the same live cluster.
+
+- name: Require primary hub identity
+  ansible.builtin.assert:
+    that:
+      - (acm_switchover_hub_identities.primary.cluster_uid | default('', true) | string | length) > 0
+    fail_msg: >-
+      Unable to determine primary hub cluster identity from kube-system namespace UID.
+      Refusing to continue because checkpoint resume cannot prove the same live cluster.
+  when: not (acm_switchover_operation.restore_only | default(false))

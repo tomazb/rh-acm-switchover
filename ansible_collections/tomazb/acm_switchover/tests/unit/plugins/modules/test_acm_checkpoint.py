@@ -19,8 +19,16 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_checkpoint im
 def test_build_operation_identity_captures_hub_and_operation_inputs():
     identity = build_operation_identity(
         hubs={
-            "primary": {"context": "hub-a", "kubeconfig": "/kubeconfigs/primary"},
-            "secondary": {"context": "hub-b", "kubeconfig": "/kubeconfigs/secondary"},
+            "primary": {
+                "context": "hub-a",
+                "kubeconfig": "/kubeconfigs/primary",
+                "cluster_uid": "uid-primary",
+            },
+            "secondary": {
+                "context": "hub-b",
+                "kubeconfig": "/kubeconfigs/secondary",
+                "cluster_uid": "uid-secondary",
+            },
         },
         operation={
             "method": "passive",
@@ -36,6 +44,8 @@ def test_build_operation_identity_captures_hub_and_operation_inputs():
         "secondary_context": "hub-b",
         "primary_kubeconfig": "/kubeconfigs/primary",
         "secondary_kubeconfig": "/kubeconfigs/secondary",
+        "primary_cluster_uid": "uid-primary",
+        "secondary_cluster_uid": "uid-secondary",
         "method": "passive",
         "activation_method": "restore",
         "restore_only": False,
@@ -50,6 +60,8 @@ def test_build_operation_identity_canonicalizes_sparse_inputs_to_defaults():
         "secondary_context": "",
         "primary_kubeconfig": "",
         "secondary_kubeconfig": "",
+        "primary_cluster_uid": "",
+        "secondary_cluster_uid": "",
         "method": "passive",
         "activation_method": "patch",
         "restore_only": False,
@@ -61,8 +73,8 @@ def test_build_operation_identity_canonicalizes_sparse_inputs_to_defaults():
     assert (
         build_operation_identity(
             hubs={
-                "primary": {"context": "", "kubeconfig": ""},
-                "secondary": {"context": "", "kubeconfig": ""},
+                "primary": {"context": "", "kubeconfig": "", "cluster_uid": ""},
+                "secondary": {"context": "", "kubeconfig": "", "cluster_uid": ""},
             },
             operation={
                 "method": "passive",
@@ -156,13 +168,43 @@ def test_validate_operation_identity_raises_for_mismatch():
         validate_operation_identity(checkpoint, expected_identity)
 
 
+def test_validate_operation_identity_rejects_same_context_with_different_cluster_uid():
+    expected_identity = build_operation_identity(
+        hubs={
+            "primary": {
+                "context": "hub-a",
+                "kubeconfig": "/kubeconfigs/primary",
+                "cluster_uid": "uid-a",
+            },
+            "secondary": {
+                "context": "hub-b",
+                "kubeconfig": "/kubeconfigs/secondary",
+                "cluster_uid": "uid-b",
+            },
+        },
+        operation={"method": "passive"},
+    )
+    checkpoint = {
+        "operation_identity": {
+            **expected_identity,
+            "primary_cluster_uid": "uid-a-retargeted",
+        }
+    }
+
+    with pytest.raises(CheckpointIdentityMismatch):
+        validate_operation_identity(checkpoint, expected_identity)
+
+
 def test_validate_operation_identity_raises_when_identity_is_missing_by_default():
     with pytest.raises(CheckpointIdentityMismatch):
         validate_operation_identity({}, {"method": "passive"})
 
 
 def test_validate_operation_identity_allows_missing_identity_when_requested():
-    assert validate_operation_identity({}, {"method": "passive"}, allow_missing=True) is False
+    assert (
+        validate_operation_identity({}, {"method": "passive"}, allow_missing=True)
+        is False
+    )
 
 
 def test_build_operation_identity_restore_only_defaults_method_full_and_old_hub_none():
@@ -194,9 +236,22 @@ def test_build_operation_identity_restore_only_sparse_equals_fully_populated():
 
 
 def test_is_unsafe_legacy_checkpoint_requires_reset_for_completed_legacy_state():
-    assert is_unsafe_legacy_checkpoint({"schema_version": "1.0", "completed_phases": ["preflight"]}) is True
-    assert is_unsafe_legacy_checkpoint({"schema_version": "1.0", "completed_phases": []}) is False
-    assert is_unsafe_legacy_checkpoint({"schema_version": "2.0", "completed_phases": ["preflight"]}) is False
+    assert (
+        is_unsafe_legacy_checkpoint(
+            {"schema_version": "1.0", "completed_phases": ["preflight"]}
+        )
+        is True
+    )
+    assert (
+        is_unsafe_legacy_checkpoint({"schema_version": "1.0", "completed_phases": []})
+        is False
+    )
+    assert (
+        is_unsafe_legacy_checkpoint(
+            {"schema_version": "2.0", "completed_phases": ["preflight"]}
+        )
+        is False
+    )
 
 
 def test_acm_checkpoint_check_mode_returns_record_without_change(monkeypatch):

@@ -53,7 +53,11 @@ from lib.constants import (
 from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
-from lib.report_artifacts import build_operation_report, validate_report_artifact_directory, write_json_report_artifact
+from lib.report_artifacts import (
+    build_operation_report,
+    validate_report_artifact_directory,
+    write_json_report_artifact,
+)
 from lib.validation import InputValidator, ValidationError
 from modules import (
     Decommission,
@@ -78,7 +82,8 @@ def parse_args():
     # Keep switchover/decommission CLI contracts intact while allowing
     # standalone modes that do not perform a switchover flow.
     standalone_mode_requested = any(
-        flag in sys.argv[1:] for flag in ("--setup", "--argocd-resume-only", "--restore-only")
+        flag in sys.argv[1:]
+        for flag in ("--setup", "--argocd-resume-only", "--restore-only")
     )
     restore_only_requested = "--restore-only" in sys.argv[1:]
     argocd_resume_only_requested = "--argocd-resume-only" in sys.argv[1:]
@@ -140,7 +145,9 @@ Examples:
         action="store_true",
         help="Show planned actions without executing them",
     )
-    mode_group.add_argument("--decommission", action="store_true", help="Decommission old hub (interactive)")
+    mode_group.add_argument(
+        "--decommission", action="store_true", help="Decommission old hub (interactive)"
+    )
     mode_group.add_argument(
         "--setup",
         action="store_true",
@@ -324,7 +331,9 @@ Examples:
     )
 
     # Logging
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -352,16 +361,24 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         if not getattr(args, "state_file", None):
             env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
             if env_state_dir and env_state_dir.strip():
-                InputValidator.validate_safe_filesystem_path(env_state_dir.strip(), STATE_DIR_ENV_VAR)
+                InputValidator.validate_safe_filesystem_path(
+                    env_state_dir.strip(), STATE_DIR_ENV_VAR
+                )
         else:
             # Validate user-specified state file path to prevent unsafe locations
-            InputValidator.validate_safe_filesystem_path(args.state_file, "--state-file")
+            InputValidator.validate_safe_filesystem_path(
+                args.state_file, "--state-file"
+            )
 
         if getattr(args, "report_dir", None):
             validate_report_artifact_directory(args.report_dir, "--report-dir")
 
-        if getattr(args, "validate_only", False) and getattr(args, "argocd_manage", False):
-            logger.warning("--argocd-manage has no effect with --validate-only; continuing without Argo CD management.")
+        if getattr(args, "validate_only", False) and getattr(
+            args, "argocd_manage", False
+        ):
+            logger.warning(
+                "--argocd-manage has no effect with --validate-only; continuing without Argo CD management."
+            )
 
     except ValidationError as e:
         logger.error("Validation error: %s", str(e))
@@ -379,7 +396,9 @@ def run_switchover(
     logger: logging.Logger,
 ):
     """Execute the main switchover workflow."""
-    dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    dry_run_snapshot = (
+        state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    )
     try:
         return _run_switchover_impl(args, state, primary, secondary, logger)
     finally:
@@ -424,7 +443,9 @@ def _run_switchover_impl(
             logger.warning("  3. Or use: --force to override (use with caution)")
             logger.warning("")
             if not getattr(args, "force", False):
-                logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
+                logger.error(
+                    "Use --force to proceed with stale state, or remove/reset state file to start fresh."
+                )
                 sys.exit(EXIT_FAILURE)
             logger.warning("--force used: Resetting state to start fresh switchover")
             state.reset()
@@ -437,7 +458,9 @@ def _run_switchover_impl(
         # original FAILED phase; mutating state here would destroy it.
         last_error_phase = state.get_last_error_phase()
         errors = state.get_errors()
-        last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+        last_error_msg = (
+            errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+        )
 
         logger.info("")
         logger.info("⚠️  RESUMING FROM FAILED STATE")
@@ -464,7 +487,9 @@ def _run_switchover_impl(
             logger.warning("  3. Or use: --force to reset and retry from beginning")
             logger.warning("")
             if not getattr(args, "force", False):
-                logger.error("Use --force to reset state and retry, or remove state file to start fresh.")
+                logger.error(
+                    "Use --force to reset state and retry, or remove state file to start fresh."
+                )
                 sys.exit(EXIT_FAILURE)
             logger.warning("--force used: Resetting state to start fresh switchover")
             state.reset()
@@ -478,7 +503,11 @@ def _run_switchover_impl(
 
     phase_flow: Tuple[PhaseFlowEntry, ...] = (
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),
-        (_run_phase_primary_prep, (Phase.PREFLIGHT, Phase.PRIMARY_PREP), Phase.PRIMARY_PREP),
+        (
+            _run_phase_primary_prep,
+            (Phase.PREFLIGHT, Phase.PRIMARY_PREP),
+            Phase.PRIMARY_PREP,
+        ),
         (
             _run_phase_activation,
             (
@@ -489,8 +518,16 @@ def _run_switchover_impl(
             ),
             Phase.ACTIVATION,
         ),
-        (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION), Phase.POST_ACTIVATION),
-        (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION), Phase.FINALIZATION),
+        (
+            _run_phase_post_activation,
+            (Phase.ACTIVATION, Phase.POST_ACTIVATION),
+            Phase.POST_ACTIVATION,
+        ),
+        (
+            _run_phase_finalization,
+            (Phase.POST_ACTIVATION, Phase.FINALIZATION),
+            Phase.FINALIZATION,
+        ),
     )
 
     current_phase = state.get_current_phase()
@@ -508,11 +545,15 @@ def _run_switchover_impl(
             ran_phase = True
             result = handler(args, state, primary, secondary, logger)
             if not result:
-                _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+                _attempt_argocd_resume_on_failure(
+                    args, state, primary, secondary, logger
+                )
                 return False
             if state.get_current_phase() != expected_phase:
                 _fail_unexpected_phase_state(state, expected_phase, logger)
-                _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+                _attempt_argocd_resume_on_failure(
+                    args, state, primary, secondary, logger
+                )
                 return False
 
     if not ran_phase:
@@ -523,7 +564,9 @@ def _run_switchover_impl(
     logger.info("\n" + "=" * 60)
     logger.info("SWITCHOVER COMPLETED SUCCESSFULLY!")
     logger.info("=" * 60)
-    logger.info("\nSwitchover completed at: %s", datetime.now().astimezone().isoformat())
+    logger.info(
+        "\nSwitchover completed at: %s", datetime.now().astimezone().isoformat()
+    )
     logger.info("State file: %s", args.state_file)
     logger.info("\nNext steps:")
     logger.info("  1. Inform stakeholders that switchover is complete")
@@ -550,7 +593,9 @@ def _run_restore_only_argocd_pause(
     if not getattr(args, "argocd_manage", False):
         return True
     if args.dry_run:
-        logger.info("[DRY-RUN] Would pause Argo CD auto-sync for ACM-touching Applications on secondary hub")
+        logger.info(
+            "[DRY-RUN] Would pause Argo CD auto-sync for ACM-touching Applications on secondary hub"
+        )
         return True
     if state.is_step_completed("pause_argocd_apps"):
         logger.info("Argo CD pause already completed, skipping")
@@ -560,7 +605,9 @@ def _run_restore_only_argocd_pause(
         coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
         paused_apps, failure_count = coordinator.pause_hubs([(secondary, "secondary")])
     except Exception as exc:
-        return _fail_phase(state, f"Argo CD pause on secondary hub failed: {exc}", logger)
+        return _fail_phase(
+            state, f"Argo CD pause on secondary hub failed: {exc}", logger
+        )
 
     if failure_count:
         return _fail_phase(
@@ -588,7 +635,9 @@ def run_restore_only(
     logger: logging.Logger,
 ) -> bool:
     """Execute restore-only workflow for single-hub restore from backup."""
-    dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    dry_run_snapshot = (
+        state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
+    )
     try:
         return _run_restore_only_impl(args, state, secondary, logger)
     finally:
@@ -638,7 +687,9 @@ def _run_restore_only_impl(
             logger.warning("  3. Or use: --force to override (use with caution)")
             logger.warning("")
             if not getattr(args, "force", False):
-                logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
+                logger.error(
+                    "Use --force to proceed with stale state, or remove/reset state file to start fresh."
+                )
                 sys.exit(EXIT_FAILURE)
             logger.warning("--force used: Resetting state to start fresh restore")
             state.reset()
@@ -648,7 +699,9 @@ def _run_restore_only_impl(
     elif current_phase == Phase.FAILED and not args.validate_only:
         last_error_phase = state.get_last_error_phase()
         errors = state.get_errors()
-        last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+        last_error_msg = (
+            errors[-1].get("error", "Unknown error") if errors else "Unknown error"
+        )
 
         logger.info("")
         logger.info("⚠️  RESUMING FROM FAILED STATE")
@@ -673,7 +726,9 @@ def _run_restore_only_impl(
             logger.warning("  3. Or use: --force to reset and retry from beginning")
             logger.warning("")
             if not getattr(args, "force", False):
-                logger.error("Use --force to reset state and retry, or remove state file to start fresh.")
+                logger.error(
+                    "Use --force to reset state and retry, or remove state file to start fresh."
+                )
                 sys.exit(EXIT_FAILURE)
             logger.warning("--force used: Resetting state to start fresh restore")
             state.reset()
@@ -691,8 +746,16 @@ def _run_restore_only_impl(
         (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),
         (_run_restore_only_argocd_pause, (Phase.PREFLIGHT,), Phase.PREFLIGHT),
         (_run_phase_activation, (Phase.PREFLIGHT, Phase.ACTIVATION), Phase.ACTIVATION),
-        (_run_phase_post_activation, (Phase.ACTIVATION, Phase.POST_ACTIVATION), Phase.POST_ACTIVATION),
-        (_run_phase_finalization, (Phase.POST_ACTIVATION, Phase.FINALIZATION), Phase.FINALIZATION),
+        (
+            _run_phase_post_activation,
+            (Phase.ACTIVATION, Phase.POST_ACTIVATION),
+            Phase.POST_ACTIVATION,
+        ),
+        (
+            _run_phase_finalization,
+            (Phase.POST_ACTIVATION, Phase.FINALIZATION),
+            Phase.FINALIZATION,
+        ),
     )
 
     current_phase = state.get_current_phase()
@@ -778,7 +841,9 @@ def _attempt_argocd_resume_on_failure(
         run_id,
     )
     try:
-        summary = argocd_lib.resume_recorded_applications(paused_apps, run_id, primary, secondary, logger)
+        summary = argocd_lib.resume_recorded_applications(
+            paused_apps, run_id, primary, secondary, logger
+        )
         logger.info(
             "Argo CD resume-on-failure: restored=%d, already_resumed=%d, failed=%d",
             summary.restored,
@@ -807,15 +872,22 @@ def _attempt_argocd_resume_on_failure(
         state.set_config("argocd_paused_apps", [])
         state.set_config("argocd_run_id", None)
         state.set_config("argocd_pause_dry_run", False)
-        retry_phase = Phase.PREFLIGHT if getattr(args, "restore_only", False) else Phase.PRIMARY_PREP
+        retry_phase = (
+            Phase.PREFLIGHT
+            if getattr(args, "restore_only", False)
+            else Phase.PRIMARY_PREP
+        )
         state.add_error(
             "Argo CD resume-on-failure completed; retry must re-run Argo CD pause before continuing.",
             phase=retry_phase.value,
         )
-        logger.info("Argo CD resume-on-failure cleanup completed; durable pause state cleared.")
+        logger.info(
+            "Argo CD resume-on-failure cleanup completed; durable pause state cleared."
+        )
     except Exception as exc:
         logger.warning(
-            "Argo CD resume-on-failure failed: %s. " "Use --argocd-resume-only to resume manually.",
+            "Argo CD resume-on-failure failed: %s. "
+            "Use --argocd-resume-only to resume manually.",
             exc,
         )
 
@@ -876,7 +948,9 @@ def _run_phase_preflight(
     state.set_phase(Phase.PREFLIGHT)
 
     is_restore_only = getattr(args, "restore_only", False)
-    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(args, "validate_only", False)
+    effective_argocd_manage = getattr(args, "argocd_manage", False) and not getattr(
+        args, "validate_only", False
+    )
     validator = PreflightValidator(
         primary,
         secondary,
@@ -904,7 +978,9 @@ def _run_phase_preflight(
     )
 
     if not passed:
-        return _fail_phase(state, "Pre-flight validation failed! Cannot proceed.", logger)
+        return _fail_phase(
+            state, "Pre-flight validation failed! Cannot proceed.", logger
+        )
 
     if is_restore_only:
         state.set_config("primary_version", "unknown")
@@ -917,9 +993,14 @@ def _run_phase_preflight(
             "primary_observability_detected",
             config["primary_observability_detected"],
         )
-        primary_obs_enabled = config["primary_observability_detected"] and not args.skip_observability_checks
+        primary_obs_enabled = (
+            config["primary_observability_detected"]
+            and not args.skip_observability_checks
+        )
         state.set_config("primary_has_observability", primary_obs_enabled)
-        expected_managed_cluster_names = list(config.get("expected_managed_cluster_names", []))
+        expected_managed_cluster_names = list(
+            config.get("expected_managed_cluster_names", [])
+        )
 
     state.set_config("secondary_version", config["secondary_version"])
     state.set_config(
@@ -927,7 +1008,10 @@ def _run_phase_preflight(
         config["secondary_observability_detected"],
     )
 
-    secondary_obs_enabled = config["secondary_observability_detected"] and not args.skip_observability_checks
+    secondary_obs_enabled = (
+        config["secondary_observability_detected"]
+        and not args.skip_observability_checks
+    )
     state.set_config("secondary_has_observability", secondary_obs_enabled)
     state.set_config(
         "has_observability",
@@ -951,7 +1035,7 @@ def _run_phase_preflight(
             primary,
             secondary,
             logger,
-            argocd_manage=getattr(args, "argocd_manage", False),
+            argocd_manage=effective_argocd_manage,
         )
 
     if args.validate_only:
@@ -1022,7 +1106,9 @@ def _report_argocd_acm_impact(
 
     if not argocd_manage and all_acm_apps:
         autosync_count = sum(
-            1 for a in all_acm_apps if (a.app.get("spec", {}) or {}).get("syncPolicy", {}).get("automated")
+            1
+            for a in all_acm_apps
+            if (a.app.get("spec", {}) or {}).get("syncPolicy", {}).get("automated")
         )
         if autosync_count:
             if primary is None:
@@ -1079,7 +1165,9 @@ def _run_phase_activation(
 ) -> bool:
     _log_phase_banner("PHASE 3: SECONDARY HUB ACTIVATION", logger)
     state.set_phase(Phase.ACTIVATION)
-    min_managed_clusters, expected_names, enforce_expected_names = _resolve_managed_cluster_expectation(args, state)
+    min_managed_clusters, expected_names, enforce_expected_names = (
+        _resolve_managed_cluster_expectation(args, state)
+    )
 
     activation = SecondaryActivation(
         secondary_client=secondary,
@@ -1109,7 +1197,9 @@ def _run_phase_post_activation(
 ) -> bool:
     _log_phase_banner("PHASE 4: POST-ACTIVATION VERIFICATION", logger)
     state.set_phase(Phase.POST_ACTIVATION)
-    min_managed_clusters, expected_names, enforce_expected_names = _resolve_managed_cluster_expectation(args, state)
+    min_managed_clusters, expected_names, enforce_expected_names = (
+        _resolve_managed_cluster_expectation(args, state)
+    )
 
     verification = PostActivationVerification(
         secondary,
@@ -1134,12 +1224,20 @@ def _resolve_managed_cluster_expectation(
 ) -> tuple[int, list[str], bool]:
     """Return effective ManagedCluster count/name enforcement for activation phases."""
     raw_min = getattr(args, "min_managed_clusters", None)
-    expected_names = list(state.get_config(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, []) or [])
-    expected_count = int(state.get_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, len(expected_names)) or 0)
+    expected_names = list(
+        state.get_config(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, []) or []
+    )
+    expected_count = int(
+        state.get_config(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, len(expected_names)) or 0
+    )
 
     if raw_min is None:
         expectation_mode = state.get_config(MANAGED_CLUSTER_EXPECTATION_KEY, None)
-        if expectation_mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY and expected_count == 0 and not expected_names:
+        if (
+            expectation_mode == MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY
+            and expected_count == 0
+            and not expected_names
+        ):
             return 1, [], False
         return expected_count, expected_names, bool(expected_names)
     if raw_min == 0:
@@ -1168,7 +1266,9 @@ def _run_phase_finalization(
         dry_run=args.dry_run,
         old_hub_action=old_hub_action,
         manage_auto_import_strategy=getattr(args, "manage_auto_import_strategy", False),
-        disable_observability_on_secondary=getattr(args, "disable_observability_on_secondary", False),
+        disable_observability_on_secondary=getattr(
+            args, "disable_observability_on_secondary", False
+        ),
         restore_only=is_restore_only,
     )
 
@@ -1225,7 +1325,9 @@ def run_decommission(
     )
 
     if args.dry_run:
-        logger.info("[DRY-RUN] Starting decommission workflow (no changes will be made)")
+        logger.info(
+            "[DRY-RUN] Starting decommission workflow (no changes will be made)"
+        )
     else:
         logger.info("Starting decommission workflow")
 
@@ -1270,10 +1372,19 @@ def _phase_report_from_state(state_snapshot: dict) -> dict:
 
     for step in state_snapshot.get("completed_steps", []) or []:
         name = step.get("name", "")
-        phase = next((value for prefix, value in phase_by_step_prefix.items() if name.startswith(prefix)), None)
+        phase = next(
+            (
+                value
+                for prefix, value in phase_by_step_prefix.items()
+                if name.startswith(prefix)
+            ),
+            None,
+        )
         if not phase:
             continue
-        phase_entry = phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})
+        phase_entry = phases.setdefault(
+            phase, {"phase": phase, "status": "pass", "steps": []}
+        )
         phase_entry["steps"].append(name)
 
     current_phase = state_snapshot.get("current_phase")
@@ -1288,7 +1399,9 @@ def _phase_report_from_state(state_snapshot: dict) -> dict:
             Phase.FINALIZATION.value: "finalization",
         }.get(failed_phase_value)
         if failed_phase:
-            phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})["status"] = "fail"
+            phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})[
+                "status"
+            ] = "fail"
 
     return phases
 
@@ -1378,7 +1491,9 @@ def run_setup(
     logger.info("  Role: %s", args.role)
     logger.info("  Token duration: %s", args.token_duration)
     logger.info("  Output directory: %s", args.output_dir)
-    logger.info("  Include decommission RBAC: %s", getattr(args, "include_decommission", False))
+    logger.info(
+        "  Include decommission RBAC: %s", getattr(args, "include_decommission", False)
+    )
 
     try:
         result = subprocess.run(  # nosec B603
@@ -1444,7 +1559,9 @@ def main():  # noqa: C901
             logger.error("\n✗ Setup failed!")
             sys.exit(EXIT_FAILURE)
 
-    if getattr(args, "argocd_resume_only", False) and not os.path.exists(resolved_state_file):
+    if getattr(args, "argocd_resume_only", False) and not os.path.exists(
+        resolved_state_file
+    ):
         logger.error(
             "State file not found for --argocd-resume-only: %s. "
             "Run a switchover with Argo CD management first or pass --state-file explicitly.",
@@ -1478,7 +1595,9 @@ def main():  # noqa: C901
         sys.exit(EXIT_FAILURE)
 
     if not getattr(args, "argocd_resume_only", False):
-        state.ensure_contexts(getattr(args, "primary_context", None), args.secondary_context)
+        state.ensure_contexts(
+            getattr(args, "primary_context", None), args.secondary_context
+        )
 
     try:
         primary, secondary = _initialize_clients(args, logger)
@@ -1488,6 +1607,15 @@ def main():  # noqa: C901
 
     operation_exit_code = EXIT_FAILURE
     try:
+        if not getattr(args, "argocd_resume_only", False):
+            state.ensure_hub_identities(
+                _collect_hub_identities(primary, secondary),
+                allow_legacy_backfill=getattr(args, "force", False),
+                persist=not (
+                    getattr(args, "dry_run", False)
+                    or getattr(args, "validate_only", False)
+                ),
+            )
         if getattr(args, "argocd_resume_only", False):
             success = _run_argocd_resume_only(args, state, primary, secondary, logger)
         else:
@@ -1546,6 +1674,19 @@ def _initialize_clients(
     return primary, secondary
 
 
+def _collect_hub_identities(
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+) -> dict[str, dict[str, Optional[str]]]:
+    """Read live cluster identities for available hub clients."""
+    identities: dict[str, dict[str, Optional[str]]] = {}
+    if primary is not None:
+        identities["primary"] = primary.get_cluster_identity()
+    if secondary is not None:
+        identities["secondary"] = secondary.get_cluster_identity()
+    return identities
+
+
 def _sanitize_context_identifier(value: str) -> str:
     """Sanitize context string to be filesystem friendly."""
     return InputValidator.sanitize_context_identifier(value)
@@ -1558,7 +1699,9 @@ def _get_default_state_dir() -> str:
     return ".state"
 
 
-def _build_default_state_file(primary_ctx: Optional[str], secondary_ctx: Optional[str]) -> str:
+def _build_default_state_file(
+    primary_ctx: Optional[str], secondary_ctx: Optional[str]
+) -> str:
     """Build the default state file path for the provided context ordering."""
     primary_label = primary_ctx or "restore-only"
     secondary_label = secondary_ctx or "none"
@@ -1650,7 +1793,9 @@ def _run_argocd_resume_only(
     run_id = state.get_config("argocd_run_id")
     paused_apps = state.get_config("argocd_paused_apps") or []
     if not run_id or not paused_apps:
-        logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
+        logger.error(
+            "No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing)."
+        )
         return False
     logger.info(
         "Resuming Argo CD auto-sync from state (run_id=%s, %d app(s))",
@@ -1671,11 +1816,17 @@ def _run_argocd_resume_only(
     current_secondary_ctx = getattr(args, "secondary_context", None)
 
     if stored_primary_ctx or stored_secondary_ctx:
-        if stored_primary_ctx == current_secondary_ctx and stored_secondary_ctx == current_primary_ctx:
-            logger.info("Resume-only contexts are reversed from the recorded state; swapping client mapping.")
+        if (
+            stored_primary_ctx == current_secondary_ctx
+            and stored_secondary_ctx == current_primary_ctx
+        ):
+            logger.info(
+                "Resume-only contexts are reversed from the recorded state; swapping client mapping."
+            )
             resume_primary, resume_secondary = secondary, primary
         elif current_primary_ctx is not None and (
-            stored_primary_ctx != current_primary_ctx or stored_secondary_ctx != current_secondary_ctx
+            stored_primary_ctx != current_primary_ctx
+            or stored_secondary_ctx != current_secondary_ctx
         ):
             logger.warning(
                 "Resume-only contexts (%s/%s) differ from recorded state (%s/%s); "
@@ -1687,7 +1838,9 @@ def _run_argocd_resume_only(
                 stored_secondary_ctx,
             )
 
-    primary_apps_recorded = any(isinstance(item, dict) and item.get("hub") == "primary" for item in paused_apps)
+    primary_apps_recorded = any(
+        isinstance(item, dict) and item.get("hub") == "primary" for item in paused_apps
+    )
     if primary_apps_recorded and resume_primary is None:
         if not stored_primary_ctx:
             logger.error(
@@ -1703,7 +1856,9 @@ def _run_argocd_resume_only(
                 "Resume-only primary context omitted; loading recorded primary hub client: %s",
                 stored_primary_ctx,
             )
-            resume_primary = KubeClient(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
+            resume_primary = KubeClient(
+                stored_primary_ctx, dry_run=getattr(args, "dry_run", False)
+            )
 
     summary = argocd_lib.resume_recorded_applications(
         paused_apps,
@@ -1719,7 +1874,9 @@ def _run_argocd_resume_only(
         len(paused_apps),
     )
     if summary.failed:
-        logger.error("Argo CD auto-sync restore failed for %d Application(s).", summary.failed)
+        logger.error(
+            "Argo CD auto-sync restore failed for %d Application(s).", summary.failed
+        )
         return False
     return True
 

@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Python state and collection checkpoints now bind resume validation to live hub cluster identities, rejecting same-context retargeting to a different cluster before mutation.
+- Collection preflight now refreshes MultiClusterHub discovery during execute-mode runs even when tests or callers pre-seed discovery variables, preventing stale cached MCH data from satisfying live mutation validation.
 - Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
 - Local `run_tests.sh` now treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default, with `STRICT_QUALITY=0` available only for advisory local runs.
 - Restore-only now requires at least one restored non-local ManagedCluster by default when no explicit minimum is provided; operators must explicitly opt into an empty restore target.
