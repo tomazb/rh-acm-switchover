@@ -68,6 +68,16 @@ Review the planned actions. The tool will:
 3. Verify klusterlet agents on managed clusters
 4. Attempt to enable BackupSchedule on the new hub (warns if none found — see Post-Restore section)
 
+> **Default expectation (`[Unreleased]`):** restore-only now expects at
+> least **1 restored non-local ManagedCluster** by default. If the
+> post-restore count is zero, the tool **fails closed**. This is a
+> behavior change from earlier wording that treated `0` as informational.
+>
+> If an empty target is legitimately expected (e.g., bootstrap of a new
+> hub before any clusters are imported), opt in explicitly:
+> - Python CLI: `--min-managed-clusters 0`
+> - Ansible collection: `allow_zero_managed_clusters: true`
+
 ### Step 3: Execute Restore
 
 ```bash
