@@ -398,6 +398,19 @@ Before activation, ensure the secondary hub has received and restored the latest
 > ```
 > Look for a restore with `syncRestoreWithNewBackups: true` in its spec.
 
+> **⚠️ Hard requirement (automation):** The Python CLI and the Ansible
+> collection require a passive Restore whose `spec.syncRestoreWithNewBackups`
+> is `true`. The legacy name-based fallback to `restore-acm-passive-sync` was
+> removed: preflight and activation **fail closed** if no sync-enabled
+> passive Restore is found, regardless of the resource name. If you run a
+> custom-named passive Restore, ensure the spec flag is set; the tool
+> discovers it by spec, not by name.
+>
+> **Benign `FinishedWithErrors` rule:** activation tolerates a Restore in
+> `FinishedWithErrors` only when the status message matches the exact
+> pattern `ManagedCluster <name> already available`. Any other
+> `FinishedWithErrors` message is treated as a real failure.
+
 **On SECONDARY HUB, verify passive sync status:**
 ```bash
 oc get restore.cluster.open-cluster-management.io restore-acm-passive-sync -n open-cluster-management-backup

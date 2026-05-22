@@ -75,6 +75,15 @@ oc scale deployment observability-observatorium-api \
 
 ## Step 4: Verify Passive Restore on Secondary Hub
 
+> **Hard requirement:** The tool requires `spec.syncRestoreWithNewBackups: true`
+> on the passive Restore. There is no name-based fallback — preflight and
+> activation fail closed if no sync-enabled passive Restore exists, even one
+> named `restore-acm-passive-sync`.
+>
+> **Benign `FinishedWithErrors`:** activation only tolerates this phase when
+> the message matches `ManagedCluster <name> already available`. Any other
+> message is treated as a failure.
+
 ### Check passive sync status
 
 ```bash
