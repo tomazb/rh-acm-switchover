@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 DOCUMENTATION = r"""
 ---
 module: acm_safe_path_validate
@@ -42,6 +44,16 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.validation i
 )
 
 
+def _validate_existing_parent(path: str) -> None:
+    absolute_path = os.path.abspath(path)
+    parent = os.path.dirname(absolute_path) or os.getcwd()
+    if not os.path.exists(parent):
+        raise ValidationError(f"Parent directory '{parent}' does not exist for safe path '{path}'.")
+    if not os.path.isdir(parent):
+        raise ValidationError(f"Parent path '{parent}' is not a directory for safe path '{path}'.")
+
+
+
 def main() -> None:
     module = AnsibleModule(
         argument_spec={
@@ -60,6 +72,7 @@ def main() -> None:
             validate_report_artifact_path(module.params["path"])
         else:
             validate_safe_path(module.params["path"])
+            _validate_existing_parent(module.params["path"])
     except ValidationError as exc:
         module.fail_json(msg=str(exc))
 
