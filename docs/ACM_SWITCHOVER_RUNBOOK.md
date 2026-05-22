@@ -229,6 +229,15 @@ oc get clusterdeployment.hive.openshift.io --all-namespaces \
 oc patch clusterdeployment.hive.openshift.io <cluster-deployment-name> -n <namespace> \
   --type='merge' -p '{"spec":{"preserveOnDelete":true}}'
 
+> **⚠️ Automation fail-closed behavior:** When the decommission tool cannot
+> read the Hive `ClusterDeployment` API (CRD missing, API discovery failure,
+> or permission denied), it **refuses to proceed** rather than assuming "no
+> Hive = nothing to protect". The tool also requires explicit cluster-ID
+> matches between ManagedClusters and ClusterDeployments; plausible-but-
+> unverified MC↔CD relationships are treated as unverified and block
+> decommission. On non-Hive clusters, run decommission with the documented
+> non-Hive flow rather than expecting silent skip.
+
 # Example: Batch update all ClusterDeployments with preserveOnDelete set to false or missing
 for cd in $(oc get clusterdeployment.hive.openshift.io --all-namespaces \
   -o json | jq -r '.items[] | select(.spec.preserveOnDelete != true) | 
