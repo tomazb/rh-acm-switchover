@@ -182,6 +182,14 @@ manifests, and Helm templates must stay aligned when permissions change.
   - Auto-detect observability component presence
   - Delete old-hub `MultiClusterObservability` during normal finalization when the old hub is kept as secondary
 
+> **Observability RBAC is skipped when MCO is verifiably absent.** When
+> preflight detects no `MultiClusterObservability` resources on the hub (a
+> successful API lookup returning empty), Observability-scoped RBAC checks —
+> including the baseline `MultiClusterObservability` delete validation and the
+> Observability namespace-scoped permissions below — are skipped because they
+> are not required for that workflow. Detection failure (API/auth errors)
+> still fails closed: only a confirmed empty lookup disables the checks.
+
 ### Route API Group (route.openshift.io/v1) - OpenShift Only
 
 #### Routes

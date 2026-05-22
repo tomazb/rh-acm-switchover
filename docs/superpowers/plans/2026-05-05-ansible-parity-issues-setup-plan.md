@@ -1,5 +1,13 @@
 # Ansible Parity Backlog — GitHub Issues Setup Plan
 
+> **⚠️ Superseded notice (added 2026-05-22):** The parity items this backlog
+> tracked (checkpoint hub-identity, activation live-read, validate-mode
+> checkpoint writes, decommission safe-path, passive-restore readiness) have
+> shipped under `[Unreleased]` in `CHANGELOG.md`. Use this file only as
+> historical context. Authoritative status lives in
+> `docs/ansible-collection/parity-matrix.md` and
+> `docs/ansible-collection/behavior-map.md`.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace `work-to-do.md` with 8 GitHub Issues + a milestone so progress is queryable across sessions with `gh issue list`.

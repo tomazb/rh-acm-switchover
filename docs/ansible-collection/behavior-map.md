@@ -26,6 +26,20 @@ Source: `lib/`, `modules/`, `scripts/`
 | `lib/validation.py` | centralized collection validation layer | 2 |
 | `lib/kube_client.py` | stock `kubernetes.core` usage plus later helper code | 2-3 |
 | `lib/utils.py` checkpoint semantics | `plugins/action/checkpoint_phase.py`, `plugins/module_utils/checkpoint.py` | 4 |
+
+In `validate` mode (`acm_switchover_execution.mode: validate`), the checkpoint
+preflight runs the same load + verification path as `execute` mode — including
+hub-identity binding and `reset_from` handling — but does **not** persist any
+checkpoint transitions or perform mutations. This surfaces misconfigured
+checkpoints before an actual execute-mode run.
+
+Observability RBAC permissions are skipped when MCO is verifiably absent: when
+preflight detection finds no `MultiClusterObservability` resources on the hub
+(a successful lookup returning empty), Observability-scoped RBAC checks
+(including the baseline `MultiClusterObservability` delete validation) are
+skipped because they are not required for that workflow. Detection failure
+(API/auth errors) still fails closed.
+
 | `lib/argocd.py` | `roles/argocd_manage/`, preflight read-only advisory discovery, and deferred playbook | 5 |
 | `lib/gitops_detector.py` | preflight detection and warnings, including non-blocking Argo CD ACM-touching Application advisory output | 5 |
 | `modules/preflight/reporter.py` and Python-only `lib/report_artifacts.py` | `plugins/modules/acm_preflight_report.py`, `plugins/modules/acm_report_artifact.py`, playbook report contracts | 2-6 |
