@@ -406,6 +406,43 @@ class TestStateManager:
         assert reloaded.get_current_phase() == Phase.INIT
         assert reloaded.state["completed_steps"] == []
 
+    def test_ensure_contexts_resets_when_contexts_key_is_missing_during_resume(self, tmp_path):
+        """An in-progress state missing stored contexts must discard prior progress before rebinding hubs."""
+        state_path = tmp_path / "ctx-missing-key.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.mark_step_completed("step1")
+        sm.state.pop("contexts")
+        sm.flush_state()
+
+        reloaded = StateManager(str(state_path))
+        reloaded.ensure_contexts("primary-a", "secondary-b")
+
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.state["completed_steps"] == []
+        assert reloaded.state["contexts"] == {"primary": "primary-a", "secondary": "secondary-b"}
+
+    def test_ensure_contexts_resets_when_only_primary_context_changes(self, tmp_path):
+        """Changing just one hub context must still reset state because partial drift can mix runs."""
+        state_path = tmp_path / "ctx-primary-drift.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.mark_step_completed("step1")
+        sm.set_config("preserved", "no")
+
+        reloaded = StateManager(str(state_path))
+        reloaded.ensure_contexts("primary-other", "secondary-b")
+
+        assert reloaded.get_current_phase() == Phase.INIT
+        assert reloaded.state["completed_steps"] == []
+        assert reloaded.get_config("preserved") is None
+        assert reloaded.state["contexts"] == {
+            "primary": "primary-other",
+            "secondary": "secondary-b",
+        }
+
     def test_ensure_hub_identities_stores_values(self, tmp_path):
         """Fresh state records live hub identities for later resume checks."""
         state_path = tmp_path / "identity.json"
@@ -531,6 +568,176 @@ class TestStateManager:
 
         reloaded = StateManager(str(state_path))
         assert reloaded.state["hub_identities"] == {}
+
+    def test_ensure_hub_identities_rejects_legacy_in_progress_state_when_backfill_disabled(self, tmp_path):
+        """Explicitly disabling legacy backfill must fail closed for in-progress state missing identities."""
+        state_path = tmp_path / "identity-legacy-explicit.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.set_phase(Phase.PRIMARY_PREP)
+        sm.state.pop("hub_identities")
+        sm.flush_state()
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="missing hub identity"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                },
+                allow_legacy_backfill=False,
+            )
+
+    def test_ensure_hub_identities_mismatch_leaves_disk_state_unchanged(self, tmp_path):
+        """A UID mismatch must fail closed without rewriting the already persisted hub identity data."""
+        state_path = tmp_path / "identity-read-only-mismatch.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {
+                    "context": "secondary-b",
+                    "cluster_uid": "uid-secondary-old",
+                },
+            }
+        )
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="secondary hub identity changed"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary-new",
+                    },
+                }
+            )
+
+        persisted = StateManager(str(state_path))
+        assert persisted.state["hub_identities"]["secondary"]["cluster_uid"] == "uid-secondary-old"
+
+    def test_ensure_hub_identities_persist_false_does_not_write_on_mismatch(self, tmp_path):
+        """Validation-only identity checks must still raise on drift without touching persisted state."""
+        state_path = tmp_path / "identity-read-only-primary-mismatch.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "stored-uid-123"},
+                "secondary": {
+                    "context": "secondary-b",
+                    "cluster_uid": "uid-secondary",
+                },
+            }
+        )
+
+        reloaded = StateManager(str(state_path))
+        with patch.object(reloaded, "save_state") as mock_save, patch.object(reloaded, "flush_state") as mock_flush:
+            with pytest.raises(StateIdentityMismatch, match="primary hub identity changed"):
+                reloaded.ensure_hub_identities(
+                    {
+                        "primary": {
+                            "context": "primary-a",
+                            "cluster_uid": "live-uid-456",
+                        },
+                        "secondary": {
+                            "context": "secondary-b",
+                            "cluster_uid": "uid-secondary",
+                        },
+                    },
+                    persist=False,
+                )
+
+        mock_save.assert_not_called()
+        mock_flush.assert_not_called()
+        persisted = StateManager(str(state_path))
+        assert persisted.state["hub_identities"]["primary"]["cluster_uid"] == "stored-uid-123"
+
+    def test_ensure_hub_identities_persist_false_suppresses_partial_identity_update(self, tmp_path):
+        """Validation-only checks must not flush a partial identity backfill when no mismatch is present."""
+        state_path = tmp_path / "identity-read-only-backfill.json"
+        sm = StateManager(str(state_path))
+        sm.state["hub_identities"] = {
+            "primary": {"context": "primary-a", "cluster_uid": "uid-primary"}
+        }
+        sm.flush_state()
+
+        reloaded = StateManager(str(state_path))
+        with patch.object(reloaded, "flush_state") as mock_flush:
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                },
+                persist=False,
+            )
+
+        mock_flush.assert_not_called()
+        persisted = StateManager(str(state_path))
+        assert persisted.state["hub_identities"] == {
+            "primary": {"context": "primary-a", "cluster_uid": "uid-primary"}
+        }
+
+    def test_ensure_hub_identities_rejects_partial_secondary_drift(self, tmp_path):
+        """One matching hub is not enough: a changed secondary UID must still block resume."""
+        state_path = tmp_path / "identity-secondary-drift.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_contexts("primary-a", "secondary-b")
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {
+                    "context": "secondary-b",
+                    "cluster_uid": "uid-secondary-old",
+                },
+            }
+        )
+        sm.set_phase(Phase.PRIMARY_PREP)
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="secondary hub identity changed"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary-new",
+                    },
+                }
+            )
+
+        assert reloaded.get_current_phase() == Phase.PRIMARY_PREP
+
+    def test_ensure_hub_identities_rejects_whitespace_live_cluster_uid(self, tmp_path):
+        """Whitespace-only live UIDs must be rejected because they would defeat hub identity binding."""
+        state_path = tmp_path / "identity-whitespace-uid.json"
+        sm = StateManager(str(state_path))
+        sm.ensure_hub_identities(
+            {
+                "primary": {"context": "primary-a", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary-b", "cluster_uid": "uid-secondary"},
+            }
+        )
+
+        reloaded = StateManager(str(state_path))
+        with pytest.raises(StateIdentityMismatch, match="missing a live cluster UID"):
+            reloaded.ensure_hub_identities(
+                {
+                    "primary": {"context": "primary-a", "cluster_uid": "  \t\n  "},
+                    "secondary": {
+                        "context": "secondary-b",
+                        "cluster_uid": "uid-secondary",
+                    },
+                }
+            )
+
+        assert reloaded.state["hub_identities"]["primary"]["cluster_uid"] == "uid-primary"
 
     def test_get_state_age_valid_timestamp(self, state_manager):
         """Test get_state_age returns timedelta for valid timestamp."""
