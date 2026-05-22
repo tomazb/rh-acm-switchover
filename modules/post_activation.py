@@ -21,11 +21,14 @@ from lib.constants import (
     CLUSTER_VERIFY_MAX_WORKERS,
     CLUSTER_VERIFY_TIMEOUT,
     DEFAULT_KUBECONFIG_SIZE,
+    DELETE_REQUEST_TIMEOUT,
     DISABLE_AUTO_IMPORT_ANNOTATION,
     INITIAL_CLUSTER_WAIT_TIMEOUT,
+    KLUSTERLET_API_READ_TIMEOUT,
     KLUSTERLET_RECHECK_INTERVAL,
     KLUSTERLET_RECHECK_TIMEOUT,
     KLUSTERLET_WORKER_TIMEOUT,
+    KLUSTERLET_WORKER_TIMEOUT_MESSAGE,
     LOCAL_CLUSTER_NAME,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MAX_KUBECONFIG_SIZE,
@@ -804,7 +807,7 @@ class PostActivationVerification:
             len(cluster_info),
         )
 
-        def collect_future_results(future_fallbacks: Dict, timeout_message: str) -> List[tuple]:
+        def collect_future_results(future_fallbacks: Dict, operation: str) -> List[tuple]:
             """Collect completed future results and apply fallbacks for timed-out workers."""
             done, not_done = wait(future_fallbacks.keys(), timeout=KLUSTERLET_WORKER_TIMEOUT)
             results = []
@@ -812,7 +815,12 @@ class PostActivationVerification:
                 results.append(future.result())
             for future in not_done:
                 fallback = future_fallbacks[future]
-                logger.warning(timeout_message, fallback[0], KLUSTERLET_WORKER_TIMEOUT)
+                logger.warning(
+                    KLUSTERLET_WORKER_TIMEOUT_MESSAGE,
+                    operation,
+                    fallback[0],
+                    KLUSTERLET_WORKER_TIMEOUT,
+                )
                 future.cancel()
                 results.append(fallback)
             return results
@@ -834,7 +842,7 @@ class PostActivationVerification:
             }
             for cluster_name, result, context_name in collect_future_results(
                 check_future_fallbacks,
-                "Timed out checking klusterlet for %s after %s seconds",
+                "checking",
             ):
                 if result == "verified":
                     verified.append(cluster_name)
@@ -886,14 +894,17 @@ class PostActivationVerification:
                 }
                 for cluster_name, success in collect_future_results(
                     fix_future_fallbacks,
-                    "Timed out remediating klusterlet for %s after %s seconds",
+                    "remediating",
                 ):
                     if success:
                         fixed.append(cluster_name)
                     else:
                         fix_failed.append(cluster_name)
             finally:
-                executor.shutdown(wait=False, cancel_futures=True)
+                # Remediation mutates managed clusters. Python cannot stop a
+                # running thread, so wait for bounded API calls to exit before
+                # reporting the phase outcome.
+                executor.shutdown(wait=True, cancel_futures=True)
 
             if fixed:
                 logger.info(
@@ -928,7 +939,7 @@ class PostActivationVerification:
                     }
                     for cluster_name, result in collect_future_results(
                         recheck_future_fallbacks,
-                        "Timed out re-checking klusterlet for %s after %s seconds",
+                        "re-checking",
                     ):
                         if result == "wrong_hub":
                             current_wrong_hub.append(cluster_name)
@@ -1088,6 +1099,7 @@ class PostActivationVerification:
             v1.delete_namespaced_secret(
                 name="bootstrap-hub-kubeconfig",
                 namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
             logger.debug("Deleted bootstrap-hub-kubeconfig secret on %s", cluster_name)
         except ApiException as e:
@@ -1119,6 +1131,7 @@ class PostActivationVerification:
                     v1.create_namespaced_secret(
                         namespace=namespace,
                         body=doc,
+                        _request_timeout=DELETE_REQUEST_TIMEOUT,
                     )
                     logger.debug(
                         "Created bootstrap-hub-kubeconfig secret on %s",
@@ -1154,6 +1167,7 @@ class PostActivationVerification:
                 v1.read_namespaced_secret(
                     name="bootstrap-hub-kubeconfig",
                     namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                    _request_timeout=DELETE_REQUEST_TIMEOUT,
                 )
                 return WaitConditionResult.complete("secret exists")
             except ApiException as e:
@@ -1198,6 +1212,7 @@ class PostActivationVerification:
                 name="klusterlet",
                 namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                 body=patch,
+                _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
             logger.debug("Triggered klusterlet restart on %s", cluster_name)
         except ApiException as e:
@@ -1273,22 +1288,20 @@ class PostActivationVerification:
                 paths = [os.path.expanduser("~/.kube/config")]
 
             # Determine size limit: use provided max_size, or default to MAX_KUBECONFIG_SIZE
-            if max_size is None:
-                # Check if MAX_KUBECONFIG_SIZE is set to 0 or negative to disable checking
-                if MAX_KUBECONFIG_SIZE <= 0:
-                    # Size checking disabled via environment variable
+            if max_size is not None:
+                if max_size <= 0:
+                    # Bypass size check for critical operations
                     size_limit = None
                     check_size = False
                 else:
-                    size_limit = MAX_KUBECONFIG_SIZE
+                    size_limit = max_size
                     check_size = True
-            elif max_size <= 0:
-                # Bypass size check for critical operations
+            elif MAX_KUBECONFIG_SIZE <= 0:
+                # Size checking disabled via environment variable
                 size_limit = None
                 check_size = False
             else:
-                assert max_size is not None
-                size_limit = max_size
+                size_limit = MAX_KUBECONFIG_SIZE
                 check_size = True
 
             # Merge kubeconfig data from all paths
@@ -1439,6 +1452,7 @@ class PostActivationVerification:
                 secret = v1.read_namespaced_secret(
                     name="hub-kubeconfig-secret",
                     namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                    _request_timeout=KLUSTERLET_API_READ_TIMEOUT,
                 )
             except ApiException as e:
                 if e.status == 404:
@@ -1446,6 +1460,7 @@ class PostActivationVerification:
                     secret = v1.read_namespaced_secret(
                         name="bootstrap-hub-kubeconfig",
                         namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                        _request_timeout=KLUSTERLET_API_READ_TIMEOUT,
                     )
                 else:
                     raise

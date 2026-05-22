@@ -7,6 +7,7 @@ import base64
 import logging
 import os
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -1497,6 +1498,7 @@ class TestKlusterletParallelVerification:
             "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
         }
         wait_calls = 0
+        remediation_exited = threading.Event()
 
         def fake_wait(futures, timeout):
             nonlocal wait_calls
@@ -1506,6 +1508,11 @@ class TestKlusterletParallelVerification:
                 return set(), futures
             return futures, set()
 
+        def slow_reconnect(_cluster_name, _context_name):
+            time.sleep(0.05)
+            remediation_exited.set()
+            return True
+
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(
@@ -1513,7 +1520,7 @@ class TestKlusterletParallelVerification:
                     "_check_klusterlet_connection",
                     side_effect=["wrong_hub", "verified"],
                 ):
-                    with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
+                    with patch.object(pav, "_force_klusterlet_reconnect", side_effect=slow_reconnect):
                         with patch("modules.post_activation.wait", side_effect=fake_wait):
                             with patch(
                                 "modules.post_activation.wait_for_condition",
@@ -1524,6 +1531,7 @@ class TestKlusterletParallelVerification:
                                     match="Klusterlet remediation failed",
                                 ):
                                     pav._verify_klusterlet_connections()
+        assert remediation_exited.is_set()
 
     def test_recheck_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager):
         """Timed-out post-remediation rechecks should be treated as unverified."""
@@ -1913,7 +1921,7 @@ class TestCheckKlusterletConnection:
 
         bootstrap_secret = self._make_secret("https://api.newhub.com:6443")
 
-        def side_effect(name, namespace):
+        def side_effect(name, namespace, **kwargs):
             if name == "hub-kubeconfig-secret":
                 raise ApiException(status=404)
             return bootstrap_secret
@@ -1923,6 +1931,7 @@ class TestCheckKlusterletConnection:
         result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:6443")
         assert result == "verified"
         assert mock_v1.read_namespaced_secret.call_count == 2
+        assert all("_request_timeout" in call.kwargs for call in mock_v1.read_namespaced_secret.call_args_list)
 
     def test_unreachable_on_empty_kubeconfig(self, mock_secondary_client, mock_state_manager):
         """Should return 'unreachable' when secret has no kubeconfig data."""

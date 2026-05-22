@@ -1007,7 +1007,7 @@ class SecondaryActivation:
         self,
         name_cache: Optional[Dict[str, List[str]]] = None,
         force_refresh: bool = False,
-    ) -> list[str]:
+    ) -> List[str]:
         """Return non-local ManagedCluster names currently visible on the secondary hub."""
         if name_cache is not None and not force_refresh and "non_local_names" in name_cache:
             return list(name_cache["non_local_names"])
@@ -1033,8 +1033,7 @@ class SecondaryActivation:
             return
 
         def _poll_managed_clusters():
-            generation_cache: Dict[str, List[str]] = {}
-            non_local_clusters = self._list_restored_managed_cluster_names(name_cache=generation_cache)
+            non_local_clusters = self._list_restored_managed_cluster_names()
             count = len(non_local_clusters)
             missing_expected = sorted(set(self.expected_managed_cluster_names) - set(non_local_clusters))
             if self.enforce_expected_managed_cluster_names and missing_expected:

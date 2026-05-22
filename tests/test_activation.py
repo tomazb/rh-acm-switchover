@@ -1374,6 +1374,30 @@ class TestMinManagedClusters:
         assert refreshed == ["cluster-a"]
         assert mock_secondary_client.list_custom_resources.call_count == 2
 
+    def test_managed_cluster_wait_refreshes_between_poll_iterations(self, mock_secondary_client, mock_state_manager):
+        """ManagedCluster wait polling must refresh so newly restored clusters can become visible."""
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [{"metadata": {"name": "local-cluster"}}],
+            [
+                {"metadata": {"name": "local-cluster"}},
+                {"metadata": {"name": "cluster-a"}},
+            ],
+        ]
+        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=1)
+
+        def wait_side_effect(_description, condition_fn, **_kwargs):
+            first = condition_fn()
+            second = condition_fn()
+
+            assert first.done is False
+            assert second.done is True
+            return True
+
+        with patch("modules.activation.wait_for_condition", side_effect=wait_side_effect):
+            act._wait_for_managed_clusters_restored(timeout=10)
+
+        assert mock_secondary_client.list_custom_resources.call_count == 2
+
 
 @pytest.mark.unit
 class TestPatchVerificationErrors:

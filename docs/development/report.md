@@ -49,15 +49,14 @@ Target areas included:
 
 ## 2026-05-22 Code Audit Resolution Status
 
-This follow-up records the resolution state for the reliability and safety audit items handled on
-`fix/code-audit-resolution`.
+This follow-up records the resolution state for the reliability and safety audit items handled in PR #65.
 
 | ID | Area | Resolution | Status |
 |---|---|---|---|
 | F-01 | Python post-activation klusterlet verification | Replaced unbounded worker waits with bounded `KLUSTERLET_WORKER_TIMEOUT`; timed-out check/recheck workers are treated as unreachable and timed-out remediation workers fail remediation. | Fixed |
 | F-02 | Python dry-run completion messaging | Dry-run switchover and restore-only flows no longer mark `COMPLETED` or emit production success banners; they log explicit dry-run completion intent. | Fixed |
 | F-03 | Collection observability readiness | Unknown rollout and pod readiness facts now fail closed with `default(false)` in result publication and failure gates. | Fixed |
-| F-04 | Python activation ManagedCluster list churn | Added a single-generation cache for non-local ManagedCluster names with explicit force-refresh support for final verification paths. | Fixed |
+| F-04 | Python activation ManagedCluster list churn | Added helper-level single-generation cache support with explicit force-refresh coverage; wait polling continues to refresh between attempts so newly restored ManagedClusters can become visible. | Fixed |
 | F-05 | State persistence overhead | Reclassified: measure before changing durability. Immediate `mark_step_completed()` and `set_config()` writes remain intact because they are part of the documented crash-safety contract. | Reclassified |
 | F-06 | Broader activation/post-activation refactors | Deferred to follow-up refactor epics. This PR keeps behavior changes localized to confirmed reliability and reporting issues. | Follow-up |
 | F-07 | Collection activation result reporting | Activation result publication now defaults unknown `changed` to `false` instead of reporting a mutation without evidence. | Fixed |

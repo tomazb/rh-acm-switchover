@@ -400,6 +400,10 @@ class StateManager:
     def _do_flush(self, force: bool = False, suppress_errors: bool = False) -> bool:
         """Core flush logic shared by all flush methods.
 
+        Loops until clean because _write_state callers can trigger nested state
+        mutations. A single _do_flush call may perform multiple writes when
+        state becomes dirty again during an active write.
+
         Args:
             force: If True, write even if not dirty. If False, only write when dirty.
             suppress_errors: If True, catch exceptions and print to stderr instead of raising.
