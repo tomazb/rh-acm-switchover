@@ -134,6 +134,46 @@ class TestFindAcmTouchingApps:
         assert len(result) == 1
         assert result[0].resource_count == 1
 
+    def test_includes_app_with_policy_kind(self):
+        apps = [
+            {
+                "metadata": {"namespace": "argocd", "name": "policy-app"},
+                "status": {
+                    "resources": [
+                        {"kind": "Policy", "namespace": "default", "name": "policy-a"},
+                    ]
+                },
+            }
+        ]
+
+        result = argocd_lib.find_acm_touching_apps(apps)
+
+        assert len(result) == 1
+        assert result[0].name == "policy-app"
+        assert result[0].resource_count == 1
+
+    def test_includes_app_with_placement_binding_kind(self):
+        apps = [
+            {
+                "metadata": {"namespace": "argocd", "name": "placementbinding-app"},
+                "status": {
+                    "resources": [
+                        {
+                            "kind": "PlacementBinding",
+                            "namespace": "default",
+                            "name": "binding-a",
+                        },
+                    ]
+                },
+            }
+        ]
+
+        result = argocd_lib.find_acm_touching_apps(apps)
+
+        assert len(result) == 1
+        assert result[0].name == "placementbinding-app"
+        assert result[0].resource_count == 1
+
     def test_includes_app_with_acm_sub_namespace(self):
         """Regression: open-cluster-management-* sub-namespaces must match (mirrors lib-common.sh)."""
         for sub_ns in ("open-cluster-management-hub", "open-cluster-management-addon"):
@@ -739,7 +779,9 @@ class TestResumeAutosync:
     ):
         """Fetch errors must not be treated as successful resume operations."""
         client = MagicMock()
-        client.get_custom_resource.side_effect = ApiException(status=status, reason=reason)
+        client.get_custom_resource.side_effect = ApiException(
+            status=status, reason=reason
+        )
 
         result = argocd_lib.resume_autosync(
             client, "argocd", "app", {"automated": {"prune": True}}, "run-1"
@@ -960,7 +1002,10 @@ class TestListArgocdApplications:
         )
 
         assert [app["metadata"]["name"] for app in apps] == ["app-1", "app-2"]
-        assert [call.kwargs["namespace"] for call in client.list_custom_resources.call_args_list] == [
+        assert [
+            call.kwargs["namespace"]
+            for call in client.list_custom_resources.call_args_list
+        ] == [
             "argocd",
             "test-ns",
         ]
