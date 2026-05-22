@@ -931,6 +931,7 @@ class TestSwitchoverPhaseFlow:
 
             return _handler
 
+        logger = Mock()
         with patch(
             "acm_switchover._run_phase_preflight", side_effect=_complete_phase(Phase.PREFLIGHT, "dry_preflight")
         ), patch(
@@ -946,7 +947,7 @@ class TestSwitchoverPhaseFlow:
             "acm_switchover._run_phase_finalization",
             side_effect=_complete_phase(Phase.FINALIZATION, "dry_finalization"),
         ):
-            assert run_switchover(args, state, Mock(), Mock(), Mock()) is True
+            assert run_switchover(args, state, Mock(), Mock(), logger) is True
 
         reloaded = StateManager(str(state_file))
         assert reloaded.get_current_phase() == Phase.INIT
@@ -954,6 +955,9 @@ class TestSwitchoverPhaseFlow:
         assert reloaded.get_config("dry_run_only") is None
         assert reloaded.state["completed_steps"] == []
         assert reloaded.state["last_updated"] == original_timestamp
+        log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list if call.args)
+        assert "[DRY-RUN] Would mark switchover completed" in log_text
+        assert "SWITCHOVER COMPLETED SUCCESSFULLY!" not in log_text
 
     def test_run_restore_only_dry_run_restores_original_state(self, tmp_path):
         """Dry-run restore-only must not persist resume/checkpoint progress."""
@@ -986,6 +990,7 @@ class TestSwitchoverPhaseFlow:
 
             return _handler
 
+        logger = Mock()
         with patch(
             "acm_switchover._run_phase_preflight", side_effect=_complete_phase(Phase.PREFLIGHT, "dry_preflight")
         ), patch(
@@ -998,7 +1003,7 @@ class TestSwitchoverPhaseFlow:
             "acm_switchover._run_phase_finalization",
             side_effect=_complete_phase(Phase.FINALIZATION, "dry_finalization"),
         ):
-            assert run_restore_only(args, state, Mock(), Mock()) is True
+            assert run_restore_only(args, state, Mock(), logger) is True
 
         reloaded = StateManager(str(state_file))
         assert reloaded.get_current_phase() == Phase.INIT
@@ -1006,6 +1011,9 @@ class TestSwitchoverPhaseFlow:
         assert reloaded.get_config("dry_run_only") is None
         assert reloaded.state["completed_steps"] == []
         assert reloaded.state["last_updated"] == original_timestamp
+        log_text = "\n".join(str(call.args[0]) for call in logger.info.call_args_list if call.args)
+        assert "[DRY-RUN] Would mark restore-only completed" in log_text
+        assert "RESTORE-ONLY COMPLETED SUCCESSFULLY!" not in log_text
 
     def test_run_switchover_resume_from_failed_state_retries_failed_phase(self, tmp_path):
         """Verify that run_switchover resumes from the phase that failed when state is FAILED."""

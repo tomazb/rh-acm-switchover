@@ -534,6 +534,11 @@ def _run_switchover_impl(
     if not ran_phase:
         return _fail_phase(state, "No runnable phase matched current state.", logger)
 
+    if getattr(args, "dry_run", False):
+        logger.info("[DRY-RUN] Would mark switchover completed")
+        logger.info("[DRY-RUN] Would show switchover completion next steps")
+        return True
+
     state.set_phase(Phase.COMPLETED)
 
     logger.info("\n" + "=" * 60)
@@ -743,6 +748,11 @@ def _run_restore_only_impl(
 
     if not ran_phase:
         return _fail_phase(state, "No runnable phase matched current state.", logger)
+
+    if getattr(args, "dry_run", False):
+        logger.info("[DRY-RUN] Would mark restore-only completed")
+        logger.info("[DRY-RUN] Would show restore-only completion next steps")
+        return True
 
     state.set_phase(Phase.COMPLETED)
 
