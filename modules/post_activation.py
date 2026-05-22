@@ -824,12 +824,16 @@ class PostActivationVerification:
 
         executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
         try:
-            future_fallbacks = {
-                executor.submit(check_cluster, name, api_url): (name, "unreachable", None)
+            check_future_fallbacks = {
+                executor.submit(check_cluster, name, api_url): (
+                    name,
+                    "unreachable",
+                    None,
+                )
                 for name, api_url in cluster_info
             }
             for cluster_name, result, context_name in collect_future_results(
-                future_fallbacks,
+                check_future_fallbacks,
                 "Timed out checking klusterlet for %s after %s seconds",
             ):
                 if result == "verified":
@@ -877,12 +881,11 @@ class PostActivationVerification:
 
             executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
             try:
-                future_fallbacks = {
-                    executor.submit(fix_cluster, name, ctx): (name, False)
-                    for name, ctx in wrong_hub
+                fix_future_fallbacks = {
+                    executor.submit(fix_cluster, name, ctx): (name, False) for name, ctx in wrong_hub
                 }
                 for cluster_name, success in collect_future_results(
-                    future_fallbacks,
+                    fix_future_fallbacks,
                     "Timed out remediating klusterlet for %s after %s seconds",
                 ):
                     if success:
@@ -905,7 +908,10 @@ class PostActivationVerification:
                     ", ".join(fix_failed),
                 )
 
-            post_remediation_state: Dict[str, List[str]] = {"wrong_hub": [], "unverified": []}
+            post_remediation_state: Dict[str, List[str]] = {
+                "wrong_hub": [],
+                "unverified": [],
+            }
 
             def recheck_remediated_clusters() -> WaitConditionResult:
                 """Poll remediated clusters until klusterlet updates hub-kubeconfig-secret."""
@@ -913,12 +919,15 @@ class PostActivationVerification:
                 current_unverified = []
                 executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
                 try:
-                    future_fallbacks = {
-                        executor.submit(recheck_cluster, name, ctx): (name, "unreachable")
+                    recheck_future_fallbacks = {
+                        executor.submit(recheck_cluster, name, ctx): (
+                            name,
+                            "unreachable",
+                        )
                         for name, ctx in wrong_hub
                     }
                     for cluster_name, result in collect_future_results(
-                        future_fallbacks,
+                        recheck_future_fallbacks,
                         "Timed out re-checking klusterlet for %s after %s seconds",
                     ):
                         if result == "wrong_hub":
@@ -1278,6 +1287,7 @@ class PostActivationVerification:
                 size_limit = None
                 check_size = False
             else:
+                assert max_size is not None
                 size_limit = max_size
                 check_size = True
 

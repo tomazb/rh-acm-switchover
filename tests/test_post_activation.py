@@ -1456,9 +1456,7 @@ class TestKlusterletParallelVerification:
                         # Should not raise; c1 lands in unreachable bucket
                         pav._verify_klusterlet_connections()
 
-    def test_initial_check_does_not_use_unbounded_as_completed(
-        self, mock_secondary_client, mock_state_manager, caplog
-    ):
+    def test_initial_check_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager, caplog):
         """Timed-out initial klusterlet checks should be treated as unreachable."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
         mock_secondary_client.list_custom_resources.return_value = [
@@ -1510,14 +1508,21 @@ class TestKlusterletParallelVerification:
 
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-                with patch.object(pav, "_check_klusterlet_connection", side_effect=["wrong_hub", "verified"]):
+                with patch.object(
+                    pav,
+                    "_check_klusterlet_connection",
+                    side_effect=["wrong_hub", "verified"],
+                ):
                     with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
                         with patch("modules.post_activation.wait", side_effect=fake_wait):
                             with patch(
                                 "modules.post_activation.wait_for_condition",
                                 side_effect=lambda description, condition_fn, **kwargs: condition_fn().done,
                             ):
-                                with pytest.raises(SwitchoverError, match="Klusterlet remediation failed"):
+                                with pytest.raises(
+                                    SwitchoverError,
+                                    match="Klusterlet remediation failed",
+                                ):
                                     pav._verify_klusterlet_connections()
 
     def test_recheck_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager):
@@ -1545,7 +1550,11 @@ class TestKlusterletParallelVerification:
 
         with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
-                with patch.object(pav, "_check_klusterlet_connection", side_effect=["wrong_hub", "verified"]):
+                with patch.object(
+                    pav,
+                    "_check_klusterlet_connection",
+                    side_effect=["wrong_hub", "verified"],
+                ):
                     with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
                         with patch("modules.post_activation.wait", side_effect=fake_wait):
                             with patch(
