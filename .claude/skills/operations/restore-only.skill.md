@@ -76,7 +76,7 @@ Review the planned actions. The tool will:
 > If an empty target is legitimately expected (e.g., bootstrap of a new
 > hub before any clusters are imported), opt in explicitly:
 > - Python CLI: `--min-managed-clusters 0`
-> - Ansible collection: `allow_zero_managed_clusters: true`
+> - Ansible collection: `acm_switchover_operation.allow_zero_managed_clusters: true`
 
 ### Step 3: Execute Restore
 

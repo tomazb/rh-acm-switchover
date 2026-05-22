@@ -7,7 +7,7 @@
 > historical context. Authoritative status lives in
 > `docs/ansible-collection/parity-matrix.md` and
 > `docs/ansible-collection/behavior-map.md`.
-
+>
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace `work-to-do.md` with 8 GitHub Issues + a milestone so progress is queryable across sessions with `gh issue list`.

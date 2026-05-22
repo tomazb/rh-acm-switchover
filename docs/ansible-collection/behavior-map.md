@@ -54,7 +54,7 @@ Collection activation parity with `modules/activation.py` was tightened in
 `[Unreleased]`. Two cases that previously caused false failures or wrong waits
 are now explicit:
 
-- **Passive activation, stale pre-activation Velero signal (F5).** When the
+- **Passive activation, stale pre-activation Velero signal (Step 5).** When the
   ACM controller has not yet published the new restore name, a leftover
   pre-activation Velero managed-clusters restore signal is treated as a
   *retryable pending* state, not a terminal failure. Activation re-reads the

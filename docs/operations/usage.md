@@ -224,7 +224,7 @@ python acm_switchover.py \
 > benign **only** when every reported error message matches the exact pattern
 > `ManagedCluster <name> already available`. Any other `FinishedWithErrors`
 > message fails activation.
-
+>
 > **Note:** `--activation-method` applies only to `--method passive`.
 > When `--min-managed-clusters` is omitted, the tool derives the expected non-local
 > ManagedCluster names/count from primary preflight and enforces that set after
