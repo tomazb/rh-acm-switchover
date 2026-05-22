@@ -24,6 +24,26 @@ python -m pytest tests/release/test_release_certification.py \
 
 Example profile templates live in `tests/release/profiles/`. Do not commit real kubeconfig paths, credentials, or private lab identifiers.
 
+## Live RBAC Bootstrap Certification
+
+The `rbac-bootstrap-live` scenario (module:
+`tests/release/checks/rbac_certification.py`) validates that applied cluster
+permissions match the Python RBAC validator's positive matrix end-to-end using
+`SubjectAccessReview` against the lab clusters declared in the profile. It also
+runs least-privilege deny checks so over-permissioned service accounts fail
+certification instead of passing on allow checks alone.
+
+The scenario is **opt-in**: it is skipped unless
+`ACM_ENABLE_LIVE_RBAC_CERTIFICATION=1` is set, keeping ordinary release
+validation safe for production environments. Select it via the example profile
+`tests/release/profiles/full-release-with-rbac-cert.example.yaml`; when chosen
+explicitly, live RBAC certification is treated as blocking. SAR request and
+evidence artifacts are written with collision-safe paths so concurrent scenarios
+do not overwrite each other.
+
+See [Live RBAC Bootstrap Certification](../../docs/deployment/rbac-live-certification.md)
+for full setup, expected artifacts, and comparison to static RBAC parity checks.
+
 ## Certification Eligibility
 
 Certification-eligible runs use real discovery and real stream adapters. Unit tests may inject fake discovery clients or fake adapters, but those runs are marked not certification eligible in the generated summary.

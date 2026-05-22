@@ -336,6 +336,28 @@ pytest -m integration tests/  # Integration tests
 
 Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock responses should include `resourceVersion` in metadata for patch verification tests.
 
+### Strict Quality (default-on)
+
+`./run_tests.sh` runs the CI-equivalent `black`, `isort`, `mypy`, and `bandit`
+checks as **hard failures by default**. Set `STRICT_QUALITY=0` only for
+advisory local runs (e.g., exploratory debugging) — never rely on it for
+pre-push verification. Pre-push runs must use the default strict mode so local
+results match CI.
+
+### Release Validation
+
+Release validation lives under `tests/release/` and is excluded from the
+default `./run_tests.sh` run. Run the framework with
+`python -m pytest tests/release -q`. Live certification requires an explicit
+profile via `--release-profile` or `ACM_RELEASE_PROFILE`. Live RBAC bootstrap
+certification (`rbac-bootstrap-live`, module
+`tests/release/checks/rbac_certification.py`) is opt-in behind
+`ACM_ENABLE_LIVE_RBAC_CERTIFICATION=1` and is delivered with the example
+profile `tests/release/profiles/full-release-with-rbac-cert.example.yaml`. See
+[`docs/development/release-validation-framework.md`](docs/development/release-validation-framework.md)
+and [`docs/deployment/rbac-live-certification.md`](docs/deployment/rbac-live-certification.md)
+for the full contract.
+
 ### Pre-Push CI Guardrails
 
 Before pushing changes, verify the same CI assumptions that have recently caused failures:
