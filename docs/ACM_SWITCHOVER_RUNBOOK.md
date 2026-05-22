@@ -412,6 +412,13 @@ oc get pods -n open-cluster-management-observability -l app.kubernetes.io/name=t
 # Should return: 0
 ```
 
+> **Automation note (`[Unreleased]`):** when scaling Thanos via the Python
+> CLI or the Ansible collection, the scale-down is followed by **bounded
+> polling** until the rollout is stable (no Running compact pods within
+> the configured timeout budget). A normal polling delay is expected;
+> only a timeout raises a clear error. Do not interpret a brief polling
+> wait as a hang.
+
 **Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable both only if you roll/switch back.**
 ```bash
 oc scale deployment observability-observatorium-api \
