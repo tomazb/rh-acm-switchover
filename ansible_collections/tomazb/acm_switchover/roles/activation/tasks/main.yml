@@ -34,7 +34,7 @@
         acm_switchover_activation_result:
           phase: activation
           status: pass
-          changed: "{{ acm_switchover_restore_activation_result.changed | default(true) }}"
+          changed: "{{ acm_switchover_restore_activation_result.changed | default(false) }}"
           method: "{{ acm_switchover_operation.method }}"
           activation_method: "{{ acm_switchover_operation.activation_method | default('patch') }}"
           restore: "{{ acm_switchover_restore_activation_result.restore | default({}) }}"
