@@ -152,6 +152,31 @@ Step already completed: scale_down_thanos
 Continuing with: verify_passive_sync
 ```
 
+#### Hub identity binding on resume
+
+State files record each hub's **live cluster UID** (the UID of the
+`kube-system` namespace) in addition to the context name. On every resume the
+tool re-reads the live UIDs and compares them to the stored values. Resume
+fails closed before any mutation if:
+
+- A stored UID no longer matches the cluster behind the same context name
+  (kubeconfig was edited, context was repointed at a different cluster, or
+  cluster was rebuilt).
+- The state file is missing hub identity data for an in-progress switchover
+  (legacy state predating UID binding).
+- The live cluster cannot expose a UID (e.g. `kube-system` not readable).
+
+Recovery options:
+
+- **Different cluster on purpose**: re-run with `--reset-state` after manual
+  verification to start fresh against the new cluster.
+- **Legacy state file**: re-run with `--force` to bind the existing state to
+  the current hubs **only after** manually confirming the clusters match the
+  intent of the original run.
+
+This protects against silently resuming a partially completed switchover on
+the wrong cluster when contexts are reused.
+
 ## Method Comparison
 
 ### Method 1: Continuous Passive Restore (Recommended)
@@ -186,6 +211,19 @@ python acm_switchover.py \
 > The tool now waits for deletion to fully propagate before creating `restore-acm-activate`.
 > If you run this manually, wait for deletion to complete and re-create the activation restore
 > if the phase shows `FinishedWithErrors`.
+
+> **Passive Restore requirements (hard fail-closed):** Preflight and activation
+> require a sync-enabled passive Restore — one whose
+> `spec.syncRestoreWithNewBackups` is `true`. If no such Restore exists on the
+> secondary, preflight fails and activation refuses to proceed; there is no
+> name-based fallback (a Restore named `restore-acm-passive-sync` without the
+> sync flag is **not** sufficient). Create or repair the sync-enabled Restore
+> on the secondary before re-running.
+>
+> A passive Restore that reaches phase `FinishedWithErrors` is treated as
+> benign **only** when every reported error message matches the exact pattern
+> `ManagedCluster <name> already available`. Any other `FinishedWithErrors`
+> message fails activation.
 
 > **Note:** `--activation-method` applies only to `--method passive`.
 > When `--min-managed-clusters` is omitted, the tool derives the expected non-local
@@ -286,6 +324,16 @@ python acm_switchover.py \
 
 **Use case:** Use only when the operator has decided Observability issues should
 not block cluster migration and will be handled separately.
+
+> **Thanos and Python client hardening:** Thanos compactor scale-down is now
+> verified with bounded polling against the remaining timeout budget instead
+> of a single one-shot check — the operation fails after the configured wait
+> rather than returning prematurely. In post-activation, programming errors
+> from internal helpers are re-raised instead of being downgraded to retryable
+> failures so bugs surface immediately. The Python `KubeClient` no longer
+> falls back to the global in-cluster/default kubeconfig if its explicit
+> kubeconfig/context cannot be loaded; that scenario now fails fast to prevent
+> operating against the wrong cluster.
 
 ### Scenario 3: Old Hub Kept as Secondary (Observability Disabled Automatically)
 
@@ -443,6 +491,22 @@ ClusterDeployment does not have `spec.preserveOnDelete=true`. If the Hive API
 lookup fails with permissions, a timeout, a missing API/CRD, or another API
 error, decommission fails closed before deleting ManagedClusters. A successful
 lookup with no matching ClusterDeployments remains acceptable.
+
+Matching considers multiple explicit cluster identifiers (ManagedCluster name,
+namespace, and any cross-referenced Hive cluster IDs) rather than relying on
+name alone. If a plausible MC ↔ CD relationship is found but cannot be verified
+unambiguously, decommission fails closed instead of proceeding with a guess.
+
+In the Ansible collection, decommission additionally requires an **explicit**
+primary hub input (`acm_switchover_hubs.primary`) — it will not infer the
+old-hub target from defaults or secondary-only configuration.
+
+**Decommission RBAC bootstrap filtering:**
+When bootstrapping decommission RBAC, the tool applies a **label-positive**
+filter — manifests are included only when they explicitly carry the
+decommission-extension label. Resources without the label are ignored even if
+their names match. This prevents accidental bootstrapping of unrelated
+manifests that happen to live alongside the decommission extension.
 
 **Non-interactive mode (automation):**
 ```bash

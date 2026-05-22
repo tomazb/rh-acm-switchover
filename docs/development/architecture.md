@@ -372,6 +372,7 @@ Important state categories:
 
 - `current_phase`
 - `completed_steps`
+- `hub_identities` — per-role `{context, cluster_uid}` recorded from each hub's `kube-system` namespace UID; resume re-reads live UIDs and fails closed before mutation if a recorded UID no longer matches the cluster behind the same context name, if hub identities are missing for an in-progress switchover, or if the live UID is unreadable. Operators must use `--reset-state` (different cluster on purpose) or `--force` (legacy state, after manual verification) to recover.
 - detected config such as ACM version and observability presence
 - saved resources needed for version-specific restore/unpause behavior
 - Argo CD pause metadata such as `argocd_run_id` and `argocd_paused_apps`
@@ -384,7 +385,8 @@ Operational guarantees:
 - locking protects against concurrent modification
 - signal and exit handlers flush dirty state
 - completed-state reruns remain safe, including validate-only behavior
-- report artifact writes validate controller-side paths before creating JSON files
+- report artifact writes validate controller-side paths before creating JSON files, reject destinations whose resolved parent escapes the configured workspace roots via symlinks, and route optional collection summaries through the shared `path_type: artifact` writer in `lib/report_artifacts.py` / `acm_report_artifact`
+- Thanos compactor scale-down uses bounded polling against the remaining timeout budget; post-activation re-raises programming errors instead of downgrading them to retryable failures; `KubeClient` does not fall back to the global kubeconfig when its explicit kubeconfig/context cannot be loaded
 
 ## Validation and Safety Model
 

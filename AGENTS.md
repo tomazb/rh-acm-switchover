@@ -208,6 +208,8 @@ Non-critical operations persist state via `save_state()`:
 
 State is automatically flushed on program termination (SIGTERM/SIGINT/atexit) to prevent data loss.
 
+**Hub identity binding (`cluster_uid`):** `StateManager` records each hub's live cluster UID (the `kube-system` namespace UID) alongside its context name in `state["hub_identities"]`. On every load/resume, the live UIDs are re-read and compared to the stored values. Resume fails closed before any mutation if a recorded UID no longer matches the cluster behind the same context name, if hub identities are missing for an in-progress switchover, or if the live UID is unreadable. Operators recover with `--reset-state` (different cluster on purpose) or `--force` (legacy state, after manual verification). See `docs/operations/usage.md` "Hub identity binding on resume".
+
 ### Dry-Run Decorator
 ```python
 @dry_run_skip(message="Would scale deployment", return_value={})
@@ -275,7 +277,7 @@ The collection lives at `ansible_collections/tomazb/acm_switchover/`. It is a co
   register: acm_secondary_backup_schedule_info
   when: acm_secondary_backup_schedule_info is not defined
 ```
-Exception: MCH discovery in `finalization` is unconditional — the MCH status changes after activation, so the preflight-cached value is always stale.
+Exception: MCH discovery in `finalization` is unconditional — the MCH status changes after activation, so the preflight-cached value is always stale. The `preflight` role applies the same exception during execute-mode runs: MCH discovery refreshes even when callers pre-seed the discovery variable, preventing stale cached MCH data from satisfying live mutation validation. Tests that need to control MCH discovery must do so via fixtures keyed on execute-mode, not by pre-seeding the variable.
 
 **Hub access** — All tasks reach hubs via `acm_switchover_hubs.primary` and `acm_switchover_hubs.secondary`, each providing `kubeconfig` and `context`:
 ```yaml
