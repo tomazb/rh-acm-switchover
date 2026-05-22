@@ -87,6 +87,32 @@ class TestDecommission:
 
         assert result is True
 
+    @patch("modules.decommission.wait_for_condition")
+    def test_decommission_dry_run_non_interactive_is_full_no_op(
+        self, mock_wait, mock_primary_client
+    ):
+        """Dry-run top-level decommission must not issue delete or wait calls anywhere."""
+        dry_run_decommission = Decommission(
+            primary_client=mock_primary_client,
+            has_observability=True,
+            dry_run=True,
+        )
+        mock_primary_client.list_custom_resources.side_effect = [
+            [{"metadata": {"name": "observability"}}],
+            [{"metadata": {"name": "multiclusterhub"}}],
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [
+            {"metadata": {"name": "cluster1"}},
+            {"metadata": {"name": "local-cluster"}},
+        ]
+
+        result = dry_run_decommission.decommission(interactive=False)
+
+        assert result is True
+        mock_primary_client.delete_custom_resource.assert_not_called()
+        mock_primary_client.get_pods.assert_not_called()
+        mock_wait.assert_not_called()
+
     @patch("modules.decommission.confirm_action")
     @patch("modules.decommission.wait_for_condition")
     def test_decommission_interactive_user_cancels(self, mock_wait, mock_confirm, decommission_with_obs):
@@ -161,6 +187,25 @@ class TestDecommission:
         decommission_with_obs._delete_observability()
 
         mock_primary_client.delete_custom_resource.assert_not_called()
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Current implementation does not treat delete 404 as an idempotent observability cleanup success",
+    )
+    @patch("modules.decommission.wait_for_condition")
+    def test_delete_observability_ignores_404_delete_errors(self, mock_wait, decommission_with_obs, mock_primary_client):
+        """Observability delete 404 should be treated as already-gone and still complete idempotently."""
+        mock_wait.return_value = True
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "observability", "namespace": OBSERVABILITY_NAMESPACE}}
+        ]
+        mock_primary_client.delete_custom_resource.side_effect = ApiException(status=404, reason="Not Found")
+        mock_primary_client.get_pods.return_value = []
+
+        decommission_with_obs._delete_observability()
+
+        mock_primary_client.delete_custom_resource.assert_called_once()
+        mock_wait.assert_called_once()
 
     @patch("modules.decommission.wait_for_condition")
     def test_delete_observability_timeout_blocks(self, mock_wait, decommission_with_obs, mock_primary_client):
@@ -332,6 +377,31 @@ class TestDecommission:
         decommission_with_obs._delete_managed_clusters()
 
         mock_primary_client.delete_custom_resource.assert_called_once()
+
+    @patch("modules.decommission.wait_for_condition")
+    def test_delete_managed_clusters_deletes_when_matching_clusterdeployment_is_preserved(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
+        """A matching Hive ClusterDeployment with preserveOnDelete=true must not block ACM decommission."""
+        mock_wait.return_value = True
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1"}}]
+        mock_primary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "cluster1", "namespace": "cluster1"},
+                "spec": {"preserveOnDelete": True},
+            }
+        ]
+
+        decommission_with_obs._delete_managed_clusters()
+
+        mock_primary_client.delete_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1",
+            plural="managedclusters",
+            name="cluster1",
+            timeout_seconds=decommission_module.DELETE_REQUEST_TIMEOUT,
+        )
+        mock_wait.assert_called_once()
 
     @patch("modules.decommission.wait_for_condition")
     def test_delete_managed_clusters_fails_closed_for_plausible_unverified_clusterdeployment(
