@@ -34,6 +34,26 @@ Source: `lib/`, `modules/`, `scripts/`
 | `lib/waiter.py` (`WaitConditionResult`, `wait_for_condition`) | no direct equivalent — collection roles use Ansible's native `until`/`retries` loop construct; architectural difference, not a gap to close | coexistence |
 | `scripts/discover-hub.sh` | supported migration bridge, not rewritten in the collection | coexistence |
 
+## Activation Wait Contract (collection)
+
+Collection activation parity with `modules/activation.py` was tightened in
+`[Unreleased]`. Two cases that previously caused false failures or wrong waits
+are now explicit:
+
+- **Passive activation, stale pre-activation Velero signal (F5).** When the
+  ACM controller has not yet published the new restore name, a leftover
+  pre-activation Velero managed-clusters restore signal is treated as a
+  *retryable pending* state, not a terminal failure. Activation re-reads the
+  live Restore and continues polling within the configured budget instead of
+  failing before the controller publishes the new restore.
+- **Full-restore activation wait (F6).** After the ACM `Restore` resource
+  reaches a terminal phase, activation switches to ManagedCluster presence
+  checks. It does **not** wait for a Velero `managed-clusters` Restore — that
+  intermediate object can arrive out of order or be coalesced by Velero, so
+  blocking on it produces false-negative timeouts. The contract is: ACM
+  Restore terminal phase ⇒ verify expected ManagedClusters appear within the
+  remaining timeout budget.
+
 ## ACM Version Gates to Preserve
 
 - ACM 2.11 BackupSchedule delete semantics

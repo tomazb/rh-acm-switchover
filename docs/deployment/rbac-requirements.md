@@ -240,6 +240,8 @@ ManagedCluster and MultiClusterHub delete access remains in the opt-in decommiss
 Grant this extension only to service accounts that are allowed to run `--decommission`. The baseline operator role is sufficient for validation, switchover, and post-activation/finalization work.
 Validator/read-only roles must not request this extension.
 
+**Decommission RBAC bootstrap is label-positive:** when applying the decommission extension manifests, the tool selects resources by an explicit decommission-extension label rather than by name pattern. Manifests living alongside the extension that do not carry the label are skipped, so unrelated cluster-scoped Roles or Bindings cannot be applied unintentionally during decommission bootstrap.
+
 RBAC validators construct access reviews using Kubernetes API semantics: resources with subresources, such as `statefulsets/scale`, are checked as `resource=statefulsets` and `subresource=scale`.
 
 ### Namespace-Scoped Resources
