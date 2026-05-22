@@ -256,6 +256,29 @@ done
 
 ---
 
+### Automation State File — Hub Identity Binding (Python CLI)
+
+The Python CLI persists a state file per switchover (e.g.
+`.state/switchover-<primary>__<secondary>.json`) so it can resume from the
+last successful phase. As of `[Unreleased]`, the state file records each
+hub's live cluster UID (the `kube-system` namespace UID) alongside its
+context name.
+
+On resume, the tool re-reads the live UIDs and **fails closed before any
+mutation** if a recorded UID no longer matches the cluster behind the same
+context name, if hub identities are missing for an in-progress switchover,
+or if the live UID is unreadable.
+
+Recovery:
+- `--reset-state` — the context now legitimately points at a different
+  cluster (e.g., you re-pointed kubeconfig). Discards the state file.
+- `--force` — legacy state file without recorded UIDs. Use only after
+  manually re-verifying which clusters the contexts now reach.
+
+See `docs/operations/usage.md` "Hub identity binding on resume".
+
+---
+
 ### Optional: Pause Argo CD Auto-Sync (when GitOps manages ACM resources)
 
 If Argo CD (or OpenShift GitOps) manages ACM resources (BackupSchedule, Restore, ManagedCluster, MCO, etc.), auto-sync can revert switchover steps. Pause auto-sync for ACM-touching Applications **before** Step 1 and resume only **after** Git/desired state has been updated for the new hub.
