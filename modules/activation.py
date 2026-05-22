@@ -1003,8 +1003,15 @@ class SecondaryActivation:
         # Verify ManagedCluster resources actually exist
         self._verify_managed_clusters_restored()
 
-    def _list_restored_managed_cluster_names(self) -> list[str]:
+    def _list_restored_managed_cluster_names(
+        self,
+        name_cache: Optional[Dict[str, List[str]]] = None,
+        force_refresh: bool = False,
+    ) -> list[str]:
         """Return non-local ManagedCluster names currently visible on the secondary hub."""
+        if name_cache is not None and not force_refresh and "non_local_names" in name_cache:
+            return list(name_cache["non_local_names"])
+
         managed_clusters = self.secondary.list_custom_resources(
             group="cluster.open-cluster-management.io",
             version="v1",
@@ -1015,6 +1022,8 @@ class SecondaryActivation:
             name = mc.get("metadata", {}).get("name")
             if name and name != LOCAL_CLUSTER_NAME:
                 names.append(name)
+        if name_cache is not None:
+            name_cache["non_local_names"] = list(names)
         return names
 
     def _wait_for_managed_clusters_restored(self, timeout: int) -> None:
@@ -1024,7 +1033,8 @@ class SecondaryActivation:
             return
 
         def _poll_managed_clusters():
-            non_local_clusters = self._list_restored_managed_cluster_names()
+            generation_cache: Dict[str, List[str]] = {}
+            non_local_clusters = self._list_restored_managed_cluster_names(name_cache=generation_cache)
             count = len(non_local_clusters)
             missing_expected = sorted(set(self.expected_managed_cluster_names) - set(non_local_clusters))
             if self.enforce_expected_managed_cluster_names and missing_expected:

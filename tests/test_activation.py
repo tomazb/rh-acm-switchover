@@ -1335,6 +1335,45 @@ class TestMinManagedClusters:
 
         act._verify_managed_clusters_restored()
 
+    def test_managed_cluster_name_listing_can_reuse_single_generation_cache(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Repeated same-generation ManagedCluster checks should not re-list resources."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "cluster-a"}},
+            {"metadata": {"name": "local-cluster"}},
+        ]
+        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=1)
+        generation_cache = {}
+
+        first = act._list_restored_managed_cluster_names(name_cache=generation_cache)
+        second = act._list_restored_managed_cluster_names(name_cache=generation_cache)
+
+        assert first == ["cluster-a"]
+        assert second == ["cluster-a"]
+        assert mock_secondary_client.list_custom_resources.call_count == 1
+
+    def test_managed_cluster_name_listing_force_refreshes_for_final_verification(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Final verification can bypass a same-generation cache and see fresh ManagedClusters."""
+        mock_secondary_client.list_custom_resources.side_effect = [
+            [{"metadata": {"name": "local-cluster"}}],
+            [
+                {"metadata": {"name": "local-cluster"}},
+                {"metadata": {"name": "cluster-a"}},
+            ],
+        ]
+        act = self._make_activation(mock_secondary_client, mock_state_manager, min_clusters=1)
+        generation_cache = {}
+
+        first = act._list_restored_managed_cluster_names(name_cache=generation_cache)
+        refreshed = act._list_restored_managed_cluster_names(name_cache=generation_cache, force_refresh=True)
+
+        assert first == []
+        assert refreshed == ["cluster-a"]
+        assert mock_secondary_client.list_custom_resources.call_count == 2
+
 
 @pytest.mark.unit
 class TestPatchVerificationErrors:
