@@ -208,6 +208,8 @@ Non-critical operations persist state via `save_state()`:
 
 State is automatically flushed on program termination (SIGTERM/SIGINT/atexit) to prevent data loss.
 
+**Hub identity binding (`cluster_uid`):** `StateManager` records each hub's live cluster UID (the `kube-system` namespace UID) alongside its context name in `state["hub_identities"]`. On every load/resume, the live UIDs are re-read and compared to the stored values. Resume fails closed before any mutation if a recorded UID no longer matches the cluster behind the same context name, if hub identities are missing for an in-progress switchover, or if the live UID is unreadable. Operators recover with `--reset-state` (different cluster on purpose) or `--force` (legacy state, after manual verification). See `docs/operations/usage.md` "Hub identity binding on resume".
+
 ### Dry-Run Decorator
 ```python
 @dry_run_skip(message="Would scale deployment", return_value={})
@@ -275,7 +277,7 @@ The collection lives at `ansible_collections/tomazb/acm_switchover/`. It is a co
   register: acm_secondary_backup_schedule_info
   when: acm_secondary_backup_schedule_info is not defined
 ```
-Exception: MCH discovery in `finalization` is unconditional — the MCH status changes after activation, so the preflight-cached value is always stale.
+Exception: MCH discovery in `finalization` is unconditional — the MCH status changes after activation, so the preflight-cached value is always stale. The `preflight` role applies the same exception during execute-mode runs: MCH discovery refreshes even when callers pre-seed the discovery variable, preventing stale cached MCH data from satisfying live mutation validation. Tests that need to control MCH discovery must do so via fixtures keyed on execute-mode, not by pre-seeding the variable.
 
 **Hub access** — All tasks reach hubs via `acm_switchover_hubs.primary` and `acm_switchover_hubs.secondary`, each providing `kubeconfig` and `context`:
 ```yaml
@@ -333,6 +335,28 @@ pytest -m integration tests/  # Integration tests
 ```
 
 Tests use mocked `KubeClient` - fixture pattern in `tests/conftest.py`. Mock responses should include `resourceVersion` in metadata for patch verification tests.
+
+### Strict Quality (default-on)
+
+`./run_tests.sh` runs the CI-equivalent `black`, `isort`, `mypy`, and `bandit`
+checks as **hard failures by default**. Set `STRICT_QUALITY=0` only for
+advisory local runs (e.g., exploratory debugging) — never rely on it for
+pre-push verification. Pre-push runs must use the default strict mode so local
+results match CI.
+
+### Release Validation
+
+Release validation lives under `tests/release/` and is excluded from the
+default `./run_tests.sh` run. Run the framework with
+`python -m pytest tests/release -q`. Live certification requires an explicit
+profile via `--release-profile` or `ACM_RELEASE_PROFILE`. Live RBAC bootstrap
+certification (`rbac-bootstrap-live`, module
+`tests/release/checks/rbac_certification.py`) is opt-in behind
+`ACM_ENABLE_LIVE_RBAC_CERTIFICATION=1` and is delivered with the example
+profile `tests/release/profiles/full-release-with-rbac-cert.example.yaml`. See
+[`docs/development/release-validation-framework.md`](docs/development/release-validation-framework.md)
+and [`docs/deployment/rbac-live-certification.md`](docs/deployment/rbac-live-certification.md)
+for the full contract.
 
 ### Pre-Push CI Guardrails
 

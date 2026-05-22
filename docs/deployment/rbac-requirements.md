@@ -182,6 +182,14 @@ manifests, and Helm templates must stay aligned when permissions change.
   - Auto-detect observability component presence
   - Delete old-hub `MultiClusterObservability` during normal finalization when the old hub is kept as secondary
 
+> **Observability RBAC is skipped when MCO is verifiably absent.** When
+> preflight detects no `MultiClusterObservability` resources on the hub (a
+> successful API lookup returning empty), Observability-scoped RBAC checks —
+> including the baseline `MultiClusterObservability` delete validation and the
+> Observability namespace-scoped permissions below — are skipped because they
+> are not required for that workflow. Detection failure (API/auth errors)
+> still fails closed: only a confirmed empty lookup disables the checks.
+
 ### Route API Group (route.openshift.io/v1) - OpenShift Only
 
 #### Routes
@@ -239,6 +247,8 @@ ManagedCluster and MultiClusterHub delete access remains in the opt-in decommiss
 
 Grant this extension only to service accounts that are allowed to run `--decommission`. The baseline operator role is sufficient for validation, switchover, and post-activation/finalization work.
 Validator/read-only roles must not request this extension.
+
+**Decommission RBAC bootstrap is label-positive:** when applying the decommission extension manifests, the tool selects resources by an explicit decommission-extension label rather than by name pattern. Manifests living alongside the extension that do not carry the label are skipped, so unrelated cluster-scoped Roles or Bindings cannot be applied unintentionally during decommission bootstrap.
 
 RBAC validators construct access reviews using Kubernetes API semantics: resources with subresources, such as `statefulsets/scale`, are checked as `resource=statefulsets` and `subresource=scale`.
 

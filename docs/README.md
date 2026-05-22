@@ -42,6 +42,7 @@ Installation, configuration, and RBAC setup.
 
 - **[RBAC Requirements](deployment/rbac-requirements.md)** - Complete RBAC permissions documentation
 - **[RBAC Deployment Guide](deployment/rbac-deployment.md)** - Step-by-step RBAC deployment
+- **[Live RBAC Bootstrap Certification](deployment/rbac-live-certification.md)** - Opt-in end-to-end SubjectAccessReview certification for release validation
 
 ### Ansible Collection
 
@@ -63,6 +64,7 @@ Architecture, testing, and contribution guidelines.
 - **[Code Walkthrough](development/code-walkthrough.md)** - Deep explanation of Python, Ansible, and Bash implementation flows with Mermaid diagrams
 - **[Testing Guide](development/testing.md)** - How to run tests and CI/CD pipelines
 - **[CI/CD Setup](development/ci.md)** - GitHub Actions pipeline configuration
+- **[Release Validation Framework](development/release-validation-framework.md)** - Pytest-native release certification framework, profiles, and live RBAC certification scenario
 - **[RBAC Implementation](development/rbac-implementation.md)** - Overview of RBAC features
 
 ### Implementation Notes

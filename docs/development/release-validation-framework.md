@@ -27,6 +27,7 @@ Profiles describe the lab, enabled streams, required scenarios, release metadata
 - `tests/release/profiles/dev-minimal.example.yaml`
 - `tests/release/profiles/full-release.example.yaml`
 - `tests/release/profiles/argocd-release.example.yaml`
+- `tests/release/profiles/full-release-with-rbac-cert.example.yaml` — full release matrix plus the live RBAC bootstrap certification scenario (`rbac-bootstrap-live`). The scenario is gated by `ACM_ENABLE_LIVE_RBAC_CERTIFICATION=1`; when an operator selects this profile, live RBAC certification is treated as blocking. See [Live RBAC Bootstrap Certification](../deployment/rbac-live-certification.md) for the certification flow, artifacts, and least-privilege deny checks.
 
 Use the examples as templates for real lab profiles. Do not commit real kubeconfig paths, cluster identifiers that should stay private, or credentials.
 

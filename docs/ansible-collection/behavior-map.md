@@ -26,6 +26,20 @@ Source: `lib/`, `modules/`, `scripts/`
 | `lib/validation.py` | centralized collection validation layer | 2 |
 | `lib/kube_client.py` | stock `kubernetes.core` usage plus later helper code | 2-3 |
 | `lib/utils.py` checkpoint semantics | `plugins/action/checkpoint_phase.py`, `plugins/module_utils/checkpoint.py` | 4 |
+
+In `validate` mode (`acm_switchover_execution.mode: validate`), the checkpoint
+preflight runs the same load + verification path as `execute` mode — including
+hub-identity binding and `reset_from` handling — but does **not** persist any
+checkpoint transitions or perform mutations. This surfaces misconfigured
+checkpoints before an actual execute-mode run.
+
+Observability RBAC permissions are skipped when MCO is verifiably absent: when
+preflight detection finds no `MultiClusterObservability` resources on the hub
+(a successful lookup returning empty), Observability-scoped RBAC checks
+(including the baseline `MultiClusterObservability` delete validation) are
+skipped because they are not required for that workflow. Detection failure
+(API/auth errors) still fails closed.
+
 | `lib/argocd.py` | `roles/argocd_manage/`, preflight read-only advisory discovery, and deferred playbook | 5 |
 | `lib/gitops_detector.py` | preflight detection and warnings, including non-blocking Argo CD ACM-touching Application advisory output | 5 |
 | `modules/preflight/reporter.py` and Python-only `lib/report_artifacts.py` | `plugins/modules/acm_preflight_report.py`, `plugins/modules/acm_report_artifact.py`, playbook report contracts | 2-6 |
@@ -33,6 +47,26 @@ Source: `lib/`, `modules/`, `scripts/`
 | `check_rbac.py` / `scripts/setup-rbac.sh` | `playbooks/rbac_bootstrap.yml`, `roles/rbac_bootstrap/`, `plugins/modules/acm_rbac_bootstrap.py` | 6 |
 | `lib/waiter.py` (`WaitConditionResult`, `wait_for_condition`) | no direct equivalent — collection roles use Ansible's native `until`/`retries` loop construct; architectural difference, not a gap to close | coexistence |
 | `scripts/discover-hub.sh` | supported migration bridge, not rewritten in the collection | coexistence |
+
+## Activation Wait Contract (collection)
+
+Collection activation parity with `modules/activation.py` was tightened in
+`[Unreleased]`. Two cases that previously caused false failures or wrong waits
+are now explicit:
+
+- **Passive activation, stale pre-activation Velero signal (Step 5).** When the
+  ACM controller has not yet published the new restore name, a leftover
+  pre-activation Velero managed-clusters restore signal is treated as a
+  *retryable pending* state, not a terminal failure. Activation re-reads the
+  live Restore and continues polling within the configured budget instead of
+  failing before the controller publishes the new restore.
+- **Full-restore activation wait (F6).** After the ACM `Restore` resource
+  reaches a terminal phase, activation switches to ManagedCluster presence
+  checks. It does **not** wait for a Velero `managed-clusters` Restore — that
+  intermediate object can arrive out of order or be coalesced by Velero, so
+  blocking on it produces false-negative timeouts. The contract is: ACM
+  Restore terminal phase ⇒ verify expected ManagedClusters appear within the
+  remaining timeout budget.
 
 ## ACM Version Gates to Preserve
 

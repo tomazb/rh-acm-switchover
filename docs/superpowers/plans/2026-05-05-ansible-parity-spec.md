@@ -1,5 +1,14 @@
 # ACM Switchover Ansible/Python Parity — Work To Do
 
+> **⚠️ Superseded notice (added 2026-05-22):** The items in this plan covering
+> checkpoint hub-identity binding, activation live-read / readiness, validate-mode
+> checkpoint preflight execution, decommission safe-path / Hive fail-closed,
+> passive-restore readiness, RBAC observability skip, and shared report artifact
+> hardening have shipped and are tracked in `CHANGELOG.md` under `[Unreleased]`.
+> Treat the corresponding "Pending"/"Partial" entries below as historical. For
+> current status see `docs/ansible-collection/parity-matrix.md` and
+> `docs/ansible-collection/behavior-map.md`.
+
 **Branch baseline:** `ansible` branch of `tomazb/rh-acm-switchover`  
 **Scope:** Align the Ansible Collection with the Python CLI safety and operational semantics.  
 **Review basis:** Static code review of repository files. This plan has not been verified against a live ACM/OpenShift cluster.  

@@ -229,6 +229,15 @@ oc get clusterdeployment.hive.openshift.io --all-namespaces \
 oc patch clusterdeployment.hive.openshift.io <cluster-deployment-name> -n <namespace> \
   --type='merge' -p '{"spec":{"preserveOnDelete":true}}'
 
+> **⚠️ Automation fail-closed behavior:** When the decommission tool cannot
+> read the Hive `ClusterDeployment` API (CRD missing, API discovery failure,
+> or permission denied), it **refuses to proceed** rather than assuming "no
+> Hive = nothing to protect". The tool also requires explicit cluster-ID
+> matches between ManagedClusters and ClusterDeployments; plausible-but-
+> unverified MC↔CD relationships are treated as unverified and block
+> decommission. On non-Hive clusters, run decommission with the documented
+> non-Hive flow rather than expecting silent skip.
+
 # Example: Batch update all ClusterDeployments with preserveOnDelete set to false or missing
 for cd in $(oc get clusterdeployment.hive.openshift.io --all-namespaces \
   -o json | jq -r '.items[] | select(.spec.preserveOnDelete != true) | 
@@ -244,6 +253,29 @@ done
 **Verify all show "true" before proceeding with switchover.**
 
 > **WITHOUT THIS:** Deleting ManagedClusters from old hub will DESTROY the underlying cluster infrastructure!
+
+---
+
+### Automation State File — Hub Identity Binding (Python CLI)
+
+The Python CLI persists a state file per switchover (e.g.
+`.state/switchover-<primary>__<secondary>.json`) so it can resume from the
+last successful phase. As of `[Unreleased]`, the state file records each
+hub's live cluster UID (the `kube-system` namespace UID) alongside its
+context name.
+
+On resume, the tool re-reads the live UIDs and **fails closed before any
+mutation** if a recorded UID no longer matches the cluster behind the same
+context name, if hub identities are missing for an in-progress switchover,
+or if the live UID is unreadable.
+
+Recovery:
+- `--reset-state` — the context now legitimately points at a different
+  cluster (e.g., you re-pointed kubeconfig). Discards the state file.
+- `--force` — legacy state file without recorded UIDs. Use only after
+  manually re-verifying which clusters the contexts now reach.
+
+See `docs/operations/usage.md` "Hub identity binding on resume".
 
 ---
 
@@ -380,6 +412,13 @@ oc get pods -n open-cluster-management-observability -l app.kubernetes.io/name=t
 # Should return: 0
 ```
 
+> **Automation note (`[Unreleased]`):** when scaling Thanos via the Python
+> CLI or the Ansible collection, the scale-down is followed by **bounded
+> polling** until the rollout is stable (no Running compact pods within
+> the configured timeout budget). A normal polling delay is expected;
+> only a timeout raises a clear error. Do not interpret a brief polling
+> wait as a hang.
+
 **Optional (to avoid write contention): Pause Observatorium API on OLD hub during the switchover window. Re-enable both only if you roll/switch back.**
 ```bash
 oc scale deployment observability-observatorium-api \
@@ -397,6 +436,19 @@ Before activation, ensure the secondary hub has received and restored the latest
 > oc get restore.cluster.open-cluster-management.io -n open-cluster-management-backup
 > ```
 > Look for a restore with `syncRestoreWithNewBackups: true` in its spec.
+
+> **⚠️ Hard requirement (automation):** The Python CLI and the Ansible
+> collection require a passive Restore whose `spec.syncRestoreWithNewBackups`
+> is `true`. The legacy name-based fallback to `restore-acm-passive-sync` was
+> removed: preflight and activation **fail closed** if no sync-enabled
+> passive Restore is found, regardless of the resource name. If you run a
+> custom-named passive Restore, ensure the spec flag is set; the tool
+> discovers it by spec, not by name.
+>
+> **Benign `FinishedWithErrors` rule:** activation tolerates a Restore in
+> `FinishedWithErrors` only when the status message matches the exact
+> pattern `ManagedCluster <name> already available`. Any other
+> `FinishedWithErrors` message is treated as a real failure.
 
 **On SECONDARY HUB, verify passive sync status:**
 ```bash
