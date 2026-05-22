@@ -99,6 +99,16 @@ def test_observatorium_rollout_gate_requires_updated_replicas():
     assert ".get('spec', {}).get('replicas'" in until
 
 
+def test_observability_publish_and_failure_gates_default_readiness_to_failed():
+    """Unset observability readiness facts must fail closed instead of passing by default."""
+    text = (POST_ACTIVATION_TASKS / "verify_observability.yml").read_text()
+
+    assert "_acm_observatorium_rollout_ready | default(true)" not in text
+    assert "_acm_observability_pods_ready | default(true)" not in text
+    assert "_acm_observatorium_rollout_ready | default(false)" in text
+    assert "_acm_observability_pods_ready | default(false)" in text
+
+
 def test_cleanup_auto_import_annotations_patches_managed_clusters():
     """cleanup task must remove disable-auto-import from non-local ManagedClusters."""
     tasks = _load_yaml("cleanup_auto_import_annotations.yml")

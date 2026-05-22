@@ -37,6 +37,10 @@ from lib import (
 )
 from lib.argocd_coordinator import ArgoCDPauseCoordinator
 from lib.constants import (
+    DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,
+    DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE,
+    DRY_RUN_SWITCHOVER_COMPLETION_MESSAGE,
+    DRY_RUN_SWITCHOVER_NEXT_STEPS_MESSAGE,
     EXIT_FAILURE,
     EXIT_INTERRUPT,
     EXIT_SUCCESS,
@@ -48,7 +52,9 @@ from lib.constants import (
     MANAGED_CLUSTER_EXPECTATION_KEY,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
+    RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
     STALE_STATE_THRESHOLD,
+    SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
 )
 from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
@@ -534,10 +540,15 @@ def _run_switchover_impl(
     if not ran_phase:
         return _fail_phase(state, "No runnable phase matched current state.", logger)
 
+    if getattr(args, "dry_run", False):
+        logger.info(DRY_RUN_SWITCHOVER_COMPLETION_MESSAGE)
+        logger.info(DRY_RUN_SWITCHOVER_NEXT_STEPS_MESSAGE)
+        return True
+
     state.set_phase(Phase.COMPLETED)
 
     logger.info("\n" + "=" * 60)
-    logger.info("SWITCHOVER COMPLETED SUCCESSFULLY!")
+    logger.info(SWITCHOVER_COMPLETED_SUCCESS_MESSAGE)
     logger.info("=" * 60)
     logger.info("\nSwitchover completed at: %s", datetime.now().astimezone().isoformat())
     logger.info("State file: %s", args.state_file)
@@ -744,10 +755,15 @@ def _run_restore_only_impl(
     if not ran_phase:
         return _fail_phase(state, "No runnable phase matched current state.", logger)
 
+    if getattr(args, "dry_run", False):
+        logger.info(DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE)
+        logger.info(DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE)
+        return True
+
     state.set_phase(Phase.COMPLETED)
 
     logger.info("\n" + "=" * 60)
-    logger.info("RESTORE-ONLY COMPLETED SUCCESSFULLY!")
+    logger.info(RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE)
     logger.info("=" * 60)
     logger.info("\nRestore completed at: %s", datetime.now().astimezone().isoformat())
     logger.info("State file: %s", args.state_file)

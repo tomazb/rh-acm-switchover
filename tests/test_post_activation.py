@@ -4,8 +4,10 @@ Tests cover PostActivationVerification class for verifying switchover success.
 """
 
 import base64
+import logging
 import os
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -1455,6 +1457,121 @@ class TestKlusterletParallelVerification:
                         # Should not raise; c1 lands in unreachable bucket
                         pav._verify_klusterlet_connections()
 
+    def test_initial_check_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager, caplog):
+        """Timed-out initial klusterlet checks should be treated as unreachable."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+        kube_data = {
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
+        }
+        caplog.set_level(logging.INFO, logger="acm_switchover")
+
+        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(pav, "_check_klusterlet_connection", return_value="verified"):
+                    with patch(
+                        "modules.post_activation.wait",
+                        side_effect=lambda futures, timeout: (set(), set(futures)),
+                    ):
+                        pav._verify_klusterlet_connections()
+
+        assert "Klusterlet verification skipped for 1 cluster(s)" in caplog.text
+        assert "c1" in caplog.text
+
+    def test_remediation_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager):
+        """Timed-out remediation workers should be recorded as failed remediation."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+        kube_data = {
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
+        }
+        wait_calls = 0
+        remediation_exited = threading.Event()
+
+        def fake_wait(futures, timeout):
+            nonlocal wait_calls
+            wait_calls += 1
+            futures = set(futures)
+            if wait_calls == 2:
+                return set(), futures
+            return futures, set()
+
+        def slow_reconnect(_cluster_name, _context_name):
+            time.sleep(0.05)
+            remediation_exited.set()
+            return True
+
+        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(
+                    pav,
+                    "_check_klusterlet_connection",
+                    side_effect=["wrong_hub", "verified"],
+                ):
+                    with patch.object(pav, "_force_klusterlet_reconnect", side_effect=slow_reconnect):
+                        with patch("modules.post_activation.wait", side_effect=fake_wait):
+                            with patch(
+                                "modules.post_activation.wait_for_condition",
+                                side_effect=lambda description, condition_fn, **kwargs: condition_fn().done,
+                            ):
+                                with pytest.raises(
+                                    SwitchoverError,
+                                    match="Klusterlet remediation failed",
+                                ):
+                                    pav._verify_klusterlet_connections()
+        assert remediation_exited.is_set()
+
+    def test_recheck_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager):
+        """Timed-out post-remediation rechecks should be treated as unverified."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+        kube_data = {
+            "contexts": [{"name": "ctx-c1", "context": {"cluster": "kc1"}}],
+            "clusters": [{"name": "kc1", "cluster": {"server": "https://api.c1:6443"}}],
+        }
+        wait_calls = 0
+
+        def fake_wait(futures, timeout):
+            nonlocal wait_calls
+            wait_calls += 1
+            futures = set(futures)
+            if wait_calls == 3:
+                return set(), futures
+            return futures, set()
+
+        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(
+                    pav,
+                    "_check_klusterlet_connection",
+                    side_effect=["wrong_hub", "verified"],
+                ):
+                    with patch.object(pav, "_force_klusterlet_reconnect", return_value=True):
+                        with patch("modules.post_activation.wait", side_effect=fake_wait):
+                            with patch(
+                                "modules.post_activation.wait_for_condition",
+                                side_effect=lambda description, condition_fn, **kwargs: condition_fn().done,
+                            ):
+                                with pytest.raises(SwitchoverError, match="could not be verified"):
+                                    pav._verify_klusterlet_connections()
+
 
 # ========================================================================
 # 2. Kubeconfig loading / parsing (_load_kubeconfig_data)
@@ -1804,7 +1921,7 @@ class TestCheckKlusterletConnection:
 
         bootstrap_secret = self._make_secret("https://api.newhub.com:6443")
 
-        def side_effect(name, namespace):
+        def side_effect(name, namespace, **kwargs):
             if name == "hub-kubeconfig-secret":
                 raise ApiException(status=404)
             return bootstrap_secret
@@ -1814,6 +1931,7 @@ class TestCheckKlusterletConnection:
         result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://api.newhub.com:6443")
         assert result == "verified"
         assert mock_v1.read_namespaced_secret.call_count == 2
+        assert all("_request_timeout" in call.kwargs for call in mock_v1.read_namespaced_secret.call_args_list)
 
     def test_unreachable_on_empty_kubeconfig(self, mock_secondary_client, mock_state_manager):
         """Should return 'unreachable' when secret has no kubeconfig data."""

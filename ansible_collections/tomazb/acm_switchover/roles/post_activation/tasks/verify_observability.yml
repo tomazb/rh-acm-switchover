@@ -270,16 +270,16 @@
           if (
             (_acm_observability_missing_workloads | default([]) | length) > 0
             or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
-            or not (_acm_observatorium_rollout_ready | default(true) | bool)
-            or not (_acm_observability_pods_ready | default(true) | bool)
+            or not (_acm_observatorium_rollout_ready | default(false) | bool)
+            or not (_acm_observability_pods_ready | default(false) | bool)
           )
           else 'pass'
         }}
       failures:
         missing_workloads: "{{ _acm_observability_missing_workloads | default([]) }}"
         unhealthy_pods: "{{ _acm_secondary_unhealthy_observability_pods | default([]) }}"
-        observatorium_rollout_ready: "{{ _acm_observatorium_rollout_ready | default(true) }}"
-        observability_pods_ready: "{{ _acm_observability_pods_ready | default(true) }}"
+        observatorium_rollout_ready: "{{ _acm_observatorium_rollout_ready | default(false) }}"
+        observability_pods_ready: "{{ _acm_observability_pods_ready | default(false) }}"
       observatorium_ready_replicas: >-
         {{
           ((_acm_secondary_observatorium_api_ready_info.resources | default([]) | first | default({}))
@@ -294,14 +294,14 @@
     msg: >-
       Observability verification failed. Missing workloads={{ _acm_observability_missing_workloads | default([]) | join(', ') }};
       unhealthy pods={{ _acm_secondary_unhealthy_observability_pods | default([]) | join(', ') }};
-      observatorium rollout ready={{ _acm_observatorium_rollout_ready | default(true) }};
-      observability pods ready={{ _acm_observability_pods_ready | default(true) }}.
+      observatorium rollout ready={{ _acm_observatorium_rollout_ready | default(false) }};
+      observability pods ready={{ _acm_observability_pods_ready | default(false) }}.
       Set acm_switchover_features.skip_observability_checks=true only when explicitly bypassing Observability checks.
   when: >-
     acm_switchover_execution.mode | default('execute') != 'dry_run'
     and (
       (_acm_observability_missing_workloads | default([]) | length) > 0
       or (_acm_secondary_unhealthy_observability_pods | default([]) | length) > 0
-      or not (_acm_observatorium_rollout_ready | default(true) | bool)
-      or not (_acm_observability_pods_ready | default(true) | bool)
+      or not (_acm_observatorium_rollout_ready | default(false) | bool)
+      or not (_acm_observability_pods_ready | default(false) | bool)
     )

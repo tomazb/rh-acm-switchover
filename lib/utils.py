@@ -400,6 +400,10 @@ class StateManager:
     def _do_flush(self, force: bool = False, suppress_errors: bool = False) -> bool:
         """Core flush logic shared by all flush methods.
 
+        Loops until clean because _write_state callers can trigger nested state
+        mutations. A single _do_flush call may perform multiple writes when
+        state becomes dirty again during an active write.
+
         Args:
             force: If True, write even if not dirty. If False, only write when dirty.
             suppress_errors: If True, catch exceptions and print to stderr instead of raising.
@@ -413,20 +417,29 @@ class StateManager:
             return False
 
         self._flushing = True
-        self.state["last_updated"] = _utc_timestamp()
+        performed = False
         try:
-            if suppress_errors:
-                try:
-                    self._write_state(self.state)
-                except Exception as e:
-                    import sys
+            while force or self._dirty:
+                force = False
+                self._dirty = False
+                self.state["last_updated"] = _utc_timestamp()
+                if suppress_errors:
+                    try:
+                        self._write_state(self.state)
+                    except Exception as e:
+                        self._dirty = True
+                        import sys
 
-                    print(f"Error flushing state: {e}", file=sys.stderr)
-                    return False
-            else:
-                self._write_state(self.state)
-            self._dirty = False
-            return True
+                        print(f"Error flushing state: {e}", file=sys.stderr)
+                        return False
+                else:
+                    try:
+                        self._write_state(self.state)
+                    except Exception:
+                        self._dirty = True
+                        raise
+                performed = True
+            return performed
         finally:
             self._flushing = False
 

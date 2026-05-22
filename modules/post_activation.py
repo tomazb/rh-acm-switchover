@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Dict, List, Optional
 
 import yaml
@@ -21,10 +21,14 @@ from lib.constants import (
     CLUSTER_VERIFY_MAX_WORKERS,
     CLUSTER_VERIFY_TIMEOUT,
     DEFAULT_KUBECONFIG_SIZE,
+    DELETE_REQUEST_TIMEOUT,
     DISABLE_AUTO_IMPORT_ANNOTATION,
     INITIAL_CLUSTER_WAIT_TIMEOUT,
+    KLUSTERLET_API_READ_TIMEOUT,
     KLUSTERLET_RECHECK_INTERVAL,
     KLUSTERLET_RECHECK_TIMEOUT,
+    KLUSTERLET_WORKER_TIMEOUT,
+    KLUSTERLET_WORKER_TIMEOUT_MESSAGE,
     LOCAL_CLUSTER_NAME,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MAX_KUBECONFIG_SIZE,
@@ -803,21 +807,51 @@ class PostActivationVerification:
             len(cluster_info),
         )
 
+        def collect_future_results(future_fallbacks: Dict, operation: str) -> List[tuple]:
+            """Collect completed future results and apply fallbacks for timed-out workers."""
+            done, not_done = wait(future_fallbacks.keys(), timeout=KLUSTERLET_WORKER_TIMEOUT)
+            results = []
+            for future in done:
+                results.append(future.result())
+            for future in not_done:
+                fallback = future_fallbacks[future]
+                logger.warning(
+                    KLUSTERLET_WORKER_TIMEOUT_MESSAGE,
+                    operation,
+                    fallback[0],
+                    KLUSTERLET_WORKER_TIMEOUT,
+                )
+                future.cancel()
+                results.append(fallback)
+            return results
+
         # Collect results from futures to avoid shared mutable state
         verified = []
         wrong_hub = []
         unreachable = []
 
-        with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-            futures = [executor.submit(check_cluster, name, api_url) for name, api_url in cluster_info]
-            for future in as_completed(futures):
-                cluster_name, result, context_name = future.result()
+        executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+        try:
+            check_future_fallbacks = {
+                executor.submit(check_cluster, name, api_url): (
+                    name,
+                    "unreachable",
+                    None,
+                )
+                for name, api_url in cluster_info
+            }
+            for cluster_name, result, context_name in collect_future_results(
+                check_future_fallbacks,
+                "checking",
+            ):
                 if result == "verified":
                     verified.append(cluster_name)
                 elif result == "wrong_hub":
                     wrong_hub.append((cluster_name, context_name))
                 else:  # unreachable, no_context, or error
                     unreachable.append(cluster_name)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         # Log initial results
         if verified:
@@ -853,14 +887,24 @@ class PostActivationVerification:
             fixed = []
             fix_failed = []
 
-            with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-                futures = [executor.submit(fix_cluster, name, ctx) for name, ctx in wrong_hub]
-                for future in as_completed(futures):
-                    cluster_name, success = future.result()
+            executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+            try:
+                fix_future_fallbacks = {
+                    executor.submit(fix_cluster, name, ctx): (name, False) for name, ctx in wrong_hub
+                }
+                for cluster_name, success in collect_future_results(
+                    fix_future_fallbacks,
+                    "remediating",
+                ):
                     if success:
                         fixed.append(cluster_name)
                     else:
                         fix_failed.append(cluster_name)
+            finally:
+                # Remediation mutates managed clusters. Python cannot stop a
+                # running thread, so wait for bounded API calls to exit before
+                # reporting the phase outcome.
+                executor.shutdown(wait=True, cancel_futures=True)
 
             if fixed:
                 logger.info(
@@ -875,20 +919,34 @@ class PostActivationVerification:
                     ", ".join(fix_failed),
                 )
 
-            post_remediation_state: Dict[str, List[str]] = {"wrong_hub": [], "unverified": []}
+            post_remediation_state: Dict[str, List[str]] = {
+                "wrong_hub": [],
+                "unverified": [],
+            }
 
             def recheck_remediated_clusters() -> WaitConditionResult:
                 """Poll remediated clusters until klusterlet updates hub-kubeconfig-secret."""
                 current_wrong_hub = []
                 current_unverified = []
-                with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-                    futures = [executor.submit(recheck_cluster, name, ctx) for name, ctx in wrong_hub]
-                    for future in as_completed(futures):
-                        cluster_name, result = future.result()
+                executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+                try:
+                    recheck_future_fallbacks = {
+                        executor.submit(recheck_cluster, name, ctx): (
+                            name,
+                            "unreachable",
+                        )
+                        for name, ctx in wrong_hub
+                    }
+                    for cluster_name, result in collect_future_results(
+                        recheck_future_fallbacks,
+                        "re-checking",
+                    ):
                         if result == "wrong_hub":
                             current_wrong_hub.append(cluster_name)
                         elif result != "verified":
                             current_unverified.append(cluster_name)
+                finally:
+                    executor.shutdown(wait=False, cancel_futures=True)
 
                 post_remediation_state["wrong_hub"] = current_wrong_hub
                 post_remediation_state["unverified"] = current_unverified
@@ -1041,6 +1099,7 @@ class PostActivationVerification:
             v1.delete_namespaced_secret(
                 name="bootstrap-hub-kubeconfig",
                 namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
             logger.debug("Deleted bootstrap-hub-kubeconfig secret on %s", cluster_name)
         except ApiException as e:
@@ -1072,6 +1131,7 @@ class PostActivationVerification:
                     v1.create_namespaced_secret(
                         namespace=namespace,
                         body=doc,
+                        _request_timeout=DELETE_REQUEST_TIMEOUT,
                     )
                     logger.debug(
                         "Created bootstrap-hub-kubeconfig secret on %s",
@@ -1107,6 +1167,7 @@ class PostActivationVerification:
                 v1.read_namespaced_secret(
                     name="bootstrap-hub-kubeconfig",
                     namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                    _request_timeout=DELETE_REQUEST_TIMEOUT,
                 )
                 return WaitConditionResult.complete("secret exists")
             except ApiException as e:
@@ -1151,6 +1212,7 @@ class PostActivationVerification:
                 name="klusterlet",
                 namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
                 body=patch,
+                _request_timeout=DELETE_REQUEST_TIMEOUT,
             )
             logger.debug("Triggered klusterlet restart on %s", cluster_name)
         except ApiException as e:
@@ -1226,21 +1288,20 @@ class PostActivationVerification:
                 paths = [os.path.expanduser("~/.kube/config")]
 
             # Determine size limit: use provided max_size, or default to MAX_KUBECONFIG_SIZE
-            if max_size is None:
-                # Check if MAX_KUBECONFIG_SIZE is set to 0 or negative to disable checking
-                if MAX_KUBECONFIG_SIZE <= 0:
-                    # Size checking disabled via environment variable
+            if max_size is not None:
+                if max_size <= 0:
+                    # Bypass size check for critical operations
                     size_limit = None
                     check_size = False
                 else:
-                    size_limit = MAX_KUBECONFIG_SIZE
+                    size_limit = max_size
                     check_size = True
-            elif max_size <= 0:
-                # Bypass size check for critical operations
+            elif MAX_KUBECONFIG_SIZE <= 0:
+                # Size checking disabled via environment variable
                 size_limit = None
                 check_size = False
             else:
-                size_limit = max_size
+                size_limit = MAX_KUBECONFIG_SIZE
                 check_size = True
 
             # Merge kubeconfig data from all paths
@@ -1391,6 +1452,7 @@ class PostActivationVerification:
                 secret = v1.read_namespaced_secret(
                     name="hub-kubeconfig-secret",
                     namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                    _request_timeout=KLUSTERLET_API_READ_TIMEOUT,
                 )
             except ApiException as e:
                 if e.status == 404:
@@ -1398,6 +1460,7 @@ class PostActivationVerification:
                     secret = v1.read_namespaced_secret(
                         name="bootstrap-hub-kubeconfig",
                         namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                        _request_timeout=KLUSTERLET_API_READ_TIMEOUT,
                     )
                 else:
                     raise

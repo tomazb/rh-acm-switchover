@@ -94,6 +94,14 @@ def test_activation_persists_auto_import_reset_flag_in_checkpoint():
     )
 
 
+def test_activation_result_defaults_unknown_changed_to_false():
+    """Activation result should not report changed=true when no mutation result exists."""
+    text = (ACTIVATION_TASKS / "main.yml").read_text()
+
+    assert "acm_switchover_restore_activation_result.changed | default(false)" in text
+    assert "acm_switchover_restore_activation_result.changed | default(true)" not in text
+
+
 def test_finalization_restores_auto_import_reset_flag_from_checkpoint():
     """finalization/main.yml must rehydrate auto-import reset intent before reset runs."""
     text = (FINALIZATION_TASKS / "main.yml").read_text()
