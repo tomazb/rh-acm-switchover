@@ -151,6 +151,28 @@ class TestStateManager:
         reloaded = StateManager(str(state_path))
         assert reloaded.get_config("key") == "value"
 
+    def test_reentrant_flush_preserves_dirty_state(self, tmp_path):
+        """State changed during a flush must be persisted by a follow-up flush."""
+        state_path = tmp_path / "state-reentrant.json"
+        sm = StateManager(str(state_path))
+        original_write = sm._write_state
+        write_count = 0
+
+        def reentrant_write(state):
+            nonlocal write_count
+            write_count += 1
+            original_write(state)
+            if write_count == 1:
+                sm.set_config("nested", "value")
+
+        with patch.object(sm, "_write_state", side_effect=reentrant_write):
+            sm.set_config("outer", "value")
+
+        assert write_count == 2
+        reloaded = StateManager(str(state_path))
+        assert reloaded.get_config("outer") == "value"
+        assert reloaded.get_config("nested") == "value"
+
     def test_add_error(self, state_manager):
         """Test error recording."""
         state_manager.add_error("Test error", Phase.PREFLIGHT.value)

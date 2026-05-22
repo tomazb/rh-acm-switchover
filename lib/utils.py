@@ -413,20 +413,29 @@ class StateManager:
             return False
 
         self._flushing = True
-        self.state["last_updated"] = _utc_timestamp()
+        performed = False
         try:
-            if suppress_errors:
-                try:
-                    self._write_state(self.state)
-                except Exception as e:
-                    import sys
+            while force or self._dirty:
+                force = False
+                self._dirty = False
+                self.state["last_updated"] = _utc_timestamp()
+                if suppress_errors:
+                    try:
+                        self._write_state(self.state)
+                    except Exception as e:
+                        self._dirty = True
+                        import sys
 
-                    print(f"Error flushing state: {e}", file=sys.stderr)
-                    return False
-            else:
-                self._write_state(self.state)
-            self._dirty = False
-            return True
+                        print(f"Error flushing state: {e}", file=sys.stderr)
+                        return False
+                else:
+                    try:
+                        self._write_state(self.state)
+                    except Exception:
+                        self._dirty = True
+                        raise
+                performed = True
+            return performed
         finally:
             self._flushing = False
 
