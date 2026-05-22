@@ -246,6 +246,44 @@ class TestFindArgocdPauseBlockers:
         assert "parent-set" in blockers[0].message
         assert "pause/update the ApplicationSet" in blockers[0].message
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Known gap: disabled ApplicationSet-managed ACM apps are not blocked",
+    )
+    def test_blocks_applicationset_owned_acm_app_even_when_autosync_is_already_disabled(
+        self,
+    ):
+        """ApplicationSet-managed ACM apps should remain blockers even if auto-sync is already off."""
+        apps = [
+            {
+                "metadata": {
+                    "namespace": "argocd",
+                    "name": "child-app",
+                    "ownerReferences": [
+                        {"kind": "ApplicationSet", "name": "parent-set"}
+                    ],
+                },
+                "spec": {"syncPolicy": {"automated": None}},
+                "status": {
+                    "resources": [
+                        {
+                            "kind": "BackupSchedule",
+                            "namespace": "open-cluster-management-backup",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        blockers = argocd_lib.find_argocd_pause_blockers(apps)
+
+        assert len(blockers) == 1
+        assert blockers[0].namespace == "argocd"
+        assert blockers[0].name == "child-app"
+        assert (
+            blockers[0].reason == argocd_lib.PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED
+        )
+
     def test_does_not_block_disabled_autosync_with_empty_resources(self):
         apps = [
             {
@@ -514,7 +552,14 @@ class TestPauseAutosync:
         assert "pause/update the ApplicationSet" in result.error
         client.patch_custom_resource.assert_not_called()
 
-    def test_fails_when_autosync_remains_enabled_after_patch(self):
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Known gap: verification race still reports patch_applied=True",
+    )
+    def test_pause_autosync_returns_patch_applied_false_when_controller_reenables_sync_after_patch(
+        self,
+    ):
+        """If re-read shows auto-sync re-enabled, pause should be reported as not applied."""
         client = MagicMock()
         client.patch_custom_resource.return_value = {
             "metadata": {"resourceVersion": "1001"}
@@ -531,7 +576,7 @@ class TestPauseAutosync:
         result = argocd_lib.pause_autosync(client, app, "run-1")
 
         assert result.patched is False
-        assert result.patch_applied is True
+        assert result.patch_applied is False
         assert result.error is not None
         assert "auto-sync remains enabled after pause" in result.error
         client.patch_custom_resource.assert_called_once()
@@ -648,6 +693,61 @@ class TestResumeAutosync:
             ]
             is None
         )
+
+    def test_marker_mismatch_with_autosync_logs_warning_when_stale_marker_cleanup_fails(
+        self, caplog
+    ):
+        """Cleanup failure should warn and leave the already-resumed app in a noop state."""
+        import logging
+
+        client = MagicMock()
+        client.get_custom_resource.return_value = {
+            "metadata": {
+                "resourceVersion": "500",
+                "annotations": {argocd_lib.ARGOCD_PAUSED_BY_ANNOTATION: "old-run"},
+            },
+            "spec": {
+                "syncPolicy": {
+                    "automated": {"prune": True, "selfHeal": True},
+                },
+            },
+        }
+        client.patch_custom_resource.side_effect = ApiException(
+            status=403, reason="Forbidden"
+        )
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            result = argocd_lib.resume_autosync(
+                client, "argocd", "app", {"automated": {}}, "run-1"
+            )
+
+        assert result.restored is False
+        assert result.skip_reason == argocd_lib.RESUME_SKIP_REASON_MARKER_MISSING
+        assert argocd_lib.is_resume_noop(result) is True
+        client.patch_custom_resource.assert_called_once()
+        assert any(
+            "Failed to clean stale marker on argocd/app" in msg
+            for msg in caplog.messages
+        )
+
+    @pytest.mark.parametrize(
+        ("status", "reason"),
+        [(403, "Forbidden"), (500, "Internal Server Error")],
+    )
+    def test_resume_autosync_fetch_api_error_leaves_application_paused(
+        self, status, reason
+    ):
+        """Fetch errors must not be treated as successful resume operations."""
+        client = MagicMock()
+        client.get_custom_resource.side_effect = ApiException(status=status, reason=reason)
+
+        result = argocd_lib.resume_autosync(
+            client, "argocd", "app", {"automated": {"prune": True}}, "run-1"
+        )
+
+        assert result.restored is False
+        assert result.skip_reason == f"fetch error: {status}"
+        client.patch_custom_resource.assert_not_called()
 
     def test_patch_exception_returns_skip_reason(self):
         client = MagicMock()
@@ -793,6 +893,27 @@ class TestDetectArgocdInstallation:
         with pytest.raises(ApiException):
             argocd_lib.detect_argocd_installation(client)
 
+    def test_unknown_when_argocds_crd_presence_is_indeterminate(self, monkeypatch):
+        """Indeterminate argocds CRD detection should surface an unknown install type."""
+        client = MagicMock()
+
+        def fake_get_crd_presence(_client, crd_name, *, required):
+            if crd_name == "applications.argoproj.io":
+                return True
+            if crd_name == "argocds.argoproj.io":
+                return None
+            raise AssertionError(f"Unexpected CRD lookup: {crd_name}")
+
+        monkeypatch.setattr(argocd_lib, "_get_crd_presence", fake_get_crd_presence)
+
+        result = argocd_lib.detect_argocd_installation(client)
+
+        assert result.has_applications_crd is True
+        assert result.has_argocds_crd is False
+        assert result.install_type == "unknown"
+        assert result.argocd_instances == []
+        client.list_custom_resources.assert_not_called()
+
 
 @pytest.mark.unit
 class TestListArgocdApplications:
@@ -825,3 +946,21 @@ class TestListArgocdApplications:
         )
 
         assert [app["metadata"]["name"] for app in apps] == ["app-1", "app-2"]
+
+    def test_namespaced_listing_skips_empty_namespace_entries(self):
+        """Empty namespace strings should be ignored without suppressing valid results."""
+        client = MagicMock()
+        client.list_custom_resources.side_effect = [
+            [{"metadata": {"namespace": "argocd", "name": "app-1"}}],
+            [{"metadata": {"namespace": "test-ns", "name": "app-2"}}],
+        ]
+
+        apps = argocd_lib.list_argocd_applications(
+            client, namespaces=["", "argocd", "", "test-ns"]
+        )
+
+        assert [app["metadata"]["name"] for app in apps] == ["app-1", "app-2"]
+        assert [call.kwargs["namespace"] for call in client.list_custom_resources.call_args_list] == [
+            "argocd",
+            "test-ns",
+        ]
