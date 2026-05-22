@@ -1,12 +1,39 @@
 """Tests for the acm_rbac_validate collection module."""
 
-import pytest
+import json
+from pathlib import Path
 
+import pytest
+import yaml
+from ansible.module_utils import basic
+from ansible.module_utils.basic import AnsibleModule as RealAnsibleModule
+
+import ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate as acm_rbac_validate_module
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate import (
     expand_rbac_requirements,
     main,
     summarize_rbac_results,
 )
+
+RUN_SSAR_TASK = Path(__file__).resolve().parents[4] / "roles" / "preflight" / "tasks" / "run_ssar.yml"
+
+
+class ModuleExit(Exception):
+    def __init__(self, results):
+        super().__init__("module exited")
+        self.results = results
+
+
+class ModuleFail(Exception):
+    def __init__(self, results):
+        super().__init__("module failed")
+        self.results = results
+
+
+def _run_ssar_resource_attributes():
+    tasks = yaml.safe_load(RUN_SSAR_TASK.read_text(encoding="utf-8"))
+    run_task = next(task for task in tasks if task.get("name") == "Run SelfSubjectAccessReview for each permission")
+    return run_task["kubernetes.core.k8s"]["definition"]["spec"]["resourceAttributes"]
 
 
 def test_manage_mode_adds_application_patch_permission():
@@ -293,6 +320,169 @@ def test_summary_reports_pass_when_all_permissions_allowed():
     assert summary["results"][0]["status"] == "pass"
 
 
+def test_main_fails_closed_when_denied_permissions_present(monkeypatch):
+    captured = {}
+    denied_permissions = [
+        {
+            "api_group": "argoproj.io",
+            "resource": "applications",
+            "verb": "patch",
+            "namespace": None,
+            "reason": "Forbidden",
+        }
+    ]
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "hub": "primary",
+                "role": "operator",
+                "include_decommission": False,
+                "include_old_hub_finalization": False,
+                "decommission_only": False,
+                "skip_observability": False,
+                "argocd_mode": "none",
+                "argocd_install_type": "unknown",
+                "denied_permissions": denied_permissions,
+                "result_id": None,
+                "failure_message": None,
+                "success_message": None,
+                "recommended_action": None,
+            }
+            self.check_mode = False
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+
+        def fail_json(self, **kwargs):
+            raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+    monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", FakeModule)
+
+    main()
+
+    assert captured["exit"]["changed"] is False
+    assert captured["exit"]["passed"] is False
+    assert captured["exit"]["critical_failures"] == 1
+    assert captured["exit"]["results"][0]["status"] == "fail"
+    assert captured["exit"]["results"][0]["details"]["denied_permissions"] == denied_permissions
+
+
+def test_main_check_mode_returns_validation_without_change(monkeypatch):
+    captured = {}
+    expected_permissions = [("argoproj.io", "applications", "get", None)]
+    expanded = {}
+
+    def fake_expand_rbac_requirements(**kwargs):
+        expanded["kwargs"] = kwargs
+        return expected_permissions
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["supports_check_mode"] is True
+            self.params = {
+                "hub": "primary",
+                "role": "operator",
+                "include_decommission": False,
+                "include_old_hub_finalization": False,
+                "decommission_only": False,
+                "skip_observability": False,
+                "argocd_mode": "none",
+                "argocd_install_type": "unknown",
+                "denied_permissions": [],
+                "result_id": None,
+                "failure_message": None,
+                "success_message": None,
+                "recommended_action": None,
+            }
+            self.check_mode = True
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+
+        def fail_json(self, **kwargs):
+            raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+    monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", FakeModule)
+    monkeypatch.setattr(acm_rbac_validate_module, "expand_rbac_requirements", fake_expand_rbac_requirements)
+
+    main()
+
+    assert expanded["kwargs"] == {
+        "role": "operator",
+        "include_decommission": False,
+        "include_old_hub_finalization": False,
+        "skip_observability": False,
+        "argocd_mode": "none",
+        "argocd_install_type": "unknown",
+        "decommission_only": False,
+    }
+    assert captured["exit"]["changed"] is False
+    assert captured["exit"]["permissions"] == expected_permissions
+    assert captured["exit"]["passed"] is True
+
+
+def test_main_requires_hub_argument_at_module_boundary(monkeypatch):
+    class CapturingAnsibleModule(RealAnsibleModule):
+        def exit_json(self, **kwargs):
+            raise ModuleExit(kwargs)
+
+        def fail_json(self, **kwargs):
+            raise ModuleFail(kwargs)
+
+    monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", CapturingAnsibleModule)
+    monkeypatch.setattr(basic, "_ANSIBLE_ARGS", json.dumps({"ANSIBLE_MODULE_ARGS": {}}).encode("utf-8"))
+
+    with pytest.raises(ModuleFail) as excinfo:
+        main()
+
+    assert excinfo.value.results["msg"] == "missing required arguments: hub"
+
+
+def test_statefulset_scale_permission_uses_ssar_subresource_split_contract():
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        include_old_hub_finalization=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+    )
+    resource_attributes = _run_ssar_resource_attributes()
+
+    assert (
+        "apps",
+        "statefulsets/scale",
+        "patch",
+        "open-cluster-management-observability",
+    ) in permissions
+    assert resource_attributes["resource"] == "{{ item.1.split('/')[0] }}"
+    assert resource_attributes["subresource"] == "{{ item.1.split('/')[1] | default(omit, true) }}"
+
+
+def test_run_ssar_api_failures_are_recorded_and_fail_closed():
+    task_text = RUN_SSAR_TASK.read_text(encoding="utf-8")
+    denied_permissions = [
+        {
+            "api_group": "",
+            "resource": "pods",
+            "verb": "get",
+            "namespace": "default",
+            "reason": "authorization API unavailable",
+        }
+    ]
+
+    summary = summarize_rbac_results(hub="primary", denied_permissions=denied_permissions)
+
+    assert "result.failed | default(false)" in task_text
+    assert "result.result is not defined" in task_text
+    assert "result.result.status is not defined" in task_text
+    assert 'result.msg | default("SelfSubjectAccessReview did not return a status")' in task_text
+    assert summary["passed"] is False
+    assert summary["critical_failures"] == 1
+    assert summary["results"][0]["details"]["denied_permissions"][0]["reason"] == "authorization API unavailable"
+
+
 def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
     captured = {}
 
@@ -410,6 +600,41 @@ def test_validator_role_rejects_argocd_manage_permissions():
             argocd_mode="manage",
             argocd_install_type="operator",
         )
+
+
+def test_main_maps_validator_argocd_manage_to_fail_json(monkeypatch):
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "hub": "primary",
+                "role": "validator",
+                "include_decommission": False,
+                "include_old_hub_finalization": False,
+                "decommission_only": False,
+                "skip_observability": False,
+                "argocd_mode": "manage",
+                "argocd_install_type": "operator",
+                "denied_permissions": [],
+                "result_id": None,
+                "failure_message": None,
+                "success_message": None,
+                "recommended_action": None,
+            }
+            self.check_mode = False
+
+        def exit_json(self, **kwargs):
+            raise AssertionError(f"unexpected exit_json: {kwargs}")
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+
+    monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", FakeModule)
+
+    main()
+
+    assert captured["fail"] == {"msg": "validator role cannot use argocd_mode=manage"}
 
 
 def test_operator_role_has_patch_on_managedclusters():
