@@ -49,6 +49,7 @@ SECRET_VISIBILITY_INTERVAL = 1
 # Klusterlet post-remediation recheck wait (hub-kubeconfig-secret convergence)
 KLUSTERLET_RECHECK_TIMEOUT = 300
 KLUSTERLET_RECHECK_INTERVAL = 10
+KLUSTERLET_WORKER_TIMEOUT = 180
 
 # Parallel cluster verification settings
 CLUSTER_VERIFY_MAX_WORKERS = 10

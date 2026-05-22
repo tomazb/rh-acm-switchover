@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Dict, List, Optional
 
 import yaml
@@ -25,6 +25,7 @@ from lib.constants import (
     INITIAL_CLUSTER_WAIT_TIMEOUT,
     KLUSTERLET_RECHECK_INTERVAL,
     KLUSTERLET_RECHECK_TIMEOUT,
+    KLUSTERLET_WORKER_TIMEOUT,
     LOCAL_CLUSTER_NAME,
     MANAGED_CLUSTER_AGENT_NAMESPACE,
     MAX_KUBECONFIG_SIZE,
@@ -803,21 +804,42 @@ class PostActivationVerification:
             len(cluster_info),
         )
 
+        def collect_future_results(future_fallbacks: Dict, timeout_message: str) -> List[tuple]:
+            """Collect completed future results and apply fallbacks for timed-out workers."""
+            done, not_done = wait(future_fallbacks.keys(), timeout=KLUSTERLET_WORKER_TIMEOUT)
+            results = []
+            for future in done:
+                results.append(future.result())
+            for future in not_done:
+                fallback = future_fallbacks[future]
+                logger.warning(timeout_message, fallback[0], KLUSTERLET_WORKER_TIMEOUT)
+                future.cancel()
+                results.append(fallback)
+            return results
+
         # Collect results from futures to avoid shared mutable state
         verified = []
         wrong_hub = []
         unreachable = []
 
-        with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-            futures = [executor.submit(check_cluster, name, api_url) for name, api_url in cluster_info]
-            for future in as_completed(futures):
-                cluster_name, result, context_name = future.result()
+        executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+        try:
+            future_fallbacks = {
+                executor.submit(check_cluster, name, api_url): (name, "unreachable", None)
+                for name, api_url in cluster_info
+            }
+            for cluster_name, result, context_name in collect_future_results(
+                future_fallbacks,
+                "Timed out checking klusterlet for %s after %s seconds",
+            ):
                 if result == "verified":
                     verified.append(cluster_name)
                 elif result == "wrong_hub":
                     wrong_hub.append((cluster_name, context_name))
                 else:  # unreachable, no_context, or error
                     unreachable.append(cluster_name)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         # Log initial results
         if verified:
@@ -853,14 +875,22 @@ class PostActivationVerification:
             fixed = []
             fix_failed = []
 
-            with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-                futures = [executor.submit(fix_cluster, name, ctx) for name, ctx in wrong_hub]
-                for future in as_completed(futures):
-                    cluster_name, success = future.result()
+            executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+            try:
+                future_fallbacks = {
+                    executor.submit(fix_cluster, name, ctx): (name, False)
+                    for name, ctx in wrong_hub
+                }
+                for cluster_name, success in collect_future_results(
+                    future_fallbacks,
+                    "Timed out remediating klusterlet for %s after %s seconds",
+                ):
                     if success:
                         fixed.append(cluster_name)
                     else:
                         fix_failed.append(cluster_name)
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
             if fixed:
                 logger.info(
@@ -881,14 +911,22 @@ class PostActivationVerification:
                 """Poll remediated clusters until klusterlet updates hub-kubeconfig-secret."""
                 current_wrong_hub = []
                 current_unverified = []
-                with ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS) as executor:
-                    futures = [executor.submit(recheck_cluster, name, ctx) for name, ctx in wrong_hub]
-                    for future in as_completed(futures):
-                        cluster_name, result = future.result()
+                executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+                try:
+                    future_fallbacks = {
+                        executor.submit(recheck_cluster, name, ctx): (name, "unreachable")
+                        for name, ctx in wrong_hub
+                    }
+                    for cluster_name, result in collect_future_results(
+                        future_fallbacks,
+                        "Timed out re-checking klusterlet for %s after %s seconds",
+                    ):
                         if result == "wrong_hub":
                             current_wrong_hub.append(cluster_name)
                         elif result != "verified":
                             current_unverified.append(cluster_name)
+                finally:
+                    executor.shutdown(wait=False, cancel_futures=True)
 
                 post_remediation_state["wrong_hub"] = current_wrong_hub
                 post_remediation_state["unverified"] = current_unverified
