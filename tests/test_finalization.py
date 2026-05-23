@@ -240,6 +240,20 @@ class TestFinalization:
             finalization._verify_new_backups(timeout=50)
 
     @patch("modules.finalization.time")
+    def test_verify_new_backups_timeout_without_recorded_backup_raises_hard_failure(
+        self, mock_time, finalization, mock_secondary_client
+    ):
+        """Without a recorded post-switchover backup, timeout must raise instead of silently succeeding."""
+        mock_time.time.side_effect = [0, 15, 45, 61]
+        mock_secondary_client.list_custom_resources.return_value = []
+        finalization.state.get_config.side_effect = lambda key, default=None: default
+
+        with pytest.raises(SwitchoverError, match="No new backup created within 60s"):
+            finalization._verify_new_backups(timeout=60)
+
+        mock_secondary_client.get_custom_resource.assert_not_called()
+
+    @patch("modules.finalization.time")
     def test_verify_new_backups_stores_backup_name(self, mock_time, finalization, mock_secondary_client):
         """Successful backup detection must record the backup name in state."""
         mock_time.time.side_effect = [0, 1]
@@ -774,6 +788,18 @@ class TestFinalization:
     def test_parse_cron_interval_seconds(self, finalization, cron_expr, expected_seconds):
         assert finalization._parse_cron_interval_seconds(cron_expr) == expected_seconds
 
+    @pytest.mark.parametrize("cron_expr", ["@monthly", "not-a-cron"])
+    def test_get_backup_schedule_interval_seconds_returns_none_for_invalid_cron(self, finalization, cron_expr):
+        """Unsupported BackupSchedule cron expressions must fall back to None instead of raising."""
+        finalization._cached_schedules = [
+            {
+                "metadata": {"name": "schedule-rhacm"},
+                "spec": {"veleroSchedule": cron_expr},
+            }
+        ]
+
+        assert finalization._get_backup_schedule_interval_seconds() is None
+
     def test_verify_backup_integrity_skips_age_without_new_backup(self, finalization, mock_secondary_client):
         """Backup age enforcement should be skipped if no post-switchover backup name is recorded."""
         backup_ts = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat().replace("+00:00", "Z")
@@ -971,6 +997,35 @@ class TestFinalization:
 
         with pytest.raises(SwitchoverError, match="not ACM-owned"):
             finalization._verify_backup_integrity(max_age_seconds=600)
+
+    def test_verify_backup_integrity_rejects_recorded_backup_with_non_acm_owner_labels(
+        self, finalization, mock_secondary_client
+    ):
+        """Recorded backups with unrelated owner labels must hard-fail integrity verification."""
+        backup_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        mock_secondary_client.get_custom_resource.return_value = {
+            "metadata": {
+                "name": "manual-backup",
+                "creationTimestamp": backup_ts,
+                "labels": {"cluster.open-cluster-management.io/backup-schedule-type": "manual"},
+            },
+            "status": {
+                "phase": "Completed",
+                "completionTimestamp": backup_ts,
+                "errors": 0,
+                "warnings": 0,
+            },
+        }
+        mock_secondary_client.get_pods.return_value = []
+        finalization._cached_schedules = []
+        finalization.state.get_config.side_effect = lambda key, default=None: (
+            "manual-backup" if key == "post_switchover_backup_name" else None
+        )
+
+        with pytest.raises(SwitchoverError, match="not ACM-owned"):
+            finalization._verify_backup_integrity(max_age_seconds=600)
+
+        mock_secondary_client.list_custom_resources.assert_not_called()
 
     @patch("modules.finalization.wait_for_condition")
     def test_verify_backup_integrity_waits_for_completion(self, mock_wait, finalization, mock_secondary_client):
@@ -1618,6 +1673,27 @@ class TestFinalization:
                 assert result is True
                 mock_disable.assert_not_called()
                 mock_verify.assert_called_once()
+
+    def test_handle_old_hub_secondary_skips_safely_when_primary_client_is_absent(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Secondary old-hub handling must be a safe no-op when restore-only mode has no primary client."""
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            primary_client=None,
+            old_hub_action="secondary",
+        )
+
+        with (
+            patch.object(fin, "_setup_old_hub_as_secondary") as setup_old_hub,
+            patch.object(fin, "_decommission_old_hub") as decommission_old_hub,
+        ):
+            fin._handle_old_hub()
+
+        setup_old_hub.assert_not_called()
+        decommission_old_hub.assert_not_called()
 
     def test_handle_old_hub_raises_on_unknown_old_hub_action(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager

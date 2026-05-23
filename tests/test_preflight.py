@@ -7,6 +7,7 @@ of validation reporters and validators.
 from unittest.mock import Mock, patch
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 from lib.constants import ACM_NAMESPACE, BACKUP_NAMESPACE
 from modules.preflight import (
@@ -14,6 +15,7 @@ from modules.preflight import (
     ObservabilityDetector,
     ValidationReporter,
 )
+from modules.preflight_coordinator import PreflightValidator
 
 
 @pytest.fixture
@@ -118,3 +120,51 @@ class TestObservabilityDetector:
 
         assert result == (primary_has, secondary_has)
         assert reporter.results[-1]["message"] == expected_message
+
+
+@pytest.mark.unit
+def test_preflight_fails_closed_when_argocd_crd_discovery_is_unauthorized():
+    """Unauthorized Argo CD CRD discovery must fail preflight instead of being skipped."""
+    primary = Mock()
+    secondary = Mock()
+    primary.namespace_exists.return_value = True
+    secondary.namespace_exists.return_value = True
+    primary.list_custom_resources.return_value = []
+
+    validator = PreflightValidator(
+        primary_client=primary,
+        secondary_client=secondary,
+        method="passive",
+        skip_rbac_validation=False,
+    )
+
+    validator.kubeconfig_validator.run = Mock()
+    validator.tooling_validator.run = Mock()
+    validator.namespace_validator.run = Mock()
+    validator.version_validator.run = Mock(return_value=("2.14.0", "2.14.0"))
+    validator.hub_component_validator.run = Mock()
+    validator.backup_validator.run = Mock()
+    validator.backup_schedule_validator.run = Mock()
+    validator.backup_storage_location_validator.run = Mock()
+    validator.cluster_deployment_validator.run = Mock()
+    validator.managed_cluster_backup_validator.run = Mock()
+    validator.passive_sync_validator.run = Mock()
+    validator.observability_detector.detect = Mock(return_value=(False, False))
+    validator.observability_prereq_validator.run = Mock()
+    validator.reporter.print_summary = Mock()
+
+    with patch("modules.preflight_coordinator.validate_rbac_permissions") as validate_rbac, patch(
+        "modules.preflight_coordinator.AutoImportStrategyValidator"
+    ) as auto_import_validator, patch(
+        "modules.preflight_coordinator.argocd_lib.detect_argocd_installation",
+        side_effect=ApiException(status=401, reason="Unauthorized"),
+    ):
+        auto_import_validator.return_value.run = Mock()
+        passed, _config = validator.validate_all()
+
+    assert passed is False
+    validate_rbac.assert_not_called()
+    rbac_results = [result for result in validator.reporter.results if result["check"] == "RBAC Permissions"]
+    assert len(rbac_results) == 1
+    assert rbac_results[0]["passed"] is False
+    assert "401 Unauthorized" in rbac_results[0]["message"]

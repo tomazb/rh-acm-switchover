@@ -133,6 +133,43 @@ class TestWaitForCondition:
             wait_for_condition(description="test progress", condition_fn=condition, logger=mock_logger)
 
     @patch("lib.waiter.time")
+    def test_wait_timeout_zero_expires_immediately(self, mock_time, mock_logger):
+        """A zero timeout should expire before the first poll attempt."""
+        mock_time.time.side_effect = [0, 0]
+        condition = Mock(return_value=WaitConditionResult.pending("still waiting"))
+
+        result = wait_for_condition(
+            description="zero timeout",
+            condition_fn=condition,
+            timeout=0,
+            logger=mock_logger,
+        )
+
+        assert result is False
+        condition.assert_not_called()
+        mock_time.sleep.assert_not_called()
+        mock_logger.warning.assert_called_once_with("%s not complete before timeout", "zero timeout")
+
+    @patch("lib.waiter.time")
+    def test_wait_fast_timeout_zero_disables_fast_interval(self, mock_time, mock_logger):
+        """fast_timeout=0 should bypass fast polling and use the standard interval."""
+        mock_time.time.side_effect = [0, 1, 1, 41]
+        condition = Mock(return_value=WaitConditionResult.pending("waiting"))
+
+        result = wait_for_condition(
+            description="standard interval wait",
+            condition_fn=condition,
+            timeout=40,
+            interval=30,
+            fast_interval=10,
+            fast_timeout=0,
+            logger=mock_logger,
+        )
+
+        assert result is False
+        mock_time.sleep.assert_called_once_with(30)
+
+    @patch("lib.waiter.time")
     def test_wait_timeout(self, mock_time, mock_logger):
         """Test condition times out without logging raw timeout configuration."""
         # time.time() calls:

@@ -168,7 +168,10 @@ def main() -> None:
         )
     except ValueError as e:
         module.fail_json(msg=str(e))
-    module.exit_json(changed=operation["action"] != "none", operation=operation)
+    module.exit_json(
+        changed=(operation["action"] != "none") and not module.check_mode,
+        operation=operation,
+    )
 
 
 if __name__ == "__main__":

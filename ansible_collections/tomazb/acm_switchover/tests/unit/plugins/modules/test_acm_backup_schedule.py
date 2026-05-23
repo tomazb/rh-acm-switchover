@@ -5,7 +5,49 @@ import pytest
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_backup_schedule import (
     backup_schedule_pause_mode,
     build_backup_schedule_operation,
+    main,
 )
+
+
+def _run_module(
+    monkeypatch,
+    *,
+    acm_version: str = "2.13.2",
+    intent: str = "pause",
+    schedules: list[dict] | None = None,
+    saved_schedule: dict | None = None,
+    check_mode: bool = False,
+) -> dict:
+    captured: dict = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "acm_version": acm_version,
+                "intent": intent,
+                "schedules": schedules or [],
+                "saved_schedule": saved_schedule or {},
+            }
+            self.check_mode = check_mode
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+            raise SystemExit(0)
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+            raise SystemExit(1)
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_backup_schedule.AnsibleModule",
+        FakeModule,
+    )
+
+    try:
+        main()
+    except SystemExit:
+        pass
+    return captured
 
 
 def test_pause_mode_uses_delete_for_acm_211():
@@ -122,3 +164,39 @@ def test_pause_mode_raises_on_empty_version():
     """Empty version should raise ValueError."""
     with pytest.raises(ValueError, match="Invalid ACM version format"):
         backup_schedule_pause_mode("")
+
+
+def test_run_module_check_mode_returns_planned_pause_without_change(monkeypatch):
+    schedules = [{"metadata": {"name": "acm-hub-backup"}, "spec": {"paused": False}}]
+
+    result = _run_module(monkeypatch, schedules=schedules, check_mode=True)
+
+    assert result["exit"]["changed"] is False
+    assert result["exit"]["operation"]["action"] == "patch"
+    assert result["exit"]["operation"]["patch"] == {"spec": {"paused": True}}
+    assert schedules == [{"metadata": {"name": "acm-hub-backup"}, "spec": {"paused": False}}]
+
+
+def test_run_module_pause_when_already_paused_is_idempotent(monkeypatch):
+    result = _run_module(
+        monkeypatch,
+        schedules=[{"metadata": {"name": "acm-hub-backup"}, "spec": {"paused": True}}],
+    )
+
+    assert result["exit"] == {
+        "changed": False,
+        "operation": {"action": "none", "mode": "pause"},
+    }
+
+
+def test_run_module_enable_when_already_enabled_is_idempotent(monkeypatch):
+    result = _run_module(
+        monkeypatch,
+        intent="enable",
+        schedules=[{"metadata": {"name": "acm-hub-backup"}, "spec": {"paused": False}}],
+    )
+
+    assert result["exit"] == {
+        "changed": False,
+        "operation": {"action": "none", "mode": "pause"},
+    }

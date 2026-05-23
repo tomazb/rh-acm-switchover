@@ -75,9 +75,8 @@ def wait_for_condition(
 
         remaining_timeout = max(0.0, timeout - elapsed_seconds)
         sleep_interval: float = interval
-        if fast_interval:
-            if fast_timeout <= 0 or elapsed < fast_timeout:
-                sleep_interval = fast_interval
+        if fast_interval and fast_timeout > 0 and elapsed < fast_timeout:
+            sleep_interval = fast_interval
         sleep_interval = min(sleep_interval, remaining_timeout)
         if sleep_interval > 0:
             time.sleep(sleep_interval)

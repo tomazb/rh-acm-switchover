@@ -331,3 +331,123 @@ def test_write_json_artifact_rejects_out_of_range_mode_before_writing(tmp_path):
         )
 
     assert not destination.exists()
+
+
+def test_run_module_fails_with_actionable_message_on_permission_denied(tmp_path, monkeypatch):
+    captured = {}
+    destination = tmp_path / "artifacts" / "report.json"
+
+    def fail_open(path, flags, mode):
+        raise PermissionError(13, "Permission denied", path)
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "path": str(destination),
+                "report": {"status": "pass", "phase": "preflight"},
+                "mode": "0644",
+            }
+            self.check_mode = False
+
+        def exit_json(self, **kwargs):
+            raise AssertionError(f"unexpected exit_json: {kwargs}")
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+
+    monkeypatch.setattr(artifacts.os, "open", fail_open)
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_report_artifact.AnsibleModule",
+        FakeModule,
+    )
+
+    main()
+
+    assert captured["fail"]["path"] == str(destination)
+    assert "Cannot write report artifact to" in captured["fail"]["msg"]
+    assert "Permission denied" in captured["fail"]["msg"]
+
+
+def test_run_module_fails_deterministically_for_existing_unwritable_file(tmp_path, monkeypatch):
+    captured = {}
+    destination = tmp_path / "artifacts" / "report.json"
+    destination.parent.mkdir()
+    destination.write_text(json.dumps({"phase": "preflight", "status": "fail"}, indent=2, sort_keys=True) + "\n")
+    destination.chmod(0o644)
+
+    def fail_open(path, flags, mode):
+        raise PermissionError(13, "Permission denied", path)
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "path": str(destination),
+                "report": {"status": "pass", "phase": "preflight"},
+                "mode": "0644",
+            }
+            self.check_mode = False
+
+        def exit_json(self, **kwargs):
+            raise AssertionError(f"unexpected exit_json: {kwargs}")
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+
+    monkeypatch.setattr(artifacts.os, "open", fail_open)
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_report_artifact.AnsibleModule",
+        FakeModule,
+    )
+
+    main()
+
+    assert captured["fail"]["path"] == str(destination)
+    assert "Cannot write report artifact to" in captured["fail"]["msg"]
+    assert "Permission denied" in captured["fail"]["msg"]
+
+
+def test_write_json_artifact_preserves_complex_payload_with_stable_key_order(tmp_path):
+    destination = tmp_path / "artifacts" / "complex-report.json"
+    report = {
+        "summary": {
+            "warning_failures": 0,
+            "critical_failures": 0,
+            "passed": True,
+        },
+        "source": "tomazb.acm_switchover",
+        "status": "pass",
+        "schema_version": "1.0",
+        "results": [
+            {
+                "status": "pass",
+                "message": "ready",
+                "details": {
+                    "managed_clusters": ["cluster-b", "cluster-a"],
+                    "counts": {"warning": 0, "critical": 0},
+                },
+                "id": "preflight-cluster-status",
+            }
+        ],
+        "phase": "preflight",
+        "generated_at": "2026-05-20T00:00:00+00:00",
+    }
+
+    output_path, changed = write_json_artifact(
+        report=report,
+        destination=str(destination),
+        mode="0644",
+    )
+
+    written = destination.read_text(encoding="utf-8")
+
+    assert output_path == str(destination)
+    assert changed is True
+    assert json.loads(written) == report
+    assert written == json.dumps(report, indent=2, sort_keys=True) + "\n"
+    assert '"generated_at": "2026-05-20T00:00:00+00:00"' in written
+    assert '"schema_version": "1.0"' in written
+    assert '"source": "tomazb.acm_switchover"' in written
+    assert written.index('"generated_at"') < written.index('"phase"') < written.index('"results"')
+    assert written.index('"results"') < written.index('"schema_version"') < written.index('"source"')
+    top_level_status_index = written.rindex('\n  "status"')
+    assert written.index('"source"') < top_level_status_index < written.index('"summary"')
