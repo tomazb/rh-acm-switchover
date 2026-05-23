@@ -47,9 +47,7 @@ def build_phase_transition(checkpoint: dict, phase: str, status: str) -> dict:
     if status == "pass" and phase not in completed:
         completed.append(phase)
     elif status in {"fail", "reset"}:
-        completed = [
-            completed_phase for completed_phase in completed if completed_phase != phase
-        ]
+        completed = [completed_phase for completed_phase in completed if completed_phase != phase]
     return {
         "completed_phases": completed,
         "phase_status": status,
@@ -84,8 +82,7 @@ class ActionModule(ActionBase):
         execution = task_vars.get("acm_switchover_execution") or {}
         execution_mode = execution.get("mode", "dry_run")
         is_check_mode = (
-            task_vars.get("ansible_check_mode") is True
-            or getattr(self._play_context, "check_mode", False) is True
+            task_vars.get("ansible_check_mode") is True or getattr(self._play_context, "check_mode", False) is True
         )
         is_non_mutating = is_check_mode or execution_mode in {"dry_run", "validate"}
 
@@ -154,15 +151,13 @@ class ActionModule(ActionBase):
         if checkpoint_data.get("failed"):
             return checkpoint_data
 
-        checkpoint_data, backfilled_operation_identity = (
-            self._normalize_checkpoint_data(
-                checkpoint_data=checkpoint_data,
-                phase=phase,
-                status=status,
-                reset_from=reset_from,
-                has_explicit_reset=has_explicit_reset,
-                expected_operation_identity=expected_operation_identity,
-            )
+        checkpoint_data, backfilled_operation_identity = self._normalize_checkpoint_data(
+            checkpoint_data=checkpoint_data,
+            phase=phase,
+            status=status,
+            reset_from=reset_from,
+            has_explicit_reset=has_explicit_reset,
+            expected_operation_identity=expected_operation_identity,
         )
         if checkpoint_data.get("failed"):
             return checkpoint_data
@@ -175,19 +170,11 @@ class ActionModule(ActionBase):
                 return save_result
 
         if status == "enter":
-            if (
-                (backfilled_operation_identity or reset_from)
-                and backend == "file"
-                and not is_non_mutating
-            ):
+            if (backfilled_operation_identity or reset_from) and backend == "file" and not is_non_mutating:
                 save_result = self._save_checkpoint(path, checkpoint_data)
                 if save_result is not None and save_result.get("failed"):
                     return save_result
-            already_done = (
-                False
-                if execution_mode == "validate"
-                else not should_resume_phase(checkpoint_data, phase)
-            )
+            already_done = False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
             return {
                 "changed": False,
                 "checkpoint": checkpoint_data,
@@ -209,19 +196,11 @@ class ActionModule(ActionBase):
         checkpoint_data["completed_phases"] = transition["completed_phases"]
         checkpoint_data["phase_status"] = transition["phase_status"]
         checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        sanitized_operational_data = {
-            key: value
-            for key, value in operational_data.items()
-            if value not in (None, "")
-        }
-        checkpoint_data.setdefault("operational_data", {}).update(
-            sanitized_operational_data
-        )
+        sanitized_operational_data = {key: value for key, value in operational_data.items() if value not in (None, "")}
+        checkpoint_data.setdefault("operational_data", {}).update(sanitized_operational_data)
 
         if error and status == "fail":
-            checkpoint_data.setdefault("errors", []).append(
-                {"phase": phase, "error": error}
-            )
+            checkpoint_data.setdefault("errors", []).append({"phase": phase, "error": error})
         if report_ref:
             checkpoint_data.setdefault("report_refs", []).append(
                 {
@@ -254,9 +233,7 @@ class ActionModule(ActionBase):
             # (phases are appended in order), so pruning is already complete.
             if reset_from in checkpoint_data.get("completed_phases", []):
                 return (
-                    self._build_reset_from_checkpoint(
-                        checkpoint_data, reset_from, expected_operation_identity
-                    ),
+                    self._build_reset_from_checkpoint(checkpoint_data, reset_from, expected_operation_identity),
                     False,
                 )
 
@@ -291,21 +268,15 @@ class ActionModule(ActionBase):
             checkpoint_data["operation_identity"] = expected_operation_identity
             backfilled_operation_identity = True
 
-        if (
-            checkpoint_data.get("schema_version") == SCHEMA_VERSION
-            and not has_explicit_reset
-        ):
+        if checkpoint_data.get("schema_version") == SCHEMA_VERSION and not has_explicit_reset:
             try:
-                validate_operation_identity(
-                    checkpoint_data, expected_operation_identity
-                )
+                validate_operation_identity(checkpoint_data, expected_operation_identity)
             except CheckpointIdentityMismatch as exc:
                 return (
                     {
                         "failed": True,
                         "msg": (
-                            f"{exc} Use checkpoint.reset or checkpoint.reset_from to "
-                            "start a new execution safely."
+                            f"{exc} Use checkpoint.reset or checkpoint.reset_from to " "start a new execution safely."
                         ),
                     },
                     False,
@@ -316,9 +287,7 @@ class ActionModule(ActionBase):
     def _build_reset_from_checkpoint(
         self, checkpoint_data: dict, reset_from: str, expected_operation_identity: dict
     ) -> dict:
-        pruned_completed_phases = reset_completed_phases_from(
-            checkpoint_data.get("completed_phases", []), reset_from
-        )
+        pruned_completed_phases = reset_completed_phases_from(checkpoint_data.get("completed_phases", []), reset_from)
 
         if checkpoint_data.get("schema_version") != SCHEMA_VERSION:
             rebuilt_checkpoint = build_checkpoint_record(
@@ -327,9 +296,7 @@ class ActionModule(ActionBase):
                 operation_identity=expected_operation_identity,
             )
             rebuilt_checkpoint["errors"] = list(checkpoint_data.get("errors", []))
-            rebuilt_checkpoint["report_refs"] = list(
-                checkpoint_data.get("report_refs", [])
-            )
+            rebuilt_checkpoint["report_refs"] = list(checkpoint_data.get("report_refs", []))
             rebuilt_checkpoint["completed_phases"] = pruned_completed_phases
             return rebuilt_checkpoint
 
