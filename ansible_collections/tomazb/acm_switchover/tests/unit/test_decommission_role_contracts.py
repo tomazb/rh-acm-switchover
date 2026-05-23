@@ -11,22 +11,18 @@ These tests verify the structural safety contracts of decommission role tasks:
 """
 
 import pathlib
+import sys
 
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from yaml_contract_helpers import _when_text  # noqa: E402
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 DECOMMISSION_MAIN = ROLES_DIR / "decommission" / "tasks" / "main.yml"
 DELETE_OBSERVABILITY = ROLES_DIR / "decommission" / "tasks" / "delete_observability.yml"
 DELETE_MANAGED_CLUSTERS = ROLES_DIR / "decommission" / "tasks" / "delete_managed_clusters.yml"
 DELETE_MCH = ROLES_DIR / "decommission" / "tasks" / "delete_multiclusterhub.yml"
-
-
-def _when_text(task: dict) -> str:
-    """Normalize a task's 'when' condition to a single string for assertion."""
-    when = task.get("when", "")
-    if isinstance(when, list):
-        return " ".join(str(w) for w in when)
-    return str(when)
 
 
 def _include_file(task: dict) -> str:
@@ -41,7 +37,7 @@ class TestDecommissionMain:
     """decommission/tasks/main.yml structural contract tests."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(DECOMMISSION_MAIN.read_text())
+        self.tasks = yaml.safe_load(DECOMMISSION_MAIN.read_text()) or []
 
     def test_file_exists(self):
         assert DECOMMISSION_MAIN.exists(), "decommission/tasks/main.yml must exist"
@@ -157,7 +153,7 @@ class TestDeleteObservability:
     """decommission/tasks/delete_observability.yml contract tests."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(DELETE_OBSERVABILITY.read_text())
+        self.tasks = yaml.safe_load(DELETE_OBSERVABILITY.read_text()) or []
 
     def test_file_exists(self):
         assert DELETE_OBSERVABILITY.exists(), "decommission/tasks/delete_observability.yml must exist"
@@ -188,7 +184,7 @@ class TestDeleteObservability:
 
     def test_delete_task_guarded_by_execute_mode(self):
         """k8s state:absent delete task must not run in dry-run mode."""
-        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "k8s_info" not in str(t)]
+        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
         delete_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "absent"]
         assert delete_tasks, "delete_observability.yml must have a delete task (state: absent)"
         for task in delete_tasks:
@@ -200,7 +196,7 @@ class TestDeleteObservability:
 
     def test_delete_task_uses_loop(self):
         """Delete task must use a loop to delete all discovered resources."""
-        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "k8s_info" not in str(t)]
+        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
         delete_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "absent"]
         assert delete_tasks
         for task in delete_tasks:
@@ -241,7 +237,7 @@ class TestDeleteManagedClusters:
     """decommission/tasks/delete_managed_clusters.yml contract tests."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(DELETE_MANAGED_CLUSTERS.read_text())
+        self.tasks = yaml.safe_load(DELETE_MANAGED_CLUSTERS.read_text()) or []
 
     def test_file_exists(self):
         assert DELETE_MANAGED_CLUSTERS.exists(), "decommission/tasks/delete_managed_clusters.yml must exist"
@@ -295,7 +291,7 @@ class TestDeleteMultiClusterHub:
     """decommission/tasks/delete_multiclusterhub.yml contract tests."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(DELETE_MCH.read_text())
+        self.tasks = yaml.safe_load(DELETE_MCH.read_text()) or []
 
     def test_file_exists(self):
         assert DELETE_MCH.exists(), "decommission/tasks/delete_multiclusterhub.yml must exist"
@@ -312,7 +308,7 @@ class TestDeleteMultiClusterHub:
             assert "!= 'dry_run'" in _when_text(task), "MCH list must be guarded by execute-mode check"
 
         # delete task
-        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "k8s_info" not in str(t)]
+        k8s_tasks = [t for t in self.tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
         mch_delete_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("kind") == "MultiClusterHub"]
         assert mch_delete_tasks, "delete_multiclusterhub.yml must have a MultiClusterHub delete task"
         for task in mch_delete_tasks:

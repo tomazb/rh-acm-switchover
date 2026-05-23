@@ -8,8 +8,12 @@ These tests verify that each role's resource discovery follows the expected cont
 """
 
 import pathlib
+import sys
 
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from yaml_contract_helpers import _flatten_tasks, _when_text  # noqa: E402
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 ACTIVATION_DISCOVER = ROLES_DIR / "activation" / "tasks" / "discover_resources.yml"
@@ -17,19 +21,11 @@ FINALIZATION_DISCOVER = ROLES_DIR / "finalization" / "tasks" / "discover_resourc
 POST_ACTIVATION_DISCOVER = ROLES_DIR / "post_activation" / "tasks" / "discover_resources.yml"
 
 
-def _when_text(task: dict) -> str:
-    """Normalize a task's 'when' condition to a single string for assertion."""
-    when = task.get("when", "")
-    if isinstance(when, list):
-        return " ".join(str(w) for w in when)
-    return str(when)
-
-
 class TestActivationDiscoverResources:
     """Activation discover_resources.yml must use test_overrides for Restores and standard guards for MCH."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(ACTIVATION_DISCOVER.read_text())
+        self.tasks = yaml.safe_load(ACTIVATION_DISCOVER.read_text()) or []
 
     def test_file_exists(self):
         assert ACTIVATION_DISCOVER.exists(), "activation/tasks/discover_resources.yml must exist"
@@ -55,8 +51,8 @@ class TestActivationDiscoverResources:
         for task in restore_reads:
             when = _when_text(task)
             assert (
-                "is not defined" in when
-            ), "Live Restore read must be guarded so tests can skip it by supplying an override"
+                "acm_switchover_test_overrides" in when and "is not defined" in when
+            ), "Live Restore read must be gated on acm_switchover_test_overrides so tests can skip it by supplying an override"
 
     def test_restores_live_read_uses_secondary_hub(self):
         """Activation live Restore read must target the secondary hub."""
@@ -121,8 +117,8 @@ class TestFinalizationDiscoverResources:
     """Finalization discover_resources.yml hub routing: secondary for new-hub reads, primary for old-hub reads."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(FINALIZATION_DISCOVER.read_text())
         self.file_text = FINALIZATION_DISCOVER.read_text()
+        self.tasks = yaml.safe_load(self.file_text) or []
 
     def test_file_exists(self):
         assert FINALIZATION_DISCOVER.exists(), "finalization/tasks/discover_resources.yml must exist"
@@ -195,11 +191,22 @@ class TestFinalizationDiscoverResources:
 
     def test_old_hub_restore_live_read_requires_execute_mode(self):
         """Old hub Restore live read must be guarded so it does not run in dry-run mode."""
-        # Use raw file text since the when is a multi-item list that includes the mode check
-        assert "mode | default('dry_run') != 'dry_run'" in self.file_text, (
-            "Old hub Restore live read must be guarded by '!= dry_run' to prevent "
-            "attempting a real cluster read during dry-run operations"
-        )
+        k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
+        primary_restore_reads = [
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"
+            and "primary" in str(t.get("kubernetes.core.k8s_info", {}).get("kubeconfig", ""))
+        ]
+        assert (
+            primary_restore_reads
+        ), "Old hub Restore live read task must exist (see test_old_hub_restore_reads_from_primary_hub)"
+        for task in primary_restore_reads:
+            when = _when_text(task)
+            assert "!= 'dry_run'" in when, (
+                "Old hub Restore live read must be guarded by '!= dry_run' to prevent "
+                "attempting a real cluster read during dry-run operations"
+            )
 
     def test_dry_run_seeds_empty_old_hub_restore(self):
         """In dry-run mode, _old_hub_existing_restore_info must be seeded as empty.
@@ -230,7 +237,7 @@ class TestPostActivationDiscoverResources:
     """post_activation discover_resources.yml must guard ManagedCluster reads and target the secondary hub."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(POST_ACTIVATION_DISCOVER.read_text())
+        self.tasks = yaml.safe_load(POST_ACTIVATION_DISCOVER.read_text()) or []
 
     def test_file_exists(self):
         assert POST_ACTIVATION_DISCOVER.exists(), "post_activation/tasks/discover_resources.yml must exist"

@@ -13,8 +13,12 @@ These tests verify the structural safety contracts of the argocd_manage role:
 """
 
 import pathlib
+import sys
 
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from yaml_contract_helpers import _flatten_tasks, _when_text  # noqa: E402
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 ARGOCD_MAIN = ROLES_DIR / "argocd_manage" / "tasks" / "main.yml"
@@ -22,30 +26,11 @@ ARGOCD_DISCOVER = ROLES_DIR / "argocd_manage" / "tasks" / "discover.yml"
 ARGOCD_PAUSE = ROLES_DIR / "argocd_manage" / "tasks" / "pause.yml"
 
 
-def _when_text(task: dict) -> str:
-    """Normalize a task's 'when' condition to a single string for assertion."""
-    when = task.get("when", "")
-    if isinstance(when, list):
-        return " ".join(str(w) for w in when)
-    return str(when)
-
-
-def _flatten_tasks(tasks: list) -> list:
-    """Recursively flatten block/rescue/always nested tasks into a flat list."""
-    result = []
-    for task in tasks:
-        result.append(task)
-        for key in ("block", "rescue", "always"):
-            if key in task:
-                result.extend(_flatten_tasks(task[key]))
-    return result
-
-
 class TestArgoCDManageMain:
     """argocd_manage/tasks/main.yml structural contract tests."""
 
     def setup_method(self):
-        self.tasks = yaml.safe_load(ARGOCD_MAIN.read_text())
+        self.tasks = yaml.safe_load(ARGOCD_MAIN.read_text()) or []
 
     def test_file_exists(self):
         assert ARGOCD_MAIN.exists(), "argocd_manage/tasks/main.yml must exist"
@@ -98,10 +83,10 @@ class TestArgoCDDiscover:
     """argocd_manage/tasks/discover.yml structural contract tests."""
 
     def setup_method(self):
-        raw = yaml.safe_load(ARGOCD_DISCOVER.read_text())
+        self.file_text = ARGOCD_DISCOVER.read_text()
+        raw = yaml.safe_load(self.file_text) or []
         self.tasks = raw
         self.flat_tasks = _flatten_tasks(raw)
-        self.file_text = ARGOCD_DISCOVER.read_text()
 
     def test_file_exists(self):
         assert ARGOCD_DISCOVER.exists(), "argocd_manage/tasks/discover.yml must exist"
@@ -218,19 +203,16 @@ class TestArgoCDPause:
     """argocd_manage/tasks/pause.yml structural contract tests."""
 
     def setup_method(self):
-        raw = yaml.safe_load(ARGOCD_PAUSE.read_text())
+        raw = yaml.safe_load(ARGOCD_PAUSE.read_text()) or []
         self.tasks = raw
         self.flat_tasks = _flatten_tasks(raw)
-        # Get the inner block tasks from the outer block
-        outer_block = [t for t in raw if "block" in t]
-        self.block_tasks = outer_block[0]["block"] if outer_block else []
 
     def test_file_exists(self):
         assert ARGOCD_PAUSE.exists(), "argocd_manage/tasks/pause.yml must exist"
 
     def test_patch_task_skipped_in_dry_run(self):
         """k8s patch task must be guarded by execute mode — must not run in dry-run."""
-        k8s_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s" in t and "k8s_info" not in str(t)]
+        k8s_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
         patch_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "patched"]
         assert patch_tasks, "pause.yml must have a k8s state:patched task to remove autosync"
         for task in patch_tasks:
@@ -242,7 +224,7 @@ class TestArgoCDPause:
 
     def test_patch_task_skipped_in_mock_mode(self):
         """k8s patch task must not run when mock apps are supplied (no live cluster available)."""
-        k8s_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s" in t and "k8s_info" not in str(t)]
+        k8s_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
         patch_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "patched"]
         assert patch_tasks
         for task in patch_tasks:
