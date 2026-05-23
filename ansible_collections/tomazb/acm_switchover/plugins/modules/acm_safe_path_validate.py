@@ -53,7 +53,6 @@ def _validate_existing_parent(path: str) -> None:
         raise ValidationError(f"Parent path '{parent}' is not a directory for safe path '{path}'.")
 
 
-
 def main() -> None:
     module = AnsibleModule(
         argument_spec={

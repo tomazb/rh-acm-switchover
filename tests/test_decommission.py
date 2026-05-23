@@ -88,9 +88,7 @@ class TestDecommission:
         assert result is True
 
     @patch("modules.decommission.wait_for_condition")
-    def test_decommission_dry_run_non_interactive_is_full_no_op(
-        self, mock_wait, mock_primary_client
-    ):
+    def test_decommission_dry_run_non_interactive_is_full_no_op(self, mock_wait, mock_primary_client):
         """Dry-run top-level decommission must not issue delete or wait calls anywhere."""
         dry_run_decommission = Decommission(
             primary_client=mock_primary_client,
@@ -193,7 +191,9 @@ class TestDecommission:
         reason="Current implementation does not treat delete 404 as an idempotent observability cleanup success",
     )
     @patch("modules.decommission.wait_for_condition")
-    def test_delete_observability_ignores_404_delete_errors(self, mock_wait, decommission_with_obs, mock_primary_client):
+    def test_delete_observability_ignores_404_delete_errors(
+        self, mock_wait, decommission_with_obs, mock_primary_client
+    ):
         """Observability delete 404 should be treated as already-gone and still complete idempotently."""
         mock_wait.return_value = True
         mock_primary_client.list_custom_resources.return_value = [

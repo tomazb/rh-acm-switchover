@@ -368,7 +368,6 @@ def test_run_module_fails_with_actionable_message_on_permission_denied(tmp_path,
     assert "Permission denied" in captured["fail"]["msg"]
 
 
-
 def test_run_module_fails_deterministically_for_existing_unwritable_file(tmp_path, monkeypatch):
     captured = {}
     destination = tmp_path / "artifacts" / "report.json"
@@ -405,7 +404,6 @@ def test_run_module_fails_deterministically_for_existing_unwritable_file(tmp_pat
     assert captured["fail"]["path"] == str(destination)
     assert "Cannot write report artifact to" in captured["fail"]["msg"]
     assert "Permission denied" in captured["fail"]["msg"]
-
 
 
 def test_write_json_artifact_preserves_complex_payload_with_stable_key_order(tmp_path):

@@ -174,9 +174,7 @@ def test_run_module_check_mode_returns_planned_pause_without_change(monkeypatch)
     assert result["exit"]["changed"] is False
     assert result["exit"]["operation"]["action"] == "patch"
     assert result["exit"]["operation"]["patch"] == {"spec": {"paused": True}}
-    assert schedules == [
-        {"metadata": {"name": "acm-hub-backup"}, "spec": {"paused": False}}
-    ]
+    assert schedules == [{"metadata": {"name": "acm-hub-backup"}, "spec": {"paused": False}}]
 
 
 def test_run_module_pause_when_already_paused_is_idempotent(monkeypatch):

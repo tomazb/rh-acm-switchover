@@ -660,9 +660,7 @@ class TestStateManager:
         """Validation-only checks must not flush a partial identity backfill when no mismatch is present."""
         state_path = tmp_path / "identity-read-only-backfill.json"
         sm = StateManager(str(state_path))
-        sm.state["hub_identities"] = {
-            "primary": {"context": "primary-a", "cluster_uid": "uid-primary"}
-        }
+        sm.state["hub_identities"] = {"primary": {"context": "primary-a", "cluster_uid": "uid-primary"}}
         sm.flush_state()
 
         reloaded = StateManager(str(state_path))
@@ -680,9 +678,7 @@ class TestStateManager:
 
         mock_flush.assert_not_called()
         persisted = StateManager(str(state_path))
-        assert persisted.state["hub_identities"] == {
-            "primary": {"context": "primary-a", "cluster_uid": "uid-primary"}
-        }
+        assert persisted.state["hub_identities"] == {"primary": {"context": "primary-a", "cluster_uid": "uid-primary"}}
 
     def test_ensure_hub_identities_rejects_partial_secondary_drift(self, tmp_path):
         """One matching hub is not enough: a changed secondary UID must still block resume."""
