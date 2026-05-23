@@ -443,27 +443,39 @@ def test_main_requires_hub_argument_at_module_boundary(monkeypatch):
     assert excinfo.value.results["msg"] == "missing required arguments: hub"
 
 
-def test_statefulset_scale_permission_name_with_slash_is_exposed_unchanged(monkeypatch, capsys):
-    # The collection Python module does not perform SSAR resource/subresource splitting.
-    # It emits raw permission tuples and the split happens later in run_ssar.yml.
+def test_statefulset_scale_permission_uses_ssar_subresource_split_contract(monkeypatch, capsys):
+    # Python module preserves the slash-form; the resource/subresource split occurs in roles/preflight/tasks/run_ssar.yml
     monkeypatch.setattr(
         basic,
         "_ANSIBLE_ARGS",
-        json.dumps({"ANSIBLE_MODULE_ARGS": {"hub": "primary", "role": "operator"}}).encode("utf-8"),
+        json.dumps(
+            {
+                "ANSIBLE_MODULE_ARGS": {
+                    "hub": "primary",
+                    "role": "operator",
+                    "denied_permissions": [
+                        {
+                            "api_group": "apps",
+                            "resource": "statefulsets/scale",
+                            "verb": "patch",
+                            "namespace": "open-cluster-management-observability",
+                            "reason": "Forbidden",
+                        }
+                    ],
+                }
+            }
+        ).encode("utf-8"),
     )
     monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", RealAnsibleModule)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         main()
 
     result = json.loads(capsys.readouterr().out)
 
-    assert [
-        "apps",
-        "statefulsets/scale",
-        "get",
-        "open-cluster-management-observability",
-    ] in result["permissions"]
+    assert excinfo.value.code == 0
+    assert result.get("failed") is not True
+    assert result["results"][0]["details"]["denied_permissions"][0]["resource"] == "statefulsets/scale"
     assert [
         "apps",
         "statefulsets/scale",

@@ -120,7 +120,7 @@ class PreflightValidator:
             try:
                 discovery = argocd_lib.detect_argocd_installation(client)
             except ApiException as exc:
-                if exc.status in (401, 403):
+                if exc.status == 403:
                     logger.info(
                         "Unable to inspect Argo CD CRDs on %s hub (%s %s); deferring to RBAC validation.",
                         hub_label,
@@ -130,6 +130,10 @@ class PreflightValidator:
                     discovery_unknown = True
                     install_types[hub_label] = "unknown"
                     continue
+                if exc.status == 401:
+                    raise ValidationError(
+                        f"authorization denied while inspecting Argo CD CRDs on {hub_label} hub: {exc.status} {exc.reason}"
+                    ) from exc
                 raise
             if discovery.has_applications_crd:
                 applications_present = True

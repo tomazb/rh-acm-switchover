@@ -1,6 +1,7 @@
 """Tests for the acm_preflight_report collection module."""
 
 import json
+from unittest.mock import patch
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report import (
     build_preflight_report,
@@ -31,7 +32,44 @@ def test_report_status_is_fail_when_critical_finding_fails():
     assert report["phase"] == "preflight"
 
 
-def test_report_status_is_pass_when_only_warnings_exist():
+def test_run_module_empty_findings_passes_without_changes(monkeypatch):
+    captured = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "phase": "preflight",
+                "results": [],
+                "hubs": {
+                    "primary": {"context": "primary-hub"},
+                    "secondary": {"context": "secondary-hub"},
+                },
+                "path": None,
+            }
+            self.check_mode = False
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+
+        def fail_json(self, **kwargs):
+            raise AssertionError(f"unexpected fail_json: {kwargs}")
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_preflight_report.AnsibleModule",
+        FakeModule,
+    )
+
+    main()
+
+    result = captured["exit"]
+    assert result["changed"] is False
+    assert result["report"]["status"] == "pass"
+    assert result["report"]["summary"]["passed"] is True
+    assert result["report"]["summary"]["critical_failures"] == 0
+    assert result["report"]["summary"]["warning_failures"] == 0
+
+
+def test_report_status_is_pass_when_only_warning_and_info_findings_exist():
     report = build_preflight_report(
         phase="preflight",
         results=[
@@ -42,14 +80,26 @@ def test_report_status_is_pass_when_only_warnings_exist():
                 "message": "duplicate user names found",
                 "details": {},
                 "recommended_action": "Regenerate kubeconfigs",
-            }
+            },
+            {
+                "id": "preflight-observability-optional",
+                "severity": "info",
+                "status": "fail",
+                "message": "observability not installed",
+                "details": {},
+                "recommended_action": "None",
+            },
         ],
         hubs={
             "primary": {"context": "primary-hub"},
             "secondary": {"context": "secondary-hub"},
         },
     )
+
     assert report["status"] == "pass"
+    assert report["summary"]["passed"] is True
+    assert report["summary"]["critical_failures"] == 0
+    assert report["summary"]["warning_failures"] == 1
 
 
 def test_summary_counts_failures_by_severity():
@@ -125,7 +175,7 @@ def test_run_module_check_mode_rejects_unsafe_report_path(monkeypatch):
     assert captured["fail"]["path"] == "./artifacts/../outside/preflight-report.json"
 
 
-def test_run_module_check_mode_reports_planned_report_without_writing(tmp_path, monkeypatch):
+def test_run_module_check_mode_does_not_write_report_and_returns_unchanged(tmp_path, monkeypatch):
     captured = {}
     destination = tmp_path / "artifacts" / "preflight-report.json"
     destination.parent.mkdir()
@@ -134,7 +184,16 @@ def test_run_module_check_mode_reports_planned_report_without_writing(tmp_path, 
         def __init__(self, *args, **kwargs):
             self.params = {
                 "phase": "preflight",
-                "results": [],
+                "results": [
+                    {
+                        "id": "preflight-version-compatibility",
+                        "severity": "critical",
+                        "status": "fail",
+                        "message": "versions are incompatible",
+                        "details": {},
+                        "recommended_action": "Upgrade the secondary hub",
+                    }
+                ],
                 "hubs": {"secondary": {"context": "secondary-hub"}},
                 "path": str(destination),
             }
@@ -151,11 +210,14 @@ def test_run_module_check_mode_reports_planned_report_without_writing(tmp_path, 
         FakeModule,
     )
 
-    main()
+    with patch("ansible_collections.tomazb.acm_switchover.plugins.module_utils.artifacts.os.open") as mock_open:
+        main()
 
-    assert captured["exit"]["changed"] is True
+    assert mock_open.called is False
+    assert captured["exit"]["changed"] is False
     assert captured["exit"]["path"] == str(destination)
     assert captured["exit"]["report"]["phase"] == "preflight"
+    assert captured["exit"]["report"]["status"] == "fail"
     assert not destination.exists()
 
 
