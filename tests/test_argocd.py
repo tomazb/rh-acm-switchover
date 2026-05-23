@@ -277,10 +277,6 @@ class TestFindArgocdPauseBlockers:
         assert "parent-set" in blockers[0].message
         assert "pause/update the ApplicationSet" in blockers[0].message
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Known gap: disabled ApplicationSet-managed ACM apps are not blocked",
-    )
     def test_blocks_applicationset_owned_acm_app_even_when_autosync_is_already_disabled(
         self,
     ):
@@ -310,6 +306,35 @@ class TestFindArgocdPauseBlockers:
         assert blockers[0].namespace == "argocd"
         assert blockers[0].name == "child-app"
         assert blockers[0].reason == argocd_lib.PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED
+
+    def test_blocks_applicationset_owned_acm_app_with_enabled_autosync_and_unknown_impact(
+        self,
+    ):
+        """ApplicationSet-managed ACM app with enabled autosync should be blocked as APPLICATIONSET_MANAGED, not UNKNOWN_ACM_IMPACT."""
+        apps = [
+            {
+                "metadata": {
+                    "namespace": "argocd",
+                    "name": "child-app",
+                    "ownerReferences": [{"kind": "ApplicationSet", "name": "parent-set"}],
+                },
+                "spec": {"syncPolicy": {"automated": {"prune": True}}},
+                "status": {
+                    "resources": [
+                        {
+                            "kind": "BackupSchedule",
+                            "namespace": "open-cluster-management-backup",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        blockers = argocd_lib.find_argocd_pause_blockers(apps)
+
+        assert len(blockers) == 1
+        assert blockers[0].reason == argocd_lib.PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED
+        assert "parent-set" in blockers[0].message
 
     def test_does_not_block_disabled_autosync_with_empty_resources(self):
         apps = [
@@ -562,10 +587,6 @@ class TestPauseAutosync:
         assert "pause/update the ApplicationSet" in result.error
         client.patch_custom_resource.assert_not_called()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Known gap: verification race still reports patch_applied=True",
-    )
     def test_pause_autosync_returns_patch_applied_false_when_controller_reenables_sync_after_patch(
         self,
     ):

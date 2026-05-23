@@ -431,22 +431,10 @@ def find_argocd_pause_blockers(apps: List[Dict[str, Any]]) -> List[ArgocdPauseBl
     """Return Applications that make managed auto-sync pause unsafe."""
     blockers: List[ArgocdPauseBlocker] = []
     for app in apps:
-        if not is_autosync_enabled(app):
-            continue
-
         namespace, name = _app_identity(app)
-        if _resources_have_unknown_acm_impact(app):
-            blockers.append(
-                ArgocdPauseBlocker(
-                    namespace=namespace,
-                    name=name,
-                    reason=PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT,
-                    message=_unknown_impact_message(namespace, name),
-                    app=app,
-                )
-            )
-            continue
 
+        # Block ApplicationSet-managed ACM apps regardless of current autosync state —
+        # the ApplicationSet controller can re-enable autosync even after a manual patch.
         if has_applicationset_owner(app) and _count_acm_resources(app) > 0:
             parent = _applicationset_owner_name(app)
             blockers.append(
@@ -455,6 +443,21 @@ def find_argocd_pause_blockers(apps: List[Dict[str, Any]]) -> List[ArgocdPauseBl
                     name=name,
                     reason=PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED,
                     message=_applicationset_message(namespace, name, parent),
+                    app=app,
+                )
+            )
+            continue
+
+        if not is_autosync_enabled(app):
+            continue
+
+        if _resources_have_unknown_acm_impact(app):
+            blockers.append(
+                ArgocdPauseBlocker(
+                    namespace=namespace,
+                    name=name,
+                    reason=PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT,
+                    message=_unknown_impact_message(namespace, name),
                     app=app,
                 )
             )
@@ -696,7 +699,7 @@ def pause_autosync(
             name=name,
             original_sync_policy=original,
             patched=False,
-            patch_applied=True,
+            patch_applied=False,
             error=message,
         )
     return PauseResult(

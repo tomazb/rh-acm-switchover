@@ -186,10 +186,6 @@ class TestDecommission:
 
         mock_primary_client.delete_custom_resource.assert_not_called()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Current implementation does not treat delete 404 as an idempotent observability cleanup success",
-    )
     @patch("modules.decommission.wait_for_condition")
     def test_delete_observability_ignores_404_delete_errors(
         self, mock_wait, decommission_with_obs, mock_primary_client

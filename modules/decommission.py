@@ -125,13 +125,19 @@ class Decommission:
 
             logger.info("Deleting MultiClusterObservability: %s", mco_name)
 
-            self.primary.delete_custom_resource(
-                group="observability.open-cluster-management.io",
-                version="v1beta2",
-                plural="multiclusterobservabilities",
-                name=mco_name,
-                timeout_seconds=DELETE_REQUEST_TIMEOUT,
-            )
+            try:
+                self.primary.delete_custom_resource(
+                    group="observability.open-cluster-management.io",
+                    version="v1beta2",
+                    plural="multiclusterobservabilities",
+                    name=mco_name,
+                    timeout_seconds=DELETE_REQUEST_TIMEOUT,
+                )
+            except ApiException as exc:
+                if exc.status == 404:
+                    logger.info("MultiClusterObservability %s already gone (404), treating as success", mco_name)
+                else:
+                    raise
 
         if self.dry_run:
             logger.info("[DRY-RUN] Skipping wait for observability termination")
