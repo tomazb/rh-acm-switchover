@@ -463,7 +463,8 @@ def test_main_requires_hub_argument_at_module_boundary(monkeypatch):
     monkeypatch.setattr(
         basic, "_ANSIBLE_ARGS", json.dumps({"ANSIBLE_MODULE_ARGS": {}}).encode("utf-8")
     )
-    monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
+    if hasattr(basic, "_ANSIBLE_PROFILE"):
+        monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
 
     with pytest.raises(ModuleFail) as excinfo:
         main()
@@ -496,7 +497,8 @@ def test_statefulset_scale_permission_uses_ssar_subresource_split_contract(
             }
         ).encode("utf-8"),
     )
-    monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
+    if hasattr(basic, "_ANSIBLE_PROFILE"):
+        monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
     monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", RealAnsibleModule)
 
     with pytest.raises(SystemExit) as excinfo:
@@ -703,7 +705,8 @@ def test_main_maps_validator_argocd_manage_to_failed_module_output(monkeypatch, 
             }
         ).encode("utf-8"),
     )
-    monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
+    if hasattr(basic, "_ANSIBLE_PROFILE"):
+        monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
     monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", RealAnsibleModule)
 
     with pytest.raises(SystemExit):
