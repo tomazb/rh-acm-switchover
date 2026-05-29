@@ -45,6 +45,9 @@
       so activation and post-activation can enforce the restore and Observability expectations.
   when:
     - (_checkpoint_enter | default({})).skipped_phase | default(false)
+    # Intentional default('execute'): this is a read-only validation assert,
+    # not a mutation task. Over-validating checkpoint data when mode is unknown
+    # is safer than silently skipping validation.
     - acm_switchover_execution.mode | default('execute') == 'execute'
 
 - name: Restore operational facts from checkpoint when preflight is skipped

@@ -22,9 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
 - Local `run_tests.sh` now treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default, with `STRICT_QUALITY=0` available only for advisory local runs.
 - Restore-only now requires at least one restored non-local ManagedCluster by default when no explicit minimum is provided; operators must explicitly opt into an empty restore target. This supersedes the `[1.7.10]` description that "restore-only pins the expectation to `0`": as of `[Unreleased]`, omitted `--min-managed-clusters` in restore-only defaults to `1`, and an empty target requires explicit `--min-managed-clusters 0` (Python CLI) or `acm_switchover_operation.allow_zero_managed_clusters: true` (collection).
+- Python CLI ArgoCD resume-only now fails closed when the secondary context does not match the checkpoint's recorded secondary context. Operators must use `--force` to override.
+- Collection checkpoint identity validation now requires `operation_identity` in schema 2.0 checkpoints that have completed phases. Clear the checkpoint file or re-run from scratch if upgrading from an older checkpoint format.
+- Collection mutation tasks now default missing `acm_switchover_execution.mode` to `dry_run`. Operators must explicitly set `mode: execute` for live runs.
 
 ### Fixed
 
+- Fixed collection `find_argocd_pause_blockers` to check ApplicationSet ownership before autosync state, matching the Python fix. ApplicationSet-managed ACM apps are now always blocked regardless of current autosync state.
 - Hardened Python CLI and Ansible collection report artifact writes to reject symlinked artifact destinations that escape the controller workspace and to route optional collection summaries through the shared artifact writer.
 - Added least-privilege deny checks to live RBAC certification so over-permissioned service accounts fail certification instead of passing solely on required allow checks.
 - Tightened decommission safety checks so ClusterDeployment matching considers additional explicit cluster identifiers, fails closed for plausible unverified relationships, requires explicit collection primary hub inputs, and keeps decommission RBAC bootstrap filtering label-positive.

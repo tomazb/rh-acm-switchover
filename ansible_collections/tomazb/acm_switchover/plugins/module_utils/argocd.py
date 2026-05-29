@@ -68,7 +68,9 @@ def count_acm_resources(app: dict) -> int:
     count = 0
     for resource in _status_resources(app) or []:
         namespace = resource.get("namespace")
-        if namespace in ACM_NAMESPACES or (namespace and ACM_NAMESPACE_REGEX.match(namespace)):
+        if namespace in ACM_NAMESPACES or (
+            namespace and ACM_NAMESPACE_REGEX.match(namespace)
+        ):
             count += 1
             continue
         if resource.get("kind") in ACM_KINDS:
@@ -115,13 +117,29 @@ def _applicationset_message(namespace: str, name: str, parent: str) -> str:
 
 
 def find_argocd_pause_blockers(applications: list[dict]) -> list[dict]:
-    """Return auto-sync Applications that cannot be managed safely by child Application patches."""
+    """Return Applications that make managed auto-sync pause unsafe."""
     blockers = []
     for app in applications:
+        namespace, name = _app_identity(app)
+
+        # Block ApplicationSet-managed ACM apps regardless of current autosync state —
+        # the ApplicationSet controller can re-enable autosync even after a manual patch.
+        if has_applicationset_owner(app) and count_acm_resources(app) > 0:
+            blockers.append(
+                {
+                    "namespace": namespace,
+                    "name": name,
+                    "reason": PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED,
+                    "message": _applicationset_message(
+                        namespace, name, _applicationset_owner_name(app)
+                    ),
+                }
+            )
+            continue
+
         if not is_autosync_enabled(app):
             continue
 
-        namespace, name = _app_identity(app)
         if _resources_have_unknown_acm_impact(app):
             blockers.append(
                 {
@@ -129,17 +147,6 @@ def find_argocd_pause_blockers(applications: list[dict]) -> list[dict]:
                     "name": name,
                     "reason": PAUSE_BLOCK_REASON_UNKNOWN_ACM_IMPACT,
                     "message": _unknown_impact_message(namespace, name),
-                }
-            )
-            continue
-
-        if has_applicationset_owner(app) and count_acm_resources(app) > 0:
-            blockers.append(
-                {
-                    "namespace": namespace,
-                    "name": name,
-                    "reason": PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED,
-                    "message": _applicationset_message(namespace, name, _applicationset_owner_name(app)),
                 }
             )
     return blockers
