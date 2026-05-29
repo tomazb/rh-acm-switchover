@@ -37,8 +37,14 @@ def test_activate_restore_verifies_patch_application_after_patch():
     """activation/activate_restore.yml must verify Restore patch application with polling."""
     tasks = _load_yaml(ACTIVATION_TASKS / "activate_restore.yml")
 
-    restore_queries = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"]
-    assert restore_queries, "activate_restore.yml must re-read Restore resources after patching"
+    restore_queries = [
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"
+    ]
+    assert (
+        restore_queries
+    ), "activate_restore.yml must re-read Restore resources after patching"
 
     verification_tasks = [
         task
@@ -46,14 +52,18 @@ def test_activate_restore_verifies_patch_application_after_patch():
         if "resourceVersion" in str(task.get("until", ""))
         or "veleroManagedClustersBackupName" in str(task.get("until", ""))
     ]
-    assert verification_tasks, "activate_restore.yml must poll until the activation patch is observable"
+    assert (
+        verification_tasks
+    ), "activate_restore.yml must poll until the activation patch is observable"
 
     verify_task = verification_tasks[0]
     assert (
         "retries" in verify_task and "delay" in verify_task
     ), "activate_restore.yml must retry patch verification instead of trusting a single patch response"
     until = str(verify_task.get("until", ""))
-    assert "resourceVersion" in until, "activate_restore.yml must verify a Restore resourceVersion change"
+    assert (
+        "resourceVersion" in until
+    ), "activate_restore.yml must verify a Restore resourceVersion change"
     assert (
         "veleroManagedClustersBackupName" in until
     ), "activate_restore.yml must verify the managed-clusters backup field after patching"
@@ -67,10 +77,13 @@ def test_full_restore_waits_for_managed_cluster_presence_after_acm_restore():
     managed_cluster_waits = [
         task
         for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster" and "until" in task
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+        and "until" in task
     ]
 
-    assert managed_cluster_waits, "wait_for_restore.yml must poll ManagedClusters for full Restore activation"
+    assert (
+        managed_cluster_waits
+    ), "wait_for_restore.yml must poll ManagedClusters for full Restore activation"
     wait_task = managed_cluster_waits[0]
     until = str(wait_task["until"])
     when = str(wait_task.get("when", ""))
@@ -84,7 +97,10 @@ def test_full_restore_waits_for_managed_cluster_presence_after_acm_restore():
     assert "acm_switchover_operation.min_managed_clusters is defined" in text
     assert "acm_switchover_expected_managed_cluster_count" in text
     assert "acm_switchover_operation.restore_only | default(false) | bool" in text
-    assert "1\n          if (acm_switchover_operation.restore_only | default(false) | bool)" in text
+    assert (
+        "1\n          if (acm_switchover_operation.restore_only | default(false) | bool)"
+        in text
+    )
 
 
 def test_preflight_validate_rbac_detects_argocd_install_type():
@@ -95,18 +111,29 @@ def test_preflight_validate_rbac_detects_argocd_install_type():
     applications_crd = ".".join(("applications", "argoproj", "io"))
 
     crd_queries = [
-        task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "CustomResourceDefinition"
+        task
+        for task in tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("kind")
+        == "CustomResourceDefinition"
     ]
-    assert crd_queries, "validate_rbac.yml must query Argo CD CRDs to determine install type"
-    assert argocds_crd in text, "validate_rbac.yml must detect operator installs via the argocds CRD"
+    assert (
+        crd_queries
+    ), "validate_rbac.yml must query Argo CD CRDs to determine install type"
+    assert (
+        argocds_crd in text
+    ), "validate_rbac.yml must detect operator installs via the argocds CRD"
     assert (
         "argocd_install_type: unknown" not in text
     ), "validate_rbac.yml must stop widening permissions with a hardcoded unknown install type"
     assert (
         applications_crd in text
     ), "validate_rbac.yml must probe the applications CRD to distinguish vanilla Argo CD from no install"
-    assert "'check'" in text, "validate_rbac.yml must support the read-only Argo CD RBAC check mode"
-    assert "skip_gitops_check" in text, "validate_rbac.yml must derive Argo CD RBAC mode from skip_gitops_check"
+    assert (
+        "'check'" in text
+    ), "validate_rbac.yml must support the read-only Argo CD RBAC check mode"
+    assert (
+        "skip_gitops_check" in text
+    ), "validate_rbac.yml must derive Argo CD RBAC mode from skip_gitops_check"
 
 
 def test_decommission_validates_rbac_before_destructive_steps():
@@ -118,21 +145,32 @@ def test_decommission_validates_rbac_before_destructive_steps():
     main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
     includes = [task.get("ansible.builtin.include_tasks", "") for task in main_tasks]
 
-    assert "validate_rbac.yml" in includes, "decommission/main.yml must include validate_rbac.yml"
-    assert "delete_managed_clusters.yml" in includes, "decommission/main.yml must include delete_managed_clusters.yml"
+    assert (
+        "validate_rbac.yml" in includes
+    ), "decommission/main.yml must include validate_rbac.yml"
+    assert (
+        "delete_managed_clusters.yml" in includes
+    ), "decommission/main.yml must include delete_managed_clusters.yml"
     assert includes.index("validate_rbac.yml") < includes.index(
         "delete_managed_clusters.yml"
     ), "decommission RBAC validation must run before destructive delete tasks"
     validate_include = next(
-        task for task in main_tasks if task.get("ansible.builtin.include_tasks") == "validate_rbac.yml"
+        task
+        for task in main_tasks
+        if task.get("ansible.builtin.include_tasks") == "validate_rbac.yml"
     )
-    assert validate_include["when"] == "not (acm_switchover_features.skip_rbac_validation | default(false))"
+    assert (
+        validate_include["when"]
+        == "not (acm_switchover_features.skip_rbac_validation | default(false))"
+    )
 
     validate_text = (DECOMMISSION_TASKS / "validate_rbac.yml").read_text()
     assert "tomazb.acm_switchover.acm_rbac_validate" in validate_text
     assert "include_decommission: true" in validate_text
     assert "decommission_only: true" in validate_text
-    assert "run_ssar" in validate_text, "decommission validate_rbac.yml must execute SSAR checks before proceeding"
+    assert (
+        "run_ssar" in validate_text
+    ), "decommission validate_rbac.yml must execute SSAR checks before proceeding"
 
 
 def test_decommission_asserts_explicit_primary_hub_before_kubernetes_operations():
@@ -150,8 +188,12 @@ def test_decommission_asserts_explicit_primary_hub_before_kubernetes_operations(
         if "ansible.builtin.assert" in task and index < first_k8s_index
     ]
 
-    assert assert_tasks, "decommission/main.yml must assert primary hub inputs before Kubernetes calls"
-    assert_text = "\n".join(str(task["ansible.builtin.assert"]) for _, task in assert_tasks)
+    assert (
+        assert_tasks
+    ), "decommission/main.yml must assert primary hub inputs before Kubernetes calls"
+    assert_text = "\n".join(
+        str(task["ansible.builtin.assert"]) for _, task in assert_tasks
+    )
     assert "acm_switchover_hubs.primary.kubeconfig" in assert_text
     assert "acm_switchover_hubs.primary.context" in assert_text
     assert "| length) > 0" in assert_text
@@ -160,7 +202,9 @@ def test_decommission_asserts_explicit_primary_hub_before_kubernetes_operations(
 
 def test_decommission_autodetects_observability_by_default_before_rbac():
     """Decommission should derive observability from the namespace unless explicitly overridden."""
-    defaults = yaml.safe_load((ROLES_DIR / "decommission" / "defaults" / "main.yml").read_text())
+    defaults = yaml.safe_load(
+        (ROLES_DIR / "decommission" / "defaults" / "main.yml").read_text()
+    )
     main_text = (DECOMMISSION_TASKS / "main.yml").read_text()
     main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
     includes = [task.get("ansible.builtin.include_tasks", "") for task in main_tasks]
@@ -178,7 +222,8 @@ def test_decommission_autodetects_observability_by_default_before_rbac():
     observability_fact_index = next(
         index
         for index, task in enumerate(main_tasks)
-        if "acm_switchover_decommission_effective_has_observability" in str(task.get("ansible.builtin.set_fact", {}))
+        if "acm_switchover_decommission_effective_has_observability"
+        in str(task.get("ansible.builtin.set_fact", {}))
     )
     validate_index = includes.index("validate_rbac.yml")
 
@@ -190,7 +235,9 @@ def test_decommission_observability_autodetection_fails_closed():
     """Auto detection must not convert 403/timeouts/API errors into no-observability."""
     main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
     namespace_task = next(
-        task for task in main_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Namespace"
+        task
+        for task in main_tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "Namespace"
     )
 
     assert "failed_when" not in namespace_task
@@ -216,13 +263,19 @@ def test_decommission_defaults_missing_execution_mode_to_dry_run_for_destructive
         text = path.read_text()
         assert "default('') != 'dry_run'" not in text
         assert "default('') == 'dry_run'" not in text
-        assert "default('dry_run')" in text, f"{path.name} must treat missing execution.mode as dry_run"
+        assert (
+            "default('dry_run')" in text
+        ), f"{path.name} must treat missing execution.mode as dry_run"
 
 
 def test_decommission_summary_uses_report_artifact_safe_path_policy():
     """Optional decommission summaries must use the shared report artifact writer."""
     main_tasks = _load_yaml(DECOMMISSION_TASKS / "main.yml")
-    summary_tasks = [task for task in main_tasks if task.get("name") == "Write decommission summary when requested"]
+    summary_tasks = [
+        task
+        for task in main_tasks
+        if task.get("name") == "Write decommission summary when requested"
+    ]
 
     assert summary_tasks, "decommission/main.yml must write the optional summary"
     summary_task = summary_tasks[0]
@@ -231,16 +284,25 @@ def test_decommission_summary_uses_report_artifact_safe_path_policy():
     assert artifact_args["path"] == "{{ _acm_summary_path_abs }}"
     assert artifact_args["report"] == "{{ acm_switchover_decommission_result }}"
     assert artifact_args["mode"] == "0644"
-    assert summary_task["when"] == "_acm_decommission_summary_path | default('') | length > 0"
+    assert (
+        summary_task["when"]
+        == "_acm_decommission_summary_path | default('') | length > 0"
+    )
     assert not any(
-        task.get("ansible.builtin.copy", {}).get("dest") == "{{ _acm_summary_path_abs }}" for task in main_tasks
+        task.get("ansible.builtin.copy", {}).get("dest")
+        == "{{ _acm_summary_path_abs }}"
+        for task in main_tasks
     ), "decommission summary writes must not bypass artifact path validation"
 
 
 def test_discovery_summary_uses_report_artifact_safe_path_policy():
     """Optional discovery summaries must use the shared report artifact writer."""
     main_tasks = _load_yaml(ROLES_DIR / "discovery" / "tasks" / "main.yml")
-    summary_tasks = [task for task in main_tasks if task.get("name") == "Write summary when requested"]
+    summary_tasks = [
+        task
+        for task in main_tasks
+        if task.get("name") == "Write summary when requested"
+    ]
 
     assert summary_tasks, "discovery/main.yml must write the optional summary"
     summary_task = summary_tasks[0]
@@ -250,14 +312,20 @@ def test_discovery_summary_uses_report_artifact_safe_path_policy():
     assert artifact_args["report"] == "{{ acm_switchover_discovery_result }}"
     assert artifact_args["mode"] == "0644"
     assert not any(
-        task.get("ansible.builtin.copy", {}).get("dest") == "{{ _acm_summary_path_abs }}" for task in main_tasks
+        task.get("ansible.builtin.copy", {}).get("dest")
+        == "{{ _acm_summary_path_abs }}"
+        for task in main_tasks
     ), "discovery summary writes must not bypass artifact path validation"
 
 
 def test_rbac_bootstrap_summary_uses_report_artifact_safe_path_policy():
     """Optional RBAC bootstrap summaries must use the shared report artifact writer."""
     main_tasks = _load_yaml(ROLES_DIR / "rbac_bootstrap" / "tasks" / "main.yml")
-    summary_tasks = [task for task in main_tasks if task.get("name") == "Write summary when requested"]
+    summary_tasks = [
+        task
+        for task in main_tasks
+        if task.get("name") == "Write summary when requested"
+    ]
 
     assert summary_tasks, "rbac_bootstrap/main.yml must write the optional summary"
     summary_task = summary_tasks[0]
@@ -267,23 +335,33 @@ def test_rbac_bootstrap_summary_uses_report_artifact_safe_path_policy():
     assert artifact_args["report"] == "{{ acm_switchover_rbac_bootstrap_result }}"
     assert artifact_args["mode"] == "0644"
     assert not any(
-        task.get("ansible.builtin.copy", {}).get("dest") == "{{ _acm_summary_path_abs }}" for task in main_tasks
+        task.get("ansible.builtin.copy", {}).get("dest")
+        == "{{ _acm_summary_path_abs }}"
+        for task in main_tasks
     ), "rbac_bootstrap summary writes must not bypass artifact path validation"
 
 
 def test_argocd_manage_test_summary_uses_report_artifact_safe_path_policy():
     """The optional Argo CD test summary must use the shared report artifact writer."""
-    play_tasks = _flatten_tasks(_load_yaml(PLAYBOOKS_DIR / "argocd_manage_test.yml")[0]["tasks"])
-    summary_tasks = [task for task in play_tasks if task.get("name") == "Write summary file"]
+    play_tasks = _flatten_tasks(
+        _load_yaml(PLAYBOOKS_DIR / "argocd_manage_test.yml")[0]["tasks"]
+    )
+    summary_tasks = [
+        task for task in play_tasks if task.get("name") == "Write summary file"
+    ]
 
     assert summary_tasks, "argocd_manage_test.yml must write the optional summary"
     summary_task = summary_tasks[0]
     artifact_args = summary_task.get("tomazb.acm_switchover.acm_report_artifact")
-    assert artifact_args, "argocd_manage_test summary writes must use acm_report_artifact"
+    assert (
+        artifact_args
+    ), "argocd_manage_test summary writes must use acm_report_artifact"
     assert artifact_args["path"] == "{{ _acm_summary_path_abs }}"
     assert artifact_args["mode"] == "0644"
     assert not any(
-        task.get("ansible.builtin.copy", {}).get("dest") == "{{ _acm_summary_path_abs }}" for task in play_tasks
+        task.get("ansible.builtin.copy", {}).get("dest")
+        == "{{ _acm_summary_path_abs }}"
+        for task in play_tasks
     ), "argocd_manage_test summary writes must not bypass artifact path validation"
 
 
@@ -295,19 +373,27 @@ def test_decommission_waits_for_non_local_managed_clusters_before_mch_delete():
     wait_tasks = [
         task
         for task in tasks
-        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster" and "until" in task
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+        and "until" in task
     ]
 
-    assert wait_tasks, "delete_managed_clusters.yml must poll ManagedClusters after delete requests"
+    assert (
+        wait_tasks
+    ), "delete_managed_clusters.yml must poll ManagedClusters after delete requests"
     wait_task = wait_tasks[-1]
     assert "retries" in wait_task and "delay" in wait_task
     until = str(wait_task.get("until", ""))
     assert "local-cluster" in until
     assert "| length" in until
     assert "== 0" in until
-    assert text.index("Delete non-local ManagedClusters") < text.index(wait_task["name"])
+    assert text.index("Delete non-local ManagedClusters") < text.index(
+        wait_task["name"]
+    )
     assert isinstance(wait_task.get("when"), list)
-    assert any("_managed_cluster_delete_targets" in str(condition) for condition in wait_task["when"])
+    assert any(
+        "_managed_cluster_delete_targets" in str(condition)
+        for condition in wait_task["when"]
+    )
 
 
 def test_decommission_checks_clusterdeployments_before_managedcluster_delete():
@@ -317,16 +403,22 @@ def test_decommission_checks_clusterdeployments_before_managedcluster_delete():
     text = (DECOMMISSION_TASKS / "delete_managed_clusters.yml").read_text()
 
     clusterdeployment_reads = [
-        task for task in flattened_tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ClusterDeployment"
+        task
+        for task in flattened_tasks
+        if task.get("kubernetes.core.k8s_info", {}).get("kind") == "ClusterDeployment"
     ]
     fail_tasks = [task for task in flattened_tasks if task.get("ansible.builtin.fail")]
 
-    assert clusterdeployment_reads, "delete_managed_clusters.yml must re-read Hive ClusterDeployments"
+    assert (
+        clusterdeployment_reads
+    ), "delete_managed_clusters.yml must re-read Hive ClusterDeployments"
     assert fail_tasks, "delete_managed_clusters.yml must fail before unsafe deletes"
-    assert text.index("List Hive ClusterDeployments before ManagedCluster deletion") < text.index(
-        "Block unsafe ManagedCluster deletion"
+    assert text.index(
+        "List Hive ClusterDeployments before ManagedCluster deletion"
+    ) < text.index("Block unsafe ManagedCluster deletion")
+    assert text.index("Block unsafe ManagedCluster deletion") < text.index(
+        "Delete non-local ManagedClusters"
     )
-    assert text.index("Block unsafe ManagedCluster deletion") < text.index("Delete non-local ManagedClusters")
     assert "_managed_cluster_delete_targets" in text
     assert "preserveOnDelete" in text
     assert "clusterMetadata" in text
@@ -337,12 +429,15 @@ def test_decommission_checks_clusterdeployments_before_managedcluster_delete():
     assert "to_json" in text
 
 
-def _render_clusterdeployment_delete_safety(clusterdeployments: list[dict], target_names: list[str]) -> dict:
+def _render_clusterdeployment_delete_safety(
+    clusterdeployments: list[dict], target_names: list[str]
+) -> dict:
     tasks = _load_yaml(DECOMMISSION_TASKS / "delete_managed_clusters.yml")
     classify_task = next(
         task
         for task in tasks
-        if task.get("name") == "Classify matching ClusterDeployments before ManagedCluster deletion"
+        if task.get("name")
+        == "Classify matching ClusterDeployments before ManagedCluster deletion"
     )
     expression = classify_task["vars"]["_clusterdeployment_delete_safety_json"]
     environment = Environment()
@@ -351,7 +446,9 @@ def _render_clusterdeployment_delete_safety(clusterdeployments: list[dict], targ
     environment.filters["unique"] = lambda values: list(dict.fromkeys(values))
     rendered = environment.from_string(expression).render(
         _decommission_clusterdeployments={"resources": clusterdeployments},
-        _managed_cluster_delete_targets=[{"metadata": {"name": name}} for name in target_names],
+        _managed_cluster_delete_targets=[
+            {"metadata": {"name": name}} for name in target_names
+        ],
     )
 
     return json.loads(rendered)
@@ -425,7 +522,8 @@ def test_decommission_clusterdeployment_safety_classifier_behavior():
         for item in safety["unverified"]
     )
     assert any(
-        "cluster-h/install-h: plausible but unverified ManagedCluster relationship" in item
+        "cluster-h/install-h: plausible but unverified ManagedCluster relationship"
+        in item
         and "metadata.namespace=cluster-h" in item
         for item in safety["unverified"]
     )
@@ -439,9 +537,9 @@ def test_decommission_missing_clusterdeployment_api_fails_before_delete():
     assert "Record verified absence of Hive ClusterDeployment API" not in text
     assert "_clusterdeployments_verified_absent" not in text
     assert "Unable to verify ClusterDeployment preserveOnDelete safety" in text
-    assert text.index("Unable to verify ClusterDeployment preserveOnDelete safety") < text.index(
-        "Delete non-local ManagedClusters"
-    )
+    assert text.index(
+        "Unable to verify ClusterDeployment preserveOnDelete safety"
+    ) < text.index("Delete non-local ManagedClusters")
 
 
 def test_decommission_deletes_all_discovered_observability_and_mch_resources():
@@ -453,12 +551,22 @@ def test_decommission_deletes_all_discovered_observability_and_mch_resources():
         tasks = _load_yaml(DECOMMISSION_TASKS / filename)
         text = (DECOMMISSION_TASKS / filename).read_text()
 
-        discovery_tasks = [task for task in tasks if task.get("kubernetes.core.k8s_info", {}).get("kind") == kind]
-        delete_tasks = [task for task in tasks if task.get("kubernetes.core.k8s", {}).get("kind") == kind]
+        discovery_tasks = [
+            task
+            for task in tasks
+            if task.get("kubernetes.core.k8s_info", {}).get("kind") == kind
+        ]
+        delete_tasks = [
+            task
+            for task in tasks
+            if task.get("kubernetes.core.k8s", {}).get("kind") == kind
+        ]
 
         assert discovery_tasks, f"{filename} must list {kind} resources before deletion"
         assert delete_tasks, f"{filename} must delete discovered {kind} resources"
-        assert "{{ item.metadata.name }}" in str(delete_tasks[0].get("kubernetes.core.k8s", {}).get("name"))
+        assert "{{ item.metadata.name }}" in str(
+            delete_tasks[0].get("kubernetes.core.k8s", {}).get("name")
+        )
         assert "loop" in delete_tasks[0]
         assert f"name: {fixed_name}" not in text
 
@@ -483,7 +591,8 @@ def test_decommission_waits_for_observability_and_acm_workload_pods():
     pod_wait = next(
         task
         for task in mch_tasks
-        if task.get("name") == "Wait for ACM workload pods to terminate after MultiClusterHub deletion"
+        if task.get("name")
+        == "Wait for ACM workload pods to terminate after MultiClusterHub deletion"
     )
     assert pod_wait.get("failed_when") is False
 
@@ -522,7 +631,9 @@ def test_rbac_bootstrap_defaults_missing_execution_mode_to_dry_run_for_mutations
         text = path.read_text()
         assert "default('') != 'dry_run'" not in text
         assert "default('') == 'dry_run'" not in text
-        assert "default('dry_run')" in text, f"{path.name} must treat missing execution.mode as dry_run"
+        assert (
+            "default('dry_run')" in text
+        ), f"{path.name} must treat missing execution.mode as dry_run"
 
 
 def test_run_ssar_records_failed_or_malformed_reviews_as_denied_permissions():
@@ -543,7 +654,9 @@ def test_collection_ssar_tasks_split_resource_subresources():
     ]:
         text = path.read_text()
         assert "resource: \"{{ item.1.split('/')[0] }}\"" in text
-        assert "subresource: \"{{ item.1.split('/')[1] | default(omit, true) }}\"" in text
+        assert (
+            "subresource: \"{{ item.1.split('/')[1] | default(omit, true) }}\"" in text
+        )
 
 
 def test_collection_rbac_validation_runs_ssars_in_dry_run():
@@ -594,7 +707,9 @@ def test_activation_rediscovers_restore_facts_before_passive_selection():
     assert "acm_switchover_test_overrides | default({})" in discover_text
     assert "register: acm_secondary_restores_info" not in discover_text
     assert includes[0] == "discover_resources.yml"
-    assert includes.index("discover_resources.yml") < includes.index("verify_passive_sync.yml")
+    assert includes.index("discover_resources.yml") < includes.index(
+        "verify_passive_sync.yml"
+    )
 
 
 def test_activation_uses_live_restore_facts_instead_of_preflight_restore_facts():
@@ -641,7 +756,8 @@ def test_resumable_roles_use_phase_local_discovery_facts():
         / "repair_backup_schedule_collision.yml": [
             "acm_finalization_backup_schedules_info",
         ],
-        FINALIZATION_TASKS / "verify_backups.yml": ["acm_finalization_backup_schedules_info"],
+        FINALIZATION_TASKS
+        / "verify_backups.yml": ["acm_finalization_backup_schedules_info"],
     }
     stale_preflight_facts = {
         "acm_primary_mch_info",
@@ -682,7 +798,8 @@ def test_phase_local_facts_are_not_direct_register_targets():
         text = path.read_text()
         for fact in phase_local_facts:
             assert f"register: {fact}" not in text, (
-                f"{path.name} must register to a temporary variable and publish " f"{fact} only with guarded set_fact"
+                f"{path.name} must register to a temporary variable and publish "
+                f"{fact} only with guarded set_fact"
             )
 
 
@@ -696,8 +813,12 @@ def test_activation_requires_passive_restore_ready_before_mutation_tasks():
     block_tasks = next(task["block"] for task in main_tasks if "block" in task)
     includes = [task.get("ansible.builtin.include_tasks", "") for task in block_tasks]
 
-    assert includes.index("verify_passive_sync.yml") < includes.index("manage_auto_import.yml")
-    assert includes.index("verify_passive_sync.yml") < includes.index("activate_restore.yml")
+    assert includes.index("verify_passive_sync.yml") < includes.index(
+        "manage_auto_import.yml"
+    )
+    assert includes.index("verify_passive_sync.yml") < includes.index(
+        "activate_restore.yml"
+    )
 
 
 def test_restore_wait_accepts_only_benign_finished_with_errors():
@@ -715,14 +836,22 @@ def test_collection_mutation_tasks_default_missing_execution_mode_to_dry_run():
         ACTIVATION_TASKS / "manage_auto_import.yml",
         ACTIVATION_TASKS / "apply_immediate_import.yml",
         FINALIZATION_TASKS / "reset_auto_import.yml",
+        POST_ACTIVATION_TASKS / "verify_observability.yml",
+        POST_ACTIVATION_TASKS / "cleanup_auto_import_annotations.yml",
+        FINALIZATION_TASKS / "disable_old_hub_observability.yml",
+        PRIMARY_PREP_TASKS / "manage_auto_import.yml",
     ]
 
     for path in files:
         text = path.read_text()
         assert "default('') != 'dry_run'" not in text
         assert "default('') == 'dry_run'" not in text
+        assert "default('execute')" not in text, (
+            f"{path.name} uses default('execute') which allows live mutations "
+            f"when execution.mode is missing; must use default('dry_run')"
+        )
         assert (
-            "acm_switchover_execution.mode | default('dry_run') != 'dry_run'" in text
+            "acm_switchover_execution.mode | default('dry_run')" in text
         ), f"{path.name} must guard live mutations with dry_run-safe default"
 
 
@@ -738,10 +867,15 @@ def test_argocd_resume_splits_checkpoint_path_facts():
     playbook = _load_yaml(PLAYBOOKS_DIR / "argocd_resume.yml")
     pre_tasks = playbook[0].get("pre_tasks", [])
     path_fact_tasks = [
-        task for task in pre_tasks if "_argocd_resume_checkpoint_path" in task.get("ansible.builtin.set_fact", {})
+        task
+        for task in pre_tasks
+        if "_argocd_resume_checkpoint_path" in task.get("ansible.builtin.set_fact", {})
     ]
     abs_fact_tasks = [
-        task for task in pre_tasks if "_argocd_resume_checkpoint_path_abs" in task.get("ansible.builtin.set_fact", {})
+        task
+        for task in pre_tasks
+        if "_argocd_resume_checkpoint_path_abs"
+        in task.get("ansible.builtin.set_fact", {})
     ]
 
     assert path_fact_tasks
@@ -749,5 +883,6 @@ def test_argocd_resume_splits_checkpoint_path_facts():
     for task in pre_tasks:
         facts = task.get("ansible.builtin.set_fact", {})
         assert not (
-            "_argocd_resume_checkpoint_path" in facts and "_argocd_resume_checkpoint_path_abs" in facts
+            "_argocd_resume_checkpoint_path" in facts
+            and "_argocd_resume_checkpoint_path_abs" in facts
         ), "checkpoint path and absolute path facts must be assigned in separate tasks"
