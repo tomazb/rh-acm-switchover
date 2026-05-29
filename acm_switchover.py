@@ -1840,9 +1840,15 @@ def _run_argocd_resume_only(
                 "Resume-only contexts are reversed from the recorded state; swapping client mapping."
             )
             resume_primary, resume_secondary = secondary, primary
-        elif current_primary_ctx is not None and (
-            stored_primary_ctx != current_primary_ctx
-            or stored_secondary_ctx != current_secondary_ctx
+        elif (
+            (
+                current_primary_ctx is not None
+                and stored_primary_ctx != current_primary_ctx
+            )
+            or (
+                current_secondary_ctx is not None
+                and stored_secondary_ctx != current_secondary_ctx
+            )
         ):
             if not getattr(args, "force", False):
                 logger.error(

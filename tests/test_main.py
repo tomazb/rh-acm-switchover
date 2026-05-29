@@ -4311,3 +4311,27 @@ class TestArgocdResumeOnlyContextMismatch:
 
         assert result is True
         assert "--force used" in caplog.text
+
+    def test_secondary_mismatch_without_primary_fails(self, caplog):
+        state = self._make_state("hub-a", "hub-b")
+        args = self._make_args(None, "hub-y")
+        logger = logging.getLogger("test.argocd_resume_secondary_mismatch")
+
+        result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
+
+        assert result is False
+        assert "differ from recorded state" in caplog.text
+
+    def test_secondary_mismatch_without_primary_force_proceeds(self, caplog):
+        state = self._make_state("hub-a", "hub-b")
+        args = self._make_args(None, "hub-y", force=True)
+        logger = logging.getLogger("test.argocd_resume_secondary_force")
+
+        with patch(
+            "acm_switchover.argocd_lib.resume_recorded_applications"
+        ) as mock_resume:
+            mock_resume.return_value = Mock(restored=1, already_resumed=0, failed=0)
+            result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
+
+        assert result is True
+        assert "--force used" in caplog.text
