@@ -11,10 +11,10 @@
     msg: >-
       [dry_run] Would delete MultiClusterObservability on the old hub and wait
       for observability pods to terminate.
-  when: acm_switchover_execution.mode | default('execute') == 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 
 - name: Read old hub MultiClusterObservability resources safely
-  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
   block:
     - name: Read old hub MultiClusterObservability resources
       kubernetes.core.k8s_info:
@@ -62,7 +62,7 @@
   loop_control:
     label: "{{ item.metadata.name | default('observability') }}"
   when:
-    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - not (acm_switchover_features.skip_gitops_check | default(false))
 
 - name: Delete old hub MultiClusterObservability resources
@@ -77,7 +77,7 @@
   loop_control:
     label: "{{ item.metadata.name | default('observability') }}"
   register: _acm_old_hub_mco_delete_result
-  when: acm_switchover_execution.mode | default('execute') != 'dry_run'
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Wait for old hub observability pods to terminate
   kubernetes.core.k8s_info:
@@ -93,7 +93,7 @@
   failed_when: false
   changed_when: false
   when:
-    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - (_acm_old_hub_mco_info.resources | default([]) | length) > 0
 
 - name: Fail when observability pods remain after MCO deletion
@@ -103,7 +103,7 @@
       MultiClusterObservability. If GitOps is not recreating MCO, this may
       indicate a product bug.
   when:
-    - acm_switchover_execution.mode | default('execute') != 'dry_run'
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
     - (_acm_old_hub_mco_info.resources | default([]) | length) > 0
     - _acm_old_hub_observability_pods_info is defined
     - (_acm_old_hub_observability_pods_info.resources | default([]) | length) > 0
@@ -126,4 +126,4 @@
         {%- endif -%}
         {%- endfor -%}
         {{ deleted }}
-      status: "{{ 'skipped' if acm_switchover_execution.mode | default('execute') == 'dry_run' else 'pass' }}"
+      status: "{{ 'skipped' if acm_switchover_execution.mode | default('dry_run') == 'dry_run' else 'pass' }}"

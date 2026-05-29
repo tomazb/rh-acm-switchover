@@ -17,7 +17,13 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate
     summarize_rbac_results,
 )
 
-RUN_SSAR_TASK = Path(__file__).resolve().parents[4] / "roles" / "preflight" / "tasks" / "run_ssar.yml"
+RUN_SSAR_TASK = (
+    Path(__file__).resolve().parents[4]
+    / "roles"
+    / "preflight"
+    / "tasks"
+    / "run_ssar.yml"
+)
 
 
 class ModuleExit(Exception):
@@ -34,9 +40,13 @@ class ModuleFail(Exception):
 
 def _render_denied_permissions_from_run_ssar(results):
     tasks = yaml.safe_load(RUN_SSAR_TASK.read_text(encoding="utf-8"))
-    collect_task = next(task for task in tasks if task.get("name") == "Collect denied permissions")
+    collect_task = next(
+        task for task in tasks if task.get("name") == "Collect denied permissions"
+    )
     template = collect_task["ansible.builtin.set_fact"]["_rbac_denied_permissions"]
-    rendered = Environment().from_string(template).render(_ssar_results={"results": results})
+    rendered = (
+        Environment().from_string(template).render(_ssar_results={"results": results})
+    )
     return ast.literal_eval(rendered)
 
 
@@ -313,8 +323,14 @@ def test_summary_accepts_workflow_specific_metadata():
 
     result = summary["results"][0]
     assert result["id"] == "rbac-bootstrap-primary"
-    assert result["message"] == "RBAC bootstrap cannot verify required permissions on primary hub"
-    assert result["recommended_action"] == "Run rbac_bootstrap with an account that can grant the documented role"
+    assert (
+        result["message"]
+        == "RBAC bootstrap cannot verify required permissions on primary hub"
+    )
+    assert (
+        result["recommended_action"]
+        == "Run rbac_bootstrap with an account that can grant the documented role"
+    )
 
 
 def test_summary_reports_pass_when_all_permissions_allowed():
@@ -369,7 +385,10 @@ def test_main_fails_closed_when_denied_permissions_present(monkeypatch):
     assert captured["exit"]["passed"] is False
     assert captured["exit"]["critical_failures"] == 1
     assert captured["exit"]["results"][0]["status"] == "fail"
-    assert captured["exit"]["results"][0]["details"]["denied_permissions"] == denied_permissions
+    assert (
+        captured["exit"]["results"][0]["details"]["denied_permissions"]
+        == denied_permissions
+    )
 
 
 def test_main_check_mode_returns_validation_without_change(monkeypatch):
@@ -408,7 +427,11 @@ def test_main_check_mode_returns_validation_without_change(monkeypatch):
             raise AssertionError(f"unexpected fail_json: {kwargs}")
 
     monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", FakeModule)
-    monkeypatch.setattr(acm_rbac_validate_module, "expand_rbac_requirements", fake_expand_rbac_requirements)
+    monkeypatch.setattr(
+        acm_rbac_validate_module,
+        "expand_rbac_requirements",
+        fake_expand_rbac_requirements,
+    )
 
     main()
 
@@ -434,8 +457,14 @@ def test_main_requires_hub_argument_at_module_boundary(monkeypatch):
         def fail_json(self, **kwargs):
             raise ModuleFail(kwargs)
 
-    monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", CapturingAnsibleModule)
-    monkeypatch.setattr(basic, "_ANSIBLE_ARGS", json.dumps({"ANSIBLE_MODULE_ARGS": {}}).encode("utf-8"))
+    monkeypatch.setattr(
+        acm_rbac_validate_module, "AnsibleModule", CapturingAnsibleModule
+    )
+    monkeypatch.setattr(
+        basic, "_ANSIBLE_ARGS", json.dumps({"ANSIBLE_MODULE_ARGS": {}}).encode("utf-8")
+    )
+    if hasattr(basic, "_ANSIBLE_PROFILE"):
+        monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
 
     with pytest.raises(ModuleFail) as excinfo:
         main()
@@ -443,7 +472,9 @@ def test_main_requires_hub_argument_at_module_boundary(monkeypatch):
     assert excinfo.value.results["msg"] == "missing required arguments: hub"
 
 
-def test_statefulset_scale_permission_uses_ssar_subresource_split_contract(monkeypatch, capsys):
+def test_statefulset_scale_permission_uses_ssar_subresource_split_contract(
+    monkeypatch, capsys
+):
     # Python module preserves the slash-form; the resource/subresource split occurs in roles/preflight/tasks/run_ssar.yml
     monkeypatch.setattr(
         basic,
@@ -466,6 +497,8 @@ def test_statefulset_scale_permission_uses_ssar_subresource_split_contract(monke
             }
         ).encode("utf-8"),
     )
+    if hasattr(basic, "_ANSIBLE_PROFILE"):
+        monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
     monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", RealAnsibleModule)
 
     with pytest.raises(SystemExit) as excinfo:
@@ -475,7 +508,10 @@ def test_statefulset_scale_permission_uses_ssar_subresource_split_contract(monke
 
     assert excinfo.value.code == 0
     assert result.get("failed") is not True
-    assert result["results"][0]["details"]["denied_permissions"][0]["resource"] == "statefulsets/scale"
+    assert (
+        result["results"][0]["details"]["denied_permissions"][0]["resource"]
+        == "statefulsets/scale"
+    )
     assert [
         "apps",
         "statefulsets/scale",
@@ -515,11 +551,16 @@ def test_run_ssar_api_failures_are_recorded_and_fail_closed():
 
     assert denied_permissions == expected_denied_permissions
 
-    summary = summarize_rbac_results(hub="primary", denied_permissions=denied_permissions)
+    summary = summarize_rbac_results(
+        hub="primary", denied_permissions=denied_permissions
+    )
 
     assert summary["passed"] is False
     assert summary["critical_failures"] == 1
-    assert summary["results"][0]["details"]["denied_permissions"] == expected_denied_permissions
+    assert (
+        summary["results"][0]["details"]["denied_permissions"]
+        == expected_denied_permissions
+    )
 
 
 def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
@@ -552,7 +593,9 @@ def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
 
     main()
 
-    assert captured["fail"] == {"msg": "include_decommission is only valid for the operator role"}
+    assert captured["fail"] == {
+        "msg": "include_decommission is only valid for the operator role"
+    }
 
 
 def test_validator_role_has_readonly_managedcluster_permission():
@@ -596,7 +639,9 @@ def test_hub_validation_surface_excludes_managed_cluster_namespace_permissions()
         argocd_install_type="unknown",
     )
 
-    managed_cluster_perms = [p for p in permissions if p[3] == "open-cluster-management-agent"]
+    managed_cluster_perms = [
+        p for p in permissions if p[3] == "open-cluster-management-agent"
+    ]
     assert managed_cluster_perms == []
 
 
@@ -610,7 +655,11 @@ def test_validator_role_no_write_on_backupschedules():
         argocd_install_type="unknown",
     )
     # Filter to backup namespace permissions
-    backup_perms = [p for p in permissions if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"]
+    backup_perms = [
+        p
+        for p in permissions
+        if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"
+    ]
     # Should only have get/list, no write operations
     verbs = {p[2] for p in backup_perms}
     assert verbs == {"get", "list"}
@@ -656,6 +705,8 @@ def test_main_maps_validator_argocd_manage_to_failed_module_output(monkeypatch, 
             }
         ).encode("utf-8"),
     )
+    if hasattr(basic, "_ANSIBLE_PROFILE"):
+        monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy")
     monkeypatch.setattr(acm_rbac_validate_module, "AnsibleModule", RealAnsibleModule)
 
     with pytest.raises(SystemExit):
@@ -695,7 +746,11 @@ def test_operator_role_has_write_on_backupschedules():
         argocd_install_type="unknown",
     )
     # Filter to backup namespace permissions
-    backup_perms = [p for p in permissions if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"]
+    backup_perms = [
+        p
+        for p in permissions
+        if p[3] == "open-cluster-management-backup" and p[1] == "backupschedules"
+    ]
     verbs = {p[2] for p in backup_perms}
     assert "create" in verbs
     assert "patch" in verbs
