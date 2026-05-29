@@ -119,6 +119,22 @@ def test_applicationset_owned_acm_app_is_blocked():
     assert "pause/update the ApplicationSet" in blockers[0]["message"]
 
 
+def test_blocks_applicationset_owned_acm_app_even_when_autosync_is_already_disabled():
+    """ApplicationSet-managed ACM apps must remain blockers even when auto-sync is already off."""
+    app = _app(
+        "child-app",
+        [{"kind": "BackupSchedule", "namespace": "open-cluster-management-backup"}],
+    )
+    app["metadata"]["ownerReferences"] = [{"kind": "ApplicationSet", "name": "parent-set"}]
+    app["spec"] = {"syncPolicy": {"automated": None}}
+
+    blockers = find_argocd_pause_blockers([app])
+
+    assert len(blockers) == 1
+    assert blockers[0]["reason"] == PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED
+    assert "parent-set" in blockers[0]["message"]
+
+
 def test_applicationset_owned_stale_empty_status_resources_prefers_unknown_impact_blocker():
     app = _app("child-app", [])
     app["metadata"].update(
