@@ -5,7 +5,7 @@ import pathlib
 
 import yaml
 from jinja2 import Environment
-from yaml_contract_helpers import _flatten_tasks
+from yaml_contract_helpers import _flatten_tasks, _when_text
 
 COLLECTION_DIR = pathlib.Path(__file__).resolve().parents[2]
 ROLES_DIR = COLLECTION_DIR / "roles"
@@ -887,14 +887,6 @@ def test_argocd_resume_splits_checkpoint_path_facts():
         ), "checkpoint path and absolute path facts must be assigned in separate tasks"
 
 
-def _when_text_resilience(task: dict) -> str:
-    """Normalize a task's 'when' condition to a single string."""
-    when = task.get("when", "")
-    if isinstance(when, list):
-        return " ".join(str(w) for w in when)
-    return str(when)
-
-
 def test_preflight_validate_rbac_fails_closed_on_argocd_401():
     """validate_rbac.yml must fail closed on HTTP 401 during Argo CD CRD discovery.
 
@@ -934,7 +926,7 @@ def test_preflight_validate_rbac_fails_closed_on_argocd_401():
         in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
     ]
     for task in unexpected_fail_tasks:
-        when = _when_text_resilience(task)
+        when = _when_text(task)
         assert (
             "'401' not in" not in when
         ), "Unexpected-error fail task must not exclude 401 — dedicated 401 tasks handle it"
