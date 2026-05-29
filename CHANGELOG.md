@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Live RBAC certification now derives its positive permission matrix from the Python RBAC validator, supports profile-driven hub scopes, treats explicitly selected live certification as blocking, and records collision-safe SAR request/evidence artifacts.
 - Local `run_tests.sh` now treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default, with `STRICT_QUALITY=0` available only for advisory local runs.
 - Restore-only now requires at least one restored non-local ManagedCluster by default when no explicit minimum is provided; operators must explicitly opt into an empty restore target. This supersedes the `[1.7.10]` description that "restore-only pins the expectation to `0`": as of `[Unreleased]`, omitted `--min-managed-clusters` in restore-only defaults to `1`, and an empty target requires explicit `--min-managed-clusters 0` (Python CLI) or `acm_switchover_operation.allow_zero_managed_clusters: true` (collection).
-- ArgoCD resume-only now fails closed when the secondary context does not match the checkpoint's recorded secondary context; operators must use `--force` to override.
+- Python CLI ArgoCD resume-only now fails closed when the secondary context does not match the checkpoint's recorded secondary context; operators must use `--force` to override.
 - Collection checkpoint identity validation now requires `operation_identity` in schema 2.0 checkpoints that have completed phases; clear the checkpoint file or re-run from scratch if upgrading from an older checkpoint format.
 - Collection mutation tasks now default missing `acm_switchover_execution.mode` to `dry_run`; operators must explicitly set `mode: execute` for live runs.
 
