@@ -44,7 +44,7 @@
   when:
     - not (acm_switchover_operation.restore_only | default(false))
     - _rbac_requested_argocd_mode != 'none'
-    - not (_rbac_argocd_app_crd_primary.failed | default(false))
+    - (_rbac_argocd_app_crd_primary.msg | default('')) | length == 0
     - (_rbac_argocd_app_crd_primary.resources | default([]) | length) > 0
 
 - name: Fail closed on authorization denied during Argo CD CRD discovery for primary hub
@@ -57,7 +57,6 @@
   when:
     - not (acm_switchover_operation.restore_only | default(false))
     - _rbac_requested_argocd_mode != 'none'
-    - _rbac_argocd_app_crd_primary.failed | default(false)
     - >-
       '401' in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)
       or 'unauthorized' in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)
@@ -70,7 +69,7 @@
   when:
     - not (acm_switchover_operation.restore_only | default(false))
     - _rbac_requested_argocd_mode != 'none'
-    - _rbac_argocd_app_crd_primary.failed | default(false)
+    - (_rbac_argocd_app_crd_primary.msg | default('')) | length > 0
     - "'403' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
     - "'forbidden' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
 
@@ -78,11 +77,11 @@
   ansible.builtin.set_fact:
     _rbac_argocd_install_type_primary: >-
       {%- set app_msg = (_rbac_argocd_app_crd_primary.msg | default('')) | lower -%}
-      {%- if _rbac_argocd_app_crd_primary.failed | default(false) -%}
+      {%- if app_msg | length > 0 -%}
       unknown
       {%- elif (_rbac_argocd_app_crd_primary.resources | default([]) | length) == 0 -%}
       none
-      {%- elif _rbac_argocd_instance_crd_primary.failed | default(false) -%}
+      {%- elif (_rbac_argocd_instance_crd_primary.msg | default('')) | length > 0 -%}
       unknown
       {%- elif (_rbac_argocd_instance_crd_primary.resources | default([]) | length) > 0 -%}
       operator
@@ -180,7 +179,7 @@
   failed_when: false
   when:
     - _rbac_requested_argocd_mode != 'none'
-    - not (_rbac_argocd_app_crd_secondary.failed | default(false))
+    - (_rbac_argocd_app_crd_secondary.msg | default('')) | length == 0
     - (_rbac_argocd_app_crd_secondary.resources | default([]) | length) > 0
 
 - name: Fail closed on authorization denied during Argo CD CRD discovery for secondary hub
@@ -192,7 +191,6 @@
       Detail: {{ _rbac_argocd_app_crd_secondary.msg | default('no detail') }}
   when:
     - _rbac_requested_argocd_mode != 'none'
-    - _rbac_argocd_app_crd_secondary.failed | default(false)
     - >-
       '401' in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)
       or 'unauthorized' in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)
@@ -204,18 +202,18 @@
       {{ _rbac_argocd_app_crd_secondary.msg | default(_rbac_argocd_app_crd_secondary | string) }}
   when:
     - _rbac_requested_argocd_mode != 'none'
-    - _rbac_argocd_app_crd_secondary.failed | default(false)
+    - (_rbac_argocd_app_crd_secondary.msg | default('')) | length > 0
     - "'403' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
     - "'forbidden' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
 
 - name: Record Argo CD install type for secondary hub
   ansible.builtin.set_fact:
     _rbac_argocd_install_type_secondary: >-
-      {%- if _rbac_argocd_app_crd_secondary.failed | default(false) -%}
+      {%- if (_rbac_argocd_app_crd_secondary.msg | default('')) | length > 0 -%}
       unknown
       {%- elif (_rbac_argocd_app_crd_secondary.resources | default([]) | length) == 0 -%}
       none
-      {%- elif _rbac_argocd_instance_crd_secondary.failed | default(false) -%}
+      {%- elif (_rbac_argocd_instance_crd_secondary.msg | default('')) | length > 0 -%}
       unknown
       {%- elif (_rbac_argocd_instance_crd_secondary.resources | default([]) | length) > 0 -%}
       operator

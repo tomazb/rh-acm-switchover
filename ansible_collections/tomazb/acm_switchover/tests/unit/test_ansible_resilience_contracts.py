@@ -937,6 +937,20 @@ def test_preflight_validate_rbac_fails_closed_on_argocd_401():
             "'403' not in" in when
         ), "Unexpected-error fail task must still exclude 403 (deferred to RBAC validation)"
 
+    for task in auth_fail_tasks + unexpected_fail_tasks:
+        when = _when_text(task)
+        assert ".failed" not in when, (
+            "Error detection must use .msg presence, not .failed — "
+            "failed_when: false on k8s_info overrides .failed to False"
+        )
+
+    for task in unexpected_fail_tasks:
+        when = _when_text(task)
+        assert ".msg" in when, (
+            "Unexpected-error fail task must gate on .msg presence "
+            "since failed_when: false overrides .failed"
+        )
+
     for hub in ("primary", "secondary"):
         hub_401_indices = [
             i
