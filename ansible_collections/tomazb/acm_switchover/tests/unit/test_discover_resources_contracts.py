@@ -8,17 +8,16 @@ These tests verify that each role's resource discovery follows the expected cont
 """
 
 import pathlib
-import sys
 
 import yaml
-
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from yaml_contract_helpers import _flatten_tasks, _when_text  # noqa: E402
+from yaml_contract_helpers import _when_text
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 ACTIVATION_DISCOVER = ROLES_DIR / "activation" / "tasks" / "discover_resources.yml"
 FINALIZATION_DISCOVER = ROLES_DIR / "finalization" / "tasks" / "discover_resources.yml"
-POST_ACTIVATION_DISCOVER = ROLES_DIR / "post_activation" / "tasks" / "discover_resources.yml"
+POST_ACTIVATION_DISCOVER = (
+    ROLES_DIR / "post_activation" / "tasks" / "discover_resources.yml"
+)
 
 
 class TestActivationDiscoverResources:
@@ -28,7 +27,9 @@ class TestActivationDiscoverResources:
         self.tasks = yaml.safe_load(ACTIVATION_DISCOVER.read_text()) or []
 
     def test_file_exists(self):
-        assert ACTIVATION_DISCOVER.exists(), "activation/tasks/discover_resources.yml must exist"
+        assert (
+            ACTIVATION_DISCOVER.exists()
+        ), "activation/tasks/discover_resources.yml must exist"
 
     def test_restores_use_test_override_pattern(self):
         """Activation Restore discovery uses acm_switchover_test_overrides, not a bare is-not-defined guard.
@@ -37,7 +38,9 @@ class TestActivationDiscoverResources:
         the normal fact variable, which may already be set from a previous role run.
         """
         set_fact_tasks = [t for t in self.tasks if "ansible.builtin.set_fact" in t]
-        override_tasks = [t for t in set_fact_tasks if "test_overrides" in _when_text(t)]
+        override_tasks = [
+            t for t in set_fact_tasks if "test_overrides" in _when_text(t)
+        ]
         assert override_tasks, (
             "activation/discover_resources.yml must have a set_fact task guarded by "
             "acm_switchover_test_overrides.activation_restores_info to allow test pre-seeding"
@@ -46,8 +49,14 @@ class TestActivationDiscoverResources:
     def test_restores_live_read_skipped_when_test_override_supplied(self):
         """Live Restore read must be gated so it is skipped when a test override is supplied."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        restore_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"]
-        assert restore_reads, "activation/discover_resources.yml must read Restore resources"
+        restore_reads = [
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"
+        ]
+        assert (
+            restore_reads
+        ), "activation/discover_resources.yml must read Restore resources"
         for task in restore_reads:
             when = _when_text(task)
             assert (
@@ -57,7 +66,11 @@ class TestActivationDiscoverResources:
     def test_restores_live_read_uses_secondary_hub(self):
         """Activation live Restore read must target the secondary hub."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        restore_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"]
+        restore_reads = [
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"
+        ]
         assert restore_reads
         for task in restore_reads:
             params = task["kubernetes.core.k8s_info"]
@@ -72,9 +85,13 @@ class TestActivationDiscoverResources:
         """Activation MCH discovery must use the standard 'is not defined' pre-seed guard."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
         mch_reads = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
         ]
-        assert mch_reads, "activation/discover_resources.yml must read MultiClusterHub resources"
+        assert (
+            mch_reads
+        ), "activation/discover_resources.yml must read MultiClusterHub resources"
         for task in mch_reads:
             when = _when_text(task)
             assert "acm_activation_mch_info is not defined" in when, (
@@ -86,7 +103,9 @@ class TestActivationDiscoverResources:
         """Activation MCH read must target the secondary hub (new hub being activated)."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
         mch_reads = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
         ]
         assert mch_reads
         for task in mch_reads:
@@ -104,7 +123,9 @@ class TestActivationDiscoverResources:
         breaking downstream templates that iterate over resources.
         """
         publish_tasks = [t for t in self.tasks if "Publish live" in t.get("name", "")]
-        assert publish_tasks, "activation/discover_resources.yml must have 'Publish live...' set_fact tasks"
+        assert (
+            publish_tasks
+        ), "activation/discover_resources.yml must have 'Publish live...' set_fact tasks"
         for task in publish_tasks:
             when = _when_text(task)
             assert "skipped" in when, (
@@ -121,13 +142,21 @@ class TestFinalizationDiscoverResources:
         self.tasks = yaml.safe_load(self.file_text) or []
 
     def test_file_exists(self):
-        assert FINALIZATION_DISCOVER.exists(), "finalization/tasks/discover_resources.yml must exist"
+        assert (
+            FINALIZATION_DISCOVER.exists()
+        ), "finalization/tasks/discover_resources.yml must exist"
 
     def test_backup_schedules_guard_and_secondary_hub(self):
         """BackupSchedule discovery must be pre-seedable and target the secondary hub."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        bs_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "BackupSchedule"]
-        assert bs_reads, "finalization/discover_resources.yml must read BackupSchedule resources"
+        bs_reads = [
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "BackupSchedule"
+        ]
+        assert (
+            bs_reads
+        ), "finalization/discover_resources.yml must read BackupSchedule resources"
         for task in bs_reads:
             when = _when_text(task)
             assert (
@@ -142,14 +171,20 @@ class TestFinalizationDiscoverResources:
         """MCH discovery must be pre-seedable and target the secondary hub."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
         mch_reads = [
-            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "MultiClusterHub"
         ]
         assert mch_reads, "finalization/discover_resources.yml must read MCH resources"
         for task in mch_reads:
             when = _when_text(task)
-            assert "acm_finalization_mch_info is not defined" in when, "MCH read must use pre-seed guard"
+            assert (
+                "acm_finalization_mch_info is not defined" in when
+            ), "MCH read must use pre-seed guard"
             params = task["kubernetes.core.k8s_info"]
-            assert "secondary" in str(params.get("kubeconfig", "")), "MCH reads must target secondary hub"
+            assert "secondary" in str(
+                params.get("kubeconfig", "")
+            ), "MCH reads must target secondary hub"
 
     def test_restores_secondary_guard_and_secondary_hub(self):
         """Secondary Restore discovery must be pre-seedable and target the secondary hub."""
@@ -159,7 +194,8 @@ class TestFinalizationDiscoverResources:
             t
             for t in k8s_info_tasks
             if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"
-            and "secondary" in str(t.get("kubernetes.core.k8s_info", {}).get("kubeconfig", ""))
+            and "secondary"
+            in str(t.get("kubernetes.core.k8s_info", {}).get("kubeconfig", ""))
         ]
         assert (
             secondary_restore_reads
@@ -179,7 +215,8 @@ class TestFinalizationDiscoverResources:
             t
             for t in k8s_info_tasks
             if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"
-            and "primary" in str(t.get("kubernetes.core.k8s_info", {}).get("kubeconfig", ""))
+            and "primary"
+            in str(t.get("kubernetes.core.k8s_info", {}).get("kubeconfig", ""))
         ]
         assert primary_restore_reads, (
             "finalization/discover_resources.yml must read the old hub's passive sync Restore "
@@ -187,7 +224,9 @@ class TestFinalizationDiscoverResources:
         )
         for task in primary_restore_reads:
             params = task["kubernetes.core.k8s_info"]
-            assert "primary" in str(params.get("context", "")), "Old hub Restore read must also use primary hub context"
+            assert "primary" in str(
+                params.get("context", "")
+            ), "Old hub Restore read must also use primary hub context"
 
     def test_old_hub_restore_live_read_requires_execute_mode(self):
         """Old hub Restore live read must be guarded so it does not run in dry-run mode."""
@@ -196,7 +235,8 @@ class TestFinalizationDiscoverResources:
             t
             for t in k8s_info_tasks
             if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Restore"
-            and "primary" in str(t.get("kubernetes.core.k8s_info", {}).get("kubeconfig", ""))
+            and "primary"
+            in str(t.get("kubernetes.core.k8s_info", {}).get("kubeconfig", ""))
         ]
         assert (
             primary_restore_reads
@@ -218,7 +258,8 @@ class TestFinalizationDiscoverResources:
         dry_run_seed_tasks = [
             t
             for t in set_fact_tasks
-            if "_old_hub_existing_restore_info" in str(t.get("ansible.builtin.set_fact", {}))
+            if "_old_hub_existing_restore_info"
+            in str(t.get("ansible.builtin.set_fact", {}))
             and "dry_run" in _when_text(t)
         ]
         assert dry_run_seed_tasks, (
@@ -240,13 +281,21 @@ class TestPostActivationDiscoverResources:
         self.tasks = yaml.safe_load(POST_ACTIVATION_DISCOVER.read_text()) or []
 
     def test_file_exists(self):
-        assert POST_ACTIVATION_DISCOVER.exists(), "post_activation/tasks/discover_resources.yml must exist"
+        assert (
+            POST_ACTIVATION_DISCOVER.exists()
+        ), "post_activation/tasks/discover_resources.yml must exist"
 
     def test_managed_clusters_uses_is_not_defined_guard(self):
         """ManagedCluster discovery must use 'is not defined' guard to allow test pre-seeding."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mc_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"]
-        assert mc_reads, "post_activation/discover_resources.yml must read ManagedCluster resources"
+        mc_reads = [
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+        ]
+        assert (
+            mc_reads
+        ), "post_activation/discover_resources.yml must read ManagedCluster resources"
         for task in mc_reads:
             when = _when_text(task)
             assert "acm_secondary_managed_clusters_info is not defined" in when, (
@@ -257,7 +306,11 @@ class TestPostActivationDiscoverResources:
     def test_managed_clusters_uses_secondary_hub(self):
         """ManagedCluster reads must target the secondary hub (new hub after switchover)."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
-        mc_reads = [t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"]
+        mc_reads = [
+            t
+            for t in k8s_info_tasks
+            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "ManagedCluster"
+        ]
         assert mc_reads
         for task in mc_reads:
             params = task["kubernetes.core.k8s_info"]
@@ -265,4 +318,6 @@ class TestPostActivationDiscoverResources:
                 "ManagedCluster reads must use secondary hub kubeconfig — "
                 "post_activation checks that clusters connected to the new hub"
             )
-            assert "secondary" in str(params.get("context", "")), "ManagedCluster reads must use secondary hub context"
+            assert "secondary" in str(
+                params.get("context", "")
+            ), "ManagedCluster reads must use secondary hub context"

@@ -5,6 +5,7 @@ import pathlib
 
 import yaml
 from jinja2 import Environment
+from yaml_contract_helpers import _flatten_tasks, _when_text
 
 COLLECTION_DIR = pathlib.Path(__file__).resolve().parents[2]
 ROLES_DIR = COLLECTION_DIR / "roles"
@@ -22,15 +23,6 @@ DECOMMISSION_TASKS = ROLES_DIR / "decommission" / "tasks"
 
 def _load_yaml(path: pathlib.Path) -> list[dict]:
     return yaml.safe_load(path.read_text())
-
-
-def _flatten_tasks(tasks: list[dict]) -> list[dict]:
-    flattened = []
-    for task in tasks:
-        flattened.append(task)
-        for section in ("block", "rescue", "always"):
-            flattened.extend(_flatten_tasks(task.get(section, []) or []))
-    return flattened
 
 
 def test_activate_restore_verifies_patch_application_after_patch():
@@ -893,3 +885,86 @@ def test_argocd_resume_splits_checkpoint_path_facts():
             "_argocd_resume_checkpoint_path" in facts
             and "_argocd_resume_checkpoint_path_abs" in facts
         ), "checkpoint path and absolute path facts must be assigned in separate tasks"
+
+
+def test_preflight_validate_rbac_fails_closed_on_argocd_401():
+    """validate_rbac.yml must fail closed on HTTP 401 during Argo CD CRD discovery.
+
+    401 indicates broken/expired credentials, not merely missing CRD read permission
+    (which is 403). Silently deferring 401 to RBAC validation would hide auth problems
+    and potentially produce misleading "missing permissions" results. This mirrors the
+    Python CLI behavior in preflight_coordinator.py.
+    """
+    tasks = _load_yaml(PREFLIGHT_TASKS / "validate_rbac.yml")
+
+    fail_tasks = [t for t in tasks if "ansible.builtin.fail" in t]
+    auth_fail_tasks = [
+        t
+        for t in fail_tasks
+        if "authorization denied"
+        in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
+        or "401" in t.get("ansible.builtin.fail", {}).get("msg", "")
+    ]
+    assert (
+        len(auth_fail_tasks) >= 2
+    ), "validate_rbac.yml must have fail-closed tasks for 401/unauthorized on both hubs"
+
+    for hub in ("primary", "secondary"):
+        hub_auth_fails = [
+            t
+            for t in auth_fail_tasks
+            if hub in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
+        ]
+        assert (
+            hub_auth_fails
+        ), f"validate_rbac.yml must have a 401 fail-closed task for the {hub} hub"
+
+    unexpected_fail_tasks = [
+        t
+        for t in fail_tasks
+        if "unable to inspect"
+        in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
+    ]
+    for task in unexpected_fail_tasks:
+        when = _when_text(task)
+        assert (
+            "'401' not in" not in when
+        ), "Unexpected-error fail task must not exclude 401 — dedicated 401 tasks handle it"
+        assert (
+            "'unauthorized' not in" not in when
+        ), "Unexpected-error fail task must not exclude unauthorized — dedicated 401 tasks handle it"
+        assert (
+            "'403' not in" in when
+        ), "Unexpected-error fail task must still exclude 403 (deferred to RBAC validation)"
+
+    for task in auth_fail_tasks + unexpected_fail_tasks:
+        when = _when_text(task)
+        assert ".failed" not in when, (
+            "Error detection must use .msg presence, not .failed — "
+            "failed_when: false on k8s_info overrides .failed to False"
+        )
+
+    for task in unexpected_fail_tasks:
+        when = _when_text(task)
+        assert ".msg" in when, (
+            "Unexpected-error fail task must gate on .msg presence "
+            "since failed_when: false overrides .failed"
+        )
+
+    for hub in ("primary", "secondary"):
+        hub_401_indices = [
+            i
+            for i, t in enumerate(tasks)
+            if t in auth_fail_tasks
+            and hub in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
+        ]
+        hub_unexpected_indices = [
+            i
+            for i, t in enumerate(tasks)
+            if t in unexpected_fail_tasks
+            and hub in t.get("ansible.builtin.fail", {}).get("msg", "").lower()
+        ]
+        if hub_401_indices and hub_unexpected_indices:
+            assert (
+                hub_401_indices[0] < hub_unexpected_indices[0]
+            ), f"401 fail task for {hub} hub must precede the unexpected-error fail task"
