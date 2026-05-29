@@ -68,7 +68,9 @@ def count_acm_resources(app: dict) -> int:
     count = 0
     for resource in _status_resources(app) or []:
         namespace = resource.get("namespace")
-        if namespace in ACM_NAMESPACES or (namespace and ACM_NAMESPACE_REGEX.match(namespace)):
+        if namespace in ACM_NAMESPACES or (
+            namespace and ACM_NAMESPACE_REGEX.match(namespace)
+        ):
             count += 1
             continue
         if resource.get("kind") in ACM_KINDS:
@@ -128,7 +130,9 @@ def find_argocd_pause_blockers(applications: list[dict]) -> list[dict]:
                     "namespace": namespace,
                     "name": name,
                     "reason": PAUSE_BLOCK_REASON_APPLICATIONSET_MANAGED,
-                    "message": _applicationset_message(namespace, name, _applicationset_owner_name(app)),
+                    "message": _applicationset_message(
+                        namespace, name, _applicationset_owner_name(app)
+                    ),
                 }
             )
             continue
