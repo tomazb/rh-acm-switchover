@@ -169,7 +169,7 @@ class ActionModule(ActionBase):
 
         checkpoint_data["phase"] = phase
 
-        if should_reset and backend == "file" and not is_non_mutating:
+        if should_reset and backend == CHECKPOINT_BACKEND_FILE and not is_non_mutating:
             save_result = self._save_checkpoint(path, checkpoint_data)
             if save_result is not None and save_result.get("failed"):
                 return save_result
@@ -177,7 +177,7 @@ class ActionModule(ActionBase):
         if status == "enter":
             if (
                 (backfilled_operation_identity or reset_from)
-                and backend == "file"
+                and backend == CHECKPOINT_BACKEND_FILE
                 and not is_non_mutating
             ):
                 save_result = self._save_checkpoint(path, checkpoint_data)
@@ -231,7 +231,7 @@ class ActionModule(ActionBase):
                 }
             )
 
-        if backend == "file":
+        if backend == CHECKPOINT_BACKEND_FILE:
             save_result = self._save_checkpoint(path, checkpoint_data)
             if save_result is not None and save_result.get("failed"):
                 return save_result

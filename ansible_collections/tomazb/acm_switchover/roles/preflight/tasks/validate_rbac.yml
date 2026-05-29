@@ -47,6 +47,21 @@
     - not (_rbac_argocd_app_crd_primary.failed | default(false))
     - (_rbac_argocd_app_crd_primary.resources | default([]) | length) > 0
 
+- name: Fail closed on authorization denied during Argo CD CRD discovery for primary hub
+  ansible.builtin.fail:
+    msg: >-
+      Authorization denied while inspecting Argo CD CRDs on the primary hub
+      (HTTP 401). This usually means the kubeconfig credentials are expired or
+      invalid. Fix the credentials and retry.
+      Detail: {{ _rbac_argocd_app_crd_primary.msg | default('no detail') }}
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - _rbac_requested_argocd_mode != 'none'
+    - _rbac_argocd_app_crd_primary.failed | default(false)
+    - >-
+      '401' in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)
+      or 'unauthorized' in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)
+
 - name: Fail on unexpected Argo CD Applications CRD discovery error for primary hub
   ansible.builtin.fail:
     msg: >-
@@ -56,9 +71,7 @@
     - not (acm_switchover_operation.restore_only | default(false))
     - _rbac_requested_argocd_mode != 'none'
     - _rbac_argocd_app_crd_primary.failed | default(false)
-    - "'401' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
     - "'403' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
-    - "'unauthorized' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
     - "'forbidden' not in ((_rbac_argocd_app_crd_primary.msg | default('')) | lower)"
 
 - name: Record Argo CD install type for primary hub
@@ -170,6 +183,20 @@
     - not (_rbac_argocd_app_crd_secondary.failed | default(false))
     - (_rbac_argocd_app_crd_secondary.resources | default([]) | length) > 0
 
+- name: Fail closed on authorization denied during Argo CD CRD discovery for secondary hub
+  ansible.builtin.fail:
+    msg: >-
+      Authorization denied while inspecting Argo CD CRDs on the secondary hub
+      (HTTP 401). This usually means the kubeconfig credentials are expired or
+      invalid. Fix the credentials and retry.
+      Detail: {{ _rbac_argocd_app_crd_secondary.msg | default('no detail') }}
+  when:
+    - _rbac_requested_argocd_mode != 'none'
+    - _rbac_argocd_app_crd_secondary.failed | default(false)
+    - >-
+      '401' in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)
+      or 'unauthorized' in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)
+
 - name: Fail on unexpected Argo CD Applications CRD discovery error for secondary hub
   ansible.builtin.fail:
     msg: >-
@@ -178,9 +205,7 @@
   when:
     - _rbac_requested_argocd_mode != 'none'
     - _rbac_argocd_app_crd_secondary.failed | default(false)
-    - "'401' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
     - "'403' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
-    - "'unauthorized' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
     - "'forbidden' not in ((_rbac_argocd_app_crd_secondary.msg | default('')) | lower)"
 
 - name: Record Argo CD install type for secondary hub
