@@ -434,6 +434,46 @@ When using Codex review, convert Graphify output into concrete findings only whe
 the source code demonstrates a credible correctness, safety, idempotence, parity,
 RBAC, check_mode, or destructive-operation risk.
 
+## Thermos Review Resolution
+
+The operator-supplied external Thermos Ansible review is a hypothesis source,
+not an authority. The original report may exist locally as an untracked
+`thermos_ansible_review.md`, but it is not required in a fresh checkout;
+[`thermos-resolution-plan.md`](thermos-resolution-plan.md) is the
+self-contained resolution source. Validate every finding against source code,
+tests, docs, and Graphify leads before treating it as a repo issue.
+
+Use [`thermos-resolution-plan.md`](thermos-resolution-plan.md) as the state
+tracker for Thermos follow-up work:
+
+- Update the tracker in every Thermos PR with the branch, status, verification,
+  and PR URL state for that slice.
+- Use one isolated `.worktrees/thermos-NN-*` worktree and one branch per PR.
+- Start each PR from the latest merged `ansible` branch, unless the tracker
+  explicitly records a stacked-branch dependency.
+- Keep PRs scoped to the tracker row being resolved. Do not fold unrelated
+  advisory refactors into safety fixes.
+- Preserve the dual-supported parity contract. If a Thermos fix would
+  intentionally diverge Python CLI and Ansible collection behavior, get explicit
+  operator approval and record the approved divergence in the required parity
+  docs before implementation.
+- Keep protected runbook files and `.claude/skills/**/*.skill.md` read-only
+  unless the operator explicitly approves those edits.
+
+## Pull Request Merge Gate
+
+Before merging any PR:
+
+- Fetch and review every top-level PR comment, review, and review thread.
+- Validate each actionable comment against the codebase before changing code.
+- Address each accepted comment with code/docs/tests, or reply with a concrete
+  technical reason when no change is appropriate.
+- Resolve each review thread only after the relevant change or reply is pushed.
+- Re-fetch PR comments and review threads after addressing feedback. Do not
+  merge while any actionable thread remains unresolved.
+- Check CI immediately before merge. Do not merge with failing, cancelled, or
+  pending required checks.
+
 ## Code Review Guidelines
 
 Prioritize correctness and operational safety over style comments.
