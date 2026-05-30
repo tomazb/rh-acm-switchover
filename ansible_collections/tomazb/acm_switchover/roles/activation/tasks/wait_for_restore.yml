@@ -68,33 +68,17 @@
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Resolve full-restore managed-cluster presence expectation
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/resolve_managed_cluster_expectation.yml"
+  vars:
+    acm_switchover_managed_cluster_expectation_mode: activation_restore_wait
+  when:
+    - acm_switchover_restore_activation_result.wait_target.managed_cluster_presence_required | default(false)
+    - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Publish activation managed-cluster expectation aliases
   ansible.builtin.set_fact:
-    _acm_activation_min_managed_clusters: >-
-      {{
-        (acm_switchover_operation.min_managed_clusters | int)
-        if (
-          acm_switchover_operation.min_managed_clusters is defined
-          and acm_switchover_operation.min_managed_clusters is not none
-        )
-        else (
-          1
-          if (acm_switchover_operation.restore_only | default(false) | bool)
-          else (acm_switchover_expected_managed_cluster_count | default(0) | int)
-        )
-      }}
-    _acm_activation_expected_managed_cluster_names: >-
-      {{
-        []
-        if (
-          acm_switchover_operation.min_managed_clusters is defined
-          and acm_switchover_operation.min_managed_clusters is not none
-        )
-        else (
-          []
-          if (acm_switchover_operation.restore_only | default(false) | bool)
-          else (acm_switchover_expected_managed_cluster_names | default([]))
-        )
-      }}
+    _acm_activation_min_managed_clusters: "{{ acm_switchover_resolved_min_managed_clusters | int }}"
+    _acm_activation_expected_managed_cluster_names: "{{ acm_switchover_resolved_expected_managed_cluster_names | default([]) }}"
   when:
     - acm_switchover_restore_activation_result.wait_target.managed_cluster_presence_required | default(false)
     - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
