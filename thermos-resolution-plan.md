@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:using-git-worktrees` before starting each implementation PR. Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` to execute each PR slice task-by-task. Update this file in every Thermos PR.
 
-**Goal:** Resolve the validated findings from `thermos_ansible_review.md` through isolated, reviewable branches without parity drift between the Python CLI and the Ansible collection.
+**Goal:** Resolve the validated findings captured from the operator-supplied external Thermos Ansible review through isolated, reviewable branches without parity drift between the Python CLI and the Ansible collection.
 
-**Architecture:** Treat the external report as a hypothesis source, not an authority. Every finding must stay tied to source evidence, tests, and documentation changes. Each PR uses a dedicated worktree and branch, updates this tracker, and preserves the dual-supported parity contract unless explicit operator approval records an intentional divergence.
+**Architecture:** Treat the external report as a hypothesis source, not an authority. The original report may exist locally as an untracked `thermos_ansible_review.md`, but it is not required in a fresh checkout; this tracker is the self-contained resolution source. Every finding must stay tied to source evidence, tests, and documentation changes. Each PR uses a dedicated worktree and branch, updates this tracker, and preserves the dual-supported parity contract unless explicit operator approval records an intentional divergence.
 
 **Tech Stack:** Python CLI, Ansible collection roles/playbooks/modules, pytest, GitHub PRs, `.worktrees/` git worktrees.
 
@@ -306,4 +306,4 @@ python -m pytest tests/test_rbac_collection_parity.py tests/test_rbac_validator.
 
 - Base branch: `ansible`
 - Root worktree had pre-existing untracked Graphify review artifacts and `thermos_ansible_review.md` when this tracker was created.
-- Keep Thermos implementation changes isolated in `.worktrees/thermos-*` branches.
+- Keep Thermos implementation changes isolated in `.worktrees/thermos-*` worktrees and their corresponding branches.

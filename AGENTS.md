@@ -436,8 +436,11 @@ RBAC, check_mode, or destructive-operation risk.
 
 ## Thermos Review Resolution
 
-The external report [`thermos_ansible_review.md`](thermos_ansible_review.md) is a
-hypothesis source, not an authority. Validate every finding against source code,
+The operator-supplied external Thermos Ansible review is a hypothesis source,
+not an authority. The original report may exist locally as an untracked
+`thermos_ansible_review.md`, but it is not required in a fresh checkout;
+[`thermos-resolution-plan.md`](thermos-resolution-plan.md) is the
+self-contained resolution source. Validate every finding against source code,
 tests, docs, and Graphify leads before treating it as a repo issue.
 
 Use [`thermos-resolution-plan.md`](thermos-resolution-plan.md) as the state
@@ -456,6 +459,20 @@ tracker for Thermos follow-up work:
   docs before implementation.
 - Keep protected runbook files and `.claude/skills/**/*.skill.md` read-only
   unless the operator explicitly approves those edits.
+
+## Pull Request Merge Gate
+
+Before merging any PR:
+
+- Fetch and review every top-level PR comment, review, and review thread.
+- Validate each actionable comment against the codebase before changing code.
+- Address each accepted comment with code/docs/tests, or reply with a concrete
+  technical reason when no change is appropriate.
+- Resolve each review thread only after the relevant change or reply is pushed.
+- Re-fetch PR comments and review threads after addressing feedback. Do not
+  merge while any actionable thread remains unresolved.
+- Check CI immediately before merge. Do not merge with failing, cancelled, or
+  pending required checks.
 
 ## Code Review Guidelines
 
