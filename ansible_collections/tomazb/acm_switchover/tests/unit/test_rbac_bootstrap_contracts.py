@@ -103,7 +103,7 @@ def test_preflight_validates_configured_managed_cluster_rbac():
     assert namespace_args["name"] == "open-cluster-management-agent"
     assert namespace_args["kubeconfig"] == "{{ managed_cluster_target.value.kubeconfig }}"
     assert "managed_cluster_target.value.context | default('', true)" in namespace_args["context"]
-    assert namespace_check["failed_when"] is False
+    assert "failed_when" not in namespace_check
 
     expansion_args = expansion["tomazb.acm_switchover.acm_rbac_validate"]
     assert expansion_args["hub"] == "managed-cluster {{ managed_cluster_target.key }}"
@@ -135,6 +135,7 @@ def test_managed_cluster_rbac_records_missing_agent_namespace():
     assert "open-cluster-management-agent" in denied_expr
     assert '"resource": "namespaces"' in denied_expr
     assert "_rbac_managed_cluster_agent_namespace.msg" in denied_expr
+    assert "not (_rbac_managed_cluster_agent_namespace.failed | default(false))" in str(missing_namespace["when"])
 
 
 def test_run_ssar_omits_empty_context_for_managed_cluster_kubeconfigs():

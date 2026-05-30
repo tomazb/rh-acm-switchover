@@ -13,7 +13,6 @@
       }}
   register: _rbac_managed_cluster_agent_namespace
   changed_when: false
-  failed_when: false
 
 - name: Record missing managed cluster agent namespace
   ansible.builtin.set_fact:
@@ -30,14 +29,18 @@
             | default("Namespace open-cluster-management-agent does not exist on managed cluster")
         }]
       }}
-  when: (_rbac_managed_cluster_agent_namespace.resources | default([]) | length) == 0
+  when:
+    - not (_rbac_managed_cluster_agent_namespace.failed | default(false))
+    - (_rbac_managed_cluster_agent_namespace.resources | default([]) | length) == 0
 
 - name: Expand required RBAC permissions for managed cluster
   tomazb.acm_switchover.acm_rbac_validate:
     hub: "managed-cluster {{ managed_cluster_target.key }}"
     scope: managed_cluster
   register: _rbac_expanded_managed_cluster
-  when: (_rbac_managed_cluster_agent_namespace.resources | default([]) | length) > 0
+  when:
+    - not (_rbac_managed_cluster_agent_namespace.failed | default(false))
+    - (_rbac_managed_cluster_agent_namespace.resources | default([]) | length) > 0
 
 - name: Run SelfSubjectAccessReview checks for managed cluster
   ansible.builtin.include_tasks: run_ssar.yml
@@ -45,7 +48,9 @@
     acm_rbac_permissions: "{{ _rbac_expanded_managed_cluster.permissions }}"
     _ssar_target_kubeconfig: "{{ managed_cluster_target.value.kubeconfig }}"
     _ssar_target_context: "{{ managed_cluster_target.value.context | default('', true) }}"
-  when: (_rbac_managed_cluster_agent_namespace.resources | default([]) | length) > 0
+  when:
+    - not (_rbac_managed_cluster_agent_namespace.failed | default(false))
+    - (_rbac_managed_cluster_agent_namespace.resources | default([]) | length) > 0
 
 - name: Collect denied permissions for managed cluster
   ansible.builtin.set_fact:
@@ -58,4 +63,6 @@
           | list
         )
       }}
-  when: (_rbac_managed_cluster_agent_namespace.resources | default([]) | length) > 0
+  when:
+    - not (_rbac_managed_cluster_agent_namespace.failed | default(false))
+    - (_rbac_managed_cluster_agent_namespace.resources | default([]) | length) > 0
