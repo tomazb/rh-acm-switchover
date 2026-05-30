@@ -1,10 +1,15 @@
 ---
 - name: Skip observability verification in dry-run mode
   ansible.builtin.set_fact:
-    acm_observability_check_result:
+    acm_switchover_observability_check_result:
       changed: false
       status: skipped
       reason: dry_run
+  when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+
+- name: Publish legacy dry-run observability result alias
+  ansible.builtin.set_fact:
+    acm_observability_check_result: "{{ acm_switchover_observability_check_result }}"
   when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 
 - name: Read observatorium-api Deployment on the secondary hub
@@ -257,7 +262,7 @@
 
 - name: Publish observability verification result
   ansible.builtin.set_fact:
-    acm_observability_check_result:
+    acm_switchover_observability_check_result:
       changed: >-
         {{
           (_acm_secondary_observatorium_scale_result.changed | default(false))
@@ -287,6 +292,11 @@
           .get('readyReplicas', 0))
         }}
       unhealthy_pods: "{{ _acm_secondary_unhealthy_observability_pods | default([]) }}"
+  when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
+
+- name: Publish legacy observability verification result alias
+  ansible.builtin.set_fact:
+    acm_observability_check_result: "{{ acm_switchover_observability_check_result }}"
   when: acm_switchover_execution.mode | default('dry_run') != 'dry_run'
 
 - name: Fail when observability checks did not fully pass

@@ -98,9 +98,3 @@ rbac:
   
   # Additional custom rules for validator ClusterRole
   customValidatorRules: []
-  
-  # Additional custom namespaces for Role creation
-  # Example:
-  # customNamespaces:
-  #   - custom-acm-namespace
-  customNamespaces: []

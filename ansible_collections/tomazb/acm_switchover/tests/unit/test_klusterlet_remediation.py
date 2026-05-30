@@ -21,9 +21,27 @@ def test_fix_klusterlet_file_exists():
     assert (POST_ACTIVATION_TASKS / "fix_klusterlet.yml").exists()
 
 
-def test_fix_klusterlet_single_file_exists():
-    """fix_klusterlet_single.yml must exist in post_activation tasks."""
-    assert (POST_ACTIVATION_TASKS / "fix_klusterlet_single.yml").exists()
+def test_obsolete_single_cluster_task_files_are_removed():
+    """Stale per-cluster task files must not remain as unsafe dead code."""
+    assert not (POST_ACTIVATION_TASKS / "fix_klusterlet_single.yml").exists()
+    assert not (POST_ACTIVATION_TASKS / "verify_klusterlet_connection_single.yml").exists()
+
+
+def test_post_activation_tasks_do_not_decode_sensitive_kubeconfig_material():
+    """Kubeconfig and import-secret material must stay inside bounded no-log modules."""
+    forbidden_tokens = (
+        "_klusterlet_current_hub_kubeconfig",
+        "_klusterlet_expected_hub_kubeconfig",
+        "_klusterlet_import_docs",
+        "_import_yaml_raw",
+        "from_yaml_all",
+        "b64decode | from_yaml",
+    )
+
+    for task_file in sorted(POST_ACTIVATION_TASKS.glob("*.yml")):
+        text = task_file.read_text()
+        for token in forbidden_tokens:
+            assert token not in text, f"{task_file.name} must not expose {token}"
 
 
 def test_verify_klusterlet_includes_remediation():
@@ -83,6 +101,19 @@ def test_verify_klusterlet_records_module_remediation_attempts():
     assert "_klusterlet_remediation_result is defined" in content
     assert "_klusterlet_initial_probe_result | default({})" in content
     assert "wrong_hub_clusters" in content
+
+
+def test_klusterlet_remediation_note_uses_prefixed_fact_with_compatibility_alias():
+    """The public note fact must be namespaced while preserving the legacy alias."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    note_task = next(task for task in tasks if task.get("name") == "Note klusterlet remediation candidates")
+    alias_task = next(task for task in tasks if task.get("name") == "Publish legacy klusterlet remediation note alias")
+
+    assert "acm_switchover_klusterlet_remediation_note" in note_task["ansible.builtin.set_fact"]
+    assert (
+        alias_task["ansible.builtin.set_fact"]["acm_klusterlet_remediation_note"]
+        == "{{ acm_switchover_klusterlet_remediation_note }}"
+    )
 
 
 def test_verify_klusterlet_reprobes_after_remediation():

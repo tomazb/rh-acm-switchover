@@ -109,6 +109,27 @@ def test_observability_publish_and_failure_gates_default_readiness_to_failed():
     assert "_acm_observability_pods_ready | default(false)" in text
 
 
+def test_observability_result_uses_prefixed_fact_with_compatibility_alias():
+    """The public observability result must be namespaced while preserving the legacy alias."""
+    tasks = _load_yaml("verify_observability.yml")
+    publish_tasks = [
+        task
+        for task in tasks
+        if "ansible.builtin.set_fact" in task
+        and "acm_switchover_observability_check_result" in task["ansible.builtin.set_fact"]
+    ]
+    alias_tasks = [
+        task
+        for task in tasks
+        if "ansible.builtin.set_fact" in task
+        and task["ansible.builtin.set_fact"].get("acm_observability_check_result")
+        == "{{ acm_switchover_observability_check_result }}"
+    ]
+
+    assert publish_tasks, "verify_observability.yml must publish acm_switchover_observability_check_result"
+    assert alias_tasks, "verify_observability.yml must preserve the acm_observability_check_result alias"
+
+
 def test_cleanup_auto_import_annotations_patches_managed_clusters():
     """cleanup task must remove disable-auto-import from non-local ManagedClusters."""
     tasks = _load_yaml("cleanup_auto_import_annotations.yml")

@@ -110,6 +110,26 @@ class TestVerifyManagedClustersPolling:
         assert "_acm_post_activation_min_managed_clusters" in str(module_args["min_managed_clusters"])
         assert "_acm_post_activation_expected_managed_cluster_names" in str(module_args["expected_names"])
 
+    def test_verification_results_use_prefixed_facts_with_compatibility_aliases(self):
+        """Public post_activation verification facts should use acm_switchover_ names."""
+        tasks = yaml.safe_load(self.content)
+        summary_task = next(task for task in tasks if "tomazb.acm_switchover.acm_managedcluster_status" in task)
+        verify_task = next(task for task in tasks if "tomazb.acm_switchover.acm_cluster_verify" in task)
+        alias_tasks = [task for task in tasks if "ansible.builtin.set_fact" in task]
+
+        assert summary_task["register"] == "acm_switchover_cluster_status_result"
+        assert verify_task["register"] == "acm_switchover_cluster_verify_result"
+        assert any(
+            task["ansible.builtin.set_fact"].get("cluster_status_result")
+            == "{{ acm_switchover_cluster_status_result }}"
+            for task in alias_tasks
+        )
+        assert any(
+            task["ansible.builtin.set_fact"].get("acm_cluster_verify_result")
+            == "{{ acm_switchover_cluster_verify_result }}"
+            for task in alias_tasks
+        )
+
     def test_preflight_zero_cluster_compatibility_excludes_restore_only(self):
         """A preflight-derived zero count may allow non-restore switchovers, but not restore-only."""
         assert "not (acm_switchover_operation.restore_only | default(false) | bool)" in self.content
@@ -190,6 +210,14 @@ class TestKlusterletReverification:
         assert (
             "_klusterlet_remediation_attempted" in content
         ), "verify_klusterlet.yml must set _klusterlet_remediation_attempted flag"
+
+    def test_main_consumes_prefixed_post_activation_result_facts(self):
+        """The role result contract must consume namespaced public fact names."""
+        content = (POST_ACTIVATION_TASKS / "main.yml").read_text()
+
+        assert "acm_switchover_cluster_verify_result" in content
+        assert "acm_switchover_observability_check_result" in content
+        assert "status: \"{{ 'pass' if acm_cluster_verify_result.passed else 'fail' }}\"" not in content
 
 
 # ── Issue 4: Negative min_managed_clusters rejection ──
