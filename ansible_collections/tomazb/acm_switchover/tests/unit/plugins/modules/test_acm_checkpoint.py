@@ -42,8 +42,6 @@ def test_build_operation_identity_captures_hub_and_operation_inputs():
     assert identity == {
         "primary_context": "hub-a",
         "secondary_context": "hub-b",
-        "primary_kubeconfig": "/kubeconfigs/primary",
-        "secondary_kubeconfig": "/kubeconfigs/secondary",
         "primary_cluster_uid": "uid-primary",
         "secondary_cluster_uid": "uid-secondary",
         "method": "passive",
@@ -58,8 +56,6 @@ def test_build_operation_identity_canonicalizes_sparse_inputs_to_defaults():
     expected_identity = {
         "primary_context": "",
         "secondary_context": "",
-        "primary_kubeconfig": "",
-        "secondary_kubeconfig": "",
         "primary_cluster_uid": "",
         "secondary_cluster_uid": "",
         "method": "passive",
@@ -193,6 +189,33 @@ def test_validate_operation_identity_rejects_same_context_with_different_cluster
 
     with pytest.raises(CheckpointIdentityMismatch):
         validate_operation_identity(checkpoint, expected_identity)
+
+
+def test_validate_operation_identity_accepts_legacy_kubeconfig_fields():
+    expected_identity = build_operation_identity(
+        hubs={
+            "primary": {
+                "context": "hub-a",
+                "kubeconfig": "/new/primary",
+                "cluster_uid": "uid-a",
+            },
+            "secondary": {
+                "context": "hub-b",
+                "kubeconfig": "/new/secondary",
+                "cluster_uid": "uid-b",
+            },
+        },
+        operation={"method": "passive"},
+    )
+    checkpoint = {
+        "operation_identity": {
+            **expected_identity,
+            "primary_kubeconfig": "/legacy/primary",
+            "secondary_kubeconfig": "/legacy/secondary",
+        }
+    }
+
+    assert validate_operation_identity(checkpoint, expected_identity) is True
 
 
 def test_validate_operation_identity_raises_when_identity_is_missing_by_default():

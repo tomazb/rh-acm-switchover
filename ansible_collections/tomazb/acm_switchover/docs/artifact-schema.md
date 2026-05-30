@@ -29,6 +29,8 @@ instead of `~/.kube/config`.
 - Path is validated with the collection safe-path policy before any controller-side file write
 - `status=pass` means no critical findings failed
 - Warning-only failures remain visible in `results` but do not fail the role
+- The `hubs` object records hub context and live cluster UID only. It does not
+  persist kubeconfig paths.
 - Each result entry uses the stable schema:
   - `id`
   - `severity`
@@ -123,8 +125,8 @@ quarantining, or mutating the checkpoint file.
   "operation_identity": {
     "primary_context": "primary-hub",
     "secondary_context": "secondary-hub",
-    "primary_kubeconfig": "./kubeconfigs/primary.kubeconfig",
-    "secondary_kubeconfig": "./kubeconfigs/secondary.kubeconfig",
+    "primary_cluster_uid": "d1f2b8a0-0000-4000-9000-111111111111",
+    "secondary_cluster_uid": "e3a4c9b1-0000-4000-9000-222222222222",
     "method": "passive",
     "activation_method": "patch",
     "restore_only": false,
@@ -162,9 +164,13 @@ a writable `acm_switchover_execution.checkpoint.path`.
 ### Checkpoint Resume And Reset
 
 Current schema `2.0` checkpoints are bound to the current operation identity:
-primary and secondary contexts, kubeconfig path strings, method, activation method,
+primary and secondary contexts, live hub cluster UIDs, method, activation method,
 restore-only mode, old-hub action, and collection version. If the stored identity
 does not match the current invocation, the run fails before reusing the checkpoint.
+Schema `2.0` checkpoints written by older collection builds may contain legacy
+`primary_kubeconfig` and `secondary_kubeconfig` identity fields. These fields are
+ignored for identity comparison and removed from the checkpoint on the next
+execute-mode resume when the remaining context and cluster UID identity matches.
 
 Use `acm_switchover_execution.checkpoint.reset: true` to start from a fresh checkpoint.
 Use `acm_switchover_execution.checkpoint.reset_from` to remove the named phase and

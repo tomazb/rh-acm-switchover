@@ -18,6 +18,7 @@ CHECKPOINT_VALID_STATUSES = frozenset({"enter", "pass", "fail", "reset"})
 CHECKPOINT_BACKEND_FILE = "file"
 CHECKPOINT_DEFAULT_PATH = ".state/checkpoint.json"
 CHECKPOINT_REPORT_KIND_JSON = "json-report"
+LEGACY_OPERATION_IDENTITY_FIELDS = frozenset({"primary_kubeconfig", "secondary_kubeconfig"})
 
 
 class CheckpointIdentityMismatch(ValueError):
@@ -41,8 +42,6 @@ def build_operation_identity(
     return {
         "primary_context": primary.get("context") or "",
         "secondary_context": secondary.get("context") or "",
-        "primary_kubeconfig": primary.get("kubeconfig") or "",
-        "secondary_kubeconfig": secondary.get("kubeconfig") or "",
         "primary_cluster_uid": primary.get("cluster_uid") or primary_identity.get("cluster_uid") or "",
         "secondary_cluster_uid": secondary.get("cluster_uid") or secondary_identity.get("cluster_uid") or "",
         "method": operation.get("method") or ("full" if _restore_only else "passive"),
@@ -51,6 +50,13 @@ def build_operation_identity(
         "old_hub_action": operation.get("old_hub_action") or ("none" if _restore_only else "secondary"),
         "collection_version": collection_version or "",
     }
+
+
+def normalize_operation_identity(identity: dict) -> dict:
+    """Drop legacy sensitive fields before comparing or persisting identities."""
+    if not isinstance(identity, dict):
+        return {}
+    return {key: value for key, value in identity.items() if key not in LEGACY_OPERATION_IDENTITY_FIELDS}
 
 
 def build_checkpoint_record(phase: str, operational_data: dict, operation_identity: dict | None = None) -> dict:
@@ -76,7 +82,7 @@ def validate_operation_identity(checkpoint: dict, expected_identity: dict, *, al
         if allow_missing:
             return False
         raise CheckpointIdentityMismatch("Checkpoint is missing operation identity.")
-    if actual_identity != expected_identity:
+    if normalize_operation_identity(actual_identity) != normalize_operation_identity(expected_identity):
         raise CheckpointIdentityMismatch("Checkpoint operation identity does not match the current execution.")
     return True
 

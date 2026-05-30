@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed collection preflight reports and checkpoint operation identities so they no longer persist kubeconfig paths. Reports and checkpoints retain hub context plus live cluster UID, and existing schema 2.0 checkpoints with legacy kubeconfig identity fields are normalized on resume.
 - Fixed Python CLI Argo CD resume-only identity validation so state files with stored hub cluster UIDs fail closed when a live hub UID changes or cannot be read.
 - Fixed `klusterlet` fail-closed behavior. Initial Python worker timeouts now fail post-activation. Collection probe check mode avoids live client construction. Collection probe API/client exceptions are now reported as failed probe results instead of skipped checks.
 - Fixed the collection full switchover playbook to reject `restore_only=true` before any phase roles run, and tightened restore-only input validation so primary hub kubeconfig data is rejected with primary context data.
