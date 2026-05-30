@@ -12,6 +12,7 @@ import yaml
 from ansible_collections.tomazb.acm_switchover.tests.conftest import (
     _ansible_env,
     _materialize_fixture_kubeconfigs,
+    _merge_test_vars,
     _seed_fixture_defaults,
 )
 
@@ -33,6 +34,72 @@ def _materialize_report_dir(report_dir: str, tmp_path: Path) -> Path:
     return materialized
 
 
+def _write_preflight_fixture_kubeconfig(kubeconfig_path: Path, context: str, server: str) -> None:
+    kubeconfig_path.parent.mkdir(parents=True, exist_ok=True)
+    cluster_name = f"{context}-cluster"
+    user_name = f"{context}-user"
+    kubeconfig_path.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "clusters": [
+                    {
+                        "name": cluster_name,
+                        "cluster": {
+                            "server": server,
+                            "insecure-skip-tls-verify": True,
+                        },
+                    }
+                ],
+                "contexts": [
+                    {
+                        "name": context,
+                        "context": {
+                            "cluster": cluster_name,
+                            "user": user_name,
+                        },
+                    }
+                ],
+                "current-context": context,
+                "users": [
+                    {
+                        "name": user_name,
+                        "user": {
+                            "username": "fixture",
+                            "password": "fixture",
+                        },
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _materialize_preflight_fixture_kubeconfigs(vars_payload: dict, tmp_path: Path) -> None:
+    test_overrides = vars_payload.get("acm_switchover_test_overrides")
+    if not isinstance(test_overrides, dict) or "fixture_kubeconfig_server" not in test_overrides:
+        _materialize_fixture_kubeconfigs(vars_payload, tmp_path)
+        return
+
+    hubs = vars_payload.get("acm_switchover_hubs")
+    if not isinstance(hubs, dict):
+        return
+
+    kubeconfig_dir = tmp_path / "kubeconfigs"
+    kubeconfig_server = str(test_overrides["fixture_kubeconfig_server"])
+    for hub_name in ("primary", "secondary"):
+        hub = hubs.get(hub_name)
+        if not isinstance(hub, dict) or not hub.get("kubeconfig"):
+            continue
+        context = str(hub.get("context") or f"{hub_name}-hub")
+        kubeconfig_path = kubeconfig_dir / f"{hub_name}.kubeconfig"
+        _write_preflight_fixture_kubeconfig(kubeconfig_path, context, kubeconfig_server)
+        hub["kubeconfig"] = str(kubeconfig_path)
+
+
 def _prepare_execution_vars(vars_payload: dict, tmp_path: Path) -> Path:
     execution = vars_payload.setdefault("acm_switchover_execution", {})
     report_dir = execution.get("report_dir")
@@ -42,18 +109,23 @@ def _prepare_execution_vars(vars_payload: dict, tmp_path: Path) -> Path:
     else:
         effective_report_dir = tmp_path / "artifacts"
         execution["report_dir"] = str(effective_report_dir)
-    _materialize_fixture_kubeconfigs(vars_payload, tmp_path)
+    _materialize_preflight_fixture_kubeconfigs(vars_payload, tmp_path)
     return effective_report_dir
 
 
 @pytest.fixture
 def run_preflight_fixture(tmp_path):
-    def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+    def _run(
+        fixture_name: str,
+        overrides: dict | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _find_repo_root()
         fixture_path = (
             repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/preflight" / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
+        if overrides:
+            _merge_test_vars(vars_payload, overrides)
         _seed_fixture_defaults(vars_payload)
         report_dir = _prepare_execution_vars(vars_payload, tmp_path)
 

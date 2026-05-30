@@ -1,5 +1,130 @@
 """Integration tests for the preflight role contract."""
 
+from __future__ import annotations
+
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
+
+import pytest
+
+
+class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
+    def log_message(self, _format, *_args):
+        return
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        responses = {
+            "/version": {
+                "major": "1",
+                "minor": "28",
+                "gitVersion": "v1.28.0",
+            },
+            "/api": {
+                "kind": "APIVersions",
+                "versions": ["v1"],
+                "serverAddressByClientCIDRs": [],
+            },
+            "/api/v1": {
+                "kind": "APIResourceList",
+                "groupVersion": "v1",
+                "resources": [
+                    {
+                        "name": "namespaces",
+                        "singularName": "",
+                        "namespaced": False,
+                        "kind": "Namespace",
+                        "verbs": ["get", "list"],
+                    }
+                ],
+            },
+            "/api/v1/namespaces/default": {
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {"name": "default"},
+            },
+            "/apis": {
+                "kind": "APIGroupList",
+                "groups": [
+                    {
+                        "name": "authorization.k8s.io",
+                        "versions": [
+                            {
+                                "groupVersion": "authorization.k8s.io/v1",
+                                "version": "v1",
+                            }
+                        ],
+                        "preferredVersion": {
+                            "groupVersion": "authorization.k8s.io/v1",
+                            "version": "v1",
+                        },
+                    }
+                ],
+            },
+            "/apis/authorization.k8s.io/v1": {
+                "kind": "APIResourceList",
+                "groupVersion": "authorization.k8s.io/v1",
+                "resources": [
+                    {
+                        "name": "selfsubjectaccessreviews",
+                        "singularName": "",
+                        "namespaced": False,
+                        "kind": "SelfSubjectAccessReview",
+                        "verbs": ["create"],
+                    }
+                ],
+            },
+        }
+        payload = responses.get(path)
+        if payload is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+        self._write_json(payload)
+
+    def do_POST(self):
+        if self.path != "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews":
+            self.send_response(404)
+            self.end_headers()
+            return
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length:
+            self.rfile.read(content_length)
+        self._write_json(
+            {
+                "apiVersion": "authorization.k8s.io/v1",
+                "kind": "SelfSubjectAccessReview",
+                "metadata": {"name": "fixture-denial"},
+                "status": {
+                    "allowed": False,
+                    "reason": "fixture denied permission",
+                },
+            },
+            status=201,
+        )
+
+    def _write_json(self, payload, status=200):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture
+def fixture_kubernetes_api_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureKubernetesHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
 
 def test_preflight_input_failure_writes_report_and_fails(run_preflight_fixture):
     completed, report = run_preflight_fixture("input_failure.yml")
@@ -37,6 +162,30 @@ def test_preflight_backup_failure_is_reported(run_preflight_fixture):
     assert "preflight-passive-restore-secondary" in result_ids
     assert "preflight-clusterdeployments" in result_ids
     assert "preflight-managed-cluster-backups" in result_ids
+
+
+def test_preflight_rbac_failure_still_reports_backup_findings(
+    run_preflight_fixture,
+    fixture_kubernetes_api_server,
+):
+    completed, report = run_preflight_fixture(
+        "rbac_and_backup_failure.yml",
+        overrides={
+            "acm_switchover_test_overrides": {
+                "fixture_kubeconfig_server": fixture_kubernetes_api_server,
+            },
+        },
+    )
+    assert completed.returncode != 0
+    assert report, completed.stdout + completed.stderr
+    assert report["status"] == "fail"
+    results_by_id = {item["id"]: item for item in report["results"]}
+    assert results_by_id["preflight-rbac-primary"]["status"] == "fail"
+    assert results_by_id["preflight-rbac-secondary"]["status"] == "fail"
+    assert results_by_id["preflight-backup-latest"]["status"] == "fail"
+    assert results_by_id["preflight-backup-schedule"]["status"] == "fail"
+    assert results_by_id["preflight-backup-storage-location-primary"]["status"] == "fail"
+    assert results_by_id["preflight-passive-restore-secondary"]["status"] == "fail"
 
 
 def test_preflight_fixture_without_execution_block_uses_defaults(run_preflight_fixture):

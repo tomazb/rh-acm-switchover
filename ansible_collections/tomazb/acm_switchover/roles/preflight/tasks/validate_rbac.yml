@@ -305,9 +305,13 @@
         }}
       critical_failures: >-
         {{
-          (acm_switchover_preflight_summary.critical_failures | default(0))
-          + (acm_primary_rbac_validation.critical_failures | default(0))
-          + (acm_secondary_rbac_validation.critical_failures | default(0))
-          + (acm_managed_cluster_rbac_validation.critical_failures | default(0))
+          (acm_switchover_preflight_summary.critical_failures | default(0) | int)
+          + (acm_primary_rbac_validation.critical_failures | default(0) | int)
+          + (acm_secondary_rbac_validation.critical_failures | default(0) | int)
+          + (acm_managed_cluster_rbac_validation.critical_failures | default(0) | int)
         }}
-      warning_failures: "{{ acm_switchover_preflight_summary.warning_failures | default(0) }}"
+      warning_failures: "{{ acm_switchover_preflight_summary.warning_failures | default(0) | int }}"
+
+- name: Mark RBAC validation collection complete
+  ansible.builtin.set_fact:
+    _acm_preflight_rbac_validation_completed: true
