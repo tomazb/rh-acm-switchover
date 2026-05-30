@@ -54,6 +54,13 @@ def test_shared_managed_cluster_expectation_publishes_common_facts():
     assert "acm_switchover_resolved_allow_zero_managed_clusters" in text
 
 
+def test_shared_managed_cluster_expectation_handles_undefined_or_null_inputs():
+    text = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
+
+    assert "(acm_switchover_managed_cluster_expectation_mode | default('')) in" in text
+    assert "acm_switchover_managed_clusters | default({}, true)" in text
+
+
 def test_shared_managed_cluster_expectation_validates_counts_before_int_coercion():
     tasks = _load_tasks(COMMON_TASKS / "resolve_managed_cluster_expectation.yml")
     text = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()

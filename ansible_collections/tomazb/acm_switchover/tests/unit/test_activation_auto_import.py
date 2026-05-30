@@ -145,6 +145,13 @@ def test_manage_auto_import_preserves_python_guards_and_detect_only_mode():
     assert "ImportAndSync" in content
 
 
+def test_auto_import_support_handles_missing_mch_discovery_fact():
+    """The support resolver should fail predictably instead of raising UndefinedError."""
+    support_content = AUTO_IMPORT_SUPPORT_TASK.read_text()
+
+    assert "(acm_activation_mch_info | default({}, true)).resources" in support_content
+
+
 def test_manage_auto_import_initializes_strategy_for_dry_run_paths():
     """Dry-run skips live ConfigMap discovery, but later when clauses still need a strategy value."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "manage_auto_import.yml").read_text())

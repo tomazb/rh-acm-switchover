@@ -2,7 +2,7 @@
 - name: Validate managed-cluster expectation mode
   ansible.builtin.assert:
     that:
-      - acm_switchover_managed_cluster_expectation_mode in ['activation_restore_wait', 'post_activation_verify']
+      - (acm_switchover_managed_cluster_expectation_mode | default('')) in ['activation_restore_wait', 'post_activation_verify']
     fail_msg: >-
       Unsupported managed-cluster expectation mode:
       {{ acm_switchover_managed_cluster_expectation_mode | default('undefined') }}
@@ -11,7 +11,7 @@
   ansible.builtin.set_fact:
     acm_switchover_resolved_configured_managed_cluster_names: >-
       {{
-        acm_switchover_managed_clusters | default({})
+        acm_switchover_managed_clusters | default({}, true)
         | dict2items
         | map(attribute='key')
         | list
