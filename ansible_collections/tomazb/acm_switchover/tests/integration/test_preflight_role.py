@@ -122,6 +122,7 @@ def fixture_kubernetes_api_server():
         yield f"http://127.0.0.1:{server.server_port}"
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
 
