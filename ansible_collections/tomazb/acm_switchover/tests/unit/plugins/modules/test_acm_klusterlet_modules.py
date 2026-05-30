@@ -202,6 +202,45 @@ def test_probe_defaults_to_all_managed_clusters_when_candidates_are_omitted():
     assert result["verified_clusters"] == ["cluster-a"]
 
 
+def test_probe_check_mode_returns_plan_without_clients():
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        candidate_clusters=["cluster-a"],
+        workers=1,
+        check_mode=True,
+        core_client_factory=_fail_client_factory,
+    )
+
+    assert result["changed"] is False
+    assert result["failed"] is False
+    assert result["planned_clusters"] == ["cluster-a"]
+    assert result["results"] == [{"cluster": "cluster-a", "status": "planned", "reason": "check_mode"}]
+
+
+def test_probe_reports_client_exception_as_failed_result():
+    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+
+    def core_client_factory(kubeconfig: str, context: str | None = None):
+        if kubeconfig == "hub":
+            return secondary
+        raise RuntimeError("managed client failed")
+
+    result = probe_klusterlet_connections(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        candidate_clusters=["cluster-a"],
+        workers=1,
+        core_client_factory=core_client_factory,
+    )
+
+    assert result["failed"] is True
+    assert result["failed_clusters"] == ["cluster-a"]
+    assert result["skipped_clusters"] == []
+    assert result["results"][0]["status"] == "failed"
+    assert "managed client failed" in result["results"][0]["reason"]
+
+
 def test_probe_waits_until_wrong_hub_secret_converges(monkeypatch):
     """Post-remediation probe polling must tolerate stale hub-kubeconfig-secret reads."""
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})

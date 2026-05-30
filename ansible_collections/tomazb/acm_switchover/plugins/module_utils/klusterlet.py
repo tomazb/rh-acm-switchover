@@ -304,7 +304,7 @@ def probe_one_cluster(
     except Exception as exc:
         return {
             "cluster": cluster_name,
-            "status": "skipped",
+            "status": "failed",
             "reason": error_summary(exc),
         }
 
@@ -318,15 +318,56 @@ def probe_klusterlet_connections(
     future_timeout: int | float | None = None,
     wait_timeout: int | float | None = None,
     wait_interval: int | float | None = None,
+    check_mode: bool = False,
     core_client_factory: CoreClientFactory = build_core_v1_client,
 ) -> dict:
     worker_count = normalize_workers(workers)
     request_timeout_value = normalize_timeout(request_timeout, "request_timeout")
     future_timeout_value = normalize_timeout(future_timeout, "future_timeout")
     candidates = list(candidate_clusters if candidate_clusters is not None else managed_clusters.keys())
+
+    def build_probe_result(results: list[dict]) -> dict:
+        failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
+        return {
+            "changed": False,
+            "failed": bool(failed_clusters),
+            "workers": worker_count,
+            "results": results,
+            "verified_clusters": [item["cluster"] for item in results if item["status"] == "verified"],
+            "wrong_hub_clusters": [item["cluster"] for item in results if item["status"] == "wrong_hub"],
+            "skipped_clusters": [item["cluster"] for item in results if item["status"] == "skipped"],
+            "failed_clusters": failed_clusters,
+        }
+
+    if check_mode:
+        results = [{"cluster": cluster, "status": "planned", "reason": "check_mode"} for cluster in candidates]
+        result = build_probe_result(results)
+        result["planned_clusters"] = candidates
+        return result
+
     secondary_client: CoreV1Client | None = None
     if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
-        secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
+        try:
+            secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
+        except Exception as exc:
+            reason = error_summary(exc)
+            results = [
+                (
+                    {
+                        "cluster": cluster,
+                        "status": "failed",
+                        "reason": reason,
+                    }
+                    if (managed_clusters.get(cluster) or {}).get("kubeconfig")
+                    else {
+                        "cluster": cluster,
+                        "status": "skipped",
+                        "reason": "no_managed_cluster_kubeconfig",
+                    }
+                )
+                for cluster in candidates
+            ]
+            return build_probe_result(results)
 
     def run_probe_once() -> dict:
         results = ordered_bounded_map(
@@ -346,17 +387,7 @@ def probe_klusterlet_connections(
                 "reason": worker_timeout_reason(future_timeout_value),
             },
         )
-        failed_clusters = [item["cluster"] for item in results if item["status"] == "failed"]
-        return {
-            "changed": False,
-            "failed": bool(failed_clusters),
-            "workers": worker_count,
-            "results": results,
-            "verified_clusters": [item["cluster"] for item in results if item["status"] == "verified"],
-            "wrong_hub_clusters": [item["cluster"] for item in results if item["status"] == "wrong_hub"],
-            "skipped_clusters": [item["cluster"] for item in results if item["status"] == "skipped"],
-            "failed_clusters": failed_clusters,
-        }
+        return build_probe_result(results)
 
     if wait_timeout is None:
         return run_probe_once()

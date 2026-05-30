@@ -829,13 +829,14 @@ class PostActivationVerification:
         verified = []
         wrong_hub = []
         unreachable = []
+        timed_out = []
 
         executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
         try:
             check_future_fallbacks = {
                 executor.submit(check_cluster, name, api_url): (
                     name,
-                    "unreachable",
+                    "worker_timeout",
                     None,
                 )
                 for name, api_url in cluster_info
@@ -848,6 +849,8 @@ class PostActivationVerification:
                     verified.append(cluster_name)
                 elif result == "wrong_hub":
                     wrong_hub.append((cluster_name, context_name))
+                elif result == "worker_timeout":
+                    timed_out.append(cluster_name)
                 else:  # unreachable, no_context, or error
                     unreachable.append(cluster_name)
         finally:
@@ -860,6 +863,8 @@ class PostActivationVerification:
                 len(verified),
                 ", ".join(verified),
             )
+        if timed_out:
+            raise SwitchoverError(f"Klusterlet verification timed out for cluster(s): {', '.join(timed_out)}")
 
         def fix_cluster(cluster_name: str, context_name: str) -> tuple:
             """Fix a single cluster's klusterlet connection. Returns (cluster_name, success)."""

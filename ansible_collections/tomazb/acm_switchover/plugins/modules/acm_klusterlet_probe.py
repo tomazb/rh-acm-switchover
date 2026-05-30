@@ -97,6 +97,7 @@ def main() -> None:
             future_timeout=module.params.get("future_timeout", KLUSTERLET_WORKER_TIMEOUT),
             wait_timeout=module.params.get("wait_timeout"),
             wait_interval=module.params.get("wait_interval", KLUSTERLET_RECHECK_INTERVAL),
+            check_mode=getattr(module, "check_mode", False),
         )
     except Exception as exc:
         module.fail_json(msg=str(exc))

@@ -1457,8 +1457,8 @@ class TestKlusterletParallelVerification:
                         # Should not raise; c1 lands in unreachable bucket
                         pav._verify_klusterlet_connections()
 
-    def test_initial_check_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager, caplog):
-        """Timed-out initial klusterlet checks should be treated as unreachable."""
+    def test_initial_check_timeout_fails_closed(self, mock_secondary_client, mock_state_manager, caplog):
+        """Timed-out initial klusterlet checks must fail post-activation."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -1479,9 +1479,10 @@ class TestKlusterletParallelVerification:
                         "modules.post_activation.wait",
                         side_effect=lambda futures, timeout: (set(), set(futures)),
                     ):
-                        pav._verify_klusterlet_connections()
+                        with pytest.raises(SwitchoverError, match="Klusterlet verification timed out"):
+                            pav._verify_klusterlet_connections()
 
-        assert "Klusterlet verification skipped for 1 cluster(s)" in caplog.text
+        assert "Timed out checking klusterlet for c1" in caplog.text
         assert "c1" in caplog.text
 
     def test_remediation_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager):
