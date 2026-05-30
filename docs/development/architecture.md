@@ -459,4 +459,4 @@ The collection uses a fundamentally different architecture from the Python CLI:
 - **Klusterlet helpers** use bounded direct Kubernetes requests and worker futures. Defaults are 10 workers, 30-second per-request timeouts, and 180-second worker future timeout windows for each probe/remediation batch; worker future timeouts are reported as failed cluster results.
 - **Constants isolation**: `plugins/module_utils/constants.py` is the collection's constants file — it cannot import from `lib/constants.py`
 
-The collection architecture is fully detailed in the [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md). Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.
+The collection architecture is tracked through the [Ansible collection behavior map](../ansible-collection/behavior-map.md), [parity matrix](../ansible-collection/parity-matrix.md), and collection-owned architecture docs. Both the Python CLI and the Ansible Collection are production implementations in the current coexistence period.

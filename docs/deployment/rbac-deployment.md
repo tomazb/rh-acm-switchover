@@ -32,36 +32,56 @@ Choose the deployment method that best fits your environment:
 
 ## Quick Start
 
-### Automated Setup (Recommended)
+### Ansible Collection Bootstrap (Recommended)
 
-The easiest way to deploy RBAC and generate kubeconfigs is using the bootstrap script:
+The recommended operator path is the collection RBAC bootstrap playbook. It
+applies the same least-privilege manifest set as `deploy/rbac/`, can generate a
+service-account kubeconfig, and can validate the applied permissions through the
+collection RBAC validator.
 
 ```bash
 # Clone repository
 git clone https://github.com/tomazb/rh-acm-switchover.git
 cd rh-acm-switchover
 
-# Setup RBAC on a hub with your admin kubeconfig
+# Bootstrap operator RBAC on a hub with an admin kubeconfig
+ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/rbac_bootstrap.yml \
+  -i ansible_collections/tomazb/acm_switchover/examples/inventory.yml \
+  -e '{"acm_switchover_hubs":{"primary":{"kubeconfig":"~/.kube/admin.yaml","context":"primary-hub"}}}' \
+  -e '{"acm_switchover_execution":{"mode":"execute"}}' \
+  -e '{"acm_switchover_rbac_bootstrap":{"role":"operator","generate_kubeconfigs":true,"validate_permissions":true,"output_dir":"./kubeconfigs"}}'
+
+# The playbook will:
+# 1. Deploy all RBAC resources (namespace, SA, roles, bindings)
+# 2. Generate a kubeconfig with unique user name
+# 3. Validate permissions with the collection RBAC validator
+```
+
+The collection kubeconfig generator sanitizes context names containing `/` or
+`:` for safe output filenames while using the original value for all cluster API
+operations. For example, context `admin/api-prod.example.com:6443` generates a
+file such as `kubeconfigs/admin_api-prod.example.com_6443-operator.yaml`.
+
+This bootstrap path deploys the baseline operator role only. The baseline role
+includes the `MultiClusterObservability` delete permission used by normal
+old-hub finalization when observability is present; it does not include
+`ManagedCluster` or `MultiClusterHub` delete permissions for decommission. Set
+`acm_switchover_rbac_bootstrap.include_decommission=true` only for service
+accounts that must run old-hub teardown.
+
+### Deprecated Bash Bootstrap
+
+The legacy `scripts/setup-rbac.sh` wrapper remains for Python CLI compatibility,
+but active operator guidance should prefer `playbooks/rbac_bootstrap.yml`.
+
+```bash
 ./scripts/setup-rbac.sh \
   --admin-kubeconfig ~/.kube/admin.yaml \
   --context primary-hub \
   --role operator
-
-# The script will:
-# 1. Deploy all RBAC resources (namespace, SA, roles, bindings)
-# 2. Generate a kubeconfig with unique user name
-# 3. Validate permissions with check_rbac.py
-
-# OpenShift oc-login context names containing '/' or ':' are fully supported.
-# The script sanitizes them for safe output filenames while using the original
-# value for all cluster API operations.
-# Example: --context "admin/api-prod.example.com:6443"
-#   generates: kubeconfigs/admin_api-prod.example.com_6443-operator.yaml
 ```
 
-This bootstrap path deploys the baseline operator role only. The baseline role includes the `MultiClusterObservability` delete permission used by normal old-hub finalization when observability is present; it does not include `ManagedCluster` or `MultiClusterHub` delete permissions for decommission.
-
-For multi-hub setup:
+For legacy multi-hub script setup:
 
 ```bash
 # Setup both hubs
@@ -514,7 +534,9 @@ python acm_switchover.py \
 
 ### setup-rbac.sh
 
-Automated RBAC deployment and kubeconfig generation.
+Deprecated Bash wrapper for RBAC deployment and kubeconfig generation. Prefer
+the collection `playbooks/rbac_bootstrap.yml` entrypoint for new operator
+automation.
 
 ```bash
 ./scripts/setup-rbac.sh --admin-kubeconfig <path> --context <context> [OPTIONS]
@@ -532,7 +554,7 @@ Automated RBAC deployment and kubeconfig generation.
 | `--skip-validation` | Skip RBAC validation after deployment | - |
 | `--dry-run` | Show what would be deployed without changes | - |
 
-**Example - Full setup for production:**
+**Legacy example - Bash wrapper with decommission extension:**
 
 ```bash
 ./scripts/setup-rbac.sh \

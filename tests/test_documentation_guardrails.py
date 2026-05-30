@@ -172,6 +172,62 @@ def test_rbac_docs_match_observability_route_and_scale_permissions():
     assert 'resources: ["deployments", "statefulsets", "statefulsets/scale"]' in install_doc
 
 
+def test_rbac_requirements_document_current_cluster_read_permissions():
+    """RBAC requirements must include the cluster-wide read surface shipped in manifests."""
+    content = _read("docs/deployment/rbac-requirements.md")
+
+    assert "- **Resources**: `namespaces`\n- **Verbs**: `get`, `list`" in content
+    assert "#### Nodes" in content
+    assert "- **Resources**: `nodes`\n- **Verbs**: `get`, `list`" in content
+    assert "#### ClusterOperators" in content
+    assert "- **Resources**: `clusteroperators`\n- **Verbs**: `get`, `list`" in content
+    assert "#### ClusterVersions" in content
+    assert "- **Resources**: `clusterversions`\n- **Verbs**: `get`, `list`" in content
+
+
+def test_rbac_requirements_document_current_namespace_permissions():
+    """Namespace-scoped RBAC docs must include read resources and verbs from shipped Roles."""
+    content = _read("docs/deployment/rbac-requirements.md")
+    namespace_section = content.split("### Namespace-Scoped Resources", 1)[1].split("### Managed-Cluster", 1)[0]
+
+    assert "- `pods` (get, list)" in namespace_section
+    assert "- `backupstoragelocations` (get, list - velero.io)" in namespace_section
+    assert "- `configmaps` (get, list, create, patch, delete)" in namespace_section
+
+
+def test_rbac_deployment_recommends_collection_bootstrap_before_deprecated_script():
+    """Operator bootstrap docs should prefer the collection playbook over the deprecated script."""
+    content = _read("docs/deployment/rbac-deployment.md")
+    quick_start = content.split("## Quick Start", 1)[1].split("### Option 1", 1)[0]
+
+    assert "playbooks/rbac_bootstrap.yml" in quick_start
+    assert "scripts/setup-rbac.sh" in quick_start
+    assert quick_start.index("playbooks/rbac_bootstrap.yml") < quick_start.index("scripts/setup-rbac.sh")
+    assert "deprecated" in quick_start.lower()
+
+
+def test_collection_readme_no_longer_calls_collection_foundation_scope():
+    """Collection README should describe the current production collection, not the old foundation scope."""
+    content = _read("ansible_collections/tomazb/acm_switchover/README.md")
+
+    assert "Foundation Ansible Collection" not in content
+    assert "Production-ready Ansible Collection" in content
+
+
+def test_project_docs_do_not_link_missing_ansible_design_spec():
+    """Docs must not link the removed 2026-04-10 Ansible rewrite spec."""
+    stale_spec = "2026-04-10-ansible-collection-rewrite-design.md"
+
+    docs_paths = sorted(path for path in (REPO_ROOT / "docs").rglob("*.md") if path.is_file())
+    for doc_path in docs_paths:
+        content = doc_path.read_text(encoding="utf-8")
+        assert stale_spec not in content
+
+    for path in ("docs/project/summary.md", "docs/project/prd.md"):
+        content = _read(path)
+        assert "../ansible-collection/" in content
+
+
 def test_report_artifact_docs_do_not_claim_identical_top_level_fields():
     """Report docs must describe aligned contracts without promising field-for-field identity."""
     artifact_schema = _read("ansible_collections/tomazb/acm_switchover/docs/artifact-schema.md")

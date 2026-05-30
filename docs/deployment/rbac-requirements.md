@@ -1,7 +1,7 @@
 # RBAC Requirements for ACM Switchover
 
 **Version**: 1.0.0  
-**Last Updated**: May 13, 2026
+**Last Updated**: May 30, 2026
 
 ## Overview
 
@@ -58,9 +58,15 @@ manifests, and Helm templates must stay aligned when permissions change.
 
 #### Namespaces
 - **Resources**: `namespaces`
-- **Verbs**: `get`
+- **Verbs**: `get`, `list`
 - **Scope**: Cluster-wide
-- **Purpose**: Validate existence of ACM, backup, and observability namespaces
+- **Purpose**: Validate existence of ACM, backup, and observability namespaces and discover namespace identity during hub validation
+
+#### Nodes
+- **Resources**: `nodes`
+- **Verbs**: `get`, `list`
+- **Scope**: Cluster-wide
+- **Purpose**: Read-only cluster health validation before switchover or decommission work
 
 #### Secrets
 - **Resources**: `secrets`
@@ -71,14 +77,28 @@ manifests, and Helm templates must stay aligned when permissions change.
 #### ConfigMaps
 - **Resources**: `configmaps`
 - **Verbs**: `get`, `list`, `create`, `patch`, `delete`
-- **Scope**: Namespace-scoped (`multicluster-engine`)
-- **Purpose**: Manage auto-import strategy configuration
+- **Scope**: Namespace-scoped (`open-cluster-management-backup`, `multicluster-engine`)
+- **Purpose**: Manage checkpoint/config state and auto-import strategy configuration
 
 #### Pods
 - **Resources**: `pods`
 - **Verbs**: `get`, `list`
-- **Scope**: Namespace-scoped (`open-cluster-management-observability`)
-- **Purpose**: Monitor observability component health and verify readiness
+- **Scope**: Namespace-scoped (`open-cluster-management`, `open-cluster-management-backup`, `open-cluster-management-observability`)
+- **Purpose**: Monitor ACM, Velero, and observability component health and verify readiness
+
+### OpenShift Config API Group (config.openshift.io)
+
+#### ClusterOperators
+- **Resources**: `clusteroperators`
+- **Verbs**: `get`, `list`
+- **Scope**: Cluster-wide
+- **Purpose**: Read-only OpenShift cluster health validation
+
+#### ClusterVersions
+- **Resources**: `clusterversions`
+- **Verbs**: `get`, `list`
+- **Scope**: Cluster-wide
+- **Purpose**: Read-only upgrade and cluster version status validation
 
 ### Apps API Group (apps/v1)
 
@@ -224,11 +244,15 @@ These permissions are validated during preflight when GitOps checks are enabled.
 
 ### Cluster-Scoped Resources
 These resources require ClusterRole and ClusterRoleBinding:
-- `namespaces` (validation only)
+- `namespaces` (get/list for validation and discovery)
+- `nodes` (read-only health validation)
+- `clusteroperators` (read-only health validation)
+- `clusterversions` (read-only upgrade/status validation)
 - `managedclusters` (ACM-wide operations)
 - `multiclusterhubs` (ACM version detection)
 - `multiclusterobservabilities` (auto-detection and old-hub finalization cleanup)
 - `clusterdeployments` (safety validation)
+- `customresourcedefinitions` (Argo CD install-type detection when GitOps checks are enabled)
 
 ### Optional Decommission Extension
 
@@ -257,11 +281,13 @@ These resources use Role and RoleBinding for specific namespaces:
 
 #### open-cluster-management-backup
 - `secrets` (get)
-- `configmaps` (get, create, patch, delete)
+- `configmaps` (get, list, create, patch, delete)
+- `pods` (get, list)
 - `backupschedules` (get, list, create, patch, delete)
 - `restores` (get, list, create, patch, delete)
 - `backups` (get, list - velero.io)
 - `restores` (get, list - velero.io)
+- `backupstoragelocations` (get, list - velero.io)
 - `dataprotectionapplications` (get, list)
 
 #### open-cluster-management-observability
@@ -273,7 +299,7 @@ These resources use Role and RoleBinding for specific namespaces:
 - `routes` (get)
 
 #### multicluster-engine
-- `configmaps` (get, create, patch, delete)
+- `configmaps` (get, list, create, patch, delete)
 
 #### open-cluster-management (if needed)
 - `pods` (get, list)
@@ -330,7 +356,7 @@ This spoke RBAC is a separate prerequisite from hub preflight validation. Hub pr
    - **Risk**: Operations affecting entire cluster
    - **Mitigation**: 
      - Cluster-scoped permissions limited to specific resource types
-     - No access to critical cluster resources (nodes, CSRs, etc.)
+     - No write access to critical cluster resources; nodes are read-only for health validation and CSRs are not granted
      - Validation-only mode for risk assessment
      - Comprehensive logging and audit trails
 
