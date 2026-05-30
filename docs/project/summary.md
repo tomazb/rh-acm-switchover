@@ -15,7 +15,7 @@ A comprehensive Python-based automation tool for executing Red Hat Advanced Clus
 - Simpler than Go while maintaining flexibility
 - Rich ecosystem for YAML, JSON, and logging
 
-> **Note**: An Ansible Collection rewrite is approved for planning and will deliver core parity as a second form factor. The Python CLI remains the production implementation during the coexistence period. See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md).
+> **Note**: The Ansible Collection is now a production-ready second form factor. During coexistence, keep Python CLI and collection behavior aligned through the [Ansible collection parity matrix](../ansible-collection/parity-matrix.md) and [behavior map](../ansible-collection/behavior-map.md).
 
 ### Idempotency via State Management
 
@@ -382,4 +382,4 @@ With complete documentation including quick reference, detailed usage examples, 
 
 **Project Status: Complete and Ready for Use** ✅
 
-An Ansible Collection rewrite is approved for planning and will deliver core parity as a second form factor targeting `ansible-core` CLI and AAP. See [Ansible Collection Rewrite Design](../superpowers/specs/2026-04-10-ansible-collection-rewrite-design.md).
+The Ansible Collection is implemented as a production-ready second form factor targeting `ansible-core` CLI and AAP. Keep capability status and implementation ownership aligned with the [Ansible collection parity matrix](../ansible-collection/parity-matrix.md) and [behavior map](../ansible-collection/behavior-map.md).

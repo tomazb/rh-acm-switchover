@@ -1,6 +1,6 @@
 # tomazb.acm_switchover
 
-Foundation Ansible Collection for ACM hub switchover automation.
+Production-ready Ansible Collection for ACM hub switchover automation.
 
 ## Current Scope
 
