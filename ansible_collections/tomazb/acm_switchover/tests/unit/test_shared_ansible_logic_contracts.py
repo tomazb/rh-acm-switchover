@@ -54,6 +54,22 @@ def test_shared_managed_cluster_expectation_publishes_common_facts():
     assert "acm_switchover_resolved_allow_zero_managed_clusters" in text
 
 
+def test_shared_managed_cluster_expectation_validates_counts_before_int_coercion():
+    tasks = _load_tasks(COMMON_TASKS / "resolve_managed_cluster_expectation.yml")
+    text = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
+    task_names = [task.get("name") for task in tasks]
+
+    validation_index = task_names.index("Validate managed-cluster expectation count inputs")
+    activation_index = task_names.index("Resolve activation managed-cluster expectation")
+    post_activation_zero_index = task_names.index("Resolve post-activation zero managed-cluster allowance")
+
+    assert validation_index < activation_index
+    assert validation_index < post_activation_zero_index
+    assert "acm_switchover_operation.min_managed_clusters must be a non-negative integer when set" in text
+    assert "acm_switchover_expected_managed_cluster_count must be a non-negative integer when set" in text
+    assert "is match('^[0-9]+$')" in text
+
+
 def test_activation_computes_auto_import_support_once_before_consumers():
     block_tasks = _activation_block_tasks()
     includes = [task.get("ansible.builtin.include_tasks") for task in block_tasks]

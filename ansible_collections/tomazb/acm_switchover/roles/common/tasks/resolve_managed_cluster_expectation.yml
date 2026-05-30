@@ -18,6 +18,21 @@
         | sort
       }}
 
+- name: Validate managed-cluster expectation count inputs
+  ansible.builtin.assert:
+    that:
+      - >-
+        ((acm_switchover_operation | default({})).get('min_managed_clusters') is none)
+        or
+        (((acm_switchover_operation | default({})).get('min_managed_clusters') | string) is match('^[0-9]+$'))
+      - >-
+        (acm_switchover_expected_managed_cluster_count | default(none) is none)
+        or
+        ((acm_switchover_expected_managed_cluster_count | string) is match('^[0-9]+$'))
+    fail_msg: >-
+      acm_switchover_operation.min_managed_clusters must be a non-negative integer when set;
+      acm_switchover_expected_managed_cluster_count must be a non-negative integer when set.
+
 - name: Resolve activation managed-cluster expectation
   ansible.builtin.set_fact:
     acm_switchover_resolved_min_managed_clusters: >-
