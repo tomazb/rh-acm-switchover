@@ -16,7 +16,7 @@
 - name: Run SelfSubjectAccessReview for each permission
   kubernetes.core.k8s:
     kubeconfig: "{{ _ssar_kubeconfig }}"
-    context: "{{ _ssar_context }}"
+    context: "{{ _ssar_context if (_ssar_context | default('') | length) > 0 else omit }}"
     state: present
     definition:
       apiVersion: authorization.k8s.io/v1

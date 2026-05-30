@@ -6,6 +6,7 @@
 - `acm_switchover_operation`
 - `acm_switchover_features`
 - `acm_switchover_execution`
+- `acm_switchover_managed_clusters`
 - `acm_switchover_decommission`
 - `acm_switchover_rbac_bootstrap`
 - `acm_switchover_discovery`
@@ -35,6 +36,19 @@
 | `activation_method` | `patch`, `restore` | `patch` | Passive activation mechanism; `restore` is valid only with `method=passive` |
 | `min_managed_clusters` | int or null | null | Omitted/null derives expected non-local ManagedCluster names/count from preflight; restore-only omitted requires at least one restored non-local ManagedCluster unless `allow_zero_managed_clusters` is explicitly enabled; explicit `0` opts into an empty non-local ManagedCluster target like the Python CLI; positive values enforce that minimum count |
 | `restore_only` | bool | `false` | Set by `playbooks/restore_only.yml`; direct role invocations must set it explicitly |
+
+### `acm_switchover_managed_clusters`
+
+Optional mapping of managed-cluster names to direct kubeconfig data used for
+klusterlet probing and remediation. When entries include `kubeconfig`,
+preflight RBAC validation also checks the managed-cluster
+`open-cluster-management-agent` permissions through that kubeconfig before
+post-activation reaches klusterlet operations.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `<cluster>.kubeconfig` | str | optional | Managed-cluster kubeconfig path for direct klusterlet probe/remediation and managed-cluster RBAC validation |
+| `<cluster>.context` | str | optional | Managed-cluster kubeconfig context. If omitted, the kubeconfig current context is used for RBAC validation and module calls |
 
 ### `acm_switchover_features`
 
@@ -119,7 +133,7 @@ Each role publishes a typed result fact. All facts persist in play scope and are
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `acm_switchover_managed_clusters` | dict | `{}` | Optional managed-cluster kubeconfigs used for klusterlet probe and remediation |
+| `acm_switchover_managed_clusters` | dict | `{}` | Optional managed-cluster kubeconfigs used for preflight managed-cluster RBAC validation plus klusterlet probe and remediation |
 | `acm_switchover_execution.concurrency.klusterlet_probe_workers` | int | `10` | Maximum concurrent klusterlet probe workers; set to `1` for sequential probing |
 | `acm_switchover_execution.concurrency.klusterlet_remediation_workers` | int | `10` | Maximum concurrent klusterlet remediation workers; set to `1` for sequential remediation |
 | `acm_switchover_execution.timeouts.klusterlet_request_seconds` | int | `30` | Per Kubernetes API request timeout for direct klusterlet probe/remediation calls |

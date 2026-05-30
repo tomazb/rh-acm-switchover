@@ -313,7 +313,11 @@ Managed-cluster klusterlet remediation uses a separate RBAC surface in the `open
 - `deployments` (`get`, `patch`) for operator remediation
 - `secrets` (`get`) and `deployments` (`get`) for validator/read-only inspection
 
-This spoke RBAC is a separate prerequisite from hub preflight validation. Hub preflight validates only hub-cluster access; it does not prove that managed-cluster kubeconfigs have the optional klusterlet remediation permissions.
+This spoke RBAC is a separate prerequisite from hub RBAC. The collection
+preflight validates this surface for entries supplied in
+`acm_switchover_managed_clusters` that include a `kubeconfig`; clusters without
+managed-cluster kubeconfigs cannot be checked until an operator supplies direct
+managed-cluster access.
 
 ## Security Considerations
 

@@ -481,7 +481,7 @@ Use the `generate-merged-kubeconfig.sh` script for easy multi-hub kubeconfig cre
   --token-duration 72h \
   hub1:operator,hub2:operator
 
-# Include managed clusters for klusterlet validation
+# Include managed clusters for managed-cluster RBAC and klusterlet validation
 ./scripts/generate-merged-kubeconfig.sh \
   --output ~/full-kubeconfig.yaml \
   hub1:operator,hub2:operator,managed1:operator

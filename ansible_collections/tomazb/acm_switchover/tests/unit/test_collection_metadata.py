@@ -2,6 +2,10 @@ import re
 from pathlib import Path
 
 import yaml
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    RBAC_BASE_ASSETS,
+    RBAC_DECOMMISSION_ASSETS,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 COLLECTION_ROOT = REPO_ROOT / "ansible_collections" / "tomazb" / "acm_switchover"
@@ -86,6 +90,15 @@ def test_packaged_rbac_manifests_match_repo_assets():
     for repo_file in repo_files:
         packaged_file = PACKAGED_RBAC_ROOT / repo_file.relative_to(REPO_RBAC_ROOT)
         assert packaged_file.read_text() == repo_file.read_text()
+
+
+def test_rbac_bootstrap_asset_constants_cover_all_packaged_manifests():
+    packaged_files = sorted(
+        str(path.relative_to(PACKAGED_RBAC_ROOT.parent.parent)) for path in PACKAGED_RBAC_ROOT.rglob("*.yaml")
+    )
+    selected_assets = sorted(RBAC_BASE_ASSETS + RBAC_DECOMMISSION_ASSETS)
+
+    assert selected_assets == packaged_files
 
 
 def test_shared_rbac_manifest_resources_are_explicitly_marked_common():

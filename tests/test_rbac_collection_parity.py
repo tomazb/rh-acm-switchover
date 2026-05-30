@@ -120,6 +120,18 @@ def _python_decommission_permissions(*, skip_observability):
     return sorted(permissions)
 
 
+def _python_managed_cluster_permissions(role):
+    managed_namespaces = (
+        RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+        if role == "operator"
+        else RBACValidator.VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+    )
+    permissions = []
+    for namespace, entries in managed_namespaces.items():
+        permissions.extend(_expand(entries, namespace=namespace))
+    return sorted(permissions)
+
+
 @pytest.mark.parametrize(
     (
         "role",
@@ -219,3 +231,19 @@ def test_collection_decommission_only_expansion_matches_python():
     )
 
     assert collection_permissions == _python_decommission_permissions(skip_observability=True)
+
+
+@pytest.mark.parametrize("role", ["operator", "validator"])
+def test_collection_managed_cluster_rbac_expansion_matches_python(role):
+    collection_permissions = sorted(
+        expand_rbac_requirements(
+            role=role,
+            include_decommission=False,
+            skip_observability=False,
+            argocd_mode="none",
+            argocd_install_type="unknown",
+            scope="managed_cluster",
+        )
+    )
+
+    assert collection_permissions == _python_managed_cluster_permissions(role)
