@@ -42,3 +42,25 @@ def test_preflight_initializes_validation_accumulator_only_once():
     init_count = sum(1 for task in tasks if task.get("name") == "Initialize preflight result accumulator")
 
     assert init_count == 1, "preflight should initialize the validation accumulator once and preserve input results"
+
+
+def test_preflight_resets_rbac_completion_for_each_role_run():
+    """RBAC continuation state must not leak from a previous preflight invocation."""
+    tasks = yaml.safe_load(PREFLIGHT_MAIN.read_text())
+
+    reset_index = next(
+        index
+        for index, task in enumerate(tasks)
+        if task.get("name") == "Record whether full preflight validation should run"
+    )
+    run_phase_index = next(index for index, task in enumerate(tasks) if task.get("name") == "Run preflight phase")
+    reset_task = tasks[reset_index]
+    backup_task = next(
+        task
+        for task in tasks[run_phase_index].get("block", [])
+        if task.get("ansible.builtin.include_tasks") == "validate_backups.yml"
+    )
+
+    assert reset_index < run_phase_index
+    assert reset_task["ansible.builtin.set_fact"]["_acm_preflight_rbac_validation_completed"] is False
+    assert "_acm_preflight_rbac_validation_completed" in backup_task["when"]

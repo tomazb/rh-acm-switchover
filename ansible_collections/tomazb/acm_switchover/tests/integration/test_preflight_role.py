@@ -14,6 +14,7 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self):
+        path = self.path.split("?")[0]
         responses = {
             "/version": {
                 "major": "1",
@@ -75,7 +76,7 @@ class _FixtureKubernetesHandler(BaseHTTPRequestHandler):
                 ],
             },
         }
-        payload = responses.get(self.path)
+        payload = responses.get(path)
         if payload is None:
             self.send_response(404)
             self.end_headers()
@@ -177,13 +178,13 @@ def test_preflight_rbac_failure_still_reports_backup_findings(
     assert completed.returncode != 0
     assert report, completed.stdout + completed.stderr
     assert report["status"] == "fail"
-    result_ids = {item["id"] for item in report["results"]}
-    assert "preflight-rbac-primary" in result_ids
-    assert "preflight-rbac-secondary" in result_ids
-    assert "preflight-backup-latest" in result_ids
-    assert "preflight-backup-schedule" in result_ids
-    assert "preflight-backup-storage-location-primary" in result_ids
-    assert "preflight-passive-restore-secondary" in result_ids
+    results_by_id = {item["id"]: item for item in report["results"]}
+    assert results_by_id["preflight-rbac-primary"]["status"] == "fail"
+    assert results_by_id["preflight-rbac-secondary"]["status"] == "fail"
+    assert results_by_id["preflight-backup-latest"]["status"] == "fail"
+    assert results_by_id["preflight-backup-schedule"]["status"] == "fail"
+    assert results_by_id["preflight-backup-storage-location-primary"]["status"] == "fail"
+    assert results_by_id["preflight-passive-restore-secondary"]["status"] == "fail"
 
 
 def test_preflight_fixture_without_execution_block_uses_defaults(run_preflight_fixture):

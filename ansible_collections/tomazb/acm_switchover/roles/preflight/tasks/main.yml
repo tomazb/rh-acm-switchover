@@ -90,6 +90,7 @@
 - name: Record whether full preflight validation should run
   ansible.builtin.set_fact:
     _acm_preflight_run_validations: "{{ acm_switchover_preflight_summary.passed | bool }}"
+    _acm_preflight_rbac_validation_completed: false
 
 - name: Run preflight phase
   when:
