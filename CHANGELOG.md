@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixed klusterlet fail-closed behavior so initial Python worker timeouts fail post-activation, collection probe check mode avoids live client construction, and collection probe API/client exceptions are reported as failed probe results instead of skipped checks.
+- Fixed `klusterlet` fail-closed behavior. Initial Python worker timeouts now fail post-activation. Collection probe check mode avoids live client construction. Collection probe API/client exceptions are now reported as failed probe results instead of skipped checks.
 - Fixed the collection full switchover playbook to reject `restore_only=true` before any phase roles run, and tightened restore-only input validation so primary hub kubeconfig data is rejected with primary context data.
 - Fixed collection preflight RBAC to fail closed on HTTP 401 during Argo CD CRD discovery, matching the Python CLI. Previously, 401 was treated the same as 403 (deferred), which could hide expired or invalid kubeconfig credentials.
 - Fixed collection `find_argocd_pause_blockers` to check ApplicationSet ownership before autosync state, matching the Python fix. ApplicationSet-managed ACM apps are now always blocked regardless of current autosync state.

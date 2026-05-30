@@ -347,6 +347,8 @@ def probe_klusterlet_connections(
 
     secondary_client: CoreV1Client | None = None
     if any((managed_clusters.get(cluster) or {}).get("kubeconfig") for cluster in candidates):
+        # Preserve the probe contract: secondary hub client setup failures are
+        # per-cluster failed probe results, not generic module exceptions.
         try:
             secondary_client = core_client_factory(secondary_hub.get("kubeconfig", ""), secondary_hub.get("context"))
         except Exception as exc:
