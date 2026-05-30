@@ -460,10 +460,24 @@ tracker for Thermos follow-up work:
 - Keep protected runbook files and `.claude/skills/**/*.skill.md` read-only
   unless the operator explicitly approves those edits.
 
+## Pull Request Creation Gate
+
+Before creating any PR:
+
+- Use the `code-review` skill against the completed branch changes.
+- Address all critical and warning findings, or document a concrete technical
+  reason when a finding is not applicable.
+- Re-run the `code-review` skill after any review-driven changes before opening
+  the PR.
+- Keep local verification evidence ready for the PR body.
+
 ## Pull Request Merge Gate
 
 Before merging any PR:
 
+- Use the `code-review` skill again on the current PR head before merge.
+- Address all critical and warning findings, or document a concrete technical
+  reason when a finding is not applicable.
 - Fetch and review every top-level PR comment, review, and review thread.
 - Validate each actionable comment against the codebase before changing code.
 - Address each accepted comment with code/docs/tests, or reply with a concrete
