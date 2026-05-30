@@ -36,6 +36,14 @@ options:
       - Intended for the dedicated decommission role, not switchover preflight.
     type: bool
     default: false
+  scope:
+    description:
+      - Permission surface to expand.
+      - C(hub) validates hub cluster permissions.
+      - C(managed_cluster) validates the managed-cluster agent namespace used for klusterlet operations.
+    type: str
+    choices: [hub, managed_cluster]
+    default: hub
   skip_observability:
     description: Whether to omit observability-related permissions from the matrix.
     type: bool
@@ -107,6 +115,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.result impor
 
 VALID_ROLES = ("operator", "validator")
 VALID_ARGOCD_MODES = ("none", "check", "manage")
+VALID_SCOPES = ("hub", "managed_cluster")
 
 # Cluster-scoped permissions for operator role
 OPERATOR_CLUSTER_PERMISSIONS = [
@@ -302,12 +311,36 @@ def expand_rbac_requirements(
     argocd_install_type: str,
     include_old_hub_finalization: bool = False,
     decommission_only: bool = False,
+    scope: str = "hub",
 ) -> list[tuple[str, str, str, str | None]]:
     """Return the full flat list of (api_group, resource, verb, namespace) tuples for a given configuration.
 
     This mirrors the permission matrix from lib/rbac_validator.py and is used by
     the role's RBAC validation tasks to enumerate what to check via SelfSubjectAccessReview.
     """
+    if scope not in VALID_SCOPES:
+        raise ValueError(f"Invalid scope '{scope}'. Must be one of: {VALID_SCOPES}")
+
+    if scope == "managed_cluster":
+        if include_decommission:
+            raise ValueError("include_decommission is only valid for hub scope")
+        if include_old_hub_finalization:
+            raise ValueError("include_old_hub_finalization is only valid for hub scope")
+        if decommission_only:
+            raise ValueError("decommission_only is only valid for hub scope")
+        if argocd_mode != "none":
+            raise ValueError("argocd_mode is only valid for hub scope")
+
+        managed_ns_perms = (
+            OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+            if role == "operator"
+            else VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
+        )
+        permissions: list[tuple[str, str, str, str | None]] = []
+        for namespace, ns_perms in managed_ns_perms.items():
+            permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
+        return _deduplicate_permissions(permissions)
+
     if decommission_only:
         if role != "operator":
             raise ValueError("decommission_only is only valid for the operator role")
@@ -430,6 +463,11 @@ def main() -> None:
             "include_decommission": {"type": "bool", "default": False},
             "include_old_hub_finalization": {"type": "bool", "default": False},
             "decommission_only": {"type": "bool", "default": False},
+            "scope": {
+                "type": "str",
+                "default": "hub",
+                "choices": list(VALID_SCOPES),
+            },
             "skip_observability": {"type": "bool", "default": False},
             "argocd_mode": {
                 "type": "str",
@@ -455,6 +493,7 @@ def main() -> None:
             argocd_mode=module.params["argocd_mode"],
             argocd_install_type=module.params["argocd_install_type"],
             decommission_only=module.params["decommission_only"],
+            scope=module.params.get("scope", "hub"),
         )
     except ValueError as exc:
         module.fail_json(msg=str(exc))

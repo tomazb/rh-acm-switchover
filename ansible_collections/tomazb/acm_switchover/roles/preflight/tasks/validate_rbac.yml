@@ -252,6 +252,31 @@
     denied_permissions: "{{ _rbac_denied_permissions_secondary | default([]) }}"
   register: acm_secondary_rbac_validation
 
+- name: Initialize denied permissions for managed clusters
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions_managed_clusters: []
+  when: (acm_switchover_managed_clusters | default({}) | length) > 0
+
+- name: Validate configured managed cluster RBAC permissions
+  ansible.builtin.include_tasks: validate_managed_cluster_rbac.yml
+  loop: "{{ acm_switchover_managed_clusters | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - (item.value.kubeconfig | default('') | length) > 0
+
+- name: Summarize RBAC validation results for managed clusters
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: managed-clusters
+    scope: managed_cluster
+    denied_permissions: "{{ _rbac_denied_permissions_managed_clusters | default([]) }}"
+    result_id: preflight-rbac-managed-clusters
+    failure_message: missing required RBAC permissions on configured managed clusters
+    success_message: all required RBAC permissions validated on configured managed clusters
+    recommended_action: Grant the documented managed-cluster RBAC role before running preflight again
+  register: acm_managed_cluster_rbac_validation
+  when: (acm_switchover_managed_clusters | default({}) | length) > 0
+
 - name: Merge RBAC results into preflight accumulator
   ansible.builtin.set_fact:
     acm_switchover_validation_results: >-
@@ -259,6 +284,7 @@
         (acm_switchover_validation_results | default([]))
         + (acm_primary_rbac_validation.results | default([]))
         + acm_secondary_rbac_validation.results
+        + (acm_managed_cluster_rbac_validation.results | default([]))
       }}
     acm_switchover_preflight_summary:
       passed: >-
@@ -266,11 +292,13 @@
           (acm_switchover_preflight_summary.passed | default(true))
           and (acm_primary_rbac_validation.passed | default(true))
           and acm_secondary_rbac_validation.passed
+          and (acm_managed_cluster_rbac_validation.passed | default(true))
         }}
       critical_failures: >-
         {{
           (acm_switchover_preflight_summary.critical_failures | default(0))
           + (acm_primary_rbac_validation.critical_failures | default(0))
           + (acm_secondary_rbac_validation.critical_failures | default(0))
+          + (acm_managed_cluster_rbac_validation.critical_failures | default(0))
         }}
       warning_failures: "{{ acm_switchover_preflight_summary.warning_failures | default(0) }}"

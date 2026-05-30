@@ -1,0 +1,25 @@
+---
+- name: Expand required RBAC permissions for managed cluster
+  tomazb.acm_switchover.acm_rbac_validate:
+    hub: "managed-cluster {{ item.key }}"
+    scope: managed_cluster
+  register: _rbac_expanded_managed_cluster
+
+- name: Run SelfSubjectAccessReview checks for managed cluster
+  ansible.builtin.include_tasks: run_ssar.yml
+  vars:
+    acm_rbac_permissions: "{{ _rbac_expanded_managed_cluster.permissions }}"
+    _ssar_target_kubeconfig: "{{ item.value.kubeconfig }}"
+    _ssar_target_context: "{{ item.value.context | default('') }}"
+
+- name: Collect denied permissions for managed cluster
+  ansible.builtin.set_fact:
+    _rbac_denied_permissions_managed_clusters: >-
+      {{
+        (_rbac_denied_permissions_managed_clusters | default([]))
+        + (
+          (_rbac_denied_permissions | default([]))
+          | map('combine', {'target': item.key})
+          | list
+        )
+      }}

@@ -65,6 +65,53 @@ def test_preflight_primary_rbac_expansion_requests_old_hub_finalization_delete()
     assert summary_args["include_old_hub_finalization"] == "{{ _rbac_include_old_hub_finalization_primary }}"
 
 
+def test_preflight_validates_configured_managed_cluster_rbac():
+    tasks = yaml.safe_load((PREFLIGHT_TASKS / "validate_rbac.yml").read_text(encoding="utf-8"))
+    include = next(task for task in tasks if task.get("name") == "Validate configured managed cluster RBAC permissions")
+    summary = next(
+        task for task in tasks if task.get("name") == "Summarize RBAC validation results for managed clusters"
+    )
+
+    assert include["ansible.builtin.include_tasks"] == "validate_managed_cluster_rbac.yml"
+    assert "acm_switchover_managed_clusters" in str(include.get("loop"))
+    assert "kubeconfig" in str(include.get("when"))
+
+    helper_tasks = yaml.safe_load((PREFLIGHT_TASKS / "validate_managed_cluster_rbac.yml").read_text(encoding="utf-8"))
+    expansion = next(
+        task for task in helper_tasks if task.get("name") == "Expand required RBAC permissions for managed cluster"
+    )
+    ssar = next(
+        task for task in helper_tasks if task.get("name") == "Run SelfSubjectAccessReview checks for managed cluster"
+    )
+    collect = next(
+        task for task in helper_tasks if task.get("name") == "Collect denied permissions for managed cluster"
+    )
+
+    expansion_args = expansion["tomazb.acm_switchover.acm_rbac_validate"]
+    assert expansion_args["hub"] == "managed-cluster {{ item.key }}"
+    assert expansion_args["scope"] == "managed_cluster"
+
+    assert ssar["ansible.builtin.include_tasks"] == "run_ssar.yml"
+    ssar_vars = ssar["vars"]
+    assert ssar_vars["acm_rbac_permissions"] == "{{ _rbac_expanded_managed_cluster.permissions }}"
+    assert ssar_vars["_ssar_target_kubeconfig"] == "{{ item.value.kubeconfig }}"
+    assert ssar_vars["_ssar_target_context"] == "{{ item.value.context | default('') }}"
+
+    assert collect["ansible.builtin.set_fact"]["_rbac_denied_permissions_managed_clusters"]
+    summary_args = summary["tomazb.acm_switchover.acm_rbac_validate"]
+    assert summary_args["scope"] == "managed_cluster"
+    assert summary_args["denied_permissions"] == "{{ _rbac_denied_permissions_managed_clusters | default([]) }}"
+
+
+def test_run_ssar_omits_empty_context_for_managed_cluster_kubeconfigs():
+    tasks = yaml.safe_load((PREFLIGHT_TASKS / "run_ssar.yml").read_text(encoding="utf-8"))
+    ssar_task = next(task for task in tasks if task.get("name") == "Run SelfSubjectAccessReview for each permission")
+    context_expr = ssar_task["kubernetes.core.k8s"]["context"]
+
+    assert "_ssar_context" in context_expr
+    assert "else omit" in context_expr
+
+
 def test_operator_mco_delete_rule_matches_root_helm_and_collection_bundle():
     root_verbs = _operator_mco_verbs_from_clusterrole(REPO_ROOT / "deploy" / "rbac" / "clusterrole.yaml")
     bundled_verbs = _operator_mco_verbs_from_clusterrole(ROLE_DIR / "files" / "deploy" / "rbac" / "clusterrole.yaml")
