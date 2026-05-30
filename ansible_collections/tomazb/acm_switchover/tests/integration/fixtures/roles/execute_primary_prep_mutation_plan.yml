@@ -1,0 +1,41 @@
+---
+acm_switchover_hubs:
+  primary:
+    context: primary-hub
+    kubeconfig: ./kubeconfigs/primary
+  secondary:
+    context: secondary-hub
+    kubeconfig: ./kubeconfigs/secondary
+
+acm_switchover_operation:
+  method: passive
+  activation_method: patch
+  old_hub_action: secondary
+
+acm_switchover_execution:
+  mode: execute
+  report_dir: ./artifacts
+  checkpoint:
+    enabled: false
+
+acm_switchover_features:
+  manage_auto_import_strategy: false
+  skip_rbac_validation: true
+  skip_observability_checks: true
+  argocd:
+    manage: false
+
+acm_primary_prep_mch_info:
+  resources:
+    - metadata:
+        name: multiclusterhub
+      status:
+        currentVersion: 2.14.2
+
+acm_primary_prep_backup_schedules_info:
+  resources:
+    - metadata:
+        name: acm-hub-backup
+        namespace: open-cluster-management-backup
+      spec:
+        paused: false

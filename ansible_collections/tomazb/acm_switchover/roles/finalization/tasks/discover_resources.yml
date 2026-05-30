@@ -16,7 +16,7 @@
     - _acm_finalization_backup_schedules_live_info is defined
     - not (_acm_finalization_backup_schedules_live_info.skipped | default(false))
 
-- name: Refresh finalization MultiClusterHub when not pre-seeded by tests
+- name: Refresh finalization MultiClusterHub in execute mode or when not pre-seeded
   kubernetes.core.k8s_info:
     api_version: operator.open-cluster-management.io/v1
     kind: MultiClusterHub
@@ -24,7 +24,9 @@
     kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
     context: "{{ acm_switchover_hubs.secondary.context }}"
   register: _acm_finalization_mch_live_info
-  when: acm_finalization_mch_info is not defined
+  when: >-
+    (acm_switchover_execution.mode | default('dry_run') == 'execute')
+    or (acm_finalization_mch_info is not defined)
 
 - name: Publish live finalization MultiClusterHub resources
   ansible.builtin.set_fact:

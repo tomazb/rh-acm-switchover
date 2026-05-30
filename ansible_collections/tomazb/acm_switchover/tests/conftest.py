@@ -11,7 +11,10 @@ import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
-_ANSIBLE_PY314_COMPAT_PATH = _REPO_ROOT / "ansible_collections/tomazb/acm_switchover/tests/support/python314_ast_compat"
+_ANSIBLE_PY314_COMPAT_PATH = (
+    _REPO_ROOT
+    / "ansible_collections/tomazb/acm_switchover/tests/support/python314_ast_compat"
+)
 
 
 def _materialize_report_dir(report_dir: str, tmp_path: Path) -> Path:
@@ -102,7 +105,9 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
         if activation_restores_info is not None:
             vars_payload["acm_activation_restores_info"] = activation_restores_info
 
-    vars_payload.setdefault("acm_switchover_features", {}).setdefault("token_expiry_warning_hours", 4)
+    vars_payload.setdefault("acm_switchover_features", {}).setdefault(
+        "token_expiry_warning_hours", 4
+    )
     vars_payload.setdefault(
         "acm_switchover_hub_identities",
         {
@@ -138,9 +143,13 @@ def _seed_fixture_defaults(vars_payload: dict) -> None:
             status = {}
             backup["status"] = status
         status.setdefault("phase", "Completed")
-    for schedule in vars_payload.get("acm_primary_backup_schedules_info", {}).get("resources", []):
+    for schedule in vars_payload.get("acm_primary_backup_schedules_info", {}).get(
+        "resources", []
+    ):
         schedule.setdefault("spec", {}).setdefault("useManagedServiceAccount", True)
-    for cluster_deployment in vars_payload.get("acm_primary_cluster_deployments_info", {}).get("resources", []):
+    for cluster_deployment in vars_payload.get(
+        "acm_primary_cluster_deployments_info", {}
+    ).get("resources", []):
         cluster_deployment.setdefault("spec", {}).setdefault("preserveOnDelete", True)
 
 
@@ -158,13 +167,25 @@ def _seed_phase_local_facts(vars_payload: dict) -> None:
         if source_fact in vars_payload and phase_fact not in vars_payload:
             vars_payload[phase_fact] = vars_payload[source_fact]
 
-    if "acm_activation_mch_info" not in vars_payload and "acm_finalization_mch_info" in vars_payload:
-        vars_payload["acm_activation_mch_info"] = vars_payload["acm_finalization_mch_info"]
-    if "acm_finalization_mch_info" not in vars_payload and "acm_activation_mch_info" in vars_payload:
-        vars_payload["acm_finalization_mch_info"] = vars_payload["acm_activation_mch_info"]
+    if (
+        "acm_activation_mch_info" not in vars_payload
+        and "acm_finalization_mch_info" in vars_payload
+    ):
+        vars_payload["acm_activation_mch_info"] = vars_payload[
+            "acm_finalization_mch_info"
+        ]
+    if (
+        "acm_finalization_mch_info" not in vars_payload
+        and "acm_activation_mch_info" in vars_payload
+    ):
+        vars_payload["acm_finalization_mch_info"] = vars_payload[
+            "acm_activation_mch_info"
+        ]
 
 
-def _ansible_env(repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Path, ...] = ()) -> dict:
+def _ansible_env(
+    repo_root: Path, tmp_path: Path, *, extra_pythonpaths: tuple[Path, ...] = ()
+) -> dict:
     local_tmp = tmp_path / "ansible-local"
     remote_tmp = tmp_path / "ansible-remote"
     local_tmp.mkdir(parents=True, exist_ok=True)
@@ -198,12 +219,24 @@ def _merge_test_vars(base: dict, overrides: dict) -> dict:
     return base
 
 
+def _fail_ansible_playbook_timeout(
+    exc: subprocess.TimeoutExpired, timeout_seconds: int
+) -> None:
+    pytest.fail(
+        f"ansible-playbook timed out after {timeout_seconds}s.\n"
+        f"Stdout:\n{exc.stdout or ''}\n"
+        f"Stderr:\n{exc.stderr or ''}"
+    )
+
+
 @pytest.fixture
 def run_switchover_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _REPO_ROOT
         fixture_path = (
-            repo_root / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover" / fixture_name
+            repo_root
+            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/switchover"
+            / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
@@ -232,11 +265,74 @@ def run_switchover_fixture(tmp_path):
                 timeout=300,
             )
         except subprocess.TimeoutExpired as exc:
-            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
+            _fail_ansible_playbook_timeout(exc, 300)
 
         report_path = report_dir / "switchover-report.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
         return completed, report
+
+    return _run
+
+
+@pytest.fixture
+def run_role_fixture(tmp_path):
+    def _run(role_name: str, fixture_name: str) -> subprocess.CompletedProcess[str]:
+        repo_root = _REPO_ROOT
+        fixture_path = (
+            repo_root
+            / "ansible_collections/tomazb/acm_switchover/tests/integration/fixtures/roles"
+            / fixture_name
+        )
+        vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
+        _seed_fixture_defaults(vars_payload)
+        _prepare_execution_vars(vars_payload, tmp_path)
+
+        vars_file = tmp_path / "vars.yml"
+        vars_file.write_text(yaml.safe_dump(vars_payload, sort_keys=False))
+
+        playbook_path = tmp_path / f"{role_name}.yml"
+        playbook_path.write_text(
+            yaml.safe_dump(
+                [
+                    {
+                        "hosts": "localhost",
+                        "connection": "local",
+                        "gather_facts": False,
+                        "tasks": [
+                            {
+                                "name": f"Run {role_name} role",
+                                "ansible.builtin.include_role": {
+                                    "name": f"tomazb.acm_switchover.{role_name}",
+                                },
+                            }
+                        ],
+                    }
+                ],
+                sort_keys=False,
+            )
+        )
+
+        env = _ansible_env(repo_root, tmp_path)
+
+        try:
+            return subprocess.run(
+                [
+                    "ansible-playbook",
+                    str(playbook_path),
+                    "-i",
+                    "ansible_collections/tomazb/acm_switchover/examples/inventory.yml",
+                    "-e",
+                    f"@{vars_file}",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired as exc:
+            _fail_ansible_playbook_timeout(exc, 300)
 
     return _run
 
@@ -277,7 +373,7 @@ def run_restore_only_fixture(tmp_path):
                 timeout=300,
             )
         except subprocess.TimeoutExpired as exc:
-            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
+            _fail_ansible_playbook_timeout(exc, 300)
 
         report_path = report_dir / "restore-only-report.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
@@ -297,7 +393,9 @@ def run_checkpoint_fixture(tmp_path):
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         repo_root = _REPO_ROOT
         fixture_path = (
-            repo_root / "ansible_collections/tomazb/acm_switchover/tests/scenario/fixtures/checkpoint" / fixture_name
+            repo_root
+            / "ansible_collections/tomazb/acm_switchover/tests/scenario/fixtures/checkpoint"
+            / fixture_name
         )
         vars_payload = yaml.safe_load(fixture_path.read_text()) or {}
         _seed_fixture_defaults(vars_payload)
@@ -305,9 +403,11 @@ def run_checkpoint_fixture(tmp_path):
             _merge_test_vars(vars_payload, vars_overrides)
 
         checkpoint_path = tmp_path / checkpoint_name
-        report_dir = _prepare_execution_vars(vars_payload, tmp_path)
+        _prepare_execution_vars(vars_payload, tmp_path)
         vars_payload["acm_switchover_execution"].setdefault("checkpoint", {})
-        vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(checkpoint_path)
+        vars_payload["acm_switchover_execution"]["checkpoint"]["path"] = str(
+            checkpoint_path
+        )
 
         if pre_completed_phases:
             checkpoint_record = {
@@ -328,8 +428,11 @@ def run_checkpoint_fixture(tmp_path):
                 checkpoint_record["operation_identity"] = build_operation_identity(
                     hubs=vars_payload.get("acm_switchover_hubs") or {},
                     operation=vars_payload.get("acm_switchover_operation") or {},
-                    collection_version=vars_payload.get("acm_switchover_collection_version"),
-                    hub_identities=vars_payload.get("acm_switchover_hub_identities") or {},
+                    collection_version=vars_payload.get(
+                        "acm_switchover_collection_version"
+                    ),
+                    hub_identities=vars_payload.get("acm_switchover_hub_identities")
+                    or {},
                 )
             checkpoint_path.write_text(json.dumps(checkpoint_record, indent=2))
 
@@ -359,9 +462,11 @@ def run_checkpoint_fixture(tmp_path):
                 timeout=300,
             )
         except subprocess.TimeoutExpired as exc:
-            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
+            _fail_ansible_playbook_timeout(exc, 300)
 
-        checkpoint = json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
+        checkpoint = (
+            json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
+        )
         return completed, checkpoint
 
     return _run
