@@ -87,9 +87,13 @@
       (((_checkpoint_enter.checkpoint | default({})).get('operational_data', {})).get('secondary_has_observability', none))
       is not none
 
+- name: Record whether full preflight validation should run
+  ansible.builtin.set_fact:
+    _acm_preflight_run_validations: "{{ acm_switchover_preflight_summary.passed | bool }}"
+
 - name: Run preflight phase
   when:
-    - acm_switchover_preflight_summary.passed
+    - _acm_preflight_run_validations | default(false) | bool
     - not ((_checkpoint_enter | default({})).skipped_phase | default(false))
   block:
 
@@ -172,7 +176,9 @@
 
     - name: Validate backup, restore, and cluster backup prerequisites
       ansible.builtin.include_tasks: validate_backups.yml
-      when: acm_switchover_preflight_summary.passed
+      when: >-
+        acm_switchover_preflight_summary.passed
+        or (_acm_preflight_rbac_validation_completed | default(false) | bool)
 
     - name: Recompute aggregate preflight summary from collected results
       ansible.builtin.set_fact:
