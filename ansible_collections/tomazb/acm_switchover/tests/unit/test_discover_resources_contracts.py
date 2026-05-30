@@ -167,8 +167,8 @@ class TestFinalizationDiscoverResources:
                 params.get("kubeconfig", "")
             ), "BackupSchedule reads must target secondary hub (where backups are being enabled)"
 
-    def test_mch_guard_and_secondary_hub(self):
-        """MCH discovery must be pre-seedable and target the secondary hub."""
+    def test_mch_refreshes_in_execute_mode_and_uses_secondary_hub(self):
+        """MCH discovery must ignore pre-seeded facts in execute mode and target the secondary hub."""
         k8s_info_tasks = [t for t in self.tasks if "kubernetes.core.k8s_info" in t]
         mch_reads = [
             t
@@ -179,8 +179,15 @@ class TestFinalizationDiscoverResources:
         for task in mch_reads:
             when = _when_text(task)
             assert (
+                "acm_switchover_execution.mode | default('dry_run') == 'execute'"
+                in when
+            ), (
+                "Finalization MCH read must refresh live data in execute mode even when "
+                "tests or previous phases pre-seeded acm_finalization_mch_info"
+            )
+            assert (
                 "acm_finalization_mch_info is not defined" in when
-            ), "MCH read must use pre-seed guard"
+            ), "Finalization MCH read must remain pre-seedable outside execute mode"
             params = task["kubernetes.core.k8s_info"]
             assert "secondary" in str(
                 params.get("kubeconfig", "")
