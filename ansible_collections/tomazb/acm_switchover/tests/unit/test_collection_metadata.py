@@ -119,3 +119,13 @@ def test_shared_rbac_manifest_resources_are_explicitly_marked_common():
                 assert labels.get("app.kubernetes.io/role") == "common"
             else:
                 assert labels.get("app.kubernetes.io/role") in {"operator", "validator"}
+
+
+def test_helm_values_do_not_document_unused_custom_namespaces():
+    """Helm values and README must not expose values that no template consumes."""
+    chart_root = REPO_ROOT / "deploy" / "helm" / "acm-switchover-rbac"
+    values = yaml.safe_load((chart_root / "values.yaml").read_text())
+    readme = (chart_root / "README.md").read_text()
+
+    assert "customNamespaces" not in values.get("rbac", {})
+    assert "rbac.customNamespaces" not in readme

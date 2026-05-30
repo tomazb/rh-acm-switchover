@@ -57,13 +57,13 @@
       ansible.builtin.set_fact:
         acm_switchover_post_activation_result:
           phase: post_activation
-          status: "{{ 'pass' if acm_cluster_verify_result.passed else 'fail' }}"
+          status: "{{ 'pass' if acm_switchover_cluster_verify_result.passed else 'fail' }}"
           changed: false
-          summary: "{{ acm_cluster_verify_result }}"
+          summary: "{{ acm_switchover_cluster_verify_result }}"
           klusterlet_probe: "{{ _klusterlet_probe_result | default({}) }}"
           klusterlet_remediation: "{{ _klusterlet_remediation_result | default({}) }}"
           cleanup_auto_import: "{{ acm_switchover_cleanup_auto_import_result | default({}) }}"
-          observability: "{{ acm_observability_check_result | default({}) }}"
+          observability: "{{ acm_switchover_observability_check_result | default({}) }}"
       tags:
         - post_activation
         - verify
@@ -73,11 +73,11 @@
       ansible.builtin.fail:
         msg: >-
           Post activation verification failed:
-          {{ acm_cluster_verify_result.pending | default([]) | join(', ') }} cluster(s) not ready{% if acm_cluster_verify_result.missing | default([]) | length > 0 %};
-          missing expected ManagedCluster(s): {{ acm_cluster_verify_result.missing | join(', ') }}{% endif %}
+          {{ acm_switchover_cluster_verify_result.pending | default([]) | join(', ') }} cluster(s) not ready{% if acm_switchover_cluster_verify_result.missing | default([]) | length > 0 %};
+          missing expected ManagedCluster(s): {{ acm_switchover_cluster_verify_result.missing | join(', ') }}{% endif %}
       when:
         - acm_switchover_execution.mode | default('dry_run') != 'dry_run'
-        - not acm_cluster_verify_result.passed
+        - not acm_switchover_cluster_verify_result.passed
   rescue:
     - name: Mark checkpoint failure
       tomazb.acm_switchover.checkpoint_phase:

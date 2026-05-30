@@ -8,7 +8,9 @@
       {{
         (
           _klusterlet_remediation_candidates
-          | default(acm_cluster_verify_result.pending | default([]))
+          | default(
+              acm_switchover_cluster_verify_result.pending | default(acm_cluster_verify_result.pending | default([]))
+            )
         )
         | unique
         | list

@@ -427,6 +427,8 @@ def main() -> None:
         backup_name=module.params["backup_name"],
         allow_conventional_name_fallback=module.params["allow_conventional_name_fallback"],
     )
+    if module.check_mode:
+        plan["changed"] = False
     module.exit_json(**plan)
 
 

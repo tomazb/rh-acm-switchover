@@ -6,10 +6,54 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_restore_info import (
     build_activation_patch,
     build_restore_activation_plan,
+    main,
     passive_restore_ready_for_preflight,
     passive_restore_ready_reason,
     select_passive_sync_restore,
 )
+
+
+def _run_module(
+    monkeypatch,
+    *,
+    restores: list[dict] | None = None,
+    method: str = "passive",
+    activation_method: str = "patch",
+    backup_name: str = "latest",
+    allow_conventional_name_fallback: bool = True,
+    check_mode: bool = False,
+) -> dict:
+    captured: dict = {}
+
+    class FakeModule:
+        def __init__(self, *args, **kwargs):
+            self.params = {
+                "restores": restores or [],
+                "method": method,
+                "activation_method": activation_method,
+                "backup_name": backup_name,
+                "allow_conventional_name_fallback": allow_conventional_name_fallback,
+            }
+            self.check_mode = check_mode
+
+        def exit_json(self, **kwargs):
+            captured["exit"] = kwargs
+            raise SystemExit(0)
+
+        def fail_json(self, **kwargs):
+            captured["fail"] = kwargs
+            raise SystemExit(1)
+
+    monkeypatch.setattr(
+        "ansible_collections.tomazb.acm_switchover.plugins.modules.acm_restore_info.AnsibleModule",
+        FakeModule,
+    )
+
+    try:
+        main()
+    except SystemExit:
+        pass
+    return captured
 
 
 def test_select_passive_sync_restore_prefers_sync_enabled_resource():
@@ -184,6 +228,35 @@ def test_build_restore_activation_plan_for_passive_patch_mode():
     assert plan["restore_ready"] is True
     assert plan["restore_ready_reason"] == "Passive Restore phase Enabled is ready."
     assert plan["restore_phase"] == "Enabled"
+
+
+def test_run_module_check_mode_returns_planned_operation_without_change(monkeypatch):
+    result = _run_module(
+        monkeypatch,
+        check_mode=True,
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                    "resourceVersion": "42",
+                },
+                "spec": {
+                    "syncRestoreWithNewBackups": True,
+                    "veleroManagedClustersBackupName": "older-backup",
+                },
+                "status": {"phase": "Enabled"},
+            }
+        ],
+        backup_name="latest",
+    )
+
+    assert result["exit"]["changed"] is False
+    assert result["exit"]["operation"]["action"] == "patch"
+    assert result["exit"]["operation"]["patch"] == {
+        "metadata": {"resourceVersion": "42"},
+        "spec": {"veleroManagedClustersBackupName": "latest"},
+    }
 
 
 def test_build_restore_activation_plan_defaults_passive_patch_to_latest_backup():

@@ -88,7 +88,6 @@ The following table lists the configurable parameters and their default values.
 | `rbac.enabled` | Enable RBAC resource creation | `true` |
 | `rbac.customOperatorRules` | Additional operator ClusterRole rules | `[]` |
 | `rbac.customValidatorRules` | Additional validator ClusterRole rules | `[]` |
-| `rbac.customNamespaces` | Additional namespaces for Roles | `[]` |
 
 ## Examples
 
