@@ -206,6 +206,15 @@ def test_rbac_deployment_recommends_collection_bootstrap_before_deprecated_scrip
     assert "deprecated" in quick_start.lower()
 
 
+def test_collection_rbac_bootstrap_example_uses_absolute_kubeconfig_path():
+    """JSON extra-vars do not shell-expand '~', so the recommended copy/paste example must avoid it."""
+    content = _read("docs/deployment/rbac-deployment.md")
+    collection_example = content.split("ansible-playbook ansible_collections", 1)[1].split("```", 1)[0]
+
+    assert "~/.kube/admin.yaml" not in collection_example
+    assert '"/home/admin/.kube/admin.yaml"' in collection_example
+
+
 def test_collection_readme_no_longer_calls_collection_foundation_scope():
     """Collection README should describe the current production collection, not the old foundation scope."""
     content = _read("ansible_collections/tomazb/acm_switchover/README.md")

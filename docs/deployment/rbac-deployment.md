@@ -47,7 +47,7 @@ cd rh-acm-switchover
 # Bootstrap operator RBAC on a hub with an admin kubeconfig
 ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/rbac_bootstrap.yml \
   -i ansible_collections/tomazb/acm_switchover/examples/inventory.yml \
-  -e '{"acm_switchover_hubs":{"primary":{"kubeconfig":"~/.kube/admin.yaml","context":"primary-hub"}}}' \
+  -e '{"acm_switchover_hubs":{"primary":{"kubeconfig":"/home/admin/.kube/admin.yaml","context":"primary-hub"}}}' \
   -e '{"acm_switchover_execution":{"mode":"execute"}}' \
   -e '{"acm_switchover_rbac_bootstrap":{"role":"operator","generate_kubeconfigs":true,"validate_permissions":true,"output_dir":"./kubeconfigs"}}'
 
@@ -61,6 +61,8 @@ The collection kubeconfig generator sanitizes context names containing `/` or
 `:` for safe output filenames while using the original value for all cluster API
 operations. For example, context `admin/api-prod.example.com:6443` generates a
 file such as `kubeconfigs/admin_api-prod.example.com_6443-operator.yaml`.
+Use an absolute kubeconfig path in JSON extra-vars; shell shortcuts such as `~`
+are not expanded inside quoted JSON values.
 
 This bootstrap path deploys the baseline operator role only. The baseline role
 includes the `MultiClusterObservability` delete permission used by normal
