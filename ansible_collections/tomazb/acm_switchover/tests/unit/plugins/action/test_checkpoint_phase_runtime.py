@@ -1655,12 +1655,24 @@ def test_action_module_enter_normalizes_legacy_kubeconfig_identity_fields(tmp_pa
         }
     )
 
-    result = action.run(task_vars=task_vars)
+    fixed_now = datetime(2026, 5, 30, 13, 20, 0, tzinfo=timezone.utc)
+
+    class FixedDateTime:
+        @staticmethod
+        def now(tz=None):
+            return fixed_now
+
+    with patch(
+        "ansible_collections.tomazb.acm_switchover.plugins.action.checkpoint_phase.datetime",
+        FixedDateTime,
+    ):
+        result = action.run(task_vars=task_vars)
 
     assert result.get("failed") is not True
     assert result["checkpoint"]["operation_identity"] == expected_identity
     saved = json.loads(checkpoint_file.read_text())
     assert saved["operation_identity"] == expected_identity
+    assert saved["updated_at"] == fixed_now.isoformat()
     assert "primary_kubeconfig" not in saved["operation_identity"]
     assert "secondary_kubeconfig" not in saved["operation_identity"]
 

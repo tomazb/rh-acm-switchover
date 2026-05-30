@@ -149,8 +149,10 @@ def test_collection_artifact_schema_documents_current_checkpoint_contract():
 
     assert '"schema_version": "2.0"' in content
     assert "operation_identity" in content
-    assert '"primary_kubeconfig": "./kubeconfigs/primary.kubeconfig"' in content
-    assert '"secondary_kubeconfig": "./kubeconfigs/secondary.kubeconfig"' in content
+    assert '"primary_cluster_uid": "d1f2b8a0-0000-4000-9000-111111111111"' in content
+    assert '"secondary_cluster_uid": "e3a4c9b1-0000-4000-9000-222222222222"' in content
+    assert '"primary_kubeconfig": "./kubeconfigs/primary.kubeconfig"' not in content
+    assert '"secondary_kubeconfig": "./kubeconfigs/secondary.kubeconfig"' not in content
     assert "checkpoint.reset_from" in content
     assert "validate" in content
     assert "dry_run" in content

@@ -177,6 +177,8 @@ class ActionModule(ActionBase):
                 and backend == CHECKPOINT_BACKEND_FILE
                 and not is_non_mutating
             ):
+                if operation_identity_changed:
+                    checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
                 save_result = self._save_checkpoint(path, checkpoint_data)
                 if save_result is not None and save_result.get("failed"):
                     return save_result
