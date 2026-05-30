@@ -10,7 +10,7 @@
         msg: >-
           restore_only mode must use playbooks/restore_only.yml, not playbooks/switchover.yml.
           The full switchover playbook runs primary_prep and requires primary hub access.
-      when: acm_switchover_operation.restore_only | default(false) | bool
+      when: (acm_switchover_operation | default({})).restore_only | default(false) | bool
 
   tasks:
     - name: Run switchover phases

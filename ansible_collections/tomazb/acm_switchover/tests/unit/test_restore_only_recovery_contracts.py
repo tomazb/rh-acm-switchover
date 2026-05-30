@@ -53,7 +53,9 @@ def test_switchover_playbook_rejects_restore_only_mode_before_roles():
     assert "ansible.builtin.fail" in fail_task
     assert "restore_only" in str(fail_task["ansible.builtin.fail"].get("msg", ""))
     assert "restore_only.yml" in str(fail_task["ansible.builtin.fail"].get("msg", ""))
-    assert "acm_switchover_operation.restore_only | default(false) | bool" in str(fail_task.get("when", ""))
+    assert "(acm_switchover_operation | default({})).restore_only | default(false) | bool" in str(
+        fail_task.get("when", "")
+    )
 
 
 def test_verify_passive_sync_passes_activation_method_to_restore_selector():
