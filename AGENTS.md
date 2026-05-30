@@ -360,7 +360,30 @@ for the full contract.
 
 ### Pre-Push CI Guardrails
 
-Before pushing changes, verify the same CI assumptions that have recently caused failures:
+**Run the CI-equivalent checks locally before opening a PR and again before merging it.** The `Code Quality Checks` job fails the PR if formatting drifts, so reproduce these exact commands locally first. The simplest path is `./run_tests.sh` (strict mode on by default runs `black`, `isort`, `mypy`, and `bandit`). To run the individual gates exactly as CI does — using the same scope `acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests`:
+
+```bash
+# 1. Format check (this is the gate that has been failing PRs)
+black --check --line-length 120 --diff acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests
+isort --check-only --profile black --line-length 120 acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests
+
+# To fix formatting (drop --check), then re-run the checks above:
+black --line-length 120 acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests
+isort --profile black --line-length 120 acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests
+
+# 2. Lint
+flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+# 3. Type check
+mypy --explicit-package-bases acm_switchover.py lib/ modules/ ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests --ignore-missing-imports --no-strict-optional
+
+# 4. Security scan
+bandit --ini .bandit -f txt
+```
+
+A PR must be green on these locally before you open it, and must be re-verified (rebased on the target branch) before it is merged. Do not rely on the editor auto-format hook alone — it only runs on files you edit in-session, while CI checks the entire scope above.
+
+Before pushing changes, also verify the same CI assumptions that have recently caused failures:
 
 - **Root `tests/` jobs do not install `ansible-core`**: top-level tests under [`tests/`](tests/) may import collection helpers, but they must not hard-require `ansible.module_utils` at import time. If a parity test needs a collection module, keep the test import-safe without assuming the root Python job has Ansible installed.
 - **CodeQL can flag URL-like strings in tests**: avoid putting raw host-like strings such as CRD names ending in `.argoproj.io` into assertion message text when a less URL-like description will do. Prefer messages like "applications CRD" or "argocds CRD" unless the exact literal is required by the assertion itself.
