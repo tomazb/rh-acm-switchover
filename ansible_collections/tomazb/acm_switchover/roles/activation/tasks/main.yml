@@ -17,6 +17,9 @@
       ansible.builtin.include_tasks: verify_passive_sync.yml
       when: acm_switchover_operation.method == 'passive'
 
+    - name: Resolve auto-import support for ACM 2.14+
+      ansible.builtin.include_tasks: resolve_auto_import_support.yml
+
     - name: Manage auto-import strategy for ACM 2.14+
       ansible.builtin.include_tasks: manage_auto_import.yml
 

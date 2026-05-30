@@ -1,76 +1,15 @@
 ---
 - name: Resolve managed-cluster verification expectation
-  ansible.builtin.set_fact:
-    _acm_post_activation_configured_managed_cluster_names: >-
-      {{
-        acm_switchover_managed_clusters | default({})
-        | dict2items
-        | map(attribute='key')
-        | list
-        | sort
-      }}
-    _acm_post_activation_allow_zero_managed_clusters: >-
-      {{
-        (acm_switchover_operation.allow_zero_managed_clusters | default(false) | bool)
-        or (
-          acm_switchover_operation.min_managed_clusters is defined
-          and acm_switchover_operation.min_managed_clusters is not none
-          and (acm_switchover_operation.min_managed_clusters | int) == 0
-        )
-        or (
-          not (acm_switchover_operation.restore_only | default(false) | bool)
-          and acm_switchover_expected_managed_cluster_count is defined
-          and acm_switchover_expected_managed_cluster_count is not none
-          and (acm_switchover_expected_managed_cluster_count | int) == 0
-        )
-      }}
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/resolve_managed_cluster_expectation.yml"
+  vars:
+    acm_switchover_managed_cluster_expectation_mode: post_activation_verify
 
-- name: Resolve managed-cluster verification threshold
+- name: Publish post-activation managed-cluster expectation aliases
   ansible.builtin.set_fact:
-    _acm_post_activation_min_managed_clusters: >-
-      {{
-        (acm_switchover_operation.min_managed_clusters | int)
-        if (
-          acm_switchover_operation.min_managed_clusters is defined
-          and acm_switchover_operation.min_managed_clusters is not none
-        )
-        else (
-          acm_switchover_expected_managed_cluster_count | default(0) | int
-          if (acm_switchover_expected_managed_cluster_count | default(0) | int) > 0
-          else (
-            _acm_post_activation_configured_managed_cluster_names | length
-            if (
-              acm_switchover_operation.restore_only | default(false) | bool
-              and (_acm_post_activation_configured_managed_cluster_names | length) > 0
-            )
-            else (
-              0
-              if (_acm_post_activation_allow_zero_managed_clusters | bool)
-              else 1
-            )
-          )
-        )
-      }}
-    _acm_post_activation_expected_managed_cluster_names: >-
-      {{
-        []
-        if (
-          acm_switchover_operation.min_managed_clusters is defined
-          and acm_switchover_operation.min_managed_clusters is not none
-        )
-        else (
-          acm_switchover_expected_managed_cluster_names
-          if (acm_switchover_expected_managed_cluster_names | default([]) | length) > 0
-          else (
-            _acm_post_activation_configured_managed_cluster_names
-            if (
-              acm_switchover_operation.restore_only | default(false) | bool
-              and (_acm_post_activation_configured_managed_cluster_names | length) > 0
-            )
-            else []
-          )
-        )
-      }}
+    _acm_post_activation_configured_managed_cluster_names: "{{ acm_switchover_resolved_configured_managed_cluster_names | default([]) }}"
+    _acm_post_activation_allow_zero_managed_clusters: "{{ acm_switchover_resolved_allow_zero_managed_clusters | bool }}"
+    _acm_post_activation_min_managed_clusters: "{{ acm_switchover_resolved_min_managed_clusters | int }}"
+    _acm_post_activation_expected_managed_cluster_names: "{{ acm_switchover_resolved_expected_managed_cluster_names | default([]) }}"
 
 # After a Velero MC restore, the hub re-creates ManagedCluster objects with
 # status from the backup snapshot (often Available=True from the old primary).

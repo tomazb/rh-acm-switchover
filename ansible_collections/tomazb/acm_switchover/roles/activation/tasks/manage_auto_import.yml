@@ -7,29 +7,6 @@
     _auto_import_strategy_changed: false
     _auto_import_current_strategy: default
 
-- name: Derive secondary ACM version for auto-import strategy management
-  ansible.builtin.set_fact:
-    _acm_secondary_version: >-
-      {{
-        acm_secondary_version
-        | default(
-            (
-              (acm_activation_mch_info.resources | default([]) | first | default({}))
-              .get('status', {})
-              .get('currentVersion', '')
-            ),
-            true
-          )
-      }}
-
-- name: Determine whether secondary ACM supports auto-import strategy
-  ansible.builtin.set_fact:
-    _acm_secondary_supports_auto_import: >-
-      {{
-        (_acm_secondary_version | length > 0)
-        and (_acm_secondary_version is version('2.14.0', '>='))
-      }}
-
 - name: Initialize auto-import candidate list
   ansible.builtin.set_fact:
     _auto_import_non_local_clusters: []

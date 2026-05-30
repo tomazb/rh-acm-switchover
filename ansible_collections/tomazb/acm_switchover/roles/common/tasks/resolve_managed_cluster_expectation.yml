@@ -1,0 +1,117 @@
+---
+- name: Validate managed-cluster expectation mode
+  ansible.builtin.assert:
+    that:
+      - acm_switchover_managed_cluster_expectation_mode in ['activation_restore_wait', 'post_activation_verify']
+    fail_msg: >-
+      Unsupported managed-cluster expectation mode:
+      {{ acm_switchover_managed_cluster_expectation_mode | default('undefined') }}
+
+- name: Collect configured managed-cluster expectation names
+  ansible.builtin.set_fact:
+    acm_switchover_resolved_configured_managed_cluster_names: >-
+      {{
+        acm_switchover_managed_clusters | default({})
+        | dict2items
+        | map(attribute='key')
+        | list
+        | sort
+      }}
+
+- name: Resolve activation managed-cluster expectation
+  ansible.builtin.set_fact:
+    acm_switchover_resolved_min_managed_clusters: >-
+      {{
+        (acm_switchover_operation.min_managed_clusters | int)
+        if (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+        )
+        else (
+          1
+          if (acm_switchover_operation.restore_only | default(false) | bool)
+          else (acm_switchover_expected_managed_cluster_count | default(0) | int)
+        )
+      }}
+    acm_switchover_resolved_expected_managed_cluster_names: >-
+      {{
+        []
+        if (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+        )
+        else (
+          []
+          if (acm_switchover_operation.restore_only | default(false) | bool)
+          else (acm_switchover_expected_managed_cluster_names | default([]))
+        )
+      }}
+    acm_switchover_resolved_allow_zero_managed_clusters: false
+  when: acm_switchover_managed_cluster_expectation_mode == 'activation_restore_wait'
+
+- name: Resolve post-activation zero managed-cluster allowance
+  ansible.builtin.set_fact:
+    acm_switchover_resolved_allow_zero_managed_clusters: >-
+      {{
+        (acm_switchover_operation.allow_zero_managed_clusters | default(false) | bool)
+        or (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+          and (acm_switchover_operation.min_managed_clusters | int) == 0
+        )
+        or (
+          not (acm_switchover_operation.restore_only | default(false) | bool)
+          and acm_switchover_expected_managed_cluster_count is defined
+          and acm_switchover_expected_managed_cluster_count is not none
+          and (acm_switchover_expected_managed_cluster_count | int) == 0
+        )
+      }}
+  when: acm_switchover_managed_cluster_expectation_mode == 'post_activation_verify'
+
+- name: Resolve post-activation managed-cluster expectation
+  ansible.builtin.set_fact:
+    acm_switchover_resolved_min_managed_clusters: >-
+      {{
+        (acm_switchover_operation.min_managed_clusters | int)
+        if (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+        )
+        else (
+          acm_switchover_expected_managed_cluster_count | default(0) | int
+          if (acm_switchover_expected_managed_cluster_count | default(0) | int) > 0
+          else (
+            acm_switchover_resolved_configured_managed_cluster_names | length
+            if (
+              acm_switchover_operation.restore_only | default(false) | bool
+              and (acm_switchover_resolved_configured_managed_cluster_names | length) > 0
+            )
+            else (
+              0
+              if (acm_switchover_resolved_allow_zero_managed_clusters | bool)
+              else 1
+            )
+          )
+        )
+      }}
+    acm_switchover_resolved_expected_managed_cluster_names: >-
+      {{
+        []
+        if (
+          acm_switchover_operation.min_managed_clusters is defined
+          and acm_switchover_operation.min_managed_clusters is not none
+        )
+        else (
+          acm_switchover_expected_managed_cluster_names
+          if (acm_switchover_expected_managed_cluster_names | default([]) | length) > 0
+          else (
+            acm_switchover_resolved_configured_managed_cluster_names
+            if (
+              acm_switchover_operation.restore_only | default(false) | bool
+              and (acm_switchover_resolved_configured_managed_cluster_names | length) > 0
+            )
+            else []
+          )
+        )
+      }}
+  when: acm_switchover_managed_cluster_expectation_mode == 'post_activation_verify'

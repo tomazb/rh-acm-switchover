@@ -24,6 +24,7 @@ from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_cluster_verif
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 POST_ACTIVATION_TASKS = ROLES_DIR / "post_activation" / "tasks"
+COMMON_TASKS = ROLES_DIR / "common" / "tasks"
 
 
 def _load_yaml(path: pathlib.Path) -> list[dict]:
@@ -39,6 +40,7 @@ class TestVerifyManagedClustersPolling:
     @pytest.fixture(autouse=True)
     def _load_tasks(self):
         self.content = (POST_ACTIVATION_TASKS / "verify_managed_clusters.yml").read_text()
+        self.expectation_content = (COMMON_TASKS / "resolve_managed_cluster_expectation.yml").read_text()
 
     def test_until_checks_available_condition(self):
         assert "ManagedClusterConditionAvailable" in self.content
@@ -132,13 +134,13 @@ class TestVerifyManagedClustersPolling:
 
     def test_preflight_zero_cluster_compatibility_excludes_restore_only(self):
         """A preflight-derived zero count may allow non-restore switchovers, but not restore-only."""
-        assert "not (acm_switchover_operation.restore_only | default(false) | bool)" in self.content
-        assert "acm_switchover_expected_managed_cluster_count is defined" in self.content
+        assert "not (acm_switchover_operation.restore_only | default(false) | bool)" in self.expectation_content
+        assert "acm_switchover_expected_managed_cluster_count is defined" in self.expectation_content
 
     def test_explicit_min_zero_allows_empty_hub_like_python_cli(self):
         """Role-level min_managed_clusters=0 must be the CLI-equivalent empty-target opt-in."""
-        assert "acm_switchover_operation.min_managed_clusters is defined" in self.content
-        assert "(acm_switchover_operation.min_managed_clusters | int) == 0" in self.content
+        assert "acm_switchover_operation.min_managed_clusters is defined" in self.expectation_content
+        assert "(acm_switchover_operation.min_managed_clusters | int) == 0" in self.expectation_content
 
 
 # ── Issue 2: Re-verification after klusterlet remediation ──

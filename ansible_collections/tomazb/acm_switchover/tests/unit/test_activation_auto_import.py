@@ -8,6 +8,7 @@ ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 ACTIVATION_TASKS = ROLES_DIR / "activation" / "tasks"
 FINALIZATION_TASKS = ROLES_DIR / "finalization" / "tasks"
 CONSTANTS_FILE = pathlib.Path(__file__).resolve().parents[2] / "plugins" / "module_utils" / "constants.py"
+AUTO_IMPORT_SUPPORT_TASK = ACTIVATION_TASKS / "resolve_auto_import_support.yml"
 
 
 def test_manage_auto_import_file_exists():
@@ -131,9 +132,11 @@ def test_apply_immediate_import_does_not_swallow_patch_failures():
 def test_manage_auto_import_preserves_python_guards_and_detect_only_mode():
     """Activation auto-import management must mirror Python _maybe_set_auto_import_strategy()."""
     content = (ACTIVATION_TASKS / "manage_auto_import.yml").read_text()
+    support_content = AUTO_IMPORT_SUPPORT_TASK.read_text()
 
-    assert "acm_secondary_version" in content
-    assert "version('2.14.0', '>=')" in content
+    assert "acm_secondary_version" in support_content
+    assert "version('2.14.0', '>=')" in support_content
+    assert "_acm_secondary_supports_auto_import" in content
     assert "old_hub_action" in content
     assert "local-cluster" in content
     assert "rejectattr('metadata.name', 'equalto', 'local-cluster')" in content
@@ -182,9 +185,10 @@ def test_manage_auto_import_omits_missing_secondary_context():
 def test_apply_immediate_import_requires_acm_214_or_newer():
     """Immediate-import annotations are an ACM 2.14+ behavior and must be version-gated."""
     content = (ACTIVATION_TASKS / "apply_immediate_import.yml").read_text()
+    support_content = AUTO_IMPORT_SUPPORT_TASK.read_text()
 
-    assert "acm_secondary_version" in content
-    assert "version('2.14.0', '>=')" in content
+    assert "acm_secondary_version" in support_content
+    assert "version('2.14.0', '>=')" in support_content
     assert "_acm_secondary_supports_auto_import" in content
 
 
