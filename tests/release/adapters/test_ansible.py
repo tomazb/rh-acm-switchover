@@ -115,6 +115,15 @@ def test_build_extra_vars_sets_method_full_for_restore_only(tmp_path: Path) -> N
     assert extra_vars["acm_switchover_operation"]["min_managed_clusters"] is None
 
 
+def test_build_extra_vars_clears_primary_hub_for_restore_only(tmp_path: Path) -> None:
+    adapter = _make_adapter(tmp_path)
+
+    extra_vars = adapter.build_extra_vars("ansible-restore-only")
+
+    assert extra_vars["acm_switchover_hubs"]["primary"] == {"context": "", "kubeconfig": ""}
+    assert extra_vars["acm_switchover_operation"]["old_hub_action"] == "none"
+
+
 def test_build_extra_vars_leaves_min_managed_clusters_unset_by_default(tmp_path: Path) -> None:
     adapter = _make_adapter(tmp_path)
 

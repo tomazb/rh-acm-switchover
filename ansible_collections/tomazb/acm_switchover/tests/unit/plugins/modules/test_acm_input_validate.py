@@ -195,6 +195,16 @@ def test_restore_only_rejects_primary_context():
     assert "restore_only" in primary_result["message"]
 
 
+def test_restore_only_rejects_primary_kubeconfig():
+    """Primary kubeconfig must be empty in restore-only mode."""
+    results = build_input_validation_results(
+        _restore_only_params(**{"hubs.primary.kubeconfig": "./kubeconfigs/primary"})
+    )
+    primary_result = next(r for r in results if r["id"] == "preflight-input-primary-kubeconfig")
+    assert primary_result["status"] == "fail"
+    assert "restore_only" in primary_result["message"]
+
+
 def test_restore_only_rejects_missing_secondary_context():
     """Secondary context is required in restore-only mode."""
     results = build_input_validation_results(_restore_only_params(**{"hubs.secondary.context": ""}))

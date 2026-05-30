@@ -85,15 +85,21 @@ class AnsibleAdapter:
         return env
 
     def build_extra_vars(self, scenario_id: str) -> dict:
+        restore_only = scenario_id == "ansible-restore-only"
+        primary_hub = (
+            {"context": "", "kubeconfig": ""}
+            if restore_only
+            else {"context": self.primary_context, "kubeconfig": self.primary_kubeconfig}
+        )
         extra_vars = {
             "acm_switchover_hubs": {
-                "primary": {"context": self.primary_context, "kubeconfig": self.primary_kubeconfig},
+                "primary": primary_hub,
                 "secondary": {"context": self.secondary_context, "kubeconfig": self.secondary_kubeconfig},
             },
             "acm_switchover_operation": {
-                "restore_only": scenario_id == "ansible-restore-only",
-                "method": "full" if scenario_id == "ansible-restore-only" else "passive",
-                "old_hub_action": "secondary",
+                "restore_only": restore_only,
+                "method": "full" if restore_only else "passive",
+                "old_hub_action": "none" if restore_only else "secondary",
                 "activation_method": "patch",
                 "min_managed_clusters": None,
                 "dry_run": False,
