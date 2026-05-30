@@ -2727,7 +2727,7 @@ class TestArgocdResumeOnly:
         primary = Mock(name="primary-client")
         primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-primary"}
         secondary = Mock(name="secondary-client")
-        secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": ""}
+        secondary.get_cluster_identity.side_effect = RuntimeError("kube-system UID unavailable")
         logger = logging.getLogger("test.resume_only_identity_missing")
 
         with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
