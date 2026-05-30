@@ -54,3 +54,5 @@ graphify-out/
 .agents/
 .claude/settings.local.json
 .claude/agent-memory-local/
+
+review/graphify/
