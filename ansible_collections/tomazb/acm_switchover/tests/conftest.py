@@ -219,6 +219,16 @@ def _merge_test_vars(base: dict, overrides: dict) -> dict:
     return base
 
 
+def _fail_ansible_playbook_timeout(
+    exc: subprocess.TimeoutExpired, timeout_seconds: int
+) -> None:
+    pytest.fail(
+        f"ansible-playbook timed out after {timeout_seconds}s.\n"
+        f"Stdout:\n{exc.stdout or ''}\n"
+        f"Stderr:\n{exc.stderr or ''}"
+    )
+
+
 @pytest.fixture
 def run_switchover_fixture(tmp_path):
     def _run(fixture_name: str) -> tuple[subprocess.CompletedProcess[str], dict]:
@@ -255,7 +265,7 @@ def run_switchover_fixture(tmp_path):
                 timeout=300,
             )
         except subprocess.TimeoutExpired as exc:
-            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
+            _fail_ansible_playbook_timeout(exc, 300)
 
         report_path = report_dir / "switchover-report.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
@@ -322,7 +332,7 @@ def run_role_fixture(tmp_path):
                 timeout=300,
             )
         except subprocess.TimeoutExpired as exc:
-            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
+            _fail_ansible_playbook_timeout(exc, 300)
 
     return _run
 
@@ -363,7 +373,7 @@ def run_restore_only_fixture(tmp_path):
                 timeout=300,
             )
         except subprocess.TimeoutExpired as exc:
-            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
+            _fail_ansible_playbook_timeout(exc, 300)
 
         report_path = report_dir / "restore-only-report.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
@@ -452,7 +462,7 @@ def run_checkpoint_fixture(tmp_path):
                 timeout=300,
             )
         except subprocess.TimeoutExpired as exc:
-            pytest.fail(f"ansible-playbook timed out after 300s: {exc}")
+            _fail_ansible_playbook_timeout(exc, 300)
 
         checkpoint = (
             json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
