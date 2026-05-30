@@ -112,6 +112,22 @@ def build_input_validation_results(params: dict) -> list[dict]:
                     "primary context correctly empty for restore-only",
                 )
             )
+
+        if primary_kubeconfig:
+            results.append(
+                _fail_result(
+                    "preflight-input-primary-kubeconfig",
+                    "restore_only mode does not use a primary hub; leave primary kubeconfig empty",
+                    "Remove acm_switchover_hubs.primary.kubeconfig for restore-only",
+                )
+            )
+        else:
+            results.append(
+                _pass_result(
+                    "preflight-input-primary-kubeconfig",
+                    "primary kubeconfig correctly empty for restore-only",
+                )
+            )
     else:
         try:
             validate_context_name(primary_context)

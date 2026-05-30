@@ -68,3 +68,11 @@ def test_switchover_invalid_report_dir_fails_without_writing_report(
     assert completed.returncode != 0
     assert report == {}
     assert "Path traversal attempt" in completed.stdout or "Path traversal attempt" in completed.stderr
+
+
+def test_switchover_playbook_rejects_restore_only_mode(run_switchover_fixture):
+    completed, report = run_switchover_fixture("restore_only_rejected.yml")
+    assert completed.returncode != 0
+    assert report == {}
+    assert "restore_only mode must use" in completed.stdout or "restore_only mode must use" in completed.stderr
+    assert "Run primary prep" not in completed.stdout

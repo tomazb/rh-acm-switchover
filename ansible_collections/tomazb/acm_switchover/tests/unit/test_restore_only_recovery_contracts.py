@@ -37,6 +37,25 @@ def test_restore_only_validates_secondary_backup_artifacts():
     ), "validate_backups.yml should describe the restore-only backup validation path explicitly"
 
 
+def test_switchover_playbook_rejects_restore_only_mode_before_roles():
+    """The full switchover playbook must not run primary_prep for restore-only requests."""
+    play = _load_playbook("switchover.yml")[0]
+    pre_tasks = play.get("pre_tasks", [])
+
+    fail_tasks = [
+        task
+        for task in pre_tasks
+        if task.get("name") == "Reject restore-only mode in switchover playbook"
+    ]
+
+    assert fail_tasks, "switchover.yml must fail before roles when restore_only=true"
+    fail_task = fail_tasks[0]
+    assert "ansible.builtin.fail" in fail_task
+    assert "restore_only" in str(fail_task["ansible.builtin.fail"].get("msg", ""))
+    assert "restore_only.yml" in str(fail_task["ansible.builtin.fail"].get("msg", ""))
+    assert "acm_switchover_operation.restore_only | default(false) | bool" in str(fail_task.get("when", ""))
+
+
 def test_verify_passive_sync_passes_activation_method_to_restore_selector():
     """Passive activation resume must let acm_restore_info see activation_method=restore."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "verify_passive_sync.yml").read_text())
