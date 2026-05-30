@@ -54,4 +54,5 @@ secrets/
 credentials/
 tmp/
 artifacts/
+review/
 # END Graphify ACM switchover review ignore
