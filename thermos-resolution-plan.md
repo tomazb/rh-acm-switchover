@@ -60,7 +60,7 @@
 | PR | Status | Branch | Worktree | Findings | PR URL | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
 | 01 | merged | `docs/thermos-resolution-tracking` | `.worktrees/thermos-01-tracking` | tracker + agent instructions | https://github.com/tomazb/rh-acm-switchover/pull/72 | `python -m pytest tests/test_documentation_guardrails.py -q` passed; `git diff --check` passed; CI passed |
-| 02 | ready_for_review | `fix/thermos-restore-only-guard` | `.worktrees/thermos-02-restore-only` | F1 | unopened | `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -q` passed; `git diff --check` passed |
+| 02 | ready_for_review | `fix/thermos-restore-only-guard` | `.worktrees/thermos-02-restore-only` | F1 | https://github.com/tomazb/rh-acm-switchover/pull/73 | `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -q` passed; `git diff --check` passed |
 | 03 | planned | `fix/thermos-klusterlet-fail-closed` | `.worktrees/thermos-03-klusterlet` | F2, F3, F28 | unopened | Python post-activation tests + collection klusterlet module tests |
 | 04 | planned | `fix/thermos-hub-identity-resume` | `.worktrees/thermos-04-hub-identity` | F5, F6 | unopened | `tests/test_main.py`, `tests/test_utils.py` |
 | 05 | planned | `fix/thermos-report-checkpoint-identity` | `.worktrees/thermos-05-identity-hygiene` | F9, F16 | unopened | report artifact tests + checkpoint action tests |
