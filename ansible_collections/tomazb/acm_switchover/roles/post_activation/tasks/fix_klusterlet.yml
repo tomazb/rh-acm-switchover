@@ -9,11 +9,7 @@
         (
           _klusterlet_remediation_candidates
           | default(
-              (
-                acm_switchover_cluster_verify_result
-                | default(acm_cluster_verify_result | default({}))
-              ).pending
-              | default([])
+              acm_switchover_cluster_verify_result.pending | default(acm_cluster_verify_result.pending | default([]))
             )
         )
         | unique

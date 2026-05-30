@@ -10,7 +10,15 @@
 
 - name: Resolve managed-cluster verification result for klusterlet remediation
   ansible.builtin.set_fact:
-    _klusterlet_cluster_verify_result: "{{ acm_switchover_cluster_verify_result | default(acm_cluster_verify_result | default({})) }}"
+    _klusterlet_cluster_verify_result: >-
+      {{
+        acm_switchover_cluster_verify_result
+        if (
+          acm_switchover_cluster_verify_result is defined
+          and not (acm_switchover_cluster_verify_result.skipped | default(false) | bool)
+        )
+        else (acm_cluster_verify_result | default({}))
+      }}
 
 - name: Combine pending and wrong-hub klusterlet remediation candidates
   ansible.builtin.set_fact:

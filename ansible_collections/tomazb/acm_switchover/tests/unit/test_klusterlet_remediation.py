@@ -116,6 +116,31 @@ def test_klusterlet_remediation_note_uses_prefixed_fact_with_compatibility_alias
     )
 
 
+def test_klusterlet_verify_fallback_ignores_skipped_prefixed_result():
+    """A skipped prefixed register must not mask the legacy cluster verify result."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    resolve_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Resolve managed-cluster verification result for klusterlet remediation"
+    )
+    expression = resolve_task["ansible.builtin.set_fact"]["_klusterlet_cluster_verify_result"]
+
+    assert "acm_switchover_cluster_verify_result is defined" in expression
+    assert "not (acm_switchover_cluster_verify_result.skipped | default(false) | bool)" in expression
+    assert "else (acm_cluster_verify_result | default({}))" in expression
+
+
+def test_fix_klusterlet_fallback_uses_legacy_pending_when_prefixed_result_is_skipped():
+    """The fix task must fall back on legacy pending when the prefixed result has no pending key."""
+    content = (POST_ACTIVATION_TASKS / "fix_klusterlet.yml").read_text()
+
+    assert (
+        "acm_switchover_cluster_verify_result.pending | default(acm_cluster_verify_result.pending | default([]))"
+        in content
+    )
+
+
 def test_verify_klusterlet_reprobes_after_remediation():
     """Wrong-hub remediation must be followed by a second klusterlet probe."""
     tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
