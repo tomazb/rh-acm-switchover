@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed Python CLI Argo CD resume-only identity validation so state files with stored hub cluster UIDs fail closed when a live hub UID changes or cannot be read.
 - Fixed `klusterlet` fail-closed behavior. Initial Python worker timeouts now fail post-activation. Collection probe check mode avoids live client construction. Collection probe API/client exceptions are now reported as failed probe results instead of skipped checks.
 - Fixed the collection full switchover playbook to reject `restore_only=true` before any phase roles run, and tightened restore-only input validation so primary hub kubeconfig data is rejected with primary context data.
 - Fixed collection preflight RBAC to fail closed on HTTP 401 during Argo CD CRD discovery, matching the Python CLI. Previously, 401 was treated the same as 403 (deferred), which could hide expired or invalid kubeconfig credentials.

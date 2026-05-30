@@ -2674,6 +2674,71 @@ class TestInitializeClients:
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
+    def _make_identity_state(self, tmp_path):
+        from lib.utils import StateManager
+
+        state = StateManager(str(tmp_path / "resume-state.json"))
+        state.ensure_contexts("hub-a", "hub-b")
+        state.ensure_hub_identities(
+            {
+                "primary": {"context": "hub-a", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "hub-b", "cluster_uid": "uid-secondary"},
+            }
+        )
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config(
+            "argocd_paused_apps",
+            [
+                {
+                    "hub": "secondary",
+                    "namespace": "argocd",
+                    "name": "app-2",
+                    "original_sync_policy": {"automated": {}},
+                }
+            ],
+        )
+        return state
+
+    def test_resume_only_rejects_stored_secondary_identity_mismatch(self, tmp_path, caplog):
+        from acm_switchover import _run_argocd_resume_only
+
+        state = self._make_identity_state(tmp_path)
+        args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", force=False)
+        primary = Mock(name="primary-client")
+        primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-primary"}
+        secondary = Mock(name="secondary-client")
+        secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary-new"}
+        logger = logging.getLogger("test.resume_only_identity_mismatch")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+            with caplog.at_level(logging.ERROR):
+                result = _run_argocd_resume_only(args, state, primary, secondary, logger)
+
+        assert result is False
+        assert "hub identity" in caplog.text
+        resume_recorded.assert_not_called()
+
+    def test_resume_only_rejects_unreadable_live_secondary_identity(self, tmp_path, caplog):
+        from acm_switchover import _run_argocd_resume_only
+
+        state = self._make_identity_state(tmp_path)
+        args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", force=False)
+        primary = Mock(name="primary-client")
+        primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-primary"}
+        secondary = Mock(name="secondary-client")
+        secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": ""}
+        logger = logging.getLogger("test.resume_only_identity_missing")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+            with caplog.at_level(logging.ERROR):
+                result = _run_argocd_resume_only(args, state, primary, secondary, logger)
+
+        assert result is False
+        assert "hub identity" in caplog.text
+        resume_recorded.assert_not_called()
+
     def test_resume_only_builds_primary_client_from_recorded_state_when_primary_context_omitted(
         self,
     ):

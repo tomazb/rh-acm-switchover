@@ -1703,6 +1703,15 @@ def _collect_hub_identities(
     return identities
 
 
+def _stored_hub_identities(state: StateManager) -> dict:
+    """Return persisted hub identity records, if this state file has them."""
+    state_data = getattr(state, "state", {}) or {}
+    if not isinstance(state_data, dict):
+        return {}
+    identities = state_data.get("hub_identities") or {}
+    return identities if isinstance(identities, dict) else {}
+
+
 def _sanitize_context_identifier(value: str) -> str:
     """Sanitize context string to be filesystem friendly."""
     return InputValidator.sanitize_context_identifier(value)
@@ -1891,6 +1900,43 @@ def _run_argocd_resume_only(
             resume_primary = KubeClient(
                 stored_primary_ctx, dry_run=getattr(args, "dry_run", False)
             )
+
+    stored_identities = _stored_hub_identities(state)
+    if stored_identities:
+        if stored_identities.get("primary") and resume_primary is None and stored_primary_ctx:
+            try:
+                if stored_primary_ctx == current_secondary_ctx and secondary is not None:
+                    resume_primary = secondary
+                else:
+                    logger.info(
+                        "Resume-only identity validation loading recorded primary hub client: %s",
+                        stored_primary_ctx,
+                    )
+                    resume_primary = KubeClient(
+                        stored_primary_ctx,
+                        dry_run=getattr(args, "dry_run", False),
+                    )
+            except Exception as exc:
+                logger.error("Resume-only hub identity validation failed: %s", exc)
+                return False
+
+        try:
+            live_identities = _collect_hub_identities(resume_primary, resume_secondary)
+            missing_roles = sorted(role for role in stored_identities if role not in live_identities)
+            if missing_roles:
+                logger.error(
+                    "Resume-only hub identity validation failed: missing live client for recorded %s hub identity.",
+                    ", ".join(missing_roles),
+                )
+                return False
+            state.ensure_hub_identities(
+                live_identities,
+                allow_legacy_backfill=getattr(args, "force", False),
+                persist=False,
+            )
+        except Exception as exc:
+            logger.error("Resume-only hub identity validation failed: %s", exc)
+            return False
 
     summary = argocd_lib.resume_recorded_applications(
         paused_apps,
