@@ -493,7 +493,7 @@ def main() -> None:
             argocd_mode=module.params["argocd_mode"],
             argocd_install_type=module.params["argocd_install_type"],
             decommission_only=module.params["decommission_only"],
-            scope=module.params.get("scope", "hub"),
+            scope=module.params["scope"],
         )
     except ValueError as exc:
         module.fail_json(msg=str(exc))
