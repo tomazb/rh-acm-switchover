@@ -26,6 +26,10 @@ options:
     description: Hub connection info to embed in the report for traceability.
     required: true
     type: dict
+  hub_identities:
+    description: Live hub identity data to embed in the report for traceability.
+    type: dict
+    default: {}
   path:
     description: Destination path for the JSON report file. Skipped when not provided.
     type: str
@@ -69,7 +73,34 @@ def summarize_preflight_results(results: list[dict]) -> dict:
     }
 
 
-def build_preflight_report(phase: str, results: list[dict], hubs: dict) -> dict:
+def sanitize_report_hubs(hubs: dict, hub_identities: dict | None = None) -> dict:
+    """Return non-sensitive hub identity metadata for report artifacts."""
+    hubs = hubs if isinstance(hubs, dict) else {}
+    hub_identities = hub_identities if isinstance(hub_identities, dict) else {}
+    ordered_roles = list(dict.fromkeys(("primary", "secondary", *hubs.keys(), *hub_identities.keys())))
+    report_hubs = {}
+    for role in ordered_roles:
+        hub = hubs.get(role) or {}
+        identity = hub_identities.get(role) or {}
+        if not isinstance(hub, dict):
+            hub = {}
+        if not isinstance(identity, dict):
+            identity = {}
+        if not hub and not identity:
+            continue
+        report_hubs[role] = {
+            "context": hub.get("context") or identity.get("context") or "",
+            "cluster_uid": hub.get("cluster_uid") or identity.get("cluster_uid") or "",
+        }
+    return report_hubs
+
+
+def build_preflight_report(
+    phase: str,
+    results: list[dict],
+    hubs: dict,
+    hub_identities: dict | None = None,
+) -> dict:
     summary = summarize_preflight_results(results)
     return {
         "schema_version": "1.0",
@@ -78,7 +109,7 @@ def build_preflight_report(phase: str, results: list[dict], hubs: dict) -> dict:
         "phase": phase,
         "status": "pass" if summary["passed"] else "fail",
         "summary": summary,
-        "hubs": hubs,
+        "hubs": sanitize_report_hubs(hubs, hub_identities),
         "results": results,
     }
 
@@ -102,6 +133,7 @@ def main() -> None:
             "phase": {"type": "str", "required": True},
             "results": {"type": "list", "elements": "dict", "required": True},
             "hubs": {"type": "dict", "required": True},
+            "hub_identities": {"type": "dict", "required": False, "default": {}},
             "path": {"type": "str", "required": False, "default": None},
         },
         supports_check_mode=True,
@@ -111,6 +143,7 @@ def main() -> None:
         phase=module.params["phase"],
         results=module.params["results"],
         hubs=module.params["hubs"],
+        hub_identities=module.params.get("hub_identities") or {},
     )
     output_path = None
     changed = False

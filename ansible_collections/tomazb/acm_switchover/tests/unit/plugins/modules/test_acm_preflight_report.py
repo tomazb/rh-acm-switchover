@@ -32,6 +32,37 @@ def test_report_status_is_fail_when_critical_finding_fails():
     assert report["phase"] == "preflight"
 
 
+def test_report_hub_identity_excludes_kubeconfig_paths():
+    report = build_preflight_report(
+        phase="preflight",
+        results=[],
+        hubs={
+            "primary": {
+                "context": "primary-hub",
+                "kubeconfig": "/tmp/primary-admin.kubeconfig",
+            },
+            "secondary": {
+                "context": "secondary-hub",
+                "kubeconfig": "/tmp/secondary-admin.kubeconfig",
+                "cluster_uid": "uid-secondary-from-hubs",
+            },
+        },
+        hub_identities={
+            "primary": {"cluster_uid": "uid-primary"},
+            "secondary": {"cluster_uid": "uid-secondary-from-identities"},
+        },
+    )
+
+    assert report["hubs"] == {
+        "primary": {"context": "primary-hub", "cluster_uid": "uid-primary"},
+        "secondary": {
+            "context": "secondary-hub",
+            "cluster_uid": "uid-secondary-from-hubs",
+        },
+    }
+    assert "kubeconfig" not in json.dumps(report["hubs"])
+
+
 def test_run_module_empty_findings_passes_without_changes(monkeypatch):
     captured = {}
 

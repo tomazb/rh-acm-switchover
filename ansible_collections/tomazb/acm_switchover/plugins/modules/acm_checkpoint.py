@@ -58,15 +58,16 @@ checkpoint:
     operation_identity:
       description: >
         Operation identity payload binding the checkpoint to a specific switchover run.
-        Populated by the checkpoint_phase action plugin; null when the record is
-        created directly via this module without identity context.
+        Populated by the checkpoint_phase action plugin with hub contexts, live
+        cluster UIDs, and operation options; null when the record is created
+        directly via this module without identity context.
       type: dict
       returned: always
     errors:
       description: List of error strings recorded during the phase.
       type: list
     report_refs:
-      description: List of report reference strings attached to this checkpoint.
+      description: List of report reference dicts attached to this checkpoint.
       type: list
     created_at:
       description: ISO-8601 UTC timestamp when the record was created.
