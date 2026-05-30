@@ -59,7 +59,7 @@
 
 | PR | Status | Branch | Worktree | Findings | PR URL | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
-| 01 | ready_for_review | `docs/thermos-resolution-tracking` | `.worktrees/thermos-01-tracking` | tracker + agent instructions | unopened | `python -m pytest tests/test_documentation_guardrails.py -q` passed; `git diff --check` passed |
+| 01 | ready_for_review | `docs/thermos-resolution-tracking` | `.worktrees/thermos-01-tracking` | tracker + agent instructions | https://github.com/tomazb/rh-acm-switchover/pull/72 | `python -m pytest tests/test_documentation_guardrails.py -q` passed; `git diff --check` passed |
 | 02 | planned | `fix/thermos-restore-only-guard` | `.worktrees/thermos-02-restore-only` | F1 | unopened | collection input/playbook tests |
 | 03 | planned | `fix/thermos-klusterlet-fail-closed` | `.worktrees/thermos-03-klusterlet` | F2, F3, F28 | unopened | Python post-activation tests + collection klusterlet module tests |
 | 04 | planned | `fix/thermos-hub-identity-resume` | `.worktrees/thermos-04-hub-identity` | F5, F6 | unopened | `tests/test_main.py`, `tests/test_utils.py` |
