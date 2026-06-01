@@ -54,6 +54,14 @@
 | F26 | confirmed coverage gap | PR 08 + PR 12 | PR 08 aligned managed-cluster RBAC behavior; PR 12 adds full root-to-collection bundled RBAC manifest parity coverage. |
 | F27 | confirmed test naming issue | PR 06 | A post-activation integration test name claims pending-cluster failure while asserting dry-run skip. |
 | F28 | confirmed | PR 03 | Collection klusterlet probe treats broad API exceptions as skipped instead of failed. |
+| F29 | confirmed | PR 14 | Python ACM version parsing treats suffixed modern versions as older than 2.12 and can route `BackupSchedule` handling to delete. Collection fails loudly on the same input, so behavior is not in parity. |
+| F30 | resolved | PR 13 | Current CI-scope `black --check --line-length 120` passes on `ansible` at `4fbc352`. Keep strict formatting verification in every Round 6 PR. |
+| F31 | confirmed hardening | PR 18 | Safe path validation and report artifact sanitization remain duplicated across Python and collection helpers. These use different path bases and have incomplete adversarial parity coverage. |
+| F32 | confirmed hardening | PR 15 | `scripts/setup-rbac.sh` creates token-bearing kubeconfigs with the process umask and only narrows permissions afterward. |
+| F33 | confirmed hardening | PR 16 | `container-bootstrap/Containerfile` uses mutable base image tags and downloads `jq`/OpenShift client binaries without checksum verification. |
+| F34 | confirmed robustness | PR 17 | Collection klusterlet remediation deletes `bootstrap-hub-kubeconfig` before recreating it. This leaves a failure window with no bootstrap secret. |
+| F35 | needs operator decision | PR 19 | Helm `customValidatorRules` can add mutating verbs to the validator `ClusterRole`. Decide whether to enforce read-only verbs or explicitly document this as an advanced escape hatch. |
+| F36 | confirmed hardening | PR 15 | Service-account token generation defaults to `48h`; reduce the default or require explicit opt-in for longer-lived tokens. |
 
 ## PR Sequence
 
@@ -70,7 +78,14 @@
 | 09 | merged | `fix/thermos-ansible-surface-cleanup` | `.worktrees/thermos-09-ansible-cleanup` | F17, F18, F21, F23 | https://github.com/tomazb/rh-acm-switchover/pull/80 | CodeRabbit CLI pre-merge review `findings=0`; Gemini review threads addressed, resolved, and re-fetched clean; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; `python -m pytest tests/test_rbac_integration.py tests/test_documentation_guardrails.py -q` passed; `ruff check` on touched Python files passed; `black --check --line-length 120` on touched Python files passed; `git diff --check` passed; CI passed |
 | 10 | merged | `fix/thermos-preflight-complete-reporting` | `.worktrees/thermos-10-preflight-reporting` | F22 | https://github.com/tomazb/rh-acm-switchover/pull/81 | CodeRabbit CLI pre-merge review `findings=0`; all review threads addressed, resolved, and re-fetched clean; red/green RBAC plus backup preflight fixture passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_preflight_role.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_preflight_checkpoint_validation_order.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; `python -m pytest tests/test_documentation_guardrails.py -q` passed; `ruff check` on touched Python files passed; touched-file `black --check --line-length 120` and `isort --check-only --profile black --line-length 120` passed; `git diff --check` passed; CI passed |
 | 11 | merged | `refactor/thermos-shared-ansible-logic` | `.worktrees/thermos-11-shared-logic` | F19, F20 | https://github.com/tomazb/rh-acm-switchover/pull/82 | CodeRabbit CLI pre-PR review `findings=0`. CodeRabbit CLI pre-merge review rerun `findings=0`. CodeRabbit minor count-validation finding addressed. 3 Gemini review threads addressed, resolved, and re-fetched clean. Shared logic contract tests passed. `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed. `python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -q` passed. `python -m pytest ansible_collections/tomazb/acm_switchover/tests/scenario/test_checkpoint_resume.py -q` passed. `python -m pytest tests/test_documentation_guardrails.py -q` passed. `ruff check` on touched Python tests passed. Touched-file `black --check --line-length 120` and `isort --check-only --profile black --line-length 120` passed. `git diff --check` passed. CI passed |
-| 12 | ready_for_review | `refactor/thermos-maintainability` | `.worktrees/thermos-12-maintainability` | F12, F13, F14, F15, residual F26 coverage | https://github.com/tomazb/rh-acm-switchover/pull/84 | `python -m pytest tests/test_main.py tests/test_main_phase_flow.py tests/test_main_argocd_resume.py tests/test_utils.py tests/test_post_activation.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_rbac_bootstrap_contracts.py tests/test_rbac_collection_parity.py tests/test_rbac_validator.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_preflight_parity.py ansible_collections/tomazb/acm_switchover/tests/unit/test_preflight_passive_restore_alignment.py ansible_collections/tomazb/acm_switchover/tests/unit/test_restore_only_recovery_contracts.py ansible_collections/tomazb/acm_switchover/tests/integration/test_preflight_role.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; CodeRabbit CLI review `findings=2` minor RBAC parity test hardening findings addressed; review-comment pass addressed PR #84 inline threads for workflow exits/constants, flow typing/import cleanup, klusterlet worker fallback, and managed-cluster key assertions; `python -m pytest tests/test_main.py tests/test_main_phase_flow.py tests/test_main_argocd_resume.py tests/test_post_activation.py -q` passed; final `./run_tests.sh` passed |
+| 12 | merged | `refactor/thermos-maintainability` | `.worktrees/thermos-12-maintainability` | F12, F13, F14, F15, residual F26 coverage | https://github.com/tomazb/rh-acm-switchover/pull/84 | `python -m pytest tests/test_main.py tests/test_main_phase_flow.py tests/test_main_argocd_resume.py tests/test_utils.py tests/test_post_activation.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_rbac_bootstrap_contracts.py tests/test_rbac_collection_parity.py tests/test_rbac_validator.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_preflight_parity.py ansible_collections/tomazb/acm_switchover/tests/unit/test_preflight_passive_restore_alignment.py ansible_collections/tomazb/acm_switchover/tests/unit/test_restore_only_recovery_contracts.py ansible_collections/tomazb/acm_switchover/tests/integration/test_preflight_role.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; CodeRabbit CLI review `findings=2` minor RBAC parity test hardening findings addressed; review-comment pass addressed PR #84 inline threads for workflow exits/constants, flow typing/import cleanup, klusterlet worker fallback, and managed-cluster key assertions; `python -m pytest tests/test_main.py tests/test_main_phase_flow.py tests/test_main_argocd_resume.py tests/test_post_activation.py -q` passed; final `./run_tests.sh` passed; merged in local history at `4fbc352` |
+| 13 | ready_for_review | `docs/thermos-round6-tracking` | `.worktrees/thermos-13-round6-tracking` | Round 6 tracker + PR 12 status drift + F30 verification | _TBD_ | Add F29-F36 tracking, mark PR 12 merged, and verify documentation guardrails plus CI-scope `black --check`. |
+| 14 | planned | `fix/thermos-version-parsing-parity` | `.worktrees/thermos-14-version-parity` | F29 | _TBD_ | Add Python/collection ACM version parsing parity for suffixed/build metadata versions and fail-closed behavior for unparsable versions. |
+| 15 | planned | `fix/thermos-kubeconfig-token-hardening` | `.worktrees/thermos-15-token-hardening` | F32, F36 | _TBD_ | Harden kubeconfig file creation permissions and reduce default service-account token duration. |
+| 16 | planned | `fix/thermos-container-supply-chain` | `.worktrees/thermos-16-container-supply-chain` | F33 | _TBD_ | Pin container base images and verify downloaded binary checksums. |
+| 17 | planned | `fix/thermos-klusterlet-secret-ordering` | `.worktrees/thermos-17-klusterlet-secret-ordering` | F34 | _TBD_ | Replace delete-then-create klusterlet bootstrap secret remediation with apply/replace or create-before-delete semantics. |
+| 18 | planned | `fix/thermos-safe-path-consolidation` | `.worktrees/thermos-18-safe-path-consolidation` | F31 | _TBD_ | Consolidate safe path validation and add adversarial Python/collection parity coverage. |
+| 19 | planned | `fix/thermos-helm-validator-guardrail` | `.worktrees/thermos-19-helm-validator-guardrail` | F35 | _TBD_ | Implement the operator-approved Helm validator custom-rule policy and corresponding tests/docs. |
 
 ## Per-PR Implementation Details
 
@@ -294,6 +309,147 @@
 - Targeted tests pass after each sub-slice.
 - Root and collection-bundled RBAC manifests are compared by file set and exact content.
 - Full strict suite runs before final merge.
+
+### PR 13: Round 6 Tracking Reconciliation
+
+**Scope**
+- Add Round 6 findings F29-F36 to this tracker.
+- Mark PR 12 merged now that PR #84 is present in local `ansible` history.
+- Record F30 as resolved by current CI-scope Black verification.
+- No product behavior changes.
+
+**Files**
+- Modify: `thermos-resolution-plan.md`
+
+**Acceptance Criteria**
+- The validation matrix records F29-F36 with planned resolution PRs.
+- The PR sequence includes one planned Round 6 row per follow-up slice.
+- PR 12 status is `merged`.
+- Documentation guardrail tests pass.
+
+### PR 14: ACM Version Parsing Parity
+
+**Scope**
+- Fix F29 by aligning Python and collection BackupSchedule version decisions.
+- Accept ACM versions with pre-release/build suffixes when the leading numeric `major.minor` decision is unambiguous, such as `2.14.3-rc1` and `2.14.3+build`.
+- Fail closed on truly unparsable versions instead of silently routing Python to the ACM 2.11 delete path.
+
+**Likely Files**
+- `lib/utils.py`
+- `modules/primary_prep.py`
+- `modules/backup_schedule.py`
+- `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_backup_schedule.py`
+- `tests/test_utils.py`
+- `tests/test_backup_schedule.py`
+- `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_backup_schedule.py`
+- Parity tests if a shared fixture is added.
+
+**Acceptance Criteria**
+- Python and collection both classify `2.14.3-rc1` and `2.14.3+build` as pause-capable.
+- Python does not delete a BackupSchedule when the ACM version cannot be parsed.
+- Existing ACM 2.11 delete behavior remains intact for clean 2.11 versions.
+- Targeted Python and collection BackupSchedule tests pass.
+
+### PR 15: Kubeconfig Token Hardening
+
+**Scope**
+- Fix F32 and F36 in one credential-handling slice.
+- Create generated kubeconfig output directories with owner-only permissions.
+- Write token-bearing kubeconfigs under `umask 077` so there is no readable window before `chmod`.
+- Reduce the default TokenRequest duration from `48h` to a shorter operator-safe default, or require explicit opt-in for longer durations.
+
+**Likely Files**
+- `scripts/setup-rbac.sh`
+- `scripts/generate-sa-kubeconfig.sh`
+- `scripts/generate-merged-kubeconfig.sh`
+- `tests/test_scripts_integration.py`
+- RBAC deployment docs if defaults or examples change.
+
+**Acceptance Criteria**
+- `setup-rbac.sh` uses a tightened umask for kubeconfig writes and creates output directories with mode `700`.
+- Token duration defaults are consistent across setup, single-service-account generation, and merged kubeconfig generation.
+- CLI validation and docs reflect the new default and explicit longer-duration path.
+- Script integration/static tests cover the secure write pattern and duration default.
+
+### PR 16: Container Supply Chain Hardening
+
+**Scope**
+- Fix F33.
+- Pin container base images by digest.
+- Verify `jq` and OpenShift client downloads with checksums before installation.
+- Avoid `curl | tar` extraction.
+
+**Likely Files**
+- `container-bootstrap/Containerfile`
+- Container build docs if image pinning or version update process needs operator guidance.
+- Tests or static guardrails that inspect the Containerfile.
+
+**Acceptance Criteria**
+- Base images use digest-pinned references.
+- Downloaded `jq` and OpenShift client artifacts are verified before use.
+- `oc`/`kubectl` extraction happens only after checksum verification.
+- Static tests fail if mutable tags or unchecked `curl | tar` patterns return.
+
+### PR 17: Klusterlet Bootstrap Secret Ordering
+
+**Scope**
+- Fix F34.
+- Remove the delete-then-create failure window for `bootstrap-hub-kubeconfig` during collection klusterlet remediation.
+- Preserve current idempotent behavior and failure reporting.
+
+**Likely Files**
+- `ansible_collections/tomazb/acm_switchover/plugins/module_utils/klusterlet.py`
+- `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py`
+
+**Acceptance Criteria**
+- A failed replacement attempt does not leave a previously existing bootstrap secret deleted.
+- Existing 404/409 handling remains intentional and tested.
+- Remediation still reports accurate `changed`, `failed_clusters`, and per-step status.
+- Collection klusterlet module tests pass.
+
+### PR 18: Safe Path Consolidation
+
+**Scope**
+- Fix F31.
+- Collapse duplicated safe-path/report-artifact validation logic into one canonical Python implementation.
+- Add a thin collection copy where import boundaries require it.
+- Add adversarial parity coverage for traversal, symlink escapes, `/tmp` prefix confusion, home/cwd roots, and non-existent ancestors.
+
+**Likely Files**
+- `lib/validation.py`
+- `lib/report_artifacts.py`
+- `ansible_collections/tomazb/acm_switchover/plugins/module_utils/validation.py`
+- `tests/fixtures/validation_parity_cases.yml`
+- `tests/test_validation.py`
+- `tests/test_report_artifacts.py`
+- `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/module_utils/test_validation_security.py`
+- `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_safe_path_validate.py`
+
+**Acceptance Criteria**
+- Python CLI, Python report artifact, and collection report artifact checks make the same accept/reject decisions for shared cases.
+- Symlink escape and prefix-confusion cases are explicitly covered.
+- Existing safe artifact write protections, including no-follow behavior, remain intact.
+- Python and collection validation parity tests pass.
+
+### PR 19: Helm Validator Rule Guardrail
+
+**Scope**
+- Resolve F35 after explicit operator decision.
+- Preferred default: reject mutating verbs in `rbac.customValidatorRules` so the validator ClusterRole remains read-only.
+- If operators need an escape hatch, document that divergence explicitly and add a visible opt-in value.
+
+**Likely Files**
+- `deploy/helm/acm-switchover-rbac/templates/clusterrole.yaml`
+- `deploy/helm/acm-switchover-rbac/values.yaml`
+- `deploy/helm/acm-switchover-rbac/README.md`
+- Helm/static tests for rendered RBAC behavior.
+- Parity/support docs if the read-only validator contract intentionally changes.
+
+**Acceptance Criteria**
+- The validator read-only invariant is either enforced by template guardrails or explicitly opt-in with documented operational impact.
+- Mutating validator custom rules cannot be added silently.
+- Helm rendering/static tests cover allowed read-only custom rules and rejected mutating custom rules, or the approved opt-in path.
+- Any intentional parity/support boundary change is documented in the required parity docs.
 
 ## Verification Command Reference
 
