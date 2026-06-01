@@ -2,19 +2,47 @@
 
 import argparse
 import logging
-import sys
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Callable, Iterable, Optional, Tuple
+from typing import Any, Callable, Collection, Optional, Tuple
 
-from lib.constants import EXIT_FAILURE, STALE_STATE_THRESHOLD
+from lib.constants import (
+    STALE_STATE_THRESHOLD,
+    WORKFLOW_ALREADY_COMPLETED_MESSAGE,
+    WORKFLOW_BANNER,
+    WORKFLOW_BLANK_LINE,
+    WORKFLOW_CANNOT_DETERMINE_FAILED_PHASE_MESSAGE,
+    WORKFLOW_FAILED_AT_PHASE_MESSAGE,
+    WORKFLOW_FAILED_STATE_FORCE_REQUIRED_MESSAGE,
+    WORKFLOW_FORCE_RESET_FRESH_MESSAGE,
+    WORKFLOW_FORCE_RESET_RETRY_OPTION,
+    WORKFLOW_FORCE_STALE_STATE_OPTION,
+    WORKFLOW_LAST_ERROR_MESSAGE,
+    WORKFLOW_LEADING_BANNER,
+    WORKFLOW_NO_PHASES_EXECUTED_MESSAGE,
+    WORKFLOW_NO_RUNNABLE_PHASE_MATCHED_MESSAGE,
+    WORKFLOW_NON_RUNNABLE_PHASE_MESSAGE,
+    WORKFLOW_OPTIONS_MESSAGE,
+    WORKFLOW_REMOVE_STATE_FILE_OPTION,
+    WORKFLOW_RESET_STATE_FRESH_OPTION,
+    WORKFLOW_RESET_STATE_OPTION,
+    WORKFLOW_RESUMING_FAILED_STATE_MESSAGE,
+    WORKFLOW_RETRY_FROM_PHASE_MESSAGE,
+    WORKFLOW_STALE_COMPLETED_DETAIL_MESSAGE,
+    WORKFLOW_STALE_COMPLETED_STATE_MESSAGE,
+    WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE,
+    WORKFLOW_START_FRESH_MESSAGE,
+    WORKFLOW_STATE_AGE_MESSAGE,
+    WORKFLOW_STATE_FILE_MESSAGE,
+)
+from lib.exceptions import SwitchoverError
 from lib.utils import Phase, StateManager
 
 PhaseHandler = Callable[
     [argparse.Namespace, StateManager, Any, Any, logging.Logger],
     bool,
 ]
-PhaseFlowEntry = Tuple[PhaseHandler, Iterable[Phase], Phase]
+PhaseFlowEntry = Tuple[PhaseHandler, Collection[Phase], Phase]
 FailPhaseHandler = Callable[[StateManager, str, logging.Logger], bool]
 UnexpectedPhaseHandler = Callable[[StateManager, Phase, logging.Logger], bool]
 FailureHook = Callable[
@@ -44,12 +72,12 @@ def log_completed_noop(
     """Log an explicit no-op banner for reruns against a recent completed state."""
 
     age_minutes = int(state_age.total_seconds() // 60)
-    logger.info("\n" + "=" * 60)
-    logger.info("%s ALREADY COMPLETED", operation_label)
-    logger.info("=" * 60)
-    logger.info("Existing state file age: %s minutes", age_minutes)
-    logger.info("No phases were executed on this run.")
-    logger.info("State file: %s", state.state_file)
+    logger.info(WORKFLOW_LEADING_BANNER)
+    logger.info(WORKFLOW_ALREADY_COMPLETED_MESSAGE, operation_label)
+    logger.info(WORKFLOW_BANNER)
+    logger.info(WORKFLOW_STATE_AGE_MESSAGE, age_minutes)
+    logger.info(WORKFLOW_NO_PHASES_EXECUTED_MESSAGE)
+    logger.info(WORKFLOW_STATE_FILE_MESSAGE, state.state_file)
 
 
 def handle_completed_state(
@@ -76,23 +104,23 @@ def handle_completed_state(
 
     operation_noun = config.operation_noun
     if state_age.total_seconds() > STALE_STATE_THRESHOLD:
-        logger.warning("")
-        logger.warning("⚠️  DETECTED STALE COMPLETED STATE")
+        logger.warning(WORKFLOW_BLANK_LINE)
+        logger.warning(WORKFLOW_STALE_COMPLETED_STATE_MESSAGE)
         logger.warning(
-            "%s appears already completed, but state file is %s old.",
+            WORKFLOW_STALE_COMPLETED_DETAIL_MESSAGE,
             operation_noun.title(),
             f"{int(state_age.total_seconds() // 60)} minutes",
         )
-        logger.warning("")
-        logger.warning("To start a fresh %s:", operation_noun)
-        logger.warning("  1. Remove state file: rm %s", state.state_file)
-        logger.warning("  2. Or use: --reset-state")
-        logger.warning("  3. Or use: --force to override (use with caution)")
-        logger.warning("")
+        logger.warning(WORKFLOW_BLANK_LINE)
+        logger.warning(WORKFLOW_START_FRESH_MESSAGE, operation_noun)
+        logger.warning(WORKFLOW_REMOVE_STATE_FILE_OPTION, state.state_file)
+        logger.warning(WORKFLOW_RESET_STATE_OPTION)
+        logger.warning(WORKFLOW_FORCE_STALE_STATE_OPTION)
+        logger.warning(WORKFLOW_BLANK_LINE)
         if not getattr(args, "force", False):
-            logger.error("Use --force to proceed with stale state, or remove/reset state file to start fresh.")
-            sys.exit(EXIT_FAILURE)
-        logger.warning("--force used: Resetting state to start fresh %s", operation_noun)
+            logger.error(WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE)
+            raise SwitchoverError(WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE)
+        logger.warning(WORKFLOW_FORCE_RESET_FRESH_MESSAGE, operation_noun)
         state.reset()
         return False
 
@@ -115,28 +143,28 @@ def handle_failed_state(
     errors = state.get_errors()
     last_error_msg = errors[-1].get("error", "Unknown error") if errors else "Unknown error"
 
-    logger.info("")
-    logger.info("⚠️  RESUMING FROM FAILED STATE")
-    logger.info("Last error: %s", last_error_msg)
+    logger.info(WORKFLOW_BLANK_LINE)
+    logger.info(WORKFLOW_RESUMING_FAILED_STATE_MESSAGE)
+    logger.info(WORKFLOW_LAST_ERROR_MESSAGE, last_error_msg)
 
     if last_error_phase and last_error_phase in config.resumable_phases:
-        logger.info("Failed at phase: %s", last_error_phase.value)
-        logger.info("Will retry from this phase")
+        logger.info(WORKFLOW_FAILED_AT_PHASE_MESSAGE, last_error_phase.value)
+        logger.info(WORKFLOW_RETRY_FROM_PHASE_MESSAGE)
         state.record_retry_error_baseline(last_error_phase, len(errors))
         state.set_phase(last_error_phase)
         return
 
-    logger.warning("Cannot determine which phase failed from error history")
-    logger.warning("")
-    logger.warning("Options:")
-    logger.warning("  1. Remove state file: rm %s", state.state_file)
-    logger.warning("  2. Or use: --reset-state to start fresh")
-    logger.warning("  3. Or use: --force to reset and retry from beginning")
-    logger.warning("")
+    logger.warning(WORKFLOW_CANNOT_DETERMINE_FAILED_PHASE_MESSAGE)
+    logger.warning(WORKFLOW_BLANK_LINE)
+    logger.warning(WORKFLOW_OPTIONS_MESSAGE)
+    logger.warning(WORKFLOW_REMOVE_STATE_FILE_OPTION, state.state_file)
+    logger.warning(WORKFLOW_RESET_STATE_FRESH_OPTION)
+    logger.warning(WORKFLOW_FORCE_RESET_RETRY_OPTION)
+    logger.warning(WORKFLOW_BLANK_LINE)
     if not getattr(args, "force", False):
-        logger.error("Use --force to reset state and retry, or remove state file to start fresh.")
-        sys.exit(EXIT_FAILURE)
-    logger.warning("--force used: Resetting state to start fresh %s", config.operation_noun)
+        logger.error(WORKFLOW_FAILED_STATE_FORCE_REQUIRED_MESSAGE)
+        raise SwitchoverError(WORKFLOW_FAILED_STATE_FORCE_REQUIRED_MESSAGE)
+    logger.warning(WORKFLOW_FORCE_RESET_FRESH_MESSAGE, config.operation_noun)
     state.reset()
 
 
@@ -172,7 +200,7 @@ def run_phase_flow(
     if current_phase not in runnable_phases:
         return fail_phase(
             state,
-            f"State phase '{current_phase.value}' is not runnable in {flow_name} flow.",
+            WORKFLOW_NON_RUNNABLE_PHASE_MESSAGE % (current_phase.value, flow_name),
             logger,
         )
 
@@ -190,6 +218,6 @@ def run_phase_flow(
                 return False
 
     if not ran_phase:
-        return fail_phase(state, "No runnable phase matched current state.", logger)
+        return fail_phase(state, WORKFLOW_NO_RUNNABLE_PHASE_MATCHED_MESSAGE, logger)
 
     return True

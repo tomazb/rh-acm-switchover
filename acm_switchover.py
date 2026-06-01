@@ -52,10 +52,16 @@ from lib.constants import (
     MANAGED_CLUSTER_EXPECTATION_KEY,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
+    OPERATION_LABEL_RESTORE,
+    OPERATION_LABEL_SWITCHOVER,
+    OPERATION_NOUN_RESTORE,
+    OPERATION_NOUN_SWITCHOVER,
+    PHASE_FLOW_NAME_RESTORE_ONLY,
+    PHASE_FLOW_NAME_SWITCHOVER,
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
 )
-from lib.exceptions import StateLoadError, StateLockError
+from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
 from lib.gitops_detector import GitOpsCollector
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import (
@@ -415,7 +421,7 @@ def _run_switchover_impl(
         args,
         state,
         logger,
-        CompletedStateConfig(operation_label="SWITCHOVER", operation_noun="switchover"),
+        CompletedStateConfig(operation_label=OPERATION_LABEL_SWITCHOVER, operation_noun=OPERATION_NOUN_SWITCHOVER),
     ):
         return True
     handle_failed_state(
@@ -431,7 +437,7 @@ def _run_switchover_impl(
                 Phase.POST_ACTIVATION,
                 Phase.FINALIZATION,
             ),
-            operation_noun="switchover",
+            operation_noun=OPERATION_NOUN_SWITCHOVER,
         ),
     )
 
@@ -474,7 +480,7 @@ def _run_switchover_impl(
         secondary,
         logger,
         phase_flow,
-        "switchover",
+        PHASE_FLOW_NAME_SWITCHOVER,
         _fail_phase,
         _fail_unexpected_phase_state,
         _attempt_argocd_resume_on_failure,
@@ -587,7 +593,7 @@ def _run_restore_only_impl(
         args,
         state,
         logger,
-        CompletedStateConfig(operation_label="RESTORE", operation_noun="restore"),
+        CompletedStateConfig(operation_label=OPERATION_LABEL_RESTORE, operation_noun=OPERATION_NOUN_RESTORE),
     ):
         return True
     handle_failed_state(
@@ -601,7 +607,7 @@ def _run_restore_only_impl(
                 Phase.POST_ACTIVATION,
                 Phase.FINALIZATION,
             ),
-            operation_noun="restore",
+            operation_noun=OPERATION_NOUN_RESTORE,
         ),
     )
 
@@ -633,7 +639,7 @@ def _run_restore_only_impl(
         secondary,
         logger,
         phase_flow,
-        "restore-only",
+        PHASE_FLOW_NAME_RESTORE_ONLY,
         _fail_phase,
         _fail_unexpected_phase_state,
         _attempt_argocd_resume_on_failure,
@@ -1414,6 +1420,10 @@ def main():  # noqa: C901
         logger.info("State saved to: %s", args.state_file)
         logger.info("Re-run the same command to resume from last successful step")
         operation_exit_code = EXIT_INTERRUPT
+    except SwitchoverError as exc:
+        logger.error("\n✗ %s", exc)
+        state.add_error(str(exc))
+        operation_exit_code = EXIT_FAILURE
     except Exception as exc:
         logger.error("\n✗ Unexpected error: %s", exc, exc_info=args.verbose)
         state.add_error(str(exc))

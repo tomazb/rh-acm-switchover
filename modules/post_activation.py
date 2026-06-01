@@ -772,7 +772,17 @@ class PostActivationVerification:
         done, not_done = wait(future_fallbacks.keys(), timeout=KLUSTERLET_WORKER_TIMEOUT)
         results = []
         for future in done:
-            results.append(future.result())
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                fallback = future_fallbacks[future]
+                logger.error(
+                    "Worker thread for %s failed while %s klusterlet: %s",
+                    fallback[0],
+                    operation,
+                    exc,
+                )
+                results.append(fallback)
         for future in not_done:
             fallback = future_fallbacks[future]
             logger.warning(

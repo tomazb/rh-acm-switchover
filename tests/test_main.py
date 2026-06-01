@@ -42,6 +42,8 @@ from lib.constants import (
     EXIT_FAILURE,
     EXIT_INTERRUPT,
     EXIT_SUCCESS,
+    EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
+    EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
     MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
     MANAGED_CLUSTER_EXPECTATION_KEY,
@@ -49,6 +51,7 @@ from lib.constants import (
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
 )
+from lib.exceptions import SwitchoverError
 from lib.validation import ValidationError
 
 
@@ -367,7 +370,6 @@ class TestForceWithCompletedState:
 @pytest.mark.unit
 class TestCompletedStateTimestampHandling:
     def test_missing_last_updated_treated_as_stale_requires_force(self, tmp_path):
-        from lib.constants import EXIT_FAILURE
         from lib.utils import Phase, StateManager
 
         state_file = tmp_path / "state.json"
@@ -387,13 +389,10 @@ class TestCompletedStateTimestampHandling:
             skip_observability_checks=False,
         )
 
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(SwitchoverError, match="Use --force to proceed with stale state"):
             run_switchover(args, reloaded, Mock(), Mock(), Mock())
 
-        assert exc.value.code == EXIT_FAILURE
-
     def test_malformed_last_updated_treated_as_stale_requires_force(self, tmp_path):
-        from lib.constants import EXIT_FAILURE
         from lib.utils import Phase, StateManager
 
         state_file = tmp_path / "state.json"
@@ -413,10 +412,8 @@ class TestCompletedStateTimestampHandling:
             skip_observability_checks=False,
         )
 
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(SwitchoverError, match="Use --force to proceed with stale state"):
             run_switchover(args, reloaded, Mock(), Mock(), Mock())
-
-        assert exc.value.code == EXIT_FAILURE
 
     def test_force_with_missing_last_updated_validate_only_preserves_phase(self, tmp_path):
         from lib.utils import Phase, StateManager
@@ -572,9 +569,8 @@ class TestCompletedStateTimestampHandling:
             skip_rbac_validation=True,
             skip_observability_checks=False,
         )
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(SwitchoverError, match="Use --force to proceed with stale state"):
             run_switchover(args2, reloaded2, Mock(), Mock(), Mock())
-        assert exc.value.code == EXIT_FAILURE
 
     def test_recent_completed_state_does_not_require_force(self, tmp_path):
         from lib.constants import STALE_STATE_THRESHOLD
@@ -1109,7 +1105,7 @@ class TestSwitchoverPhaseFlow:
         finalization.assert_called_once()
 
     def test_run_switchover_failed_state_without_error_phase_requires_force(self, tmp_path):
-        """Verify that FAILED state without determinable error phase requires --force."""
+        """FAILED state without determinable error phase should raise a domain error."""
         from lib.utils import Phase, StateManager
 
         state_file = tmp_path / "state.json"
@@ -1126,10 +1122,8 @@ class TestSwitchoverPhaseFlow:
             skip_observability_checks=False,
         )
 
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(SwitchoverError, match="Use --force to reset state and retry"):
             run_switchover(args, state, Mock(), Mock(), Mock())
-
-        assert exc_info.value.code == EXIT_FAILURE
 
     def test_run_switchover_failed_state_with_non_runnable_error_phase_requires_force(self, tmp_path):
         """FAILED resume should refuse phases that are not valid restart points."""
@@ -1150,10 +1144,8 @@ class TestSwitchoverPhaseFlow:
             skip_observability_checks=False,
         )
 
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(SwitchoverError, match="Use --force to reset state and retry"):
             run_switchover(args, state, Mock(), Mock(), Mock())
-
-        assert exc_info.value.code == EXIT_FAILURE
 
     def test_run_switchover_failed_state_force_resets_and_retries(self, tmp_path):
         """Verify that --force with FAILED state and unknown error phase resets state."""
@@ -2023,8 +2015,8 @@ class TestPreflightPhase:
             result = _run_phase_preflight(args, state, primary, secondary, logger)
 
         assert result is True
-        state.set_config.assert_any_call("expected_managed_cluster_names", ["cluster-a", "cluster-b"])
-        state.set_config.assert_any_call("expected_managed_cluster_count", 2)
+        state.set_config.assert_any_call(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, ["cluster-a", "cluster-b"])
+        state.set_config.assert_any_call(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, 2)
         state.set_config.assert_any_call(
             MANAGED_CLUSTER_EXPECTATION_KEY,
             MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
@@ -2057,8 +2049,8 @@ class TestPreflightPhase:
             result = _run_phase_preflight(args, state, None, secondary, Mock())
 
         assert result is True
-        state.set_config.assert_any_call("expected_managed_cluster_names", [])
-        state.set_config.assert_any_call("expected_managed_cluster_count", 0)
+        state.set_config.assert_any_call(EXPECTED_MANAGED_CLUSTER_NAMES_KEY, [])
+        state.set_config.assert_any_call(EXPECTED_MANAGED_CLUSTER_COUNT_KEY, 0)
         state.set_config.assert_any_call(
             MANAGED_CLUSTER_EXPECTATION_KEY,
             MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,

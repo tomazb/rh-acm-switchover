@@ -14,6 +14,7 @@ from acm_switchover import (
     run_switchover,
 )
 from lib.constants import EXIT_FAILURE
+from lib.exceptions import SwitchoverError
 from tests.main_test_helpers import (
     failing_phase_stub,
     make_restore_only_args,
@@ -317,9 +318,9 @@ class TestResumeFromFailedState:
 class TestStaleStateDetection:
     """Tests for stale completed state detection and --force override."""
 
-    def test_stale_completed_state_exits_without_force(self, tmp_path):
+    def test_stale_completed_state_raises_without_force(self, tmp_path):
         """State older than STALE_STATE_THRESHOLD with COMPLETED phase should
-        exit with EXIT_FAILURE when --force is not set."""
+        raise a workflow-domain error when --force is not set."""
         from lib.constants import STALE_STATE_THRESHOLD
         from lib.utils import Phase, StateManager
 
@@ -335,10 +336,8 @@ class TestStaleStateDetection:
         state2 = StateManager(str(state_file))
         args = make_switchover_args(state_file=str(state_file))
 
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(SwitchoverError, match="Use --force to proceed with stale state"):
             run_switchover(args, state2, Mock(), Mock(), Mock())
-
-        assert exc_info.value.code == EXIT_FAILURE
 
     def test_stale_completed_state_force_resets_and_proceeds(self, tmp_path):
         """With --force on stale COMPLETED state, orchestrator should reset
@@ -515,6 +514,44 @@ class TestMainExceptionHandlers:
             main()
 
         assert exc_info.value.code == EXIT_FAILURE
+
+    def test_workflow_domain_error_exits_without_unexpected_log(self, tmp_path, monkeypatch, capsys):
+        """SwitchoverError from workflow helpers should exit cleanly with failure."""
+        monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", str(tmp_path))
+        state_file = tmp_path / "state.json"
+
+        with patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--primary-context",
+                "p1",
+                "--secondary-context",
+                "s1",
+                "--method",
+                "passive",
+                "--old-hub-action",
+                "secondary",
+                "--state-file",
+                str(state_file),
+            ],
+        ), patch("acm_switchover._initialize_clients", return_value=(Mock(), Mock())), patch(
+            "acm_switchover._collect_hub_identities",
+            return_value={},
+        ), patch(
+            "acm_switchover._execute_operation",
+            side_effect=SwitchoverError("Use --force to proceed with stale state"),
+        ), patch(
+            "acm_switchover._write_python_report"
+        ), pytest.raises(
+            SystemExit
+        ) as exc_info:
+            main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        captured = capsys.readouterr()
+        assert "Use --force to proceed with stale state" in captured.err
+        assert "Unexpected error" not in captured.err
 
 
 @pytest.mark.unit
