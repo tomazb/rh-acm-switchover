@@ -9,6 +9,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import stat
@@ -32,6 +33,7 @@ T = TypeVar("T")
 # plus a reference count so multiple StateManager instances in the same process
 # can reuse the same OS lock without blocking each other.
 _RUN_LOCK_REGISTRY: Dict[str, Dict[str, Any]] = {}
+_ACM_VERSION_RE = re.compile(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?(?:[-+][A-Za-z0-9][A-Za-z0-9.+-]*)?\s*$")
 
 
 class StateIdentityMismatch(RuntimeError):
@@ -876,18 +878,20 @@ def parse_acm_version(version_string: str) -> Optional[Tuple[int, int, int]]:
     Parse ACM version string to tuple for comparison.
 
     Args:
-        version_string: Version like "2.12.0" or "2.11.3"
+        version_string: Version like "2.12.0", "2.11.3", or "2.14.3-rc1"
 
     Returns:
         Tuple of (major, minor, patch)
     """
-    try:
-        parts = [int(p) for p in version_string.strip().split(".")]
-        while len(parts) < 3:
-            parts.append(0)
-        return (parts[0], parts[1], parts[2])
-    except (ValueError, AttributeError):
+    if not isinstance(version_string, str):
         return None
+
+    match = _ACM_VERSION_RE.match(version_string)
+    if not match:
+        return None
+
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch or 0)
 
 
 def is_acm_version_ge(version: str, compare_to: str) -> bool:

@@ -148,10 +148,16 @@ def test_build_pause_delete_mode_for_acm_211():
     assert operation["mode"] == "delete"
 
 
-def test_pause_mode_raises_on_prerelease_version():
-    """Pre-release versions like 2.14.3-rc1 should raise ValueError."""
+@pytest.mark.parametrize("acm_version", ["2.14.3-rc1", "2.14.3+build", "2.14.3-rc1+build"])
+def test_pause_mode_uses_spec_paused_for_suffixed_modern_versions(acm_version):
+    """Suffixed modern versions should be classified by their numeric prefix."""
+    assert backup_schedule_pause_mode(acm_version) == "pause"
+
+
+def test_pause_mode_raises_on_unparseable_version():
+    """Truly unparseable versions should fail closed."""
     with pytest.raises(ValueError, match="Invalid ACM version format"):
-        backup_schedule_pause_mode("2.14.3-rc1")
+        backup_schedule_pause_mode("not-a-version")
 
 
 def test_pause_mode_raises_on_single_segment_version():

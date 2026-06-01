@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 from lib.constants import BACKUP_NAMESPACE
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
-from lib.utils import StateManager, is_acm_version_ge
+from lib.utils import StateManager, parse_acm_version
 
 logger = logging.getLogger("acm_switchover")
 
@@ -29,6 +29,21 @@ def fail_on_multiple_backup_schedules(schedules: List[Dict[str, Any]], hub_label
         f"{hub_label}: {_backup_schedule_names(schedules)}. "
         "Refusing to choose one automatically."
     )
+
+
+def acm_supports_backup_schedule_pause(acm_version: str) -> bool:
+    """Return whether ACM version supports BackupSchedule spec.paused.
+
+    Raises SwitchoverError when the version cannot be parsed, because falling
+    back to either mutation path would risk changing the wrong resource state.
+    """
+    parsed = parse_acm_version(acm_version)
+    if parsed is None:
+        raise SwitchoverError(
+            f"Invalid ACM version '{acm_version}'. "
+            "Cannot determine BackupSchedule pause behavior; refusing to mutate BackupSchedule."
+        )
+    return parsed >= (2, 12, 0)
 
 
 class BackupScheduleManager:
@@ -70,7 +85,7 @@ class BackupScheduleManager:
             )
             return
 
-        if is_acm_version_ge(acm_version, "2.12.0"):
+        if acm_supports_backup_schedule_pause(acm_version):
             if self.dry_run:
                 logger.info(
                     "[DRY-RUN] Would unpause BackupSchedule %s on %s via spec.paused",

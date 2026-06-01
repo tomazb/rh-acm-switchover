@@ -142,6 +142,8 @@ class TestBackupScheduleManager:
             ("2.12.0", True),
             ("2.12.5", True),
             ("2.13.0", True),
+            ("2.14.3-rc1", True),
+            ("2.14.3+build", True),
             ("2.11.5", False),
             ("2.10.0", False),
         ],
@@ -158,6 +160,20 @@ class TestBackupScheduleManager:
             mock_kube_client.patch_custom_resource.assert_called_once()
         else:
             mock_kube_client.patch_custom_resource.assert_not_called()
+
+    @pytest.mark.parametrize("acm_version", ["not-a-version", "2"])
+    def test_version_based_pause_handling_fails_closed_for_unparseable_version(
+        self, schedule_manager, mock_kube_client, acm_version
+    ):
+        """Unparseable ACM versions must fail before planning BackupSchedule changes."""
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
+        ]
+
+        with pytest.raises(SwitchoverError, match="Invalid ACM version"):
+            schedule_manager.ensure_enabled(acm_version)
+
+        mock_kube_client.patch_custom_resource.assert_not_called()
 
     def test_multiple_schedules_fail_without_patching(self, schedule_manager, mock_kube_client):
         """Multiple schedules are ambiguous and must fail without patching either one."""
