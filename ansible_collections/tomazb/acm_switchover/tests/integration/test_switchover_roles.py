@@ -35,17 +35,13 @@ def test_restore_activation_fixture_reports_delete_and_create_plan(
     assert completed.returncode == 0
     assert report["phases"]["activation"]["status"] == "pass"
     assert report["phases"]["activation"]["operation"]["action"] == "delete_and_create"
-    assert (
-        report["phases"]["activation"]["wait_target"]["name"] == "restore-acm-activate"
-    )
+    assert report["phases"]["activation"]["wait_target"]["name"] == "restore-acm-activate"
 
 
 def test_stale_preflight_restore_facts_do_not_allow_failed_live_activation_restore(
     run_switchover_fixture,
 ):
-    completed, report = run_switchover_fixture(
-        "stale_preflight_live_activation_failure.yml"
-    )
+    completed, report = run_switchover_fixture("stale_preflight_live_activation_failure.yml")
     assert completed.returncode != 0
     assert "Passive Restore phase Failed failed." in completed.stdout
     assert "Build activation plan" not in completed.stdout
@@ -64,10 +60,7 @@ def test_finalization_fixture_reports_enable_backup_operation(run_switchover_fix
     completed, report = run_switchover_fixture("finalization_backup_recovery.yml")
     assert completed.returncode == 0
     assert report["phases"]["finalization"]["status"] == "pass"
-    assert (
-        report["phases"]["finalization"]["enable_backups"]["operation"]["action"]
-        == "patch"
-    )
+    assert report["phases"]["finalization"]["enable_backups"]["operation"]["action"] == "patch"
 
 
 def test_finalization_reports_collision_repair_plan_when_backup_enable_is_already_satisfied(
@@ -76,14 +69,8 @@ def test_finalization_reports_collision_repair_plan_when_backup_enable_is_alread
     completed, report = run_switchover_fixture("finalization_noop.yml")
     assert completed.returncode == 0
     assert report["phases"]["finalization"]["status"] == "pass"
-    assert (
-        report["phases"]["finalization"]["enable_backups"]["operation"]["action"]
-        == "none"
-    )
-    assert (
-        report["phases"]["finalization"]["backup_schedule_collision_repair"]["changed"]
-        is True
-    )
+    assert report["phases"]["finalization"]["enable_backups"]["operation"]["action"] == "none"
+    assert report["phases"]["finalization"]["backup_schedule_collision_repair"]["changed"] is True
     assert report["phases"]["finalization"]["changed"] is True
 
 
@@ -93,18 +80,12 @@ def test_switchover_invalid_report_dir_fails_without_writing_report(
     completed, report = run_switchover_fixture("invalid_report_dir.yml")
     assert completed.returncode != 0
     assert report == {}
-    assert (
-        "Path traversal attempt" in completed.stdout
-        or "Path traversal attempt" in completed.stderr
-    )
+    assert "Path traversal attempt" in completed.stdout or "Path traversal attempt" in completed.stderr
 
 
 def test_switchover_playbook_rejects_restore_only_mode(run_switchover_fixture):
     completed, report = run_switchover_fixture("restore_only_rejected.yml")
     assert completed.returncode != 0
     assert report == {}
-    assert (
-        "restore_only mode must use" in completed.stdout
-        or "restore_only mode must use" in completed.stderr
-    )
+    assert "restore_only mode must use" in completed.stdout or "restore_only mode must use" in completed.stderr
     assert "Run primary prep" not in completed.stdout

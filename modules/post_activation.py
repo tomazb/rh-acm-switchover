@@ -10,7 +10,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 from kubernetes import client, config
@@ -737,8 +737,265 @@ class PostActivationVerification:
 
         logger.info("All ManagedClusters cleared of disable-auto-import annotation")
 
+    def _klusterlet_cluster_targets(self) -> List[Tuple[str, str]]:
+        """Build (cluster_name, api_url) pairs for non-local managed clusters."""
+
+        cluster_targets = []
+        for managed_cluster in self._get_managed_clusters():
+            name = managed_cluster.get("metadata", {}).get("name")
+            if not name or name == LOCAL_CLUSTER_NAME:
+                continue
+            client_configs = managed_cluster.get("spec", {}).get("managedClusterClientConfigs", [])
+            api_url = client_configs[0].get("url", "") if client_configs else ""
+            cluster_targets.append((name, api_url))
+        return cluster_targets
+
+    def _check_klusterlet_target(
+        self,
+        kubeconfig_data: Dict,
+        new_hub_server: str,
+        cluster_name: str,
+        cluster_api_url: str,
+    ) -> Tuple[str, str, Optional[str]]:
+        try:
+            context_name = self._find_context_by_api_url(kubeconfig_data, cluster_api_url, cluster_name)
+            if not context_name:
+                return (cluster_name, "no_context", None)
+
+            result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
+            return (cluster_name, result, context_name)
+        except Exception as exc:
+            logger.debug("Error checking klusterlet for %s: %s", cluster_name, exc)
+            return (cluster_name, "unreachable", None)
+
+    def _collect_klusterlet_future_results(self, future_fallbacks: Dict, operation: str) -> List[tuple]:
+        done, not_done = wait(future_fallbacks.keys(), timeout=KLUSTERLET_WORKER_TIMEOUT)
+        results = []
+        for future in done:
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                fallback = future_fallbacks[future]
+                logger.error(
+                    "Worker thread for %s failed while %s klusterlet: %s",
+                    fallback[0],
+                    operation,
+                    exc,
+                )
+                results.append(fallback)
+        for future in not_done:
+            fallback = future_fallbacks[future]
+            logger.warning(
+                KLUSTERLET_WORKER_TIMEOUT_MESSAGE,
+                operation,
+                fallback[0],
+                KLUSTERLET_WORKER_TIMEOUT,
+            )
+            future.cancel()
+            results.append(fallback)
+        return results
+
+    def _check_klusterlet_targets(
+        self,
+        cluster_targets: List[Tuple[str, str]],
+        kubeconfig_data: Dict,
+        new_hub_server: str,
+    ) -> Tuple[List[str], List[Tuple[str, Optional[str]]], List[str], List[str]]:
+        logger.info(
+            "Checking klusterlet connections for %d cluster(s) in parallel...",
+            len(cluster_targets),
+        )
+
+        verified = []
+        wrong_hub = []
+        unreachable = []
+        timed_out = []
+
+        executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+        try:
+            check_future_fallbacks = {
+                executor.submit(
+                    self._check_klusterlet_target,
+                    kubeconfig_data,
+                    new_hub_server,
+                    name,
+                    api_url,
+                ): (name, "worker_timeout", None)
+                for name, api_url in cluster_targets
+            }
+            for cluster_name, result, context_name in self._collect_klusterlet_future_results(
+                check_future_fallbacks,
+                "checking",
+            ):
+                if result == "verified":
+                    verified.append(cluster_name)
+                elif result == "wrong_hub":
+                    wrong_hub.append((cluster_name, context_name))
+                elif result == "worker_timeout":
+                    timed_out.append(cluster_name)
+                else:
+                    unreachable.append(cluster_name)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        return verified, wrong_hub, unreachable, timed_out
+
+    def _fix_klusterlet_target(self, cluster_name: str, context_name: str) -> Tuple[str, bool]:
+        success = self._force_klusterlet_reconnect(cluster_name, context_name)
+        return (cluster_name, success)
+
+    def _fix_wrong_hub_klusterlets(self, wrong_hub: List[Tuple[str, str]]) -> Tuple[List[str], List[str]]:
+        fixed = []
+        fix_failed = []
+
+        executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+        try:
+            fix_future_fallbacks = {
+                executor.submit(self._fix_klusterlet_target, name, context_name): (name, False)
+                for name, context_name in wrong_hub
+            }
+            for cluster_name, success in self._collect_klusterlet_future_results(
+                fix_future_fallbacks,
+                "remediating",
+            ):
+                if success:
+                    fixed.append(cluster_name)
+                else:
+                    fix_failed.append(cluster_name)
+        finally:
+            # Remediation mutates managed clusters. Python cannot stop a running
+            # thread, so wait for bounded API calls to exit before reporting.
+            executor.shutdown(wait=True, cancel_futures=True)
+
+        return fixed, fix_failed
+
+    def _recheck_klusterlet_target(
+        self,
+        new_hub_server: str,
+        cluster_name: str,
+        context_name: str,
+    ) -> Tuple[str, str]:
+        try:
+            result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
+            return (cluster_name, result)
+        except Exception as exc:
+            logger.debug("Error re-checking klusterlet for %s: %s", cluster_name, exc)
+            return (cluster_name, "unreachable")
+
+    def _remediated_klusterlet_state(
+        self,
+        wrong_hub: List[Tuple[str, str]],
+        new_hub_server: str,
+    ) -> Tuple[List[str], List[str]]:
+        current_wrong_hub = []
+        current_unverified = []
+        executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
+        try:
+            recheck_future_fallbacks = {
+                executor.submit(self._recheck_klusterlet_target, new_hub_server, name, context_name): (
+                    name,
+                    "unreachable",
+                )
+                for name, context_name in wrong_hub
+            }
+            for cluster_name, result in self._collect_klusterlet_future_results(
+                recheck_future_fallbacks,
+                "re-checking",
+            ):
+                if result == "wrong_hub":
+                    current_wrong_hub.append(cluster_name)
+                elif result != "verified":
+                    current_unverified.append(cluster_name)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        return current_wrong_hub, current_unverified
+
+    def _wait_for_remediated_klusterlets(
+        self,
+        wrong_hub: List[Tuple[str, str]],
+        new_hub_server: str,
+    ) -> Tuple[List[str], List[str]]:
+        post_remediation_state: Dict[str, List[str]] = {
+            "wrong_hub": [],
+            "unverified": [],
+        }
+
+        def recheck_remediated_clusters() -> WaitConditionResult:
+            current_wrong_hub, current_unverified = self._remediated_klusterlet_state(
+                wrong_hub,
+                new_hub_server,
+            )
+            post_remediation_state["wrong_hub"] = current_wrong_hub
+            post_remediation_state["unverified"] = current_unverified
+
+            if not current_wrong_hub and not current_unverified:
+                return WaitConditionResult.complete("all remediated klusterlets verified")
+
+            pending_details = []
+            if current_wrong_hub:
+                pending_details.append(f"still wrong hub: {', '.join(current_wrong_hub)}")
+            if current_unverified:
+                pending_details.append(f"unverified: {', '.join(current_unverified)}")
+            return WaitConditionResult.pending("; ".join(pending_details))
+
+        wait_for_condition(
+            description="post-remediation klusterlet hub convergence",
+            condition_fn=recheck_remediated_clusters,
+            timeout=KLUSTERLET_RECHECK_TIMEOUT,
+            interval=KLUSTERLET_RECHECK_INTERVAL,
+            logger=logger,
+        )
+        return post_remediation_state["wrong_hub"], post_remediation_state["unverified"]
+
+    def _remediate_wrong_hub_klusterlets(
+        self,
+        wrong_hub: List[Tuple[str, str]],
+        new_hub_server: str,
+    ) -> None:
+        logger.warning(
+            "Klusterlet connected to wrong hub for %d cluster(s): %s - attempting to fix...",
+            len(wrong_hub),
+            ", ".join([cluster_name for cluster_name, _ in wrong_hub]),
+        )
+
+        fixed, fix_failed = self._fix_wrong_hub_klusterlets(wrong_hub)
+        if fixed:
+            logger.info(
+                "✓ Fixed klusterlet connection for %d cluster(s): %s",
+                len(fixed),
+                ", ".join(fixed),
+            )
+        if fix_failed:
+            logger.warning(
+                "✗ Failed to fix klusterlet for %d cluster(s): %s",
+                len(fix_failed),
+                ", ".join(fix_failed),
+            )
+
+        post_remediation_wrong_hub, post_remediation_unverified = self._wait_for_remediated_klusterlets(
+            wrong_hub,
+            new_hub_server,
+        )
+
+        fatal_messages = []
+        if fix_failed:
+            fatal_messages.append(f"Klusterlet remediation failed for cluster(s): {', '.join(fix_failed)}")
+        if post_remediation_wrong_hub:
+            fatal_messages.append(
+                "Klusterlet still connected to the wrong hub after remediation: "
+                f"{', '.join(post_remediation_wrong_hub)}"
+            )
+        if post_remediation_unverified:
+            fatal_messages.append(
+                "Klusterlet remediation could not be verified for cluster(s): "
+                f"{', '.join(post_remediation_unverified)}"
+            )
+        if fatal_messages:
+            raise SwitchoverError("; ".join(fatal_messages))
+
     @dry_run_skip(message="Skipping klusterlet connection verification")
-    def _verify_klusterlet_connections(self):  # noqa: C901
+    def _verify_klusterlet_connections(self):
         """
         Verify and fix klusterlet agents on managed clusters to connect to the new hub.
 
@@ -758,105 +1015,27 @@ class PostActivationVerification:
 
         logger.info("Verifying klusterlet connections to new hub...")
 
-        # Get the new hub's API server URL
         new_hub_server = self._get_hub_api_server()
         if not new_hub_server:
             logger.warning("Could not determine new hub API server URL, skipping klusterlet verification")
             return
 
-        # Load kubeconfig data for context lookup
-        # Use max_size=0 to bypass size check for critical klusterlet verification
         kubeconfig_data = self._load_kubeconfig_data(max_size=0)
         if not kubeconfig_data:
             logger.warning("Could not load kubeconfig, skipping klusterlet verification")
             return
 
-        # Get list of managed clusters with their API server URLs
-        managed_clusters = self._get_managed_clusters()
-
-        # Build list of (cluster_name, api_url) tuples, excluding local-cluster
-        cluster_info = []
-        for mc in managed_clusters:
-            name = mc.get("metadata", {}).get("name")
-            if name and name != LOCAL_CLUSTER_NAME:
-                # Get API server URL from ManagedCluster spec
-                client_configs = mc.get("spec", {}).get("managedClusterClientConfigs", [])
-                api_url = client_configs[0].get("url", "") if client_configs else ""
-                cluster_info.append((name, api_url))
-
-        if not cluster_info:
+        cluster_targets = self._klusterlet_cluster_targets()
+        if not cluster_targets:
             logger.info("No managed clusters to verify klusterlet connections")
             return
 
-        # Try to verify each cluster's klusterlet connection in parallel
-        def check_cluster(cluster_name: str, cluster_api_url: str) -> tuple:
-            """Check a single cluster's klusterlet connection. Returns (cluster_name, result, context_name)."""
-            try:
-                context_name = self._find_context_by_api_url(kubeconfig_data, cluster_api_url, cluster_name)
-                if not context_name:
-                    return (cluster_name, "no_context", None)
-
-                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
-                return (cluster_name, result, context_name)
-            except Exception as e:
-                logger.debug("Error checking klusterlet for %s: %s", cluster_name, e)
-                return (cluster_name, "unreachable", None)
-
-        logger.info(
-            "Checking klusterlet connections for %d cluster(s) in parallel...",
-            len(cluster_info),
+        verified, wrong_hub, unreachable, timed_out = self._check_klusterlet_targets(
+            cluster_targets,
+            kubeconfig_data,
+            new_hub_server,
         )
 
-        def collect_future_results(future_fallbacks: Dict, operation: str) -> List[tuple]:
-            """Collect completed future results and apply fallbacks for timed-out workers."""
-            done, not_done = wait(future_fallbacks.keys(), timeout=KLUSTERLET_WORKER_TIMEOUT)
-            results = []
-            for future in done:
-                results.append(future.result())
-            for future in not_done:
-                fallback = future_fallbacks[future]
-                logger.warning(
-                    KLUSTERLET_WORKER_TIMEOUT_MESSAGE,
-                    operation,
-                    fallback[0],
-                    KLUSTERLET_WORKER_TIMEOUT,
-                )
-                future.cancel()
-                results.append(fallback)
-            return results
-
-        # Collect results from futures to avoid shared mutable state
-        verified = []
-        wrong_hub = []
-        unreachable = []
-        timed_out = []
-
-        executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
-        try:
-            check_future_fallbacks = {
-                executor.submit(check_cluster, name, api_url): (
-                    name,
-                    "worker_timeout",
-                    None,
-                )
-                for name, api_url in cluster_info
-            }
-            for cluster_name, result, context_name in collect_future_results(
-                check_future_fallbacks,
-                "checking",
-            ):
-                if result == "verified":
-                    verified.append(cluster_name)
-                elif result == "wrong_hub":
-                    wrong_hub.append((cluster_name, context_name))
-                elif result == "worker_timeout":
-                    timed_out.append(cluster_name)
-                else:  # unreachable, no_context, or error
-                    unreachable.append(cluster_name)
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-
-        # Log initial results
         if verified:
             logger.info(
                 "✓ Klusterlet verified for %d cluster(s): %s",
@@ -865,133 +1044,8 @@ class PostActivationVerification:
             )
         if timed_out:
             raise SwitchoverError(f"Klusterlet verification timed out for cluster(s): {', '.join(timed_out)}")
-
-        def fix_cluster(cluster_name: str, context_name: str) -> tuple:
-            """Fix a single cluster's klusterlet connection. Returns (cluster_name, success)."""
-            success = self._force_klusterlet_reconnect(cluster_name, context_name)
-            return (cluster_name, success)
-
-        def recheck_cluster(cluster_name: str, context_name: str) -> tuple:
-            """Re-check a remediated cluster's klusterlet connection."""
-            try:
-                result = self._check_klusterlet_connection(context_name, cluster_name, new_hub_server)
-                return (cluster_name, result)
-            except Exception as e:
-                logger.debug("Error re-checking klusterlet for %s: %s", cluster_name, e)
-                return (cluster_name, "unreachable")
-
-        # Fix clusters connected to wrong hub (also in parallel)
         if wrong_hub:
-            logger.warning(
-                "Klusterlet connected to wrong hub for %d cluster(s): %s - attempting to fix...",
-                len(wrong_hub),
-                ", ".join([c[0] for c in wrong_hub]),
-            )
-
-            # Collect results from futures to avoid shared mutable state
-            fixed = []
-            fix_failed = []
-
-            executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
-            try:
-                fix_future_fallbacks = {
-                    executor.submit(fix_cluster, name, ctx): (name, False) for name, ctx in wrong_hub
-                }
-                for cluster_name, success in collect_future_results(
-                    fix_future_fallbacks,
-                    "remediating",
-                ):
-                    if success:
-                        fixed.append(cluster_name)
-                    else:
-                        fix_failed.append(cluster_name)
-            finally:
-                # Remediation mutates managed clusters. Python cannot stop a
-                # running thread, so wait for bounded API calls to exit before
-                # reporting the phase outcome.
-                executor.shutdown(wait=True, cancel_futures=True)
-
-            if fixed:
-                logger.info(
-                    "✓ Fixed klusterlet connection for %d cluster(s): %s",
-                    len(fixed),
-                    ", ".join(fixed),
-                )
-            if fix_failed:
-                logger.warning(
-                    "✗ Failed to fix klusterlet for %d cluster(s): %s",
-                    len(fix_failed),
-                    ", ".join(fix_failed),
-                )
-
-            post_remediation_state: Dict[str, List[str]] = {
-                "wrong_hub": [],
-                "unverified": [],
-            }
-
-            def recheck_remediated_clusters() -> WaitConditionResult:
-                """Poll remediated clusters until klusterlet updates hub-kubeconfig-secret."""
-                current_wrong_hub = []
-                current_unverified = []
-                executor = ThreadPoolExecutor(max_workers=CLUSTER_VERIFY_MAX_WORKERS)
-                try:
-                    recheck_future_fallbacks = {
-                        executor.submit(recheck_cluster, name, ctx): (
-                            name,
-                            "unreachable",
-                        )
-                        for name, ctx in wrong_hub
-                    }
-                    for cluster_name, result in collect_future_results(
-                        recheck_future_fallbacks,
-                        "re-checking",
-                    ):
-                        if result == "wrong_hub":
-                            current_wrong_hub.append(cluster_name)
-                        elif result != "verified":
-                            current_unverified.append(cluster_name)
-                finally:
-                    executor.shutdown(wait=False, cancel_futures=True)
-
-                post_remediation_state["wrong_hub"] = current_wrong_hub
-                post_remediation_state["unverified"] = current_unverified
-
-                if not current_wrong_hub and not current_unverified:
-                    return WaitConditionResult.complete("all remediated klusterlets verified")
-
-                pending_details = []
-                if current_wrong_hub:
-                    pending_details.append(f"still wrong hub: {', '.join(current_wrong_hub)}")
-                if current_unverified:
-                    pending_details.append(f"unverified: {', '.join(current_unverified)}")
-                return WaitConditionResult.pending("; ".join(pending_details))
-
-            wait_for_condition(
-                description="post-remediation klusterlet hub convergence",
-                condition_fn=recheck_remediated_clusters,
-                timeout=KLUSTERLET_RECHECK_TIMEOUT,
-                interval=KLUSTERLET_RECHECK_INTERVAL,
-                logger=logger,
-            )
-            post_remediation_wrong_hub = post_remediation_state["wrong_hub"]
-            post_remediation_unverified = post_remediation_state["unverified"]
-
-            fatal_messages = []
-            if fix_failed:
-                fatal_messages.append(f"Klusterlet remediation failed for cluster(s): {', '.join(fix_failed)}")
-            if post_remediation_wrong_hub:
-                fatal_messages.append(
-                    "Klusterlet still connected to the wrong hub after remediation: "
-                    f"{', '.join(post_remediation_wrong_hub)}"
-                )
-            if post_remediation_unverified:
-                fatal_messages.append(
-                    "Klusterlet remediation could not be verified for cluster(s): "
-                    f"{', '.join(post_remediation_unverified)}"
-                )
-            if fatal_messages:
-                raise SwitchoverError("; ".join(fatal_messages))
-
+            self._remediate_wrong_hub_klusterlets(wrong_hub, new_hub_server)
         if unreachable:
             logger.info(
                 "Klusterlet verification skipped for %d cluster(s) (no context available): %s",

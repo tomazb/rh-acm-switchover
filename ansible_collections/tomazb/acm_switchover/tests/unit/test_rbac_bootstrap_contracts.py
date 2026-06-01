@@ -24,6 +24,11 @@ def _operator_mco_verbs_from_clusterrole(path):
     return set(rule["verbs"])
 
 
+def _rbac_manifest_files(root):
+    manifest_paths = {path for suffix in (".yaml", ".yml") for path in root.rglob(f"*{suffix}")}
+    return sorted(path.relative_to(root) for path in manifest_paths)
+
+
 def test_bootstrap_permission_validation_covers_shipped_argocd_rules():
     tasks = _load_tasks("validate_permissions.yml")
     validation_tasks = [task for task in tasks if "tomazb.acm_switchover.acm_rbac_validate" in task]
@@ -162,3 +167,18 @@ def test_operator_mco_delete_rule_matches_root_helm_and_collection_bundle():
     assert root_verbs == {"get", "list", "delete"}
     assert bundled_verbs == root_verbs
     assert helm_snippet in helm_clusterrole
+
+
+def test_collection_bundled_rbac_manifests_match_root_manifests():
+    root_dir = REPO_ROOT / "deploy" / "rbac"
+    bundled_dir = ROLE_DIR / "files" / "deploy" / "rbac"
+    root_files = _rbac_manifest_files(root_dir)
+    bundled_files = _rbac_manifest_files(bundled_dir)
+
+    assert root_files, "no RBAC manifests found in deploy/rbac"
+    assert bundled_files, "no bundled RBAC manifests found in collection role"
+    assert bundled_files == root_files
+    for relative_path in root_files:
+        assert (bundled_dir / relative_path).read_text(encoding="utf-8") == (root_dir / relative_path).read_text(
+            encoding="utf-8"
+        ), f"Bundled RBAC manifest drifted: {relative_path}"

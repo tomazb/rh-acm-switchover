@@ -1,0 +1,172 @@
+---
+- name: Identify primary backups still in progress
+  ansible.builtin.set_fact:
+    _acm_primary_in_progress_backups: >-
+      {%- set names = [] -%}
+      {%- for backup in (acm_primary_backups_info.resources | default([])) -%}
+      {%- if backup.get('status', {}).get('phase') == 'InProgress' -%}
+      {%- set _ = names.append(backup.get('metadata', {}).get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ names }}
+  when: not (acm_switchover_operation.restore_only | default(false))
+
+- name: Wait for primary in-progress backups to finish
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: _acm_primary_backup_wait_info
+  until: >-
+    {{
+      (
+        _acm_primary_backup_wait_info.resources | default([])
+        | selectattr('status.phase', 'equalto', 'InProgress')
+        | list
+        | length
+      ) == 0
+    }}
+  retries: "{{ acm_switchover_backup_wait_retries | default(60) }}"
+  delay: "{{ acm_switchover_backup_wait_delay | default(10) }}"
+  changed_when: false
+  failed_when: false
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - (_acm_primary_in_progress_backups | default([]) | length) > 0
+
+- name: Read primary hub backups after in-progress wait
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.primary.context }}"
+  register: acm_primary_backups_info
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - (_acm_primary_in_progress_backups | default([]) | length) > 0
+
+- name: Identify primary backups still in progress after wait
+  ansible.builtin.set_fact:
+    _acm_primary_remaining_in_progress_backups: >-
+      {%- set names = [] -%}
+      {%- for backup in (acm_primary_backups_info.resources | default([])) -%}
+      {%- if backup.get('status', {}).get('phase') == 'InProgress' -%}
+      {%- set _ = names.append(backup.get('metadata', {}).get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ names | to_json }}
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - (_acm_primary_in_progress_backups | default([]) | length) > 0
+
+- name: Record primary backups still in progress after wait
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-in-progress-after-wait",
+            "severity": "critical",
+            "status": "fail",
+            "message": "primary backup(s) still InProgress after waiting",
+            "details": {
+              "backup_names": _acm_primary_remaining_in_progress_backups | default('[]') | from_json,
+              "attempts": _acm_primary_backup_wait_info.attempts | default(0)
+            },
+            "recommended_action": "Wait for Velero backups to complete or investigate stuck primary backup jobs before switchover"
+          }
+        ]
+      }}
+  when:
+    - not (acm_switchover_operation.restore_only | default(false))
+    - (_acm_primary_remaining_in_progress_backups | default('[]') | from_json | length) > 0
+
+- name: Identify restore-only target backups still in progress
+  ansible.builtin.set_fact:
+    _acm_secondary_in_progress_backups: >-
+      {%- set names = [] -%}
+      {%- for backup in (acm_secondary_backups_info.resources | default([])) -%}
+      {%- if backup.get('status', {}).get('phase') == 'InProgress' -%}
+      {%- set _ = names.append(backup.get('metadata', {}).get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ names }}
+  when: acm_switchover_operation.restore_only | default(false)
+
+- name: Wait for restore-only target in-progress backups to finish
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: _acm_secondary_backup_wait_info
+  until: >-
+    {{
+      (
+        _acm_secondary_backup_wait_info.resources | default([])
+        | selectattr('status.phase', 'equalto', 'InProgress')
+        | list
+        | length
+      ) == 0
+    }}
+  retries: "{{ acm_switchover_backup_wait_retries | default(60) }}"
+  delay: "{{ acm_switchover_backup_wait_delay | default(10) }}"
+  changed_when: false
+  failed_when: false
+  when:
+    - acm_switchover_operation.restore_only | default(false)
+    - (_acm_secondary_in_progress_backups | default([]) | length) > 0
+
+- name: Read restore-only target backups after in-progress wait
+  kubernetes.core.k8s_info:
+    api_version: velero.io/v1
+    kind: Backup
+    namespace: open-cluster-management-backup
+    kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
+    context: "{{ acm_switchover_hubs.secondary.context }}"
+  register: acm_secondary_backups_info
+  when:
+    - acm_switchover_operation.restore_only | default(false)
+    - (_acm_secondary_in_progress_backups | default([]) | length) > 0
+
+- name: Identify restore-only target backups still in progress after wait
+  ansible.builtin.set_fact:
+    _acm_secondary_remaining_in_progress_backups: >-
+      {%- set names = [] -%}
+      {%- for backup in (acm_secondary_backups_info.resources | default([])) -%}
+      {%- if backup.get('status', {}).get('phase') == 'InProgress' -%}
+      {%- set _ = names.append(backup.get('metadata', {}).get('name', 'unknown')) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ names | to_json }}
+  when:
+    - acm_switchover_operation.restore_only | default(false)
+    - (_acm_secondary_in_progress_backups | default([]) | length) > 0
+
+- name: Record restore-only target backups still in progress after wait
+  ansible.builtin.set_fact:
+    acm_switchover_validation_results: >-
+      {{
+        acm_switchover_validation_results
+        + [
+          {
+            "id": "preflight-backup-in-progress-after-wait-restore-only",
+            "severity": "critical",
+            "status": "fail",
+            "message": "restore-only target backup(s) still InProgress after waiting",
+            "details": {
+              "backup_names": _acm_secondary_remaining_in_progress_backups | default('[]') | from_json,
+              "attempts": _acm_secondary_backup_wait_info.attempts | default(0)
+            },
+            "recommended_action": "Wait for Velero backups to complete or investigate stuck restore-only target backup jobs before activation"
+          }
+        ]
+      }}
+  when:
+    - acm_switchover_operation.restore_only | default(false)
+    - (_acm_secondary_remaining_in_progress_backups | default('[]') | from_json | length) > 0

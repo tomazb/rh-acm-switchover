@@ -18,6 +18,42 @@ DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE = "[DRY-RUN] Would mark restore-only com
 DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE = "[DRY-RUN] Would show restore-only completion next steps"
 SWITCHOVER_COMPLETED_SUCCESS_MESSAGE = "SWITCHOVER COMPLETED SUCCESSFULLY!"
 RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE = "RESTORE-ONLY COMPLETED SUCCESSFULLY!"
+OPERATION_LABEL_SWITCHOVER = "SWITCHOVER"
+OPERATION_NOUN_SWITCHOVER = "switchover"
+OPERATION_LABEL_RESTORE = "RESTORE"
+OPERATION_NOUN_RESTORE = "restore"
+PHASE_FLOW_NAME_SWITCHOVER = "switchover"
+PHASE_FLOW_NAME_RESTORE_ONLY = "restore-only"
+WORKFLOW_BLANK_LINE = ""
+WORKFLOW_BANNER = "=" * 60
+WORKFLOW_LEADING_BANNER = "\n" + WORKFLOW_BANNER
+WORKFLOW_ALREADY_COMPLETED_MESSAGE = "%s ALREADY COMPLETED"
+WORKFLOW_STATE_AGE_MESSAGE = "Existing state file age: %s minutes"
+WORKFLOW_NO_PHASES_EXECUTED_MESSAGE = "No phases were executed on this run."
+WORKFLOW_STATE_FILE_MESSAGE = "State file: %s"
+WORKFLOW_STALE_COMPLETED_STATE_MESSAGE = "⚠️  DETECTED STALE COMPLETED STATE"
+WORKFLOW_STALE_COMPLETED_DETAIL_MESSAGE = "%s appears already completed, but state file is %s old."
+WORKFLOW_START_FRESH_MESSAGE = "To start a fresh %s:"
+WORKFLOW_REMOVE_STATE_FILE_OPTION = "  1. Remove state file: rm %s"
+WORKFLOW_RESET_STATE_OPTION = "  2. Or use: --reset-state"
+WORKFLOW_FORCE_STALE_STATE_OPTION = "  3. Or use: --force to override (use with caution)"
+WORKFLOW_STALE_STATE_FORCE_REQUIRED_MESSAGE = (
+    "Use --force to proceed with stale state, or remove/reset state file to start fresh."
+)
+WORKFLOW_FORCE_RESET_FRESH_MESSAGE = "--force used: Resetting state to start fresh %s"
+WORKFLOW_RESUMING_FAILED_STATE_MESSAGE = "⚠️  RESUMING FROM FAILED STATE"
+WORKFLOW_LAST_ERROR_MESSAGE = "Last error: %s"
+WORKFLOW_FAILED_AT_PHASE_MESSAGE = "Failed at phase: %s"
+WORKFLOW_RETRY_FROM_PHASE_MESSAGE = "Will retry from this phase"
+WORKFLOW_CANNOT_DETERMINE_FAILED_PHASE_MESSAGE = "Cannot determine which phase failed from error history"
+WORKFLOW_OPTIONS_MESSAGE = "Options:"
+WORKFLOW_RESET_STATE_FRESH_OPTION = "  2. Or use: --reset-state to start fresh"
+WORKFLOW_FORCE_RESET_RETRY_OPTION = "  3. Or use: --force to reset and retry from beginning"
+WORKFLOW_FAILED_STATE_FORCE_REQUIRED_MESSAGE = (
+    "Use --force to reset state and retry, or remove state file to start fresh."
+)
+WORKFLOW_NON_RUNNABLE_PHASE_MESSAGE = "State phase '%s' is not runnable in %s flow."
+WORKFLOW_NO_RUNNABLE_PHASE_MATCHED_MESSAGE = "No runnable phase matched current state."
 
 # Timeouts (in seconds)
 RESTORE_WAIT_TIMEOUT = 1800

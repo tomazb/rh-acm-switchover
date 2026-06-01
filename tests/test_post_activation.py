@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import Future
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
@@ -1219,6 +1220,29 @@ def _kubeconfig_yaml(clusters=None, contexts=None):
 @pytest.mark.unit
 class TestKlusterletParallelVerification:
     """Tests for _verify_klusterlet_connections parallel execution."""
+
+    def test_worker_exception_uses_fallback_result(self, mock_secondary_client, mock_state_manager, caplog):
+        """Worker exceptions should be logged and converted to their fallback result."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+        failed_future = Future()
+        failed_future.set_exception(RuntimeError("worker exploded"))
+        successful_future = Future()
+        successful_future.set_result(("cluster-ok", "verified", "ctx-ok"))
+
+        caplog.set_level(logging.ERROR, logger="acm_switchover")
+
+        results = pav._collect_klusterlet_future_results(
+            {
+                failed_future: ("cluster-failed", "worker_timeout", None),
+                successful_future: ("cluster-ok", "worker_timeout", None),
+            },
+            "checking",
+        )
+
+        assert ("cluster-failed", "worker_timeout", None) in results
+        assert ("cluster-ok", "verified", "ctx-ok") in results
+        assert "Worker thread for cluster-failed failed while checking klusterlet" in caplog.text
+        assert "worker exploded" in caplog.text
 
     def test_filters_local_cluster(self, mock_secondary_client, mock_state_manager):
         """local-cluster should be excluded from klusterlet verification."""

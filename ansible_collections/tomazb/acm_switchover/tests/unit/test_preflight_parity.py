@@ -4,6 +4,7 @@ import pathlib
 
 import yaml
 from jinja2 import Environment
+from preflight_task_text import validate_backups_text
 
 ROLES_DIR = pathlib.Path(__file__).resolve().parents[2] / "roles"
 PREFLIGHT_TASKS = ROLES_DIR / "preflight" / "tasks"
@@ -140,7 +141,7 @@ def test_validate_versions_requires_exact_acm_version_match():
 
 def test_validate_backups_enforces_backup_and_cluster_parity_checks():
     """validate_backups.yml must include the missing critical parity checks."""
-    text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
+    text = validate_backups_text()
 
     assert "InProgress" in text, "validate_backups.yml must wait for in-progress Velero backups"
     assert "until:" in text, "validate_backups.yml must poll backup state before judging latest backup phase"
@@ -177,9 +178,25 @@ def test_validate_backups_enforces_backup_and_cluster_parity_checks():
     ), "useManagedServiceAccount validation must be critical for full and passive non-restore-only switchovers"
 
 
+def test_validate_backups_is_split_into_focused_task_files():
+    """The backup preflight wrapper should remain small and delegate focused validation sections."""
+    tasks = yaml.safe_load((PREFLIGHT_TASKS / "validate_backups.yml").read_text())
+    includes = [task.get("ansible.builtin.include_tasks") for task in tasks]
+
+    assert includes == [
+        "validate_backups/progress.yml",
+        "validate_backups/artifacts.yml",
+        "validate_backups/schedule_storage.yml",
+        "validate_backups/infrastructure.yml",
+        "validate_backups/managed_cluster_backups.yml",
+    ]
+    for include in includes:
+        assert (PREFLIGHT_TASKS / include).is_file()
+
+
 def test_validate_backups_records_remaining_in_progress_backups_after_wait():
     """Collection preflight must fail if in-progress Velero backups remain after polling."""
-    text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
+    text = validate_backups_text()
 
     assert "preflight-backup-in-progress-after-wait" in text
     assert "backup(s) still InProgress after waiting" in text
@@ -192,7 +209,7 @@ def test_validate_backups_records_remaining_in_progress_backups_after_wait():
 
 def test_validate_backups_use_managed_service_account_recommended_action_is_valid_jinja():
     """validate_backups.yml must keep the useManagedServiceAccount advisory expression parseable."""
-    text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
+    text = validate_backups_text()
     anchor = (
         '"recommended_action": "Set spec.useManagedServiceAccount=true in the primary BackupSchedule before '
         'switchover"'

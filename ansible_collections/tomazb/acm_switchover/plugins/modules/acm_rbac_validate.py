@@ -336,10 +336,10 @@ def expand_rbac_requirements(
             if role == "operator"
             else VALIDATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS
         )
-        permissions: list[tuple[str, str, str, str | None]] = []
+        managed_permissions: list[tuple[str, str, str, str | None]] = []
         for namespace, ns_perms in managed_ns_perms.items():
-            permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
-        return _deduplicate_permissions(permissions)
+            managed_permissions.extend(_expand_permission_list(ns_perms, namespace=namespace))
+        return _deduplicate_permissions(managed_permissions)
 
     if decommission_only:
         if role != "operator":
