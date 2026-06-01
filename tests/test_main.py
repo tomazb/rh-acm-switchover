@@ -218,6 +218,7 @@ class TestArgParsing:
             assert args.setup is True
             assert args.method is None
             assert args.old_hub_action is None
+            assert args.token_duration == "24h"
 
     def test_argocd_resume_only_rejects_dry_run_at_parse_time(self):
         """Resume-only is a standalone mode and must be mutually exclusive with dry-run."""

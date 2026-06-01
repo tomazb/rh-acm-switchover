@@ -272,8 +272,8 @@ Examples:
     )
     setup_group.add_argument(
         "--token-duration",
-        default="48h",
-        help="Token validity duration for generated kubeconfigs (default: 48h)",
+        default="24h",
+        help="Token validity duration for generated kubeconfigs (default: 24h)",
     )
     setup_group.add_argument(
         "--output-dir",

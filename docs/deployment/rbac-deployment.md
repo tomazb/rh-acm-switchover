@@ -412,15 +412,15 @@ kubectl auth can-i --list \
 ### Generate Service Account Token
 
 ```bash
-# Create long-lived token (48 hours - recommended default)
+# Create short-lived token (24 hours - recommended default)
 kubectl create token acm-switchover-operator \
   -n acm-switchover \
-  --duration=48h
+  --duration=24h
 
 # Store in variable
 SA_TOKEN=$(kubectl create token acm-switchover-operator \
   -n acm-switchover \
-  --duration=48h)
+  --duration=24h)
 ```
 
 ### Generate kubeconfig for Service Account
@@ -459,7 +459,7 @@ kubectl --kubeconfig=/tmp/operator-kubeconfig.yaml get managedclusters
 | `--kubeconfig <path>` | Kubeconfig to read cluster metadata and token from | Current kubeconfig |
 | `--context <ctx>` | Kubernetes context to use | Current context |
 | `--user <name>` | Custom user name in kubeconfig | `<context>-<sa-name>` |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 
 > **Tip**: Always use `--user` with unique names when generating kubeconfigs for
 > multiple clusters to prevent credential collisions when merging.
@@ -493,7 +493,7 @@ Use the `generate-merged-kubeconfig.sh` script for easy multi-hub kubeconfig cre
 |--------|-------------|---------|
 | `--admin-kubeconfig <path>` | Admin kubeconfig for token generation | Current kubeconfig |
 | `--output <file>` | Output merged kubeconfig file | `./merged-kubeconfig.yaml` |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 | `--namespace <ns>` | Namespace where SAs exist | `acm-switchover` |
 
 #### Manual Merging (Alternative)
@@ -550,7 +550,7 @@ automation.
 | `--context <context>` | **Required.** Kubernetes context to deploy RBAC to | - |
 | `--role <role>` | Role to deploy: `operator`, `validator`, `both` | `both` |
 | `--include-decommission` | Also deploy and validate the opt-in decommission RBAC extension (operator or both only) | - |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 | `--output-dir <dir>` | Output directory for kubeconfigs | `./kubeconfigs` |
 | `--skip-kubeconfig` | Skip kubeconfig generation | - |
 | `--skip-validation` | Skip RBAC validation after deployment | - |
@@ -582,7 +582,7 @@ Generate and merge kubeconfigs for multiple clusters.
 |--------|-------------|---------|
 | `--admin-kubeconfig <path>` | Admin kubeconfig for token generation | Current kubeconfig |
 | `--output <file>` | Output merged kubeconfig file | `./merged-kubeconfig.yaml` |
-| `--token-duration <dur>` | Token validity duration | `48h` |
+| `--token-duration <dur>` | Token validity duration | `24h` |
 | `--namespace <ns>` | Namespace where SAs exist | `acm-switchover` |
 | `--managed-cluster` | Flag for managed cluster contexts | - |
 
@@ -591,7 +591,7 @@ Generate and merge kubeconfigs for multiple clusters.
 ```bash
 ./scripts/generate-merged-kubeconfig.sh \
   --output ~/switchover.yaml \
-  --token-duration 48h \
+  --token-duration 24h \
   hub1:operator,hub2:operator,hub3:validator
 ```
 

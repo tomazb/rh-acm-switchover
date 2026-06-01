@@ -9,7 +9,7 @@ set -euo pipefail
 KUBECONFIG_PATH=""
 CONTEXT=""
 USER_NAME=""
-DURATION="48h"
+DURATION="24h"
 
 usage() {
     echo "Usage: $0 [OPTIONS] <namespace> <service-account-name>" >&2
@@ -17,7 +17,7 @@ usage() {
     echo "  --kubeconfig <path>       Kubeconfig to read cluster metadata from" >&2
     echo "  --context <context>       Kubernetes context to use" >&2
     echo "  --user <name>             User name in generated kubeconfig" >&2
-    echo "  --token-duration <dur>    Token validity duration (default: 48h)" >&2
+    echo "  --token-duration <dur>    Token validity duration (default: 24h)" >&2
 }
 
 while [[ $# -gt 0 ]]; do

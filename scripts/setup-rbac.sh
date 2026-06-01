@@ -17,7 +17,7 @@
 # Options:
 #   --role <role>              - Role to deploy: operator, validator, both (default: both)
 #   --include-decommission     - Also deploy/validate optional decommission RBAC for operator teardown
-#   --token-duration <dur>     - Token validity duration (default: 48h)
+#   --token-duration <dur>     - Token validity duration (default: 24h)
 #   --output-dir <dir>         - Output directory for kubeconfigs (default: ./kubeconfigs)
 #   --skip-kubeconfig          - Skip kubeconfig generation
 #   --skip-validation          - Skip RBAC validation after deployment
@@ -59,7 +59,7 @@ RBAC_MANIFEST_DIR="${REPO_ROOT}/deploy/rbac"
 ADMIN_KUBECONFIG=""
 CONTEXT=""
 ROLE="both"
-TOKEN_DURATION="48h"
+TOKEN_DURATION="24h"
 OUTPUT_DIR="./kubeconfigs"
 INCLUDE_DECOMMISSION=false
 SKIP_KUBECONFIG=false
@@ -107,7 +107,7 @@ while [[ $# -gt 0 ]]; do
                 TOKEN_DURATION="$2"
                 shift 2
             else
-                echo "Error: --token-duration requires a value (e.g., 48h)" >&2
+                echo "Error: --token-duration requires a value (e.g., 24h)" >&2
                 exit 1
             fi
             ;;
@@ -148,7 +148,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --role <role>              Role to deploy: operator, validator, both (default: both)"
             echo "  --include-decommission     Also deploy/validate optional decommission RBAC"
-            echo "  --token-duration <dur>     Token validity duration (default: 48h)"
+            echo "  --token-duration <dur>     Token validity duration (default: 24h)"
             echo "  --output-dir <dir>         Output directory for kubeconfigs (default: ./kubeconfigs)"
             echo "  --skip-kubeconfig          Skip kubeconfig generation"
             echo "  --skip-validation          Skip RBAC validation after deployment"
@@ -435,7 +435,7 @@ if ! $SKIP_KUBECONFIG; then
     if $DRY_RUN; then
         echo "Would create directory: $OUTPUT_DIR"
     else
-        mkdir -p "$OUTPUT_DIR"
+        install -d -m 700 "$OUTPUT_DIR"
     fi
     
     # Generate kubeconfigs based on role selection
@@ -453,12 +453,15 @@ if ! $SKIP_KUBECONFIG; then
             check_pass "[dry-run] Would generate $output_file"
         else
             # Use the generate-sa-kubeconfig.sh script
-            if "${SCRIPT_DIR}/generate-sa-kubeconfig.sh" \
-                --kubeconfig "$ADMIN_KUBECONFIG" \
-                --context "$CONTEXT" \
-                --user "$user_name" \
-                --token-duration "$TOKEN_DURATION" \
-                "$SWITCHOVER_NAMESPACE" "$sa_name" > "$output_file" 2>/dev/null; then
+            if (
+                umask 077
+                "${SCRIPT_DIR}/generate-sa-kubeconfig.sh" \
+                    --kubeconfig "$ADMIN_KUBECONFIG" \
+                    --context "$CONTEXT" \
+                    --user "$user_name" \
+                    --token-duration "$TOKEN_DURATION" \
+                    "$SWITCHOVER_NAMESPACE" "$sa_name" > "$output_file" 2>/dev/null
+            ); then
                 chmod 600 "$output_file" || true
                 check_pass "Generated kubeconfig: $output_file"
                 echo "  User name: $user_name"

@@ -99,6 +99,21 @@ class TestScriptArgumentSafety:
 
         assert '--kubeconfig "$ADMIN_KUBECONFIG"' in content
 
+    def test_setup_rbac_uses_hardened_kubeconfig_defaults_and_writes(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert 'TOKEN_DURATION="24h"' in content
+        assert 'install -d -m 700 "$OUTPUT_DIR"' in content
+        assert "umask 077" in content
+        assert '> "$output_file"' in content
+        assert 'chmod 600 "$output_file"' in content
+
+    def test_generate_sa_kubeconfig_defaults_to_24h(self):
+        content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
+
+        assert 'DURATION="24h"' in content
+        assert "default: 24h" in content
+
 
 def write_shared_jq_mock(mock_bin: Path) -> None:
     """Create a mock jq that handles minimal cases and delegates to real jq."""
