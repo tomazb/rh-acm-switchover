@@ -54,9 +54,7 @@ class TestArgoCDManageMain:
     def test_pause_is_conditional_on_pause_mode(self):
         """Pause task must only run when mode is 'pause'."""
         import_tasks = [t for t in self.tasks if "ansible.builtin.import_tasks" in t]
-        pause_imports = [
-            t for t in import_tasks if t["ansible.builtin.import_tasks"] == "pause.yml"
-        ]
+        pause_imports = [t for t in import_tasks if t["ansible.builtin.import_tasks"] == "pause.yml"]
         assert pause_imports, "main.yml must include pause.yml"
         for task in pause_imports:
             when = _when_text(task)
@@ -68,9 +66,7 @@ class TestArgoCDManageMain:
     def test_resume_is_conditional_on_resume_mode(self):
         """Resume task must only run when mode is 'resume'."""
         import_tasks = [t for t in self.tasks if "ansible.builtin.import_tasks" in t]
-        resume_imports = [
-            t for t in import_tasks if t["ansible.builtin.import_tasks"] == "resume.yml"
-        ]
+        resume_imports = [t for t in import_tasks if t["ansible.builtin.import_tasks"] == "resume.yml"]
         assert resume_imports, "main.yml must include resume.yml"
         for task in resume_imports:
             when = _when_text(task)
@@ -96,11 +92,7 @@ class TestArgoCDDiscover:
         """Mock application path must only activate when acm_switchover_argocd_mock_apps is defined."""
         block_tasks = [t for t in self.tasks if "block" in t]
         assert block_tasks, "discover.yml must have at least one block task"
-        mock_path = [
-            t
-            for t in block_tasks
-            if "is defined" in _when_text(t) and "mock_apps" in _when_text(t)
-        ]
+        mock_path = [t for t in block_tasks if "is defined" in _when_text(t) and "mock_apps" in _when_text(t)]
         assert mock_path, (
             "discover.yml must have a block task guarded by "
             "'when: acm_switchover_argocd_mock_apps is defined' for test/mock mode"
@@ -109,11 +101,7 @@ class TestArgoCDDiscover:
     def test_live_path_guarded_by_mock_apps_not_defined(self):
         """Live cluster discovery path must only activate when mock apps are not supplied."""
         block_tasks = [t for t in self.tasks if "block" in t]
-        live_path = [
-            t
-            for t in block_tasks
-            if "is not defined" in _when_text(t) and "mock_apps" in _when_text(t)
-        ]
+        live_path = [t for t in block_tasks if "is not defined" in _when_text(t) and "mock_apps" in _when_text(t)]
         assert live_path, (
             "discover.yml must have a block task guarded by "
             "'when: acm_switchover_argocd_mock_apps is not defined' for live cluster discovery"
@@ -122,14 +110,8 @@ class TestArgoCDDiscover:
     def test_live_path_has_rescue_block(self):
         """Live discovery block must have a rescue block to handle API errors gracefully."""
         block_tasks = [t for t in self.tasks if "block" in t]
-        live_path = [
-            t
-            for t in block_tasks
-            if "is not defined" in _when_text(t) and "mock_apps" in _when_text(t)
-        ]
-        assert (
-            live_path
-        ), "Live path block must exist (see test_live_path_guarded_by_mock_apps_not_defined)"
+        live_path = [t for t in block_tasks if "is not defined" in _when_text(t) and "mock_apps" in _when_text(t)]
+        assert live_path, "Live path block must exist (see test_live_path_guarded_by_mock_apps_not_defined)"
         for task in live_path:
             assert "rescue" in task, (
                 "Live Argo CD discovery block must have a rescue block to handle "
@@ -147,16 +129,11 @@ class TestArgoCDDiscover:
         assert block_tasks, "Live path block with rescue must exist"
         for block_task in block_tasks:
             rescue_tasks = block_task["rescue"]
-            set_fact_in_rescue = [
-                t for t in rescue_tasks if "ansible.builtin.set_fact" in t
-            ]
+            set_fact_in_rescue = [t for t in rescue_tasks if "ansible.builtin.set_fact" in t]
             not_installed_facts = [
                 t
                 for t in set_fact_in_rescue
-                if t.get("ansible.builtin.set_fact", {}).get(
-                    "acm_switchover_argocd_installed"
-                )
-                is False
+                if t.get("ansible.builtin.set_fact", {}).get("acm_switchover_argocd_installed") is False
             ]
             assert not_installed_facts, (
                 "Rescue block must have a set_fact task that sets "
@@ -194,12 +171,8 @@ class TestArgoCDDiscover:
         blocked by the same ApplicationSet/safety checks that guard the pause path.
         """
         fail_tasks = [t for t in self.tasks if "ansible.builtin.fail" in t]
-        blocked_app_fails = [
-            t for t in fail_tasks if "blocked" in str(t.get("ansible.builtin.fail", {}))
-        ]
-        assert (
-            blocked_app_fails
-        ), "discover.yml must have a fail task that aborts when blocked apps are detected"
+        blocked_app_fails = [t for t in fail_tasks if "blocked" in str(t.get("ansible.builtin.fail", {}))]
+        assert blocked_app_fails, "discover.yml must have a fail task that aborts when blocked apps are detected"
         for task in blocked_app_fails:
             when = _when_text(task)
             assert "== 'pause'" in when, (
@@ -211,13 +184,9 @@ class TestArgoCDDiscover:
         """Live Application list must use dynamic hub reference to support secondary-hub testing."""
         k8s_info_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s_info" in t]
         app_list_tasks = [
-            t
-            for t in k8s_info_tasks
-            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Application"
+            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Application"
         ]
-        assert (
-            app_list_tasks
-        ), "discover.yml must have a k8s_info task that lists Applications"
+        assert app_list_tasks, "discover.yml must have a k8s_info task that lists Applications"
         for task in app_list_tasks:
             params = task["kubernetes.core.k8s_info"]
             kubeconfig = str(params.get("kubeconfig", ""))
@@ -240,19 +209,9 @@ class TestArgoCDPause:
 
     def test_patch_task_skipped_in_dry_run(self):
         """k8s patch task must be guarded by execute mode — must not run in dry-run."""
-        k8s_tasks = [
-            t
-            for t in self.flat_tasks
-            if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t
-        ]
-        patch_tasks = [
-            t
-            for t in k8s_tasks
-            if t.get("kubernetes.core.k8s", {}).get("state") == "patched"
-        ]
-        assert (
-            patch_tasks
-        ), "pause.yml must have a k8s state:patched task to remove autosync"
+        k8s_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
+        patch_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "patched"]
+        assert patch_tasks, "pause.yml must have a k8s state:patched task to remove autosync"
         for task in patch_tasks:
             when = _when_text(task)
             assert "!= 'dry_run'" in when, (
@@ -262,22 +221,13 @@ class TestArgoCDPause:
 
     def test_patch_task_skipped_in_mock_mode(self):
         """k8s patch task must not run when mock apps are supplied (no live cluster available)."""
-        k8s_tasks = [
-            t
-            for t in self.flat_tasks
-            if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t
-        ]
-        patch_tasks = [
-            t
-            for t in k8s_tasks
-            if t.get("kubernetes.core.k8s", {}).get("state") == "patched"
-        ]
+        k8s_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s" in t and "kubernetes.core.k8s_info" not in t]
+        patch_tasks = [t for t in k8s_tasks if t.get("kubernetes.core.k8s", {}).get("state") == "patched"]
         assert patch_tasks
         for task in patch_tasks:
             when = _when_text(task)
             assert "mock_apps is not defined" in when, (
-                "Argo CD patch task must be skipped in mock mode "
-                "(no live cluster is available to patch)"
+                "Argo CD patch task must be skipped in mock mode " "(no live cluster is available to patch)"
             )
 
     def test_post_pause_reread_exists(self):
@@ -288,9 +238,7 @@ class TestArgoCDPause:
         """
         k8s_info_tasks = [t for t in self.flat_tasks if "kubernetes.core.k8s_info" in t]
         app_reread_tasks = [
-            t
-            for t in k8s_info_tasks
-            if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Application"
+            t for t in k8s_info_tasks if t.get("kubernetes.core.k8s_info", {}).get("kind") == "Application"
         ]
         assert app_reread_tasks, (
             "pause.yml must have a k8s_info task that re-reads Applications after patching "
@@ -307,8 +255,7 @@ class TestArgoCDPause:
         autosync_fail_tasks = [
             t
             for t in fail_tasks
-            if "auto-sync remains"
-            in str(t.get("ansible.builtin.fail", {}).get("msg", "")).lower()
+            if "auto-sync remains" in str(t.get("ansible.builtin.fail", {}).get("msg", "")).lower()
             or "sync" in str(t.get("ansible.builtin.fail", {}).get("msg", "")).lower()
         ]
         assert autosync_fail_tasks, (

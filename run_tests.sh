@@ -18,6 +18,8 @@ NC='\033[0m' # No Color
 # CI-equivalent quality gates fail by default. Set STRICT_QUALITY=0 for a local
 # advisory-only quality pass while preserving test execution.
 STRICT_QUALITY="${STRICT_QUALITY:-1}"
+FLAKE8_JOBS="${FLAKE8_JOBS:-1}"
+BLACK_WORKERS="${BLACK_WORKERS:-1}"
 PYLINT_PATHS=(acm_switchover.py lib/ modules/)
 QUALITY_PATHS=(
     acm_switchover.py
@@ -110,8 +112,8 @@ echo "======================================"
 
 echo ""
 echo "--- Flake8 (Style Check) ---"
-flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-run_advisory_check "Flake8 full style check" flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
+flake8 . --jobs "$FLAKE8_JOBS" --count --select=E9,F63,F7,F82 --show-source --statistics
+run_advisory_check "Flake8 full style check" flake8 . --jobs "$FLAKE8_JOBS" --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
 
 echo ""
 echo "--- Pylint (Code Analysis) ---"
@@ -119,7 +121,7 @@ run_advisory_check "Pylint" pylint "${PYLINT_PATHS[@]}" --exit-zero --max-line-l
 
 echo ""
 echo "--- Black (Format Check) ---"
-run_ci_quality_gate "Black format check" black --check --line-length 120 "${QUALITY_PATHS[@]}"
+run_ci_quality_gate "Black format check" black --check --workers "$BLACK_WORKERS" --line-length 120 "${QUALITY_PATHS[@]}"
 
 echo ""
 echo "--- isort (Import Sort Check) ---"

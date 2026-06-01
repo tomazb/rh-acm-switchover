@@ -3,6 +3,7 @@
 import pathlib
 
 import yaml
+from preflight_task_text import validate_backups_text
 
 COLLECTION_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PREFLIGHT_TASKS = COLLECTION_ROOT / "roles" / "preflight" / "tasks"
@@ -27,7 +28,7 @@ def test_restore_only_discovers_secondary_backups():
 
 def test_restore_only_validates_secondary_backup_artifacts():
     """Restore-only preflight must fail when the target bucket has no synced backups."""
-    text = (PREFLIGHT_TASKS / "validate_backups.yml").read_text()
+    text = validate_backups_text()
 
     assert (
         "acm_secondary_backups_info.resources" in text
@@ -42,11 +43,7 @@ def test_switchover_playbook_rejects_restore_only_mode_before_roles():
     play = _load_playbook("switchover.yml")[0]
     pre_tasks = play.get("pre_tasks", [])
 
-    fail_tasks = [
-        task
-        for task in pre_tasks
-        if task.get("name") == "Reject restore-only mode in switchover playbook"
-    ]
+    fail_tasks = [task for task in pre_tasks if task.get("name") == "Reject restore-only mode in switchover playbook"]
 
     assert fail_tasks, "switchover.yml must fail before roles when restore_only=true"
     fail_task = fail_tasks[0]
