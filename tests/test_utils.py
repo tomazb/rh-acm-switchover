@@ -21,6 +21,7 @@ from lib.utils import (
     StateManager,
     dry_run_skip,
     is_acm_version_ge,
+    parse_acm_version,
     setup_logging,
 )
 
@@ -1084,6 +1085,18 @@ class TestVersionComparison:
     """Test cases for version comparison utilities."""
 
     @pytest.mark.parametrize(
+        "version,expected",
+        [
+            ("2.14.3-rc1", (2, 14, 3)),
+            ("2.14.3+build", (2, 14, 3)),
+            ("2.14.3-rc1+build", (2, 14, 3)),
+        ],
+    )
+    def test_parse_acm_version_accepts_numeric_prefix_with_suffix(self, version, expected):
+        """Suffixed ACM versions should keep the leading numeric comparison tuple."""
+        assert parse_acm_version(version) == expected
+
+    @pytest.mark.parametrize(
         "version1,version2",
         [
             ("2.12.0", "2.12.0"),
@@ -1103,6 +1116,8 @@ class TestVersionComparison:
             ("3.0.0", "2.12.0"),
             ("2.12", "2.11"),
             ("2.12.0", "2.12"),
+            ("2.14.3-rc1", "2.12.0"),
+            ("2.14.3+build", "2.12.0"),
         ],
     )
     def test_is_acm_version_ge_greater(self, version1, version2):
@@ -1128,6 +1143,7 @@ class TestVersionComparison:
             ("invalid", "2.12.0"),
             ("2.12.0", "invalid"),
             ("", "2.12.0"),
+            ("2", "2.12.0"),
         ],
     )
     def test_is_acm_version_ge_invalid(self, version1, version2):

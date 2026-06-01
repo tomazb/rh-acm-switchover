@@ -22,10 +22,10 @@ from lib.constants import (
 )
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
-from lib.utils import Phase, StateManager, is_acm_version_ge
+from lib.utils import Phase, StateManager
 from lib.waiter import WaitConditionResult, wait_for_condition
 
-from .backup_schedule import fail_on_multiple_backup_schedules
+from .backup_schedule import acm_supports_backup_schedule_pause, fail_on_multiple_backup_schedules
 
 logger = logging.getLogger("acm_switchover")
 
@@ -164,7 +164,7 @@ class PrimaryPreparation:
         self.state.set_config("saved_backup_schedule", bs)
 
         # ACM 2.12+ supports pausing via spec.paused
-        if is_acm_version_ge(self.acm_version, "2.12.0"):
+        if acm_supports_backup_schedule_pause(self.acm_version):
             logger.info("Using spec.paused for ACM %s", self.acm_version)
 
             patch = {"spec": {"paused": True}}

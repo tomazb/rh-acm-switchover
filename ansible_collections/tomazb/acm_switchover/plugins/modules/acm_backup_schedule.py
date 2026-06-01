@@ -77,17 +77,26 @@ operation:
 """
 
 import copy
+import re
 
 from ansible.module_utils.basic import AnsibleModule
 
+ACM_VERSION_RE = re.compile(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?(?:[-+][A-Za-z0-9][A-Za-z0-9.+-]*)?\s*$")
+
+
+def _parse_acm_version(acm_version: str) -> tuple[int, int, int]:
+    match = ACM_VERSION_RE.match(acm_version)
+    if not match:
+        raise ValueError(
+            f"Invalid ACM version format '{acm_version}'. "
+            "Expected numeric major.minor version like '2.14.3' or '2.14.3-rc1'."
+        )
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch or 0)
+
 
 def backup_schedule_pause_mode(acm_version: str) -> str:
-    try:
-        major, minor, *_rest = [int(part) for part in acm_version.split(".")]
-    except ValueError as e:
-        raise ValueError(
-            f"Invalid ACM version format '{acm_version}'. " f"Expected numeric version like '2.14.3', got error: {e}"
-        ) from e
+    major, minor, _patch = _parse_acm_version(acm_version)
     return "delete" if (major, minor) <= (2, 11) else "pause"
 
 

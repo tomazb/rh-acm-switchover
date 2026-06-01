@@ -664,6 +664,8 @@ class TestPrimaryPreparation:
         [
             ("2.12.0", True),
             ("2.13.0", True),
+            ("2.14.3-rc1", True),
+            ("2.14.3+build", True),
             ("2.11.5", False),
             ("2.10.0", False),
         ],
@@ -688,6 +690,27 @@ class TestPrimaryPreparation:
         else:
             # For ACM < 2.12, use delete instead
             mock_primary_client.delete_custom_resource.assert_called_once()
+
+    @pytest.mark.parametrize("acm_version", ["not-a-version", "2"])
+    def test_pause_backup_schedule_fails_closed_for_unparseable_version(
+        self, mock_primary_client, mock_state_manager, acm_version
+    ):
+        """Unparseable ACM versions must not fall through to the delete path."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version=acm_version,
+            has_observability=False,
+        )
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+
+        with pytest.raises(SwitchoverError, match="Invalid ACM version"):
+            prep._pause_backup_schedule()
+
+        mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
     def test_disable_auto_import_with_clusters(self, primary_prep_with_obs, mock_primary_client):
         """Test disabling auto-import on managed clusters."""
