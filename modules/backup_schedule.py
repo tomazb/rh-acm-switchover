@@ -32,7 +32,11 @@ def fail_on_multiple_backup_schedules(schedules: List[Dict[str, Any]], hub_label
 
 
 def acm_supports_backup_schedule_pause(acm_version: str) -> bool:
-    """Return whether ACM version supports BackupSchedule spec.paused."""
+    """Return whether ACM version supports BackupSchedule spec.paused.
+
+    Raises SwitchoverError when the version cannot be parsed, because falling
+    back to either mutation path would risk changing the wrong resource state.
+    """
     parsed = parse_acm_version(acm_version)
     if parsed is None:
         raise SwitchoverError(

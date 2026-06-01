@@ -890,8 +890,8 @@ def parse_acm_version(version_string: str) -> Optional[Tuple[int, int, int]]:
     if not match:
         return None
 
-    parts = [int(part) if part is not None else 0 for part in match.groups()]
-    return (parts[0], parts[1], parts[2])
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch or 0)
 
 
 def is_acm_version_ge(version: str, compare_to: str) -> bool:

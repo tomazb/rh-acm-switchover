@@ -89,7 +89,7 @@ def _parse_acm_version(acm_version: str) -> tuple[int, int, int]:
     if not match:
         raise ValueError(
             f"Invalid ACM version format '{acm_version}'. "
-            "Expected numeric major.minor version like '2.14.3' or '2.14.3-rc1'."
+            "Expected numeric major.minor or major.minor.patch version like '2.14.3' or '2.14.3-rc1'."
         )
     major, minor, patch = match.groups()
     return int(major), int(minor), int(patch or 0)
