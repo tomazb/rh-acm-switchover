@@ -50,3 +50,24 @@ Selector labels
 app.kubernetes.io/name: {{ include "acm-switchover-rbac.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Validate that custom validator ClusterRole rules remain read-only.
+*/}}
+{{- define "acm-switchover-rbac.validateValidatorCustomRules" -}}
+{{- $allowedVerbs := dict "get" true "list" true "watch" true -}}
+{{- range $ruleIndex, $rule := .Values.rbac.customValidatorRules }}
+{{- if not (kindIs "map" $rule) }}
+{{- fail (printf "rbac.customValidatorRules entries must be mappings; rule %d is invalid" $ruleIndex) }}
+{{- end }}
+{{- if not (kindIs "slice" $rule.verbs) }}
+{{- fail (printf "rbac.customValidatorRules verbs must be a list of strings; rule %d is missing or invalid" $ruleIndex) }}
+{{- end }}
+{{- range $verb := $rule.verbs }}
+{{- $verbText := toString $verb -}}
+{{- if not (hasKey $allowedVerbs $verbText) }}
+{{- fail (printf "rbac.customValidatorRules may only use read-only verbs [get, list, watch]; rule %d includes disallowed verb %q" $ruleIndex $verbText) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

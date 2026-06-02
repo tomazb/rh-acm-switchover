@@ -60,7 +60,7 @@
 | F32 | confirmed hardening | PR 15 | `scripts/setup-rbac.sh` creates token-bearing kubeconfigs with the process umask and only narrows permissions afterward. |
 | F33 | confirmed hardening | PR 16 | `container-bootstrap/Containerfile` uses mutable base image tags and downloads `jq`/OpenShift client binaries without checksum verification. |
 | F34 | confirmed robustness | PR 17 | Python and collection klusterlet remediation delete `bootstrap-hub-kubeconfig` before recreating it. PR 17 preserves parity by switching both implementations and managed-cluster RBAC/docs from delete-then-create to patch/create. |
-| F35 | needs operator decision | PR 19 | Helm `customValidatorRules` can add mutating verbs to the validator `ClusterRole`. Decide whether to enforce read-only verbs or explicitly document this as an advanced escape hatch. |
+| F35 | confirmed | PR 19 | Operator decision: Helm `customValidatorRules` must preserve the validator `ClusterRole` read-only boundary by allowing only `get`, `list`, and `watch`; no escape hatch. |
 | F36 | confirmed hardening | PR 15 | Service-account token generation defaults to `48h`; reduce the default or require explicit opt-in for longer-lived tokens. |
 
 ## PR Sequence
@@ -85,7 +85,7 @@
 | 16 | merged | `fix/thermos-container-supply-chain` | `.worktrees/thermos-16-container-supply-chain` | F33 | https://github.com/tomazb/rh-acm-switchover/pull/88 | Red/green container supply-chain guardrails passed. Targeted pytest, touched-file `black --check`, and `git diff --check` passed. Podman build passed and runtime check reported `oc` 4.21.16, `jq` 1.7.1, and Python 3.12.13. Final `./run_tests.sh` passed. Merged 2026-06-02. |
 | 17 | merged | `fix/thermos-klusterlet-secret-ordering` | `.worktrees/thermos-17-klusterlet-secret-ordering` | F34 | https://github.com/tomazb/rh-acm-switchover/pull/89 | Red/green klusterlet secret ordering tests passed; targeted Python, collection, RBAC parity/static, docs guardrail suites passed; `git diff --check` passed; final `./run_tests.sh` passed; merged 2026-06-02. |
 | 18 | merged | `fix/thermos-safe-path-consolidation` | `.worktrees/thermos-18-safe-path-consolidation` | F31 | https://github.com/tomazb/rh-acm-switchover/pull/90 | Red/green safe-path consolidation tests passed; targeted Python/collection safe-path and report-artifact suites passed; collection unit suite passed; documentation guardrails passed; `git diff --check` passed; final `./run_tests.sh` passed; merged 2026-06-02. |
-| 19 | in_progress | `fix/thermos-helm-validator-guardrail` | `.worktrees/thermos-19-helm-validator-guardrail` | F35 | _TBD_ | Implement the operator-approved Helm validator custom-rule policy and corresponding tests/docs. |
+| 19 | ready_for_review | `fix/thermos-helm-validator-guardrail` | `.worktrees/thermos-19-helm-validator-guardrail` | F35 | https://github.com/tomazb/rh-acm-switchover/pull/91 | Red/green Helm validator guardrail tests passed; explicit positive and negative `helm template` checks passed; `python -m pytest tests/test_rbac_integration.py tests/test_documentation_guardrails.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py -q` passed; touched-file Black/isort and `git diff --check` passed; final `./run_tests.sh` passed; CodeRabbit CLI review `findings=0`; Gemini review thread for malformed `verbs` values addressed; CodeRabbit review thread for non-mapping custom rule entries addressed. |
 
 ## Per-PR Implementation Details
 
@@ -440,8 +440,8 @@
 
 **Scope**
 - Resolve F35 after explicit operator decision.
-- Preferred default: reject mutating verbs in `rbac.customValidatorRules` so the validator ClusterRole remains read-only.
-- If operators need an escape hatch, document that divergence explicitly and add a visible opt-in value.
+- Reject mutating verbs in `rbac.customValidatorRules` so the validator ClusterRole remains read-only.
+- Do not add an escape hatch or intentional parity divergence.
 
 **Likely Files**
 - `deploy/helm/acm-switchover-rbac/templates/clusterrole.yaml`
@@ -451,10 +451,10 @@
 - Parity/support docs if the read-only validator contract intentionally changes.
 
 **Acceptance Criteria**
-- The validator read-only invariant is either enforced by template guardrails or explicitly opt-in with documented operational impact.
+- The validator read-only invariant is enforced by template guardrails.
 - Mutating validator custom rules cannot be added silently.
-- Helm rendering/static tests cover allowed read-only custom rules and rejected mutating custom rules, or the approved opt-in path.
-- Any intentional parity/support boundary change is documented in the required parity docs.
+- Helm rendering/static tests cover allowed read-only custom rules and rejected mutating custom rules.
+- No intentional parity/support boundary change is introduced.
 
 ## Verification Command Reference
 

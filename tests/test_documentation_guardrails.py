@@ -223,6 +223,16 @@ def test_rbac_token_duration_docs_use_24h_default():
         assert stale not in "\n".join(docs.values())
 
 
+def test_helm_validator_custom_rules_document_read_only_guardrail():
+    """Helm docs must describe validator custom rules as read-only, not unrestricted RBAC extension points."""
+    content = _read("deploy/helm/acm-switchover-rbac/README.md")
+
+    assert "`rbac.customValidatorRules`" in content
+    assert "read-only" in content.lower()
+    assert "`get`, `list`, and `watch`" in content
+    assert "mutating verbs" in content.lower()
+
+
 def test_collection_rbac_bootstrap_example_uses_absolute_kubeconfig_path():
     """JSON extra-vars do not shell-expand '~', so the recommended copy/paste example must avoid it."""
     content = _read("docs/deployment/rbac-deployment.md")

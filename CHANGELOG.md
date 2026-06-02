@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Collection mutation tasks now default missing `acm_switchover_execution.mode` to `dry_run`. Operators must explicitly set `mode: execute` for live runs.
 - Generated service-account kubeconfigs now default to 24-hour tokens across the Python CLI setup wrapper, Bash kubeconfig helpers, and collection RBAC bootstrap. Operators can still request longer-lived tokens explicitly with `--token-duration` or `acm_switchover_rbac_bootstrap.token_duration`.
 - Container bootstrap images are now digest-pinned, the bundled OpenShift client default is updated to `stable-4.21`, and downloaded `jq`, `oc`, and `kubectl` artifacts are verified with SHA-256 checksums before installation.
+- Helm RBAC chart rendering now rejects `rbac.customValidatorRules` entries with verbs outside `get`, `list`, and `watch`, preserving the validator ClusterRole's read-only contract.
 
 ### Fixed
 

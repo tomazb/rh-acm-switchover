@@ -7,6 +7,8 @@ These tests verify that:
 3. check_rbac.py argument parsing handles all context combinations
 """
 
+import shutil
+import subprocess
 from pathlib import Path
 from typing import List
 
@@ -205,6 +207,30 @@ class TestRBACManifestConsistency:
         if not path.exists():
             pytest.skip("Helm clusterrole.yaml not found")
         return path.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def helm_helpers_content(self) -> str:
+        """Read Helm helpers template as text."""
+        path = Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac" / "templates" / "_helpers.tpl"
+        if not path.exists():
+            pytest.skip("Helm _helpers.tpl not found")
+        return path.read_text(encoding="utf-8")
+
+    @pytest.fixture
+    def helm_chart_dir(self) -> Path:
+        """Get the Helm chart directory."""
+        path = Path(__file__).parent.parent / "deploy" / "helm" / "acm-switchover-rbac"
+        if not path.exists():
+            pytest.skip("Helm chart not found")
+        return path
+
+    @pytest.fixture
+    def helm_binary(self) -> str:
+        """Get Helm binary path or skip render tests."""
+        helm = shutil.which("helm")
+        if not helm:
+            pytest.skip("helm binary not available")
+        return helm
 
     @pytest.fixture
     def helm_namespace_content(self) -> str:
@@ -527,6 +553,134 @@ class TestRBACManifestConsistency:
         """Helm namespace output must carry the same common marker used by role filtering."""
         assert "app.kubernetes.io/part-of: acm-switchover-rbac" in helm_namespace_content
         assert "app.kubernetes.io/role: common" in helm_namespace_content
+
+    def test_helm_validator_custom_rule_guardrail_is_wired(self, helm_helpers_content, helm_clusterrole_content):
+        """Helm must validate custom validator verbs before rendering the read-only ClusterRole."""
+        assert 'define "acm-switchover-rbac.validateValidatorCustomRules"' in helm_helpers_content
+        assert 'include "acm-switchover-rbac.validateValidatorCustomRules" .' in helm_clusterrole_content
+        assert helm_clusterrole_content.index('include "acm-switchover-rbac.validateValidatorCustomRules" .') < (
+            helm_clusterrole_content.index(".Values.rbac.customValidatorRules")
+        )
+
+    def test_helm_allows_read_only_custom_validator_rules(self, helm_binary, helm_chart_dir, tmp_path):
+        """Read-only validator custom rules should render successfully."""
+        values_file = tmp_path / "values.yaml"
+        values_file.write_text(
+            yaml.safe_dump(
+                {
+                    "rbac": {
+                        "customValidatorRules": [
+                            {
+                                "apiGroups": ["custom.example.com"],
+                                "resources": ["readablewidgets"],
+                                "verbs": ["get", "list", "watch"],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "readablewidgets" in result.stdout
+        assert "watch" in result.stdout
+
+    @pytest.mark.parametrize("forbidden_verb", ["delete", "*"])
+    def test_helm_rejects_mutating_custom_validator_rules(self, helm_binary, helm_chart_dir, tmp_path, forbidden_verb):
+        """Validator custom rules must not grant verbs outside the read-only set."""
+        values_file = tmp_path / f"values-{forbidden_verb.replace('*', 'star')}.yaml"
+        values_file.write_text(
+            yaml.safe_dump(
+                {
+                    "rbac": {
+                        "customValidatorRules": [
+                            {
+                                "apiGroups": ["custom.example.com"],
+                                "resources": ["dangerouswidgets"],
+                                "verbs": ["get", forbidden_verb],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode != 0
+        assert "rbac.customValidatorRules may only use read-only verbs" in result.stderr
+        assert forbidden_verb in result.stderr
+
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            {
+                "apiGroups": ["custom.example.com"],
+                "resources": ["invalidwidgets"],
+            },
+            {
+                "apiGroups": ["custom.example.com"],
+                "resources": ["invalidwidgets"],
+                "verbs": "get",
+            },
+        ],
+        ids=["missing-verbs", "scalar-verbs"],
+    )
+    def test_helm_rejects_invalid_custom_validator_rule_verbs_shape(self, helm_binary, helm_chart_dir, tmp_path, rule):
+        """Validator custom rules must define verbs as a YAML list."""
+        values_file = tmp_path / "values-invalid-verbs-shape.yaml"
+        values_file.write_text(
+            yaml.safe_dump({"rbac": {"customValidatorRules": [rule]}}),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode != 0
+        assert "rbac.customValidatorRules verbs must be a list of strings" in result.stderr
+        assert "rule 0" in result.stderr
+
+    def test_helm_rejects_non_mapping_custom_validator_rule_entry(self, helm_binary, helm_chart_dir, tmp_path):
+        """Validator custom rules must be YAML mappings before rule fields are read."""
+        values_file = tmp_path / "values-invalid-rule-entry.yaml"
+        values_file.write_text(
+            yaml.safe_dump({"rbac": {"customValidatorRules": ["invalid-rule-entry"]}}),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [helm_binary, "template", "acm-switchover-rbac", str(helm_chart_dir), "-f", str(values_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode != 0
+        assert "rbac.customValidatorRules entries must be mappings" in result.stderr
+        assert "rule 0" in result.stderr
 
 
 class TestRBACValidatorPermissionStructure:
