@@ -205,7 +205,8 @@ VALIDATION_OLD_HUB_ACTION_CHOICES = ("secondary", "decommission", "none")
 VALIDATION_ACTIVATION_METHOD_CHOICES = ("patch", "restore")
 VALIDATION_LOG_FORMAT_CHOICES = ("text", "json")
 VALIDATION_SETUP_ROLE_CHOICES = ("operator", "validator", "both")
-TOKEN_DURATION_DEFAULT = "24h"
+# Token lifetime duration, not token material.
+TOKEN_DURATION_DEFAULT = "24h"  # nosec B105
 
 # Argo CD validation messages
 ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE = "--argocd-resume-on-failure requires --argocd-manage"

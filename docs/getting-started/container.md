@@ -21,7 +21,7 @@ docker build -t acm-switchover:latest -f container-bootstrap/Containerfile .
 The container image includes:
 
 - **Python 3.12** - Runtime environment
-- **OpenShift CLI (oc)** - Kubernetes API client (stable-4.14+)
+- **OpenShift CLI (oc)** - Kubernetes API client (stable-4.21)
 - **kubectl** - Kubernetes command-line tool (via oc)
 - **jq** - JSON processor for debugging
 - **curl** - HTTP client for downloads
@@ -451,10 +451,17 @@ podman build --platform linux/amd64,linux/arm64 \
 ```bash
 # Build with specific OpenShift CLI version
 podman build \
-  --build-arg OC_VERSION=4.15 \
+  --build-arg OC_VERSION=4.21 \
   -f container-bootstrap/Containerfile \
-  -t acm-switchover:oc415 .
+  -t acm-switchover:oc421 .
 ```
+
+`OC_VERSION` selects the `stable-<version>` OpenShift client stream. If you override it, also override
+the matching `OPENSHIFT_CLIENT_LINUX_AMD64_SHA256` and `OPENSHIFT_CLIENT_LINUX_ARM64_SHA256` build
+arguments with checksums from the same OpenShift mirror stream.
+
+The image also verifies `jq` during the build. Override `JQ_VERSION` only together with the matching
+`JQ_LINUX_AMD64_SHA256` and `JQ_LINUX_ARM64_SHA256` values from the upstream jq checksum file.
 
 ## Best Practices
 
