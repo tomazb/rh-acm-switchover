@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from lib import path_safety
 from lib.constants import (
     REPORT_DEFAULT_CHECK,
     REPORT_ID_PREFIX_PREFLIGHT,
@@ -19,8 +20,6 @@ from lib.constants import (
     REPORT_STATUS_FAIL,
     REPORT_STATUS_PASS,
 )
-from lib.exceptions import SecurityValidationError, ValidationError
-from lib.validation import InputValidator
 
 SCHEMA_VERSION = REPORT_SCHEMA_VERSION
 SOURCE = REPORT_SOURCE_PYTHON_CLI
@@ -70,110 +69,14 @@ def _hubs_from_args(args: Any) -> dict[str, dict[str, Any]]:
     return hubs
 
 
-def _validate_path_syntax(path_value: str, field_name: str) -> None:
-    """Apply path syntax checks without requiring absolute parents to exist yet."""
-    if not path_value:
-        raise ValidationError(f"{field_name} path cannot be empty")
-    if ".." in path_value.split("/"):
-        raise SecurityValidationError(
-            f"SECURITY: Path traversal attempt detected in {field_name} path '{path_value}'. "
-            "The '..' sequence is not allowed as a path component."
-        )
-    unsafe_chars = ["~", "$", "{", "}", "|", "&", ";", "<", ">", "`"]
-    if any(char in path_value for char in unsafe_chars):
-        raise SecurityValidationError(
-            f"SECURITY: Invalid characters in {field_name} path '{path_value}'. "
-            "Path contains unsafe characters that could be used for command injection. "
-            f"Disallowed patterns: {', '.join(unsafe_chars)}."
-        )
-
-
-def _nearest_existing_ancestor(path: Path) -> Path:
-    """Return the nearest existing ancestor for an absolute path."""
-    current = path
-    while not current.exists() and current.parent != current:
-        current = current.parent
-    return current
-
-
-def _commonpath_is_parent(path: Path, parent: Path) -> bool:
-    try:
-        return os.path.commonpath([str(path), str(parent)]) == str(parent)
-    except ValueError:
-        return False
-
-
-def _allowed_artifact_root(path: Path) -> Path:
-    """Return the most specific allowed root for an absolute artifact path."""
-    path_text = str(path)
-    candidates = [Path("/tmp"), Path("/var")]
-    cwd = Path.cwd().resolve()
-    if str(cwd):
-        candidates.append(cwd)
-    home = Path.home().resolve()
-    if str(home):
-        candidates.append(home)
-
-    matching_roots = [root.resolve() for root in candidates if _commonpath_is_parent(Path(path_text), root.resolve())]
-    if not matching_roots:
-        raise SecurityValidationError(
-            f"SECURITY: Artifact path '{path}' is outside allowed directories. "
-            "Use relative paths or paths within /tmp, /var, workspace root, or home directory."
-        )
-    return max(matching_roots, key=lambda root: len(str(root)))
-
-
-def _reject_symlink_escape(path: Path, root: Path, field_name: str) -> None:
-    """Reject existing symlinks in path parents that resolve outside root."""
-    root = root.resolve()
-    current = root
-    try:
-        relative_parts = path.relative_to(root).parts
-    except ValueError:
-        raise SecurityValidationError(
-            f"SECURITY: {field_name} path '{path}' resolves outside the allowed root '{root}'."
-        )
-
-    for part in relative_parts[:-1]:
-        current = current / part
-        if current.is_symlink() and not _commonpath_is_parent(current.resolve(), root):
-            raise SecurityValidationError(
-                f"SECURITY: {field_name} path '{path}' contains a symlink that escapes '{root}'."
-            )
-
-
 def validate_report_artifact_path(destination: str, field_name: str = "report artifact") -> Path:
     """Validate an artifact path without following unsafe relative symlinks."""
-    path = Path(destination)
-    _validate_path_syntax(destination, field_name)
-
-    if path.is_absolute():
-        InputValidator.validate_safe_filesystem_path(
-            str(_nearest_existing_ancestor(path.parent)),
-            f"{field_name} ancestor",
-        )
-        root = _allowed_artifact_root(path)
-        absolute_path = path
-    else:
-        InputValidator.validate_safe_filesystem_path(str(path.parent), f"{field_name} directory")
-        root = Path.cwd().resolve()
-        absolute_path = (root / path).absolute()
-
-    if absolute_path.is_symlink():
-        raise SecurityValidationError(f"SECURITY: {field_name} path '{destination}' must not be a symlink.")
-
-    _reject_symlink_escape(absolute_path.parent / absolute_path.name, root, field_name)
-    if absolute_path.parent.exists() and not _commonpath_is_parent(absolute_path.parent.resolve(), root):
-        raise SecurityValidationError(
-            f"SECURITY: {field_name} directory '{absolute_path.parent}' resolves outside '{root}'."
-        )
-
-    return path
+    return path_safety.validate_report_artifact_path(destination, field_name)
 
 
 def validate_report_artifact_directory(path_value: str, field_name: str = "report artifact directory") -> None:
     """Validate a report artifact directory supplied before the final filename is known."""
-    validate_report_artifact_path(str(Path(path_value) / ".artifact-path-check"), field_name)
+    path_safety.validate_report_artifact_directory(path_value, field_name)
 
 
 def build_operation_report(

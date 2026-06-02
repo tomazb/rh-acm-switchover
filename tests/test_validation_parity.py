@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from lib.exceptions import SecurityValidationError, ValidationError
+from lib.report_artifacts import validate_report_artifact_path
 from lib.validation import InputValidator
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "validation_parity_cases.yml"
@@ -67,12 +68,22 @@ def _run_path_case(case_input: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def _run_artifact_path_case(case_input: dict) -> tuple[bool, str]:
+    try:
+        validate_report_artifact_path(case_input["path"], "parity artifact")
+    except (SecurityValidationError, ValidationError) as exc:
+        return False, str(exc)
+    return True, ""
+
+
 @pytest.mark.parametrize("case", _load_cases(), ids=lambda case: case["name"])
 def test_python_validation_matches_shared_parity_fixture(case: dict) -> None:
     if case["kind"] == "operation":
         passed, message = _run_operation_case(case["input"])
     elif case["kind"] == "path":
         passed, message = _run_path_case(case["input"])
+    elif case["kind"] == "artifact_path":
+        passed, message = _run_artifact_path_case(case["input"])
     else:
         raise AssertionError(f"Unsupported validation parity case kind: {case['kind']}")
 

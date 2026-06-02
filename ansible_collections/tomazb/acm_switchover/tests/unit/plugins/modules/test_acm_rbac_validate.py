@@ -10,10 +10,10 @@ from ansible.module_utils import basic
 from ansible.module_utils.basic import AnsibleModule as RealAnsibleModule
 from jinja2 import Environment
 
+import ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate as acm_rbac_validate_module
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
     MANAGED_CLUSTER_AGENT_NAMESPACE,
 )
-import ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate as acm_rbac_validate_module
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate import (
     expand_rbac_requirements,
     main,
