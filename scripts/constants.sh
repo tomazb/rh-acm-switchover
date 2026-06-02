@@ -79,6 +79,7 @@ export AUTO_IMPORT_STRATEGY_DOC_URL="https://docs.redhat.com/en/documentation/re
 export SWITCHOVER_NAMESPACE="acm-switchover"
 export OPERATOR_SA="acm-switchover-operator"
 export VALIDATOR_SA="acm-switchover-validator"
+export DEFAULT_TOKEN_DURATION="24h"
 
 # Managed Cluster Constants
 # Used when generating kubeconfigs for managed clusters (--managed-cluster flag)

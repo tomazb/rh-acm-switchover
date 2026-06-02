@@ -195,7 +195,7 @@ warns and continues so the result matches the Python CLI's warning behavior.
 | `include_decommission` | bool | `false` | Append decommission-scoped ClusterRole manifests for `ClusterDeployment` list safety validation plus `ManagedCluster`, `MultiClusterHub`, and `MultiClusterObservability` delete; baseline operator RBAC already grants `MultiClusterObservability` delete for normal old-hub finalization |
 | `generate_kubeconfigs` | bool | `false` | Generate kubeconfigs after manifest apply |
 | `validate_permissions` | bool | `false` | Run `acm_rbac_validate` after apply |
-| `token_duration` | str | `48h` | Token validity duration for generated service account kubeconfigs |
+| `token_duration` | str | `24h` | Token validity duration for generated service account kubeconfigs |
 | `output_dir` | str | `./kubeconfigs` | Directory for generated service account kubeconfigs |
 
 ### `acm_switchover_discovery` / input facts

@@ -14,7 +14,7 @@
 #
 # Options:
 #   --admin-kubeconfig <path>  - Admin kubeconfig for generating tokens (default: current)
-#   --token-duration <dur>     - Token validity duration (default: 48h)
+#   --token-duration <dur>     - Token validity duration (default: ${DEFAULT_TOKEN_DURATION})
 #   --output <file>            - Output merged kubeconfig file (default: ./merged-kubeconfig.yaml)
 #   --namespace <ns>           - Namespace where SAs exist (default: acm-switchover)
 #   --managed-cluster          - Flag for managed cluster contexts (uses different SA pattern)
@@ -47,7 +47,7 @@ source "${SCRIPT_DIR}/lib-common.sh"
 # Default values
 # =============================================================================
 ADMIN_KUBECONFIG=""
-TOKEN_DURATION="48h"
+TOKEN_DURATION="${DEFAULT_TOKEN_DURATION}"
 OUTPUT_FILE="./merged-kubeconfig.yaml"
 # Use centralized namespace from constants.sh (SWITCHOVER_NAMESPACE)
 NAMESPACE="${SWITCHOVER_NAMESPACE:-acm-switchover}"
@@ -78,7 +78,7 @@ while [[ $# -gt 0 ]]; do
                 TOKEN_DURATION="$2"
                 shift 2
             else
-                echo "Error: --token-duration requires a value (e.g., 48h)" >&2
+                echo "Error: --token-duration requires a value (e.g., ${DEFAULT_TOKEN_DURATION})" >&2
                 exit 1
             fi
             ;;
@@ -115,7 +115,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --admin-kubeconfig <path>  Admin kubeconfig for generating tokens (default: current)"
-            echo "  --token-duration <dur>     Token validity duration (default: 48h)"
+            echo "  --token-duration <dur>     Token validity duration (default: ${DEFAULT_TOKEN_DURATION})"
             echo "  --output <file>            Output merged kubeconfig file (default: ./merged-kubeconfig.yaml)"
             echo "  --namespace <ns>           Namespace where SAs exist (default: acm-switchover)"
             echo "  --managed-cluster          Flag for managed cluster contexts"
@@ -183,7 +183,8 @@ fi
 echo ""
 
 # Create temporary directory for individual kubeconfigs
-TEMP_DIR=$(mktemp -d)
+TEMP_DIR=$(umask 077 && mktemp -d)
+chmod 700 "$TEMP_DIR"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 # Parse context list and generate kubeconfigs
@@ -266,11 +267,14 @@ for entry in "${CONTEXTS[@]}"; do
     fi
     
     # Generate kubeconfig using the determined namespace and service account
-    if "${SCRIPT_DIR}/generate-sa-kubeconfig.sh" \
-        --context "$context" \
-        --user "$user_name" \
-        --token-duration "$TOKEN_DURATION" \
-        "$sa_namespace" "$sa_name" > "$output_path"; then
+    if (
+        umask 077
+        "${SCRIPT_DIR}/generate-sa-kubeconfig.sh" \
+            --context "$context" \
+            --user "$user_name" \
+            --token-duration "$TOKEN_DURATION" \
+            "$sa_namespace" "$sa_name" > "$output_path"
+    ); then
         
         check_pass "Generated: $context ($role) -> user: $user_name"
         
@@ -309,7 +313,7 @@ echo "Merging $GENERATED_COUNT kubeconfigs..."
 # Create output directory if needed
 OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
 if [[ ! -d "$OUTPUT_DIR" ]]; then
-    mkdir -p "$OUTPUT_DIR"
+    install -d -m 700 "$OUTPUT_DIR"
 fi
 
 # Rename cluster names in each kubeconfig to avoid collision

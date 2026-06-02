@@ -25,6 +25,7 @@ from lib.constants import (
     ARGOCD_RESUME_ON_FAILURE_CONFLICTS_RESUME_ONLY_MESSAGE,
     ARGOCD_RESUME_ON_FAILURE_CONFLICTS_VALIDATE_ONLY_MESSAGE,
     ARGOCD_RESUME_ON_FAILURE_REQUIRES_MANAGE_MESSAGE,
+    TOKEN_DURATION_DEFAULT,
     VALIDATION_ACTIVATION_METHOD_CHOICES,
     VALIDATION_LOG_FORMAT_CHOICES,
     VALIDATION_METHOD_CHOICES,
@@ -490,7 +491,9 @@ class InputValidator:
             # Validate token-duration format (basic check for number + unit)
             if hasattr(args, "token_duration") and args.token_duration:
                 if not re.match(r"^\d+[hms]$", args.token_duration):
-                    raise ValidationError("--token-duration must be in format like '48h', '30m', or '3600s'")
+                    raise ValidationError(
+                        f"--token-duration must be in format like '{TOKEN_DURATION_DEFAULT}', '30m', or '3600s'"
+                    )
             # Validate output-dir if provided
             if hasattr(args, "output_dir") and args.output_dir:
                 InputValidator.validate_safe_filesystem_path(args.output_dir, "output-dir")

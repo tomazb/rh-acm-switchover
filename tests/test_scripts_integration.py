@@ -99,6 +99,34 @@ class TestScriptArgumentSafety:
 
         assert '--kubeconfig "$ADMIN_KUBECONFIG"' in content
 
+    def test_setup_rbac_uses_hardened_kubeconfig_defaults_and_writes(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert 'TOKEN_DURATION="${DEFAULT_TOKEN_DURATION}"' in content
+        assert 'install -d -m 700 "$OUTPUT_DIR"' in content
+        assert "umask 077" in content
+        assert '> "$output_file"' in content
+        assert 'chmod 600 "$output_file"' in content
+
+    def test_generate_sa_kubeconfig_defaults_to_24h(self):
+        constants = (SCRIPTS_DIR / "constants.sh").read_text(encoding="utf-8")
+        content = (SCRIPTS_DIR / "generate-sa-kubeconfig.sh").read_text(encoding="utf-8")
+        merged_content = (SCRIPTS_DIR / "generate-merged-kubeconfig.sh").read_text(encoding="utf-8")
+        setup_content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert 'DEFAULT_TOKEN_DURATION="24h"' in constants
+        assert 'DURATION="${DEFAULT_TOKEN_DURATION}"' in content
+        assert 'TOKEN_DURATION="${DEFAULT_TOKEN_DURATION}"' in merged_content
+        assert 'TOKEN_DURATION="${DEFAULT_TOKEN_DURATION}"' in setup_content
+        assert "default: ${DEFAULT_TOKEN_DURATION}" in content
+
+    def test_setup_rbac_preserves_generator_stderr_on_kubeconfig_failure(self):
+        content = (SCRIPTS_DIR / "setup-rbac.sh").read_text(encoding="utf-8")
+
+        assert '> "$output_file" 2>/dev/null' not in content
+        assert 'local error_file="${output_file}.err"' in content
+        assert 'cat "$error_file" >&2' in content
+
 
 def write_shared_jq_mock(mock_bin: Path) -> None:
     """Create a mock jq that handles minimal cases and delegates to real jq."""

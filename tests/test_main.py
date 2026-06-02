@@ -50,6 +50,7 @@ from lib.constants import (
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
+    TOKEN_DURATION_DEFAULT,
 )
 from lib.exceptions import SwitchoverError
 from lib.validation import ValidationError
@@ -218,6 +219,7 @@ class TestArgParsing:
             assert args.setup is True
             assert args.method is None
             assert args.old_hub_action is None
+            assert args.token_duration == TOKEN_DURATION_DEFAULT
 
     def test_argocd_resume_only_rejects_dry_run_at_parse_time(self):
         """Resume-only is a standalone mode and must be mutually exclusive with dry-run."""

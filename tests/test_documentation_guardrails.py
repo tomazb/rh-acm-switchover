@@ -206,6 +206,23 @@ def test_rbac_deployment_recommends_collection_bootstrap_before_deprecated_scrip
     assert "deprecated" in quick_start.lower()
 
 
+def test_rbac_token_duration_docs_use_24h_default():
+    """Operator-facing RBAC docs must match the generated kubeconfig token default."""
+    docs = {
+        "docs/deployment/rbac-deployment.md": _read("docs/deployment/rbac-deployment.md"),
+        "scripts/README.md": _read("scripts/README.md"),
+        "ansible_collections/tomazb/acm_switchover/docs/variable-reference.md": _read(
+            "ansible_collections/tomazb/acm_switchover/docs/variable-reference.md"
+        ),
+    }
+
+    for path, content in docs.items():
+        assert "`24h`" in content or "24 hours" in content, f"{path} must document the 24h token default"
+
+    for stale in ("Default 48-hour token", "`48h` | Token validity duration", "| `token_duration` | str | `48h`"):
+        assert stale not in "\n".join(docs.values())
+
+
 def test_collection_rbac_bootstrap_example_uses_absolute_kubeconfig_path():
     """JSON extra-vars do not shell-expand '~', so the recommended copy/paste example must avoid it."""
     content = _read("docs/deployment/rbac-deployment.md")
