@@ -12,6 +12,8 @@ def _containerfile() -> str:
 
 
 def _section(content: str, start: str, end: str) -> str:
+    if start not in content or end not in content:
+        raise ValueError(f"Section markers '{start}' or '{end}' not found in content")
     return content.split(start, 1)[1].split(end, 1)[0]
 
 
@@ -21,7 +23,10 @@ def test_container_base_images_are_digest_pinned():
 
     assert from_lines, "Containerfile must declare at least one base image"
     for line in from_lines:
-        image = line.split()[1]
+        parts = line.split()
+        image_parts = [part for part in parts[1:] if not part.startswith("--")]
+        assert image_parts, f"Could not find image name in FROM line: {line}"
+        image = image_parts[0]
         assert "@sha256:" in image, f"Base image is not digest-pinned: {line}"
         assert ":latest" not in image, f"Base image still uses a mutable latest tag: {line}"
 
@@ -50,7 +55,7 @@ def test_containerfile_does_not_pipe_curl_to_tar():
     """Archives must be verified before extraction."""
     content = _containerfile()
 
-    assert not re.search(r"curl\b.*\|\s*\\?\s*tar\b", content, flags=re.DOTALL)
+    assert not re.search(r"curl\b[^|]*\|\s*\\?\s*tar\b", content)
 
 
 def test_jq_download_is_verified_before_install():
