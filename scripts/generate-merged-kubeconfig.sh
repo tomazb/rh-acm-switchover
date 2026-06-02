@@ -14,7 +14,7 @@
 #
 # Options:
 #   --admin-kubeconfig <path>  - Admin kubeconfig for generating tokens (default: current)
-#   --token-duration <dur>     - Token validity duration (default: 24h)
+#   --token-duration <dur>     - Token validity duration (default: ${DEFAULT_TOKEN_DURATION})
 #   --output <file>            - Output merged kubeconfig file (default: ./merged-kubeconfig.yaml)
 #   --namespace <ns>           - Namespace where SAs exist (default: acm-switchover)
 #   --managed-cluster          - Flag for managed cluster contexts (uses different SA pattern)
@@ -47,7 +47,7 @@ source "${SCRIPT_DIR}/lib-common.sh"
 # Default values
 # =============================================================================
 ADMIN_KUBECONFIG=""
-TOKEN_DURATION="24h"
+TOKEN_DURATION="${DEFAULT_TOKEN_DURATION}"
 OUTPUT_FILE="./merged-kubeconfig.yaml"
 # Use centralized namespace from constants.sh (SWITCHOVER_NAMESPACE)
 NAMESPACE="${SWITCHOVER_NAMESPACE:-acm-switchover}"
@@ -78,7 +78,7 @@ while [[ $# -gt 0 ]]; do
                 TOKEN_DURATION="$2"
                 shift 2
             else
-                echo "Error: --token-duration requires a value (e.g., 24h)" >&2
+                echo "Error: --token-duration requires a value (e.g., ${DEFAULT_TOKEN_DURATION})" >&2
                 exit 1
             fi
             ;;
@@ -115,7 +115,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --admin-kubeconfig <path>  Admin kubeconfig for generating tokens (default: current)"
-            echo "  --token-duration <dur>     Token validity duration (default: 24h)"
+            echo "  --token-duration <dur>     Token validity duration (default: ${DEFAULT_TOKEN_DURATION})"
             echo "  --output <file>            Output merged kubeconfig file (default: ./merged-kubeconfig.yaml)"
             echo "  --namespace <ns>           Namespace where SAs exist (default: acm-switchover)"
             echo "  --managed-cluster          Flag for managed cluster contexts"

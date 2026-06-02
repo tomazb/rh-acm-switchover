@@ -60,6 +60,7 @@ from lib.constants import (
     PHASE_FLOW_NAME_SWITCHOVER,
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
+    TOKEN_DURATION_DEFAULT,
 )
 from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
 from lib.gitops_detector import GitOpsCollector
@@ -272,8 +273,8 @@ Examples:
     )
     setup_group.add_argument(
         "--token-duration",
-        default="24h",
-        help="Token validity duration for generated kubeconfigs (default: 24h)",
+        default=TOKEN_DURATION_DEFAULT,
+        help=f"Token validity duration for generated kubeconfigs (default: {TOKEN_DURATION_DEFAULT})",
     )
     setup_group.add_argument(
         "--output-dir",

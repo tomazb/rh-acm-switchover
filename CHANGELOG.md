@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed post-remediation klusterlet rechecks so Python and collection workflows wait for hub kubeconfig secret convergence before failing persistent wrong-hub results.
 - Replaced one-shot Thanos compactor scale-down checks with bounded polling, re-raised post-activation programming errors, and avoided global kubeconfig fallback/config mutation in Python client setup.
 - Fixed collection parity gaps for activation resume, passive Restore fallback, primary prep Observability gating, RBAC observability permission skipping, and validate-mode checkpoint preflight execution.
-- Hardened generated kubeconfig writes so Bash RBAC setup and merged kubeconfig generation create credential output parents with owner-only permissions and write token-bearing files under `umask 077`.
+- Hardened generated `kubeconfig` writes for Bash RBAC setup and merged `kubeconfig` generation. Output parent directories are now created with owner-only permissions, and token-bearing files are written under `umask 077`.
 
 ### Removed
 

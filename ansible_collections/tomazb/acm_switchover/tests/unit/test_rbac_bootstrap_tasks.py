@@ -1,5 +1,6 @@
 """Static tests for RBAC bootstrap task wiring."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -21,6 +22,8 @@ def test_generate_kubeconfigs_invokes_packaged_script_for_selected_service_accou
         ROLES_DIR / "rbac_bootstrap" / "files" / "scripts" / "generate-sa-kubeconfig.sh"
     ).read_text()
     tasks = _load_tasks("generate_kubeconfigs.yml")
+    defaults = yaml.safe_load(defaults_text)
+    packaged_duration = re.search(r"^\s*DURATION\s*=\s*['\"]?([^'\"\n]+)", packaged_script_text, re.MULTILINE)
 
     assert "role_path" in text
     assert "files/scripts/generate-sa-kubeconfig.sh" in text
@@ -31,10 +34,15 @@ def test_generate_kubeconfigs_invokes_packaged_script_for_selected_service_accou
     assert "--token-duration" in text
     assert "token_duration" in text
     assert "output_dir" in text
-    assert "token_duration: 24h" in defaults_text
-    assert "default('24h')" in text
-    assert 'DURATION="24h"' in packaged_script_text
+    assert defaults["acm_switchover_rbac_bootstrap"]["token_duration"] == "24h"
+    assert packaged_duration
+    assert packaged_duration.group(1) == "24h"
     assert "default: 24h" in packaged_script_text
+
+    command_task = next(task for task in tasks if task.get("ansible.builtin.command"))
+    argv = command_task["ansible.builtin.command"]["argv"]
+    token_duration_arg = argv[argv.index("--token-duration") + 1]
+    assert token_duration_arg == "{{ acm_switchover_rbac_bootstrap.token_duration | default('24h', true) }}"
 
     copy_tasks = [task for task in tasks if task.get("ansible.builtin.copy")]
     assert copy_tasks, "generated kubeconfig stdout must be written to a durable file"
