@@ -2,7 +2,7 @@
 # Based on Red Hat Universal Base Image 9
 
 # Stage 1: Build stage with full tooling
-FROM registry.access.redhat.com/ubi9/python-312:latest AS builder
+FROM registry.access.redhat.com/ubi9/python-312@sha256:52d1ffcda3b9552934f947b7d41fb0cb66973bdc0d7e91814facadc126f68663 AS builder
 
 USER root
 
@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Stage 2: Runtime stage with minimal footprint
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:ae09ecc3d754bc1726cbda3e2599cc7839e09fe1cc547ce173cf669b645be3cc
 
 LABEL name="acm-switchover" \
     vendor="Red Hat" \
@@ -31,10 +31,14 @@ LABEL name="acm-switchover" \
       io.k8s.display-name="ACM Switchover" \
       io.openshift.tags="acm,openshift,kubernetes,backup,disaster-recovery"
 
-# Define versions
-ARG OC_VERSION=4.14
+# Define versions and verified artifact checksums
+ARG OC_VERSION=4.21
 ARG JQ_VERSION=1.7.1
 ARG PYTHON_VERSION=3.12
+ARG JQ_LINUX_AMD64_SHA256=5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5
+ARG JQ_LINUX_ARM64_SHA256=4dd2d8a0661df0b22f1bb9a1f9830f06b6f3b8f7d91211a1ef5d7c4f06a8b4a5
+ARG OPENSHIFT_CLIENT_LINUX_AMD64_SHA256=9440dc8ce8c1305b450c2aa8188a6a5fda69f4dd52d69c761715cd12e1aefdf8
+ARG OPENSHIFT_CLIENT_LINUX_ARM64_SHA256=dd09d32e1b6a53466934c58360c8044212706aeaa04b1f827f284bac0ceb8a64
 
 USER root
 
@@ -50,21 +54,47 @@ RUN microdnf install -y \
     && microdnf clean all
 
 # Install jq for JSON processing
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then JQ_ARCH="amd64"; \
-    elif [ "$ARCH" = "aarch64" ]; then JQ_ARCH="arm64"; \
-    else JQ_ARCH="$ARCH"; fi && \
-    curl -sL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${JQ_ARCH}" -o /usr/local/bin/jq && \
-    chmod +x /usr/local/bin/jq
+RUN set -eu; \
+    ARCH=$(uname -m); \
+    if [ "$ARCH" = "x86_64" ]; then \
+        JQ_ARCH="amd64"; \
+        JQ_SHA256="${JQ_LINUX_AMD64_SHA256}"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        JQ_ARCH="arm64"; \
+        JQ_SHA256="${JQ_LINUX_ARM64_SHA256}"; \
+    else \
+        echo "Unsupported architecture: ${ARCH}" >&2; \
+        exit 1; \
+    fi; \
+    curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${JQ_ARCH}" \
+        -o "/tmp/jq-linux-${JQ_ARCH}"; \
+    printf '%s  %s\n' "${JQ_SHA256}" "/tmp/jq-linux-${JQ_ARCH}" > "/tmp/jq-linux-${JQ_ARCH}.sha256"; \
+    sha256sum -c "/tmp/jq-linux-${JQ_ARCH}.sha256"; \
+    cp "/tmp/jq-linux-${JQ_ARCH}" /usr/local/bin/jq; \
+    chmod 0755 /usr/local/bin/jq; \
+    rm -f "/tmp/jq-linux-${JQ_ARCH}" "/tmp/jq-linux-${JQ_ARCH}.sha256"
 
 # Install OpenShift CLI (oc)
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then OC_ARCH="amd64"; \
-    elif [ "$ARCH" = "aarch64" ]; then OC_ARCH="arm64"; \
-    else OC_ARCH="$ARCH"; fi && \
-    curl -sL "https://mirror.openshift.com/pub/openshift-v4/${OC_ARCH}/clients/ocp/stable-${OC_VERSION}/openshift-client-linux.tar.gz" | \
-    tar xvz -C /usr/local/bin oc kubectl && \
-    chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
+RUN set -eu; \
+    ARCH=$(uname -m); \
+    if [ "$ARCH" = "x86_64" ]; then \
+        OC_ARCH="amd64"; \
+        OC_SHA256="${OPENSHIFT_CLIENT_LINUX_AMD64_SHA256}"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        OC_ARCH="arm64"; \
+        OC_SHA256="${OPENSHIFT_CLIENT_LINUX_ARM64_SHA256}"; \
+    else \
+        echo "Unsupported architecture: ${ARCH}" >&2; \
+        exit 1; \
+    fi; \
+    curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/${OC_ARCH}/clients/ocp/stable-${OC_VERSION}/openshift-client-linux.tar.gz" \
+        -o /tmp/openshift-client-linux.tar.gz; \
+    printf '%s  %s\n' "${OC_SHA256}" "/tmp/openshift-client-linux.tar.gz" \
+        > /tmp/openshift-client-linux.tar.gz.sha256; \
+    sha256sum -c /tmp/openshift-client-linux.tar.gz.sha256; \
+    tar -xzf /tmp/openshift-client-linux.tar.gz -C /usr/local/bin oc kubectl; \
+    chmod 0755 /usr/local/bin/oc /usr/local/bin/kubectl; \
+    rm -f /tmp/openshift-client-linux.tar.gz /tmp/openshift-client-linux.tar.gz.sha256
 
 # Copy Python packages from builder
 COPY --from=builder /opt/app-root/lib/python3.12/site-packages /usr/lib/python3.12/site-packages
