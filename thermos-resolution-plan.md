@@ -59,7 +59,7 @@
 | F31 | confirmed hardening | PR 18 | Safe path validation and report artifact sanitization remain duplicated across Python and collection helpers. These use different path bases and have incomplete adversarial parity coverage. |
 | F32 | confirmed hardening | PR 15 | `scripts/setup-rbac.sh` creates token-bearing kubeconfigs with the process umask and only narrows permissions afterward. |
 | F33 | confirmed hardening | PR 16 | `container-bootstrap/Containerfile` uses mutable base image tags and downloads `jq`/OpenShift client binaries without checksum verification. |
-| F34 | confirmed robustness | PR 17 | Collection klusterlet remediation deletes `bootstrap-hub-kubeconfig` before recreating it. This leaves a failure window with no bootstrap secret. |
+| F34 | confirmed robustness | PR 17 | Python and collection klusterlet remediation delete `bootstrap-hub-kubeconfig` before recreating it. PR 17 preserves parity by switching both implementations and managed-cluster RBAC/docs from delete-then-create to patch/create. |
 | F35 | needs operator decision | PR 19 | Helm `customValidatorRules` can add mutating verbs to the validator `ClusterRole`. Decide whether to enforce read-only verbs or explicitly document this as an advanced escape hatch. |
 | F36 | confirmed hardening | PR 15 | Service-account token generation defaults to `48h`; reduce the default or require explicit opt-in for longer-lived tokens. |
 
@@ -82,8 +82,8 @@
 | 13 | merged | `docs/thermos-round6-tracking` | `.worktrees/thermos-13-round6-tracking` | Round 6 tracker + PR 12 status drift + F30 verification | https://github.com/tomazb/rh-acm-switchover/pull/85 | `python -m pytest tests/test_documentation_guardrails.py -q` passed; `git diff --check` passed; CI-scope `black --check --line-length 120 --diff acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests` passed during validation; Gemini and CodeRabbit review threads addressed and resolved; merged 2026-06-01 |
 | 14 | merged | `fix/thermos-version-parsing-parity` | `.worktrees/thermos-14-version-parity` | F29 | https://github.com/tomazb/rh-acm-switchover/pull/86 | Red/green version parsing tests passed; review threads addressed and resolved; `python -m pytest tests/test_utils.py tests/test_primary_prep.py tests/test_backup_schedule.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_backup_schedule.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; `python -m pytest tests/test_documentation_guardrails.py -q` passed; touched-file `black --check --line-length 120` and `isort --check-only --profile black --line-length 120` passed; `git diff --check` passed; final `./run_tests.sh` passed; merged 2026-06-01 |
 | 15 | merged | `fix/thermos-kubeconfig-token-hardening` | `.worktrees/thermos-15-token-hardening` | F32, F36 | https://github.com/tomazb/rh-acm-switchover/pull/87 | Red/green token default and kubeconfig write hardening tests passed; targeted Python/script, collection, and docs guardrail suites passed; `git diff --check` and `bash -n` passed; final `./run_tests.sh` passed; merged 2026-06-02. |
-| 16 | ready_for_review | `fix/thermos-container-supply-chain` | `.worktrees/thermos-16-container-supply-chain` | F33 | https://github.com/tomazb/rh-acm-switchover/pull/88 | Red/green container supply-chain guardrails passed. Targeted pytest, touched-file `black --check`, and `git diff --check` passed. Podman build passed and runtime check reported `oc` 4.21.16, `jq` 1.7.1, and Python 3.12.13. Final `./run_tests.sh` passed. |
-| 17 | planned | `fix/thermos-klusterlet-secret-ordering` | `.worktrees/thermos-17-klusterlet-secret-ordering` | F34 | _TBD_ | Replace delete-then-create klusterlet bootstrap secret remediation with apply/replace or create-before-delete semantics. |
+| 16 | merged | `fix/thermos-container-supply-chain` | `.worktrees/thermos-16-container-supply-chain` | F33 | https://github.com/tomazb/rh-acm-switchover/pull/88 | Red/green container supply-chain guardrails passed. Targeted pytest, touched-file `black --check`, and `git diff --check` passed. Podman build passed and runtime check reported `oc` 4.21.16, `jq` 1.7.1, and Python 3.12.13. Final `./run_tests.sh` passed. Merged 2026-06-02. |
+| 17 | ready_for_review | `fix/thermos-klusterlet-secret-ordering` | `.worktrees/thermos-17-klusterlet-secret-ordering` | F34 | https://github.com/tomazb/rh-acm-switchover/pull/89 | Red/green klusterlet secret ordering tests passed; targeted Python, collection, RBAC parity/static, docs guardrail suites passed; `git diff --check` passed; final `./run_tests.sh` passed. |
 | 18 | planned | `fix/thermos-safe-path-consolidation` | `.worktrees/thermos-18-safe-path-consolidation` | F31 | _TBD_ | Consolidate safe path validation and add adversarial Python/collection parity coverage. |
 | 19 | planned | `fix/thermos-helm-validator-guardrail` | `.worktrees/thermos-19-helm-validator-guardrail` | F35 | _TBD_ | Implement the operator-approved Helm validator custom-rule policy and corresponding tests/docs. |
 
@@ -394,17 +394,22 @@
 
 **Scope**
 - Fix F34.
-- Remove the delete-then-create failure window for `bootstrap-hub-kubeconfig` during collection klusterlet remediation.
+- Remove the delete-then-create failure window for `bootstrap-hub-kubeconfig` during Python and collection klusterlet remediation.
 - Preserve current idempotent behavior and failure reporting.
+- Preserve Python/collection parity by changing both implementations and managed-cluster RBAC/docs from `delete` to `patch`.
 
 **Likely Files**
+- `modules/post_activation.py`
 - `ansible_collections/tomazb/acm_switchover/plugins/module_utils/klusterlet.py`
+- RBAC validators, managed-cluster RBAC manifests/policies, and RBAC docs.
+- Python post-activation, collection klusterlet, RBAC parity, and documentation guardrail tests.
 - `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py`
 
 **Acceptance Criteria**
 - A failed replacement attempt does not leave a previously existing bootstrap secret deleted.
 - Existing 404/409 handling remains intentional and tested.
 - Remediation still reports accurate `changed`, `failed_clusters`, and per-step status.
+- Managed-cluster RBAC requires `secrets` `patch`, not `delete`, with Python and collection validators aligned.
 - Collection klusterlet module tests pass.
 
 ### PR 18: Safe Path Consolidation

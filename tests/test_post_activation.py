@@ -457,7 +457,7 @@ class TestPostActivationVerification:
         mock_wait.side_effect = capture_wait
 
         with pytest.raises(SwitchoverError, match="bootstrap-hub-kubeconfig secret not visible"):
-            post_verify_no_obs._wait_for_secret_visibility(mock_v1, "cluster-a")
+            post_verify_no_obs._wait_for_secret_visibility(mock_v1, "cluster-a", MANAGED_CLUSTER_AGENT_NAMESPACE)
 
         mock_wait.assert_called_once()
 
@@ -863,6 +863,204 @@ data:
         assert result is True
         verify._build_managed_cluster_clients.assert_called_once_with("test-context")
         mock_secondary_client.get_secret.assert_called_once_with(namespace="test-cluster", name="test-cluster-import")
+        mock_v1.delete_namespaced_secret.assert_not_called()
+        mock_v1.patch_namespaced_secret.assert_called_once()
+
+    def test_force_klusterlet_reconnect_patches_existing_bootstrap_secret_without_delete(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Existing bootstrap secret updates must not delete the old secret first."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=True):
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is True
+        mock_v1.delete_namespaced_secret.assert_not_called()
+        mock_v1.create_namespaced_secret.assert_not_called()
+        mock_v1.patch_namespaced_secret.assert_called_once()
+        mock_apps_v1.patch_namespaced_deployment.assert_called_once()
+
+    def test_force_klusterlet_reconnect_failed_patch_keeps_secret_and_skips_restart(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Failed patch must not delete an existing bootstrap secret or restart klusterlet."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        mock_v1.patch_namespaced_secret.side_effect = ApiException(status=403, reason="Forbidden")
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is False
+        mock_v1.delete_namespaced_secret.assert_not_called()
+        mock_v1.create_namespaced_secret.assert_not_called()
+        mock_apps_v1.patch_namespaced_deployment.assert_not_called()
+
+    def test_force_klusterlet_reconnect_creates_absent_bootstrap_secret_without_delete(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Absent bootstrap secret should be created without a delete attempt."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        mock_v1.patch_namespaced_secret.side_effect = ApiException(status=404, reason="Not Found")
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=True):
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is True
+        mock_v1.delete_namespaced_secret.assert_not_called()
+        mock_v1.create_namespaced_secret.assert_called_once()
+        mock_apps_v1.patch_namespaced_deployment.assert_called_once()
+
+    def test_force_klusterlet_reconnect_retries_patch_after_create_conflict(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """A create 409 race should retry patching the now-existing bootstrap secret."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: open-cluster-management-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        mock_v1.patch_namespaced_secret.side_effect = [
+            ApiException(status=404, reason="Not Found"),
+            None,
+        ]
+        mock_v1.create_namespaced_secret.side_effect = ApiException(status=409, reason="Already Exists")
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=True):
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is True
+        mock_v1.delete_namespaced_secret.assert_not_called()
+        assert mock_v1.patch_namespaced_secret.call_count == 2
+        mock_v1.create_namespaced_secret.assert_called_once()
+        mock_apps_v1.patch_namespaced_deployment.assert_called_once()
+
+    def test_force_klusterlet_reconnect_uses_manifest_namespace_for_wait_and_restart(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Secret visibility and restart should use the bootstrap secret manifest namespace."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-hub-kubeconfig
+  namespace: custom-agent
+data:
+  kubeconfig: dGVzdAo=
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is True
+        mock_v1.patch_namespaced_secret.assert_called_once()
+        assert mock_v1.patch_namespaced_secret.call_args.kwargs["namespace"] == "custom-agent"
+        mock_v1.read_namespaced_secret.assert_called_once()
+        assert mock_v1.read_namespaced_secret.call_args.kwargs["namespace"] == "custom-agent"
+        mock_apps_v1.patch_namespaced_deployment.assert_called_once()
+        assert mock_apps_v1.patch_namespaced_deployment.call_args.kwargs["namespace"] == "custom-agent"
+
+    def test_force_klusterlet_reconnect_fails_when_import_manifest_missing_bootstrap_secret(
+        self, mock_secondary_client, mock_state_manager
+    ):
+        """Reconnect must fail if import.yaml has no bootstrap-hub-kubeconfig Secret."""
+        verify = self._make_verify(mock_secondary_client, mock_state_manager)
+
+        import_docs = """---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unrelated
+  namespace: open-cluster-management-agent
+data:
+  key: value
+"""
+        mock_secondary_client.get_secret.return_value = {
+            "data": {"import.yaml": base64.b64encode(import_docs.encode()).decode()}
+        }
+
+        mock_v1 = Mock()
+        mock_apps_v1 = Mock()
+        verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
+
+        with patch("modules.post_activation.wait_for_condition", return_value=True):
+            result = verify._force_klusterlet_reconnect("test-cluster", "test-context")
+
+        assert result is False
+        mock_v1.patch_namespaced_secret.assert_not_called()
+        mock_v1.create_namespaced_secret.assert_not_called()
+        mock_apps_v1.patch_namespaced_deployment.assert_not_called()
 
     def test_force_klusterlet_reconnect_no_secret(self, mock_secondary_client, mock_state_manager):
         """Test klusterlet reconnect when import secret not found."""
@@ -894,6 +1092,7 @@ data:
 
         mock_v1 = Mock()
         mock_apps_v1 = Mock()
+        mock_v1.patch_namespaced_secret.side_effect = ApiException(status=404, reason="Not Found")
         mock_v1.create_namespaced_secret.side_effect = ApiException(status=403, reason="Forbidden")
         verify._build_managed_cluster_clients = Mock(return_value=(mock_v1, mock_apps_v1))
 

@@ -173,7 +173,7 @@ class RBACValidator:
     # These are only needed when connecting to managed clusters for klusterlet operations
     OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS = {
         MANAGED_CLUSTER_AGENT_NAMESPACE: [
-            ("", "secrets", ["get", "create", "delete"]),  # For klusterlet reconnection
+            ("", "secrets", ["get", "create", "patch"]),  # For klusterlet reconnection
             ("apps", "deployments", ["get", "patch"]),  # For klusterlet restart
         ],
     }

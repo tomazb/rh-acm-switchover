@@ -44,11 +44,16 @@ class FakeCoreClient:
         self,
         secrets: dict[tuple[str, str], dict] | None = None,
         fail_create: bool = False,
+        fail_patch_secret: bool = False,
+        create_conflict: bool = False,
     ):
         self.secrets = secrets or {}
         self.fail_create = fail_create
+        self.fail_patch_secret = fail_patch_secret
+        self.create_conflict = create_conflict
         self.deleted: list[tuple[str, str]] = []
         self.created: list[tuple[str, str, dict]] = []
+        self.patched: list[tuple[str, str, dict]] = []
         self.request_timeouts: list[int | None] = []
 
     def read_namespaced_secret(self, name: str, namespace: str, **kwargs):
@@ -69,8 +74,19 @@ class FakeCoreClient:
         self.request_timeouts.append(kwargs.get("_request_timeout"))
         if self.fail_create:
             raise FakeApiError(500, "create failed")
+        if self.create_conflict:
+            raise FakeApiError(409, "Already Exists")
         self.created.append((namespace, body["metadata"]["name"], body))
         self.secrets[(namespace, body["metadata"]["name"])] = body
+
+    def patch_namespaced_secret(self, name: str, namespace: str, body: dict, **kwargs):
+        self.request_timeouts.append(kwargs.get("_request_timeout"))
+        if self.fail_patch_secret:
+            raise FakeApiError(500, "patch failed")
+        if (namespace, name) not in self.secrets:
+            raise FakeApiError(404, "Not Found")
+        self.patched.append((namespace, name, body))
+        self.secrets[(namespace, name)] = body
 
 
 class FakeAppsClient:
@@ -360,7 +376,7 @@ def test_remediation_reports_missing_import_secret_as_best_effort_failure():
     assert "pending" not in result["results"][0]["steps"].values()
 
 
-def test_remediation_deletes_reapplies_and_restarts_klusterlet_in_default_namespace():
+def test_remediation_patches_and_restarts_klusterlet_in_default_namespace():
     secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
     managed = FakeCoreClient(
         {
@@ -393,18 +409,156 @@ def test_remediation_deletes_reapplies_and_restarts_klusterlet_in_default_namesp
     assert result["changed"] is True
     assert result["failed_clusters"] == []
     assert result["results"][0]["status"] == "remediated"
-    assert (
-        MANAGED_CLUSTER_AGENT_NAMESPACE,
-        BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
-    ) in managed.deleted
-    assert managed.created[0][0:2] == (
+    assert managed.deleted == []
+    assert managed.created == []
+    assert managed.patched[0][0:2] == (
         MANAGED_CLUSTER_AGENT_NAMESPACE,
         BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
     )
     assert apps.patched[0][0:2] == (MANAGED_CLUSTER_AGENT_NAMESPACE, "klusterlet")
 
 
-def test_remediation_deletes_bootstrap_secret_from_manifest_namespace():
+def test_remediation_patches_existing_bootstrap_secret_without_delete():
+    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    old_secret = _hub_secret("https://old.example:6443")
+    managed = FakeCoreClient({(MANAGED_CLUSTER_AGENT_NAMESPACE, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): old_secret})
+    apps = FakeAppsClient()
+
+    def core_client_factory(kubeconfig: str, context: str | None = None):
+        return secondary if kubeconfig == "hub" else managed
+
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
+    result = remediate_klusterlets(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        pending_clusters=["cluster-a"],
+        workers=1,
+        core_client_factory=core_client_factory,
+        apps_client_factory=apps_client_factory,
+    )
+
+    assert result["failed_clusters"] == []
+    assert managed.deleted == []
+    assert managed.created == []
+    assert managed.patched[0][0:2] == (
+        MANAGED_CLUSTER_AGENT_NAMESPACE,
+        BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+    )
+    assert result["results"][0]["steps"]["bootstrap_secret_deleted"] == "not_required"
+    assert result["results"][0]["steps"]["bootstrap_secret_applied"] == "patched"
+
+
+def test_remediation_failed_patch_keeps_existing_bootstrap_secret_and_skips_restart():
+    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    old_secret = _hub_secret("https://old.example:6443")
+    managed = FakeCoreClient(
+        {(MANAGED_CLUSTER_AGENT_NAMESPACE, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME): old_secret},
+        fail_patch_secret=True,
+    )
+    apps = FakeAppsClient()
+
+    def core_client_factory(kubeconfig: str, context: str | None = None):
+        return secondary if kubeconfig == "hub" else managed
+
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
+    result = remediate_klusterlets(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        pending_clusters=["cluster-a"],
+        workers=1,
+        core_client_factory=core_client_factory,
+        apps_client_factory=apps_client_factory,
+    )
+
+    assert result["failed_clusters"] == ["cluster-a"]
+    assert managed.deleted == []
+    assert managed.created == []
+    assert managed.secrets[(MANAGED_CLUSTER_AGENT_NAMESPACE, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME)] is old_secret
+    assert apps.patched == []
+    assert result["results"][0]["steps"]["bootstrap_secret_applied"] == "failed"
+
+
+def test_remediation_creates_absent_bootstrap_secret_without_delete_attempt():
+    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    managed = FakeCoreClient()
+    apps = FakeAppsClient()
+
+    def core_client_factory(kubeconfig: str, context: str | None = None):
+        return secondary if kubeconfig == "hub" else managed
+
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
+    result = remediate_klusterlets(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        pending_clusters=["cluster-a"],
+        workers=1,
+        core_client_factory=core_client_factory,
+        apps_client_factory=apps_client_factory,
+    )
+
+    assert result["failed_clusters"] == []
+    assert managed.deleted == []
+    assert managed.patched == []
+    assert managed.created[0][0:2] == (
+        MANAGED_CLUSTER_AGENT_NAMESPACE,
+        BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+    )
+    assert result["results"][0]["steps"]["bootstrap_secret_applied"] == "created"
+
+
+def test_remediation_retries_patch_after_create_conflict():
+    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    managed = FakeCoreClient(create_conflict=True)
+    apps = FakeAppsClient()
+    patch_attempts = 0
+
+    def patch_after_conflict(name: str, namespace: str, body: dict, **kwargs):
+        nonlocal patch_attempts
+        managed.request_timeouts.append(kwargs.get("_request_timeout"))
+        patch_attempts += 1
+        if patch_attempts == 1:
+            raise FakeApiError(404, "Not Found")
+        if patch_attempts > 2:
+            pytest.fail("patch should only be retried once after create conflict")
+        managed.patched.append((namespace, name, body))
+        managed.secrets[(namespace, name)] = body
+        return body
+
+    managed.patch_namespaced_secret = patch_after_conflict  # type: ignore[method-assign]
+
+    def core_client_factory(kubeconfig: str, context: str | None = None):
+        return secondary if kubeconfig == "hub" else managed
+
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
+    result = remediate_klusterlets(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        pending_clusters=["cluster-a"],
+        workers=1,
+        core_client_factory=core_client_factory,
+        apps_client_factory=apps_client_factory,
+    )
+
+    assert result["failed_clusters"] == []
+    assert managed.deleted == []
+    assert managed.created == []
+    assert patch_attempts == 2
+    assert managed.patched[0][0:2] == (
+        MANAGED_CLUSTER_AGENT_NAMESPACE,
+        BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+    )
+    assert result["results"][0]["steps"]["bootstrap_secret_applied"] == "patched"
+
+
+def test_remediation_patches_bootstrap_secret_from_manifest_namespace():
     custom_namespace = "custom-agent"
     import_secret = _import_secret("https://new.example:6443")
     import_yaml = base64.b64decode(import_secret["data"]["import.yaml"]).decode("utf-8")
@@ -433,8 +587,9 @@ def test_remediation_deletes_bootstrap_secret_from_manifest_namespace():
     )
 
     assert result["failed_clusters"] == []
-    assert (custom_namespace, BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME) in managed.deleted
-    assert managed.created[0][0:2] == (
+    assert managed.deleted == []
+    assert managed.created == []
+    assert managed.patched[0][0:2] == (
         custom_namespace,
         BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
     )

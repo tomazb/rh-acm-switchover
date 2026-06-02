@@ -1002,9 +1002,8 @@ class PostActivationVerification:
         When both hubs have the same cluster imported (due to passive sync restoring
         ManagedCluster resources), the klusterlet may remain connected to the old hub.
         This method detects such cases and forces the klusterlet to reconnect by:
-        1. Deleting the bootstrap-hub-kubeconfig secret on the managed cluster
-        2. Re-applying the import manifest from the new hub
-        3. Restarting the klusterlet deployment
+        1. Patching or creating the bootstrap-hub-kubeconfig secret on the managed cluster
+        2. Restarting the klusterlet deployment
 
         If we can't connect to a managed cluster (no context available), we log a
         warning but don't fail the switchover. If a wrong-hub klusterlet is
@@ -1060,9 +1059,8 @@ class PostActivationVerification:
         This is needed when both hubs have the same cluster imported (due to passive
         sync) and the klusterlet is still connected to the old hub. The fix involves:
         1. Getting the import secret from the new hub
-        2. Deleting the bootstrap-hub-kubeconfig secret on the managed cluster
-        3. Re-applying the import manifest (which recreates the bootstrap secret)
-        4. Restarting the klusterlet deployment
+        2. Patching or creating the bootstrap-hub-kubeconfig secret on the managed cluster
+        3. Restarting the klusterlet deployment
 
         Note: This method intentionally uses raw kubernetes client APIs instead of
         KubeClient because it connects to managed clusters (not the hub) using
@@ -1088,15 +1086,12 @@ class PostActivationVerification:
             # ApiClient so no further global kubeconfig mutation is needed.
             v1, apps_v1 = self._build_managed_cluster_clients(context_name)
 
-            # Step 2: Connect to the managed cluster and delete the bootstrap secret
-            self._delete_bootstrap_secret(v1, cluster_name)
+            # Step 2: Apply the import manifest to update the bootstrap secret
+            bootstrap_namespace = self._apply_import_manifest(v1, import_yaml, cluster_name)
 
-            # Step 3: Apply the import manifest to recreate the bootstrap secret
-            self._apply_import_manifest(v1, import_yaml, cluster_name)
-
-            # Step 4: Wait for secret to be visible, then restart the klusterlet deployment
-            self._wait_for_secret_visibility(v1, cluster_name)
-            self._restart_klusterlet(apps_v1, cluster_name)
+            # Step 3: Wait for secret to be visible, then restart the klusterlet deployment
+            self._wait_for_secret_visibility(v1, cluster_name, bootstrap_namespace)
+            self._restart_klusterlet(apps_v1, cluster_name, bootstrap_namespace)
 
             logger.info("Force-reconnected klusterlet for %s", cluster_name)
             return True
@@ -1147,26 +1142,8 @@ class PostActivationVerification:
 
         return base64.b64decode(import_yaml_b64).decode("utf-8")
 
-    def _delete_bootstrap_secret(self, v1: client.CoreV1Api, cluster_name: str) -> None:
-        """Delete the bootstrap-hub-kubeconfig secret on the managed cluster.
-
-        Args:
-            v1: CoreV1Api bound to the managed cluster's context
-            cluster_name: Name of the ManagedCluster
-        """
-        try:
-            v1.delete_namespaced_secret(
-                name="bootstrap-hub-kubeconfig",
-                namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
-                _request_timeout=DELETE_REQUEST_TIMEOUT,
-            )
-            logger.debug("Deleted bootstrap-hub-kubeconfig secret on %s", cluster_name)
-        except ApiException as e:
-            if e.status != 404:
-                logger.warning("Failed to delete bootstrap secret on %s: %s", cluster_name, e)
-
-    def _apply_import_manifest(self, v1: client.CoreV1Api, import_yaml: str, cluster_name: str) -> None:
-        """Apply the import manifest to recreate the bootstrap secret.
+    def _apply_import_manifest(self, v1: client.CoreV1Api, import_yaml: str, cluster_name: str) -> str:
+        """Apply the import manifest to patch or create the bootstrap secret.
 
         Args:
             v1: CoreV1Api bound to the managed cluster's context
@@ -1176,48 +1153,83 @@ class PostActivationVerification:
 
         # Parse the import YAML and apply each resource
         import_docs = list(yaml.safe_load_all(import_yaml))
+        bootstrap_namespace = ""
 
         for doc in import_docs:
             if not doc:
                 continue
             kind = doc.get("kind", "")
             name = doc.get("metadata", {}).get("name", "")
-            namespace = doc.get("metadata", {}).get("namespace")
+            namespace = doc.get("metadata", {}).get("namespace") or MANAGED_CLUSTER_AGENT_NAMESPACE
 
             try:
                 if kind == "Secret" and name == "bootstrap-hub-kubeconfig":
-                    # This is the key secret we need to recreate
-                    v1.create_namespaced_secret(
-                        namespace=namespace,
-                        body=doc,
-                        _request_timeout=DELETE_REQUEST_TIMEOUT,
-                    )
-                    logger.debug(
-                        "Created bootstrap-hub-kubeconfig secret on %s",
-                        cluster_name,
-                    )
+                    bootstrap_namespace = namespace
+                    self._patch_or_create_bootstrap_secret(v1, namespace, doc, cluster_name)
             except ApiException as e:
-                if e.status == 409:  # Already exists
-                    pass
-                else:
-                    # Log only status/reason to avoid leaking sensitive data from exception body
-                    logger.debug(
-                        "Error applying managed-cluster import resource: status=%s reason=%s",
-                        getattr(e, "status", None),
-                        getattr(e, "reason", None),
-                    )
-                    raise SwitchoverError(
-                        "Failed to create bootstrap-hub-kubeconfig secret on "
-                        f"{cluster_name}: status={getattr(e, 'status', None)} "
-                        f"reason={getattr(e, 'reason', None)}"
-                    ) from e
+                # Log only status/reason to avoid leaking sensitive data from exception body
+                logger.debug(
+                    "Error applying managed-cluster import resource: status=%s reason=%s",
+                    getattr(e, "status", None),
+                    getattr(e, "reason", None),
+                )
+                raise SwitchoverError(
+                    "Failed to apply bootstrap-hub-kubeconfig secret on "
+                    f"{cluster_name}: status={getattr(e, 'status', None)} "
+                    f"reason={getattr(e, 'reason', None)}"
+                ) from e
 
-    def _wait_for_secret_visibility(self, v1: client.CoreV1Api, cluster_name: str) -> None:
+        if not bootstrap_namespace:
+            raise SwitchoverError(f"Import manifest for {cluster_name} has no bootstrap-hub-kubeconfig secret")
+
+        return bootstrap_namespace
+
+    def _patch_or_create_bootstrap_secret(
+        self,
+        v1: client.CoreV1Api,
+        namespace: str,
+        body: Dict,
+        cluster_name: str,
+    ) -> None:
+        """Patch an existing bootstrap secret, creating it when absent."""
+        try:
+            v1.patch_namespaced_secret(
+                name="bootstrap-hub-kubeconfig",
+                namespace=namespace,
+                body=body,
+                _request_timeout=DELETE_REQUEST_TIMEOUT,
+            )
+            logger.debug("Patched bootstrap-hub-kubeconfig secret on %s", cluster_name)
+            return
+        except ApiException as e:
+            if e.status != 404:
+                raise
+
+        try:
+            v1.create_namespaced_secret(
+                namespace=namespace,
+                body=body,
+                _request_timeout=DELETE_REQUEST_TIMEOUT,
+            )
+            logger.debug("Created bootstrap-hub-kubeconfig secret on %s", cluster_name)
+        except ApiException as e:
+            if e.status != 409:
+                raise
+            v1.patch_namespaced_secret(
+                name="bootstrap-hub-kubeconfig",
+                namespace=namespace,
+                body=body,
+                _request_timeout=DELETE_REQUEST_TIMEOUT,
+            )
+            logger.debug("Patched bootstrap-hub-kubeconfig secret on %s after create conflict", cluster_name)
+
+    def _wait_for_secret_visibility(self, v1: client.CoreV1Api, cluster_name: str, namespace: str) -> None:
         """Wait for the bootstrap-hub-kubeconfig secret to be visible.
 
         Args:
             v1: CoreV1Api bound to the managed cluster's context
             cluster_name: Name of the ManagedCluster
+            namespace: Namespace containing the bootstrap-hub-kubeconfig secret
         """
 
         def secret_exists() -> WaitConditionResult:
@@ -1225,7 +1237,7 @@ class PostActivationVerification:
             try:
                 v1.read_namespaced_secret(
                     name="bootstrap-hub-kubeconfig",
-                    namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                    namespace=namespace,
                     _request_timeout=DELETE_REQUEST_TIMEOUT,
                 )
                 return WaitConditionResult.complete("secret exists")
@@ -1251,12 +1263,13 @@ class PostActivationVerification:
                 "bootstrap-hub-kubeconfig secret not visible on " f"{cluster_name} after {SECRET_VISIBILITY_TIMEOUT}s"
             )
 
-    def _restart_klusterlet(self, apps_v1: client.AppsV1Api, cluster_name: str) -> None:
+    def _restart_klusterlet(self, apps_v1: client.AppsV1Api, cluster_name: str, namespace: str) -> None:
         """Restart the klusterlet deployment on the managed cluster.
 
         Args:
             apps_v1: AppsV1Api bound to the managed cluster's context
             cluster_name: Name of the ManagedCluster
+            namespace: Namespace containing the klusterlet deployment
         """
         import time as time_module
 
@@ -1269,7 +1282,7 @@ class PostActivationVerification:
             }
             apps_v1.patch_namespaced_deployment(
                 name="klusterlet",
-                namespace=MANAGED_CLUSTER_AGENT_NAMESPACE,
+                namespace=namespace,
                 body=patch,
                 _request_timeout=DELETE_REQUEST_TIMEOUT,
             )

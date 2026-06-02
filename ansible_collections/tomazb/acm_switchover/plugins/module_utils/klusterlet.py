@@ -27,9 +27,9 @@ from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants im
 class CoreV1Client(Protocol):
     def read_namespaced_secret(self, name: str, namespace: str, **kwargs) -> dict | object: ...
 
-    def delete_namespaced_secret(self, name: str, namespace: str, **kwargs) -> object: ...
-
     def create_namespaced_secret(self, namespace: str, body: dict, **kwargs) -> object: ...
+
+    def patch_namespaced_secret(self, name: str, namespace: str, body: dict, **kwargs) -> object: ...
 
 
 class AppsV1Client(Protocol):
@@ -480,38 +480,55 @@ def remediate_one_cluster(
         managed_core = core_client_factory(kubeconfig, context)
         apps_client = apps_client_factory(kubeconfig, context)
         changed = False
+        steps["bootstrap_secret_deleted"] = "not_required"
         try:
-            managed_core.delete_namespaced_secret(
+            managed_core.patch_namespaced_secret(
                 name=BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
-                namespace=bootstrap_namespace,
-                **request_timeout_kwargs(request_timeout),
-            )
-            steps["bootstrap_secret_deleted"] = "ok"
-            changed = True
-        except Exception as exc:
-            if getattr(exc, "status", None) == 404:
-                steps["bootstrap_secret_deleted"] = "absent"
-            else:
-                steps["bootstrap_secret_deleted"] = "failed"
-                return _result(
-                    cluster_name,
-                    "failed",
-                    _mark_pending_not_run(steps),
-                    reason=error_summary(exc),
-                    changed=changed,
-                )
-
-        try:
-            managed_core.create_namespaced_secret(
                 namespace=bootstrap_namespace,
                 body=bootstrap_doc,
                 **request_timeout_kwargs(request_timeout),
             )
-            steps["bootstrap_secret_applied"] = "ok"
+            steps["bootstrap_secret_applied"] = "patched"
             changed = True
         except Exception as exc:
-            if getattr(exc, "status", None) == 409:
-                steps["bootstrap_secret_applied"] = "exists"
+            if getattr(exc, "status", None) == 404:
+                try:
+                    managed_core.create_namespaced_secret(
+                        namespace=bootstrap_namespace,
+                        body=bootstrap_doc,
+                        **request_timeout_kwargs(request_timeout),
+                    )
+                    steps["bootstrap_secret_applied"] = "created"
+                    changed = True
+                except Exception as create_exc:
+                    if getattr(create_exc, "status", None) == 409:
+                        try:
+                            managed_core.patch_namespaced_secret(
+                                name=BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+                                namespace=bootstrap_namespace,
+                                body=bootstrap_doc,
+                                **request_timeout_kwargs(request_timeout),
+                            )
+                            steps["bootstrap_secret_applied"] = "patched"
+                            changed = True
+                        except Exception as retry_exc:
+                            steps["bootstrap_secret_applied"] = "failed"
+                            return _result(
+                                cluster_name,
+                                "failed",
+                                _mark_pending_not_run(steps),
+                                reason=error_summary(retry_exc),
+                                changed=changed,
+                            )
+                    else:
+                        steps["bootstrap_secret_applied"] = "failed"
+                        return _result(
+                            cluster_name,
+                            "failed",
+                            _mark_pending_not_run(steps),
+                            reason=error_summary(create_exc),
+                            changed=changed,
+                        )
             else:
                 steps["bootstrap_secret_applied"] = "failed"
                 return _result(
@@ -585,7 +602,7 @@ def remediate_klusterlets(
             if (managed_clusters.get(cluster_name) or {}).get("kubeconfig"):
                 steps = {
                     "import_secret_read": "planned",
-                    "bootstrap_secret_deleted": "planned",
+                    "bootstrap_secret_deleted": "not_required",
                     "bootstrap_secret_applied": "planned",
                     "klusterlet_restarted": "planned",
                 }

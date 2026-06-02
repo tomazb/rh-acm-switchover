@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 from kubernetes.client.rest import ApiException
 
-from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
+from lib.constants import ACM_NAMESPACE, MANAGED_CLUSTER_AGENT_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.exceptions import ValidationError
 from lib.rbac_validator import RBACValidator, validate_decommission_permissions, validate_rbac_permissions
 
@@ -445,7 +445,7 @@ class TestRBACValidator:
         validator.client.namespace_exists.return_value = True
 
         def mock_check(api_group, resource, verb, namespace=None):
-            if resource == "secrets" and verb == "create":
+            if resource == "secrets" and verb == "patch":
                 return (False, "Permission denied")
             return (True, "")
 
@@ -456,6 +456,17 @@ class TestRBACValidator:
         assert all_valid is False
         assert len(errors) > 0
         assert any("secrets" in error for error in errors)
+
+    def test_operator_managed_cluster_secret_permissions_patch_without_delete(self):
+        """Operator remediation should patch or create bootstrap secrets, not delete them."""
+        perms = RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS[MANAGED_CLUSTER_AGENT_NAMESPACE]
+        secrets_perm = next((p for p in perms if p[1] == "secrets"), None)
+
+        assert secrets_perm is not None
+        assert "get" in secrets_perm[2]
+        assert "create" in secrets_perm[2]
+        assert "patch" in secrets_perm[2]
+        assert "delete" not in secrets_perm[2]
 
     def test_validate_managed_cluster_permissions_validator_role(self, mock_client):
         """Test validate_managed_cluster_permissions with validator role (read-only)."""
@@ -470,6 +481,7 @@ class TestRBACValidator:
         calls = validator.check_permission.call_args_list
         verbs_checked = [c.args[2] if len(c.args) > 2 else c.kwargs.get("verb") for c in calls]
         assert "create" not in verbs_checked
+        assert "patch" not in verbs_checked
         assert "delete" not in verbs_checked
         assert "get" in verbs_checked
 

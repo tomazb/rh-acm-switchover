@@ -6,7 +6,7 @@
 # The open-cluster-management-agent namespace exists on managed clusters (not hubs)
 # and contains the klusterlet agent that connects the managed cluster to the hub.
 # During switchover, the tool may need to:
-# - Delete and recreate the bootstrap-hub-kubeconfig secret
+# - Patch or create the bootstrap-hub-kubeconfig secret
 # - Restart the klusterlet deployment to pick up new hub connection
 #
 apiVersion: policy.open-cluster-management.io/v1
@@ -131,7 +131,7 @@ spec:
                   # Secrets - for managing bootstrap-hub-kubeconfig during reconnection
                   - apiGroups: [""]
                     resources: ["secrets"]
-                    verbs: ["get", "create", "delete"]
+                    verbs: ["get", "create", "patch"]
                   # Deployments - for restarting klusterlet after config change
                   - apiGroups: ["apps"]
                     resources: ["deployments"]

@@ -10,6 +10,9 @@ from ansible.module_utils import basic
 from ansible.module_utils.basic import AnsibleModule as RealAnsibleModule
 from jinja2 import Environment
 
+from ansible_collections.tomazb.acm_switchover.plugins.module_utils.constants import (
+    MANAGED_CLUSTER_AGENT_NAMESPACE,
+)
 import ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate as acm_rbac_validate_module
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_validate import (
     expand_rbac_requirements,
@@ -774,3 +777,22 @@ def test_operator_role_has_write_on_backupschedules():
     assert "create" in verbs
     assert "patch" in verbs
     assert "delete" in verbs
+
+
+def test_operator_managed_cluster_secret_permissions_patch_without_delete():
+    """Operator remediation should patch or create bootstrap secrets, not delete them."""
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+        scope="managed_cluster",
+    )
+    secret_perms = [p for p in permissions if p[3] == MANAGED_CLUSTER_AGENT_NAMESPACE and p[1] == "secrets"]
+    verbs = {p[2] for p in secret_perms}
+
+    assert "get" in verbs
+    assert "create" in verbs
+    assert "patch" in verbs
+    assert "delete" not in verbs
