@@ -17,10 +17,10 @@ Features:
 """
 
 import logging
-import os
 import re
 from typing import Pattern, Sequence
 
+from lib import path_safety
 from lib.constants import (
     ARGOCD_RESUME_ON_FAILURE_CONFLICTS_RESUME_ONLY_MESSAGE,
     ARGOCD_RESUME_ON_FAILURE_CONFLICTS_VALIDATE_ONLY_MESSAGE,
@@ -35,6 +35,8 @@ from lib.constants import (
 from lib.exceptions import SecurityValidationError, ValidationError
 
 logger = logging.getLogger("acm_switchover")
+
+__all__ = ["InputValidator", "SecurityValidationError", "ValidationError"]
 
 # Kubernetes resource name validation patterns
 # Based on Kubernetes naming conventions: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
@@ -260,67 +262,7 @@ class InputValidator:
             SecurityValidationError: If path contains unsafe characters or patterns
             ValidationError: If path is empty
         """
-        if not path:
-            raise ValidationError(f"{field_name} path cannot be empty")
-
-        # Prevent path traversal by checking for '..' as a path component
-        if ".." in path.split("/"):
-            raise SecurityValidationError(
-                f"SECURITY: Path traversal attempt detected in {field_name} path '{path}'. "
-                f"The '..' sequence is not allowed as a path component."
-            )
-
-        # Prevent command injection and other unsafe patterns
-        unsafe_chars = ["~", "$", "{", "}", "|", "&", ";", "<", ">", "`"]
-        if any(char in path for char in unsafe_chars):
-            raise SecurityValidationError(
-                f"SECURITY: Invalid characters in {field_name} path '{path}'. "
-                f"Path contains unsafe characters that could be used for command injection. "
-                f"Disallowed patterns: {', '.join(unsafe_chars)}."
-            )
-
-        # Allow absolute paths in safe directories or workspace-relative paths
-        # Permit /tmp, /var, and absolute paths under current working directory or $HOME
-        if path.startswith("/"):
-            # Resolve symlinks to prevent bypass via symlink chains
-            if os.path.exists(path):
-                resolved_path = os.path.realpath(path)
-            else:
-                ancestor = path
-                missing_parts: list[str] = []
-                while ancestor and not os.path.exists(ancestor):
-                    ancestor, name = os.path.split(ancestor)
-                    if name:
-                        missing_parts.insert(0, name)
-
-                if not ancestor or not os.path.exists(ancestor):
-                    raise SecurityValidationError(
-                        f"SECURITY: Absolute path '{path}' for {field_name} cannot be resolved against an existing directory."
-                    )
-                if not os.path.isdir(ancestor):
-                    raise SecurityValidationError(
-                        f"SECURITY: Absolute path '{path}' for {field_name} resolves through a non-directory ancestor."
-                    )
-
-                resolved_path = os.path.join(os.path.realpath(ancestor), *missing_parts)
-
-            # B108 is skipped in .bandit because these are allowed path prefixes
-            # used for validation, not hardcoded temp file creation paths.
-            safe_roots = ["/tmp", "/var"]
-            # Allow paths under current working directory
-            cwd = os.getcwd()
-            if cwd:
-                safe_roots.append(os.path.realpath(cwd))
-            # Allow paths under home directory
-            home = os.path.expanduser("~")
-            if home and home != "~":
-                safe_roots.append(os.path.realpath(home))
-
-            if not any(os.path.commonpath([resolved_path, safe_root]) == safe_root for safe_root in safe_roots):
-                raise SecurityValidationError(
-                    f"SECURITY: Absolute path '{path}' is not allowed for {field_name}. "
-                    f"Use relative paths or paths within /tmp, /var, workspace root, or home directory to prevent filesystem escape attacks."
-                )
+        path_safety.validate_safe_filesystem_path(path, field_name)
 
     @staticmethod
     def sanitize_context_identifier(value: str) -> str:

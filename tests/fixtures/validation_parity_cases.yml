@@ -121,3 +121,41 @@
   expected:
     passed: false
     contains: "Path traversal attempt"
+
+- name: valid relative artifact path
+  kind: artifact_path
+  input:
+    path: artifacts/reports/switchover-report.json
+  expected:
+    passed: true
+
+- name: valid tmp artifact path with missing ancestors
+  kind: artifact_path
+  input:
+    path: /tmp/acm-switchover/missing/reports/switchover-report.json
+  expected:
+    passed: true
+
+- name: artifact traversal path rejected
+  kind: artifact_path
+  input:
+    path: artifacts/../outside/report.json
+  expected:
+    passed: false
+    contains: "Path traversal attempt"
+
+- name: artifact disallowed absolute root rejected
+  kind: artifact_path
+  input:
+    path: /etc/acm-switchover/report.json
+  expected:
+    passed: false
+    contains: "allowed"
+
+- name: artifact tmp prefix confusion rejected
+  kind: artifact_path
+  input:
+    path: /tmp-not-allowed/acm-switchover/report.json
+  expected:
+    passed: false
+    contains: "allowed"
