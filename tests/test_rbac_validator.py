@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 from kubernetes.client.rest import ApiException
 
-from lib.constants import ACM_NAMESPACE, OBSERVABILITY_NAMESPACE
+from lib.constants import ACM_NAMESPACE, MANAGED_CLUSTER_AGENT_NAMESPACE, OBSERVABILITY_NAMESPACE
 from lib.exceptions import ValidationError
 from lib.rbac_validator import RBACValidator, validate_decommission_permissions, validate_rbac_permissions
 
@@ -459,7 +459,7 @@ class TestRBACValidator:
 
     def test_operator_managed_cluster_secret_permissions_patch_without_delete(self):
         """Operator remediation should patch or create bootstrap secrets, not delete them."""
-        perms = RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS["open-cluster-management-agent"]
+        perms = RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS[MANAGED_CLUSTER_AGENT_NAMESPACE]
         secrets_perm = next((p for p in perms if p[1] == "secrets"), None)
 
         assert secrets_perm is not None

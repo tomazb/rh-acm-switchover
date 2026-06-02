@@ -352,9 +352,10 @@ managed-cluster access.
    - **Risk**: Unauthorized access to sensitive credentials
    - **Mitigation**: 
      - Secret access limited to specific namespaces
-     - Only `get` verb granted (no list, create, patch, delete)
+     - Hub-side secret access is read-only (`get`) for backup and observability validation
+     - Managed-cluster operator remediation requires `get`, `create`, and `patch` only for the klusterlet bootstrap secret workflow
      - Secrets not logged or exposed in output
-     - Read-only validator role doesn't need secret access
+     - Read-only validator role has no secret write access; managed-cluster validator checks use `get` only
 
 5. **Cluster-Wide Impact**
    - **Risk**: Operations affecting entire cluster
