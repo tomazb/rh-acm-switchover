@@ -309,7 +309,7 @@ These resources use Role and RoleBinding for specific namespaces:
 
 Managed-cluster klusterlet remediation uses a separate RBAC surface in the `open-cluster-management-agent` namespace on spoke clusters:
 
-- `secrets` (`get`, `create`, `delete`) for operator remediation
+- `secrets` (`get`, `create`, `patch`) for operator remediation
 - `deployments` (`get`, `patch`) for operator remediation
 - `secrets` (`get`) and `deployments` (`get`) for validator/read-only inspection
 

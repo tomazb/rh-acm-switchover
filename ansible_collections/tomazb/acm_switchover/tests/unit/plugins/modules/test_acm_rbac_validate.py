@@ -774,3 +774,22 @@ def test_operator_role_has_write_on_backupschedules():
     assert "create" in verbs
     assert "patch" in verbs
     assert "delete" in verbs
+
+
+def test_operator_managed_cluster_secret_permissions_patch_without_delete():
+    """Operator remediation should patch or create bootstrap secrets, not delete them."""
+    permissions = expand_rbac_requirements(
+        role="operator",
+        include_decommission=False,
+        skip_observability=False,
+        argocd_mode="none",
+        argocd_install_type="unknown",
+        scope="managed_cluster",
+    )
+    secret_perms = [p for p in permissions if p[3] == "open-cluster-management-agent" and p[1] == "secrets"]
+    verbs = {p[2] for p in secret_perms}
+
+    assert "get" in verbs
+    assert "create" in verbs
+    assert "patch" in verbs
+    assert "delete" not in verbs

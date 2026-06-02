@@ -86,7 +86,7 @@ class TestRBACPermissionCoverage:
                 "open-cluster-management-agent",
                 "secrets",
                 None,
-                ["create", "delete"],
+                ["create", "patch"],
             ),
             (
                 "managed_cluster_namespace",

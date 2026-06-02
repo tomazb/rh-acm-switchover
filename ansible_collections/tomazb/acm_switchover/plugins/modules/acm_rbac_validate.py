@@ -217,7 +217,7 @@ VALIDATOR_HUB_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]]
 # Managed-cluster namespace permissions for operator role
 OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS: dict[str, list[tuple[str, str, list[str]]]] = {
     MANAGED_CLUSTER_AGENT_NAMESPACE: [
-        ("", "secrets", ["get", "create", "delete"]),
+        ("", "secrets", ["get", "create", "patch"]),
         (APPS, "deployments", ["get", "patch"]),
     ],
 }

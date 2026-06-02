@@ -27,7 +27,7 @@ Managed cluster RBAC policy for klusterlet reconnection operations:
 This policy is required for the klusterlet reconnection feature during hub switchover.
 The `open-cluster-management-agent` namespace exists only on managed clusters and contains
 the klusterlet agent. During switchover, the tool may need to:
-- Delete and recreate the `bootstrap-hub-kubeconfig` secret
+- Patch or create the `bootstrap-hub-kubeconfig` secret
 - Restart the klusterlet deployment to connect to the new hub
 
 ## What the Policies Validate
@@ -54,7 +54,7 @@ The policy deploys RBAC for klusterlet management:
 1. **Namespace**: `acm-switchover`
 2. **Service Accounts**: `acm-switchover-operator`, `acm-switchover-validator`
 3. **Roles** in `open-cluster-management-agent` namespace:
-   - `acm-switchover-operator`: secrets (get, create, delete), deployments (get, patch)
+   - `acm-switchover-operator`: secrets (get, create, patch), deployments (get, patch)
    - `acm-switchover-validator`: secrets (get), deployments (get)
 4. **RoleBindings**: Binds Roles to ServiceAccounts
 
@@ -258,7 +258,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create", "delete"]
+    verbs: ["get", "create", "patch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "patch"]
