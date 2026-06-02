@@ -42,13 +42,7 @@ def _nearest_existing_ancestor(path: Path) -> tuple[Path, list[str]]:
 
 
 def _safe_roots() -> list[Path]:
-    roots = [Path("/tmp"), Path("/var")]
-    home_dir = Path(os.path.expanduser("~")).resolve()
-    if str(home_dir):
-        roots.append(home_dir)
-    cwd = Path.cwd().resolve()
-    if str(cwd):
-        roots.append(cwd)
+    roots = [Path("/tmp"), Path("/var"), Path(os.path.expanduser("~")), Path.cwd()]
     return [root.resolve() for root in roots]
 
 
@@ -119,7 +113,7 @@ def validate_report_artifact_path(path: str) -> None:
             raise ValidationError(f"Artifact path '{path}' resolves through a non-directory ancestor.")
     else:
         root = Path.cwd().resolve()
-        absolute_path = Path(os.path.abspath(path))
+        absolute_path = (root / path_obj).absolute()
 
     if absolute_path.is_symlink():
         raise ValidationError(f"Artifact path '{path}' must not be a symlink.")

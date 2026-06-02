@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils import validation
@@ -55,3 +57,18 @@ def test_report_artifact_rejects_missing_path_under_non_directory_ancestor(tmp_p
 
     with pytest.raises(ValidationError, match="non-directory ancestor"):
         validate_report_artifact_path(str(file_anchor / "missing" / "report.json"))
+
+
+def test_relative_report_artifact_path_allows_symlinked_cwd(tmp_path, monkeypatch):
+    from ansible_collections.tomazb.acm_switchover.plugins.module_utils.path_safety import (
+        validate_report_artifact_path,
+    )
+
+    real_workspace = tmp_path / "real-workspace"
+    real_workspace.mkdir()
+    symlinked_workspace = tmp_path / "workspace-link"
+    symlinked_workspace.symlink_to(real_workspace, target_is_directory=True)
+
+    monkeypatch.setattr(os, "getcwd", lambda: str(symlinked_workspace))
+
+    validate_report_artifact_path("reports/switchover.json")
