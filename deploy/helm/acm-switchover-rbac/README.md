@@ -87,7 +87,7 @@ The following table lists the configurable parameters and their default values.
 | `environment` | Environment designation | `production` |
 | `rbac.enabled` | Enable RBAC resource creation | `true` |
 | `rbac.customOperatorRules` | Additional operator ClusterRole rules | `[]` |
-| `rbac.customValidatorRules` | Additional validator ClusterRole rules | `[]` |
+| `rbac.customValidatorRules` | Additional read-only validator ClusterRole rules; verbs are limited to `get`, `list`, and `watch` | `[]` |
 
 ## Examples
 
@@ -118,6 +118,19 @@ rbac:
     - apiGroups: ["custom.example.com"]
       resources: ["customresources"]
       verbs: ["get", "list", "create"]
+```
+
+Operator custom rules may include the mutating verbs required by your environment.
+Validator custom rules are always read-only: `rbac.customValidatorRules` accepts only
+`get`, `list`, and `watch`. Helm rendering fails if validator custom rules include
+mutating verbs such as `create`, `update`, `patch`, `delete`, or `*`.
+
+```yaml
+rbac:
+  customValidatorRules:
+    - apiGroups: ["custom.example.com"]
+      resources: ["customresources"]
+      verbs: ["get", "list", "watch"]
 ```
 
 Install with custom values:

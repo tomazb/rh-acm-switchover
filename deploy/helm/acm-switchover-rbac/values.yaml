@@ -96,5 +96,8 @@ rbac:
   #     verbs: ["get", "list"]
   customOperatorRules: []
   
-  # Additional custom rules for validator ClusterRole
+  # Additional custom rules for validator ClusterRole.
+  # Validator custom rules are restricted to read-only verbs: get, list, watch.
+  # Helm rendering fails if any validator custom rule includes mutating verbs
+  # such as create, update, patch, delete, or wildcard '*'.
   customValidatorRules: []
