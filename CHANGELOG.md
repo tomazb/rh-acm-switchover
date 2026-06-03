@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed Python post-activation klusterlet probing so client construction failures, non-404 managed-cluster secret API errors, transport errors, and unexpected per-cluster probe exceptions fail closed instead of being reported as non-fatal skips.
 - Fixed Python and collection klusterlet remediation to patch an existing `bootstrap-hub-kubeconfig` secret instead of deleting it before re-creating it. Managed-cluster RBAC now requires `secrets` `patch` instead of `delete`.
 - Fixed collection preflight reports and checkpoint operation identities so they no longer persist kubeconfig paths. Reports and checkpoints retain hub context plus live cluster UID, and existing schema 2.0 checkpoints with legacy kubeconfig identity fields are normalized on resume.
 - Fixed Python CLI Argo CD resume-only identity validation so state files with stored hub cluster UIDs fail closed when a live hub UID changes or cannot be read.

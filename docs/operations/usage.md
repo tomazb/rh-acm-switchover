@@ -252,6 +252,10 @@ Clusters without a managed-cluster kubeconfig are explicitly skipped for direct
 klusterlet probing/remediation. That skip is non-fatal only when the
 ManagedCluster readiness checks already passed; if the same cluster remains not
 joined or unavailable, the post-activation ManagedCluster gate still fails.
+Python post-activation also treats missing klusterlet hub secrets and malformed
+or incomplete embedded kubeconfig data as non-fatal skips, but managed-cluster
+client construction failures, non-404 secret API errors, transport failures, and
+unexpected probe exceptions now fail post-activation.
 
 In the Ansible collection, direct klusterlet probes and remediations default to
 10 worker threads, 30-second Kubernetes request timeouts, and 180-second

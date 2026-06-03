@@ -1653,8 +1653,8 @@ class TestKlusterletParallelVerification:
         # Called with empty api_url
         mock_find.assert_called_once_with(kube_data, "", "orphan")
 
-    def test_check_cluster_exception_returns_unreachable(self, mock_secondary_client, mock_state_manager):
-        """Exceptions in check_cluster inner function should yield 'unreachable'."""
+    def test_check_cluster_exception_fails_verification(self, mock_secondary_client, mock_state_manager):
+        """Unexpected per-cluster probe exceptions should fail post-activation."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
 
         mock_secondary_client.list_custom_resources.return_value = [
@@ -1677,8 +1677,8 @@ class TestKlusterletParallelVerification:
                         "_check_klusterlet_connection",
                         side_effect=RuntimeError("boom"),
                     ):
-                        # Should not raise; c1 lands in unreachable bucket
-                        pav._verify_klusterlet_connections()
+                        with pytest.raises(SwitchoverError, match="Klusterlet verification failed"):
+                            pav._verify_klusterlet_connections()
 
     def test_initial_check_timeout_fails_closed(self, mock_secondary_client, mock_state_manager, caplog):
         """Timed-out initial klusterlet checks must fail post-activation."""
@@ -1707,6 +1707,28 @@ class TestKlusterletParallelVerification:
 
         assert "Timed out checking klusterlet for c1" in caplog.text
         assert "c1" in caplog.text
+
+    def test_no_context_remains_non_fatal_skip(self, mock_secondary_client, mock_state_manager, caplog):
+        """Missing kubeconfig contexts should remain non-fatal klusterlet skips."""
+        pav = _make_pav(mock_secondary_client, mock_state_manager)
+        caplog.set_level(logging.INFO, logger="acm_switchover")
+
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "c1"},
+                "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443"}]},
+            },
+        ]
+
+        kube_data = {"contexts": [], "clusters": []}
+
+        with patch.object(pav, "_get_hub_api_server", return_value="https://hub:6443"):
+            with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
+                with patch.object(pav, "_find_context_by_api_url", return_value=""):
+                    pav._verify_klusterlet_connections()
+
+        assert "unreachable or uninspectable" in caplog.text
+        assert "no context available" not in caplog.text
 
     def test_remediation_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager):
         """Timed-out remediation workers should be recorded as failed remediation."""
@@ -2157,6 +2179,41 @@ class TestCheckKlusterletConnection:
         assert mock_v1.read_namespaced_secret.call_count == 2
         assert all("_request_timeout" in call.kwargs for call in mock_v1.read_namespaced_secret.call_args_list)
 
+    def test_both_hub_and_bootstrap_secret_404_remains_unreachable(self, mock_secondary_client, mock_state_manager):
+        """Missing klusterlet hub secrets should remain a non-fatal unreachable result."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        mock_v1.read_namespaced_secret.side_effect = ApiException(status=404)
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+
+        assert result == "unreachable"
+        assert mock_v1.read_namespaced_secret.call_count == 2
+
+    @pytest.mark.parametrize("status", [403, 500])
+    def test_non_404_hub_secret_read_fails(self, mock_secondary_client, mock_state_manager, status):
+        """Non-404 hub secret API errors should fail closed."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        mock_v1.read_namespaced_secret.side_effect = ApiException(status=status)
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+
+        assert result == "failed"
+
+    def test_bootstrap_secret_non_404_after_hub_404_fails(self, mock_secondary_client, mock_state_manager):
+        """Hub-secret 404 plus bootstrap-secret API failure should fail closed."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+
+        def side_effect(name, namespace, **kwargs):
+            if name == "hub-kubeconfig-secret":
+                raise ApiException(status=404)
+            raise ApiException(status=500)
+
+        mock_v1.read_namespaced_secret.side_effect = side_effect
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+
+        assert result == "failed"
+
     def test_unreachable_on_empty_kubeconfig(self, mock_secondary_client, mock_state_manager):
         """Should return 'unreachable' when secret has no kubeconfig data."""
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
@@ -2177,10 +2234,31 @@ class TestCheckKlusterletConnection:
         result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
         assert result == "unreachable"
 
+    def test_unreachable_on_invalid_base64_in_secret(self, mock_secondary_client, mock_state_manager):
+        """Should return 'unreachable' when the embedded kubeconfig is not valid base64."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        secret = Mock()
+        secret.data = {"kubeconfig": "abc"}
+        mock_v1.read_namespaced_secret.return_value = secret
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        assert result == "unreachable"
+
     def test_unreachable_on_empty_clusters(self, mock_secondary_client, mock_state_manager):
         """Should return 'unreachable' when embedded kubeconfig has no clusters."""
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         inner = yaml.dump({"clusters": []})
+        secret = Mock()
+        secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
+        mock_v1.read_namespaced_secret.return_value = secret
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        assert result == "unreachable"
+
+    def test_unreachable_on_clusters_mapping(self, mock_secondary_client, mock_state_manager):
+        """Should return 'unreachable' when clusters is not a list."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        inner = yaml.dump({"clusters": {"name": "hub", "cluster": {"server": "https://hub:6443"}}})
         secret = Mock()
         secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
         mock_v1.read_namespaced_secret.return_value = secret
@@ -2199,31 +2277,42 @@ class TestCheckKlusterletConnection:
         result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
         assert result == "unreachable"
 
-    def test_unreachable_on_config_exception(self, mock_secondary_client, mock_state_manager):
-        """ConfigException (context doesn't exist) should return 'unreachable'."""
+    def test_unreachable_on_non_string_server_url(self, mock_secondary_client, mock_state_manager):
+        """Should return 'unreachable' when server URL is not a string."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        inner = yaml.dump({"clusters": [{"name": "hub", "cluster": {"server": ["https://hub:6443"]}}]})
+        secret = Mock()
+        secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
+        mock_v1.read_namespaced_secret.return_value = secret
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        assert result == "unreachable"
+
+    def test_failed_on_config_exception(self, mock_secondary_client, mock_state_manager):
+        """Client construction failures should return a failed probe result."""
         from kubernetes import config as kube_config
 
         pav = _make_pav(mock_secondary_client, mock_state_manager)
         pav._build_managed_cluster_clients = Mock(side_effect=kube_config.ConfigException("no context"))
 
         result = pav._check_klusterlet_connection("bad-ctx", "c1", "https://hub:6443")
-        assert result == "unreachable"
+        assert result == "failed"
 
-    def test_unreachable_on_generic_exception(self, mock_secondary_client, mock_state_manager):
-        """Generic exceptions should return 'unreachable'."""
+    def test_failed_on_generic_client_exception(self, mock_secondary_client, mock_state_manager):
+        """Generic client construction exceptions should return a failed probe result."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
         pav._build_managed_cluster_clients = Mock(side_effect=RuntimeError("connection refused"))
 
         result = pav._check_klusterlet_connection("bad-ctx", "c1", "https://hub:6443")
-        assert result == "unreachable"
+        assert result == "failed"
 
-    def test_unreachable_on_non_404_api_exception(self, mock_secondary_client, mock_state_manager):
-        """Non-404 ApiException on hub-kubeconfig-secret should propagate to unreachable."""
+    def test_failed_on_non_404_api_exception(self, mock_secondary_client, mock_state_manager):
+        """Non-404 ApiException on hub-kubeconfig-secret should fail closed."""
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         mock_v1.read_namespaced_secret.side_effect = ApiException(status=403)
 
         result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
-        assert result == "unreachable"
+        assert result == "failed"
 
     def test_unreachable_on_none_kubeconfig_data(self, mock_secondary_client, mock_state_manager):
         """Should return 'unreachable' when yaml.safe_load returns None."""
