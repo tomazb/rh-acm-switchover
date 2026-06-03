@@ -337,6 +337,22 @@ def test_standalone_argocd_resume_validates_live_identity_before_resume():
     assert max(primary_identity_indices + secondary_identity_indices) < validate_indices[0]
     assert validate_indices[0] < resume_indices[0]
 
+    secondary_read = pre_tasks[secondary_identity_indices[0]]
+    secondary_args = secondary_read["kubernetes.core.k8s_info"]
+    secondary_when = " ".join(str(item) for item in secondary_read.get("when", []))
+    assert "(acm_switchover_hubs.secondary | default({})).kubeconfig | default(omit)" in secondary_args.get(
+        "kubeconfig", ""
+    )
+    assert "(acm_switchover_hubs.secondary | default({})).context | default(omit)" in secondary_args.get("context", "")
+    assert "acm_switchover_hubs.secondary is defined" in secondary_when
+    assert "acm_switchover_hubs.secondary.context | default('')" in secondary_when
+
+    publish_task = next(task for task in pre_tasks if task.get("name") == "Publish Argo CD resume live hub identities")
+    secondary_context = publish_task["ansible.builtin.set_fact"]["_argocd_resume_hub_identities"]["secondary"][
+        "context"
+    ]
+    assert "(acm_switchover_hubs.secondary | default({})).context | default('')" in secondary_context
+
 
 def test_discover_run_id_gated_by_resume_mode():
     """discover.yml must NOT generate run_id when mode is resume.

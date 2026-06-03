@@ -100,11 +100,13 @@
         api_version: v1
         kind: Namespace
         name: kube-system
-        kubeconfig: "{{ acm_switchover_hubs.secondary.kubeconfig }}"
-        context: "{{ acm_switchover_hubs.secondary.context }}"
+        kubeconfig: "{{ (acm_switchover_hubs.secondary | default({})).kubeconfig | default(omit) }}"
+        context: "{{ (acm_switchover_hubs.secondary | default({})).context | default(omit) }}"
       register: _argocd_resume_secondary_identity_namespace
       when:
         - _argocd_resume_checkpoint is defined
+        - acm_switchover_hubs.secondary is defined
+        - (acm_switchover_hubs.secondary.context | default('')) | length > 0
 
     - name: Publish Argo CD resume live hub identities
       ansible.builtin.set_fact:
@@ -117,7 +119,7 @@
                 .get('metadata', {})).get('uid', '')
               }}
           secondary:
-            context: "{{ acm_switchover_hubs.secondary.context | default('') }}"
+            context: "{{ (acm_switchover_hubs.secondary | default({})).context | default('') }}"
             cluster_uid: >-
               {{
                 (((_argocd_resume_secondary_identity_namespace | default({})).resources | default([]) | first | default({}))

@@ -60,7 +60,6 @@ from ansible.module_utils.basic import AnsibleModule
 
 from ansible_collections.tomazb.acm_switchover.plugins.module_utils.checkpoint import (
     CheckpointIdentityMismatch,
-    build_operation_identity,
     normalize_operation_identity,
     validate_operation_identity,
 )
@@ -86,9 +85,9 @@ def _require_live_identity(hub_identities: dict, role: str) -> None:
         )
 
 
-def _roles_to_validate(checkpoint_identity: dict, hubs: dict) -> list[str]:
+def _roles_to_validate(hubs: dict) -> list[str]:
     roles = ["secondary"]
-    if _has_hub(hubs, "primary") or checkpoint_identity.get("primary_context"):
+    if _has_hub(hubs, "primary"):
         roles.insert(0, "primary")
     return roles
 
@@ -119,6 +118,37 @@ def _operation_for_validation(checkpoint_identity: dict, operation: dict) -> dic
     return {**defaults, **(operation or {})}
 
 
+def _expected_identity_for_roles(
+    *,
+    checkpoint_identity: dict,
+    hubs: dict,
+    hub_identities: dict,
+    operation: dict,
+    collection_version: str,
+    roles: list[str],
+) -> dict:
+    expected_identity = {
+        **checkpoint_identity,
+        "method": operation.get("method") or checkpoint_identity.get("method") or "passive",
+        "activation_method": operation.get("activation_method")
+        or checkpoint_identity.get("activation_method")
+        or "patch",
+        "restore_only": (
+            operation.get("restore_only")
+            if operation.get("restore_only") is not None
+            else checkpoint_identity.get("restore_only", False)
+        ),
+        "old_hub_action": operation.get("old_hub_action") or checkpoint_identity.get("old_hub_action") or "secondary",
+        "collection_version": collection_version,
+    }
+    for role in roles:
+        hub = hubs.get(role) or {}
+        identity = hub_identities.get(role) or {}
+        expected_identity[f"{role}_context"] = hub.get("context") or ""
+        expected_identity[f"{role}_cluster_uid"] = identity.get("cluster_uid") or ""
+    return expected_identity
+
+
 def validate_checkpoint_identity(
     *,
     checkpoint: dict,
@@ -132,7 +162,8 @@ def validate_checkpoint_identity(
     if not checkpoint_identity:
         raise ValueError("Checkpoint is missing operation identity.")
 
-    for role in _roles_to_validate(checkpoint_identity, hubs):
+    roles = _roles_to_validate(hubs)
+    for role in roles:
         _require_live_identity(hub_identities, role)
 
     validation_operation = _operation_for_validation(checkpoint_identity, operation)
@@ -140,11 +171,13 @@ def validate_checkpoint_identity(
     if validation_collection_version is None or validation_collection_version == "":
         validation_collection_version = checkpoint_identity.get("collection_version") or ""
 
-    expected_identity = build_operation_identity(
+    expected_identity = _expected_identity_for_roles(
+        checkpoint_identity=checkpoint_identity,
         hubs=hubs,
         operation=validation_operation,
         collection_version=validation_collection_version,
         hub_identities=hub_identities,
+        roles=roles,
     )
     try:
         validate_operation_identity({"operation_identity": checkpoint_identity}, expected_identity)
@@ -153,11 +186,13 @@ def validate_checkpoint_identity(
         if not (_has_hub(hubs, "primary") and _has_hub(hubs, "secondary")):
             raise ValueError(str(normal_error)) from normal_error
 
-    swapped_identity = build_operation_identity(
+    swapped_identity = _expected_identity_for_roles(
+        checkpoint_identity=checkpoint_identity,
         hubs=_swapped_hubs(hubs),
         operation=validation_operation,
         collection_version=validation_collection_version,
         hub_identities=_swapped_identities(hub_identities),
+        roles=roles,
     )
     try:
         validate_operation_identity({"operation_identity": checkpoint_identity}, swapped_identity)

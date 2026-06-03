@@ -62,6 +62,43 @@ def test_validate_checkpoint_identity_rejects_uid_mismatch():
         )
 
 
+def test_validate_checkpoint_identity_ignores_stale_hub_cluster_uid():
+    with pytest.raises(ValueError, match="does not match"):
+        validate_checkpoint_identity(
+            checkpoint={"operation_identity": _checkpoint_identity()},
+            hubs={
+                "primary": {"context": "hub-a", "cluster_uid": "uid-a"},
+                "secondary": {"context": "hub-b", "cluster_uid": "uid-b"},
+            },
+            operation={"method": "passive"},
+            hub_identities={
+                "primary": {"context": "hub-a", "cluster_uid": "uid-retargeted"},
+                "secondary": {"context": "hub-b", "cluster_uid": "uid-b"},
+            },
+        )
+
+
+def test_validate_checkpoint_identity_accepts_secondary_only_for_full_checkpoint():
+    result = validate_checkpoint_identity(
+        checkpoint={"operation_identity": _checkpoint_identity()},
+        hubs={"secondary": {"context": "hub-b"}},
+        operation={"method": "passive"},
+        hub_identities={"secondary": {"context": "hub-b", "cluster_uid": "uid-b"}},
+    )
+
+    assert result["matched_mapping"] == "normal"
+
+
+def test_validate_checkpoint_identity_rejects_secondary_only_uid_mismatch():
+    with pytest.raises(ValueError, match="does not match"):
+        validate_checkpoint_identity(
+            checkpoint={"operation_identity": _checkpoint_identity()},
+            hubs={"secondary": {"context": "hub-b"}},
+            operation={"method": "passive"},
+            hub_identities={"secondary": {"context": "hub-b", "cluster_uid": "uid-retargeted"}},
+        )
+
+
 def test_validate_checkpoint_identity_rejects_missing_checkpoint_identity():
     with pytest.raises(ValueError, match="missing operation identity"):
         validate_checkpoint_identity(
