@@ -43,9 +43,9 @@ options:
   allow_conventional_name_fallback:
     description:
       - Allow selecting C(restore-acm-passive-sync) when C(syncRestoreWithNewBackups) is omitted.
-      - This is a compatibility fallback for older Restore objects and is enabled by default.
+      - This is a compatibility fallback for older Restore objects and must be explicitly enabled.
     type: bool
-    default: true
+    default: false
 """
 
 EXAMPLES = r"""
@@ -93,7 +93,7 @@ def restore_messages_are_benign_already_available(messages: object) -> bool:
 
 def select_passive_sync_restore(
     restores: list[dict],
-    allow_conventional_name_fallback: bool = True,
+    allow_conventional_name_fallback: bool = False,
 ) -> tuple[dict | None, dict[str, object]]:
     """Select the best passive sync restore and return diagnostics.
 
@@ -267,7 +267,7 @@ def build_restore_activation_plan(
     activation_method: str,
     restores: list[dict],
     backup_name: str | None,
-    allow_conventional_name_fallback: bool = True,
+    allow_conventional_name_fallback: bool = False,
 ) -> dict:
     backup_name = backup_name or VELERO_BACKUP_LATEST
     passive_restore, diagnostics = select_passive_sync_restore(
@@ -416,7 +416,7 @@ def main() -> None:
                 "required": False,
                 "default": VELERO_BACKUP_LATEST,
             },
-            "allow_conventional_name_fallback": {"type": "bool", "default": True},
+            "allow_conventional_name_fallback": {"type": "bool", "default": False},
         },
         supports_check_mode=True,
     )

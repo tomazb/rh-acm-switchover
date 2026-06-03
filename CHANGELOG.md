@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed direct collection `acm_restore_info` module use so passive Restore selection now defaults to the documented fail-closed contract requiring `spec.syncRestoreWithNewBackups=true`. The conventional-name fallback remains available only as an explicit opt-in.
 - Fixed Python post-activation klusterlet probing so client construction failures, non-404 managed-cluster secret API errors, transport errors, and unexpected per-cluster probe exceptions fail closed instead of being reported as non-fatal skips.
 - Fixed Python and collection klusterlet remediation to patch an existing `bootstrap-hub-kubeconfig` secret instead of deleting it before re-creating it. Managed-cluster RBAC now requires `secrets` `patch` instead of `delete`.
 - Fixed collection preflight reports and checkpoint operation identities so they no longer persist kubeconfig paths. Reports and checkpoints retain hub context plus live cluster UID, and existing schema 2.0 checkpoints with legacy kubeconfig identity fields are normalized on resume.

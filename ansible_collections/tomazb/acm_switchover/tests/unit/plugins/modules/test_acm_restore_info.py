@@ -20,19 +20,24 @@ def _run_module(
     method: str = "passive",
     activation_method: str = "patch",
     backup_name: str = "latest",
-    allow_conventional_name_fallback: bool = True,
+    allow_conventional_name_fallback: bool | None = None,
     check_mode: bool = False,
 ) -> dict:
     captured: dict = {}
 
     class FakeModule:
         def __init__(self, *args, **kwargs):
+            argument_spec = kwargs["argument_spec"]
             self.params = {
                 "restores": restores or [],
                 "method": method,
                 "activation_method": activation_method,
                 "backup_name": backup_name,
-                "allow_conventional_name_fallback": allow_conventional_name_fallback,
+                "allow_conventional_name_fallback": (
+                    argument_spec["allow_conventional_name_fallback"]["default"]
+                    if allow_conventional_name_fallback is None
+                    else allow_conventional_name_fallback
+                ),
             }
             self.check_mode = check_mode
 
@@ -104,7 +109,7 @@ def test_select_passive_sync_restore_no_sync_enabled():
     assert diagnostics["reason"] == "no_sync_restore"
 
 
-def test_select_passive_sync_restore_falls_back_to_conventional_name_by_default():
+def test_select_passive_sync_restore_rejects_conventional_name_by_default():
     restore, diagnostics = select_passive_sync_restore(
         [
             {
@@ -115,6 +120,25 @@ def test_select_passive_sync_restore_falls_back_to_conventional_name_by_default(
                 "spec": {},
             }
         ]
+    )
+    assert restore is None
+    assert diagnostics["restore_count"] == 1
+    assert diagnostics["sync_enabled_count"] == 0
+    assert diagnostics["reason"] == "no_sync_restore"
+
+
+def test_select_passive_sync_restore_falls_back_to_conventional_name_when_explicitly_enabled():
+    restore, diagnostics = select_passive_sync_restore(
+        [
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "creationTimestamp": "2026-04-10T10:00:00Z",
+                },
+                "spec": {},
+            }
+        ],
+        allow_conventional_name_fallback=True,
     )
     assert restore["metadata"]["name"] == "restore-acm-passive-sync"
     assert diagnostics["restore_count"] == 1
@@ -257,6 +281,26 @@ def test_run_module_check_mode_returns_planned_operation_without_change(monkeypa
         "metadata": {"resourceVersion": "42"},
         "spec": {"veleroManagedClustersBackupName": "latest"},
     }
+
+
+def test_run_module_rejects_conventional_passive_restore_by_default(monkeypatch):
+    result = _run_module(
+        monkeypatch,
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-passive-sync",
+                    "namespace": "open-cluster-management-backup",
+                },
+                "spec": {},
+                "status": {"phase": "Enabled"},
+            }
+        ],
+    )
+
+    assert result["exit"]["restore"] is None
+    assert result["exit"]["reason"] == "no_sync_restore"
+    assert result["exit"]["operation"]["action"] == "none"
 
 
 def test_build_restore_activation_plan_defaults_passive_patch_to_latest_backup():
