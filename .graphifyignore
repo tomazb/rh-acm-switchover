@@ -1,4 +1,4 @@
-
+.worktrees/
 # Added for Graphify-assisted ACM switchover review
 .git/
 .venv/
