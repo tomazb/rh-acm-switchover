@@ -22,6 +22,19 @@
 
 **Last Updated:** 2026-06-03
 
+## Post-Merge Revalidation (2026-06-03)
+
+Current `ansible` HEAD `ac041f6` includes merged Thermos PRs 17-20 (`#89`, `#90`, `#91`, `#92`). A focused source revalidation confirmed:
+
+- `F31` is resolved: path-safety now routes through canonical `path_safety` helpers plus adversarial parity coverage.
+- `F34` is resolved: Python and collection klusterlet remediation now patch/create `bootstrap-hub-kubeconfig`; managed-cluster RBAC/docs were realigned to `patch`.
+- `F35` is resolved: Helm rendering now rejects mutating `rbac.customValidatorRules` verbs before template output.
+- `F37` is resolved: standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against live hubs before resuming Applications.
+- One residual follow-up remains worth a separate PR:
+  - `F38` Python klusterlet verification still downgrades broad API/client inspection failures to informational `unreachable`, diverging from the collection's fail-closed probe behavior.
+
+Treat `F38` as the current Thermos follow-up queue. Keep it isolated from unrelated cleanup.
+
 ## Finding Validation Matrix
 
 | Finding | Validation | Resolution PR | Notes |
@@ -56,14 +69,14 @@
 | F28 | confirmed | PR 03 | Collection klusterlet probe treats broad API exceptions as skipped instead of failed. |
 | F29 | confirmed | PR 14 | Python ACM version parsing treats suffixed modern versions as older than 2.12 and can route `BackupSchedule` handling to delete. Collection fails loudly on the same input, so behavior is not in parity. |
 | F30 | resolved | PR 13 | Current CI-scope `black --check --line-length 120` passes on `ansible` at `4fbc352`. Keep strict formatting verification in every Round 6 PR. |
-| F31 | confirmed hardening | PR 18 | Safe path validation and report artifact sanitization remain duplicated across Python and collection helpers. These use different path bases and have incomplete adversarial parity coverage. |
-| F32 | confirmed hardening | PR 15 | `scripts/setup-rbac.sh` creates token-bearing kubeconfigs with the process umask and only narrows permissions afterward. |
-| F33 | confirmed hardening | PR 16 | `container-bootstrap/Containerfile` uses mutable base image tags and downloads `jq`/OpenShift client binaries without checksum verification. |
-| F34 | confirmed robustness | PR 17 | Python and collection klusterlet remediation delete `bootstrap-hub-kubeconfig` before recreating it. PR 17 preserves parity by switching both implementations and managed-cluster RBAC/docs from delete-then-create to patch/create. |
-| F35 | confirmed | PR 19 | Operator decision: Helm `customValidatorRules` must preserve the validator `ClusterRole` read-only boundary by allowing only `get`, `list`, and `watch`; no escape hatch. |
-| F36 | confirmed hardening | PR 15 | Service-account token generation defaults to `48h`; reduce the default or require explicit opt-in for longer-lived tokens. |
-| F37 | confirmed | PR 20 | Standalone collection Argo CD resume reloads a checkpoint run ID without validating checkpoint operation identity against live hub UIDs before mutating Applications. |
-| F38 | confirmed | PR 21 | Python klusterlet API/client failures are still conflated with non-fatal unreachable/skipped states and can fail open during post-activation verification. |
+| F31 | resolved | PR 18 | Path safety now funnels through canonical `path_safety` helpers with adversarial parity coverage; the remaining Python/collection dual copy is an intentional import-boundary mirror guarded by tests. |
+| F32 | resolved | PR 15 | `setup-rbac.sh` and merged kubeconfig generation now write under `umask 077` and create output directories with owner-only permissions. |
+| F33 | resolved | PR 16 | Container base images are digest-pinned and `jq` / OpenShift client downloads are checksum-verified before installation or extraction. |
+| F34 | resolved | PR 17 | Python and collection klusterlet remediation now patch/create `bootstrap-hub-kubeconfig`; managed-cluster RBAC/docs were realigned from `delete` to `patch`. |
+| F35 | resolved | PR 19 | Helm render now rejects mutating `rbac.customValidatorRules` verbs through `validateValidatorCustomRules`, with static tests covering allowed and rejected cases. |
+| F36 | resolved | PR 15 | Service-account token generation defaults were reduced to `24h`; longer lifetimes remain explicit operator opt-in. |
+| F37 | resolved | PR 20 | Standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against the live hubs before resuming Applications. |
+| F38 | confirmed post-merge | PR 21 | Python klusterlet verification still downgrades broad API/client inspection failures to informational `unreachable`, diverging from the collection's fail-closed probe semantics. |
 
 ## PR Sequence
 
@@ -88,7 +101,7 @@
 | 17 | merged | `fix/thermos-klusterlet-secret-ordering` | `.worktrees/thermos-17-klusterlet-secret-ordering` | F34 | https://github.com/tomazb/rh-acm-switchover/pull/89 | Red/green klusterlet secret ordering tests passed; targeted Python, collection, RBAC parity/static, docs guardrail suites passed; `git diff --check` passed; final `./run_tests.sh` passed; merged 2026-06-02. |
 | 18 | merged | `fix/thermos-safe-path-consolidation` | `.worktrees/thermos-18-safe-path-consolidation` | F31 | https://github.com/tomazb/rh-acm-switchover/pull/90 | Red/green safe-path consolidation tests passed; targeted Python/collection safe-path and report-artifact suites passed; collection unit suite passed; documentation guardrails passed; `git diff --check` passed; final `./run_tests.sh` passed; merged 2026-06-02. |
 | 19 | merged | `fix/thermos-helm-validator-guardrail` | `.worktrees/thermos-19-helm-validator-guardrail` | F35 | https://github.com/tomazb/rh-acm-switchover/pull/91 | Red/green Helm validator guardrail tests passed; explicit positive and negative `helm template` checks passed; `python -m pytest tests/test_rbac_integration.py tests/test_documentation_guardrails.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py -q` passed; touched-file Black/isort and `git diff --check` passed; final `./run_tests.sh` passed; CodeRabbit CLI review `findings=0`; Gemini review thread for malformed `verbs` values addressed; CodeRabbit review thread for non-mapping custom rule entries addressed; merged 2026-06-03. |
-| 20 | ready_for_review | `thermos-20-argocd-resume-identity` | `.worktrees/thermos-20-argocd-resume-identity` | F37 | https://github.com/tomazb/rh-acm-switchover/pull/92 | Red/green checkpoint identity module and playbook contract tests passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; `python -m pytest tests/test_post_activation.py tests/test_documentation_guardrails.py -q` passed; touched-file Black/isort and `git diff --check` passed; final `./run_tests.sh` passed. |
+| 20 | merged | `thermos-20-argocd-resume-identity` | `.worktrees/thermos-20-argocd-resume-identity` | F37 | https://github.com/tomazb/rh-acm-switchover/pull/92 | Red/green checkpoint identity module and playbook contract tests passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; `python -m pytest tests/test_post_activation.py tests/test_documentation_guardrails.py -q` passed; touched-file Black/isort and `git diff --check` passed; final `./run_tests.sh` passed; merged in local history at `ac041f6`. |
 | 21 | planned | `thermos-21-python-klusterlet-fail-closed` | `.worktrees/thermos-21-python-klusterlet-fail-closed` | F38 | pending | Start from updated `ansible` after PR 20 merges. |
 
 ## Per-PR Implementation Details
