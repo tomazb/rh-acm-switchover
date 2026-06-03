@@ -1708,9 +1708,10 @@ class TestKlusterletParallelVerification:
         assert "Timed out checking klusterlet for c1" in caplog.text
         assert "c1" in caplog.text
 
-    def test_no_context_remains_non_fatal_skip(self, mock_secondary_client, mock_state_manager):
+    def test_no_context_remains_non_fatal_skip(self, mock_secondary_client, mock_state_manager, caplog):
         """Missing kubeconfig contexts should remain non-fatal klusterlet skips."""
         pav = _make_pav(mock_secondary_client, mock_state_manager)
+        caplog.set_level(logging.INFO, logger="acm_switchover")
 
         mock_secondary_client.list_custom_resources.return_value = [
             {
@@ -1725,6 +1726,9 @@ class TestKlusterletParallelVerification:
             with patch.object(pav, "_load_kubeconfig_data", return_value=kube_data):
                 with patch.object(pav, "_find_context_by_api_url", return_value=""):
                     pav._verify_klusterlet_connections()
+
+        assert "unreachable or uninspectable" in caplog.text
+        assert "no context available" not in caplog.text
 
     def test_remediation_does_not_use_unbounded_as_completed(self, mock_secondary_client, mock_state_manager):
         """Timed-out remediation workers should be recorded as failed remediation."""
@@ -2230,6 +2234,16 @@ class TestCheckKlusterletConnection:
         result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
         assert result == "unreachable"
 
+    def test_unreachable_on_invalid_base64_in_secret(self, mock_secondary_client, mock_state_manager):
+        """Should return 'unreachable' when the embedded kubeconfig is not valid base64."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        secret = Mock()
+        secret.data = {"kubeconfig": "abc"}
+        mock_v1.read_namespaced_secret.return_value = secret
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        assert result == "unreachable"
+
     def test_unreachable_on_empty_clusters(self, mock_secondary_client, mock_state_manager):
         """Should return 'unreachable' when embedded kubeconfig has no clusters."""
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
@@ -2241,10 +2255,32 @@ class TestCheckKlusterletConnection:
         result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
         assert result == "unreachable"
 
+    def test_unreachable_on_clusters_mapping(self, mock_secondary_client, mock_state_manager):
+        """Should return 'unreachable' when clusters is not a list."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        inner = yaml.dump({"clusters": {"name": "hub", "cluster": {"server": "https://hub:6443"}}})
+        secret = Mock()
+        secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
+        mock_v1.read_namespaced_secret.return_value = secret
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        assert result == "unreachable"
+
     def test_unreachable_on_non_dict_cluster_entry(self, mock_secondary_client, mock_state_manager):
         """Should return 'unreachable' when clusters[0] is not a dict."""
         pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
         inner = yaml.dump({"clusters": ["not-a-dict"]})
+        secret = Mock()
+        secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
+        mock_v1.read_namespaced_secret.return_value = secret
+
+        result = pav._check_klusterlet_connection("ctx-c1", "c1", "https://hub:6443")
+        assert result == "unreachable"
+
+    def test_unreachable_on_non_string_server_url(self, mock_secondary_client, mock_state_manager):
+        """Should return 'unreachable' when server URL is not a string."""
+        pav, mock_v1 = self._setup(mock_secondary_client, mock_state_manager)
+        inner = yaml.dump({"clusters": [{"name": "hub", "cluster": {"server": ["https://hub:6443"]}}]})
         secret = Mock()
         secret.data = {"kubeconfig": base64.b64encode(inner.encode()).decode()}
         mock_v1.read_namespaced_secret.return_value = secret
