@@ -43,6 +43,13 @@ the omitted value requires at least one restored non-local ManagedCluster unless
 `min_managed_clusters` to `0` to opt into an empty non-local ManagedCluster
 target, or set a positive value to enforce that explicit minimum count.
 
+`playbooks/argocd_resume.yml` can recover the Argo CD pause `run_id` from the
+configured checkpoint file. When it does, the playbook reads live `kube-system`
+namespace UIDs for the hubs it will resume and validates them against the
+checkpoint `operation_identity` before including the mutating `argocd_manage`
+role. Explicit `run_id` input remains supported and does not require checkpoint
+loading.
+
 ## Phase 5 Capability Status
 
 | Python / CLI Capability | Collection Phase 5 Status |
