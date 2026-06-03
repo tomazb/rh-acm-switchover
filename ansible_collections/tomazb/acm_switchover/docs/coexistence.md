@@ -58,6 +58,14 @@ cluster UID do not match. Execute-mode collection preflight also refreshes
 MultiClusterHub discovery even if discovery variables were pre-seeded, so stale
 cached MCH status cannot authorize a later live mutation.
 
+The standalone `argocd_resume.yml` playbook applies the same identity boundary
+when it loads a checkpoint to recover the Argo CD pause `run_id`: it reads live
+`kube-system` namespace UIDs for the hubs it will mutate and fails before
+including `argocd_manage` if the checkpoint identity is missing, unreadable, or
+does not match the live hubs. If both hubs are supplied, normal and explicitly
+swapped primary/secondary mappings are accepted only when both contexts and UIDs
+match the checkpoint.
+
 ## GitOps Integration Boundary
 
 Generic GitOps marker detection in the collection is **read-only and warning-oriented**.
@@ -76,7 +84,9 @@ in the collection. It is managed by the `argocd_manage` role:
 
 - Pause is triggered in `primary_prep` when `acm_switchover_features.argocd.manage: true`
 - Automatic resume during finalization has been removed (unsafe — operator must retarget Git first)
-- A standalone resume entrypoint is available at `playbooks/argocd_resume.yml`
+- A standalone resume entrypoint is available at `playbooks/argocd_resume.yml`; when
+  it loads a checkpoint for the pause `run_id`, live hub identity validation
+  completes before any Application resume patch runs
 
 The `app.kubernetes.io/instance` label is treated as `UNRELIABLE` by the marker detector
 and must not be used as a definitive GitOps signal. Use `argocd.argoproj.io/instance`

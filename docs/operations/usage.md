@@ -111,6 +111,13 @@ decommission, RBAC/bootstrap, checkpoint, and report artifacts.
 
 Resume treats already-resumed apps (pause marker missing) as idempotent no-op, and fails if an app is still paused by a different run or cannot be restored for other actionable reasons.
 
+For the Ansible collection, `playbooks/argocd_resume.yml` can reload the pause
+`run_id` from the configured checkpoint. When it does, the playbook validates
+the checkpoint's stored hub contexts and live cluster UIDs against freshly read
+`kube-system` namespace UIDs before running any resume patch. If both hubs are
+provided, normal and explicitly swapped primary/secondary contexts are accepted
+only when the stored context and UID pairs match.
+
 **State file tracking:**
 The script creates `.state/switchover-<primary>__<secondary>.json` tracking progress:
 ```json

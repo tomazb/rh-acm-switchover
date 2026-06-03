@@ -300,6 +300,44 @@ def test_standalone_argocd_resume_validates_checkpoint_path_before_file_reads():
     )
 
 
+def test_standalone_argocd_resume_validates_live_identity_before_resume():
+    """argocd_resume.yml must bind checkpoint identity to live hub UIDs before mutation."""
+    playbook = yaml.safe_load((PLAYBOOKS_DIR / "argocd_resume.yml").read_text())
+    pre_tasks = playbook[0].get("pre_tasks", [])
+    tasks = playbook[0].get("tasks", [])
+    all_tasks = [*pre_tasks, *tasks]
+
+    primary_identity_indices = [
+        idx
+        for idx, task in enumerate(pre_tasks)
+        if task.get("name") == "Read primary kube-system namespace identity"
+        and task.get("kubernetes.core.k8s_info", {}).get("kind") == "Namespace"
+        and task.get("kubernetes.core.k8s_info", {}).get("name") == "kube-system"
+    ]
+    secondary_identity_indices = [
+        idx
+        for idx, task in enumerate(pre_tasks)
+        if task.get("name") == "Read secondary kube-system namespace identity"
+        and task.get("kubernetes.core.k8s_info", {}).get("kind") == "Namespace"
+        and task.get("kubernetes.core.k8s_info", {}).get("name") == "kube-system"
+    ]
+    validate_indices = [
+        idx for idx, task in enumerate(pre_tasks) if "tomazb.acm_switchover.acm_checkpoint_identity_validate" in task
+    ]
+    resume_indices = [
+        idx
+        for idx, task in enumerate(all_tasks)
+        if task.get("ansible.builtin.include_role", {}).get("name") == "tomazb.acm_switchover.argocd_manage"
+    ]
+
+    assert primary_identity_indices, "argocd_resume.yml must read live primary kube-system UID"
+    assert secondary_identity_indices, "argocd_resume.yml must read live secondary kube-system UID"
+    assert validate_indices, "argocd_resume.yml must validate checkpoint identity before standalone resume"
+    assert resume_indices, "argocd_resume.yml must still include argocd_manage resume tasks"
+    assert max(primary_identity_indices + secondary_identity_indices) < validate_indices[0]
+    assert validate_indices[0] < resume_indices[0]
+
+
 def test_discover_run_id_gated_by_resume_mode():
     """discover.yml must NOT generate run_id when mode is resume.
 

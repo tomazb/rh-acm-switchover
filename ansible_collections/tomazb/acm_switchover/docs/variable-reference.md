@@ -85,6 +85,12 @@ post-activation reaches klusterlet operations.
 
 The full variable name is `acm_switchover_execution.checkpoint.reset_from`.
 Checkpoint `reset_from` accepts `preflight`, `primary_prep`, `activation`, `post_activation`, or `finalization`.
+When `playbooks/argocd_resume.yml` loads a checkpoint to recover a missing
+Argo CD `run_id`, the checkpoint must contain operation identity data with hub
+contexts and live cluster UIDs. The playbook re-reads `kube-system` namespace
+UIDs and fails before resume patches if the live hubs do not match. Supplying an
+explicit `acm_switchover_argocd.run_id` or `acm_switchover_execution.run_id`
+preserves the existing explicit-run-id path and skips checkpoint loading.
 
 ### Argo CD management safety
 

@@ -264,7 +264,7 @@ The collection lives at `ansible_collections/tomazb/acm_switchover/`. It is a co
 | `rbac_bootstrap` | RBAC setup scripts | Create service accounts, roles, and kubeconfigs |
 
 **Plugins** (in `plugins/`):
-- `modules/` — custom modules: `acm_backup_schedule`, `acm_checkpoint`, `acm_cluster_verify`, `acm_discovery`, `acm_input_validate`, `acm_klusterlet_probe`, `acm_klusterlet_remediate`, `acm_kubeconfig_inspect`, `acm_managedcluster_status`, `acm_preflight_report`, `acm_rbac_bootstrap`, `acm_rbac_validate`, `acm_report_artifact`, `acm_restore_info`, `acm_argocd_filter`, `acm_safe_path_validate`
+- `modules/` — custom modules: `acm_backup_schedule`, `acm_checkpoint`, `acm_checkpoint_identity_validate`, `acm_cluster_verify`, `acm_discovery`, `acm_input_validate`, `acm_klusterlet_probe`, `acm_klusterlet_remediate`, `acm_kubeconfig_inspect`, `acm_managedcluster_status`, `acm_preflight_report`, `acm_rbac_bootstrap`, `acm_rbac_validate`, `acm_report_artifact`, `acm_restore_info`, `acm_argocd_filter`, `acm_safe_path_validate`
 - `module_utils/` — shared utilities: `argocd`, `artifacts`, `checkpoint`, `constants`, `gitops`, `klusterlet`, `result`, `validation`
 - `action/checkpoint_phase.py` — action plugin for phase checkpointing
 

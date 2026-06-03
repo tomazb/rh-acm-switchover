@@ -20,7 +20,7 @@
 - Do not modify protected runbook files or `.claude/skills/**/*.skill.md` without explicit operator approval.
 - Do not intentionally change Python/Ansible parity status without explicit operator approval and repo documentation updates.
 
-**Last Updated:** 2026-06-02
+**Last Updated:** 2026-06-03
 
 ## Finding Validation Matrix
 
@@ -62,6 +62,8 @@
 | F34 | confirmed robustness | PR 17 | Python and collection klusterlet remediation delete `bootstrap-hub-kubeconfig` before recreating it. PR 17 preserves parity by switching both implementations and managed-cluster RBAC/docs from delete-then-create to patch/create. |
 | F35 | confirmed | PR 19 | Operator decision: Helm `customValidatorRules` must preserve the validator `ClusterRole` read-only boundary by allowing only `get`, `list`, and `watch`; no escape hatch. |
 | F36 | confirmed hardening | PR 15 | Service-account token generation defaults to `48h`; reduce the default or require explicit opt-in for longer-lived tokens. |
+| F37 | confirmed | PR 20 | Standalone collection Argo CD resume reloads a checkpoint run ID without validating checkpoint operation identity against live hub UIDs before mutating Applications. |
+| F38 | confirmed | PR 21 | Python klusterlet API/client failures are still conflated with non-fatal unreachable/skipped states and can fail open during post-activation verification. |
 
 ## PR Sequence
 
@@ -85,7 +87,9 @@
 | 16 | merged | `fix/thermos-container-supply-chain` | `.worktrees/thermos-16-container-supply-chain` | F33 | https://github.com/tomazb/rh-acm-switchover/pull/88 | Red/green container supply-chain guardrails passed. Targeted pytest, touched-file `black --check`, and `git diff --check` passed. Podman build passed and runtime check reported `oc` 4.21.16, `jq` 1.7.1, and Python 3.12.13. Final `./run_tests.sh` passed. Merged 2026-06-02. |
 | 17 | merged | `fix/thermos-klusterlet-secret-ordering` | `.worktrees/thermos-17-klusterlet-secret-ordering` | F34 | https://github.com/tomazb/rh-acm-switchover/pull/89 | Red/green klusterlet secret ordering tests passed; targeted Python, collection, RBAC parity/static, docs guardrail suites passed; `git diff --check` passed; final `./run_tests.sh` passed; merged 2026-06-02. |
 | 18 | merged | `fix/thermos-safe-path-consolidation` | `.worktrees/thermos-18-safe-path-consolidation` | F31 | https://github.com/tomazb/rh-acm-switchover/pull/90 | Red/green safe-path consolidation tests passed; targeted Python/collection safe-path and report-artifact suites passed; collection unit suite passed; documentation guardrails passed; `git diff --check` passed; final `./run_tests.sh` passed; merged 2026-06-02. |
-| 19 | ready_for_review | `fix/thermos-helm-validator-guardrail` | `.worktrees/thermos-19-helm-validator-guardrail` | F35 | https://github.com/tomazb/rh-acm-switchover/pull/91 | Red/green Helm validator guardrail tests passed; explicit positive and negative `helm template` checks passed; `python -m pytest tests/test_rbac_integration.py tests/test_documentation_guardrails.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py -q` passed; touched-file Black/isort and `git diff --check` passed; final `./run_tests.sh` passed; CodeRabbit CLI review `findings=0`; Gemini review thread for malformed `verbs` values addressed; CodeRabbit review thread for non-mapping custom rule entries addressed. |
+| 19 | merged | `fix/thermos-helm-validator-guardrail` | `.worktrees/thermos-19-helm-validator-guardrail` | F35 | https://github.com/tomazb/rh-acm-switchover/pull/91 | Red/green Helm validator guardrail tests passed; explicit positive and negative `helm template` checks passed; `python -m pytest tests/test_rbac_integration.py tests/test_documentation_guardrails.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py -q` passed; touched-file Black/isort and `git diff --check` passed; final `./run_tests.sh` passed; CodeRabbit CLI review `findings=0`; Gemini review thread for malformed `verbs` values addressed; CodeRabbit review thread for non-mapping custom rule entries addressed; merged 2026-06-03. |
+| 20 | in_progress | `thermos-20-argocd-resume-identity` | `.worktrees/thermos-20-argocd-resume-identity` | F37 | pending | Red/green checkpoint identity module tests passed locally; final verification pending. |
+| 21 | planned | `thermos-21-python-klusterlet-fail-closed` | `.worktrees/thermos-21-python-klusterlet-fail-closed` | F38 | pending | Start from updated `ansible` after PR 20 merges. |
 
 ## Per-PR Implementation Details
 
@@ -455,6 +459,44 @@
 - Mutating validator custom rules cannot be added silently.
 - Helm rendering/static tests cover allowed read-only custom rules and rejected mutating custom rules.
 - No intentional parity/support boundary change is introduced.
+
+### PR 20: Standalone Argo CD Resume Identity Validation
+
+**Scope**
+- Resolve F37 by validating collection checkpoint operation identity before standalone Argo CD resume mutates Applications.
+- Preserve explicit `run_id` behavior when operators supply `acm_switchover_argocd.run_id` or `acm_switchover_execution.run_id`.
+- Accept two-hub swapped primary/secondary contexts only when stored context and live UID pairs match the checkpoint.
+
+**Likely Files**
+- `ansible_collections/tomazb/acm_switchover/playbooks/argocd_resume.yml`
+- `ansible_collections/tomazb/acm_switchover/plugins/modules/acm_checkpoint_identity_validate.py`
+- `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_checkpoint_identity_validate.py`
+- `ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_hub_parameterization.py`
+- Operator-facing collection docs and changelog.
+
+**Acceptance Criteria**
+- Checkpoint-backed standalone resume reads live `kube-system` namespace UIDs before including `argocd_manage`.
+- Missing checkpoint identity, missing live UID, unreadable live identity, and UID/context mismatch fail before resume mutation.
+- Normal and swapped two-hub mappings are covered by unit tests.
+- Explicit `run_id` input remains usable without checkpoint loading.
+
+### PR 21: Python Klusterlet Fail-Closed Recheck
+
+**Scope**
+- Resolve F38 by separating expected non-fatal klusterlet skips from real Python inspection failures.
+- Leave collection klusterlet code unchanged unless parity tests expose drift.
+
+**Likely Files**
+- `modules/post_activation.py`
+- `tests/test_post_activation.py`
+- `CHANGELOG.md`
+- Operator docs that describe klusterlet probing behavior.
+
+**Acceptance Criteria**
+- No kubeconfig context, missing klusterlet hub secret, malformed/uninspectable secret data, and no hub server in the secret remain non-fatal skips.
+- Client construction failures, non-404 API errors, transport errors, and unexpected probe exceptions are classified as failed statuses.
+- `_verify_klusterlet_connections` raises `SwitchoverError` when those failed probe results are present.
+- Regression tests cover 403/500 secret reads, bootstrap fallback 500, client construction failure, and full verification failure.
 
 ## Verification Command Reference
 
