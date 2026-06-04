@@ -318,7 +318,7 @@ class Finalization:
         logger.info("Found %s switchover restore resource(s) to clean up", len(all_restores))
 
         for restore in all_restores:
-            restore_name = restore.get("metadata", {}).get("name", "unknown")
+            restore_name = (restore.get("metadata", {}) or {}).get("name", "unknown")
             try:
                 # Archive restore details before deletion
                 restore_archive = self._archive_restore_details(restore)
