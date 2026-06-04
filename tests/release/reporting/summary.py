@@ -2,9 +2,7 @@ from __future__ import annotations
 
 
 def _failed_required_scenarios(required_scenarios: list[dict]) -> list[str]:
-    return [
-        item["scenario_id"] for item in required_scenarios if item.get("status") not in {"passed", "not_applicable"}
-    ]
+    return [item["scenario_id"] for item in required_scenarios if item.get("status") != "passed"]
 
 
 def build_summary(

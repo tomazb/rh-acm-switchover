@@ -67,7 +67,8 @@ def discover_hub_facts(
 
     backup_present = backup is not None
     restore_present = restore is not None
-    if backup_present:
+    backup_paused = backup.get("spec", {}).get("paused") if backup else None
+    if backup_present and backup_paused is not True:
         hub_role = "primary"
     elif restore_present:
         hub_role = "secondary"

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from tests.release.adapters.bash import BashAdapter
+from tests.release.reporting.artifacts import ReleaseArtifacts
 from tests.release.test_release_certification import execute_bash_scenarios
 
 
@@ -55,22 +56,24 @@ def test_bash_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_path
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(
-        "tests.release.adapters.bash.sanitize_text",
+        "tests.release.reporting.artifacts.sanitize_text",
         lambda _: (_ for _ in ()).throw(RedactionError("sensitive")),
     )
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
     adapter = BashAdapter(
         Path("/repo"),
         "primary",
         "secondary",
         "/kube/primary",
         "/kube/secondary",
-        tmp_path,
+        artifacts.run_dir,
     )
 
     result = adapter.execute("preflight")
 
     assert result.status == "failed"
     assert any(a.name == "artifact-redaction" for a in result.assertions)
+    assert "scenarios/preflight/bash/stdout.txt" in (artifacts.run_dir / "redaction.json").read_text(encoding="utf-8")
 
 
 def test_build_command_raises_for_unknown_scenario(tmp_path: Path) -> None:

@@ -40,9 +40,9 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
         
-    - name: Run unit tests with coverage
+    - name: Run root tests with coverage
       run: |
-        python -m pytest tests/ -v -m "not e2e" --cov=. --cov-report=xml --cov-report=html --cov-report=term
+        python -m pytest tests/ --ignore=tests/release -v -m "not e2e" --cov=. --cov-report=xml --cov-report=html --cov-report=term
         
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
@@ -112,6 +112,29 @@ jobs:
         name: bandit-security-report
         path: bandit-report.json
         retention-days: 30
+
+  release-framework:
+    name: Release Framework Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+
+    - name: Run release framework helper tests
+      run: |
+        python -m pytest tests/release -q
 
   security:
     name: Security Scanning
@@ -220,7 +243,9 @@ jobs:
           "docs/deployment/rbac-deployment.md"
           "docs/development/architecture.md"
           "docs/development/testing.md"
+          "docs/development/release-validation-framework.md"
           "docs/development/ci.md"
+          "docs/deployment/rbac-live-certification.md"
           "docs/reference/validation-rules.md"
           "docs/project/prd.md"
           "docs/project/summary.md"
@@ -317,40 +342,10 @@ jobs:
       run: |
         docker run --rm acm-switchover:test --help
 
-  release-check:
-    name: Release Readiness
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    needs: [test, lint, security, syntax-check, documentation]
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
-      
-    - name: Check version consistency
-      run: |
-        # Check that version is consistent across files
-        echo "Checking version consistency..."
-        
-        # Extract versions from different sources
-        grep -o "\\[[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+\\]" CHANGELOG.md | head -1
-        grep -o "Version.*[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+" docs/project/prd.md | head -1
-        grep -o "__version__.*[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+" lib/__init__.py | head -1
-        
-    - name: Verify CHANGELOG updated
-      run: |
-        if ! grep -q "$(date +%Y-%m-%d)" CHANGELOG.md; then
-          echo "Warning: CHANGELOG may not be updated for today's date"
-        fi
-        
-    - name: Summary
-      run: |
-        echo "✓ All checks passed - Release ready"
-
   notify:
     name: Notification
     runs-on: ubuntu-latest
-    needs: [test, lint, security, syntax-check, documentation, integration-test]
+    needs: [test, lint, release-framework, security, syntax-check, documentation, integration-test]
     if: always()
     
     steps:
@@ -358,6 +353,7 @@ jobs:
       run: |
         echo "Test: ${{ needs.test.result }}"
         echo "Lint: ${{ needs.lint.result }}"
+        echo "Release framework: ${{ needs.release-framework.result }}"
         echo "Security: ${{ needs.security.result }}"
         echo "Syntax: ${{ needs.syntax-check.result }}"
         echo "Documentation: ${{ needs.documentation.result }}"

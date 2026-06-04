@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.release.adapters.ansible import PLAYBOOKS
+from tests.release.adapters.bash import SCRIPT_BY_SCENARIO
 from tests.release.orchestrator import run_release_certification
 from tests.release.reporting.render import render_release_report
 from tests.release.reporting.summary import build_summary
@@ -19,18 +21,10 @@ from tests.release.scenarios.runtime_parity import (
 # in tests/release/adapters/python_cli.py.
 PYTHON_SCENARIOS = frozenset(scenario_id for scenario_id, defn in SCENARIOS_BY_ID.items() if "python" in defn.streams)
 
-# V1 Ansible scenarios executed by AnsibleAdapter.
-# When adding a new Ansible scenario, update PLAYBOOKS and REPORT_NAMES
-# in tests/release/adapters/ansible.py.
-ANSIBLE_SCENARIOS = {
-    "preflight",
-    "ansible-passive-switchover",
-    "ansible-restore-only",
-    "argocd-managed-switchover",
-    "decommission",
-    "rbac-bootstrap",
-}
-BASH_SCENARIOS = {"preflight", "bash-discovery", "bash-postflight"}
+# Derived from adapter command maps so helper tests stay aligned with the
+# executable scenario surface.
+ANSIBLE_SCENARIOS = frozenset(PLAYBOOKS)
+BASH_SCENARIOS = frozenset(SCRIPT_BY_SCENARIO)
 
 
 def execute_ansible_scenarios(*, adapter, scenario_ids: Sequence[str]) -> list:

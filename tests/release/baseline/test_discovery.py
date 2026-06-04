@@ -73,3 +73,17 @@ def test_discover_hub_facts_ignores_malformed_managed_clusters() -> None:
     )
 
     assert facts.managed_cluster_names == ("cluster-a", "cluster-b")
+
+
+def test_discover_hub_facts_uses_paused_backup_to_avoid_primary_role_drift() -> None:
+    client = FakeHubDiscoveryClient()
+    client.resources["backupschedules"][0]["spec"]["paused"] = True
+
+    facts = discover_hub_facts(
+        client=client,
+        context="secondary",
+        acm_namespace="open-cluster-management",
+        argocd_namespaces=("openshift-gitops",),
+    )
+
+    assert facts.hub_role == "secondary"

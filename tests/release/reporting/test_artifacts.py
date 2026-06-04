@@ -69,6 +69,21 @@ def test_sanitized_write_records_rejection_in_redaction_json(tmp_path: Path) -> 
     assert "logs/secrets.txt" in redaction["rejected_artifacts"]
 
 
+def test_sanitized_capture_records_rejection_and_placeholder(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+
+    path, written = artifacts.write_sanitized_capture(
+        "logs/secrets.txt",
+        "token: abc123",
+        rejected_placeholder="Captured output was rejected by the sanitizer\n",
+    )
+
+    assert written is False
+    assert path.read_text(encoding="utf-8") == "Captured output was rejected by the sanitizer\n"
+    redaction = json.loads((artifacts.run_dir / "redaction.json").read_text(encoding="utf-8"))
+    assert "logs/secrets.txt" in redaction["rejected_artifacts"]
+
+
 def test_write_json_rejects_path_traversal(tmp_path: Path) -> None:
     artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
     with pytest.raises(ValueError, match="escapes"):

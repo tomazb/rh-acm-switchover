@@ -12,6 +12,8 @@ def test_root_ci_excludes_e2e_tests_by_marker():
     text = CI_WORKFLOW.read_text()
 
     assert '-m "not e2e"' in text or "-m 'not e2e'" in text
+    assert "--ignore=tests/release" in text
+    assert "python -m pytest tests/release -q" in text
 
 
 def test_collection_ci_covers_restore_only_syntax_and_runtime_tests():
@@ -50,7 +52,15 @@ def test_run_tests_quality_gates_are_explicit_and_scoped():
     assert "isort --check-only --profile black --line-length 120 ." not in text
 
 
-def test_run_tests_excludes_release_framework_by_default():
+def test_release_framework_ci_job_is_explicit_and_not_overstated():
+    text = CI_WORKFLOW.read_text()
+
+    assert "Release Readiness" not in text
+    assert "Release Framework Tests" in text
+
+
+def test_run_tests_executes_release_framework_explicitly():
     text = RUN_TESTS.read_text()
 
     assert "--ignore=tests/release" in text
+    assert "python -m pytest tests/release -q" in text

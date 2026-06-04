@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from tests.release.reporting.redaction import RedactionError, sanitize_text
+from tests.release.reporting.artifacts import write_capture_artifact
 
 from .common import AssertionRecord, ReportArtifact, StreamResult
 
@@ -44,16 +44,6 @@ def _decode(data: str | bytes | None) -> str:
     if isinstance(data, bytes):
         return data.decode("utf-8", errors="replace")
     return data or ""
-
-
-def _sanitized_write(path: Path, content: str) -> bool:
-    """Sanitize *content* and write to *path*. Returns False if content was rejected."""
-    try:
-        sanitized = sanitize_text(content)
-        path.write_text(sanitized.text, encoding="utf-8")
-        return True
-    except RedactionError:
-        return False
 
 
 @dataclass(frozen=True)
@@ -196,8 +186,18 @@ class AnsibleAdapter:
             )
         except subprocess.TimeoutExpired as exc:
             ended_at = _now()
-            stdout_written = _sanitized_write(stdout_path, _decode(exc.stdout))
-            stderr_written = _sanitized_write(stderr_path, _decode(exc.stderr))
+            _, stdout_written = write_capture_artifact(
+                run_dir=self.artifact_dir,
+                relative_path=stdout_path.relative_to(self.artifact_dir),
+                content=_decode(exc.stdout),
+                rejected_placeholder="",
+            )
+            _, stderr_written = write_capture_artifact(
+                run_dir=self.artifact_dir,
+                relative_path=stderr_path.relative_to(self.artifact_dir),
+                content=_decode(exc.stderr),
+                rejected_placeholder="Captured output was rejected by the sanitizer\n",
+            )
             timeout_assertions: list[AssertionRecord] = [
                 AssertionRecord(
                     capability=scenario_id,
@@ -235,8 +235,18 @@ class AnsibleAdapter:
                 ended_at=ended_at,
             )
         ended_at = _now()
-        stdout_written = _sanitized_write(stdout_path, completed.stdout)
-        stderr_written = _sanitized_write(stderr_path, completed.stderr)
+        _, stdout_written = write_capture_artifact(
+            run_dir=self.artifact_dir,
+            relative_path=stdout_path.relative_to(self.artifact_dir),
+            content=completed.stdout,
+            rejected_placeholder="",
+        )
+        _, stderr_written = write_capture_artifact(
+            run_dir=self.artifact_dir,
+            relative_path=stderr_path.relative_to(self.artifact_dir),
+            content=completed.stderr,
+            rejected_placeholder="Captured output was rejected by the sanitizer\n",
+        )
         status = "passed" if completed.returncode == 0 else "failed"
         assertions: list[AssertionRecord] = [
             AssertionRecord(

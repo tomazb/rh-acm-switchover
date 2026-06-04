@@ -12,6 +12,6 @@ def validate_artifact_reuse_manifest(
         raise ValueError(f"{manifest_path}: schema_version must be 1")
     if manifest.get("profile", {}).get("sha256") != expected_profile_hash:
         raise ValueError(f"{manifest_path}: profile.sha256 does not match active profile")
-    if manifest.get("selected_matrix_hash") != expected_matrix_hash:
-        raise ValueError(f"{manifest_path}: selected_matrix_hash does not match active matrix")
+    if manifest.get("matrix", {}).get("hash") != expected_matrix_hash:
+        raise ValueError(f"{manifest_path}: matrix.hash does not match active matrix")
     return manifest

@@ -34,7 +34,7 @@ Avoid relying on hard-coded totals in this file; the suite is still expanding.
 ### Release Validation Framework
 
 - `tests/release/` contains the profile-driven release certification framework.
-- Framework unit tests are explicit and are not part of the default `./run_tests.sh` run.
+- `./run_tests.sh` now runs the non-live `tests/release/` helper suite explicitly after the root test lane.
 - Live certification requires a real lab profile and is not certification-eligible when fake discovery clients or fake stream adapters are injected.
 - See `tests/release/README.md` and `docs/development/release-validation-framework.md`.
 
@@ -47,7 +47,7 @@ Avoid relying on hard-coded totals in this file; the suite is still expanding.
 ```
 
 This is the preferred entry point for local verification. It respects the existing virtualenv if one is active, otherwise it uses `.venv` first and falls back to `venv`.
-The default runner excludes `tests/release/`; run release framework tests explicitly when changing release validation code.
+The default runner executes root tests first, then runs `tests/release/` as an explicit non-live helper lane. Live certification still requires a profile-driven invocation.
 The runner treats CI-equivalent `black`, `isort`, `mypy`, and `bandit` checks as hard failures by default. Use `STRICT_QUALITY=0 ./run_tests.sh` only when you need a local advisory pass.
 
 ### Root Tests Only

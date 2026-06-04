@@ -72,6 +72,10 @@ class ReleaseArtifacts:
         (run_dir / "release-report.md").write_text("# Release Report\n\nStatus: created\n", encoding="utf-8")
         return artifacts
 
+    @classmethod
+    def bind_existing_run(cls, run_dir: Path) -> "ReleaseArtifacts":
+        return cls(root=run_dir.parent, run_id=run_dir.name, run_dir=run_dir)
+
     def _safe_path(self, relative_path: str | Path) -> Path:
         """Resolve *relative_path* under run_dir and raise if it escapes."""
         resolved = (self.run_dir / relative_path).resolve()
@@ -101,6 +105,22 @@ class ReleaseArtifacts:
         path.write_text(sanitized.text, encoding="utf-8")
         self._update_redaction_record(str(relative_path), sanitized.redacted_counts_by_class, rejected=False)
         return path
+
+    def write_sanitized_capture(
+        self,
+        relative_path: str | Path,
+        content: str,
+        *,
+        rejected_placeholder: str,
+    ) -> tuple[Path, bool]:
+        relative_path = Path(relative_path)
+        try:
+            return self.write_sanitized_text(relative_path, content), True
+        except RedactionError:
+            path = self._safe_path(relative_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(rejected_placeholder, encoding="utf-8")
+            return path, False
 
     def _update_redaction_record(self, artifact_path: str, counts: dict[str, int], *, rejected: bool) -> None:
         """Merge a scan result into redaction.json for audit-trail tracking."""
@@ -145,3 +165,31 @@ class ReleaseArtifacts:
             },
         )
         return manifest_path, summary_path
+
+
+def write_capture_artifact(
+    *,
+    run_dir: Path,
+    relative_path: str | Path,
+    content: str,
+    rejected_placeholder: str,
+) -> tuple[Path, bool]:
+    artifacts = ReleaseArtifacts.bind_existing_run(run_dir)
+    relative_path = Path(relative_path)
+    if (run_dir / "redaction.json").exists():
+        return artifacts.write_sanitized_capture(
+            relative_path,
+            content,
+            rejected_placeholder=rejected_placeholder,
+        )
+
+    path = artifacts._safe_path(relative_path)
+    try:
+        sanitized = sanitize_text(content)
+    except RedactionError:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rejected_placeholder, encoding="utf-8")
+        return path, False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(sanitized.text, encoding="utf-8")
+    return path, True

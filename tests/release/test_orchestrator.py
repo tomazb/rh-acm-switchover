@@ -4,6 +4,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from tests.release.adapters.common import AssertionRecord, StreamResult
 from tests.release.checks.rbac_certification import CertificationResult
 from tests.release.checks.static_gates import GateCommand, GateResult
@@ -12,6 +14,7 @@ from tests.release.contracts.loader import load_profile
 from tests.release.contracts.models import (
     RBACCertificationHubProfile,
     RBACCertificationProfile,
+    ReleaseMetadataProfile,
     ScenarioProfile,
 )
 from tests.release.orchestrator import OcDiscoveryClient, run_release_certification
@@ -41,6 +44,17 @@ class FakeDiscoveryClient:
         if resource == "backupstoragelocations":
             return [{"metadata": {"name": "default"}, "status": {"phase": "Available"}}]
         return []
+
+
+class MissingBackupStorageDiscoveryClient(FakeDiscoveryClient):
+    def list_resources(self, resource: str, namespace: str | None = None) -> list[dict]:
+        if resource == "backupstoragelocations":
+            return []
+        return super().list_resources(resource, namespace)
+
+
+class RealisticDiscoveryClient(FakeDiscoveryClient):
+    test_only = False
 
 
 class FakeAdapter:
@@ -103,14 +117,16 @@ class FailingAdapter(FakeAdapter):
         raise RuntimeError("adapter boom")
 
 
+class RealisticAdapter(FakeAdapter):
+    test_only = False
+
+
 def _release_options(tmp_path: Path, *, mode: str = "certification") -> ReleaseOptions:
     return ReleaseOptions(
         profile_path=Path("tests/release/profiles/dev-minimal.example.yaml"),
         mode=mode,
         scenarios=(),
         streams=(),
-        resume_from_artifacts=None,
-        rerun_from_artifacts=None,
         artifact_dir=tmp_path,
         allow_dirty=True,
     )
@@ -346,7 +362,284 @@ def test_orchestrator_uses_profile_live_rbac_certification_scope(
     ]
 
 
-def test_oc_discovery_client_handles_missing_oc(monkeypatch) -> None:
+def test_orchestrator_required_live_rbac_skip_fails_required_scenario(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("ACM_ENABLE_LIVE_RBAC_CERTIFICATION", raising=False)
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    profile = replace(
+        loaded.profile,
+        scenarios=loaded.profile.scenarios
+        + (
+            ScenarioProfile(
+                id="rbac-bootstrap-live",
+                required=True,
+            ),
+        ),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+
+    summary = run_release_certification(
+        release_options=replace(
+            _release_options(tmp_path),
+            scenarios=("rbac-bootstrap-live",),
+        ),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": FakeDiscoveryClient(primary=True),
+            "secondary": FakeDiscoveryClient(primary=False),
+        },
+        adapters={"python": FakeAdapter("python"), "ansible": FakeAdapter("ansible")},
+        gate_runner=_passing_gate,
+    )
+
+    scenario_results = json.loads((artifacts.run_dir / "scenario-results.json").read_text(encoding="utf-8"))
+    rbac_live = next(
+        item for item in scenario_results["scenario_statuses"] if item["scenario_id"] == "rbac-bootstrap-live"
+    )
+    assert rbac_live["status"] == "failed"
+    assert "required scenario failed: rbac-bootstrap-live" in summary["failure_reasons"]
+
+
+def test_orchestrator_stops_before_mutation_when_lab_readiness_fails(
+    tmp_path: Path,
+) -> None:
+    profile = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    primary = MissingBackupStorageDiscoveryClient(primary=True)
+    secondary = MissingBackupStorageDiscoveryClient(primary=False)
+    python = FakeAdapter("python")
+    ansible = FakeAdapter("ansible")
+
+    summary = run_release_certification(
+        release_options=_release_options(tmp_path),
+        release_profile=profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": primary,
+            "secondary": secondary,
+        },
+        adapters={"python": python, "ansible": ansible},
+        gate_runner=_passing_gate,
+    )
+
+    scenario_results = json.loads((artifacts.run_dir / "scenario-results.json").read_text(encoding="utf-8"))
+    lab_readiness = next(item for item in scenario_results["scenario_statuses"] if item["scenario_id"] == "lab-readiness")
+    assert lab_readiness["status"] == "failed"
+    assert "required scenario failed: lab-readiness" in summary["failure_reasons"]
+    assert python.calls == []
+    assert ansible.calls == []
+
+
+def test_orchestrator_stops_before_mutation_when_baseline_check_fails(
+    tmp_path: Path,
+) -> None:
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    profile = replace(
+        loaded.profile,
+        baseline=replace(loaded.profile.baseline, initial_primary="secondary"),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    python = FakeAdapter("python")
+    ansible = FakeAdapter("ansible")
+
+    summary = run_release_certification(
+        release_options=_release_options(tmp_path),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": FakeDiscoveryClient(primary=True),
+            "secondary": FakeDiscoveryClient(primary=False),
+        },
+        adapters={"python": python, "ansible": ansible},
+        gate_runner=_passing_gate,
+    )
+
+    scenario_results = json.loads((artifacts.run_dir / "scenario-results.json").read_text(encoding="utf-8"))
+    baseline_check = next(item for item in scenario_results["scenario_statuses"] if item["scenario_id"] == "baseline-check")
+    assert baseline_check["status"] == "failed"
+    assert "required scenario failed: baseline-check" in summary["failure_reasons"]
+    assert python.calls == []
+    assert ansible.calls == []
+
+
+def test_orchestrator_required_scenario_without_executable_streams_fails(
+    tmp_path: Path,
+) -> None:
+    profile = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+
+    summary = run_release_certification(
+        release_options=replace(_release_options(tmp_path), streams=("bash",)),
+        release_profile=profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": FakeDiscoveryClient(primary=True),
+            "secondary": FakeDiscoveryClient(primary=False),
+        },
+        adapters={"python": FakeAdapter("python"), "ansible": FakeAdapter("ansible")},
+        gate_runner=_passing_gate,
+    )
+
+    scenario_results = json.loads((artifacts.run_dir / "scenario-results.json").read_text(encoding="utf-8"))
+    preflight = next(item for item in scenario_results["scenario_statuses"] if item["scenario_id"] == "preflight")
+    assert preflight["status"] == "failed"
+    assert "required scenario failed: preflight" in summary["failure_reasons"]
+
+
+def test_orchestrator_blocks_dirty_checkout_without_allow_dirty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    profile = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    python = RealisticAdapter("python")
+    ansible = RealisticAdapter("ansible")
+
+    monkeypatch.setattr(
+        "tests.release.orchestrator._git_checkout_state",
+        lambda repo_root: {"available": True, "dirty": True, "allow_dirty": False, "commit": "abc123", "warnings": []},
+    )
+
+    summary = run_release_certification(
+        release_options=replace(_release_options(tmp_path), allow_dirty=False),
+        release_profile=profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": RealisticDiscoveryClient(primary=True),
+            "secondary": RealisticDiscoveryClient(primary=False),
+        },
+        adapters={"python": python, "ansible": ansible},
+        gate_runner=_passing_gate,
+    )
+
+    manifest = json.loads((artifacts.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "failed"
+    assert manifest["failure_reasons"] == ["release certification failed: RuntimeError: git checkout is dirty; rerun with --allow-dirty"]
+    assert python.calls == []
+    assert ansible.calls == []
+
+
+def test_orchestrator_dirty_allow_dirty_run_is_not_certification_eligible(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    profile = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+
+    monkeypatch.setattr(
+        "tests.release.orchestrator._git_checkout_state",
+        lambda repo_root: {"available": True, "dirty": True, "allow_dirty": True, "commit": "abc123", "warnings": []},
+    )
+
+    summary = run_release_certification(
+        release_options=replace(_release_options(tmp_path), allow_dirty=True),
+        release_profile=profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": RealisticDiscoveryClient(primary=True),
+            "secondary": RealisticDiscoveryClient(primary=False),
+        },
+        adapters={"python": RealisticAdapter("python"), "ansible": RealisticAdapter("ansible")},
+        gate_runner=_passing_gate,
+    )
+
+    manifest = json.loads((artifacts.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert summary["certification_eligible"] is False
+    assert "run is not certification eligible" in summary["failure_reasons"]
+    assert manifest["git"] == {
+        "available": True,
+        "dirty": True,
+        "allow_dirty": True,
+        "commit": "abc123",
+        "warnings": [],
+    }
+
+
+def test_orchestrator_records_release_metadata_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    profile = replace(
+        loaded.profile,
+        release=ReleaseMetadataProfile(expected_version="9.9.9", metadata_files=("README.md",)),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path / "artifacts", run_id="run-1")
+    (tmp_path / "README.md").write_text("Version 1.0.0\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "tests.release.orchestrator._git_checkout_state",
+        lambda repo_root: {"available": True, "dirty": False, "allow_dirty": False, "commit": "abc123", "warnings": []},
+    )
+
+    summary = run_release_certification(
+        release_options=replace(_release_options(tmp_path / "artifacts"), allow_dirty=False),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=tmp_path,
+        discovery_clients={
+            "primary": RealisticDiscoveryClient(primary=True),
+            "secondary": RealisticDiscoveryClient(primary=False),
+        },
+        adapters={"python": RealisticAdapter("python"), "ansible": RealisticAdapter("ansible")},
+        gate_runner=_passing_gate,
+    )
+
+    manifest = json.loads((artifacts.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert summary["release_metadata"]["status"] == "failed"
+    assert "release metadata failed" in summary["failure_reasons"]
+    assert manifest["release_metadata"]["status"] == "failed"
+    assert manifest["release_metadata"]["hash"] is None
+
+
+def test_orchestrator_writes_recovery_budget_from_profile(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    profile = replace(
+        loaded.profile,
+        recovery=replace(loaded.profile.recovery, total_budget_minutes=17),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+
+    monkeypatch.setattr(
+        "tests.release.orchestrator._git_checkout_state",
+        lambda repo_root: {"available": True, "dirty": False, "allow_dirty": False, "commit": "abc123", "warnings": []},
+    )
+
+    run_release_certification(
+        release_options=replace(_release_options(tmp_path), allow_dirty=False),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": FakeDiscoveryClient(primary=True),
+            "secondary": FakeDiscoveryClient(primary=False),
+        },
+        adapters={"python": FakeAdapter("python"), "ansible": FakeAdapter("ansible")},
+        gate_runner=_passing_gate,
+    )
+
+    recovery = json.loads((artifacts.run_dir / "recovery.json").read_text(encoding="utf-8"))
+    assert recovery["budget_minutes"] == 17
+    assert recovery["hard_stops"] == []
+
+
+def test_oc_discovery_client_raises_explicit_error_when_oc_is_missing(monkeypatch) -> None:
     def fail_run(*args, **kwargs):
         raise FileNotFoundError("oc")
 
@@ -354,10 +647,11 @@ def test_oc_discovery_client_handles_missing_oc(monkeypatch) -> None:
 
     client = OcDiscoveryClient(kubeconfig="/missing", context="ctx")
 
-    assert client.list_resources("managedclusters") == []
+    with pytest.raises(RuntimeError, match="discovery failed for managedclusters.*FileNotFoundError"):
+        client.list_resources("managedclusters")
 
 
-def test_oc_discovery_client_handles_invalid_json(monkeypatch) -> None:
+def test_oc_discovery_client_raises_explicit_error_on_invalid_json(monkeypatch) -> None:
     class Completed:
         returncode = 0
         stdout = "{not-json"
@@ -369,7 +663,41 @@ def test_oc_discovery_client_handles_invalid_json(monkeypatch) -> None:
 
     client = OcDiscoveryClient(kubeconfig="/missing", context="ctx")
 
-    assert client.list_resources("managedclusters") == []
+    with pytest.raises(RuntimeError, match="discovery failed for managedclusters.*invalid JSON"):
+        client.list_resources("managedclusters")
+
+
+def test_orchestrator_records_discovery_failure_in_manifest(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def fail_run(*args, **kwargs):
+        raise FileNotFoundError("oc")
+
+    monkeypatch.setattr("tests.release.orchestrator.subprocess.run", fail_run)
+    monkeypatch.setattr(
+        "tests.release.orchestrator._git_checkout_state",
+        lambda repo_root: {"available": True, "dirty": False, "allow_dirty": False, "commit": "abc123", "warnings": []},
+    )
+    profile = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+
+    summary = run_release_certification(
+        release_options=replace(_release_options(tmp_path), allow_dirty=False),
+        release_profile=profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": OcDiscoveryClient(kubeconfig="/missing", context="primary"),
+            "secondary": OcDiscoveryClient(kubeconfig="/missing", context="secondary"),
+        },
+        adapters={"python": FakeAdapter("python"), "ansible": FakeAdapter("ansible")},
+        gate_runner=_passing_gate,
+    )
+
+    manifest = json.loads((artifacts.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "failed"
+    assert "discovery failed for multiclusterhubs" in manifest["failure_reasons"][0]
 
 
 def test_orchestrator_marks_manifest_failed_on_unexpected_exception(

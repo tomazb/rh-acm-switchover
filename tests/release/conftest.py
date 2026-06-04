@@ -21,8 +21,6 @@ class ReleaseOptions:
     mode: str | None
     scenarios: tuple[str, ...]
     streams: tuple[str, ...]
-    resume_from_artifacts: Path | None
-    rerun_from_artifacts: Path | None
     artifact_dir: Path | None
     allow_dirty: bool
 
@@ -43,8 +41,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         choices=("bash", "python", "ansible"),
         default=[],
     )
-    group.addoption("--release-resume-from-artifacts", action="store", default=None)
-    group.addoption("--release-rerun-from-artifacts", action="store", default=None)
     group.addoption("--release-artifact-dir", action="store", default=None)
     group.addoption("--allow-dirty", action="store_true", default=False)
 
@@ -96,16 +92,6 @@ def release_options(pytestconfig: pytest.Config) -> ReleaseOptions:
         mode=mode,
         scenarios=scenario_filter,
         streams=stream_filter,
-        resume_from_artifacts=(
-            Path(pytestconfig.getoption("--release-resume-from-artifacts"))
-            if pytestconfig.getoption("--release-resume-from-artifacts")
-            else None
-        ),
-        rerun_from_artifacts=(
-            Path(pytestconfig.getoption("--release-rerun-from-artifacts"))
-            if pytestconfig.getoption("--release-rerun-from-artifacts")
-            else None
-        ),
         artifact_dir=(
             Path(pytestconfig.getoption("--release-artifact-dir"))
             if pytestconfig.getoption("--release-artifact-dir")
