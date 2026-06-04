@@ -91,4 +91,4 @@
       Remediate the reported ApplicationSet parents or refresh stale Application status before retrying.
   when:
     - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'pause'
-    - acm_switchover_argocd_blocked_apps | default([])
+    - (acm_switchover_argocd_blocked_apps | default([]) | length) > 0

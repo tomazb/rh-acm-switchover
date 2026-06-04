@@ -176,9 +176,93 @@ class TestPrimaryPreparation:
         mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
         mock_primary_client.patch_custom_resource.return_value = True
 
-        result = prep.prepare()
+        with patch.object(prep, "_pause_argocd_acm_apps"):
+            result = prep.prepare()
 
         assert result is True
+        assert not any(
+            call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list
+        )
+
+    def test_prepare_dry_run_still_calls_argocd_pause_logic(self, mock_primary_client, mock_state_manager):
+        """Dry-run must still discover Argo CD apps instead of skipping the coordinator path."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
+        mock_primary_client.patch_custom_resource.return_value = True
+
+        with patch.object(prep, "_pause_argocd_acm_apps") as pause_argocd:
+            result = prep.prepare()
+
+        assert result is True
+        pause_argocd.assert_called_once_with()
+        assert not any(
+            call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list
+        )
+
+    def test_prepare_dry_run_surfaces_argocd_blockers(self, mock_primary_client, mock_state_manager):
+        """Dry-run should still fail when Argo CD discovery finds pause blockers."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
+        mock_primary_client.patch_custom_resource.return_value = True
+
+        with patch.object(
+            prep,
+            "_pause_argocd_acm_apps",
+            side_effect=SwitchoverError("Argo CD auto-sync pause failed for 1 Application(s)"),
+        ) as pause_argocd:
+            result = prep.prepare()
+
+        assert result is False
+        pause_argocd.assert_called_once_with()
+        mock_state_manager.add_error.assert_called_once_with(
+            "Argo CD auto-sync pause failed for 1 Application(s)",
+            primary_prep_module.Phase.PRIMARY_PREP.value,
+        )
+
+    def test_prepare_dry_run_skips_argocd_pause_when_step_already_completed(
+        self, mock_primary_client, mock_state_manager
+    ):
+        """Dry-run should mirror resumed step gating when Argo CD pause already completed."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_state_manager.is_step_completed.side_effect = lambda step_name: step_name == "pause_argocd_apps"
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
+        mock_primary_client.patch_custom_resource.return_value = True
+
+        with patch.object(prep, "_pause_argocd_acm_apps") as pause_argocd:
+            result = prep.prepare()
+
+        assert result is True
+        pause_argocd.assert_not_called()
         assert not any(
             call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list
         )
