@@ -23,6 +23,7 @@ from acm_switchover import (
     _initialize_clients,
     _report_argocd_acm_impact,
     _run_argocd_resume_only,
+    _run_restore_only_argocd_pause,
     _run_phase_activation,
     _run_phase_finalization,
     _run_phase_post_activation,
@@ -1023,6 +1024,47 @@ class TestSwitchoverPhaseFlow:
         assert DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE in log_text
         assert DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE in log_text
         assert RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE not in log_text
+
+    def test_restore_only_argocd_pause_dry_run_uses_coordinator_without_marking_step(self):
+        args = SimpleNamespace(argocd_manage=True, dry_run=True)
+        state = Mock()
+        state.is_step_completed.return_value = False
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class:
+            coordinator = coordinator_class.return_value
+            coordinator.pause_hubs.return_value = ([{"hub": "secondary", "name": "app-1"}], 0)
+            state.get_config.return_value = "run-1"
+
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
+
+        assert result is True
+        coordinator_class.assert_called_once_with(state, dry_run=True)
+        coordinator.pause_hubs.assert_called_once_with([(secondary, "secondary")])
+        state.mark_step_completed.assert_not_called()
+
+    def test_restore_only_argocd_pause_dry_run_fails_on_blockers(self):
+        args = SimpleNamespace(argocd_manage=True, dry_run=True)
+        state = Mock()
+        state.is_step_completed.return_value = False
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class, patch(
+            "acm_switchover._fail_phase",
+            return_value=False,
+        ) as fail_phase:
+            coordinator = coordinator_class.return_value
+            coordinator.pause_hubs.return_value = ([], 1)
+
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
+
+        assert result is False
+        coordinator_class.assert_called_once_with(state, dry_run=True)
+        coordinator.pause_hubs.assert_called_once_with([(secondary, "secondary")])
+        fail_phase.assert_called_once_with(state, "Argo CD auto-sync pause failed for 1 Application(s)", logger)
+        state.mark_step_completed.assert_not_called()
 
     def test_run_switchover_resume_from_failed_state_retries_failed_phase(self, tmp_path):
         """Verify that run_switchover resumes from the phase that failed when state is FAILED."""

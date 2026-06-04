@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed Python `--argocd-manage --dry-run` handling so switchover and restore-only flows still discover ACM-touching Argo CD Applications and report pause blockers instead of skipping the coordinator path entirely.
 - Hardened Python Argo CD resume paths so legacy state files without stored hub UID bindings now fail closed before any resume patch.
 - Operators must explicitly use `--force` after manual hub verification to proceed, and resume-on-failure now reuses the same validation path.
 - Fixed direct collection `acm_restore_info` module use so passive Restore selection now defaults to the documented fail-closed contract requiring `spec.syncRestoreWithNewBackups=true`. The conventional-name fallback remains available only as an explicit opt-in.

@@ -524,15 +524,12 @@ def _run_restore_only_argocd_pause(
     """
     if not getattr(args, "argocd_manage", False):
         return True
-    if args.dry_run:
-        logger.info("[DRY-RUN] Would pause Argo CD auto-sync for ACM-touching Applications on secondary hub")
-        return True
     if state.is_step_completed("pause_argocd_apps"):
         logger.info("Argo CD pause already completed, skipping")
         return True
 
     try:
-        coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+        coordinator = ArgoCDPauseCoordinator(state, dry_run=args.dry_run)
         paused_apps, failure_count = coordinator.pause_hubs([(secondary, "secondary")])
     except Exception as exc:
         return _fail_phase(state, f"Argo CD pause on secondary hub failed: {exc}", logger)
@@ -552,7 +549,8 @@ def _run_restore_only_argocd_pause(
             len(paused_apps),
             run_id,
         )
-    state.mark_step_completed("pause_argocd_apps")
+    if not args.dry_run:
+        state.mark_step_completed("pause_argocd_apps")
     return True
 
 
