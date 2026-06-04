@@ -1605,11 +1605,14 @@ def _resolve_state_file(
 
 def _state_contexts(state: StateManager) -> tuple[Optional[str], Optional[str]]:
     """Return stored primary/secondary contexts from state."""
-    stored_contexts = getattr(state, "state", {}) or {}
-    if isinstance(stored_contexts, dict):
-        stored_contexts = stored_contexts.get("contexts") or {}
-    else:
-        stored_contexts = {}
+    state_data = getattr(state, "state", {}) or {}
+    if not isinstance(state_data, dict):
+        return None, None
+
+    stored_contexts = state_data.get("contexts") or {}
+    if not isinstance(stored_contexts, dict):
+        return None, None
+
     return stored_contexts.get("primary"), stored_contexts.get("secondary")
 
 
@@ -1639,21 +1642,21 @@ def _prepare_argocd_resume_clients(
 
     if stored_primary_ctx or stored_secondary_ctx:
         if stored_primary_ctx == current_secondary_ctx and stored_secondary_ctx == current_primary_ctx:
-            logger.info("Resume-only contexts are reversed from the recorded state; swapping client mapping.")
+            logger.info("Argo CD resume contexts are reversed from the recorded state; swapping client mapping.")
             resume_primary, resume_secondary = secondary, primary
         elif (current_primary_ctx is not None and stored_primary_ctx != current_primary_ctx) or (
             current_secondary_ctx is not None and stored_secondary_ctx != current_secondary_ctx
         ):
             if not getattr(args, "force", False):
                 raise ValueError(
-                    "Resume-only contexts "
+                    "Argo CD resume contexts "
                     f"({current_primary_ctx}/{current_secondary_ctx}) differ from recorded state "
                     f"({stored_primary_ctx}/{stored_secondary_ctx}). "
                     "This may indicate wrong-hub resume. Use --force to override, "
                     "or --state-file to specify the correct state."
                 )
             logger.warning(
-                "Resume-only contexts (%s/%s) differ from recorded state (%s/%s); "
+                "Argo CD resume contexts (%s/%s) differ from recorded state (%s/%s); "
                 "--force used, preserving state and using the provided client mapping.",
                 current_primary_ctx,
                 current_secondary_ctx,
@@ -1673,7 +1676,7 @@ def _prepare_argocd_resume_clients(
             resume_primary = secondary
         elif allow_primary_load_from_state:
             logger.info(
-                "Resume-only primary context omitted; loading recorded primary hub client: %s",
+                "Argo CD resume primary context omitted; loading recorded primary hub client: %s",
                 stored_primary_ctx,
             )
             resume_primary = KubeClient(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
@@ -1684,7 +1687,7 @@ def _prepare_argocd_resume_clients(
             resume_primary = secondary
         elif allow_primary_load_from_state:
             logger.info(
-                "Resume-only identity validation loading recorded primary hub client: %s",
+                "Argo CD resume identity validation loading recorded primary hub client: %s",
                 stored_primary_ctx,
             )
             resume_primary = KubeClient(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
@@ -1702,12 +1705,15 @@ def _prepare_argocd_resume_clients(
         )
 
     live_identities = _collect_hub_identities(resume_primary, resume_secondary)
-    required_roles = {entry.get("hub") for entry in paused_apps if isinstance(entry, dict) and entry.get("hub")}
-    required_roles.update(stored_identities.keys())
+    known_hub_roles = {"primary", "secondary"}
+    required_roles = {
+        entry.get("hub") for entry in paused_apps if isinstance(entry, dict) and entry.get("hub") in known_hub_roles
+    }
+    required_roles.update(role for role in stored_identities.keys() if role in known_hub_roles)
     missing_roles = sorted(role for role in required_roles if role not in live_identities)
     if missing_roles:
         raise ValueError(
-            "Resume-only hub identity validation failed: missing live client for recorded "
+            "Argo CD resume hub identity validation failed: missing live client for recorded "
             + ", ".join(missing_roles)
             + " hub identity."
         )

@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Hardened Python Argo CD resume paths so legacy state files without stored hub UID bindings now fail closed before any resume patch unless the operator explicitly uses `--force` after manual hub verification. Resume-on-failure now reuses the same validation path.
+- Hardened Python Argo CD resume paths so legacy state files without stored hub UID bindings now fail closed before any resume patch.
+- Operators must explicitly use `--force` after manual hub verification to proceed, and resume-on-failure now reuses the same validation path.
 - Fixed direct collection `acm_restore_info` module use so passive Restore selection now defaults to the documented fail-closed contract requiring `spec.syncRestoreWithNewBackups=true`. The conventional-name fallback remains available only as an explicit opt-in.
 - Fixed Python post-activation klusterlet probing so client construction failures, non-404 managed-cluster secret API errors, transport errors, and unexpected per-cluster probe exceptions fail closed instead of being reported as non-fatal skips.
 - Fixed Python and collection klusterlet remediation to patch an existing `bootstrap-hub-kubeconfig` secret instead of deleting it before re-creating it. Managed-cluster RBAC now requires `secrets` `patch` instead of `delete`.

@@ -396,6 +396,68 @@ class TestArgocdResumeOnly:
         assert "unexpected format" in caplog.text
         assert "missing required fields" in caplog.text
 
+    def test_resume_only_ignores_malformed_context_mapping(self):
+        paused_apps = [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {}},
+            }
+        ]
+        state = self._mock_resume_state(paused_apps)
+        state.state["contexts"] = "not-a-dict"
+        args = SimpleNamespace()
+        primary, secondary = self._identity_clients()
+        logger = logging.getLogger("test.resume_only_malformed_contexts")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+
+        resume_recorded.assert_called_once_with(
+            paused_apps,
+            "run-1",
+            primary,
+            secondary,
+            logger,
+        )
+
+    def test_resume_only_leaves_unknown_hub_entries_to_resume_summary(self, caplog):
+        from acm_switchover import _run_argocd_resume_only
+
+        paused_apps = [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {}},
+            },
+            {
+                "hub": "foo",
+                "namespace": "argocd",
+                "name": "app-3",
+                "original_sync_policy": {"automated": {}},
+            },
+        ]
+        state = self._mock_resume_state(paused_apps)
+        args = SimpleNamespace()
+        primary, secondary = self._identity_clients()
+        logger = logging.getLogger("test.resume_only_unknown_hub")
+
+        with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
+            resume_autosync.return_value = argocd_lib.ResumeResult(
+                namespace="argocd",
+                name="app-2",
+                restored=True,
+            )
+            with caplog.at_level(logging.WARNING):
+                assert _run_argocd_resume_only(args, state, primary, secondary, logger) is False
+
+        assert "unrecognized hub=foo" in caplog.text
+        assert "missing live client for recorded foo hub identity" not in caplog.text
+
 
 @pytest.mark.unit
 class TestAttemptArgoCDResumeOnFailure:
@@ -641,6 +703,34 @@ class TestAttemptArgoCDResumeOnFailure:
         assert "could not be resumed" in caplog.text
         state.set_config.assert_not_called()
         state.clear_step_completed.assert_not_called()
+
+    def test_resume_on_failure_uses_context_neutral_context_mismatch_message(self, caplog):
+        args = make_resume_on_failure_args()
+        state = self._make_state()
+        logger = logging.getLogger("test.resume_on_failure_context_message")
+        primary, secondary = self._identity_clients(primary_context="hub-x")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            with caplog.at_level(logging.WARNING):
+                _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+
+        mock_resume.assert_not_called()
+        assert "Argo CD resume contexts" in caplog.text
+        assert "Resume-only contexts" not in caplog.text
+
+    def test_resume_on_failure_uses_context_neutral_missing_client_message(self, caplog):
+        args = make_resume_on_failure_args()
+        state = self._make_state()
+        logger = logging.getLogger("test.resume_on_failure_missing_client_message")
+        _, secondary = self._identity_clients()
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            with caplog.at_level(logging.WARNING):
+                _attempt_argocd_resume_on_failure(args, state, None, secondary, logger)
+
+        mock_resume.assert_not_called()
+        assert "Argo CD resume hub identity validation failed" in caplog.text
+        assert "Resume-only hub identity validation failed" not in caplog.text
 
     def test_resume_on_failure_skips_legacy_state_without_hub_identities(self, tmp_path, caplog):
         from lib.utils import Phase, StateManager
