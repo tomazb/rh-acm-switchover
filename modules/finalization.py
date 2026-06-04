@@ -31,10 +31,12 @@ from lib.constants import (
     MCE_NAMESPACE,
     MCH_VERIFY_INTERVAL,
     MCH_VERIFY_TIMEOUT,
+    MANAGED_CLUSTER_RESTORE_NAME,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
     RESTORE_FAST_POLL_INTERVAL,
+    RESTORE_FULL_NAME,
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_PASSIVE_SYNC_NAME,
     RESTORE_POLL_INTERVAL,
@@ -266,6 +268,14 @@ class Finalization:
         self.state.set_config("backup_schedule_enabled_at", datetime.now(timezone.utc).isoformat())
         self.state.set_config("new_backup_detected", False)
 
+    @staticmethod
+    def _is_cleanup_candidate_restore(restore: Dict) -> bool:
+        """Return True when the restore is owned by the switchover workflow."""
+        restore_name = (restore.get("metadata", {}) or {}).get("name", "")
+        if restore_name in {RESTORE_PASSIVE_SYNC_NAME, RESTORE_FULL_NAME, MANAGED_CLUSTER_RESTORE_NAME}:
+            return True
+        return (restore.get("spec", {}) or {}).get(SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS) is True
+
     def _cleanup_restore_resources(self):
         """Delete restore resources before enabling BackupSchedule.
 
@@ -293,10 +303,22 @@ class Finalization:
             logger.info("No restore resources found to clean up")
             return
 
-        logger.info("Found %s restore resource(s) to clean up", len(all_restores))
+        unexpected_restores = sorted(
+            (restore.get("metadata", {}) or {}).get("name", "unknown")
+            for restore in all_restores
+            if not self._is_cleanup_candidate_restore(restore)
+        )
+        if unexpected_restores:
+            raise SwitchoverError(
+                "Found unexpected Restore resource(s) blocking BackupSchedule enablement: "
+                + ", ".join(unexpected_restores)
+                + ". Refusing to delete non-switchover Restore resources automatically."
+            )
+
+        logger.info("Found %s switchover restore resource(s) to clean up", len(all_restores))
 
         for restore in all_restores:
-            restore_name = restore.get("metadata", {}).get("name", "unknown")
+            restore_name = (restore.get("metadata", {}) or {}).get("name", "unknown")
             try:
                 # Archive restore details before deletion
                 restore_archive = self._archive_restore_details(restore)

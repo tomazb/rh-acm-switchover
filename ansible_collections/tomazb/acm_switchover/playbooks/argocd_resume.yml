@@ -135,14 +135,31 @@
         operation: "{{ acm_switchover_operation | default({}) }}"
         hub_identities: "{{ _argocd_resume_hub_identities }}"
         collection_version: "{{ acm_switchover_collection_version | default('') }}"
+      register: _argocd_resume_identity_validation
       when:
         - _argocd_resume_checkpoint is defined
+
+    - name: Resolve effective hub mapping for standalone Argo CD resume
+      ansible.builtin.set_fact:
+        _argocd_resume_effective_hubs: >-
+          {{
+            acm_switchover_hubs
+            if (_argocd_resume_identity_validation.matched_mapping | default('normal')) != 'swapped'
+            else (
+              acm_switchover_hubs
+              | combine({
+                  'primary': (acm_switchover_hubs.secondary | default({})),
+                  'secondary': (acm_switchover_hubs.primary | default({}))
+                })
+            )
+          }}
 
   tasks:
     - name: Resume autosync on secondary hub
       ansible.builtin.include_role:
         name: tomazb.acm_switchover.argocd_manage
       vars:
+        acm_switchover_hubs: "{{ _argocd_resume_effective_hubs }}"
         acm_switchover_argocd_mode_override: resume
         _argocd_discover_hub: secondary
 
@@ -150,9 +167,10 @@
       ansible.builtin.include_role:
         name: tomazb.acm_switchover.argocd_manage
       vars:
+        acm_switchover_hubs: "{{ _argocd_resume_effective_hubs }}"
         acm_switchover_argocd_mode_override: resume
         _argocd_discover_hub: primary
       when:
-        - acm_switchover_hubs.primary is defined
-        - (acm_switchover_hubs.primary.kubeconfig | default('')) | length > 0
-        - (acm_switchover_hubs.primary.context | default('')) | length > 0
+        - _argocd_resume_effective_hubs.primary is defined
+        - ((_argocd_resume_effective_hubs.primary | default({})).kubeconfig | default('')) | length > 0
+        - ((_argocd_resume_effective_hubs.primary | default({})).context | default('')) | length > 0

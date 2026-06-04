@@ -1395,7 +1395,10 @@ def main():  # noqa: C901
             logger.error("  or manually remove: %s", resolved_state_file)
         sys.exit(EXIT_FAILURE)
 
-    if not getattr(args, "argocd_resume_only", False):
+    should_bind_state = not getattr(args, "argocd_resume_only", False) and not getattr(args, "decommission", False)
+    should_record_state_errors = not getattr(args, "decommission", False)
+
+    if should_bind_state:
         state.ensure_contexts(getattr(args, "primary_context", None), args.secondary_context)
 
     try:
@@ -1406,7 +1409,7 @@ def main():  # noqa: C901
 
     operation_exit_code = EXIT_FAILURE
     try:
-        if not getattr(args, "argocd_resume_only", False):
+        if should_bind_state:
             state.ensure_hub_identities(
                 _collect_hub_identities(primary, secondary),
                 allow_legacy_backfill=getattr(args, "force", False),
@@ -1423,11 +1426,13 @@ def main():  # noqa: C901
         operation_exit_code = EXIT_INTERRUPT
     except SwitchoverError as exc:
         logger.error("\n✗ %s", exc)
-        state.add_error(str(exc))
+        if should_record_state_errors:
+            state.add_error(str(exc))
         operation_exit_code = EXIT_FAILURE
     except Exception as exc:
         logger.error("\n✗ Unexpected error: %s", exc, exc_info=args.verbose)
-        state.add_error(str(exc))
+        if should_record_state_errors:
+            state.add_error(str(exc))
         operation_exit_code = EXIT_FAILURE
     else:
         if success:

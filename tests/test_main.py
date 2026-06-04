@@ -1635,6 +1635,60 @@ class TestMainGitOpsReporting:
         assert exc_info.value.code == EXIT_SUCCESS
         state.ensure_contexts.assert_not_called()
 
+    def test_main_skips_state_enforcement_for_decommission(self):
+        args = self._base_args()
+        args.decommission = True
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), None)
+        ), patch(
+            "acm_switchover._execute_operation", return_value=True
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        state.ensure_contexts.assert_not_called()
+        state.ensure_hub_identities.assert_not_called()
+
+    def test_main_does_not_record_decommission_exceptions_in_state(self):
+        args = self._base_args()
+        args.decommission = True
+        logger = Mock()
+        state = Mock()
+        collector = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging", return_value=logger
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file", return_value="state.json"
+        ), patch(
+            "acm_switchover.StateManager", return_value=state
+        ), patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), None)
+        ), patch(
+            "acm_switchover._execute_operation", side_effect=RuntimeError("boom")
+        ), patch(
+            "acm_switchover.GitOpsCollector.get_instance", return_value=collector
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_FAILURE
+        collector.print_report.assert_called_once()
+        state.add_error.assert_not_called()
+
     def test_main_resume_only_uses_existing_reversed_default_state_file(self, tmp_path, monkeypatch):
         args = self._base_args()
         args.argocd_resume_only = True

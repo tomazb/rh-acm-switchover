@@ -99,7 +99,7 @@ def test_verify_klusterlet_records_module_remediation_attempts():
     content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
 
     assert "_klusterlet_remediation_result is defined" in content
-    assert "_klusterlet_initial_probe_result | default({})" in content
+    assert "((_klusterlet_initial_probe_result | default({})) or {})" in content
     assert "wrong_hub_clusters" in content
 
 
@@ -161,6 +161,26 @@ def test_verify_klusterlet_reprobes_after_remediation():
 
     assert preprobe_indexes, "verify_klusterlet.yml must probe before remediation"
     assert reprobe_indexes, "verify_klusterlet.yml must re-probe after remediation"
+
+
+def test_verify_klusterlet_fails_initial_probe_errors_before_remediation():
+    """Probe failures must abort before wrong-hub remediation begins."""
+    tasks = yaml.safe_load((POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text())
+    fix_index = next(
+        index for index, task in enumerate(tasks) if task.get("ansible.builtin.include_tasks") == "fix_klusterlet.yml"
+    )
+    initial_fail_task = next(
+        (
+            task
+            for index, task in enumerate(tasks[:fix_index])
+            if "ansible.builtin.fail" in task
+            and "_klusterlet_initial_probe_result" in _when_text(task)
+            and "failed_clusters" in _when_text(task)
+        ),
+        None,
+    )
+
+    assert initial_fail_task is not None, "initial probe failures must be fatal before remediation"
 
 
 def test_verify_klusterlet_recheck_uses_convergence_wait_controls():

@@ -180,6 +180,29 @@ def test_restore_only_persists_argocd_run_id_in_checkpoint_after_pause():
     ), "restore_only.yml must persist operational_data.argocd_run_id for standalone argocd_resume.yml"
 
 
+def test_restore_only_rehydrates_argocd_run_id_from_checkpoint_before_pause():
+    """Retrying restore-only must not generate a new run_id while old markers remain."""
+    text = (PLAYBOOKS / "restore_only.yml").read_text()
+    pause_index = text.index("Pause Argo CD auto-sync on secondary hub before restore")
+    rehydrate_index = text.find("Rehydrate Argo CD run_id from checkpoint before pause")
+
+    assert rehydrate_index != -1
+    assert rehydrate_index < pause_index
+    assert "operational_data" in text
+    assert "argocd_run_id" in text
+
+
+def test_restore_only_rehydrate_is_guarded_by_checkpoint_enablement():
+    """Restore-only rehydrate must skip cleanly when checkpointing is disabled."""
+    tasks = _load_playbook("restore_only.yml")[0]["tasks"][0]["block"]
+    rehydrate_task = next(task for task in tasks if task.get("name") == "Rehydrate Argo CD run_id from checkpoint before pause")
+    when_text = " ".join(str(item) for item in rehydrate_task.get("when", []))
+    fact_text = str(rehydrate_task["ansible.builtin.set_fact"]["acm_switchover_argocd"])
+
+    assert "acm_switchover_execution.checkpoint.enabled | default(false)" in when_text
+    assert "((_checkpoint_enter | default({})) or {})" in fact_text
+
+
 def test_restore_only_does_not_default_to_zero_managed_clusters():
     """Restore-only must not silently pass with local-cluster or zero restored ManagedClusters."""
     text = (PLAYBOOKS / "restore_only.yml").read_text()

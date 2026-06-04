@@ -398,7 +398,7 @@ class TestFinalization:
     ):
         """Restore cleanup must fail closed when a delete request does not succeed."""
         mock_secondary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "restore-1"}, "status": {"phase": "Running"}}
+            {"metadata": {"name": "restore-acm-full"}, "status": {"phase": "Running"}}
         ]
         mock_secondary_client.delete_custom_resource.side_effect = ApiException(status=403, reason="Forbidden")
 
@@ -1930,6 +1930,29 @@ class TestFinalization:
             assert "Error deleting restore restore-acm-passive-sync" in caplog.text
         else:
             assert "Error deleting restore restore-acm-passive-sync" not in caplog.text
+
+    def test_cleanup_restore_resources_rejects_unexpected_restores(
+        self, finalization, mock_secondary_client, mock_state_manager
+    ):
+        """Cleanup must fail before deleting unrelated Restore resources."""
+        mock_secondary_client.list_custom_resources.return_value = [
+            {
+                "metadata": {"name": "restore-acm-full"},
+                "spec": {},
+                "status": {"phase": "Finished"},
+            },
+            {
+                "metadata": {"name": "manual-restore"},
+                "spec": {},
+                "status": {"phase": "Finished"},
+            },
+        ]
+
+        with pytest.raises(SwitchoverError, match="manual-restore"):
+            finalization._cleanup_restore_resources()
+
+        mock_secondary_client.delete_custom_resource.assert_not_called()
+        mock_state_manager.set_config.assert_not_called()
 
     def test_archive_restore_details_extracts_all_fields(self, finalization):
         """Test that _archive_restore_details extracts all important fields."""
