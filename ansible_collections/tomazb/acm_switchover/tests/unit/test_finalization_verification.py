@@ -37,6 +37,27 @@ def test_main_cleans_restores_before_enabling_backups():
     ), "cleanup_restores.yml must run before enable_backups.yml"
 
 
+def test_cleanup_restores_refuses_unexpected_resources_before_delete():
+    """Collection finalization must fail closed instead of deleting unrelated Restore resources."""
+    text = (FINALIZATION_TASKS / "cleanup_restores.yml").read_text()
+
+    assert "Refuse to delete unexpected Restore resources" in text
+    assert "restore-acm-passive-sync" in text
+    assert "restore-acm-full" in text
+    assert "restore-acm-activate" in text
+    assert "syncRestoreWithNewBackups" in text
+    assert "_acm_secondary_unexpected_restore_names" in text
+
+
+def test_cleanup_restores_deletes_only_classified_candidates():
+    """Collection restore cleanup must delete only switchover-owned candidates and wait on those deletions."""
+    text = (FINALIZATION_TASKS / "cleanup_restores.yml").read_text()
+
+    assert '_acm_secondary_cleanup_candidate_restores | default([])' in text
+    assert '_acm_secondary_cleanup_candidate_restore_names | default([])' in text
+    assert "select('in', _acm_secondary_cleanup_candidate_restore_names | default([]))" in text
+
+
 def test_main_repairs_backup_schedule_collision_before_continuity_checks():
     """Collection finalization must mirror Python's BackupSchedule delete/recreate collision repair."""
     includes = [task.get("ansible.builtin.include_tasks", "") for task in _main_block_tasks()]

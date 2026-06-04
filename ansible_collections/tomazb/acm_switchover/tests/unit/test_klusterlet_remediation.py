@@ -99,7 +99,7 @@ def test_verify_klusterlet_records_module_remediation_attempts():
     content = (POST_ACTIVATION_TASKS / "verify_klusterlet.yml").read_text()
 
     assert "_klusterlet_remediation_result is defined" in content
-    assert "_klusterlet_initial_probe_result | default({})" in content
+    assert "((_klusterlet_initial_probe_result | default({})) or {})" in content
     assert "wrong_hub_clusters" in content
 
 

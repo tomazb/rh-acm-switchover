@@ -200,7 +200,7 @@ def test_restore_only_rehydrate_is_guarded_by_checkpoint_enablement():
     fact_text = str(rehydrate_task["ansible.builtin.set_fact"]["acm_switchover_argocd"])
 
     assert "acm_switchover_execution.checkpoint.enabled | default(false)" in when_text
-    assert "(_checkpoint_enter | default({}))" in fact_text
+    assert "((_checkpoint_enter | default({})) or {})" in fact_text
 
 
 def test_restore_only_does_not_default_to_zero_managed_clusters():

@@ -44,7 +44,7 @@
               {{
                 acm_switchover_argocd | default({})
                 | combine({
-                    'run_id': (((_checkpoint_enter | default({})).get('checkpoint', {}))
+                    'run_id': ((((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})
                       .get('operational_data', {})
                       .get('argocd_run_id'))
                   })
@@ -53,7 +53,7 @@
             - acm_switchover_features.argocd.manage | default(false)
             - acm_switchover_execution.checkpoint.enabled | default(false)
             - (acm_switchover_argocd.run_id | default('')) | length == 0
-            - (((_checkpoint_enter | default({})).get('checkpoint', {})).get('operational_data', {}).get('argocd_run_id', '')) | length > 0
+            - ((((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_run_id', '')) | length > 0
 
         - name: Pause Argo CD auto-sync on secondary hub before restore
           ansible.builtin.include_role:
