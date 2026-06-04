@@ -529,7 +529,7 @@ def _run_restore_only_argocd_pause(
         return True
 
     try:
-        coordinator = ArgoCDPauseCoordinator(state, dry_run=args.dry_run)
+        coordinator = ArgoCDPauseCoordinator(state, dry_run=getattr(args, "dry_run", False))
         paused_apps, failure_count = coordinator.pause_hubs([(secondary, "secondary")])
     except Exception as exc:
         return _fail_phase(state, f"Argo CD pause on secondary hub failed: {exc}", logger)
@@ -549,7 +549,7 @@ def _run_restore_only_argocd_pause(
             len(paused_apps),
             run_id,
         )
-    if not args.dry_run:
+    if not getattr(args, "dry_run", False):
         state.mark_step_completed("pause_argocd_apps")
     return True
 

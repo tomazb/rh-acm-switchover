@@ -239,6 +239,34 @@ class TestPrimaryPreparation:
             primary_prep_module.Phase.PRIMARY_PREP.value,
         )
 
+    def test_prepare_dry_run_skips_argocd_pause_when_step_already_completed(
+        self, mock_primary_client, mock_state_manager
+    ):
+        """Dry-run should mirror resumed step gating when Argo CD pause already completed."""
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.12.0",
+            has_observability=False,
+            dry_run=True,
+            argocd_manage=True,
+        )
+        mock_state_manager.is_step_completed.side_effect = lambda step_name: step_name == "pause_argocd_apps"
+        mock_primary_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        ]
+        mock_primary_client.list_managed_clusters.return_value = [{"metadata": {"name": "cluster1", "labels": {}}}]
+        mock_primary_client.patch_custom_resource.return_value = True
+
+        with patch.object(prep, "_pause_argocd_acm_apps") as pause_argocd:
+            result = prep.prepare()
+
+        assert result is True
+        pause_argocd.assert_not_called()
+        assert not any(
+            call.args == ("pause_argocd_apps",) for call in mock_state_manager.mark_step_completed.call_args_list
+        )
+
     def test_pause_argocd_acm_apps_records_paused(self, mock_primary_client, mock_state_manager):
         """Pause Argo CD auto-sync should record paused apps in state."""
         prep = PrimaryPreparation(

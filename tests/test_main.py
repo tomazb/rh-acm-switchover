@@ -1066,6 +1066,24 @@ class TestSwitchoverPhaseFlow:
         fail_phase.assert_called_once_with(state, "Argo CD auto-sync pause failed for 1 Application(s)", logger)
         state.mark_step_completed.assert_not_called()
 
+    def test_restore_only_argocd_pause_defaults_missing_dry_run_to_false(self):
+        args = SimpleNamespace(argocd_manage=True)
+        state = Mock()
+        state.is_step_completed.return_value = False
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class:
+            coordinator = coordinator_class.return_value
+            coordinator.pause_hubs.return_value = ([{"hub": "secondary", "name": "app-1"}], 0)
+
+            result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
+
+        assert result is True
+        coordinator_class.assert_called_once_with(state, dry_run=False)
+        coordinator.pause_hubs.assert_called_once_with([(secondary, "secondary")])
+        state.mark_step_completed.assert_called_once_with("pause_argocd_apps")
+
     def test_run_switchover_resume_from_failed_state_retries_failed_phase(self, tmp_path):
         """Verify that run_switchover resumes from the phase that failed when state is FAILED."""
         from lib.utils import Phase, StateManager
