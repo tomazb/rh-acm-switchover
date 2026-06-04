@@ -75,8 +75,8 @@ def failing_phase_stub(name, call_order):
     return stub
 
 
-def make_resume_on_failure_args(*, argocd_resume_on_failure=True, restore_only=False):
-    return SimpleNamespace(argocd_resume_on_failure=argocd_resume_on_failure, restore_only=restore_only)
+def make_resume_on_failure_args(*, argocd_resume_on_failure=True, restore_only=False, force=False):
+    return SimpleNamespace(argocd_resume_on_failure=argocd_resume_on_failure, restore_only=restore_only, force=force)
 
 
 def make_resume_only_context_args(primary_context, secondary_context, force=False):

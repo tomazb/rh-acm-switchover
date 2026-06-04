@@ -13,6 +13,41 @@ from tests.main_test_helpers import make_resume_on_failure_args, make_resume_onl
 
 @pytest.mark.unit
 class TestArgocdResumeOnly:
+    @staticmethod
+    def _identity_clients(
+        *,
+        primary_context="hub-a",
+        secondary_context="hub-b",
+        primary_uid="uid-primary",
+        secondary_uid="uid-secondary",
+    ):
+        primary = Mock(name="primary-client")
+        primary.context = primary_context
+        primary.get_cluster_identity.return_value = {"context": primary_context, "cluster_uid": primary_uid}
+        secondary = Mock(name="secondary-client")
+        secondary.context = secondary_context
+        secondary.get_cluster_identity.return_value = {"context": secondary_context, "cluster_uid": secondary_uid}
+        return primary, secondary
+
+    def _mock_resume_state(self, paused_apps, *, primary_ctx=None, secondary_ctx=None):
+        state = Mock()
+        state_data = {}
+        if primary_ctx is not None or secondary_ctx is not None:
+            state_data["contexts"] = {"primary": primary_ctx, "secondary": secondary_ctx}
+        identities = {}
+        if any(isinstance(item, dict) and item.get("hub") == "primary" for item in paused_apps):
+            identities["primary"] = {"context": primary_ctx or "hub-a", "cluster_uid": "uid-primary"}
+        if any(isinstance(item, dict) and item.get("hub") == "secondary" for item in paused_apps):
+            identities["secondary"] = {"context": secondary_ctx or "hub-b", "cluster_uid": "uid-secondary"}
+        if identities:
+            state_data["hub_identities"] = identities
+        state.state = state_data
+        state.get_config.side_effect = lambda key, default=None: {
+            "argocd_run_id": "run-1",
+            "argocd_paused_apps": paused_apps,
+        }.get(key, default)
+        return state
+
     def _make_identity_state(self, tmp_path):
         from lib.utils import StateManager
 
@@ -78,6 +113,69 @@ class TestArgocdResumeOnly:
         assert "hub identity" in caplog.text
         resume_recorded.assert_not_called()
 
+    def test_resume_only_rejects_legacy_state_without_hub_identities(self, tmp_path, caplog):
+        from lib.utils import StateManager
+
+        state = StateManager(str(tmp_path / "legacy-resume-state.json"))
+        state.ensure_contexts("hub-a", "hub-b")
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config(
+            "argocd_paused_apps",
+            [
+                {
+                    "hub": "secondary",
+                    "namespace": "argocd",
+                    "name": "app-2",
+                    "original_sync_policy": {"automated": {}},
+                }
+            ],
+        )
+        args = make_resume_only_context_args("hub-a", "hub-b")
+        logger = logging.getLogger("test.resume_only_legacy_identity_missing")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+            with caplog.at_level(logging.ERROR):
+                result = _run_argocd_resume_only(args, state, Mock(), Mock(), logger)
+
+        assert result is False
+        assert "missing hub identity data" in caplog.text
+        resume_recorded.assert_not_called()
+
+    def test_resume_only_force_allows_legacy_state_without_hub_identities(self, tmp_path):
+        from lib.utils import StateManager
+
+        state = StateManager(str(tmp_path / "legacy-resume-force-state.json"))
+        state.ensure_contexts("hub-a", "hub-b")
+        state.set_config("argocd_run_id", "run-1")
+        paused_apps = [
+            {
+                "hub": "secondary",
+                "namespace": "argocd",
+                "name": "app-2",
+                "original_sync_policy": {"automated": {}},
+            }
+        ]
+        state.set_config("argocd_paused_apps", paused_apps)
+        args = make_resume_only_context_args("hub-a", "hub-b", force=True)
+        primary = Mock(name="primary-client")
+        primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-primary"}
+        secondary = Mock(name="secondary-client")
+        secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary"}
+        logger = logging.getLogger("test.resume_only_legacy_identity_force")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
+            resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
+
+            assert _run_argocd_resume_only(args, state, primary, secondary, logger) is True
+
+        resume_recorded.assert_called_once_with(
+            paused_apps,
+            "run-1",
+            primary,
+            secondary,
+            logger,
+        )
+
     def test_resume_only_builds_primary_client_from_recorded_state_when_primary_context_omitted(
         self,
     ):
@@ -91,19 +189,9 @@ class TestArgocdResumeOnly:
                 "original_sync_policy": {"automated": {}},
             }
         ]
-        state = Mock()
-        state.state = {
-            "contexts": {
-                "primary": "hub-a",
-                "secondary": "hub-b",
-            }
-        }
-        state.get_config.side_effect = lambda key, default=None: {
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": paused_apps,
-        }.get(key, default)
+        state = self._mock_resume_state(paused_apps, primary_ctx="hub-a", secondary_ctx="hub-b")
         args = SimpleNamespace(primary_context=None, secondary_context="hub-b", dry_run=False)
-        secondary = Mock(name="secondary-client")
+        _, secondary = self._identity_clients()
         created_primary = Mock(name="primary-client")
         logger = logging.getLogger("test")
 
@@ -140,20 +228,9 @@ class TestArgocdResumeOnly:
                 "original_sync_policy": {"automated": {"prune": True}},
             },
         ]
-        state = Mock()
-        state.state = {
-            "contexts": {
-                "primary": "hub-a",
-                "secondary": "hub-b",
-            }
-        }
-        state.get_config.side_effect = lambda key, default=None: {
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": paused_apps,
-        }.get(key, default)
+        state = self._mock_resume_state(paused_apps, primary_ctx="hub-a", secondary_ctx="hub-b")
         args = SimpleNamespace(primary_context="hub-b", secondary_context="hub-a")
-        primary = Mock(name="primary-client")
-        secondary = Mock(name="secondary-client")
+        primary, secondary = self._identity_clients()
         logger = logging.getLogger("test")
 
         with patch("acm_switchover.argocd_lib.resume_recorded_applications") as resume_recorded:
@@ -227,14 +304,9 @@ class TestArgocdResumeOnly:
                 "original_sync_policy": {"automated": {"prune": True}},
             },
         ]
-        state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": paused_apps,
-        }.get(key, default)
+        state = self._mock_resume_state(paused_apps)
         args = SimpleNamespace()
-        primary = Mock()
-        secondary = Mock()
+        primary, secondary = self._identity_clients()
         logger = logging.getLogger("test")
 
         with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
@@ -261,14 +333,9 @@ class TestArgocdResumeOnly:
                 "original_sync_policy": {"automated": {"prune": True}},
             },
         ]
-        state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": paused_apps,
-        }.get(key, default)
+        state = self._mock_resume_state(paused_apps)
         args = SimpleNamespace()
-        primary = Mock()
-        secondary = Mock()
+        primary, secondary = self._identity_clients()
         logger = logging.getLogger("test")
 
         with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
@@ -292,14 +359,9 @@ class TestArgocdResumeOnly:
                 "original_sync_policy": {"automated": {"prune": True}},
             },
         ]
-        state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": paused_apps,
-        }.get(key, default)
+        state = self._mock_resume_state(paused_apps)
         args = SimpleNamespace()
-        primary = Mock()
-        secondary = Mock()
+        primary, secondary = self._identity_clients()
         logger = logging.getLogger("test")
 
         with patch("acm_switchover.argocd_lib.resume_autosync") as resume_autosync:
@@ -323,14 +385,9 @@ class TestArgocdResumeOnly:
                 "original_sync_policy": {"automated": {}},
             },
         ]
-        state = Mock()
-        state.get_config.side_effect = lambda key, default=None: {
-            "argocd_run_id": "run-1",
-            "argocd_paused_apps": paused_apps,
-        }.get(key, default)
+        state = self._mock_resume_state(paused_apps)
         args = SimpleNamespace()
-        primary = Mock()
-        secondary = Mock()
+        primary, secondary = self._identity_clients()
         logger = logging.getLogger("test")
 
         with caplog.at_level(logging.WARNING):
@@ -344,6 +401,22 @@ class TestArgocdResumeOnly:
 class TestAttemptArgoCDResumeOnFailure:
     """Tests for _attempt_argocd_resume_on_failure best-effort cleanup."""
 
+    @staticmethod
+    def _identity_clients(
+        *,
+        primary_context="hub-a",
+        secondary_context="hub-b",
+        primary_uid="uid-primary",
+        secondary_uid="uid-secondary",
+    ):
+        primary = Mock(name="primary-client")
+        primary.context = primary_context
+        primary.get_cluster_identity.return_value = {"context": primary_context, "cluster_uid": primary_uid}
+        secondary = Mock(name="secondary-client")
+        secondary.context = secondary_context
+        secondary.get_cluster_identity.return_value = {"context": secondary_context, "cluster_uid": secondary_uid}
+        return primary, secondary
+
     def _make_state(self, *, run_id="abc123", paused_apps=None):
         state = Mock()
         if paused_apps is None:
@@ -356,11 +429,38 @@ class TestAttemptArgoCDResumeOnFailure:
                     "pause_applied": True,
                 }
             ]
+        state.state = {
+            "contexts": {"primary": "hub-a", "secondary": "hub-b"},
+            "hub_identities": {
+                role: {
+                    "context": "hub-a" if role == "primary" else "hub-b",
+                    "cluster_uid": "uid-primary" if role == "primary" else "uid-secondary",
+                }
+                for role in {
+                    item.get("hub")
+                    for item in paused_apps
+                    if isinstance(item, dict) and item.get("hub") in {"primary", "secondary"}
+                }
+            },
+        }
         state.get_config.side_effect = lambda key, *a: {
             "argocd_run_id": run_id,
             "argocd_paused_apps": paused_apps,
         }.get(key, a[0] if a else None)
         return state
+
+    @staticmethod
+    def _bind_real_state(state, *, primary=True, secondary=True):
+        primary_context = "hub-a" if primary else None
+        secondary_context = "hub-b" if secondary else None
+        state.ensure_contexts(primary_context, secondary_context)
+        identities = {}
+        if primary:
+            identities["primary"] = {"context": "hub-a", "cluster_uid": "uid-primary"}
+        if secondary:
+            identities["secondary"] = {"context": "hub-b", "cluster_uid": "uid-secondary"}
+        if identities:
+            state.ensure_hub_identities(identities)
 
     def test_resume_called_when_flag_set_and_apps_paused(self):
         """Resume is attempted when flag is set and paused apps exist in state."""
@@ -384,16 +484,18 @@ class TestAttemptArgoCDResumeOnFailure:
         ]
         state_path = tmp_path / "state.json"
         state = StateManager(str(state_path))
+        self._bind_real_state(state)
         state.set_config("argocd_run_id", "run-1")
         state.set_config("argocd_paused_apps", paused_apps)
         state.set_config("argocd_pause_dry_run", False)
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args()
         logger = logging.getLogger("test")
+        primary, secondary = self._identity_clients()
 
         with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
             mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=1, failed=0)
-            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+            _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
         assert reloaded.get_config("argocd_paused_apps") == []
@@ -408,6 +510,7 @@ class TestAttemptArgoCDResumeOnFailure:
         paused_apps = [{"hub": "primary", "namespace": "argocd", "name": "app1"}]
         state_path = tmp_path / "state.json"
         state = StateManager(str(state_path))
+        self._bind_real_state(state)
         state.set_phase(Phase.POST_ACTIVATION)
         state.add_error("post activation failed", Phase.POST_ACTIVATION.value)
         state.set_phase(Phase.FAILED)
@@ -416,10 +519,11 @@ class TestAttemptArgoCDResumeOnFailure:
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args()
         logger = logging.getLogger("test")
+        primary, secondary = self._identity_clients()
 
         with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
             mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
-            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+            _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
         assert reloaded.get_current_phase() == Phase.FAILED
@@ -432,6 +536,7 @@ class TestAttemptArgoCDResumeOnFailure:
         paused_apps = [{"hub": "secondary", "namespace": "argocd", "name": "app1"}]
         state_path = tmp_path / "state.json"
         state = StateManager(str(state_path))
+        self._bind_real_state(state, primary=False, secondary=True)
         state.set_phase(Phase.POST_ACTIVATION)
         state.add_error("post activation failed", Phase.POST_ACTIVATION.value)
         state.set_phase(Phase.FAILED)
@@ -440,10 +545,11 @@ class TestAttemptArgoCDResumeOnFailure:
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args(restore_only=True)
         logger = logging.getLogger("test")
+        _, secondary = self._identity_clients()
 
         with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
             mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
-            _attempt_argocd_resume_on_failure(args, state, None, Mock(), logger)
+            _attempt_argocd_resume_on_failure(args, state, None, secondary, logger)
 
         reloaded = StateManager(str(state_path))
         assert reloaded.get_current_phase() == Phase.FAILED
@@ -459,16 +565,18 @@ class TestAttemptArgoCDResumeOnFailure:
         ]
         state_path = tmp_path / "state.json"
         state = StateManager(str(state_path))
+        self._bind_real_state(state)
         state.set_config("argocd_run_id", "run-1")
         state.set_config("argocd_paused_apps", paused_apps)
         state.set_config("argocd_pause_dry_run", False)
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args()
         logger = logging.getLogger("test")
+        primary, secondary = self._identity_clients()
 
         with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
             mock_resume.return_value = SimpleNamespace(restored=1, already_resumed=0, failed=0)
-            _attempt_argocd_resume_on_failure(args, state, Mock(), Mock(), logger)
+            _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
         reloaded = StateManager(str(state_path))
         assert reloaded.get_config("argocd_paused_apps") == paused_apps
@@ -534,6 +642,55 @@ class TestAttemptArgoCDResumeOnFailure:
         state.set_config.assert_not_called()
         state.clear_step_completed.assert_not_called()
 
+    def test_resume_on_failure_skips_legacy_state_without_hub_identities(self, tmp_path, caplog):
+        from lib.utils import Phase, StateManager
+
+        state = StateManager(str(tmp_path / "resume-on-failure-legacy.json"))
+        state.ensure_contexts("hub-a", "hub-b")
+        state.set_phase(Phase.POST_ACTIVATION)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config(
+            "argocd_paused_apps",
+            [{"hub": "primary", "namespace": "argocd", "name": "app1", "original_sync_policy": {"automated": {}}}],
+        )
+        args = make_resume_on_failure_args()
+        primary = Mock(name="primary-client")
+        primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-primary"}
+        secondary = Mock(name="secondary-client")
+        secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary"}
+        logger = logging.getLogger("test.resume_on_failure_legacy_identity_missing")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            with caplog.at_level(logging.WARNING):
+                _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+
+        mock_resume.assert_not_called()
+        assert "missing hub identity data" in caplog.text
+
+    def test_resume_on_failure_force_allows_legacy_state_without_hub_identities(self, tmp_path):
+        from lib.utils import Phase, StateManager
+
+        state = StateManager(str(tmp_path / "resume-on-failure-legacy-force.json"))
+        state.ensure_contexts("hub-a", "hub-b")
+        state.set_phase(Phase.POST_ACTIVATION)
+        state.set_config("argocd_run_id", "run-1")
+        state.set_config(
+            "argocd_paused_apps",
+            [{"hub": "primary", "namespace": "argocd", "name": "app1", "original_sync_policy": {"automated": {}}}],
+        )
+        args = make_resume_on_failure_args(force=True)
+        primary = Mock(name="primary-client")
+        primary.get_cluster_identity.return_value = {"context": "hub-a", "cluster_uid": "uid-primary"}
+        secondary = Mock(name="secondary-client")
+        secondary.get_cluster_identity.return_value = {"context": "hub-b", "cluster_uid": "uid-secondary"}
+        logger = logging.getLogger("test.resume_on_failure_legacy_identity_force")
+
+        with patch("acm_switchover.argocd_lib.resume_recorded_applications") as mock_resume:
+            mock_resume.return_value = Mock(restored=1, already_resumed=0, failed=0)
+            _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+
+        mock_resume.assert_called_once()
+
 
 class TestArgocdResumeOnlyContextMismatch:
     """_run_argocd_resume_only must fail closed when contexts differ from state."""
@@ -545,7 +702,12 @@ class TestArgocdResumeOnlyContextMismatch:
             "argocd_run_id": "run-123",
             "argocd_paused_apps": [{"hub": "secondary", "namespace": "argocd", "name": "app1"}],
         }.get(key, default)
-        state.state = {"contexts": {"primary": primary_ctx, "secondary": secondary_ctx}}
+        state.state = {
+            "contexts": {"primary": primary_ctx, "secondary": secondary_ctx},
+            "hub_identities": {
+                "secondary": {"context": secondary_ctx or "hub-b", "cluster_uid": "uid-secondary"},
+            },
+        }
         return state
 
     def test_context_mismatch_without_force_fails(self, caplog):
