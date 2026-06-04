@@ -57,6 +57,8 @@ def test_release_framework_ci_job_is_explicit_and_not_overstated():
 
     assert "Release Readiness" not in text
     assert "Release Framework Tests" in text
+    assert "permissions:\n      contents: read" in text
+    assert "persist-credentials: false" in text
 
 
 def test_run_tests_executes_release_framework_explicitly():

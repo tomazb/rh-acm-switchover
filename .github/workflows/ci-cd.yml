@@ -116,10 +116,14 @@ jobs:
   release-framework:
     name: Release Framework Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
+      with:
+        persist-credentials: false
 
     - name: Set up Python
       uses: actions/setup-python@v6
