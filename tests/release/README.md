@@ -1,6 +1,6 @@
 # Release Validation Tests
 
-`tests/release/` contains the pytest-native release validation framework. These tests are explicit and are not run by the default `./run_tests.sh` command.
+`tests/release/` contains the pytest-native release validation framework. The non-live helper tests in this tree are now run explicitly by `./run_tests.sh` and by CI. The live certification entrypoint still requires an explicit profile and is skipped without one.
 
 ## Framework Tests
 
@@ -23,6 +23,17 @@ python -m pytest tests/release/test_release_certification.py \
 ```
 
 Example profile templates live in `tests/release/profiles/`. Do not commit real kubeconfig paths, credentials, or private lab identifiers.
+
+Supported operator controls are:
+
+- `--release-profile` or `ACM_RELEASE_PROFILE`
+- `--release-mode`
+- `--release-scenario`
+- `--release-stream`
+- `--release-artifact-dir`
+- `--allow-dirty`
+
+Focused reruns are filter-based only. The current harness does not support resuming or rerunning from a previous artifact directory.
 
 ## Live RBAC Bootstrap Certification
 
@@ -49,5 +60,7 @@ for full setup, expected artifacts, and comparison to static RBAC parity checks.
 Certification-eligible runs use real discovery and real stream adapters. Unit tests may inject fake discovery clients or fake adapters, but those runs are marked not certification eligible in the generated summary.
 
 The orchestrator writes durable artifacts under the profile artifact root, including `manifest.json`, `scenario-results.json`, `runtime-parity.json`, `summary.json`, and `release-report.md`.
+
+Dirty certification runs fail fast unless `--allow-dirty` is set. Even with `--allow-dirty`, the run remains not certification eligible. When a profile declares `release.metadata_files`, the harness also validates those files against `release.expected_version` and records the metadata hash/status in `manifest.json`.
 
 See `docs/development/release-validation-framework.md` for the full framework contract.

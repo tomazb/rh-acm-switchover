@@ -7,6 +7,7 @@ import pytest
 
 from tests.release.adapters.common import ReportArtifact
 from tests.release.adapters.python_cli import PythonCliAdapter
+from tests.release.reporting.artifacts import ReleaseArtifacts
 from tests.release.test_release_certification import execute_python_scenarios
 
 
@@ -263,14 +264,23 @@ def test_python_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_pa
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(
-        "tests.release.adapters.python_cli.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive"))
+        "tests.release.reporting.artifacts.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive"))
     )
-    adapter = PythonCliAdapter(Path("/repo"), "primary", "secondary", "/kube/primary", "/kube/secondary", tmp_path)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    adapter = PythonCliAdapter(
+        Path("/repo"),
+        "primary",
+        "secondary",
+        "/kube/primary",
+        "/kube/secondary",
+        artifacts.run_dir,
+    )
 
     result = adapter.execute("preflight")
 
     assert result.status == "failed"
     assert any(a.name == "artifact-redaction" for a in result.assertions)
+    assert "scenarios/preflight/python/stdout.txt" in (artifacts.run_dir / "redaction.json").read_text(encoding="utf-8")
 
 
 def test_python_adapter_execute_uses_profile_timeout_env_and_extra_args(monkeypatch, tmp_path: Path) -> None:

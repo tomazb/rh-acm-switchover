@@ -21,6 +21,7 @@ from tests.release.adapters.python_cli import PythonCliAdapter
 from tests.release.baseline.assertions import assert_baseline
 from tests.release.baseline.discovery import HubDiscoveryClient, discover_hub_facts
 from tests.release.baseline.fingerprint import build_environment_fingerprint
+from tests.release.checks.metadata import validate_release_metadata
 from tests.release.checks.lab_readiness import assert_lab_readiness
 from tests.release.checks.rbac_certification import certify_rbac_permissions
 from tests.release.checks.static_gates import (
@@ -81,16 +82,23 @@ class OcDiscoveryClient:
             command.extend(["-n", namespace])
         try:
             completed = subprocess.run(command, text=True, capture_output=True, check=False, timeout=120)
-        except (OSError, subprocess.SubprocessError):
-            return []
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise RuntimeError(
+                f"discovery failed for {resource} on {self.context}: {type(exc).__name__}: {exc}"
+            ) from exc
         if completed.returncode != 0:
-            return []
+            stderr = (completed.stderr or "").strip() or "no stderr"
+            raise RuntimeError(
+                f"discovery failed for {resource} on {self.context}: oc exited {completed.returncode}: {stderr}"
+            )
         try:
             payload = json.loads(completed.stdout or "{}")
-        except json.JSONDecodeError:
-            return []
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"discovery failed for {resource} on {self.context}: invalid JSON: {exc}") from exc
         items = payload.get("items", [])
-        return items if isinstance(items, list) else []
+        if not isinstance(items, list):
+            raise RuntimeError(f"discovery failed for {resource} on {self.context}: response missing items list")
+        return items
 
 
 def build_default_discovery_clients(
@@ -141,8 +149,14 @@ def _certification_eligible(
     release_options: ReleaseOptions,
     discovery_clients: Mapping[str, HubDiscoveryClient],
     adapters: Mapping[str, StreamAdapter],
+    git_checkout: Mapping[str, Any],
+    release_metadata: Mapping[str, Any],
 ) -> bool:
     if release_options.mode != "certification":
+        return False
+    if not bool(git_checkout.get("available")) or bool(git_checkout.get("dirty")):
+        return False
+    if release_metadata.get("status") != "passed":
         return False
     participants: list[Any] = [*discovery_clients.values(), *adapters.values()]
     return not any(bool(getattr(item, "test_only", False)) for item in participants)
@@ -193,7 +207,9 @@ def _local_result(scenario_id: str, status: str, assertions: list[dict], require
 def _aggregate_status(scenario: ScenarioDefinition, results: list[dict]) -> dict:
     scenario_results = [result for result in results if result["scenario_id"] == scenario.id]
     if not scenario_results:
-        status = "not_applicable"
+        status = "failed" if scenario.required else "not_applicable"
+    elif scenario.required:
+        status = "passed" if all(result.get("status") == "passed" for result in scenario_results) else "failed"
     elif all(result.get("status") in {"passed", "not_applicable"} for result in scenario_results):
         status = "passed"
     else:
@@ -424,6 +440,96 @@ def _read_redaction_state(artifacts: ReleaseArtifacts) -> dict:
         }
 
 
+def _git_checkout_state(repo_root: Path) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "available": False,
+        "dirty": False,
+        "allow_dirty": False,
+        "commit": None,
+        "warnings": [],
+    }
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        if commit.returncode != 0:
+            state["warnings"].append("git commit metadata is unavailable")
+            return state
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        if status.returncode != 0:
+            state["warnings"].append("git dirty-state metadata is unavailable")
+            return state
+    except (OSError, subprocess.SubprocessError) as exc:
+        state["warnings"].append(f"git checkout metadata is unavailable: {type(exc).__name__}: {exc}")
+        return state
+    state["available"] = True
+    state["commit"] = (commit.stdout or "").strip() or None
+    state["dirty"] = bool((status.stdout or "").strip())
+    return state
+
+
+def _release_metadata_state(*, repo_root: Path, release_profile: LoadProfileResult, matrix_hash: str) -> dict[str, Any]:
+    release = release_profile.profile.release
+    if release is None or not release.metadata_files:
+        return {
+            "status": "passed",
+            "hash": None,
+            "expected_version": release.expected_version if release is not None else None,
+            "files": [],
+            "failure_reasons": [],
+        }
+    return validate_release_metadata(
+        repo_root=repo_root,
+        metadata_files=release.metadata_files,
+        expected_version=release.expected_version,
+        profile_hash=release_profile.sha256,
+        matrix_hash=matrix_hash,
+    )
+
+
+def _initial_recovery_state(release_profile: LoadProfileResult) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "budget_minutes": release_profile.profile.recovery.total_budget_minutes,
+        "budget_consumed_seconds": 0,
+        "pre_run": [],
+        "post_failure": [],
+        "hard_stops": [],
+        "status": "not_applicable",
+    }
+
+
+def _stop_before_mutation(
+    *,
+    scenarios_by_id: Mapping[str, ScenarioDefinition],
+    lab_readiness_status: str,
+    initial_baseline_status: str,
+) -> bool:
+    failed_required_lab = (
+        "lab-readiness" in scenarios_by_id
+        and scenarios_by_id["lab-readiness"].required
+        and lab_readiness_status != "passed"
+    )
+    failed_required_baseline = (
+        "baseline-check" in scenarios_by_id
+        and scenarios_by_id["baseline-check"].required
+        and initial_baseline_status != "passed"
+    )
+    return failed_required_lab or failed_required_baseline
+
+
 def _finalize_run(
     *,
     artifacts: ReleaseArtifacts,
@@ -434,7 +540,9 @@ def _finalize_run(
     results: list[dict],
     runtime_parity: dict,
     final_baseline: dict,
+    recovery: dict,
     mandatory_argocd: dict,
+    release_metadata: dict,
 ) -> dict:
     scenario_statuses = [_aggregate_status(scenario, results) for scenario in matrix.scenarios]
     artifacts.write_json(
@@ -460,9 +568,9 @@ def _finalize_run(
         runtime_parity=runtime_parity,
         artifact_redaction=artifact_redaction,
         final_baseline=final_baseline,
-        recovery={"status": "not_applicable", "hard_stops": []},
+        recovery=recovery,
         mandatory_argocd=mandatory_argocd,
-        release_metadata={"status": "passed"},
+        release_metadata=release_metadata,
     )
     artifacts.write_json("summary.json", summary)
     final_manifest = {
@@ -502,6 +610,17 @@ def _run_release_certification(
         stream_filters=release_options.streams,
         profile_scenarios=profile.scenarios,
     )
+    git_checkout = _git_checkout_state(repo_root)
+    git_checkout["allow_dirty"] = release_options.allow_dirty
+    if git_checkout.get("dirty") and not release_options.allow_dirty:
+        raise RuntimeError("git checkout is dirty; rerun with --allow-dirty")
+    release_metadata = _release_metadata_state(
+        repo_root=repo_root,
+        release_profile=release_profile,
+        matrix_hash=matrix.matrix_hash,
+    )
+    recovery = _initial_recovery_state(release_profile)
+    artifacts.write_json("recovery.json", recovery)
     discovery_clients = discovery_clients or build_default_discovery_clients(release_profile)
     adapters = adapters or build_default_adapters(
         release_profile=release_profile,
@@ -512,6 +631,8 @@ def _run_release_certification(
         release_options=release_options,
         discovery_clients=discovery_clients,
         adapters=adapters,
+        git_checkout=git_checkout,
+        release_metadata=release_metadata,
     )
 
     manifest = {
@@ -527,6 +648,8 @@ def _run_release_certification(
             "scenario_ids": list(matrix.scenario_ids),
             "hash": matrix.matrix_hash,
         },
+        "git": git_checkout,
+        "release_metadata": release_metadata,
         "certification_eligible": certification_eligible,
         "warnings": [],
         "failure_reasons": [],
@@ -568,7 +691,9 @@ def _run_release_certification(
                 results=results,
                 runtime_parity=runtime_parity,
                 final_baseline=final_baseline,
+                recovery=recovery,
                 mandatory_argocd=({"status": "not_applicable"} if profile.argocd.mandatory else {"status": "passed"}),
+                release_metadata=release_metadata,
             )
 
     initial_fingerprint = _discover_fingerprint(
@@ -610,6 +735,29 @@ def _run_release_certification(
                 initial_baseline.assertions,
                 scenarios_by_id["baseline-check"].required,
             )
+        )
+
+    if _stop_before_mutation(
+        scenarios_by_id=scenarios_by_id,
+        lab_readiness_status=lab_readiness.status,
+        initial_baseline_status=initial_baseline.status,
+    ):
+        runtime_parity = _not_applicable_artifact()
+        artifacts.write_json("runtime-parity.json", runtime_parity)
+        final_baseline = {"status": "not_applicable", "assertions": []}
+        artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
+        return _finalize_run(
+            artifacts=artifacts,
+            release_options=release_options,
+            matrix=matrix,
+            manifest=manifest,
+            certification_eligible=certification_eligible,
+            results=results,
+            runtime_parity=runtime_parity,
+            final_baseline=final_baseline,
+            recovery=recovery,
+            mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
+            release_metadata=release_metadata,
         )
 
     results.extend(
@@ -736,7 +884,9 @@ def _run_release_certification(
         results=results,
         runtime_parity=runtime_parity,
         final_baseline=final_baseline,
+        recovery=recovery,
         mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
+        release_metadata=release_metadata,
     )
 
 

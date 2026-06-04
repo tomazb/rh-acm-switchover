@@ -4,7 +4,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.release.reporting.redaction import RedactionError, sanitize_text
+from tests.release.reporting.artifacts import write_capture_artifact
 
 GATE_COMMAND_TIMEOUT_SECONDS = 300
 TIMEOUT_RETURN_CODE = -1
@@ -39,19 +39,11 @@ def _text_output(value: str | bytes | None) -> str:
     return value
 
 
-def _sanitized_write(path: Path, content: str) -> bool:
-    try:
-        sanitized = sanitize_text(content)
-    except RedactionError:
-        return False
-    path.write_text(sanitized.text, encoding="utf-8")
-    return True
-
-
 def run_gate_command(command: GateCommand, artifact_dir: Path) -> GateResult:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = artifact_dir / f"{command.gate_id}-{command.label}.stdout"
     stderr_path = artifact_dir / f"{command.gate_id}-{command.label}.stderr"
+    run_dir = artifact_dir.parent if (artifact_dir.parent / "redaction.json").exists() else artifact_dir
 
     try:
         completed = subprocess.run(
@@ -73,8 +65,18 @@ def run_gate_command(command: GateCommand, artifact_dir: Path) -> GateResult:
         stderr_text = f"{stderr_text}Command timed out after {exc.timeout} seconds\n"
         returncode = TIMEOUT_RETURN_CODE
 
-    stdout_written = _sanitized_write(stdout_path, stdout_text)
-    stderr_written = _sanitized_write(stderr_path, stderr_text)
+    _, stdout_written = write_capture_artifact(
+        run_dir=run_dir,
+        relative_path=stdout_path.relative_to(run_dir),
+        content=stdout_text,
+        rejected_placeholder="",
+    )
+    _, stderr_written = write_capture_artifact(
+        run_dir=run_dir,
+        relative_path=stderr_path.relative_to(run_dir),
+        content=stderr_text,
+        rejected_placeholder="Captured output was rejected by the sanitizer\n",
+    )
     status = "passed" if returncode == 0 else "failed"
     if not stdout_written or not stderr_written:
         status = "failed"

@@ -30,3 +30,14 @@ def test_resolve_release_mode_defaults_to_focused_rerun_with_filters() -> None:
 def test_release_options_registered(pytestconfig: pytest.Config) -> None:
     assert pytestconfig.getoption("--release-profile", default=None) is None
     assert ReleaseOptions.__name__ == "ReleaseOptions"
+
+
+def test_release_options_only_expose_supported_fields() -> None:
+    assert set(ReleaseOptions.__dataclass_fields__) == {
+        "profile_path",
+        "mode",
+        "scenarios",
+        "streams",
+        "artifact_dir",
+        "allow_dirty",
+    }

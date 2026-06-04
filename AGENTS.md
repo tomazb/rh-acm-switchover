@@ -346,10 +346,11 @@ results match CI.
 
 ### Release Validation
 
-Release validation lives under `tests/release/` and is excluded from the
-default `./run_tests.sh` run. Run the framework with
-`python -m pytest tests/release -q`. Live certification requires an explicit
-profile via `--release-profile` or `ACM_RELEASE_PROFILE`. Live RBAC bootstrap
+Release validation lives under `tests/release/`. The default `./run_tests.sh`
+now runs the non-live `tests/release/` helper suite explicitly after the root
+test lane; run `python -m pytest tests/release -q` directly when you need a
+tighter release-framework loop. Live certification requires an explicit profile
+via `--release-profile` or `ACM_RELEASE_PROFILE`. Live RBAC bootstrap
 certification (`rbac-bootstrap-live`, module
 `tests/release/checks/rbac_certification.py`) is opt-in behind
 `ACM_ENABLE_LIVE_RBAC_CERTIFICATION=1` and is delivered with the example

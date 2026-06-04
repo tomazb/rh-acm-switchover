@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.release.adapters.ansible import AnsibleAdapter
+from tests.release.reporting.artifacts import ReleaseArtifacts
 
 
 def _make_adapter(tmp_path: Path) -> AnsibleAdapter:
@@ -269,14 +270,16 @@ def test_ansible_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_p
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(
-        "tests.release.adapters.ansible.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive"))
+        "tests.release.reporting.artifacts.sanitize_text", lambda _: (_ for _ in ()).throw(RedactionError("sensitive"))
     )
-    adapter = _make_adapter(tmp_path)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    adapter = _make_adapter(artifacts.run_dir)
 
     result = adapter.execute("preflight")
 
     assert result.status == "failed"
     assert any(a.name == "artifact-redaction" for a in result.assertions)
+    assert "scenarios/preflight/ansible/stdout.txt" in (artifacts.run_dir / "redaction.json").read_text(encoding="utf-8")
 
 
 def test_ansible_adapter_discover_reports_returns_empty_for_missing_file(tmp_path: Path) -> None:

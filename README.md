@@ -399,10 +399,10 @@ Edit state file manually or use `--reset-state` to start fresh (use with caution
 ### Run Tests
 
 ```bash
-# Run default non-release tests with coverage
+# Run the default local suite (root tests + release-framework helper tests)
 ./run_tests.sh
 
-# Run release validation framework tests explicitly
+# Run release validation framework tests directly
 python -m pytest tests/release -q
 
 # Run live release certification with an operator-provided lab profile
@@ -410,7 +410,7 @@ python -m pytest tests/release/test_release_certification.py \
   --release-profile /path/to/release-profile.yaml \
   --release-mode certification
 
-# Or manually
+# Or run the root test lane only
 python -m pytest tests/ --ignore=tests/release -v --cov=. --cov-report=html
 ```
 

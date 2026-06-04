@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated service-account kubeconfigs now default to 24-hour tokens across the Python CLI setup wrapper, Bash kubeconfig helpers, and collection RBAC bootstrap. Operators can still request longer-lived tokens explicitly with `--token-duration` or `acm_switchover_rbac_bootstrap.token_duration`.
 - Container bootstrap images are now digest-pinned, the bundled OpenShift client default is updated to `stable-4.21`, and downloaded `jq`, `oc`, and `kubectl` artifacts are verified with SHA-256 checksums before installation.
 - Helm RBAC chart rendering now rejects `rbac.customValidatorRules` entries with verbs outside `get`, `list`, and `watch`, preserving the validator ClusterRole's read-only contract.
+- Local `./run_tests.sh` now runs the non-live `tests/release/` helper suite explicitly after the root test lane, and CI runs the same suite in a dedicated `Release Framework Tests` job instead of implying release readiness via a metadata-only job label.
 
 ### Fixed
 
@@ -52,6 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced one-shot Thanos compactor scale-down checks with bounded polling, re-raised post-activation programming errors, and avoided global kubeconfig fallback/config mutation in Python client setup.
 - Fixed collection parity gaps for activation resume, passive Restore fallback, primary prep Observability gating, RBAC observability permission skipping, and validate-mode checkpoint preflight execution.
 - Hardened generated `kubeconfig` writes for Bash RBAC setup and merged `kubeconfig` generation. Output parent directories are now created with owner-only permissions, and token-bearing files are written under `umask 077`.
+- Fixed release validation helper behavior so required scenarios fail closed on `not_applicable`, dirty certification runs fail fast unless `--allow-dirty` is explicit, configured release metadata files are validated against `release.expected_version`, and emitted manifests/recovery artifacts now reflect live git and release-metadata state instead of hardcoded placeholders.
+- Fixed release validation artifact handling so static gates and stream adapters route captured stdout/stderr through the shared redaction audit, live discovery subprocess failures surface explicitly instead of degrading to empty fingerprints, and paused backup schedules no longer misclassify passive hubs as primary during baseline discovery.
 
 ### Removed
 

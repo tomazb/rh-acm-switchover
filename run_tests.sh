@@ -92,10 +92,16 @@ echo "======================================"
 echo "Running Unit Tests"
 echo "======================================"
 
-# E2E tests are on-demand. Set RUN_E2E=1 to include them.
-# Main test run always excludes E2E; E2E runs separately when requested
+# E2E tests are on-demand. Release-framework helper tests run as their own
+# explicit lane so local verification matches CI structure.
 pytest_args=(tests/ --ignore=tests/release -v --cov=. --cov-report=term-missing --cov-report=html --cov-report=xml -m "not e2e")
 python -m pytest "${pytest_args[@]}"
+
+echo ""
+echo "======================================"
+echo "Running Release Framework Tests"
+echo "======================================"
+python -m pytest tests/release -q
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
     echo ""
@@ -159,6 +165,7 @@ echo "======================================"
 echo "Test Summary"
 echo "======================================"
 echo -e "${GREEN}✓ Unit tests completed${NC}"
+echo -e "${GREEN}✓ Release framework tests completed${NC}"
 echo -e "${GREEN}✓ Coverage report generated: htmlcov/index.html${NC}"
 echo -e "${GREEN}✓ Code quality checks completed${NC}"
 echo -e "${GREEN}✓ Security checks completed${NC}"

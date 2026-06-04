@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 
 from tests.release.checks.static_gates import GateCommand, build_default_gate_commands, run_gate_command
+from tests.release.reporting.artifacts import ReleaseArtifacts
 
 
 def test_run_gate_command_records_returncode_and_output(tmp_path: Path) -> None:
@@ -87,14 +88,18 @@ def test_bash_only_profile_still_runs_local_root_gate() -> None:
 
 
 def test_run_gate_command_rejects_unredacted_secret_output(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
     result = run_gate_command(
         GateCommand(
             gate_id="sample", label="secret", command=["python", "-c", "print('token: abc123')"], cwd=Path.cwd()
         ),
-        artifact_dir=tmp_path,
+        artifact_dir=artifacts.run_dir / "static-gates",
     )
 
     assert result.status == "failed"
     assert result.returncode == 0
     assert Path(result.stdout_path).read_text(encoding="utf-8") == ""
     assert "rejected by the sanitizer" in Path(result.stderr_path).read_text(encoding="utf-8")
+    assert "static-gates/sample-secret.stdout" in (
+        artifacts.run_dir / "redaction.json"
+    ).read_text(encoding="utf-8")
