@@ -20,7 +20,7 @@
 - Do not modify protected runbook files or `.claude/skills/**/*.skill.md` without explicit operator approval.
 - Do not intentionally change Python/Ansible parity status without explicit operator approval and repo documentation updates.
 
-**Last Updated:** 2026-06-03
+**Last Updated:** 2026-06-04
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -33,7 +33,28 @@ Current `ansible` HEAD `ac041f6` includes merged Thermos PRs 17-20 (`#89`, `#90`
 - One residual follow-up remains worth a separate PR:
   - `F38` Python klusterlet verification still downgrades broad API/client inspection failures to informational `unreachable`, diverging from the collection's fail-closed probe behavior.
 
-Treat `F38` as the current Thermos follow-up queue. Keep it isolated from unrelated cleanup.
+Treat `F38` as the first item in the expanded deep-scan follow-up queue below. Keep each follow-up isolated from unrelated cleanup.
+
+## Deep-Scan Follow-Up Queue (2026-06-04)
+
+Validated follow-up findings from the Graphify-assisted deep scan and paired Thermos review passes:
+
+- `F39` Python Argo CD resume-only still fails open for legacy state files that recorded paused Applications before `hub_identities` existed. Current code validates live cluster UIDs only when stored identity bindings are already present, so same-name contexts can still resume against a retargeted cluster without `--force`.
+- `F40` Python dry-run Argo CD management skips discovery and blocker reporting entirely instead of using the existing coordinator dry-run path. The collection still discovers Applications in dry-run and only suppresses patches, so operator visibility is not in parity.
+- `F41` Argo CD pause discovery still defaults to cluster-wide `Application` listing when namespace scoping is available. Tighten API scope without weakening the per-app durable pause-state persistence that protects crash recovery.
+- `F42` Python RBAC preflight still expands to serial SelfSubjectAccessReview calls per verb/resource tuple. Optimize call volume and repeated namespace probes without restoring the old short-circuit reporting behavior.
+- `F43` Release runtime parity checks remain too shallow for the newly hardened resume, Argo CD, and RBAC flows. The harness still compares mostly artifact metadata rather than operational outcomes.
+- `F44` Safety-critical file decomposition remains deferred until the new safety and parity guardrails land. Large files identified during the deep scan remain backlog work, not the next change set.
+
+Execution order for the deep-scan queue:
+
+1. `PR 22` - fail-closed Python Argo CD resume validation for legacy state and shared resume wiring
+2. `PR 23` - Python dry-run Argo CD discovery and blocker parity
+3. `PR 24` - namespace-scoped Argo CD discovery performance hardening
+4. `PR 25` - RBAC preflight scaling without reporting regressions
+5. `PR 26` - deeper runtime parity guardrails before any large refactor
+
+Do not start `F44` until `F39` through `F43` are merged and revalidated.
 
 ## Finding Validation Matrix
 
@@ -77,6 +98,12 @@ Treat `F38` as the current Thermos follow-up queue. Keep it isolated from unrela
 | F36 | resolved | PR 15 | Service-account token generation defaults were reduced to `24h`; longer lifetimes remain explicit operator opt-in. |
 | F37 | resolved | PR 20 | Standalone collection `argocd_resume.yml` validates checkpoint hub UID identity against the live hubs before resuming Applications. |
 | F38 | confirmed post-merge | PR 21 | Python klusterlet verification still downgrades broad API/client inspection failures to informational `unreachable`, diverging from the collection's fail-closed probe semantics. |
+| F39 | confirmed deep-scan follow-up | PR 22 | Python `--argocd-resume-only` still resumes against legacy state without fail-closed hub identity binding when `argocd_paused_apps` exist but `hub_identities` are absent. |
+| F40 | confirmed deep-scan follow-up | PR 23 | Python dry-run Argo CD management skips discovery and blocker reporting, diverging from collection dry-run behavior. |
+| F41 | confirmed deep-scan follow-up | PR 24 | Argo CD discovery remains cluster-wide even when namespace scoping is available; preserve per-app durable pause persistence while tightening API scope. |
+| F42 | confirmed deep-scan follow-up | PR 25 | Python RBAC preflight still performs serial SelfSubjectAccessReview checks per verb/resource tuple and repeats avoidable probes. |
+| F43 | confirmed deep-scan follow-up | PR 26 | Release runtime parity compares mostly artifact metadata and is too shallow to catch behavior drift in new resume, Argo CD, and RBAC flows. |
+| F44 | deferred deep-scan backlog | deferred | Safety-critical file decomposition remains backlog work until F39-F43 land behind stronger parity guardrails. |
 
 ## PR Sequence
 
@@ -103,6 +130,11 @@ Treat `F38` as the current Thermos follow-up queue. Keep it isolated from unrela
 | 19 | merged | `fix/thermos-helm-validator-guardrail` | `.worktrees/thermos-19-helm-validator-guardrail` | F35 | https://github.com/tomazb/rh-acm-switchover/pull/91 | Red/green Helm validator guardrail tests passed; explicit positive and negative `helm template` checks passed; `python -m pytest tests/test_rbac_integration.py tests/test_documentation_guardrails.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_collection_metadata.py -q` passed; touched-file Black/isort and `git diff --check` passed; final `./run_tests.sh` passed; CodeRabbit CLI review `findings=0`; Gemini review thread for malformed `verbs` values addressed; CodeRabbit review thread for non-mapping custom rule entries addressed; merged 2026-06-03. |
 | 20 | merged | `thermos-20-argocd-resume-identity` | `.worktrees/thermos-20-argocd-resume-identity` | F37 | https://github.com/tomazb/rh-acm-switchover/pull/92 | Red/green checkpoint identity module and playbook contract tests passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/ -q` passed; `python -m pytest tests/test_post_activation.py tests/test_documentation_guardrails.py -q` passed; touched-file Black/isort and `git diff --check` passed; final `./run_tests.sh` passed; merged in local history at `ac041f6`. |
 | 21 | ready_for_review | `thermos-21-python-klusterlet-fail-closed` | `.worktrees/thermos-21-python-klusterlet-fail-closed` | F38 | https://github.com/tomazb/rh-acm-switchover/pull/93 | Red/green Python klusterlet fail-closed tests passed; `python -m pytest tests/test_post_activation.py -q` passed; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py -q` passed; `python -m pytest tests/test_documentation_guardrails.py -q` passed; touched-file Black and `git diff --check` passed; final `./run_tests.sh` passed; CodeRabbit CLI review `findings=0`. |
+| 22 | ready_for_review | `fix/thermos-22-python-resume-fail-closed` | `.worktrees/thermos-22-python-resume` | F39 | https://github.com/tomazb/rh-acm-switchover/pull/97 | `python -m pytest tests/test_main_argocd_resume.py tests/test_main.py tests/test_main_phase_flow.py tests/test_utils.py tests/test_documentation_guardrails.py -q` passed; `git diff --check` passed; CodeRabbit CLI review `findings=0`. PR #97 opened; waiting after PR22 slice before any PR23 work. |
+| 23 | planned | `fix/thermos-23-argocd-dry-run-parity` | `.worktrees/thermos-23-argocd-dry-run` | F40 | not opened | Planned verification: `python -m pytest tests/test_primary_prep.py tests/test_main_phase_flow.py tests/test_argocd_coordinator.py -q`; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_manage_role_contracts.py ansible_collections/tomazb/acm_switchover/tests/integration/test_argocd_manage_role.py -q`; `git diff --check`; final `./run_tests.sh`. |
+| 24 | planned | `perf/thermos-24-argocd-discovery-scope` | `.worktrees/thermos-24-argocd-scope` | F41 | not opened | Planned verification: `python -m pytest tests/test_argocd.py tests/test_argocd_coordinator.py tests/test_primary_prep.py -q`; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_discovery_safety.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_manage_role_contracts.py ansible_collections/tomazb/acm_switchover/tests/integration/test_argocd_manage_role.py -q`; `git diff --check`; final `./run_tests.sh`. |
+| 25 | planned | `perf/thermos-25-rbac-preflight-scaling` | `.worktrees/thermos-25-rbac-scaling` | F42 | not opened | Planned verification: `python -m pytest tests/test_rbac_validator.py tests/test_rbac_collection_parity.py tests/test_rbac_integration.py -q`; `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_rbac_validate.py -q`; `python -m pytest tests/release/checks/test_rbac_certification.py -q`; `git diff --check`; final `./run_tests.sh`. |
+| 26 | planned | `test/thermos-26-runtime-parity-depth` | `.worktrees/thermos-26-parity-depth` | F43, F44 gate | not opened | Planned verification: `python -m pytest tests/release/scenarios/test_runtime_parity.py tests/release/test_release_certification.py -q`; `git diff --check`; final `./run_tests.sh`. |
 
 ## Per-PR Implementation Details
 

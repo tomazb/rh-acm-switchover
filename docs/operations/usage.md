@@ -627,12 +627,13 @@ Applications that touch ACM namespaces/kinds are paused (auto-sync removed) and 
 **Resume auto-sync after updating Git for the new hub:**
 - Standalone: `--argocd-resume-only` with `--primary-context` and `--secondary-context` to restore from state.
 - Resume-only auto-discovers the original state file when the swapped-context match is unambiguous. If both context orderings have state files, pass the original file explicitly with `--state-file`.
+- Resume-only now requires stored hub identity bindings when paused Applications are present. Legacy state files created before hub UID binding must be resumed with `--force` only after the operator manually verifies both hubs still point at the intended live clusters.
 
 Note: `--argocd-manage` is allowed with `--validate-only`, but it has no effect and the CLI emits a warning. `--argocd-resume-only` is not compatible with `--validate-only`, `--decommission`, or `--setup`. If `--argocd-manage` was run with `--dry-run`, resume is blocked because the pause was not actually applied—re-run without `--dry-run` to generate resumable state.
 
 ⚠️ Only resume after Git/desired state reflects the **new** hub; otherwise Argo CD can revert switchover changes.
 
-**Resume on failure:** Add `--argocd-resume-on-failure` alongside `--argocd-manage` to automatically attempt ArgoCD resume if the switchover fails. This is safe because Git repos have not been updated yet, so ArgoCD syncing back to the original desired state helps restore pre-switchover state. Resume errors are logged but do not compound the original failure. For Ansible, set `acm_switchover_features.argocd.resume_on_failure: true` in your vars file.
+**Resume on failure:** Add `--argocd-resume-on-failure` alongside `--argocd-manage` to automatically attempt ArgoCD resume if the switchover fails. This is safe because Git repos have not been updated yet, so ArgoCD syncing back to the original desired state helps restore pre-switchover state. Resume errors are logged but do not compound the original failure. The Python CLI now reuses the same hub identity validation as standalone resume, so legacy state without hub UID bindings requires `--force` before any best-effort resume patch is attempted. For Ansible, set `acm_switchover_features.argocd.resume_on_failure: true` in your vars file.
 
 **Bash alternative (deprecated):** `./scripts/argocd-manage.sh` is deprecated and will be removed in a future release. It is not updated for the ApplicationSet and unknown-status blockers above; use the Python CLI (`--argocd-manage`) or the Ansible collection (`argocd_manage` role) instead.
 
