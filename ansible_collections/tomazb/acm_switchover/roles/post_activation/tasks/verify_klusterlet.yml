@@ -8,6 +8,15 @@
   ansible.builtin.set_fact:
     _klusterlet_initial_probe_result: "{{ _klusterlet_probe_result | default({}) }}"
 
+- name: Fail when initial klusterlet probe reports hard errors
+  ansible.builtin.fail:
+    msg: >-
+      Klusterlet verification failed before remediation;
+      failed probes={{ ((_klusterlet_initial_probe_result | default({})).failed_clusters | default([])) | join(', ') | default('none', true) }}.
+      Wrong-hub remediation only applies after successful probe execution.
+  when:
+    - (((_klusterlet_initial_probe_result | default({})).failed_clusters | default([])) | length) > 0
+
 - name: Resolve managed-cluster verification result for klusterlet remediation
   ansible.builtin.set_fact:
     _klusterlet_cluster_verify_result: >-

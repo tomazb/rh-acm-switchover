@@ -38,6 +38,23 @@
           ansible.builtin.meta: end_play
           when: acm_switchover_execution.mode | default('') == 'validate'
 
+        - name: Rehydrate Argo CD run_id from checkpoint before pause
+          ansible.builtin.set_fact:
+            acm_switchover_argocd: >-
+              {{
+                acm_switchover_argocd | default({})
+                | combine({
+                    'run_id': (((_checkpoint_enter | default({})).get('checkpoint', {}))
+                      .get('operational_data', {})
+                      .get('argocd_run_id'))
+                  })
+              }}
+          when:
+            - acm_switchover_features.argocd.manage | default(false)
+            - acm_switchover_execution.checkpoint.enabled | default(false)
+            - (acm_switchover_argocd.run_id | default('')) | length == 0
+            - (((_checkpoint_enter | default({})).get('checkpoint', {})).get('operational_data', {}).get('argocd_run_id', '')) | length > 0
+
         - name: Pause Argo CD auto-sync on secondary hub before restore
           ansible.builtin.include_role:
             name: tomazb.acm_switchover.argocd_manage

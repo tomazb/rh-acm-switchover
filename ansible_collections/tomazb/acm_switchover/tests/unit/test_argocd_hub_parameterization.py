@@ -354,6 +354,30 @@ def test_standalone_argocd_resume_validates_live_identity_before_resume():
     assert "(acm_switchover_hubs.secondary | default({})).context | default('')" in secondary_context
 
 
+def test_standalone_argocd_resume_uses_swapped_mapping_for_effective_hubs():
+    """A swapped checkpoint match must be consumed before resume targets are chosen."""
+    playbook = yaml.safe_load((PLAYBOOKS_DIR / "argocd_resume.yml").read_text())
+    pre_tasks = playbook[0].get("pre_tasks", [])
+    tasks = playbook[0].get("tasks", [])
+
+    validate_task = next(task for task in pre_tasks if task.get("name") == "Validate checkpoint identity before Argo CD resume")
+    assert validate_task.get("register") == "_argocd_resume_identity_validation"
+
+    mapping_task = next(task for task in pre_tasks if task.get("name") == "Resolve effective hub mapping for standalone Argo CD resume")
+    mapping_expr = str(mapping_task["ansible.builtin.set_fact"]["_argocd_resume_effective_hubs"])
+    assert "_argocd_resume_identity_validation.matched_mapping" in mapping_expr
+    assert "swapped" in mapping_expr
+    assert "acm_switchover_hubs.secondary" in mapping_expr
+    assert "acm_switchover_hubs.primary" in mapping_expr
+
+    secondary_resume = next(task for task in tasks if task.get("name") == "Resume autosync on secondary hub")
+    primary_resume = next(task for task in tasks if task.get("name") == "Resume autosync on primary hub")
+
+    assert "_argocd_resume_effective_hubs" in str(secondary_resume.get("vars", {}))
+    assert "_argocd_resume_effective_hubs" in str(primary_resume.get("vars", {}))
+    assert "_argocd_resume_effective_hubs.primary" in " ".join(str(item) for item in primary_resume.get("when", []))
+
+
 def test_discover_run_id_gated_by_resume_mode():
     """discover.yml must NOT generate run_id when mode is resume.
 
