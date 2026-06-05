@@ -33,3 +33,10 @@ def test_argocd_applicationset_child_blocks_managed_pause(run_argocd_fixture):
     assert "ApplicationSet parent-set" in output
     assert "pause/update the ApplicationSet" in output
     assert summary == {}
+
+
+def test_argocd_resume_with_rehydrated_discovery_namespaces_fixture(run_argocd_fixture):
+    """Resume must still succeed when trusted namespace hints are pre-seeded."""
+    completed, summary = run_argocd_fixture("resume_with_discovery_namespaces.yml")
+    assert completed.returncode == 0, completed.stderr
+    assert summary["restored"] >= 1

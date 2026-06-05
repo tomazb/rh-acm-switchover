@@ -49,7 +49,14 @@
 
 - name: Identify latest primary Velero backup
   ansible.builtin.set_fact:
-    _acm_primary_latest_backup: "{{ (acm_primary_backups_info.resources | default([]) | sort(attribute='metadata.creationTimestamp') | last | default({})) }}"
+    _acm_primary_latest_backup: >-
+      {%- set primary_backups = acm_primary_backups_info.resources | default([]) -%}
+      {%- set primary_backups_with_timestamps = primary_backups | selectattr('metadata.creationTimestamp', 'defined') | list -%}
+      {{
+        (primary_backups_with_timestamps | sort(attribute='metadata.creationTimestamp') | last)
+        if (primary_backups_with_timestamps | length) > 0
+        else (primary_backups | last | default({}))
+      }}
   when: not (acm_switchover_operation.restore_only | default(false))
 
 - name: Record latest primary Velero backup completion
@@ -90,7 +97,14 @@
 
 - name: Identify latest restore-only target Velero backup
   ansible.builtin.set_fact:
-    _acm_secondary_latest_backup: "{{ (acm_secondary_backups_info.resources | default([]) | sort(attribute='metadata.creationTimestamp') | last | default({})) }}"
+    _acm_secondary_latest_backup: >-
+      {%- set secondary_backups = acm_secondary_backups_info.resources | default([]) -%}
+      {%- set secondary_backups_with_timestamps = secondary_backups | selectattr('metadata.creationTimestamp', 'defined') | list -%}
+      {{
+        (secondary_backups_with_timestamps | sort(attribute='metadata.creationTimestamp') | last)
+        if (secondary_backups_with_timestamps | length) > 0
+        else (secondary_backups | last | default({}))
+      }}
   when: acm_switchover_operation.restore_only | default(false)
 
 - name: Record latest restore-only target Velero backup completion

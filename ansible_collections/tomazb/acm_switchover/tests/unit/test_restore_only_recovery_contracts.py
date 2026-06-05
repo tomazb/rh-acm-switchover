@@ -87,6 +87,12 @@ def test_activation_checkpoint_persists_argocd_run_id():
     assert "argocd_run_id:" in text, "activation/main.yml must persist argocd_run_id in checkpoint operational_data"
 
 
+def test_activation_checkpoint_defaults_checkpoint_enter_before_discovery_namespace_reads():
+    """Activation checkpoint writes must not dereference an undefined _checkpoint_enter."""
+    text = (ACTIVATION_TASKS / "main.yml").read_text()
+    assert "(((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})" in text
+
+
 def test_activation_wait_rejects_stale_velero_restore_signal():
     """Activation wait must require a new managed-clusters Velero restore name when one existed before activation."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "wait_for_restore.yml").read_text())
@@ -137,6 +143,20 @@ def test_primary_prep_checkpoint_persists_argocd_run_id():
     assert "argocd_run_id:" in text, "primary_prep/main.yml must persist argocd_run_id in checkpoint operational_data"
 
 
+def test_primary_prep_checkpoint_persists_argocd_discovery_namespaces():
+    """primary_prep checkpoint writes must preserve trusted per-hub Application namespace hints."""
+    text = (PRIMARY_PREP_TASKS / "main.yml").read_text()
+    assert (
+        "argocd_discovery_namespaces:" in text
+    ), "primary_prep/main.yml must persist argocd_discovery_namespaces in checkpoint operational_data"
+
+
+def test_primary_prep_defaults_checkpoint_enter_before_discovery_namespace_rehydrate():
+    """primary_prep must guard _checkpoint_enter before rehydrating discovery namespaces."""
+    text = (PRIMARY_PREP_TASKS / "main.yml").read_text()
+    assert "(((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})" in text
+
+
 def test_switchover_report_persists_argocd_run_id():
     """switchover-report.json must include Argo CD pause metadata for later explicit resume."""
     text = (PLAYBOOKS / "switchover.yml").read_text()
@@ -180,6 +200,14 @@ def test_restore_only_persists_argocd_run_id_in_checkpoint_after_pause():
     ), "restore_only.yml must persist operational_data.argocd_run_id for standalone argocd_resume.yml"
 
 
+def test_restore_only_persists_argocd_discovery_namespaces_in_checkpoint_after_pause():
+    """restore_only.yml must persist trusted namespace hints alongside the Argo CD run_id."""
+    text = (PLAYBOOKS / "restore_only.yml").read_text()
+    assert (
+        "argocd_discovery_namespaces:" in text
+    ), "restore_only.yml must persist operational_data.argocd_discovery_namespaces for resume/retry discovery"
+
+
 def test_restore_only_rehydrates_argocd_run_id_from_checkpoint_before_pause():
     """Retrying restore-only must not generate a new run_id while old markers remain."""
     text = (PLAYBOOKS / "restore_only.yml").read_text()
@@ -192,10 +220,34 @@ def test_restore_only_rehydrates_argocd_run_id_from_checkpoint_before_pause():
     assert "argocd_run_id" in text
 
 
+def test_restore_only_rehydrates_discovery_namespaces_from_checkpoint_before_pause():
+    """Retrying restore-only must reuse persisted Application namespace hints before pause."""
+    text = (PLAYBOOKS / "restore_only.yml").read_text()
+    pause_index = text.index("Pause Argo CD auto-sync on secondary hub before restore")
+    rehydrate_index = text.find("Rehydrate Argo CD discovery namespaces from checkpoint before pause")
+
+    assert rehydrate_index != -1
+    assert rehydrate_index < pause_index
+    assert "argocd_discovery_namespaces" in text
+
+
+def test_restore_only_validates_rehydrated_discovery_namespace_lists():
+    """Malformed checkpoint namespace hints must fail before restore-only Argo CD pause."""
+    text = (PLAYBOOKS / "restore_only.yml").read_text()
+    assert "Validate rehydrated Argo CD discovery namespaces from checkpoint" in text
+    validate_index = text.find("Validate rehydrated Argo CD discovery namespaces from checkpoint")
+    rehydrate_index = text.find("Rehydrate Argo CD discovery namespaces from checkpoint before pause")
+    assert validate_index != -1
+    assert validate_index < rehydrate_index
+    assert "(item.value | type_debug) == 'list'" in text
+
+
 def test_restore_only_rehydrate_is_guarded_by_checkpoint_enablement():
     """Restore-only rehydrate must skip cleanly when checkpointing is disabled."""
     tasks = _load_playbook("restore_only.yml")[0]["tasks"][0]["block"]
-    rehydrate_task = next(task for task in tasks if task.get("name") == "Rehydrate Argo CD run_id from checkpoint before pause")
+    rehydrate_task = next(
+        task for task in tasks if task.get("name") == "Rehydrate Argo CD run_id from checkpoint before pause"
+    )
     when_text = " ".join(str(item) for item in rehydrate_task.get("when", []))
     fact_text = str(rehydrate_task["ansible.builtin.set_fact"]["acm_switchover_argocd"])
 

@@ -68,7 +68,12 @@
       {%- set _ = backups.append(backup) -%}
       {%- endif -%}
       {%- endfor -%}
-      {{ (backups | sort(attribute='metadata.creationTimestamp') | last) if (backups | length) > 0 else {} }}
+      {%- set backups_with_timestamps = backups | selectattr('metadata.creationTimestamp', 'defined') | list -%}
+      {{
+        (backups_with_timestamps | sort(attribute='metadata.creationTimestamp') | last)
+        if (backups_with_timestamps | length) > 0
+        else (backups | last | default({}))
+      }}
   when: not (acm_switchover_operation.restore_only | default(false))
 
 - name: Record managed-clusters backup completion

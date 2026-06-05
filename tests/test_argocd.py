@@ -942,3 +942,52 @@ class TestListArgocdApplications:
             "argocd",
             "test-ns",
         ]
+
+
+@pytest.mark.unit
+class TestApplicationNamespaceDiscovery:
+    """Namespace-set helpers for scoped Argo CD discovery reuse."""
+
+    def test_application_namespaces_from_discovery_deduplicates_and_sorts(self):
+        apps = [
+            {"metadata": {"namespace": "team-gitops", "name": "b"}},
+            {"metadata": {"namespace": "argocd", "name": "a"}},
+            {"metadata": {"namespace": "team-gitops", "name": "c"}},
+        ]
+
+        assert argocd_lib.application_namespaces_from_discovery(apps) == ["argocd", "team-gitops"]
+
+    def test_application_namespaces_from_discovery_skips_blank_metadata(self):
+        apps = [
+            {"metadata": {"namespace": "argocd", "name": "a"}},
+            {"metadata": {"name": "missing-ns"}},
+            {"metadata": {"namespace": "  ", "name": "blank"}},
+        ]
+
+        assert argocd_lib.application_namespaces_from_discovery(apps) == ["argocd"]
+
+    def test_application_namespaces_from_discovery_ignores_non_mapping_entries(self):
+        apps = [
+            {"metadata": {"namespace": "argocd", "name": "a"}},
+            None,
+            "not-a-dict",
+            {"metadata": None},
+            {"metadata": "bad-metadata"},
+        ]
+
+        assert argocd_lib.application_namespaces_from_discovery(apps) == ["argocd"]
+
+    def test_trusted_application_namespaces_returns_none_for_missing_or_empty(self):
+        assert argocd_lib.trusted_application_namespaces(None) is None
+        assert argocd_lib.trusted_application_namespaces([]) is None
+
+    def test_trusted_application_namespaces_normalizes_and_deduplicates(self):
+        assert argocd_lib.trusted_application_namespaces([" team-gitops ", "argocd", "argocd", ""]) == [
+            "argocd",
+            "team-gitops",
+        ]
+
+    def test_trusted_application_namespaces_rejects_non_list_values(self):
+        assert argocd_lib.trusted_application_namespaces("argocd") is None
+        assert argocd_lib.trusted_application_namespaces({"primary": ["argocd"]}) is None
+        assert argocd_lib.trusted_application_namespaces(123) is None

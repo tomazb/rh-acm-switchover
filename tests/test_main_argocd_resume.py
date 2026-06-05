@@ -550,6 +550,10 @@ class TestAttemptArgoCDResumeOnFailure:
         state.set_config("argocd_run_id", "run-1")
         state.set_config("argocd_paused_apps", paused_apps)
         state.set_config("argocd_pause_dry_run", False)
+        state.set_config(
+            "argocd_discovery_namespaces",
+            {"primary": ["argocd"], "secondary": ["openshift-gitops"]},
+        )
         state.mark_step_completed("pause_argocd_apps")
         args = make_resume_on_failure_args()
         logger = logging.getLogger("test")
@@ -563,6 +567,7 @@ class TestAttemptArgoCDResumeOnFailure:
         assert reloaded.get_config("argocd_paused_apps") == []
         assert reloaded.get_config("argocd_run_id") is None
         assert reloaded.get_config("argocd_pause_dry_run") is False
+        assert reloaded.get_config("argocd_discovery_namespaces") == {}
         assert reloaded.is_step_completed("pause_argocd_apps") is False
 
     def test_resume_success_rewinds_switchover_retry_to_primary_prep(self, tmp_path):

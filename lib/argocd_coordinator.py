@@ -10,10 +10,24 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from lib import argocd as argocd_lib
+from lib.constants import (
+    STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES,
+    STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
+    STATE_KEY_ARGOCD_PAUSED_APPS,
+    STATE_KEY_ARGOCD_RUN_ID,
+)
 from lib.kube_client import KubeClient
 from lib.utils import StateManager
 
 logger = logging.getLogger("acm_switchover")
+
+
+def clear_argocd_pause_state(state: StateManager) -> None:
+    """Clear persisted Argo CD pause and discovery namespace state."""
+    state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, [])
+    state.set_config(STATE_KEY_ARGOCD_RUN_ID, None)
+    state.set_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, False)
+    state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
 
 
 class ArgoCDPauseCoordinator:
@@ -58,7 +72,16 @@ class ArgoCDPauseCoordinator:
 
     def _persist_paused_apps(self, paused_apps: List[Dict[str, Any]]) -> None:
         """Persist a deep copy so StateManager notices nested entry changes."""
-        self.state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+        self.state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, copy.deepcopy(paused_apps))
+
+    def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
+        stored = self.state.get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES) or {}
+        if not isinstance(stored, dict):
+            return {}
+        return copy.deepcopy(stored)
+
+    def _persist_discovery_namespaces_by_hub(self, namespaces_by_hub: Dict[str, List[str]]) -> None:
+        self.state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, copy.deepcopy(namespaces_by_hub))
 
     def _upsert_pause_entry(
         self,
@@ -113,17 +136,17 @@ class ArgoCDPauseCoordinator:
 
         if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
             logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
-            self.state.set_config("argocd_paused_apps", [])
-            self.state.set_config("argocd_run_id", None)
-            self.state.set_config("argocd_pause_dry_run", False)
+            clear_argocd_pause_state(self.state)
             return [], 0
 
-        run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
-        self.state.set_config("argocd_run_id", run_id)
-        self.state.set_config("argocd_pause_dry_run", self.dry_run)
-        paused_apps: List[Dict[str, Any]] = copy.deepcopy(self.state.get_config("argocd_paused_apps") or [])
+        existing_run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+        run_id = argocd_lib.run_id_or_new(existing_run_id)
+        self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
+        self.state.set_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, self.dry_run)
+        paused_apps: List[Dict[str, Any]] = copy.deepcopy(self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or [])
         pause_failures = 0
 
+        discovery_namespaces_by_hub = self._get_discovery_namespaces_by_hub() if existing_run_id else {}
         applications_by_hub: List[Tuple[KubeClient, str, List[Dict[str, Any]]]] = []
         pause_blockers = []
 
@@ -135,12 +158,17 @@ class ArgoCDPauseCoordinator:
                 )
                 continue
 
-            apps = argocd_lib.list_argocd_applications(client, namespaces=None)
+            trusted_namespaces = argocd_lib.trusted_application_namespaces(discovery_namespaces_by_hub.get(hub_label))
+            apps = argocd_lib.list_argocd_applications(client, namespaces=trusted_namespaces)
+            if trusted_namespaces is None:
+                discovery_namespaces_by_hub[hub_label] = argocd_lib.application_namespaces_from_discovery(apps)
             applications_by_hub.append((client, hub_label, apps))
             blockers = argocd_lib.find_argocd_pause_blockers(apps)
             for blocker in blockers:
                 logger.error("Argo CD pause blocked on %s: %s", hub_label, blocker.message)
             pause_blockers.extend(blockers)
+
+        self._persist_discovery_namespaces_by_hub(discovery_namespaces_by_hub)
 
         if pause_blockers:
             return paused_apps, len(pause_blockers)

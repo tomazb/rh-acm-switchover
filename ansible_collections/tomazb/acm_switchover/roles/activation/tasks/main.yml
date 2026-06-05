@@ -55,13 +55,18 @@
         error: "{{ ansible_failed_result.msg | default('unknown failure') }}"
         operational_data:
           argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+          argocd_discovery_namespaces: >-
+            {{
+              acm_switchover_argocd_discovery_namespaces | default({})
+              if (acm_switchover_argocd_discovery_namespaces | default({}) | length) > 0
+              else
+              (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_discovery_namespaces', {})
+            }}
           auto_import_strategy_changed: >-
             {{
               (_auto_import_strategy_changed | default(false))
               or
-              ((_checkpoint_enter.checkpoint | default({}))
-              .get('operational_data', {})
-              .get('auto_import_strategy_changed', false))
+              (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('auto_import_strategy_changed', false)
             }}
       when: acm_switchover_execution.checkpoint.enabled | default(false)
 
@@ -77,13 +82,18 @@
     status: pass
     operational_data:
       argocd_run_id: "{{ acm_switchover_argocd.run_id | default(acm_switchover_execution.run_id | default('')) }}"
+      argocd_discovery_namespaces: >-
+        {{
+          acm_switchover_argocd_discovery_namespaces | default({})
+          if (acm_switchover_argocd_discovery_namespaces | default({}) | length) > 0
+          else
+          (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_discovery_namespaces', {})
+        }}
       auto_import_strategy_changed: >-
         {{
           (_auto_import_strategy_changed | default(false))
           or
-          ((_checkpoint_enter.checkpoint | default({}))
-          .get('operational_data', {})
-          .get('auto_import_strategy_changed', false))
+          (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('auto_import_strategy_changed', false)
         }}
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)

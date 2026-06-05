@@ -198,3 +198,93 @@ class TestUnsafeApplicationBlocking:
             and "auto-sync remains enabled after pause" in str(task["ansible.builtin.fail"].get("msg", ""))
         ]
         assert fail_tasks, "pause.yml must fail if a re-read Application still has automated sync enabled"
+
+
+class TestTrustedNamespaceDiscovery:
+    """Later discovery passes may aggregate namespaced reads from trusted namespace hints."""
+
+    def test_discover_resolves_trusted_namespace_list_for_current_hub(self):
+        tasks = _load_discover_tasks()
+        block = _get_discovery_block(tasks)
+        resolve_tasks = [
+            task
+            for task in block.get("block", [])
+            if task.get("name") == "Resolve trusted Argo CD discovery namespaces for current hub"
+        ]
+        assert resolve_tasks, "discover.yml must resolve trusted namespaces before listing Applications"
+        fact = resolve_tasks[0]["ansible.builtin.set_fact"]
+        assert "_argocd_trusted_discovery_namespaces" in fact
+        assert "acm_switchover_argocd_discovery_namespaces" in str(fact)
+
+    def test_discover_aggregates_namespaced_k8s_info_reads(self):
+        tasks = _load_discover_tasks()
+        block = _get_discovery_block(tasks)
+        list_tasks = [
+            task
+            for task in block.get("block", [])
+            if task.get("name") == "List Applications in trusted namespaces" and "kubernetes.core.k8s_info" in task
+        ]
+        aggregate_tasks = [
+            task
+            for task in block.get("block", [])
+            if task.get("name") == "Aggregate Applications from trusted namespaces"
+        ]
+        assert list_tasks, "discover.yml must list Applications per trusted namespace"
+        assert aggregate_tasks, "discover.yml must aggregate namespaced Application reads"
+        assert "{{ item }}" in str(list_tasks[0]["kubernetes.core.k8s_info"].get("namespace", ""))
+        assert "_argocd_app_list_by_ns" in str(aggregate_tasks[0]["ansible.builtin.set_fact"])
+
+    def test_discover_records_namespace_map_after_cluster_wide_pass(self):
+        tasks = _load_discover_tasks()
+        block = _get_discovery_block(tasks)
+        record_tasks = [
+            task
+            for task in block.get("block", [])
+            if task.get("name") == "Record discovered Application namespaces for current hub"
+        ]
+        assert record_tasks, "discover.yml must persist per-hub Application namespaces after cluster-wide discovery"
+        fact = record_tasks[0]["ansible.builtin.set_fact"]
+        assert "acm_switchover_argocd_discovery_namespaces" in fact
+        when_text = str(record_tasks[0].get("when", ""))
+        assert "_argocd_use_scoped_discovery" in when_text
+        assert "== 'pause'" in when_text
+
+    def test_discover_does_not_seed_namespaces_in_read_only_discover_mode(self):
+        tasks = _load_discover_tasks()
+        block = _get_discovery_block(tasks)
+        record_tasks = [
+            task
+            for task in block.get("block", [])
+            if task.get("name") == "Record discovered Application namespaces for current hub"
+        ]
+        assert record_tasks
+        when_text = str(record_tasks[0].get("when", ""))
+        assert "!= 'discover'" in when_text or "== 'pause'" in when_text
+
+    def test_discover_keeps_advisory_discover_mode_cluster_wide(self):
+        tasks = _load_discover_tasks()
+        block = _get_discovery_block(tasks)
+        resolve_tasks = [
+            task
+            for task in block.get("block", [])
+            if task.get("name") == "Resolve trusted Argo CD discovery namespaces for current hub"
+        ]
+        assert resolve_tasks
+        scoped_expr = str(resolve_tasks[0]["ansible.builtin.set_fact"]["_argocd_use_scoped_discovery"])
+        assert "!= 'discover'" in scoped_expr or "== 'discover'" in scoped_expr
+
+    def test_discover_fails_when_persisted_hub_namespaces_are_not_a_list(self):
+        tasks = _load_discover_tasks()
+        block = _get_discovery_block(tasks)
+        fail_tasks = [
+            task
+            for task in block.get("block", [])
+            if "ansible.builtin.fail" in task
+            and "must be a list" in str(task.get("ansible.builtin.fail", {}).get("msg", "")).lower()
+        ]
+        assert fail_tasks, "discover.yml must fail closed when persisted hub namespace hints are malformed"
+        when_text = str(fail_tasks[0].get("when", ""))
+        assert "_argocd_discover_hub" in when_text
+        assert "in (acm_switchover_argocd_discovery_namespaces | default({}))" in when_text
+        assert "type_debug" in when_text
+        assert "!= 'list'" in when_text
