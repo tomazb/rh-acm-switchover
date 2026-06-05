@@ -35,7 +35,7 @@ from lib import (
     setup_logging,
     validate_decommission_permissions,
 )
-from lib.argocd_coordinator import ArgoCDPauseCoordinator
+from lib.argocd_coordinator import ArgoCDPauseCoordinator, clear_argocd_pause_state
 from lib.constants import (
     DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,
     DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE,
@@ -732,9 +732,7 @@ def _attempt_argocd_resume_on_failure(
             return
 
         state.clear_step_completed("pause_argocd_apps")
-        state.set_config("argocd_paused_apps", [])
-        state.set_config("argocd_run_id", None)
-        state.set_config("argocd_pause_dry_run", False)
+        clear_argocd_pause_state(state)
         retry_phase = Phase.PREFLIGHT if getattr(args, "restore_only", False) else Phase.PRIMARY_PREP
         state.add_error(
             "Argo CD resume-on-failure completed; retry must re-run Argo CD pause before continuing.",

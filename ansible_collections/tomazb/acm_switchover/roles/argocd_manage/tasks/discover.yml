@@ -30,7 +30,74 @@
         - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) != 'resume'
         - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'pause'
 
-    - name: List Applications in Argo CD namespace
+    - name: Resolve trusted Argo CD discovery namespaces for current hub
+      ansible.builtin.set_fact:
+        _argocd_trusted_discovery_namespaces: >-
+          {{
+            [acm_switchover_argocd.namespace]
+            if (acm_switchover_argocd.namespace | default('')) | length > 0
+            else (
+              (acm_switchover_argocd_discovery_namespaces | default({}))
+              .get(_argocd_discover_hub | default('primary'), [])
+              if (
+                (acm_switchover_argocd_discovery_namespaces | default({}))
+                .get(_argocd_discover_hub | default('primary'), [])
+              ) is list
+              else []
+            )
+          }}
+        _argocd_use_scoped_discovery: >-
+          {{
+            (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) != 'discover'
+            and (
+              (acm_switchover_argocd.namespace | default('')) | length > 0
+              or (
+                (acm_switchover_argocd_discovery_namespaces | default({}))
+                .get(_argocd_discover_hub | default('primary'), [])
+                is list
+                and (
+                  (acm_switchover_argocd_discovery_namespaces | default({}))
+                  .get(_argocd_discover_hub | default('primary'), [])
+                  | length
+                ) > 0
+              )
+            )
+          }}
+
+    - name: Fail when persisted Argo CD discovery namespaces are malformed for current hub
+      ansible.builtin.fail:
+        msg: >-
+          Persisted Argo CD discovery namespaces for hub {{ _argocd_discover_hub | default('primary') }}
+          must be a list of namespace names.
+      when:
+        - (acm_switchover_argocd.namespace | default('')) | length == 0
+        - (acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) is defined
+        - (acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) is not list
+
+    - name: List Applications in trusted namespaces
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ item }}"
+        kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
+        context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
+      loop: "{{ _argocd_trusted_discovery_namespaces | default([]) }}"
+      register: _argocd_app_list_by_ns
+      when: _argocd_use_scoped_discovery | default(false) | bool
+
+    - name: Aggregate Applications from trusted namespaces
+      ansible.builtin.set_fact:
+        _argocd_app_list:
+          resources: >-
+            {{
+              _argocd_app_list_by_ns.results | default([])
+              | map(attribute='resources')
+              | list
+              | flatten
+            }}
+      when: _argocd_use_scoped_discovery | default(false) | bool
+
+    - name: List Applications cluster-wide
       kubernetes.core.k8s_info:
         api_version: argoproj.io/v1alpha1
         kind: Application
@@ -38,6 +105,7 @@
         kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
         context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
       register: _argocd_app_list
+      when: not (_argocd_use_scoped_discovery | default(false) | bool)
 
     - name: Filter to ACM-touching applications
       tomazb.acm_switchover.acm_argocd_filter:
@@ -50,6 +118,29 @@
         acm_switchover_argocd_acm_apps: "{{ _argocd_live_filtered.applications }}"
         acm_switchover_argocd_blocked_apps: "{{ _argocd_live_filtered.blocked | default([]) }}"
         acm_switchover_argocd_all_apps: "{{ _argocd_app_list.resources | default([]) }}"
+
+    - name: Record discovered Application namespaces for current hub
+      ansible.builtin.set_fact:
+        acm_switchover_argocd_discovery_namespaces: >-
+          {{
+            acm_switchover_argocd_discovery_namespaces | default({})
+            | combine({
+                (_argocd_discover_hub | default('primary')): (
+                  _argocd_app_list.resources | default([])
+                  | map(attribute='metadata')
+                  | map(attribute='namespace')
+                  | select('defined')
+                  | select('ne', '')
+                  | list
+                  | unique
+                  | sort
+                )
+              }, recursive=True)
+          }}
+      when:
+        - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'pause'
+        - not (_argocd_use_scoped_discovery | default(false) | bool)
+        - (acm_switchover_argocd.namespace | default('')) | length == 0
 
   rescue:
     - name: Check if failure is due to missing Argo CD CRD

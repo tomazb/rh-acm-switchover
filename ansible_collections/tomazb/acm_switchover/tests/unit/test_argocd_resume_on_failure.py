@@ -148,6 +148,22 @@ def test_switchover_rescue_reset_preserves_argocd_run_id_for_retry():
     assert "acm_switchover_argocd.run_id" in operational_data["argocd_run_id"]
 
 
+def test_switchover_rescue_reset_preserves_argocd_discovery_namespaces_for_retry():
+    """Failed resume-on-failure retries must keep trusted namespace hints for scoped rediscovery."""
+    playbook = _load_playbook("switchover.yml")
+    task_block = _get_task_block(playbook)
+    reset_tasks = [
+        task
+        for task in task_block["rescue"]
+        if task.get("tomazb.acm_switchover.checkpoint_phase", {}).get("status") == "reset"
+    ]
+
+    assert reset_tasks, "switchover.yml rescue must reset primary_prep after resume-on-failure"
+    operational_data = reset_tasks[0]["tomazb.acm_switchover.checkpoint_phase"].get("operational_data", {})
+    assert "argocd_discovery_namespaces" in operational_data
+    assert "acm_switchover_argocd_discovery_namespaces" in operational_data["argocd_discovery_namespaces"]
+
+
 def test_primary_prep_rehydrates_argocd_run_id_from_checkpoint_before_pause():
     """Retrying primary_prep must not generate a new run_id while old markers remain."""
     text = (ROLES_DIR / "primary_prep" / "tasks" / "main.yml").read_text()

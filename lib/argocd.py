@@ -321,7 +321,7 @@ def list_argocd_applications(
 
     Args:
         client: KubeClient for the cluster.
-        namespaces: If set, list only from these namespaces; else discover (operator or cluster-wide).
+        namespaces: If set, list only from these namespaces; else list cluster-wide.
 
     Returns:
         List of Application resource dicts.
@@ -337,6 +337,28 @@ def list_argocd_applications(
             result.extend(_list_argocd_applications_once(client, ns))
         return result
     return _list_argocd_applications_once(client, namespace=None)
+
+
+def application_namespaces_from_discovery(apps: List[Dict[str, Any]]) -> List[str]:
+    """Return deduplicated sorted Application namespaces from a discovery list."""
+    namespaces = set()
+    for app in apps:
+        ns = ((app.get("metadata") or {}).get("namespace") or "").strip()
+        if ns:
+            namespaces.add(ns)
+    return sorted(namespaces)
+
+
+def trusted_application_namespaces(namespaces: Optional[List[str]]) -> Optional[List[str]]:
+    """Return a normalized namespace list for scoped listing, or None for cluster-wide."""
+    if namespaces is None:
+        return None
+    if not isinstance(namespaces, list):
+        return None
+    if not namespaces:
+        return None
+    normalized = sorted({ns.strip() for ns in namespaces if isinstance(ns, str) and ns.strip()})
+    return normalized or None
 
 
 def _resource_touches_acm(resource: Dict[str, Any]) -> bool:

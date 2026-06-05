@@ -195,6 +195,28 @@ class TestArgoCDDiscover:
                 "to allow the discover hub to be overridden for secondary-hub Argo CD testing"
             )
 
+    def test_discover_keeps_cluster_wide_path_without_trusted_namespaces(self):
+        """Default discovery must remain cluster-wide when no trusted namespace list exists."""
+        cluster_wide_tasks = [
+            t
+            for t in self.flat_tasks
+            if t.get("name") == "List Applications cluster-wide" and "kubernetes.core.k8s_info" in t
+        ]
+        assert cluster_wide_tasks, "discover.yml must keep a cluster-wide Application list path"
+        params = cluster_wide_tasks[0]["kubernetes.core.k8s_info"]
+        assert "default(omit)" in str(params.get("namespace", ""))
+
+    def test_discover_uses_scoped_list_when_trusted_namespaces_present(self):
+        """Trusted namespace hints must trigger per-namespace Application listing."""
+        scoped_tasks = [
+            t
+            for t in self.flat_tasks
+            if t.get("name") == "List Applications in trusted namespaces" and "kubernetes.core.k8s_info" in t
+        ]
+        assert scoped_tasks, "discover.yml must list Applications per trusted namespace when hints exist"
+        assert "loop" in scoped_tasks[0]
+        assert "_argocd_trusted_discovery_namespaces" in str(scoped_tasks[0]["loop"])
+
 
 class TestArgoCDPause:
     """argocd_manage/tasks/pause.yml structural contract tests."""

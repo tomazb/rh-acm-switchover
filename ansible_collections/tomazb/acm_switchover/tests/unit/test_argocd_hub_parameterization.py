@@ -116,20 +116,23 @@ def test_discover_uses_parameterized_hub():
 def test_discover_namespace_defaults_to_omit():
     """discover.yml must NOT hardcode a single default namespace like 'argocd'.
 
-    When acm_switchover_argocd.namespace is not set, discovery should search
-    cluster-wide (default(omit)) to match Bash/Python behavior.
+    When acm_switchover_argocd.namespace is not set and no trusted namespace
+    hints exist, discovery should search cluster-wide (default(omit)).
     """
     text = (ROLE_DIR / "discover.yml").read_text()
     assert "default('argocd')" not in text, (
         "discover.yml still hardcodes default('argocd'); " "should use default(omit) for cluster-wide discovery"
     )
     tasks = _load_yaml("discover.yml")
-    for task in tasks:
-        for block_task in task.get("block", []):
-            k8s_info = block_task.get("kubernetes.core.k8s_info", {})
-            if k8s_info:
-                ns = str(k8s_info.get("namespace", ""))
-                assert "default(omit)" in ns, f"discover.yml namespace should use default(omit), got: {ns}"
+    cluster_wide_tasks = [
+        block_task
+        for task in tasks
+        for block_task in task.get("block", [])
+        if block_task.get("name") == "List Applications cluster-wide" and block_task.get("kubernetes.core.k8s_info")
+    ]
+    assert cluster_wide_tasks, "discover.yml must keep an explicit cluster-wide Application list task"
+    ns = str(cluster_wide_tasks[0]["kubernetes.core.k8s_info"].get("namespace", ""))
+    assert "default(omit)" in ns, f"cluster-wide discover namespace should use default(omit), got: {ns}"
 
 
 def test_discover_mode_does_not_generate_pause_run_id():
@@ -227,6 +230,52 @@ def test_standalone_argocd_resume_covers_both_hubs():
     assert (
         "acm_switchover_hubs.primary is defined" in text
     ), "Primary hub resume should be guarded by acm_switchover_hubs.primary is defined"
+
+
+def test_primary_prep_rehydrates_discovery_namespaces_from_checkpoint():
+    """Retrying primary_prep must reuse persisted per-hub Application namespace hints."""
+    text = (ROLES_DIR / "primary_prep" / "tasks" / "main.yml").read_text()
+    assert "Rehydrate Argo CD discovery namespaces from checkpoint" in text
+    assert "argocd_discovery_namespaces" in text
+    pause_index = text.index("Pause Argo CD auto-sync on primary hub when enabled")
+    rehydrate_index = text.find("Rehydrate Argo CD discovery namespaces from checkpoint")
+    assert rehydrate_index != -1
+    assert rehydrate_index < pause_index
+
+
+def test_primary_prep_validates_rehydrated_discovery_namespace_lists():
+    """Malformed checkpoint namespace hints must fail before scoped Argo CD discovery."""
+    text = (ROLES_DIR / "primary_prep" / "tasks" / "main.yml").read_text()
+    assert "Validate rehydrated Argo CD discovery namespaces from checkpoint" in text
+    validate_index = text.find("Validate rehydrated Argo CD discovery namespaces from checkpoint")
+    rehydrate_index = text.find("Rehydrate Argo CD discovery namespaces from checkpoint")
+    assert validate_index != -1
+    assert validate_index < rehydrate_index
+    assert "item.value is list" in text
+
+
+def test_standalone_argocd_resume_restores_discovery_namespaces_from_checkpoint():
+    """Standalone resume must rehydrate trusted namespace hints before discovery."""
+    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+    assert "argocd_discovery_namespaces" in text
+    assert "Seed Argo CD discovery namespaces from checkpoint" in text
+    run_id_index = text.find("Seed Argo CD run_id from checkpoint")
+    namespaces_index = text.find("Seed Argo CD discovery namespaces from checkpoint")
+    resume_index = text.find("Resume autosync on secondary hub")
+    assert namespaces_index != -1
+    assert run_id_index != -1
+    assert namespaces_index < resume_index
+
+
+def test_standalone_argocd_resume_validates_rehydrated_discovery_namespace_lists():
+    """Malformed checkpoint namespace hints must fail before standalone Argo CD resume."""
+    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+    assert "Validate rehydrated Argo CD discovery namespaces from checkpoint" in text
+    validate_index = text.find("Validate rehydrated Argo CD discovery namespaces from checkpoint")
+    seed_index = text.find("Seed Argo CD discovery namespaces from checkpoint")
+    assert validate_index != -1
+    assert validate_index < seed_index
+    assert "item.value is list" in text
 
 
 def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
@@ -360,10 +409,14 @@ def test_standalone_argocd_resume_uses_swapped_mapping_for_effective_hubs():
     pre_tasks = playbook[0].get("pre_tasks", [])
     tasks = playbook[0].get("tasks", [])
 
-    validate_task = next(task for task in pre_tasks if task.get("name") == "Validate checkpoint identity before Argo CD resume")
+    validate_task = next(
+        task for task in pre_tasks if task.get("name") == "Validate checkpoint identity before Argo CD resume"
+    )
     assert validate_task.get("register") == "_argocd_resume_identity_validation"
 
-    mapping_task = next(task for task in pre_tasks if task.get("name") == "Resolve effective hub mapping for standalone Argo CD resume")
+    mapping_task = next(
+        task for task in pre_tasks if task.get("name") == "Resolve effective hub mapping for standalone Argo CD resume"
+    )
     mapping_expr = str(mapping_task["ansible.builtin.set_fact"]["_argocd_resume_effective_hubs"])
     assert "_argocd_resume_identity_validation.matched_mapping" in mapping_expr
     assert "swapped" in mapping_expr

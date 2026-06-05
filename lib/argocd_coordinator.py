@@ -16,6 +16,14 @@ from lib.utils import StateManager
 logger = logging.getLogger("acm_switchover")
 
 
+def clear_argocd_pause_state(state: StateManager) -> None:
+    """Clear persisted Argo CD pause and discovery namespace state."""
+    state.set_config("argocd_paused_apps", [])
+    state.set_config("argocd_run_id", None)
+    state.set_config("argocd_pause_dry_run", False)
+    state.set_config("argocd_discovery_namespaces", {})
+
+
 class ArgoCDPauseCoordinator:
     """Coordinates ArgoCD auto-sync pause across one or more hubs.
 
@@ -59,6 +67,15 @@ class ArgoCDPauseCoordinator:
     def _persist_paused_apps(self, paused_apps: List[Dict[str, Any]]) -> None:
         """Persist a deep copy so StateManager notices nested entry changes."""
         self.state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+
+    def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
+        stored = self.state.get_config("argocd_discovery_namespaces") or {}
+        if not isinstance(stored, dict):
+            return {}
+        return copy.deepcopy(stored)
+
+    def _persist_discovery_namespaces_by_hub(self, namespaces_by_hub: Dict[str, List[str]]) -> None:
+        self.state.set_config("argocd_discovery_namespaces", copy.deepcopy(namespaces_by_hub))
 
     def _upsert_pause_entry(
         self,
@@ -113,9 +130,7 @@ class ArgoCDPauseCoordinator:
 
         if not any(discovery.has_applications_crd for _, _, discovery in discoveries):
             logger.info("Argo CD Applications CRD not found on any hub; skipping Argo CD pause")
-            self.state.set_config("argocd_paused_apps", [])
-            self.state.set_config("argocd_run_id", None)
-            self.state.set_config("argocd_pause_dry_run", False)
+            clear_argocd_pause_state(self.state)
             return [], 0
 
         run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
@@ -124,6 +139,7 @@ class ArgoCDPauseCoordinator:
         paused_apps: List[Dict[str, Any]] = copy.deepcopy(self.state.get_config("argocd_paused_apps") or [])
         pause_failures = 0
 
+        discovery_namespaces_by_hub = self._get_discovery_namespaces_by_hub()
         applications_by_hub: List[Tuple[KubeClient, str, List[Dict[str, Any]]]] = []
         pause_blockers = []
 
@@ -135,12 +151,17 @@ class ArgoCDPauseCoordinator:
                 )
                 continue
 
-            apps = argocd_lib.list_argocd_applications(client, namespaces=None)
+            trusted_namespaces = argocd_lib.trusted_application_namespaces(discovery_namespaces_by_hub.get(hub_label))
+            apps = argocd_lib.list_argocd_applications(client, namespaces=trusted_namespaces)
+            if trusted_namespaces is None:
+                discovery_namespaces_by_hub[hub_label] = argocd_lib.application_namespaces_from_discovery(apps)
             applications_by_hub.append((client, hub_label, apps))
             blockers = argocd_lib.find_argocd_pause_blockers(apps)
             for blocker in blockers:
                 logger.error("Argo CD pause blocked on %s: %s", hub_label, blocker.message)
             pause_blockers.extend(blockers)
+
+        self._persist_discovery_namespaces_by_hub(discovery_namespaces_by_hub)
 
         if pause_blockers:
             return paused_apps, len(pause_blockers)

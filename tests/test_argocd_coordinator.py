@@ -833,3 +833,221 @@ class TestStatePersistence:
         # Verify each call got a distinct copy (not the same mutable reference)
         refs = [id(call.args[1]) for call in paused_calls]
         assert len(set(refs)) == len(refs)
+
+
+@pytest.mark.unit
+class TestDiscoveryNamespaceScope:
+    """Scoped Argo CD discovery reuse within the same pause run."""
+
+    def test_first_pass_uses_cluster_wide_listing(self):
+        state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
+        client = Mock()
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[],
+            ) as mock_list,
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[],
+            ),
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator.pause_hubs([(client, "primary")])
+
+        mock_list.assert_called_once_with(client, namespaces=None)
+
+    def test_first_pass_records_discovery_namespaces_before_pause(self):
+        state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
+        client = Mock()
+        app_argocd = _make_app("argocd", "app-1")
+        app_team = _make_app("team-gitops", "app-2")
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[app_argocd, app_team],
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[],
+            ),
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator.pause_hubs([(client, "primary")])
+
+        assert state._config["argocd_discovery_namespaces"] == {
+            "primary": ["argocd", "team-gitops"],
+        }
+
+    def test_retry_pass_uses_recorded_namespace_set(self):
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [],
+                "argocd_discovery_namespaces": {"primary": ["argocd", "team-gitops"]},
+            }
+        )
+        client = Mock()
+        app = _make_app("argocd", "app-1")
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[app],
+            ) as mock_list,
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[],
+            ),
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator.pause_hubs([(client, "primary")])
+
+        mock_list.assert_called_once_with(client, namespaces=["argocd", "team-gitops"])
+
+    def test_empty_recorded_namespace_list_falls_back_to_cluster_wide(self):
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [],
+                "argocd_discovery_namespaces": {"primary": []},
+            }
+        )
+        client = Mock()
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[],
+            ) as mock_list,
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[],
+            ),
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator.pause_hubs([(client, "primary")])
+
+        mock_list.assert_called_once_with(client, namespaces=None)
+
+    def test_no_crd_clears_discovery_namespaces(self):
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "stale",
+                "argocd_paused_apps": [{"hub": "secondary", "name": "old"}],
+                "argocd_discovery_namespaces": {"secondary": ["argocd"]},
+            }
+        )
+        client = Mock()
+
+        with patch(
+            "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+            return_value=_discovery_without_crd(),
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator.pause_hubs([(client, "secondary")])
+
+        assert state._config["argocd_discovery_namespaces"] == {}
+
+    def test_operator_instance_namespaces_are_not_used_as_scope_hints(self):
+        """Watched Application namespaces must come from discovery, not operator CRDs."""
+        state = _make_state_manager({"argocd_run_id": None, "argocd_paused_apps": []})
+        client = Mock()
+        operator_discovery = argocd_lib.ArgocdDiscoveryResult(
+            has_applications_crd=True,
+            has_argocds_crd=True,
+            install_type="operator",
+            argocd_instances=[{"namespace": "openshift-gitops", "name": "openshift-gitops"}],
+        )
+        watched_app = _make_app("team-gitops", "watched-app")
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=operator_discovery,
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[watched_app],
+            ) as mock_list,
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[],
+            ),
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator.pause_hubs([(client, "primary")])
+
+        mock_list.assert_called_once_with(client, namespaces=None)
+        assert state._config["argocd_discovery_namespaces"] == {"primary": ["team-gitops"]}
+
+    def test_malformed_recorded_namespace_value_falls_back_to_cluster_wide(self):
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [],
+                "argocd_discovery_namespaces": {"primary": "argocd"},
+            }
+        )
+        client = Mock()
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[],
+            ) as mock_list,
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[],
+            ),
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator.pause_hubs([(client, "primary")])
+
+        mock_list.assert_called_once_with(client, namespaces=None)
+
+
+@pytest.mark.unit
+class TestClearArgocdPauseState:
+    """Shared Argo CD pause-state reset helper."""
+
+    def test_clear_argocd_pause_state_clears_all_keys(self):
+        from lib.argocd_coordinator import clear_argocd_pause_state
+
+        state = _make_state_manager(
+            {
+                "argocd_run_id": "run-1",
+                "argocd_paused_apps": [{"hub": "primary", "namespace": "argocd", "name": "app-1"}],
+                "argocd_pause_dry_run": True,
+                "argocd_discovery_namespaces": {"primary": ["argocd"]},
+            }
+        )
+
+        clear_argocd_pause_state(state)
+
+        assert state._config["argocd_paused_apps"] == []
+        assert state._config["argocd_run_id"] is None
+        assert state._config["argocd_pause_dry_run"] is False
+        assert state._config["argocd_discovery_namespaces"] == {}
