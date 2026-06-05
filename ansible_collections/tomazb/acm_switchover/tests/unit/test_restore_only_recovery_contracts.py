@@ -239,7 +239,7 @@ def test_restore_only_validates_rehydrated_discovery_namespace_lists():
     rehydrate_index = text.find("Rehydrate Argo CD discovery namespaces from checkpoint before pause")
     assert validate_index != -1
     assert validate_index < rehydrate_index
-    assert "item.value is list" in text
+    assert "(item.value | type_debug) == 'list'" in text
 
 
 def test_restore_only_rehydrate_is_guarded_by_checkpoint_enablement():

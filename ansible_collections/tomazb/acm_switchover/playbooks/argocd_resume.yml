@@ -84,7 +84,7 @@
     - name: Validate rehydrated Argo CD discovery namespaces from checkpoint
       ansible.builtin.assert:
         that:
-          - item.value is list
+          - (item.value | type_debug) == 'list'
         fail_msg: >-
           Checkpoint operational_data.argocd_discovery_namespaces.{{ item.key }}
           must be a list of namespace names.

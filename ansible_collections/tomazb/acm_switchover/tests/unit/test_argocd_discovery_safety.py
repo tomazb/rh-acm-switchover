@@ -284,4 +284,7 @@ class TestTrustedNamespaceDiscovery:
         ]
         assert fail_tasks, "discover.yml must fail closed when persisted hub namespace hints are malformed"
         when_text = str(fail_tasks[0].get("when", ""))
-        assert "is not list" in when_text
+        assert "_argocd_discover_hub" in when_text
+        assert "in (acm_switchover_argocd_discovery_namespaces | default({}))" in when_text
+        assert "type_debug" in when_text
+        assert "!= 'list'" in when_text

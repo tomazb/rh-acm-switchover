@@ -19,9 +19,7 @@
           {{
             acm_switchover_argocd | default({})
             | combine({
-                'run_id': ((((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})
-                  .get('operational_data', {})
-                  .get('argocd_run_id'))
+                'run_id': (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_run_id')
               })
           }}
       when:
@@ -33,15 +31,13 @@
     - name: Validate rehydrated Argo CD discovery namespaces from checkpoint
       ansible.builtin.assert:
         that:
-          - item.value is list
+          - (item.value | type_debug) == 'list'
         fail_msg: >-
           Checkpoint operational_data.argocd_discovery_namespaces.{{ item.key }}
           must be a list of namespace names.
       loop: >-
         {{
-          (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})
-          .get('operational_data', {})
-          .get('argocd_discovery_namespaces', {})
+          (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_discovery_namespaces', {})
           | dict2items
         }}
       when:
@@ -54,9 +50,7 @@
       ansible.builtin.set_fact:
         acm_switchover_argocd_discovery_namespaces: >-
           {{
-            (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})
-            .get('operational_data', {})
-            .get('argocd_discovery_namespaces', {})
+            (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_discovery_namespaces', {})
           }}
       when:
         - acm_switchover_features.argocd.manage | default(false)

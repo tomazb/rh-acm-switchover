@@ -60,17 +60,13 @@
               acm_switchover_argocd_discovery_namespaces | default({})
               if (acm_switchover_argocd_discovery_namespaces | default({}) | length) > 0
               else
-              (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})
-              .get('operational_data', {})
-              .get('argocd_discovery_namespaces', {}))
+              (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_discovery_namespaces', {})
             }}
           auto_import_strategy_changed: >-
             {{
               (_auto_import_strategy_changed | default(false))
               or
-              (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})
-              .get('operational_data', {})
-              .get('auto_import_strategy_changed', false))
+              (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('auto_import_strategy_changed', false)
             }}
       when: acm_switchover_execution.checkpoint.enabled | default(false)
 
@@ -91,17 +87,13 @@
           acm_switchover_argocd_discovery_namespaces | default({})
           if (acm_switchover_argocd_discovery_namespaces | default({}) | length) > 0
           else
-          (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})
-          .get('operational_data', {})
-          .get('argocd_discovery_namespaces', {}))
+          (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('argocd_discovery_namespaces', {})
         }}
       auto_import_strategy_changed: >-
         {{
           (_auto_import_strategy_changed | default(false))
           or
-          (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})
-          .get('operational_data', {})
-          .get('auto_import_strategy_changed', false))
+          (((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {}).get('operational_data', {}).get('auto_import_strategy_changed', false)
         }}
   when:
     - acm_switchover_execution.checkpoint.enabled | default(false)

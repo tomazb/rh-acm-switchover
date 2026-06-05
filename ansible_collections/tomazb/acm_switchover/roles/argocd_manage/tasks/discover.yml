@@ -40,9 +40,10 @@
               (acm_switchover_argocd_discovery_namespaces | default({}))
               .get(_argocd_discover_hub | default('primary'), [])
               if (
-                (acm_switchover_argocd_discovery_namespaces | default({}))
+                ((acm_switchover_argocd_discovery_namespaces | default({}))
                 .get(_argocd_discover_hub | default('primary'), [])
-              ) is list
+                | type_debug) == 'list'
+              )
               else []
             )
           }}
@@ -52,9 +53,11 @@
             and (
               (((acm_switchover_argocd | default({})).get('namespace', '')) | length) > 0
               or (
-                (acm_switchover_argocd_discovery_namespaces | default({}))
-                .get(_argocd_discover_hub | default('primary'), [])
-                is list
+                (
+                  (acm_switchover_argocd_discovery_namespaces | default({}))
+                  .get(_argocd_discover_hub | default('primary'), [])
+                  | type_debug
+                ) == 'list'
                 and (
                   (acm_switchover_argocd_discovery_namespaces | default({}))
                   .get(_argocd_discover_hub | default('primary'), [])
@@ -71,8 +74,8 @@
           must be a list of namespace names.
       when:
         - (((acm_switchover_argocd | default({})).get('namespace', '')) | length) == 0
-        - (acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) is defined
-        - (acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) is not list
+        - (_argocd_discover_hub | default('primary')) in (acm_switchover_argocd_discovery_namespaces | default({}))
+        - ((acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) | type_debug) != 'list'
 
     - name: List Applications in trusted namespaces
       kubernetes.core.k8s_info:

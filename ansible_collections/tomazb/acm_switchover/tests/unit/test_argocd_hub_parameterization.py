@@ -251,7 +251,7 @@ def test_primary_prep_validates_rehydrated_discovery_namespace_lists():
     rehydrate_index = text.find("Rehydrate Argo CD discovery namespaces from checkpoint")
     assert validate_index != -1
     assert validate_index < rehydrate_index
-    assert "item.value is list" in text
+    assert "(item.value | type_debug) == 'list'" in text
 
 
 def test_standalone_argocd_resume_restores_discovery_namespaces_from_checkpoint():
@@ -275,7 +275,7 @@ def test_standalone_argocd_resume_validates_rehydrated_discovery_namespace_lists
     seed_index = text.find("Seed Argo CD discovery namespaces from checkpoint")
     assert validate_index != -1
     assert validate_index < seed_index
-    assert "item.value is list" in text
+    assert "(item.value | type_debug) == 'list'" in text
 
 
 def test_standalone_argocd_resume_defaults_checkpoint_in_discovery_namespace_loop():
