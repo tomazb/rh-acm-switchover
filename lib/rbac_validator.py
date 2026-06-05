@@ -10,7 +10,8 @@ The module supports two roles:
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from copy import deepcopy
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from kubernetes.client.rest import ApiException
 
@@ -266,6 +267,25 @@ class RBACValidator:
             raise ValueError(f"Invalid role '{role}'. Must be one of: {VALID_ROLES}")
         self.client = client
         self.role = role
+        self._permission_cache: Dict[Tuple[str, str, str, Optional[str]], Union[Tuple[bool, str], ValidationError]] = {}
+        self._namespace_exists_cache: Dict[str, bool] = {}
+        self._validation_result_cache: Dict[Tuple[Any, ...], Tuple[bool, Dict[str, List[str]]]] = {}
+
+    def _cached_validation_result(
+        self,
+        cache_key: Tuple[Any, ...],
+        builder: Callable[[], Tuple[bool, Dict[str, List[str]]]],
+    ) -> Tuple[bool, Dict[str, List[str]]]:
+        """Cache validation summaries and return deep-copied results to callers."""
+        if cache_key not in self._validation_result_cache:
+            self._validation_result_cache[cache_key] = builder()
+        return deepcopy(self._validation_result_cache[cache_key])
+
+    def _namespace_exists_cached(self, namespace: str) -> bool:
+        """Return namespace existence, caching results for repeated validation passes."""
+        if namespace not in self._namespace_exists_cache:
+            self._namespace_exists_cache[namespace] = self.client.namespace_exists(namespace)
+        return self._namespace_exists_cache[namespace]
 
     def _get_cluster_permissions(self) -> List[Tuple[str, str, List[str]]]:
         """Get cluster permissions based on role."""
@@ -339,6 +359,13 @@ class RBACValidator:
         Raises:
             ValidationError: If the permission self-check itself cannot be completed
         """
+        cache_key = (api_group, resource, verb, namespace)
+        cached = self._permission_cache.get(cache_key)
+        if cached is not None:
+            if isinstance(cached, ValidationError):
+                raise cached
+            return cached
+
         group_name = api_group if api_group else "core"
         scope = f"namespace '{namespace}'" if namespace else "cluster scope"
         try:
@@ -372,17 +399,23 @@ class RBACValidator:
             response = api_instance.create_self_subject_access_review(body)
 
             if response.status.allowed:
-                return True, ""
+                result: Tuple[bool, str] = (True, "")
             else:
                 reason = response.status.reason or "Permission denied"
-                return False, reason
+                result = (False, reason)
+            self._permission_cache[cache_key] = result
+            return result
 
         except ApiException as e:
-            raise ValidationError(
+            error = ValidationError(
                 f"Unable to check permission {verb} {group_name}/{resource} on {scope}: " f"{e.status} {e.reason}"
-            ) from e
+            )
+            self._permission_cache[cache_key] = error
+            raise error from e
         except Exception as e:
-            raise ValidationError(f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e}") from e
+            error = ValidationError(f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e}")
+            self._permission_cache[cache_key] = error
+            raise error from e
 
     def validate_cluster_permissions(
         self,
@@ -555,7 +588,7 @@ class RBACValidator:
                 continue
 
             # Check if namespace exists first
-            if not self.client.namespace_exists(namespace):
+            if not self._namespace_exists_cached(namespace):
                 warning = f"Namespace {namespace} does not exist - skipping permission checks"
                 logger.warning(warning)
                 errors.append(warning)
@@ -604,7 +637,7 @@ class RBACValidator:
 
         for namespace, permissions in namespace_permissions.items():
             # Check if namespace exists first
-            if not self.client.namespace_exists(namespace):
+            if not self._namespace_exists_cached(namespace):
                 warning = f"Namespace {namespace} does not exist - this may not be a managed cluster"
                 logger.warning(warning)
                 errors.append(warning)
@@ -657,35 +690,47 @@ class RBACValidator:
         Raises:
             ValidationError: If permission checks cannot be completed due to API or client errors
         """
-        all_errors: Dict[str, List[str]] = {}
-
-        # Validate cluster permissions
-        cluster_valid, cluster_errors = self.validate_cluster_permissions(
-            include_decommission=include_decommission,
-            include_old_hub_finalization=include_old_hub_finalization,
-            skip_observability=skip_observability,
-            argocd_mode=argocd_mode,
-            argocd_install_type=argocd_install_type,
+        cache_key = (
+            "all_permissions",
+            include_decommission,
+            include_old_hub_finalization,
+            skip_observability,
+            argocd_mode,
+            argocd_install_type,
         )
-        if cluster_errors:
-            all_errors["cluster"] = cluster_errors
 
-        # Validate namespace permissions
-        namespace_valid, namespace_errors = self.validate_namespace_permissions(skip_observability)
-        if namespace_errors:
-            all_errors["namespaces"] = namespace_errors
+        def builder() -> Tuple[bool, Dict[str, List[str]]]:
+            all_errors: Dict[str, List[str]] = {}
 
-        all_valid = cluster_valid and namespace_valid
+            # Validate cluster permissions
+            cluster_valid, cluster_errors = self.validate_cluster_permissions(
+                include_decommission=include_decommission,
+                include_old_hub_finalization=include_old_hub_finalization,
+                skip_observability=skip_observability,
+                argocd_mode=argocd_mode,
+                argocd_install_type=argocd_install_type,
+            )
+            if cluster_errors:
+                all_errors["cluster"] = cluster_errors
 
-        if all_valid:
-            logger.info("✓ All RBAC permissions validated successfully")
-        else:
-            logger.error("✗ RBAC permission validation failed")
-            logger.error("Error summary:")
-            for category, error_list in all_errors.items():
-                logger.error("  %s: %d errors", category, len(error_list))
+            # Validate namespace permissions
+            namespace_valid, namespace_errors = self.validate_namespace_permissions(skip_observability)
+            if namespace_errors:
+                all_errors["namespaces"] = namespace_errors
 
-        return all_valid, all_errors
+            all_valid = cluster_valid and namespace_valid
+
+            if all_valid:
+                logger.info("✓ All RBAC permissions validated successfully")
+            else:
+                logger.error("✗ RBAC permission validation failed")
+                logger.error("Error summary:")
+                for category, error_list in all_errors.items():
+                    logger.error("  %s: %d errors", category, len(error_list))
+
+            return all_valid, all_errors
+
+        return self._cached_validation_result(cache_key, builder)
 
     def validate_decommission_permissions(
         self,
@@ -695,86 +740,93 @@ class RBACValidator:
         if self.role != "operator":
             raise ValueError("Decommission permissions are only applicable to the operator role.")
 
-        all_valid = True
-        all_errors: Dict[str, List[str]] = {}
-        cluster_errors: List[str] = []
-        namespace_errors: List[str] = []
+        cache_key = ("decommission_permissions", skip_observability)
 
-        logger.info("Validating standalone decommission RBAC permissions for role: %s", self.role)
+        def builder() -> Tuple[bool, Dict[str, List[str]]]:
+            all_valid = True
+            all_errors: Dict[str, List[str]] = {}
+            cluster_errors: List[str] = []
+            namespace_errors: List[str] = []
 
-        check_observability = not skip_observability
-        if check_observability and not self.client.namespace_exists(OBSERVABILITY_NAMESPACE):
-            logger.info(
-                "Namespace %s does not exist - skipping observability decommission permission checks",
-                OBSERVABILITY_NAMESPACE,
-            )
-            check_observability = False
+            logger.info("Validating standalone decommission RBAC permissions for role: %s", self.role)
 
-        for api_group, resource, verbs in self.DECOMMISSION_CLUSTER_PERMISSIONS:
-            if not check_observability and "observability" in api_group:
-                logger.info("Skipping observability permission: %s/%s", api_group, resource)
-                continue
+            check_observability = not skip_observability
+            if check_observability and not self._namespace_exists_cached(OBSERVABILITY_NAMESPACE):
+                logger.info(
+                    "Namespace %s does not exist - skipping observability decommission permission checks",
+                    OBSERVABILITY_NAMESPACE,
+                )
+                check_observability = False
 
-            for verb in verbs:
-                has_perm, error = self.check_permission(api_group, resource, verb, None)
-                if not has_perm:
-                    all_valid = False
-                    group_name = api_group if api_group else "core"
-                    error_msg = f"Missing decommission permission: {verb} {group_name}/{resource}"
-                    if error:
-                        error_msg += f" - {error}"
-                    cluster_errors.append(error_msg)
-                    logger.error(error_msg)
-
-        if cluster_errors:
-            all_errors["cluster"] = cluster_errors
-
-        for namespace, permissions in self.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
-            if namespace == OBSERVABILITY_NAMESPACE and not check_observability:
-                continue
-
-            if not self.client.namespace_exists(namespace):
-                if namespace == ACM_NAMESPACE:
-                    # ACM namespace removal is expected after successful decommission.
-                    # Treat as success to allow idempotent reruns.
-                    logger.info(
-                        "Namespace %s does not exist — ACM already removed, "
-                        "skipping decommission permission checks for this namespace",
-                        namespace,
-                    )
+            for api_group, resource, verbs in self.DECOMMISSION_CLUSTER_PERMISSIONS:
+                if not check_observability and "observability" in api_group:
+                    logger.info("Skipping observability permission: %s/%s", api_group, resource)
                     continue
-                warning = f"Namespace {namespace} does not exist - skipping decommission permission checks"
-                logger.warning(warning)
-                namespace_errors.append(warning)
-                all_valid = False
-                continue
 
-            logger.info("Checking decommission permissions in namespace: %s", namespace)
-
-            for api_group, resource, verbs in permissions:
                 for verb in verbs:
-                    has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                    has_perm, error = self.check_permission(api_group, resource, verb, None)
                     if not has_perm:
                         all_valid = False
                         group_name = api_group if api_group else "core"
-                        error_msg = f"Missing decommission permission in {namespace}: {verb} {group_name}/{resource}"
+                        error_msg = f"Missing decommission permission: {verb} {group_name}/{resource}"
                         if error:
                             error_msg += f" - {error}"
-                        namespace_errors.append(error_msg)
+                        cluster_errors.append(error_msg)
                         logger.error(error_msg)
 
-        if namespace_errors:
-            all_errors["namespaces"] = namespace_errors
+            if cluster_errors:
+                all_errors["cluster"] = cluster_errors
 
-        if all_valid:
-            logger.info("✓ Standalone decommission RBAC permissions validated successfully")
-        else:
-            logger.error("✗ Standalone decommission RBAC permission validation failed")
-            logger.error("Error summary:")
-            for category, error_list in all_errors.items():
-                logger.error("  %s: %d errors", category, len(error_list))
+            for namespace, permissions in self.DECOMMISSION_NAMESPACE_PERMISSIONS.items():
+                if namespace == OBSERVABILITY_NAMESPACE and not check_observability:
+                    continue
 
-        return all_valid, all_errors
+                if not self._namespace_exists_cached(namespace):
+                    if namespace == ACM_NAMESPACE:
+                        # ACM namespace removal is expected after successful decommission.
+                        # Treat as success to allow idempotent reruns.
+                        logger.info(
+                            "Namespace %s does not exist — ACM already removed, "
+                            "skipping decommission permission checks for this namespace",
+                            namespace,
+                        )
+                        continue
+                    warning = f"Namespace {namespace} does not exist - skipping decommission permission checks"
+                    logger.warning(warning)
+                    namespace_errors.append(warning)
+                    all_valid = False
+                    continue
+
+                logger.info("Checking decommission permissions in namespace: %s", namespace)
+
+                for api_group, resource, verbs in permissions:
+                    for verb in verbs:
+                        has_perm, error = self.check_permission(api_group, resource, verb, namespace)
+                        if not has_perm:
+                            all_valid = False
+                            group_name = api_group if api_group else "core"
+                            error_msg = (
+                                f"Missing decommission permission in {namespace}: {verb} {group_name}/{resource}"
+                            )
+                            if error:
+                                error_msg += f" - {error}"
+                            namespace_errors.append(error_msg)
+                            logger.error(error_msg)
+
+            if namespace_errors:
+                all_errors["namespaces"] = namespace_errors
+
+            if all_valid:
+                logger.info("✓ Standalone decommission RBAC permissions validated successfully")
+            else:
+                logger.error("✗ Standalone decommission RBAC permission validation failed")
+                logger.error("Error summary:")
+                for category, error_list in all_errors.items():
+                    logger.error("  %s: %d errors", category, len(error_list))
+
+            return all_valid, all_errors
+
+        return self._cached_validation_result(cache_key, builder)
 
     def generate_permission_report(
         self,
