@@ -948,6 +948,35 @@ class TestDiscoveryNamespaceScope:
 
         mock_list.assert_called_once_with(client, namespaces=None)
 
+    def test_fresh_run_ignores_stale_recorded_namespace_hints(self):
+        state = _make_state_manager(
+            {
+                "argocd_run_id": None,
+                "argocd_paused_apps": [],
+                "argocd_discovery_namespaces": {"primary": ["stale-namespace"]},
+            }
+        )
+        client = Mock()
+
+        with (
+            patch(
+                "lib.argocd_coordinator.argocd_lib.detect_argocd_installation",
+                return_value=_discovery_with_crd(),
+            ),
+            patch(
+                "lib.argocd_coordinator.argocd_lib.list_argocd_applications",
+                return_value=[],
+            ) as mock_list,
+            patch(
+                "lib.argocd_coordinator.argocd_lib.find_acm_touching_apps",
+                return_value=[],
+            ),
+        ):
+            coordinator = ArgoCDPauseCoordinator(state, dry_run=False)
+            coordinator.pause_hubs([(client, "primary")])
+
+        mock_list.assert_called_once_with(client, namespaces=None)
+
     def test_no_crd_clears_discovery_namespaces(self):
         state = _make_state_manager(
             {

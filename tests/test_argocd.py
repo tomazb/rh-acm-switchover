@@ -966,6 +966,17 @@ class TestApplicationNamespaceDiscovery:
 
         assert argocd_lib.application_namespaces_from_discovery(apps) == ["argocd"]
 
+    def test_application_namespaces_from_discovery_ignores_non_mapping_entries(self):
+        apps = [
+            {"metadata": {"namespace": "argocd", "name": "a"}},
+            None,
+            "not-a-dict",
+            {"metadata": None},
+            {"metadata": "bad-metadata"},
+        ]
+
+        assert argocd_lib.application_namespaces_from_discovery(apps) == ["argocd"]
+
     def test_trusted_application_namespaces_returns_none_for_missing_or_empty(self):
         assert argocd_lib.trusted_application_namespaces(None) is None
         assert argocd_lib.trusted_application_namespaces([]) is None

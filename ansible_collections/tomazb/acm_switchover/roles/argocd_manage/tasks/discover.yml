@@ -26,16 +26,16 @@
             | combine({'run_id': lookup('pipe', 'python3 -c "import uuid; print(uuid.uuid4().hex[:12])"')})
           }}
       when:
-        - (acm_switchover_argocd.run_id | default('')) == ''
-        - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) != 'resume'
-        - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'pause'
+        - ((acm_switchover_argocd | default({})).get('run_id', '')) == ''
+        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) != 'resume'
+        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
 
     - name: Resolve trusted Argo CD discovery namespaces for current hub
       ansible.builtin.set_fact:
         _argocd_trusted_discovery_namespaces: >-
           {{
-            [acm_switchover_argocd.namespace]
-            if (acm_switchover_argocd.namespace | default('')) | length > 0
+            [((acm_switchover_argocd | default({})).get('namespace', ''))]
+            if (((acm_switchover_argocd | default({})).get('namespace', '')) | length) > 0
             else (
               (acm_switchover_argocd_discovery_namespaces | default({}))
               .get(_argocd_discover_hub | default('primary'), [])
@@ -48,9 +48,9 @@
           }}
         _argocd_use_scoped_discovery: >-
           {{
-            (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) != 'discover'
+            (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) != 'discover'
             and (
-              (acm_switchover_argocd.namespace | default('')) | length > 0
+              (((acm_switchover_argocd | default({})).get('namespace', '')) | length) > 0
               or (
                 (acm_switchover_argocd_discovery_namespaces | default({}))
                 .get(_argocd_discover_hub | default('primary'), [])
@@ -70,7 +70,7 @@
           Persisted Argo CD discovery namespaces for hub {{ _argocd_discover_hub | default('primary') }}
           must be a list of namespace names.
       when:
-        - (acm_switchover_argocd.namespace | default('')) | length == 0
+        - (((acm_switchover_argocd | default({})).get('namespace', '')) | length) == 0
         - (acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) is defined
         - (acm_switchover_argocd_discovery_namespaces | default({})).get(_argocd_discover_hub | default('primary')) is not list
 
@@ -101,7 +101,7 @@
       kubernetes.core.k8s_info:
         api_version: argoproj.io/v1alpha1
         kind: Application
-        namespace: "{{ acm_switchover_argocd.namespace | default(omit) }}"
+        namespace: "{{ (acm_switchover_argocd | default({})).get('namespace') | default(omit) }}"
         kubeconfig: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].kubeconfig | default(omit) }}"
         context: "{{ acm_switchover_hubs[_argocd_discover_hub | default('primary')].context | default(omit) }}"
       register: _argocd_app_list
@@ -138,9 +138,9 @@
               }, recursive=True)
           }}
       when:
-        - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'pause'
+        - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
         - not (_argocd_use_scoped_discovery | default(false) | bool)
-        - (acm_switchover_argocd.namespace | default('')) | length == 0
+        - (((acm_switchover_argocd | default({})).get('namespace', '')) | length) == 0
 
   rescue:
     - name: Check if failure is due to missing Argo CD CRD
@@ -181,5 +181,5 @@
       {{ acm_switchover_argocd_blocked_apps | default([]) }}.
       Remediate the reported ApplicationSet parents or refresh stale Application status before retrying.
   when:
-    - (acm_switchover_argocd_mode_override | default(acm_switchover_argocd.mode | default('pause'))) == 'pause'
+    - (acm_switchover_argocd_mode_override | default((acm_switchover_argocd | default({})).get('mode', 'pause'))) == 'pause'
     - (acm_switchover_argocd_blocked_apps | default([]) | length) > 0

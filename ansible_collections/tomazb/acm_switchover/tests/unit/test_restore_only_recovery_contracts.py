@@ -87,6 +87,12 @@ def test_activation_checkpoint_persists_argocd_run_id():
     assert "argocd_run_id:" in text, "activation/main.yml must persist argocd_run_id in checkpoint operational_data"
 
 
+def test_activation_checkpoint_defaults_checkpoint_enter_before_discovery_namespace_reads():
+    """Activation checkpoint writes must not dereference an undefined _checkpoint_enter."""
+    text = (ACTIVATION_TASKS / "main.yml").read_text()
+    assert "(((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})" in text
+
+
 def test_activation_wait_rejects_stale_velero_restore_signal():
     """Activation wait must require a new managed-clusters Velero restore name when one existed before activation."""
     tasks = yaml.safe_load((ACTIVATION_TASKS / "wait_for_restore.yml").read_text())
@@ -143,6 +149,12 @@ def test_primary_prep_checkpoint_persists_argocd_discovery_namespaces():
     assert (
         "argocd_discovery_namespaces:" in text
     ), "primary_prep/main.yml must persist argocd_discovery_namespaces in checkpoint operational_data"
+
+
+def test_primary_prep_defaults_checkpoint_enter_before_discovery_namespace_rehydrate():
+    """primary_prep must guard _checkpoint_enter before rehydrating discovery namespaces."""
+    text = (PRIMARY_PREP_TASKS / "main.yml").read_text()
+    assert "(((_checkpoint_enter | default({})) or {}).get('checkpoint', {}) or {})" in text
 
 
 def test_switchover_report_persists_argocd_run_id():

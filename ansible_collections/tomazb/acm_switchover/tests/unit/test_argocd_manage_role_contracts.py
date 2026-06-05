@@ -217,6 +217,12 @@ class TestArgoCDDiscover:
         assert "loop" in scoped_tasks[0]
         assert "_argocd_trusted_discovery_namespaces" in str(scoped_tasks[0]["loop"])
 
+    def test_discover_defaults_optional_argocd_inputs_before_access(self):
+        """discover.yml must not dereference acm_switchover_argocd directly when it may be undefined."""
+        text = self.file_text
+        assert "(acm_switchover_argocd | default({})).get('namespace', '')" in text
+        assert "(acm_switchover_argocd | default({})).get('mode', 'pause')" in text
+
 
 class TestArgoCDPause:
     """argocd_manage/tasks/pause.yml structural contract tests."""

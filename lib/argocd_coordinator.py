@@ -10,6 +10,12 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from lib import argocd as argocd_lib
+from lib.constants import (
+    STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES,
+    STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
+    STATE_KEY_ARGOCD_PAUSED_APPS,
+    STATE_KEY_ARGOCD_RUN_ID,
+)
 from lib.kube_client import KubeClient
 from lib.utils import StateManager
 
@@ -18,10 +24,10 @@ logger = logging.getLogger("acm_switchover")
 
 def clear_argocd_pause_state(state: StateManager) -> None:
     """Clear persisted Argo CD pause and discovery namespace state."""
-    state.set_config("argocd_paused_apps", [])
-    state.set_config("argocd_run_id", None)
-    state.set_config("argocd_pause_dry_run", False)
-    state.set_config("argocd_discovery_namespaces", {})
+    state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, [])
+    state.set_config(STATE_KEY_ARGOCD_RUN_ID, None)
+    state.set_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, False)
+    state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, {})
 
 
 class ArgoCDPauseCoordinator:
@@ -66,16 +72,16 @@ class ArgoCDPauseCoordinator:
 
     def _persist_paused_apps(self, paused_apps: List[Dict[str, Any]]) -> None:
         """Persist a deep copy so StateManager notices nested entry changes."""
-        self.state.set_config("argocd_paused_apps", copy.deepcopy(paused_apps))
+        self.state.set_config(STATE_KEY_ARGOCD_PAUSED_APPS, copy.deepcopy(paused_apps))
 
     def _get_discovery_namespaces_by_hub(self) -> Dict[str, List[str]]:
-        stored = self.state.get_config("argocd_discovery_namespaces") or {}
+        stored = self.state.get_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES) or {}
         if not isinstance(stored, dict):
             return {}
         return copy.deepcopy(stored)
 
     def _persist_discovery_namespaces_by_hub(self, namespaces_by_hub: Dict[str, List[str]]) -> None:
-        self.state.set_config("argocd_discovery_namespaces", copy.deepcopy(namespaces_by_hub))
+        self.state.set_config(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES, copy.deepcopy(namespaces_by_hub))
 
     def _upsert_pause_entry(
         self,
@@ -133,13 +139,14 @@ class ArgoCDPauseCoordinator:
             clear_argocd_pause_state(self.state)
             return [], 0
 
-        run_id = argocd_lib.run_id_or_new(self.state.get_config("argocd_run_id"))
-        self.state.set_config("argocd_run_id", run_id)
-        self.state.set_config("argocd_pause_dry_run", self.dry_run)
-        paused_apps: List[Dict[str, Any]] = copy.deepcopy(self.state.get_config("argocd_paused_apps") or [])
+        existing_run_id = self.state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+        run_id = argocd_lib.run_id_or_new(existing_run_id)
+        self.state.set_config(STATE_KEY_ARGOCD_RUN_ID, run_id)
+        self.state.set_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, self.dry_run)
+        paused_apps: List[Dict[str, Any]] = copy.deepcopy(self.state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or [])
         pause_failures = 0
 
-        discovery_namespaces_by_hub = self._get_discovery_namespaces_by_hub()
+        discovery_namespaces_by_hub = self._get_discovery_namespaces_by_hub() if existing_run_id else {}
         applications_by_hub: List[Tuple[KubeClient, str, List[Dict[str, Any]]]] = []
         pause_blockers = []
 

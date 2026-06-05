@@ -278,6 +278,24 @@ def test_standalone_argocd_resume_validates_rehydrated_discovery_namespace_lists
     assert "item.value is list" in text
 
 
+def test_standalone_argocd_resume_defaults_checkpoint_in_discovery_namespace_loop():
+    """Loop expressions must default the checkpoint object before dict2items expansion."""
+    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+    assert (
+        "(_argocd_resume_checkpoint | default({})).get('operational_data', {}).get('argocd_discovery_namespaces', {})"
+        in text
+    )
+
+
+def test_standalone_argocd_resume_defaults_checkpoint_when_seeding_discovery_namespaces():
+    """Seeding discovery namespaces must not dereference an undefined checkpoint object."""
+    text = (PLAYBOOKS_DIR / "argocd_resume.yml").read_text()
+    assert (
+        "{{ (_argocd_resume_checkpoint | default({})).get('operational_data', {}).get('argocd_discovery_namespaces', {}) }}"
+        in text
+    )
+
+
 def test_standalone_argocd_resume_restores_run_id_from_checkpoint():
     """argocd_resume.yml must seed run_id from checkpoint before resuming.
 

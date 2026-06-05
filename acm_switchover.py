@@ -59,6 +59,9 @@ from lib.constants import (
     PHASE_FLOW_NAME_RESTORE_ONLY,
     PHASE_FLOW_NAME_SWITCHOVER,
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
+    STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
+    STATE_KEY_ARGOCD_PAUSED_APPS,
+    STATE_KEY_ARGOCD_RUN_ID,
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
     TOKEN_DURATION_DEFAULT,
 )
@@ -541,7 +544,7 @@ def _run_restore_only_argocd_pause(
             logger,
         )
 
-    run_id = state.get_config("argocd_run_id")
+    run_id = state.get_config(STATE_KEY_ARGOCD_RUN_ID)
     if run_id is not None:
         logger.info(
             "Argo CD: %d Application(s) paused on secondary hub (run_id=%s). "
@@ -680,8 +683,8 @@ def _attempt_argocd_resume_on_failure(
     if not getattr(args, "argocd_resume_on_failure", False):
         return
 
-    paused_apps = state.get_config("argocd_paused_apps") or []
-    run_id = state.get_config("argocd_run_id")
+    paused_apps = state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or []
+    run_id = state.get_config(STATE_KEY_ARGOCD_RUN_ID)
     if not paused_apps or not run_id:
         return
 
@@ -1730,14 +1733,14 @@ def _run_argocd_resume_only(
     logger: logging.Logger,
 ) -> bool:
     """Load state and restore Argo CD auto-sync for previously paused Applications, then exit."""
-    if state.get_config("argocd_pause_dry_run", False):
+    if state.get_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, False):
         logger.error(
             "Argo CD resume requested, but the pause step was run in dry-run mode. "
             "Re-run pause without --dry-run to generate resumable state."
         )
         return False
-    run_id = state.get_config("argocd_run_id")
-    paused_apps = state.get_config("argocd_paused_apps") or []
+    run_id = state.get_config(STATE_KEY_ARGOCD_RUN_ID)
+    paused_apps = state.get_config(STATE_KEY_ARGOCD_PAUSED_APPS) or []
     if not run_id or not paused_apps:
         logger.error("No Argo CD paused apps in state file (argocd_run_id or argocd_paused_apps missing).")
         return False

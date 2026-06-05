@@ -343,7 +343,12 @@ def application_namespaces_from_discovery(apps: List[Dict[str, Any]]) -> List[st
     """Return deduplicated sorted Application namespaces from a discovery list."""
     namespaces = set()
     for app in apps:
-        ns = ((app.get("metadata") or {}).get("namespace") or "").strip()
+        if not isinstance(app, dict):
+            continue
+        metadata = app.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        ns = (metadata.get("namespace") or "").strip()
         if ns:
             namespaces.add(ns)
     return sorted(namespaces)

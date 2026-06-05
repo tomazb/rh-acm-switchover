@@ -167,6 +167,12 @@ MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED = "explicit_empty_allowed"
 MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM = "explicit_minimum"
 PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME = "pre_activation_velero_managed_clusters_restore_name"
 
+# Argo CD durable state keys
+STATE_KEY_ARGOCD_PAUSED_APPS = "argocd_paused_apps"
+STATE_KEY_ARGOCD_RUN_ID = "argocd_run_id"
+STATE_KEY_ARGOCD_PAUSE_DRY_RUN = "argocd_pause_dry_run"
+STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES = "argocd_discovery_namespaces"
+
 # Observability Components
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
 THANOS_COMPACTOR_LABEL_SELECTOR = "app.kubernetes.io/name=thanos-compact"
