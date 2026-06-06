@@ -102,6 +102,25 @@ class TestRBACValidator:
             validator.check_permission("", "pods", "get", "default")
 
     @patch("kubernetes.client")
+    def test_check_permission_cached_api_failure_reraises_fresh_validation_error(self, mock_k8s_client, validator):
+        """Cached infrastructure failures should keep the message but not reuse the same exception instance."""
+        mock_api = MagicMock()
+        mock_api.create_self_subject_access_review.side_effect = ApiException(
+            status=500, reason="Internal Server Error"
+        )
+        mock_k8s_client.AuthorizationV1Api.return_value = mock_api
+
+        with pytest.raises(ValidationError, match="Unable to check permission get core/pods") as first_error:
+            validator.check_permission("", "pods", "get", "default")
+
+        with pytest.raises(ValidationError, match="Unable to check permission get core/pods") as second_error:
+            validator.check_permission("", "pods", "get", "default")
+
+        assert str(first_error.value) == str(second_error.value)
+        assert first_error.value is not second_error.value
+        assert mock_api.create_self_subject_access_review.call_count == 1
+
+    @patch("kubernetes.client")
     def test_check_permission_reuses_cached_ssar_result(self, mock_k8s_client, validator):
         """Identical permission tuples should not trigger duplicate SSAR API calls."""
         mock_response = MagicMock()
@@ -466,15 +485,27 @@ class TestRBACValidator:
 
         all_valid, all_errors = validator.validate_all_permissions(skip_observability=True)
         first_call_count = len(validator.check_permission.call_args_list)
+        all_errors["cluster"][0] = "mutated cluster error"
+        all_errors["namespaces"][0] = "mutated namespace error"
+        all_errors["extra"] = ["mutated extra error"]
+
+        second_valid, second_errors = validator.validate_all_permissions(skip_observability=True)
 
         report = validator.generate_permission_report(skip_observability=True)
 
         assert all_valid is False
-        assert "cluster" in all_errors
-        assert "namespaces" in all_errors
+        assert second_valid is False
+        assert "cluster" in second_errors
+        assert "namespaces" in second_errors
+        assert second_errors["cluster"] == ["Missing permission: get cluster.open-cluster-management.io/managedclusters - Denied"]
+        assert second_errors["namespaces"] == [f"Missing permission in {BACKUP_NAMESPACE}: get core/pods - Denied"]
+        assert "extra" not in second_errors
         assert len(validator.check_permission.call_args_list) == first_call_count
         assert "Missing permission: get cluster.open-cluster-management.io/managedclusters - Denied" in report
         assert f"Missing permission in {BACKUP_NAMESPACE}: get core/pods - Denied" in report
+        assert "mutated cluster error" not in report
+        assert "mutated namespace error" not in report
+        assert "mutated extra error" not in report
 
     def test_validate_decommission_permissions_reuses_cached_summary(self, validator):
         """Repeated decommission validation should reuse the first summary for the same options."""
@@ -483,7 +514,11 @@ class TestRBACValidator:
 
         assert validator.validate_decommission_permissions(skip_observability=True) == (True, {})
         first_call_count = len(validator.check_permission.call_args_list)
+        cached_valid, cached_errors = validator.validate_decommission_permissions(skip_observability=True)
+        cached_errors["cluster"] = ["mutated cluster error"]
+        cached_errors["namespaces"] = ["mutated namespace error"]
 
+        assert cached_valid is True
         assert validator.validate_decommission_permissions(skip_observability=True) == (True, {})
         assert len(validator.check_permission.call_args_list) == first_call_count
         assert validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE)) == 1

@@ -74,19 +74,19 @@ from typing import Dict, List, Optional, Tuple, Union
 class RBACValidator:
     def __init__(self, client: KubeClient, role: str = "operator"):
         ...
-        self._permission_check_cache: Dict[
+        self._permission_cache: Dict[
             Tuple[str, str, str, Optional[str]],
-            Union[Tuple[bool, str], ValidationError],
+            Union[Tuple[bool, str], str],
         ] = {}
 
     def check_permission(
         self, api_group: str, resource: str, verb: str, namespace: Optional[str] = None
     ) -> Tuple[bool, str]:
         cache_key = (api_group, resource, verb, namespace)
-        cached = self._permission_check_cache.get(cache_key)
-        if isinstance(cached, ValidationError):
-            raise cached
+        cached = self._permission_cache.get(cache_key)
         if cached is not None:
+            if isinstance(cached, str):
+                raise ValidationError(cached)
             return cached
         ...
         if response.status.allowed:
@@ -94,17 +94,15 @@ class RBACValidator:
         else:
             reason = response.status.reason or "Permission denied"
             result = (False, reason)
-        self._permission_check_cache[cache_key] = result
+        self._permission_cache[cache_key] = result
         return result
 ```
-And in both exception branches, cache the constructed `ValidationError` before re-raising it:
+And in both exception branches, cache the formatted error message and raise a fresh `ValidationError`:
 ```python
         except ApiException as e:
-            error = ValidationError(
-                f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e.status} {e.reason}"
-            )
-            self._permission_check_cache[cache_key] = error
-            raise error from e
+            error_message = f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e.status} {e.reason}"
+            self._permission_cache[cache_key] = error_message
+            raise ValidationError(error_message) from e
 ```
 Expected: identical permission tuples reuse the first result, including fail-closed infrastructure errors.
 

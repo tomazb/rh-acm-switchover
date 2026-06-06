@@ -26,6 +26,8 @@ from lib.constants import (
     MULTICLUSTEROBSERVABILITIES_PLURAL,
     OBSERVABILITY_API_GROUP,
     OBSERVABILITY_NAMESPACE,
+    RBAC_CACHE_KEY_ALL_PERMISSIONS,
+    RBAC_CACHE_KEY_DECOMMISSION_PERMISSIONS,
 )
 from lib.exceptions import ValidationError
 
@@ -267,7 +269,7 @@ class RBACValidator:
             raise ValueError(f"Invalid role '{role}'. Must be one of: {VALID_ROLES}")
         self.client = client
         self.role = role
-        self._permission_cache: Dict[Tuple[str, str, str, Optional[str]], Union[Tuple[bool, str], ValidationError]] = {}
+        self._permission_cache: Dict[Tuple[str, str, str, Optional[str]], Union[Tuple[bool, str], str]] = {}
         self._namespace_exists_cache: Dict[str, bool] = {}
         self._validation_result_cache: Dict[Tuple[Any, ...], Tuple[bool, Dict[str, List[str]]]] = {}
 
@@ -362,8 +364,8 @@ class RBACValidator:
         cache_key = (api_group, resource, verb, namespace)
         cached = self._permission_cache.get(cache_key)
         if cached is not None:
-            if isinstance(cached, ValidationError):
-                raise cached
+            if isinstance(cached, str):
+                raise ValidationError(cached)
             return cached
 
         group_name = api_group if api_group else "core"
@@ -407,15 +409,13 @@ class RBACValidator:
             return result
 
         except ApiException as e:
-            error = ValidationError(
-                f"Unable to check permission {verb} {group_name}/{resource} on {scope}: " f"{e.status} {e.reason}"
-            )
-            self._permission_cache[cache_key] = error
-            raise error from e
+            error_message = f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e.status} {e.reason}"
+            self._permission_cache[cache_key] = error_message
+            raise ValidationError(error_message) from e
         except Exception as e:
-            error = ValidationError(f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e}")
-            self._permission_cache[cache_key] = error
-            raise error from e
+            error_message = f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e}"
+            self._permission_cache[cache_key] = error_message
+            raise ValidationError(error_message) from e
 
     def validate_cluster_permissions(
         self,
@@ -691,7 +691,7 @@ class RBACValidator:
             ValidationError: If permission checks cannot be completed due to API or client errors
         """
         cache_key = (
-            "all_permissions",
+            RBAC_CACHE_KEY_ALL_PERMISSIONS,
             include_decommission,
             include_old_hub_finalization,
             skip_observability,
@@ -740,7 +740,7 @@ class RBACValidator:
         if self.role != "operator":
             raise ValueError("Decommission permissions are only applicable to the operator role.")
 
-        cache_key = ("decommission_permissions", skip_observability)
+        cache_key = (RBAC_CACHE_KEY_DECOMMISSION_PERMISSIONS, skip_observability)
 
         def builder() -> Tuple[bool, Dict[str, List[str]]]:
             all_valid = True
