@@ -100,6 +100,4 @@ def test_run_gate_command_rejects_unredacted_secret_output(tmp_path: Path) -> No
     assert result.returncode == 0
     assert Path(result.stdout_path).read_text(encoding="utf-8") == ""
     assert "rejected by the sanitizer" in Path(result.stderr_path).read_text(encoding="utf-8")
-    assert "static-gates/sample-secret.stdout" in (
-        artifacts.run_dir / "redaction.json"
-    ).read_text(encoding="utf-8")
+    assert "static-gates/sample-secret.stdout" in (artifacts.run_dir / "redaction.json").read_text(encoding="utf-8")

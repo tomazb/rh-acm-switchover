@@ -21,8 +21,8 @@ from tests.release.adapters.python_cli import PythonCliAdapter
 from tests.release.baseline.assertions import assert_baseline
 from tests.release.baseline.discovery import HubDiscoveryClient, discover_hub_facts
 from tests.release.baseline.fingerprint import build_environment_fingerprint
-from tests.release.checks.metadata import validate_release_metadata
 from tests.release.checks.lab_readiness import assert_lab_readiness
+from tests.release.checks.metadata import validate_release_metadata
 from tests.release.checks.rbac_certification import certify_rbac_permissions
 from tests.release.checks.static_gates import (
     GateCommand,
@@ -43,7 +43,9 @@ from tests.release.reporting.summary import build_summary
 from tests.release.scenarios.catalog import ScenarioDefinition, select_release_matrix
 from tests.release.scenarios.runtime_parity import (
     CAPABILITY_REQUIRED_FIELDS,
+    ComparisonRecord,
     compare_normalized_records,
+    normalize_argocd_management,
     normalize_checkpoint_artifact,
     normalize_decommission_artifact,
     normalize_operation_artifact,
@@ -360,6 +362,104 @@ def _result_artifact_dir(result: dict) -> Path | None:
     return None
 
 
+def _report_metadata(result: dict, report_type: str) -> dict | None:
+    for report in result.get("reports", []):
+        if report.get("type") == report_type:
+            return report
+    return None
+
+
+def _state_or_checkpoint_payload(result: dict) -> dict | None:
+    artifact_dir = _result_artifact_dir(result)
+    if artifact_dir is None:
+        return None
+    for filename in ("state.json", "checkpoint.json"):
+        payload = _load_report(str(artifact_dir / filename))
+        if payload:
+            return payload
+    return None
+
+
+def _namespace_hints_by_hub(config: dict, operational_data: dict) -> dict[str, list[str]]:
+    namespace_hints = (
+        config.get("argocd_discovery_namespaces") or operational_data.get("argocd_discovery_namespaces") or {}
+    )
+    if not isinstance(namespace_hints, dict):
+        return {}
+    return {
+        str(hub_name): [str(namespace) for namespace in namespaces if namespace]
+        for hub_name, namespaces in namespace_hints.items()
+        if isinstance(namespaces, list)
+    }
+
+
+def _argocd_retry_state(*, report_run_id: str | None, persisted_run_id: str | None, resume_summary: dict) -> str:
+    if not resume_summary.get("resume_start_phase"):
+        return "not_applicable"
+    if not report_run_id or not persisted_run_id:
+        return "missing"
+    return "preserved" if report_run_id == persisted_run_id else "mismatch"
+
+
+def _argocd_pause_names(
+    *,
+    discovery_clients: Mapping[str, HubDiscoveryClient],
+    run_id: str | None,
+    namespaces_by_hub: dict[str, list[str]],
+) -> list[str]:
+    if not run_id:
+        return []
+    names: list[str] = []
+    for hub_name, client in discovery_clients.items():
+        namespaces = namespaces_by_hub.get(hub_name) or [None]
+        for namespace in namespaces:
+            for item in client.list_resources("applications.argoproj.io", namespace):
+                metadata = item.get("metadata") or {}
+                annotations = metadata.get("annotations") or {}
+                if annotations.get("acm-switchover.argoproj.io/paused-by") == run_id:
+                    item_namespace = metadata.get("namespace", namespace)
+                    item_name = metadata.get("name")
+                    if item_name:
+                        names.append(f"{hub_name}:{item_namespace}/{item_name}")
+    return sorted(set(names))
+
+
+def _add_argocd_source(
+    sources: dict[str, dict[str, dict]],
+    result: dict,
+    payload: dict,
+    *,
+    discovery_clients: Mapping[str, HubDiscoveryClient],
+) -> None:
+    if result.get("scenario_id") != "argocd-managed-switchover" or result.get("stream") not in {"python", "ansible"}:
+        return
+    state_payload = _state_or_checkpoint_payload(result) or {}
+    config = state_payload.get("config") if isinstance(state_payload.get("config"), dict) else {}
+    operational_data = (
+        state_payload.get("operational_data") if isinstance(state_payload.get("operational_data"), dict) else {}
+    )
+    resume_summary = config.get("resume_summary") or operational_data.get("resume_summary") or {}
+    argocd = payload.get("argocd") if isinstance(payload.get("argocd"), dict) else {}
+    report_run_id = argocd.get("run_id")
+    persisted_run_id = config.get("argocd_run_id") or operational_data.get("argocd_run_id")
+    namespaces_by_hub = _namespace_hints_by_hub(config, operational_data)
+    sources.setdefault("Argo CD management", {})[result["stream"]] = normalize_argocd_management(
+        {
+            "run_id": report_run_id or persisted_run_id,
+            "paused_application_names": _argocd_pause_names(
+                discovery_clients=discovery_clients,
+                run_id=report_run_id or persisted_run_id,
+                namespaces_by_hub=namespaces_by_hub,
+            ),
+            "run_id_preserved_for_retry": _argocd_retry_state(
+                report_run_id=report_run_id,
+                persisted_run_id=persisted_run_id,
+                resume_summary=resume_summary if isinstance(resume_summary, dict) else {},
+            ),
+        }
+    )
+
+
 def _add_checkpoint_source(sources: dict[str, dict[str, dict]], result: dict) -> None:
     artifact_dir = _result_artifact_dir(result)
     if artifact_dir is None:
@@ -367,12 +467,20 @@ def _add_checkpoint_source(sources: dict[str, dict[str, dict]], result: dict) ->
     for filename in ("checkpoint.json", "state.json"):
         payload = _load_report(str(artifact_dir / filename))
         if payload:
-            sources.setdefault("checkpoints", {})[result["stream"]] = normalize_checkpoint_artifact(payload)
+            sources.setdefault("checkpoints", {})[result["stream"]] = normalize_checkpoint_artifact(
+                payload,
+                scenario_id=result.get("scenario_id"),
+            )
             return
 
 
-def _normalized_runtime_sources(results: list[dict]) -> dict[str, dict[str, dict]]:
+def _normalized_runtime_sources(
+    results: list[dict],
+    *,
+    discovery_clients: Mapping[str, HubDiscoveryClient] | None = None,
+) -> dict[str, dict[str, dict]]:
     sources: dict[str, dict[str, dict]] = {}
+    discovery_clients = discovery_clients or {}
     for result in results:
         if result.get("stream") in {"python", "ansible"}:
             _add_checkpoint_source(sources, result)
@@ -386,6 +494,12 @@ def _normalized_runtime_sources(results: list[dict]) -> dict[str, dict[str, dict
             if report_type == "preflight":
                 sources.setdefault("preflight validation", {})[result["stream"]] = normalize_preflight(payload)
             if report_type == "switchover":
+                _add_argocd_source(
+                    sources,
+                    result,
+                    payload,
+                    discovery_clients=discovery_clients,
+                )
                 sources.setdefault("switchover artifacts", {})[result["stream"]] = normalize_operation_artifact(
                     payload, filename
                 )
@@ -408,9 +522,60 @@ def _normalized_runtime_sources(results: list[dict]) -> dict[str, dict[str, dict
     return sources
 
 
-def _runtime_parity(artifacts: ReleaseArtifacts, results: list[dict]) -> dict:
+def _rbac_live_consistency_record(results: list[dict]) -> ComparisonRecord | None:
+    bootstrap = next(
+        (item for item in results if item.get("scenario_id") == "rbac-bootstrap" and item.get("stream") == "ansible"),
+        None,
+    )
+    live = next(
+        (
+            item
+            for item in results
+            if item.get("scenario_id") == "rbac-bootstrap-live" and item.get("stream") == "local"
+        ),
+        None,
+    )
+    if bootstrap is None or live is None:
+        return None
+
+    bootstrap_report = _report_metadata(bootstrap, "rbac-bootstrap") or {}
+    bootstrap_payload = _load_report(bootstrap_report.get("path", "")) if bootstrap_report else None
+    bootstrap_status = str((bootstrap_payload or {}).get("status", bootstrap.get("status", "unknown")))
+    live_status = str(live.get("status", "unknown"))
+
+    if live_status == "skipped":
+        record_status = "not_applicable"
+        differences: list[dict[str, Any]] = []
+    else:
+        bootstrap_succeeded = bootstrap_status in {"pass", "passed"}
+        live_succeeded = live_status == "passed"
+        differences = (
+            []
+            if bootstrap_succeeded == live_succeeded
+            else [{"field": "live_status", "ansible": bootstrap_status, "local": live_status}]
+        )
+        record_status = "passed" if not differences else "failed"
+
+    evidence_paths = tuple(path for path in [bootstrap_report.get("path")] if path)
+    return ComparisonRecord(
+        capability="RBAC live consistency",
+        scenario_id="rbac-bootstrap-live",
+        streams=("ansible", "local"),
+        status=record_status,
+        required_fields=("bootstrap_status", "live_status"),
+        differences=differences,
+        evidence_paths=evidence_paths,
+    )
+
+
+def _runtime_parity(
+    artifacts: ReleaseArtifacts,
+    results: list[dict],
+    *,
+    discovery_clients: Mapping[str, HubDiscoveryClient] | None = None,
+) -> dict:
     comparisons = []
-    sources = _normalized_runtime_sources(results)
+    sources = _normalized_runtime_sources(results, discovery_clients=discovery_clients)
     for capability, required_fields in CAPABILITY_REQUIRED_FIELDS.items():
         by_stream = sources.get(capability, {})
         if {"python", "ansible"}.issubset(by_stream):
@@ -425,6 +590,9 @@ def _runtime_parity(artifacts: ReleaseArtifacts, results: list[dict]) -> dict:
             )
         else:
             comparisons.append(runtime_parity_not_applicable(capability, "runtime-parity", "missing source reports"))
+    live_consistency = _rbac_live_consistency_record(results)
+    if live_consistency is not None:
+        comparisons.append(live_consistency)
     return write_runtime_parity_artifact(artifacts=artifacts, comparisons=comparisons)
 
 
@@ -845,7 +1013,7 @@ def _run_release_certification(
         )
 
     runtime_parity = (
-        _runtime_parity(artifacts, results)
+        _runtime_parity(artifacts, results, discovery_clients=discovery_clients)
         if "runtime-parity" in scenarios_by_id
         else {"schema_version": 1, "status": "not_applicable", "comparisons": []}
     )

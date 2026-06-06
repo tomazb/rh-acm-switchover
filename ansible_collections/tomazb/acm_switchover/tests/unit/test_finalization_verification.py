@@ -53,8 +53,8 @@ def test_cleanup_restores_deletes_only_classified_candidates():
     """Collection restore cleanup must delete only switchover-owned candidates and wait on those deletions."""
     text = (FINALIZATION_TASKS / "cleanup_restores.yml").read_text()
 
-    assert '_acm_secondary_cleanup_candidate_restores | default([])' in text
-    assert '_acm_secondary_cleanup_candidate_restore_names | default([])' in text
+    assert "_acm_secondary_cleanup_candidate_restores | default([])" in text
+    assert "_acm_secondary_cleanup_candidate_restore_names | default([])" in text
     assert "select('in', _acm_secondary_cleanup_candidate_restore_names | default([]))" in text
 
 

@@ -497,7 +497,9 @@ class TestRBACValidator:
         assert second_valid is False
         assert "cluster" in second_errors
         assert "namespaces" in second_errors
-        assert second_errors["cluster"] == ["Missing permission: get cluster.open-cluster-management.io/managedclusters - Denied"]
+        assert second_errors["cluster"] == [
+            "Missing permission: get cluster.open-cluster-management.io/managedclusters - Denied"
+        ]
         assert second_errors["namespaces"] == [f"Missing permission in {BACKUP_NAMESPACE}: get core/pods - Denied"]
         assert "extra" not in second_errors
         assert len(validator.check_permission.call_args_list) == first_call_count

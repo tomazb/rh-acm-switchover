@@ -204,6 +204,15 @@ def run_phase_flow(
             logger,
         )
 
+    fresh_start_states = set(phase_flow[0][1])
+    if current_phase not in fresh_start_states:
+        state.set_config(
+            "resume_summary",
+            {
+                "resume_start_phase": current_phase.value,
+            },
+        )
+
     ran_phase = False
     for handler, allowed_states, expected_phase in phase_flow:
         if state.get_current_phase() in allowed_states:

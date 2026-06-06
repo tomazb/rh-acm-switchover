@@ -43,6 +43,7 @@ def test_comparison_record_serializes_required_fields() -> None:
 def test_runtime_parity_required_fields_cover_release_1710_guardrails() -> None:
     assert {
         "preflight validation",
+        "Argo CD management",
         "switchover artifacts",
         "restore-only artifacts",
         "decommission artifacts",
@@ -50,6 +51,24 @@ def test_runtime_parity_required_fields_cover_release_1710_guardrails() -> None:
         "checkpoints",
         "report artifacts",
     }.issubset(CAPABILITY_REQUIRED_FIELDS)
+    assert CAPABILITY_REQUIRED_FIELDS["Argo CD management"] == (
+        "run_id_present",
+        "paused_application_names",
+        "paused_application_count",
+        "run_id_preserved_for_retry",
+    )
+    assert CAPABILITY_REQUIRED_FIELDS["checkpoints"] == (
+        "resume_start_phase",
+        "skipped_phases",
+        "checkpoint_error_count",
+        "identity_bound",
+    )
+    assert CAPABILITY_REQUIRED_FIELDS["RBAC/bootstrap artifacts"] == (
+        "bootstrap_status",
+        "manifest_assets",
+        "include_decommission",
+        "report_filename",
+    )
 
 
 def test_compare_normalized_records_passes_equal_required_fields() -> None:
@@ -93,18 +112,21 @@ def test_normalize_preflight_sorts_check_sets() -> None:
     assert normalized["failed_check_ids"] == ["z"]
 
 
-def test_normalize_argocd_management_uses_discovered_application_sets() -> None:
+def test_normalize_argocd_management_tracks_retry_preservation() -> None:
     normalized = normalize_argocd_management(
         {
-            "selected_applications": ["app-b", "app-a"],
-            "paused_applications": ["app-a"],
-            "resumed_applications": ["app-b"],
-            "resume_failures": [],
-            "conflict_allowlist_used": False,
+            "run_id": "run-123",
+            "paused_application_names": ["secondary:argocd/app-b", "secondary:argocd/app-a"],
+            "run_id_preserved_for_retry": "preserved",
         }
     )
 
-    assert normalized["selected_applications"] == ["app-a", "app-b"]
+    assert normalized == {
+        "run_id_present": True,
+        "paused_application_names": ["secondary:argocd/app-a", "secondary:argocd/app-b"],
+        "paused_application_count": 2,
+        "run_id_preserved_for_retry": "preserved",
+    }
 
 
 def test_normalize_release_artifact_guardrails_ignore_implementation_metadata(tmp_path: Path) -> None:
@@ -120,9 +142,23 @@ def test_normalize_release_artifact_guardrails_ignore_implementation_metadata(tm
     )
     decommission = normalize_decommission_artifact({"status": "passed"}, "decommission-report.json")
     rbac = normalize_rbac_bootstrap_artifact(
-        {"assets_applied": ["operator.yaml", "decommission.yaml"]}, "rbac-bootstrap-report.json"
+        {
+            "status": "pass",
+            "assets_applied": [
+                "deploy/rbac/clusterrole.yaml",
+                "deploy/rbac/decommission-clusterrole.yaml",
+            ],
+        },
+        "rbac-bootstrap-report.json",
     )
-    checkpoint = normalize_checkpoint_artifact({"completed_steps": ["preflight", "activation"]})
+    checkpoint = normalize_checkpoint_artifact(
+        {
+            "config": {"resume_summary": {"resume_start_phase": "activation"}},
+            "errors": [{"phase": "activation", "error": "boom"}],
+            "hub_identities": {"primary": {"context": "hub-a", "cluster_uid": "uid-a"}},
+        },
+        scenario_id="python-passive-switchover",
+    )
     report = normalize_report_artifact({"schema_version": "1.0", "source": "tomazb.acm_switchover"}, str(tmp_path))
 
     assert operation == {
@@ -133,11 +169,20 @@ def test_normalize_release_artifact_guardrails_ignore_implementation_metadata(tm
     }
     assert decommission == {"status": "passed", "report_filename": "decommission-report.json"}
     assert rbac == {
-        "manifest_asset_count": 2,
+        "bootstrap_status": "pass",
+        "manifest_assets": [
+            "deploy/rbac/clusterrole.yaml",
+            "deploy/rbac/decommission-clusterrole.yaml",
+        ],
         "include_decommission": True,
         "report_filename": "rbac-bootstrap-report.json",
     }
-    assert checkpoint == {"artifact_present": True, "completed_phase_count": 2}
+    assert checkpoint == {
+        "resume_start_phase": "activation",
+        "skipped_phases": ["preflight", "primary_prep"],
+        "checkpoint_error_count": 1,
+        "identity_bound": True,
+    }
     assert report == {"schema_version": "1.0", "source_present": True, "safe_path_validated": True}
 
 
@@ -172,7 +217,16 @@ def test_normalized_runtime_sources_populates_release_artifact_guardrails(tmp_pa
     (python_dir / "state.json").write_text(json.dumps({"completed_steps": ["activation"]}), encoding="utf-8")
     (ansible_dir / "checkpoint.json").write_text(json.dumps({"completed_phases": ["activation"]}), encoding="utf-8")
     (rbac_dir / "rbac-bootstrap-report.json").write_text(
-        json.dumps({"assets_applied": ["operator.yaml", "decommission.yaml"]}), encoding="utf-8"
+        json.dumps(
+            {
+                "status": "pass",
+                "assets_applied": [
+                    "deploy/rbac/clusterrole.yaml",
+                    "deploy/rbac/decommission-clusterrole.yaml",
+                ],
+            }
+        ),
+        encoding="utf-8",
     )
 
     sources = _normalized_runtime_sources(
@@ -217,7 +271,11 @@ def test_normalized_runtime_sources_populates_release_artifact_guardrails(tmp_pa
     assert sources["checkpoints"]["python"] == sources["checkpoints"]["ansible"]
     assert sources["report artifacts"]["python"] == sources["report artifacts"]["ansible"]
     assert sources["RBAC/bootstrap artifacts"]["ansible"] == {
-        "manifest_asset_count": 2,
+        "bootstrap_status": "pass",
+        "manifest_assets": [
+            "deploy/rbac/clusterrole.yaml",
+            "deploy/rbac/decommission-clusterrole.yaml",
+        ],
         "include_decommission": True,
         "report_filename": "rbac-bootstrap-report.json",
     }

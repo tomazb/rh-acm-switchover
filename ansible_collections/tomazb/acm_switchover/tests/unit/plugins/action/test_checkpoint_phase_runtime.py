@@ -929,6 +929,44 @@ def test_action_module_reset_is_not_reapplied_after_initial_preflight_enter(tmp_
     assert activation_enter_result["skipped_phase"] is False
 
 
+def test_action_module_enter_persists_resume_start_phase_when_resuming(tmp_path):
+    checkpoint_file = tmp_path / "checkpoint.json"
+    checkpoint_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0",
+                "phase": "preflight",
+                "completed_phases": ["preflight"],
+                "operational_data": {},
+                "operation_identity": build_operation_identity(hubs={}, operation={}),
+                "errors": [],
+                "report_refs": [],
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    action = _make_checkpoint_action(
+        {
+            "phase": "primary_prep",
+            "checkpoint": {
+                "enabled": True,
+                "backend": "file",
+                "path": str(checkpoint_file),
+            },
+            "status": "enter",
+        }
+    )
+
+    result = action.run(task_vars=_task_vars_for_mode("execute"))
+
+    assert result["skipped_phase"] is False
+    assert result["checkpoint"]["operational_data"]["resume_summary"] == {
+        "resume_start_phase": "primary_prep",
+    }
+
+
 def test_action_module_dry_run_pass_does_not_mutate_checkpoint_file(tmp_path):
     import json
 
