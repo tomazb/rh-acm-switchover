@@ -173,6 +173,10 @@ STATE_KEY_ARGOCD_RUN_ID = "argocd_run_id"
 STATE_KEY_ARGOCD_PAUSE_DRY_RUN = "argocd_pause_dry_run"
 STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES = "argocd_discovery_namespaces"
 
+# RBAC validation cache keys
+RBAC_CACHE_KEY_ALL_PERMISSIONS = "all_permissions"
+RBAC_CACHE_KEY_DECOMMISSION_PERMISSIONS = "decommission_permissions"
+
 # Observability Components
 THANOS_COMPACTOR_STATEFULSET = "observability-thanos-compact"
 THANOS_COMPACTOR_LABEL_SELECTOR = "app.kubernetes.io/name=thanos-compact"
