@@ -86,7 +86,7 @@ def execute_operation(
     *,
     hooks: OperationDispatchHooks,
 ) -> bool:
-    if args.decommission:
+    if getattr(args, "decommission", False):
         return hooks.decommission_runner(args, primary, state, logger)
 
     if getattr(args, "restore_only", False):
@@ -136,7 +136,7 @@ def run_switchover_impl(
         ),
     )
 
-    if args.validate_only:
+    if getattr(args, "validate_only", False):
         return run_validate_only_preflight(args, state, primary, secondary, logger, hooks.preflight_handler)
 
     phase_flow: Tuple[PhaseFlowEntry, ...] = (
@@ -192,7 +192,7 @@ def run_switchover_impl(
     logger.info(SWITCHOVER_COMPLETED_SUCCESS_MESSAGE)
     logger.info(WORKFLOW_BANNER)
     logger.info(SWITCHOVER_COMPLETED_AT_MESSAGE, datetime.now().astimezone().isoformat())
-    logger.info(WORKFLOW_STATE_FILE_MESSAGE, args.state_file)
+    logger.info(WORKFLOW_STATE_FILE_MESSAGE, getattr(args, "state_file", None))
     logger.info(WORKFLOW_NEXT_STEPS_HEADER)
     for message in SWITCHOVER_NEXT_STEP_MESSAGES:
         logger.info(message)
@@ -237,7 +237,7 @@ def run_restore_only_impl(
         ),
     )
 
-    if args.validate_only:
+    if getattr(args, "validate_only", False):
         return run_validate_only_preflight(args, state, None, secondary, logger, hooks.preflight_handler)
 
     phase_flow: Tuple[PhaseFlowEntry, ...] = (
@@ -280,7 +280,7 @@ def run_restore_only_impl(
     logger.info(RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE)
     logger.info(WORKFLOW_BANNER)
     logger.info(RESTORE_ONLY_COMPLETED_AT_MESSAGE, datetime.now().astimezone().isoformat())
-    logger.info(WORKFLOW_STATE_FILE_MESSAGE, args.state_file)
+    logger.info(WORKFLOW_STATE_FILE_MESSAGE, getattr(args, "state_file", None))
     logger.info(WORKFLOW_NEXT_STEPS_HEADER)
     for message in RESTORE_ONLY_NEXT_STEP_MESSAGES:
         logger.info(message)

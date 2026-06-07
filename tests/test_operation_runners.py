@@ -3,7 +3,13 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from lib.constants import PHASE_FLOW_NAME_RESTORE_ONLY, PHASE_FLOW_NAME_SWITCHOVER
+from lib.constants import (
+    DEFAULT_OLD_HUB_ACTION,
+    DEFAULT_RESTORE_METHOD,
+    PHASE_FLOW_NAME_RESTORE_ONLY,
+    PHASE_FLOW_NAME_SWITCHOVER,
+    WORKFLOW_STATE_FILE_MESSAGE,
+)
 from lib.operation_runners import (
     OperationDispatchHooks,
     RestoreOnlyRunnerHooks,
@@ -82,6 +88,24 @@ def test_execute_operation_routes_restore_only_with_secondary():
     result = execute_operation(args, state, None, secondary, logger, hooks=hooks)
 
     assert result is True
+    hooks.restore_only_runner.assert_called_once_with(args, state, secondary, logger)
+
+
+def test_execute_operation_defaults_missing_decommission_flag_to_false():
+    args = SimpleNamespace(restore_only=True)
+    state = Mock()
+    secondary = Mock()
+    logger = Mock()
+    hooks = OperationDispatchHooks(
+        decommission_runner=Mock(return_value=False),
+        restore_only_runner=Mock(return_value=True),
+        switchover_runner=Mock(return_value=False),
+    )
+
+    result = execute_operation(args, state, None, secondary, logger, hooks=hooks)
+
+    assert result is True
+    hooks.decommission_runner.assert_not_called()
     hooks.restore_only_runner.assert_called_once_with(args, state, secondary, logger)
 
 
@@ -175,6 +199,38 @@ def test_run_switchover_impl_passes_expected_phase_flow_to_run_phase_flow():
     assert run_phase_flow.call_args.args[9] is hooks.on_phase_failure
 
 
+def test_run_switchover_impl_tolerates_missing_optional_args():
+    args = make_switchover_args()
+    delattr(args, "validate_only")
+    delattr(args, "state_file")
+    state = Mock()
+    primary = Mock()
+    secondary = Mock()
+    logger = Mock()
+    hooks = SwitchoverRunnerHooks(
+        preflight_handler=_bool_handler("preflight"),
+        primary_prep_handler=_bool_handler("primary_prep"),
+        activation_handler=_bool_handler("activation"),
+        post_activation_handler=_bool_handler("post_activation"),
+        finalization_handler=_bool_handler("finalization"),
+        fail_phase=Mock(return_value=False),
+        fail_unexpected_phase_state=Mock(return_value=False),
+        on_phase_failure=Mock(),
+    )
+
+    with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
+        "lib.operation_runners.handle_failed_state"
+    ), patch("lib.operation_runners.run_phase_flow", return_value=True) as run_phase_flow, patch(
+        "lib.operation_runners.run_validate_only_preflight"
+    ) as validate_only:
+        result = run_switchover_impl(args, state, primary, secondary, logger, hooks=hooks)
+
+    assert result is True
+    validate_only.assert_not_called()
+    run_phase_flow.assert_called_once()
+    assert (WORKFLOW_STATE_FILE_MESSAGE, None) in [call.args for call in logger.info.call_args_list]
+
+
 def test_run_restore_only_impl_uses_validate_only_preflight_shortcut():
     args = make_restore_only_args(validate_only=True)
     state = Mock()
@@ -222,8 +278,8 @@ def test_run_restore_only_impl_injects_pause_handler_and_restore_defaults_into_p
         result = run_restore_only_impl(args, state, secondary, logger, hooks=hooks)
 
     assert result is True
-    assert args.method == "full"
-    assert args.old_hub_action == "none"
+    assert args.method == DEFAULT_RESTORE_METHOD
+    assert args.old_hub_action == DEFAULT_OLD_HUB_ACTION
     phase_flow = run_phase_flow.call_args.args[5]
     assert [entry[0] for entry in phase_flow] == [
         hooks.preflight_handler,
@@ -234,3 +290,36 @@ def test_run_restore_only_impl_injects_pause_handler_and_restore_defaults_into_p
     ]
     assert [(entry[1], entry[2]) for entry in phase_flow] == list(EXPECTED_RESTORE_ONLY_PHASE_ROUTING)
     assert run_phase_flow.call_args.args[6] == PHASE_FLOW_NAME_RESTORE_ONLY
+
+
+def test_run_restore_only_impl_tolerates_missing_optional_args():
+    args = make_restore_only_args()
+    delattr(args, "validate_only")
+    delattr(args, "state_file")
+    state = Mock()
+    secondary = Mock()
+    logger = Mock()
+    hooks = RestoreOnlyRunnerHooks(
+        preflight_handler=_bool_handler("preflight"),
+        restore_only_pause_handler=_bool_handler("restore_only_pause"),
+        activation_handler=_bool_handler("activation"),
+        post_activation_handler=_bool_handler("post_activation"),
+        finalization_handler=_bool_handler("finalization"),
+        fail_phase=Mock(return_value=False),
+        fail_unexpected_phase_state=Mock(return_value=False),
+        on_phase_failure=Mock(),
+    )
+
+    with patch("lib.operation_runners.handle_completed_state", return_value=False), patch(
+        "lib.operation_runners.handle_failed_state"
+    ), patch("lib.operation_runners.run_phase_flow", return_value=True) as run_phase_flow, patch(
+        "lib.operation_runners.run_validate_only_preflight"
+    ) as validate_only:
+        result = run_restore_only_impl(args, state, secondary, logger, hooks=hooks)
+
+    assert result is True
+    validate_only.assert_not_called()
+    run_phase_flow.assert_called_once()
+    assert args.method == DEFAULT_RESTORE_METHOD
+    assert args.old_hub_action == DEFAULT_OLD_HUB_ACTION
+    assert (WORKFLOW_STATE_FILE_MESSAGE, None) in [call.args for call in logger.info.call_args_list]
