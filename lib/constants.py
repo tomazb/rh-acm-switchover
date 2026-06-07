@@ -24,6 +24,22 @@ OPERATION_LABEL_RESTORE = "RESTORE"
 OPERATION_NOUN_RESTORE = "restore"
 PHASE_FLOW_NAME_SWITCHOVER = "switchover"
 PHASE_FLOW_NAME_RESTORE_ONLY = "restore-only"
+DEFAULT_RESTORE_METHOD = "full"
+DEFAULT_OLD_HUB_ACTION = "none"
+SWITCHOVER_COMPLETED_AT_MESSAGE = "\nSwitchover completed at: %s"
+RESTORE_ONLY_COMPLETED_AT_MESSAGE = "\nRestore completed at: %s"
+WORKFLOW_NEXT_STEPS_HEADER = "\nNext steps:"
+SWITCHOVER_NEXT_STEP_MESSAGES = (
+    "  1. Inform stakeholders that switchover is complete",
+    "  2. Provide new hub connection details",
+    "  3. Verify applications are functioning correctly",
+    "  4. Optionally decommission old hub with: --decommission",
+)
+RESTORE_ONLY_NEXT_STEP_MESSAGES = (
+    "  1. Verify managed clusters are connected and healthy",
+    "  2. Inform stakeholders that restore is complete",
+    "  3. Provide new hub connection details",
+)
 WORKFLOW_BLANK_LINE = ""
 WORKFLOW_BANNER = "=" * 60
 WORKFLOW_LEADING_BANNER = "\n" + WORKFLOW_BANNER

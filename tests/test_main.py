@@ -20,7 +20,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from acm_switchover import (
     _attempt_argocd_resume_on_failure,
     _bind_runtime_hub_identities,
+    _execute_operation,
     _fail_phase,
+    _fail_unexpected_phase_state,
     _initialize_clients,
     _prepare_runtime,
     _report_argocd_acm_impact,
@@ -29,9 +31,13 @@ from acm_switchover import (
     _run_phase_finalization,
     _run_phase_post_activation,
     _run_phase_preflight,
+    _run_phase_primary_prep,
     _run_restore_only_argocd_pause,
+    _run_restore_only_impl,
+    _run_switchover_impl,
     main,
     parse_args,
+    run_decommission,
     run_restore_only,
     run_switchover,
     validate_args,
@@ -57,6 +63,7 @@ from lib.constants import (
 )
 from lib.exceptions import SwitchoverError
 from lib.validation import ValidationError
+from tests.main_test_helpers import make_restore_only_args, make_switchover_args
 
 
 @pytest.mark.unit
@@ -1479,6 +1486,66 @@ class TestSwitchoverPhaseFlow:
 
         assert result is True
         run_sw.assert_called_once_with(args, state, primary, secondary, logger)
+
+
+@pytest.mark.unit
+class TestOperationRunnerDelegation:
+    def test_run_switchover_impl_delegates_with_current_phase_hooks(self):
+        args = make_switchover_args()
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.operation_runners.run_switchover_impl", return_value=True) as impl:
+            result = _run_switchover_impl(args, state, primary, secondary, logger)
+
+        assert result is True
+        hooks = impl.call_args.kwargs["hooks"]
+        assert hooks.preflight_handler is _run_phase_preflight
+        assert hooks.primary_prep_handler is _run_phase_primary_prep
+        assert hooks.activation_handler is _run_phase_activation
+        assert hooks.post_activation_handler is _run_phase_post_activation
+        assert hooks.finalization_handler is _run_phase_finalization
+        assert hooks.fail_phase is _fail_phase
+        assert hooks.fail_unexpected_phase_state is _fail_unexpected_phase_state
+        assert hooks.on_phase_failure is _attempt_argocd_resume_on_failure
+
+    def test_run_restore_only_impl_delegates_with_restore_only_pause_hook(self):
+        args = make_restore_only_args()
+        state = Mock()
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.operation_runners.run_restore_only_impl", return_value=True) as impl:
+            result = _run_restore_only_impl(args, state, secondary, logger)
+
+        assert result is True
+        hooks = impl.call_args.kwargs["hooks"]
+        assert hooks.preflight_handler is _run_phase_preflight
+        assert hooks.restore_only_pause_handler is _run_restore_only_argocd_pause
+        assert hooks.activation_handler is _run_phase_activation
+        assert hooks.post_activation_handler is _run_phase_post_activation
+        assert hooks.finalization_handler is _run_phase_finalization
+        assert hooks.fail_phase is _fail_phase
+        assert hooks.fail_unexpected_phase_state is _fail_unexpected_phase_state
+        assert hooks.on_phase_failure is _attempt_argocd_resume_on_failure
+
+    def test_execute_operation_delegates_with_current_dispatch_hooks(self):
+        args = make_switchover_args()
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.operation_runners.execute_operation", return_value=True) as dispatch:
+            result = _execute_operation(args, state, primary, secondary, logger)
+
+        assert result is True
+        hooks = dispatch.call_args.kwargs["hooks"]
+        assert hooks.decommission_runner is run_decommission
+        assert hooks.restore_only_runner is run_restore_only
+        assert hooks.switchover_runner is run_switchover
 
 
 @pytest.mark.unit
