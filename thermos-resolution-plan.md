@@ -57,7 +57,9 @@ Status after merged follow-up PRs 22-26:
 - `F41` Resolved by `PR 24`: Argo CD pause discovery now scopes `Application` listing to the relevant namespaces without weakening durable pause-state persistence.
 - `F42` Resolved by `PR 25`: Python RBAC preflight no longer expands to avoidable serial SelfSubjectAccessReview probes for each repeated tuple.
 - `F43` Resolved by `PR 26`: Release runtime parity now compares real resume, Argo CD, and RBAC/bootstrap outcomes instead of mostly artifact metadata.
-- `F44` Active follow-up: safety-critical file decomposition now starts with `PR 27` as a spec-first orchestrator slice, with the remaining large-file backlog split into smaller reviewable slices.
+- `F44` Active follow-up: `PR 27` completed the runtime/bootstrap extraction, and
+  `PR 28` now records the remaining reviewable seams before the next
+  implementation slices start.
 
 Execution order for the deep-scan queue:
 
@@ -66,11 +68,16 @@ Execution order for the deep-scan queue:
 3. `PR 24` - namespace-scoped Argo CD discovery performance hardening
 4. `PR 25` - RBAC preflight scaling without reporting regressions
 5. `PR 26` - deeper runtime parity guardrails before any large refactor
-6. `PR 27` - orchestrator-first design/spec gate and follow-up implementation planning
+6. `PR 27` - orchestrator-first runtime/bootstrap extraction
+7. `PR 28` - tracker/spec map for the remaining `F44` seams
+8. `PR 29` - operation dispatch and phase-flow runner extraction
+9. `PR 30` - Argo CD resume safety extraction
+10. `PR 31` - CLI outcome/report orchestration extraction
 
 `F44` started only after `F39` through `F43` merged and revalidated. That gate
-cleared on 2026-06-07 after `PR 26` merged; `PR 27` starts with a spec-first
-orchestrator slice in `acm_switchover.py`.
+cleared on 2026-06-07 after `PR 26` merged; `PR 27` extracted the
+runtime/bootstrap seam, and `PR 28` now records the remaining slice map for the
+follow-up implementation PRs.
 
 ## Finding Validation Matrix
 
@@ -119,7 +126,7 @@ orchestrator slice in `acm_switchover.py`.
 | F41 | resolved | PR 24 | Argo CD discovery now uses namespace scoping where available while preserving per-app durable pause persistence. |
 | F42 | resolved | PR 25 | Python RBAC preflight now avoids repeated serial SelfSubjectAccessReview probes without losing reporting fidelity. |
 | F43 | resolved | PR 26 | Release runtime parity now compares real resume, Argo CD, and RBAC/bootstrap outcomes instead of mostly artifact metadata. |
-| F44 | planned deep-scan follow-up | PR 27+ | Safety-critical file decomposition now starts with a spec-first orchestrator slice after PR26 cleared the parity/runtime guardrail gate. |
+| F44 | planned deep-scan follow-up | PR 27+ | `PR 27` extracted the runtime/bootstrap seam after PR26 cleared the parity/runtime guardrail gate. `PR 28` records the remaining slice map before follow-up implementation slices tackle operation runners, Argo CD resume safety, and CLI outcome/report orchestration. |
 
 ## PR Sequence
 
@@ -152,6 +159,10 @@ orchestrator slice in `acm_switchover.py`.
 | 25 | merged | `perf/thermos-25-rbac-preflight-scaling` | `.worktrees/thermos-25-rbac-scaling` | F42 | https://github.com/tomazb/rh-acm-switchover/pull/100 | `python -m pytest tests/test_rbac_validator.py tests/test_rbac_collection_parity.py tests/test_rbac_integration.py -q` passed (`117 passed, 6 skipped`); `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_rbac_validate.py -q` passed (`32 passed`); `python -m pytest tests/release/checks/test_rbac_certification.py -q` passed (`27 passed`); `graphify update .` passed; `git diff --check` passed; `./run_tests.sh` reproduced the pre-existing Black drift recorded under PR 24 in `ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_verification.py`, `tests/release/adapters/test_ansible.py`, `tests/release/checks/test_static_gates.py`, and `tests/release/test_orchestrator.py`. PR #100 merged 2026-06-06. |
 | 26 | merged | `test/thermos-26-runtime-parity-depth` | `.worktrees/thermos-26-parity-depth` | F43, F44 gate | https://github.com/tomazb/rh-acm-switchover/pull/101 | Added design spec `docs/superpowers/specs/2026-06-06-pr26-runtime-parity-depth-design.md` and implementation plan `docs/superpowers/plans/2026-06-06-pr26-runtime-parity-depth.md`. Runtime parity now compares Argo CD pause evidence, persisted resume-start metadata, richer RBAC/bootstrap artifact identity, and RBAC live-consistency outcomes. Verification: `python -m pytest tests/release/scenarios/test_runtime_parity.py tests/release/test_orchestrator.py tests/release/test_release_certification.py tests/test_main_phase_flow.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/action/test_checkpoint_phase_runtime.py -q` passed (`115 passed, 1 skipped` after the final malformed-Application regression); `graphify update .` passed; `git diff --check` passed; CodeRabbit rerun `coderabbit review --plain -t all --base ansible` reported `No findings`; repo-wide `black --check --line-length 120 --diff acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests` passed; final `./run_tests.sh` passed, and `pip-audit` now reports `No known vulnerabilities found` after raising the `aiohttp` floor to `3.14.0`. PR #101 merged 2026-06-07. |
 | 27 | ready_for_review | `refactor/thermos-27-safety-file-decomposition` | `.worktrees/thermos-27-file-decomposition` | F44 orchestrator runtime/bootstrap extraction | https://github.com/tomazb/rh-acm-switchover/pull/102 | Added design spec `docs/superpowers/specs/2026-06-07-pr27-orchestrator-decomposition-design.md` and implementation plan `docs/superpowers/plans/2026-06-07-pr27-runtime-bootstrap-extraction.md`. Runtime/bootstrap helpers now live under `lib/runtime_bootstrap.py`, `main()` delegates state/bootstrap setup through `_prepare_runtime()`, the new state-file literals are centralized in `lib/constants.py`, and `requirements-dev.txt` now pins `ansible-core>=2.18.1` to avoid the vulnerable `2.15.13` line reported by `pip-audit`. Verification: `python -m pytest tests/test_runtime_bootstrap.py tests/test_main.py tests/test_main_phase_flow.py tests/test_main_argocd_resume.py tests/test_state_dir_env_var.py tests/test_dependency_security_constraints.py tests/release/scenarios/test_runtime_parity.py tests/test_documentation_guardrails.py -q` passed (`210 passed`); `pip-audit` passed with `No known vulnerabilities found`; `graphify update .` passed; `git diff --check` passed; CodeRabbit rerun `coderabbit review --plain -t all --base ansible` reported `No findings`. |
+| 28 | in_progress | `refactor/thermos-28-next-slice` | `.worktrees/thermos-28-next-slice` | F44 remaining slice map + tracker scope | — | Added design spec `docs/superpowers/specs/2026-06-07-pr28-f44-remaining-slice-map-design.md`. This docs-only slice records the remaining `F44` backlog after `PR 27` and sequences the follow-up seams as `PR 29` operation/phase-flow runners, `PR 30` Argo CD resume safety, and `PR 31` CLI outcome/report orchestration. Verification: `python -m pytest tests/test_documentation_guardrails.py -q` passed; `git diff --check` passed. |
+| 29 | planned | `refactor/thermos-29-operation-runners` | `.worktrees/thermos-29-operation-runners` | F44 operation/phase-flow runner extraction | — | Added design spec `docs/superpowers/specs/2026-06-07-pr29-operation-runner-design.md` and implementation plan `docs/superpowers/plans/2026-06-07-pr29-operation-runner-extraction.md`. Planned scope centers on `run_switchover()`, `run_restore_only()`, and `_execute_operation()` without reopening runtime/bootstrap or Argo CD resume safety. |
+| 30 | planned | `refactor/thermos-30-argocd-resume-safety` | `.worktrees/thermos-30-argocd-resume` | F44 Argo CD resume safety extraction | — | Slice-specific design/spec and implementation plan required before implementation. Scope is expected to isolate `_prepare_argocd_resume_clients()`, `_run_argocd_resume_only()`, and `_attempt_argocd_resume_on_failure()` with fail-closed behavior preserved. |
+| 31 | planned | `refactor/thermos-31-cli-report-orchestration` | `.worktrees/thermos-31-cli-reporting` | F44 CLI outcome/report orchestration extraction | — | Slice-specific design/spec and implementation plan required before implementation. Scope is expected to isolate report/outcome helpers and the top-level success/failure/report shell around `main()` without changing exit semantics. |
 
 ## Per-PR Implementation Details
 
@@ -582,6 +593,27 @@ orchestrator slice in `acm_switchover.py`.
 - `lib/runtime_bootstrap.py` owns the extracted leaf state/bootstrap helpers and direct unit coverage.
 - `main()` delegates state/bootstrap setup through `_prepare_runtime()` without breaking existing `acm_switchover` helper patch/import surfaces.
 - Focused runtime/bootstrap regression tests and release-parity/documentation guardrails pass.
+
+### PR 28: Remaining F44 Slice Map
+
+**Scope**
+- Record the remaining `F44` seams after `PR 27` without changing product code.
+- Add a docs-only design spec that fixes the intended follow-up slice order.
+- Update the tracker so later `F44` implementation PRs start from an explicit map.
+
+**Likely Files**
+- `thermos-resolution-plan.md`
+- `docs/superpowers/specs/2026-06-07-pr28-f44-remaining-slice-map-design.md`
+
+**Acceptance Criteria**
+- `PR 28` is recorded as a docs-only scope pass in the tracker.
+- The remaining `F44` backlog is mapped into distinct follow-up seams for
+  operation runners, Argo CD resume safety, and CLI outcome/report
+  orchestration.
+- The tracker adds tentative `PR 29` through `PR 31` rows that remain gated on
+  slice-specific design/spec and implementation-plan artifacts before
+  implementation starts.
+- Documentation guardrail verification passes.
 
 ## Verification Command Reference
 
