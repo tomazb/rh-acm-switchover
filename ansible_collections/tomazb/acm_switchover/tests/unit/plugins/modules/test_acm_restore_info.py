@@ -546,6 +546,34 @@ def test_build_restore_activation_plan_passive_restore_activation_cleans_stale_p
     assert plan["wait_target"]["name"] == "restore-acm-activate"
 
 
+def test_build_restore_activation_plan_passive_restore_activation_resume_no_passive_sync():
+    """Resume: only restore-acm-activate present, no passive sync restore → action=none, wait on activation restore."""
+    plan = build_restore_activation_plan(
+        method="passive",
+        activation_method="restore",
+        restores=[
+            {
+                "metadata": {
+                    "name": "restore-acm-activate",
+                    "namespace": "open-cluster-management-backup",
+                },
+                "spec": {"veleroManagedClustersBackupName": "latest"},
+                "status": {
+                    "phase": "Finished",
+                    "veleroManagedClustersRestoreName": "velero-mc-restore",
+                },
+            }
+        ],
+        backup_name="latest",
+    )
+
+    assert plan["operation"]["action"] == "none"
+    assert plan["restore"]["metadata"]["name"] == "restore-acm-activate"
+    assert plan["wait_target"]["name"] == "restore-acm-activate"
+    assert plan["wait_target"]["velero_restore_required"] is True
+    assert "Finished" in plan["wait_target"]["success_phases"]
+
+
 def test_build_restore_activation_plan_for_full_restore_mode():
     plan = build_restore_activation_plan(
         method="full",
