@@ -1362,20 +1362,13 @@ def _prepare_runtime(
     should_record_state_errors = not getattr(args, "decommission", False)
 
     if should_bind_state:
-        state.ensure_contexts(getattr(args, "primary_context", None), args.secondary_context)
+        state.ensure_contexts(getattr(args, "primary_context", None), getattr(args, "secondary_context", None))
 
     try:
         primary, secondary = _initialize_clients(args, logger)
     except Exception as exc:  # pragma: no cover - fatal init error
         logger.error("Failed to initialize Kubernetes clients: %s", exc)
         sys.exit(EXIT_FAILURE)
-
-    if should_bind_state:
-        state.ensure_hub_identities(
-            _collect_hub_identities(primary, secondary),
-            allow_legacy_backfill=getattr(args, "force", False),
-            persist=not (getattr(args, "dry_run", False) or getattr(args, "validate_only", False)),
-        )
 
     return runtime_bootstrap.RuntimeContext(
         state_file=resolved_state_file,
@@ -1384,6 +1377,20 @@ def _prepare_runtime(
         secondary=secondary,
         should_bind_state=should_bind_state,
         should_record_state_errors=should_record_state_errors,
+    )
+
+
+def _bind_runtime_hub_identities(
+    args: argparse.Namespace,
+    state: StateManager,
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+) -> None:
+    """Validate and bind live hub identities inside the guarded main flow."""
+    state.ensure_hub_identities(
+        _collect_hub_identities(primary, secondary),
+        allow_legacy_backfill=getattr(args, "force", False),
+        persist=not (getattr(args, "dry_run", False) or getattr(args, "validate_only", False)),
     )
 
 
@@ -1448,10 +1455,13 @@ def main():  # noqa: C901
     state = runtime.state
     primary = runtime.primary
     secondary = runtime.secondary
+    should_bind_state = runtime.should_bind_state
     should_record_state_errors = runtime.should_record_state_errors
 
     operation_exit_code = EXIT_FAILURE
     try:
+        if should_bind_state:
+            _bind_runtime_hub_identities(args, state, primary, secondary)
         if getattr(args, "argocd_resume_only", False):
             success = _run_argocd_resume_only(args, state, primary, secondary, logger)
         else:

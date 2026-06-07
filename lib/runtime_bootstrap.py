@@ -110,15 +110,19 @@ def initialize_clients(
     if client_factory is None:
         client_factory = KubeClient
 
+    dry_run = getattr(args, "dry_run", False)
+
     primary = None
-    if getattr(args, "primary_context", None):
-        logger.info("Connecting to primary hub: %s", args.primary_context)
-        primary = client_factory(args.primary_context, dry_run=args.dry_run)
+    primary_context = getattr(args, "primary_context", None)
+    if primary_context:
+        logger.info("Connecting to primary hub: %s", primary_context)
+        primary = client_factory(primary_context, dry_run=dry_run)
 
     secondary = None
-    if args.secondary_context:
-        logger.info("Connecting to secondary hub: %s", args.secondary_context)
-        secondary = client_factory(args.secondary_context, dry_run=args.dry_run)
+    secondary_context = getattr(args, "secondary_context", None)
+    if secondary_context:
+        logger.info("Connecting to secondary hub: %s", secondary_context)
+        secondary = client_factory(secondary_context, dry_run=dry_run)
 
     return primary, secondary
 

@@ -12,6 +12,8 @@ from lib.runtime_bootstrap import (
     stored_hub_identities,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def test_resolve_state_file_prefers_requested_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ACM_SWITCHOVER_STATE_DIR", "/tmp/acm-state")
@@ -36,6 +38,23 @@ def test_initialize_clients_passes_dry_run_to_each_context() -> None:
         kube_client.side_effect = [primary_client, secondary_client]
 
         assert initialize_clients(args, logger) == (primary_client, secondary_client)
+        kube_client.assert_any_call("hub-a", dry_run=True)
+        kube_client.assert_any_call("hub-b", dry_run=True)
+
+
+def test_initialize_clients_defaults_missing_optional_attributes() -> None:
+    args = SimpleNamespace(primary_context="hub-a")
+    logger = Mock()
+
+    with patch("lib.runtime_bootstrap.KubeClient") as kube_client:
+        primary_client = Mock(name="primary-client")
+        kube_client.return_value = primary_client
+
+        primary, secondary = initialize_clients(args, logger)
+
+    assert primary is primary_client
+    assert secondary is None
+    kube_client.assert_called_once_with("hub-a", dry_run=False)
 
 
 def test_collect_hub_identities_reads_only_present_clients() -> None:
