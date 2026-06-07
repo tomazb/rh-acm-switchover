@@ -31,17 +31,14 @@ from lib import (
     __version_date__,
 )
 from lib import argocd as argocd_lib
-from lib import runtime_bootstrap
 from lib import (
+    operation_runners,
+    runtime_bootstrap,
     setup_logging,
     validate_decommission_permissions,
 )
 from lib.argocd_coordinator import ArgoCDPauseCoordinator, clear_argocd_pause_state
 from lib.constants import (
-    DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,
-    DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE,
-    DRY_RUN_SWITCHOVER_COMPLETION_MESSAGE,
-    DRY_RUN_SWITCHOVER_NEXT_STEPS_MESSAGE,
     EXIT_FAILURE,
     EXIT_INTERRUPT,
     EXIT_SUCCESS,
@@ -53,18 +50,10 @@ from lib.constants import (
     MANAGED_CLUSTER_EXPECTATION_KEY,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     OBSERVABILITY_NAMESPACE,
-    OPERATION_LABEL_RESTORE,
-    OPERATION_LABEL_SWITCHOVER,
-    OPERATION_NOUN_RESTORE,
-    OPERATION_NOUN_SWITCHOVER,
-    PHASE_FLOW_NAME_RESTORE_ONLY,
-    PHASE_FLOW_NAME_SWITCHOVER,
-    RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
     STATE_DIR_ENV_VAR,
     STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
-    SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
     TOKEN_DURATION_DEFAULT,
 )
 from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
@@ -76,15 +65,6 @@ from lib.report_artifacts import (
     write_json_report_artifact,
 )
 from lib.validation import InputValidator, ValidationError
-from lib.workflow import (
-    CompletedStateConfig,
-    FailedStateConfig,
-    PhaseFlowEntry,
-    handle_completed_state,
-    handle_failed_state,
-    run_phase_flow,
-    run_validate_only_preflight,
-)
 from modules import (
     Decommission,
     Finalization,
@@ -393,6 +373,40 @@ def validate_args(args: argparse.Namespace, logger: logging.Logger) -> None:
         sys.exit(EXIT_FAILURE)
 
 
+def _build_switchover_runner_hooks() -> operation_runners.SwitchoverRunnerHooks:
+    return operation_runners.SwitchoverRunnerHooks(
+        preflight_handler=_run_phase_preflight,
+        primary_prep_handler=_run_phase_primary_prep,
+        activation_handler=_run_phase_activation,
+        post_activation_handler=_run_phase_post_activation,
+        finalization_handler=_run_phase_finalization,
+        fail_phase=_fail_phase,
+        fail_unexpected_phase_state=_fail_unexpected_phase_state,
+        on_phase_failure=_attempt_argocd_resume_on_failure,
+    )
+
+
+def _build_restore_only_runner_hooks() -> operation_runners.RestoreOnlyRunnerHooks:
+    return operation_runners.RestoreOnlyRunnerHooks(
+        preflight_handler=_run_phase_preflight,
+        restore_only_pause_handler=_run_restore_only_argocd_pause,
+        activation_handler=_run_phase_activation,
+        post_activation_handler=_run_phase_post_activation,
+        finalization_handler=_run_phase_finalization,
+        fail_phase=_fail_phase,
+        fail_unexpected_phase_state=_fail_unexpected_phase_state,
+        on_phase_failure=_attempt_argocd_resume_on_failure,
+    )
+
+
+def _build_operation_dispatch_hooks() -> operation_runners.OperationDispatchHooks:
+    return operation_runners.OperationDispatchHooks(
+        decommission_runner=run_decommission,
+        restore_only_runner=run_restore_only,
+        switchover_runner=run_switchover,
+    )
+
+
 def run_switchover(
     args: argparse.Namespace,
     state: StateManager,
@@ -417,99 +431,14 @@ def _run_switchover_impl(
     logger: logging.Logger,
 ):
     """Execute the main switchover workflow."""
-
-    if secondary is None:
-        raise ValueError("Secondary client is required for switchover")
-
-    if handle_completed_state(
-        args,
-        state,
-        logger,
-        CompletedStateConfig(operation_label=OPERATION_LABEL_SWITCHOVER, operation_noun=OPERATION_NOUN_SWITCHOVER),
-    ):
-        return True
-    handle_failed_state(
-        args,
-        state,
-        logger,
-        FailedStateConfig(
-            resumable_phases=(
-                Phase.PREFLIGHT,
-                Phase.PRIMARY_PREP,
-                Phase.SECONDARY_VERIFY,
-                Phase.ACTIVATION,
-                Phase.POST_ACTIVATION,
-                Phase.FINALIZATION,
-            ),
-            operation_noun=OPERATION_NOUN_SWITCHOVER,
-        ),
-    )
-
-    if args.validate_only:
-        return run_validate_only_preflight(args, state, primary, secondary, logger, _run_phase_preflight)
-
-    phase_flow: Tuple[PhaseFlowEntry, ...] = (
-        (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),
-        (
-            _run_phase_primary_prep,
-            (Phase.PREFLIGHT, Phase.PRIMARY_PREP),
-            Phase.PRIMARY_PREP,
-        ),
-        (
-            _run_phase_activation,
-            (
-                Phase.PREFLIGHT,
-                Phase.PRIMARY_PREP,
-                Phase.SECONDARY_VERIFY,
-                Phase.ACTIVATION,
-            ),
-            Phase.ACTIVATION,
-        ),
-        (
-            _run_phase_post_activation,
-            (Phase.ACTIVATION, Phase.POST_ACTIVATION),
-            Phase.POST_ACTIVATION,
-        ),
-        (
-            _run_phase_finalization,
-            (Phase.POST_ACTIVATION, Phase.FINALIZATION),
-            Phase.FINALIZATION,
-        ),
-    )
-
-    if not run_phase_flow(
+    return operation_runners.run_switchover_impl(
         args,
         state,
         primary,
         secondary,
         logger,
-        phase_flow,
-        PHASE_FLOW_NAME_SWITCHOVER,
-        _fail_phase,
-        _fail_unexpected_phase_state,
-        _attempt_argocd_resume_on_failure,
-    ):
-        return False
-
-    if getattr(args, "dry_run", False):
-        logger.info(DRY_RUN_SWITCHOVER_COMPLETION_MESSAGE)
-        logger.info(DRY_RUN_SWITCHOVER_NEXT_STEPS_MESSAGE)
-        return True
-
-    state.set_phase(Phase.COMPLETED)
-
-    logger.info("\n" + "=" * 60)
-    logger.info(SWITCHOVER_COMPLETED_SUCCESS_MESSAGE)
-    logger.info("=" * 60)
-    logger.info("\nSwitchover completed at: %s", datetime.now().astimezone().isoformat())
-    logger.info("State file: %s", args.state_file)
-    logger.info("\nNext steps:")
-    logger.info("  1. Inform stakeholders that switchover is complete")
-    logger.info("  2. Provide new hub connection details")
-    logger.info("  3. Verify applications are functioning correctly")
-    logger.info("  4. Optionally decommission old hub with: --decommission")
-
-    return True
+        hooks=_build_switchover_runner_hooks(),
+    )
 
 
 def _run_restore_only_argocd_pause(
@@ -583,89 +512,13 @@ def _run_restore_only_impl(
     This is a simplified variant of run_switchover() that skips PRIMARY_PREP
     (no primary hub exists) and runs finalization with old_hub_action="none".
     """
-    # Default method to full for restore-only
-    if not args.method:
-        args.method = "full"
-
-    # Default old_hub_action to none (no old hub)
-    if not getattr(args, "old_hub_action", None):
-        args.old_hub_action = "none"
-
-    if handle_completed_state(
+    return operation_runners.run_restore_only_impl(
         args,
         state,
-        logger,
-        CompletedStateConfig(operation_label=OPERATION_LABEL_RESTORE, operation_noun=OPERATION_NOUN_RESTORE),
-    ):
-        return True
-    handle_failed_state(
-        args,
-        state,
-        logger,
-        FailedStateConfig(
-            resumable_phases=(
-                Phase.PREFLIGHT,
-                Phase.ACTIVATION,
-                Phase.POST_ACTIVATION,
-                Phase.FINALIZATION,
-            ),
-            operation_noun=OPERATION_NOUN_RESTORE,
-        ),
-    )
-
-    if args.validate_only:
-        return run_validate_only_preflight(args, state, None, secondary, logger, _run_phase_preflight)
-
-    # Restore-only phase flow: skip PRIMARY_PREP entirely
-    # ArgoCD pause runs between preflight and activation (secondary hub only)
-    phase_flow: Tuple[PhaseFlowEntry, ...] = (
-        (_run_phase_preflight, (Phase.INIT, Phase.PREFLIGHT), Phase.PREFLIGHT),
-        (_run_restore_only_argocd_pause, (Phase.PREFLIGHT,), Phase.PREFLIGHT),
-        (_run_phase_activation, (Phase.PREFLIGHT, Phase.ACTIVATION), Phase.ACTIVATION),
-        (
-            _run_phase_post_activation,
-            (Phase.ACTIVATION, Phase.POST_ACTIVATION),
-            Phase.POST_ACTIVATION,
-        ),
-        (
-            _run_phase_finalization,
-            (Phase.POST_ACTIVATION, Phase.FINALIZATION),
-            Phase.FINALIZATION,
-        ),
-    )
-
-    if not run_phase_flow(
-        args,
-        state,
-        None,
         secondary,
         logger,
-        phase_flow,
-        PHASE_FLOW_NAME_RESTORE_ONLY,
-        _fail_phase,
-        _fail_unexpected_phase_state,
-        _attempt_argocd_resume_on_failure,
-    ):
-        return False
-
-    if getattr(args, "dry_run", False):
-        logger.info(DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE)
-        logger.info(DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE)
-        return True
-
-    state.set_phase(Phase.COMPLETED)
-
-    logger.info("\n" + "=" * 60)
-    logger.info(RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE)
-    logger.info("=" * 60)
-    logger.info("\nRestore completed at: %s", datetime.now().astimezone().isoformat())
-    logger.info("State file: %s", args.state_file)
-    logger.info("\nNext steps:")
-    logger.info("  1. Verify managed clusters are connected and healthy")
-    logger.info("  2. Inform stakeholders that restore is complete")
-    logger.info("  3. Provide new hub connection details")
-
-    return True
+        hooks=_build_restore_only_runner_hooks(),
+    )
 
 
 def _attempt_argocd_resume_on_failure(
@@ -1747,19 +1600,14 @@ def _execute_operation(
     logger: logging.Logger,
 ) -> bool:
     """Execute the operation requested by CLI flags."""
-
-    if args.decommission:
-        return run_decommission(args, primary, state, logger)
-
-    if getattr(args, "restore_only", False):
-        if secondary is None:
-            raise ValueError("Secondary context is required for restore-only")
-        return run_restore_only(args, state, secondary, logger)
-
-    if secondary is None:
-        raise ValueError("Secondary context is required for switchover")
-
-    return run_switchover(args, state, primary, secondary, logger)
+    return operation_runners.execute_operation(
+        args,
+        state,
+        primary,
+        secondary,
+        logger,
+        hooks=_build_operation_dispatch_hooks(),
+    )
 
 
 if __name__ == "__main__":
