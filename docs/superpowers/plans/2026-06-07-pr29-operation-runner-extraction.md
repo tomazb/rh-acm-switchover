@@ -52,14 +52,14 @@ def test_execute_operation_routes_decommission_without_touching_secondary():
     primary = Mock()
     logger = Mock()
     hooks = OperationDispatchHooks(
-        decommission_runner=Mock(return_value="decommission-result"),
-        restore_only_runner=Mock(return_value="restore-result"),
-        switchover_runner=Mock(return_value="switchover-result"),
+        decommission_runner=Mock(return_value=True),
+        restore_only_runner=Mock(return_value=False),
+        switchover_runner=Mock(return_value=False),
     )
 
     result = execute_operation(args, state, primary, None, logger, hooks=hooks)
 
-    assert result == "decommission-result"
+    assert result is True
     hooks.decommission_runner.assert_called_once_with(args, primary, state, logger)
     hooks.restore_only_runner.assert_not_called()
     hooks.switchover_runner.assert_not_called()
@@ -80,13 +80,13 @@ def test_execute_operation_routes_restore_only_with_secondary():
     logger = Mock()
     hooks = OperationDispatchHooks(
         decommission_runner=Mock(return_value=False),
-        restore_only_runner=Mock(return_value="restore-result"),
+        restore_only_runner=Mock(return_value=True),
         switchover_runner=Mock(return_value=False),
     )
 
     result = execute_operation(args, state, None, secondary, logger, hooks=hooks)
 
-    assert result == "restore-result"
+    assert result is True
     hooks.restore_only_runner.assert_called_once_with(args, state, secondary, logger)
 
 
@@ -107,12 +107,12 @@ def test_execute_operation_routes_switchover_when_secondary_exists():
     hooks = OperationDispatchHooks(
         decommission_runner=Mock(return_value=False),
         restore_only_runner=Mock(return_value=False),
-        switchover_runner=Mock(return_value="switchover-result"),
+        switchover_runner=Mock(return_value=True),
     )
 
     result = execute_operation(args, state, primary, secondary, logger, hooks=hooks)
 
-    assert result == "switchover-result"
+    assert result is True
     hooks.switchover_runner.assert_called_once_with(args, state, primary, secondary, logger)
 ```
 
@@ -504,7 +504,10 @@ def run_restore_only_impl(
     *,
     hooks: RestoreOnlyRunnerHooks,
 ) -> bool:
-    if not args.method:
+    if secondary is None:
+        raise ValueError("Secondary client is required for restore-only")
+
+    if not getattr(args, "method", None):
         args.method = "full"
     if not getattr(args, "old_hub_action", None):
         args.old_hub_action = "none"
