@@ -40,6 +40,7 @@ def test_dev_requirements_exclude_known_vulnerable_versions():
     requirements = _load_requirements("requirements-dev.txt")
 
     expected_minimums = {
+        "ansible-core": Version("2.18.1"),
         "black": Version("26.3.1"),
     }
 
