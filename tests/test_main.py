@@ -21,6 +21,7 @@ from acm_switchover import (
     _attempt_argocd_resume_on_failure,
     _fail_phase,
     _initialize_clients,
+    _prepare_runtime,
     _report_argocd_acm_impact,
     _run_argocd_resume_only,
     _run_phase_activation,
@@ -1881,6 +1882,80 @@ class TestMainGitOpsReporting:
 
         assert exc_info.value.code == EXIT_SUCCESS
         state.ensure_contexts.assert_called_once_with("primary", "secondary")
+
+
+@pytest.mark.unit
+class TestPrepareRuntime:
+    def test_prepare_runtime_binds_contexts_and_persists_hub_identities(self):
+        args = TestMainGitOpsReporting._base_args()
+        logger = Mock()
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        primary.get_cluster_identity.return_value = {"context": "primary", "cluster_uid": "uid-primary"}
+        secondary.get_cluster_identity.return_value = {"context": "secondary", "cluster_uid": "uid-secondary"}
+
+        with patch("acm_switchover.StateManager", return_value=state), patch(
+            "acm_switchover._initialize_clients", return_value=(primary, secondary)
+        ):
+            runtime = _prepare_runtime(args, logger, "state.json")
+
+        assert runtime.state is state
+        assert runtime.primary is primary
+        assert runtime.secondary is secondary
+        assert runtime.should_bind_state is True
+        assert runtime.should_record_state_errors is True
+        state.ensure_contexts.assert_called_once_with("primary", "secondary")
+        state.ensure_hub_identities.assert_called_once_with(
+            {
+                "primary": {"context": "primary", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary", "cluster_uid": "uid-secondary"},
+            },
+            allow_legacy_backfill=False,
+            persist=True,
+        )
+
+    def test_prepare_runtime_uses_non_persistent_identity_binding_for_dry_run(self):
+        args = TestMainGitOpsReporting._base_args()
+        args.dry_run = True
+        logger = Mock()
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        primary.get_cluster_identity.return_value = {"context": "primary", "cluster_uid": "uid-primary"}
+        secondary.get_cluster_identity.return_value = {"context": "secondary", "cluster_uid": "uid-secondary"}
+
+        with patch("acm_switchover.StateManager", return_value=state), patch(
+            "acm_switchover._initialize_clients", return_value=(primary, secondary)
+        ):
+            runtime = _prepare_runtime(args, logger, "state.json")
+
+        assert runtime.should_bind_state is True
+        state.ensure_hub_identities.assert_called_once_with(
+            {
+                "primary": {"context": "primary", "cluster_uid": "uid-primary"},
+                "secondary": {"context": "secondary", "cluster_uid": "uid-secondary"},
+            },
+            allow_legacy_backfill=False,
+            persist=False,
+        )
+
+    def test_prepare_runtime_removes_existing_state_file_before_state_manager(self, tmp_path):
+        args = TestMainGitOpsReporting._base_args()
+        args.reset_state = True
+        state_path = tmp_path / "state.json"
+        state_path.write_text("{}", encoding="utf-8")
+        logger = Mock()
+        state = Mock()
+
+        with patch("acm_switchover.StateManager", return_value=state) as state_manager, patch(
+            "acm_switchover._initialize_clients", return_value=(Mock(), Mock())
+        ):
+            runtime = _prepare_runtime(args, logger, str(state_path))
+
+        assert runtime.state_file == str(state_path)
+        assert not state_path.exists()
+        state_manager.assert_called_once_with(str(state_path))
 
 
 @pytest.mark.unit

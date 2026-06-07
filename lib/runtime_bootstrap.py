@@ -100,16 +100,20 @@ def resolve_state_file(
 def initialize_clients(
     args: argparse.Namespace,
     logger: logging.Logger,
+    client_factory=None,
 ) -> tuple[Optional[KubeClient], Optional[KubeClient]]:
+    if client_factory is None:
+        client_factory = KubeClient
+
     primary = None
     if getattr(args, "primary_context", None):
         logger.info("Connecting to primary hub: %s", args.primary_context)
-        primary = KubeClient(args.primary_context, dry_run=args.dry_run)
+        primary = client_factory(args.primary_context, dry_run=args.dry_run)
 
     secondary = None
     if args.secondary_context:
         logger.info("Connecting to secondary hub: %s", args.secondary_context)
-        secondary = KubeClient(args.secondary_context, dry_run=args.dry_run)
+        secondary = client_factory(args.secondary_context, dry_run=args.dry_run)
 
     return primary, secondary
 

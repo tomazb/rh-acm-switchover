@@ -31,6 +31,7 @@ from lib import (
     __version_date__,
 )
 from lib import argocd as argocd_lib
+from lib import runtime_bootstrap
 from lib import (
     setup_logging,
     validate_decommission_permissions,
@@ -92,7 +93,7 @@ from modules import (
 )
 from modules.preflight_coordinator import PreflightValidator
 
-STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
+STATE_DIR_ENV_VAR = runtime_bootstrap.STATE_DIR_ENV_VAR
 
 
 def parse_args():
@@ -1327,6 +1328,66 @@ def run_setup(
         return False
 
 
+def _prepare_runtime(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+    resolved_state_file: str,
+) -> runtime_bootstrap.RuntimeContext:
+    """Create state and clients while preserving existing entrypoint ordering."""
+    if getattr(args, "reset_state", False):
+        # --reset-state: delete existing state file before loading so StateManager
+        # starts fresh.  We handle this before constructing StateManager to allow
+        # recovery from a corrupt state file via the flag.
+        if os.path.exists(resolved_state_file):
+            logger.warning("Resetting state file: %s", resolved_state_file)
+            try:
+                os.remove(resolved_state_file)
+            except OSError as exc:
+                logger.error("Failed to remove state file: %s", exc)
+                sys.exit(EXIT_FAILURE)
+
+    try:
+        state = StateManager(resolved_state_file)
+    except (StateLoadError, StateLockError) as exc:
+        logger.error("")
+        logger.error("FATAL: Cannot initialize switchover state file.")
+        logger.error("%s", exc)
+        logger.error("")
+        if isinstance(exc, StateLoadError):
+            logger.error("To start a fresh switchover run:")
+            logger.error("  --reset-state  (removes and recreates the state file)")
+            logger.error("  or manually remove: %s", resolved_state_file)
+        sys.exit(EXIT_FAILURE)
+
+    should_bind_state = not getattr(args, "argocd_resume_only", False) and not getattr(args, "decommission", False)
+    should_record_state_errors = not getattr(args, "decommission", False)
+
+    if should_bind_state:
+        state.ensure_contexts(getattr(args, "primary_context", None), args.secondary_context)
+
+    try:
+        primary, secondary = _initialize_clients(args, logger)
+    except Exception as exc:  # pragma: no cover - fatal init error
+        logger.error("Failed to initialize Kubernetes clients: %s", exc)
+        sys.exit(EXIT_FAILURE)
+
+    if should_bind_state:
+        state.ensure_hub_identities(
+            _collect_hub_identities(primary, secondary),
+            allow_legacy_backfill=getattr(args, "force", False),
+            persist=not (getattr(args, "dry_run", False) or getattr(args, "validate_only", False)),
+        )
+
+    return runtime_bootstrap.RuntimeContext(
+        state_file=resolved_state_file,
+        state=state,
+        primary=primary,
+        secondary=secondary,
+        should_bind_state=should_bind_state,
+        should_record_state_errors=should_record_state_errors,
+    )
+
+
 def main():  # noqa: C901
     """Main entry point."""
     args = parse_args()
@@ -1384,51 +1445,14 @@ def main():  # noqa: C901
         )
         sys.exit(EXIT_FAILURE)
 
-    if getattr(args, "reset_state", False):
-        # --reset-state: delete existing state file before loading so StateManager
-        # starts fresh.  We handle this before constructing StateManager to allow
-        # recovery from a corrupt state file via the flag.
-        if os.path.exists(resolved_state_file):
-            logger.warning("Resetting state file: %s", resolved_state_file)
-            try:
-                os.remove(resolved_state_file)
-            except OSError as exc:
-                logger.error("Failed to remove state file: %s", exc)
-                sys.exit(EXIT_FAILURE)
-
-    try:
-        state = StateManager(resolved_state_file)
-    except (StateLoadError, StateLockError) as exc:
-        logger.error("")
-        logger.error("FATAL: Cannot initialize switchover state file.")
-        logger.error("%s", exc)
-        logger.error("")
-        if isinstance(exc, StateLoadError):
-            logger.error("To start a fresh switchover run:")
-            logger.error("  --reset-state  (removes and recreates the state file)")
-            logger.error("  or manually remove: %s", resolved_state_file)
-        sys.exit(EXIT_FAILURE)
-
-    should_bind_state = not getattr(args, "argocd_resume_only", False) and not getattr(args, "decommission", False)
-    should_record_state_errors = not getattr(args, "decommission", False)
-
-    if should_bind_state:
-        state.ensure_contexts(getattr(args, "primary_context", None), args.secondary_context)
-
-    try:
-        primary, secondary = _initialize_clients(args, logger)
-    except Exception as exc:  # pragma: no cover - fatal init error
-        logger.error("Failed to initialize Kubernetes clients: %s", exc)
-        sys.exit(EXIT_FAILURE)
+    runtime = _prepare_runtime(args, logger, resolved_state_file)
+    state = runtime.state
+    primary = runtime.primary
+    secondary = runtime.secondary
+    should_record_state_errors = runtime.should_record_state_errors
 
     operation_exit_code = EXIT_FAILURE
     try:
-        if should_bind_state:
-            state.ensure_hub_identities(
-                _collect_hub_identities(primary, secondary),
-                allow_legacy_backfill=getattr(args, "force", False),
-                persist=not (getattr(args, "dry_run", False) or getattr(args, "validate_only", False)),
-            )
         if getattr(args, "argocd_resume_only", False):
             success = _run_argocd_resume_only(args, state, primary, secondary, logger)
         else:
@@ -1479,18 +1503,7 @@ def _initialize_clients(
     logger: logging.Logger,
 ) -> Tuple[Optional[KubeClient], Optional[KubeClient]]:
     """Create Kubernetes clients for provided contexts."""
-
-    primary = None
-    if getattr(args, "primary_context", None):
-        logger.info("Connecting to primary hub: %s", args.primary_context)
-        primary = KubeClient(args.primary_context, dry_run=args.dry_run)
-
-    secondary = None
-    if args.secondary_context:
-        logger.info("Connecting to secondary hub: %s", args.secondary_context)
-        secondary = KubeClient(args.secondary_context, dry_run=args.dry_run)
-
-    return primary, secondary
+    return runtime_bootstrap.initialize_clients(args, logger, client_factory=KubeClient)
 
 
 def _collect_hub_identities(
@@ -1498,59 +1511,31 @@ def _collect_hub_identities(
     secondary: Optional[KubeClient],
 ) -> dict[str, dict[str, Optional[str]]]:
     """Read live cluster identities for available hub clients."""
-    identities: dict[str, dict[str, Optional[str]]] = {}
-    if primary is not None:
-        identities["primary"] = primary.get_cluster_identity()
-    if secondary is not None:
-        identities["secondary"] = secondary.get_cluster_identity()
-    return identities
+    return runtime_bootstrap.collect_hub_identities(primary, secondary)
 
 
 def _stored_hub_identities(state: StateManager) -> dict:
     """Return persisted hub identity records, if this state file has them."""
-    state_data = getattr(state, "state", {}) or {}
-    if not isinstance(state_data, dict):
-        return {}
-    identities = state_data.get("hub_identities") or {}
-    return identities if isinstance(identities, dict) else {}
+    return runtime_bootstrap.stored_hub_identities(state)
 
 
 def _sanitize_context_identifier(value: str) -> str:
     """Sanitize context string to be filesystem friendly."""
-    return InputValidator.sanitize_context_identifier(value)
+    return runtime_bootstrap.sanitize_context_identifier(value)
 
 
 def _get_default_state_dir() -> str:
-    env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
-    if env_state_dir and env_state_dir.strip():
-        return env_state_dir.strip()
-    return ".state"
+    return runtime_bootstrap.get_default_state_dir()
 
 
 def _build_default_state_file(primary_ctx: Optional[str], secondary_ctx: Optional[str]) -> str:
     """Build the default state file path for the provided context ordering."""
-    primary_label = primary_ctx or "restore-only"
-    secondary_label = secondary_ctx or "none"
-    slug = f"{_sanitize_context_identifier(primary_label)}__{_sanitize_context_identifier(secondary_label)}"
-    return os.path.join(_get_default_state_dir(), f"switchover-{slug}.json")
+    return runtime_bootstrap.build_default_state_file(primary_ctx, secondary_ctx)
 
 
 def _find_resume_state_candidates(secondary_ctx: str) -> list[str]:
     """Return resume-only state file candidates that target the provided secondary context."""
-    state_dir = _get_default_state_dir()
-    if not os.path.isdir(state_dir):
-        return []
-
-    secondary_slug = _sanitize_context_identifier(secondary_ctx)
-    suffix = f"__{secondary_slug}.json"
-    candidates = []
-    for entry in os.listdir(state_dir):
-        if not entry.startswith("switchover-") or not entry.endswith(suffix):
-            continue
-        path = os.path.join(state_dir, entry)
-        if os.path.isfile(path):
-            candidates.append(path)
-    return sorted(candidates)
+    return runtime_bootstrap.find_resume_state_candidates(secondary_ctx)
 
 
 def _resolve_state_file(
@@ -1566,59 +1551,22 @@ def _resolve_state_file(
     and _build_default_state_file(None, secondary_ctx) naturally
     produces the correct "switchover-restore-only__<sec>.json" filename.
     """
-    if requested_path:
-        return requested_path
-
-    default_path = _build_default_state_file(primary_ctx, secondary_ctx)
-    if not argocd_resume_only or not secondary_ctx:
-        return default_path
-
-    if primary_ctx is None:
-        candidates = _find_resume_state_candidates(secondary_ctx)
-        if len(candidates) == 1:
-            return candidates[0]
-        if len(candidates) > 1:
-            raise ValueError(
-                "Multiple candidate state files found for --argocd-resume-only "
-                f"matching secondary context {secondary_ctx}: {', '.join(candidates)}. "
-                "Pass --state-file explicitly or provide --primary-context to disambiguate."
-            )
-        return default_path
-
-    reversed_path = _build_default_state_file(secondary_ctx, primary_ctx)
-    default_exists = os.path.exists(default_path)
-    reversed_exists = os.path.exists(reversed_path)
-
-    if reversed_exists and not default_exists:
-        return reversed_path
-
-    if default_exists and reversed_exists and default_path != reversed_path:
-        raise ValueError(
-            "Multiple candidate state files found for --argocd-resume-only "
-            f"({default_path} and {reversed_path}). "
-            "Pass --state-file explicitly to choose the correct resume state."
-        )
-
-    return default_path
+    return runtime_bootstrap.resolve_state_file(
+        requested_path=requested_path,
+        primary_ctx=primary_ctx,
+        secondary_ctx=secondary_ctx,
+        argocd_resume_only=argocd_resume_only,
+    )
 
 
 def _state_contexts(state: StateManager) -> tuple[Optional[str], Optional[str]]:
     """Return stored primary/secondary contexts from state."""
-    state_data = getattr(state, "state", {}) or {}
-    if not isinstance(state_data, dict):
-        return None, None
-
-    stored_contexts = state_data.get("contexts") or {}
-    if not isinstance(stored_contexts, dict):
-        return None, None
-
-    return stored_contexts.get("primary"), stored_contexts.get("secondary")
+    return runtime_bootstrap.state_contexts(state)
 
 
 def _client_context_name(client: Optional[KubeClient]) -> Optional[str]:
     """Return a client context name only when it is available as a plain string."""
-    context = getattr(client, "context", None)
-    return context if isinstance(context, str) and context else None
+    return runtime_bootstrap.client_context_name(client)
 
 
 def _prepare_argocd_resume_clients(
