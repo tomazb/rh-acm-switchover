@@ -5,9 +5,14 @@ from dataclasses import dataclass
 from typing import Optional
 
 from lib import KubeClient, StateManager
+from lib.constants import (
+    STATE_DIR_DEFAULT,
+    STATE_DIR_ENV_VAR,
+    STATE_FILE_NAME_PREFIX,
+    STATE_FILE_PRIMARY_RESTORE_ONLY_LABEL,
+    STATE_FILE_SECONDARY_NONE_LABEL,
+)
 from lib.validation import InputValidator
-
-STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
 
 
 @dataclass(frozen=True)
@@ -28,14 +33,14 @@ def get_default_state_dir() -> str:
     env_state_dir = os.environ.get(STATE_DIR_ENV_VAR)
     if env_state_dir and env_state_dir.strip():
         return env_state_dir.strip()
-    return ".state"
+    return STATE_DIR_DEFAULT
 
 
 def build_default_state_file(primary_ctx: Optional[str], secondary_ctx: Optional[str]) -> str:
-    primary_label = primary_ctx or "restore-only"
-    secondary_label = secondary_ctx or "none"
+    primary_label = primary_ctx or STATE_FILE_PRIMARY_RESTORE_ONLY_LABEL
+    secondary_label = secondary_ctx or STATE_FILE_SECONDARY_NONE_LABEL
     slug = f"{sanitize_context_identifier(primary_label)}__{sanitize_context_identifier(secondary_label)}"
-    return os.path.join(get_default_state_dir(), f"switchover-{slug}.json")
+    return os.path.join(get_default_state_dir(), f"{STATE_FILE_NAME_PREFIX}{slug}.json")
 
 
 def find_resume_state_candidates(secondary_ctx: str) -> list[str]:
@@ -47,7 +52,7 @@ def find_resume_state_candidates(secondary_ctx: str) -> list[str]:
     suffix = f"__{secondary_slug}.json"
     candidates = []
     for entry in os.listdir(state_dir):
-        if not entry.startswith("switchover-") or not entry.endswith(suffix):
+        if not entry.startswith(STATE_FILE_NAME_PREFIX) or not entry.endswith(suffix):
             continue
         path = os.path.join(state_dir, entry)
         if os.path.isfile(path):

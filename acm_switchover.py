@@ -60,6 +60,7 @@ from lib.constants import (
     PHASE_FLOW_NAME_RESTORE_ONLY,
     PHASE_FLOW_NAME_SWITCHOVER,
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
+    STATE_DIR_ENV_VAR,
     STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
@@ -92,8 +93,6 @@ from modules import (
     SecondaryActivation,
 )
 from modules.preflight_coordinator import PreflightValidator
-
-STATE_DIR_ENV_VAR = runtime_bootstrap.STATE_DIR_ENV_VAR
 
 
 def parse_args():
