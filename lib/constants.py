@@ -167,6 +167,13 @@ MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED = "explicit_empty_allowed"
 MANAGED_CLUSTER_EXPECTATION_EXPLICIT_MINIMUM = "explicit_minimum"
 PRE_ACTIVATION_VELERO_MANAGED_CLUSTERS_RESTORE_NAME = "pre_activation_velero_managed_clusters_restore_name"
 
+# State file naming and location
+STATE_DIR_ENV_VAR = "ACM_SWITCHOVER_STATE_DIR"
+STATE_DIR_DEFAULT = ".state"
+STATE_FILE_NAME_PREFIX = "switchover-"
+STATE_FILE_PRIMARY_RESTORE_ONLY_LABEL = "restore-only"
+STATE_FILE_SECONDARY_NONE_LABEL = "none"
+
 # Argo CD durable state keys
 STATE_KEY_ARGOCD_PAUSED_APPS = "argocd_paused_apps"
 STATE_KEY_ARGOCD_RUN_ID = "argocd_run_id"
