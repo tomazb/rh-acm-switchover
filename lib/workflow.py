@@ -7,7 +7,9 @@ from datetime import timedelta
 from typing import Any, Callable, Collection, Optional, Tuple
 
 from lib.constants import (
+    RESUME_START_PHASE_KEY,
     STALE_STATE_THRESHOLD,
+    STATE_KEY_RESUME_SUMMARY,
     WORKFLOW_ALREADY_COMPLETED_MESSAGE,
     WORKFLOW_BANNER,
     WORKFLOW_BLANK_LINE,
@@ -61,6 +63,17 @@ class CompletedStateConfig:
 class FailedStateConfig:
     resumable_phases: Tuple[Phase, ...]
     operation_noun: str
+
+
+_CANONICAL_RESUME_START_PHASES = {
+    Phase.PREFLIGHT: "preflight",
+    Phase.PRIMARY_PREP: "primary_prep",
+    # Legacy secondary-verify resumes continue through activation.
+    Phase.SECONDARY_VERIFY: "activation",
+    Phase.ACTIVATION: "activation",
+    Phase.POST_ACTIVATION: "post_activation",
+    Phase.FINALIZATION: "finalization",
+}
 
 
 def log_completed_noop(
@@ -202,6 +215,15 @@ def run_phase_flow(
             state,
             WORKFLOW_NON_RUNNABLE_PHASE_MESSAGE % (current_phase.value, flow_name),
             logger,
+        )
+
+    resume_start_phase = _CANONICAL_RESUME_START_PHASES.get(current_phase)
+    if current_phase != Phase.INIT and resume_start_phase is not None:
+        state.set_config(
+            STATE_KEY_RESUME_SUMMARY,
+            {
+                RESUME_START_PHASE_KEY: resume_start_phase,
+            },
         )
 
     ran_phase = False

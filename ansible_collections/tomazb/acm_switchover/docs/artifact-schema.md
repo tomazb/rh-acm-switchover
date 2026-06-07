@@ -134,7 +134,10 @@ quarantining, or mutating the checkpoint file.
     "collection_version": "1.7.10"
   },
   "operational_data": {
-    "argocd_run_id": "9f2e4c13b8aa"
+    "argocd_run_id": "9f2e4c13b8aa",
+    "resume_summary": {
+      "resume_start_phase": "activation"
+    }
   },
   "errors": [],
   "report_refs": [
@@ -152,7 +155,7 @@ Fields:
 - `completed_phases` — ordered list of phase names that have passed; used to skip phases on resume
 - `phase_status` — last recorded phase outcome (`"pass"`, `"fail"`, or `"reset"`)
 - `operation_identity` — hub and operation identity used to prevent reusing a checkpoint for a different switchover
-- `operational_data` — runtime state carried across resumes (for example `argocd_run_id` and backup verification baselines)
+- `operational_data` — runtime state carried across resumes (for example `argocd_run_id`, `resume_summary.resume_start_phase`, and backup verification baselines)
 - `errors` — list of `{phase, error}` objects recorded on failure
 - `report_refs` — list of `{phase, path, kind}` report artifact references (preflight only at present)
 - `created_at` — ISO-8601 UTC timestamp of checkpoint creation
@@ -177,6 +180,12 @@ Use `acm_switchover_execution.checkpoint.reset_from` to remove the named phase a
 all downstream phases from `completed_phases`. For example,
 `checkpoint.reset_from: primary_prep` keeps `preflight` complete and reruns
 `primary_prep`, `activation`, `post_activation`, and `finalization`.
+
+During execute-mode resume, the action plugin records
+`operational_data.resume_summary.resume_start_phase` the first time it enters a
+phase that is not already complete. Release runtime parity uses that small
+breadcrumb to compare where Python and collection executions resumed without
+parsing controller logs.
 
 The accepted `checkpoint.reset_from` values are:
 

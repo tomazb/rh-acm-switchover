@@ -172,17 +172,30 @@ class ActionModule(ActionBase):
                 return save_result
 
         if status == "enter":
+            resume_summary_changed = False
+            already_done = False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
+            if not is_non_mutating and checkpoint_data.get("completed_phases") and not already_done:
+                current_operational_data = checkpoint_data.get("operational_data")
+                if not isinstance(current_operational_data, dict):
+                    current_operational_data = {}
+                    checkpoint_data["operational_data"] = current_operational_data
+                resume_summary = current_operational_data.get("resume_summary")
+                if not isinstance(resume_summary, dict):
+                    resume_summary = {}
+                    current_operational_data["resume_summary"] = resume_summary
+                if not resume_summary.get("resume_start_phase"):
+                    resume_summary["resume_start_phase"] = phase
+                    resume_summary_changed = True
             if (
-                (operation_identity_changed or reset_from)
+                (operation_identity_changed or reset_from or resume_summary_changed)
                 and backend == CHECKPOINT_BACKEND_FILE
                 and not is_non_mutating
             ):
-                if operation_identity_changed:
+                if operation_identity_changed or resume_summary_changed:
                     checkpoint_data["updated_at"] = datetime.now(timezone.utc).isoformat()
                 save_result = self._save_checkpoint(path, checkpoint_data)
                 if save_result is not None and save_result.get("failed"):
                     return save_result
-            already_done = False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
             return {
                 "changed": False,
                 "checkpoint": checkpoint_data,

@@ -409,7 +409,9 @@ class RBACValidator:
             return result
 
         except ApiException as e:
-            error_message = f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e.status} {e.reason}"
+            error_message = (
+                f"Unable to check permission {verb} {group_name}/{resource} on {scope}: {e.status} {e.reason}"
+            )
             self._permission_cache[cache_key] = error_message
             raise ValidationError(error_message) from e
         except Exception as e:

@@ -279,7 +279,9 @@ def test_ansible_adapter_execute_surfaces_redaction_rejection(monkeypatch, tmp_p
 
     assert result.status == "failed"
     assert any(a.name == "artifact-redaction" for a in result.assertions)
-    assert "scenarios/preflight/ansible/stdout.txt" in (artifacts.run_dir / "redaction.json").read_text(encoding="utf-8")
+    assert "scenarios/preflight/ansible/stdout.txt" in (artifacts.run_dir / "redaction.json").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_ansible_adapter_discover_reports_returns_empty_for_missing_file(tmp_path: Path) -> None:

@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from lib.constants import RESUME_START_PHASE_KEY, STATE_KEY_RESUME_SUMMARY
+
 CAPABILITY_REQUIRED_FIELDS = {
     "preflight validation": (
         "status",
@@ -13,6 +15,12 @@ CAPABILITY_REQUIRED_FIELDS = {
         "warning_failure_count",
         "check_ids",
         "failed_check_ids",
+    ),
+    "Argo CD management": (
+        "run_id_present",
+        "paused_application_names",
+        "paused_application_count",
+        "run_id_preserved_for_retry",
     ),
     "switchover artifacts": (
         "schema_version",
@@ -31,19 +39,31 @@ CAPABILITY_REQUIRED_FIELDS = {
         "report_filename",
     ),
     "RBAC/bootstrap artifacts": (
-        "manifest_asset_count",
+        "bootstrap_status",
+        "manifest_assets",
         "include_decommission",
         "report_filename",
     ),
     "checkpoints": (
-        "artifact_present",
-        "completed_phase_count",
+        "resume_start_phase",
+        "skipped_phases",
+        "checkpoint_error_count",
+        "identity_bound",
     ),
     "report artifacts": (
         "schema_version",
         "source_present",
         "safe_path_validated",
     ),
+}
+
+PHASE_ORDER_BY_SCENARIO = {
+    "python-passive-switchover": ("preflight", "primary_prep", "activation", "post_activation", "finalization"),
+    "ansible-passive-switchover": ("preflight", "primary_prep", "activation", "post_activation", "finalization"),
+    "argocd-managed-switchover": ("preflight", "primary_prep", "activation", "post_activation", "finalization"),
+    "python-restore-only": ("preflight", "activation", "post_activation", "finalization"),
+    "ansible-restore-only": ("preflight", "activation", "post_activation", "finalization"),
+    "checkpoint-resume": ("preflight", "primary_prep", "activation", "post_activation", "finalization"),
 }
 
 
@@ -125,12 +145,12 @@ def normalize_preflight(source: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_argocd_management(source: dict[str, Any]) -> dict[str, Any]:
+    paused_application_names = _sorted_list(source.get("paused_application_names"))
     return {
-        "selected_applications": _sorted_list(source["selected_applications"]),
-        "paused_applications": _sorted_list(source["paused_applications"]),
-        "resumed_applications": _sorted_list(source["resumed_applications"]),
-        "resume_failures": _sorted_list(source["resume_failures"]),
-        "conflict_allowlist_used": bool(source["conflict_allowlist_used"]),
+        "run_id_present": bool(source.get("run_id")),
+        "paused_application_names": paused_application_names,
+        "paused_application_count": len(paused_application_names),
+        "run_id_preserved_for_retry": str(source.get("run_id_preserved_for_retry", "not_applicable")),
     }
 
 
@@ -168,21 +188,42 @@ def normalize_decommission_artifact(source: dict[str, Any], report_filename: str
 
 
 def normalize_rbac_bootstrap_artifact(source: dict[str, Any], report_filename: str) -> dict[str, Any]:
-    assets = source.get("assets_applied") if isinstance(source.get("assets_applied"), list) else []
+    assets = _sorted_list(str(asset) for asset in source.get("assets_applied", []) if asset)
     return {
-        "manifest_asset_count": len(assets),
+        "bootstrap_status": str(source.get("status", "unknown")),
+        "manifest_assets": assets,
         "include_decommission": any("decommission" in str(asset) for asset in assets),
         "report_filename": report_filename,
     }
 
 
-def normalize_checkpoint_artifact(source: dict[str, Any]) -> dict[str, Any]:
-    completed = source.get("completed_phases")
-    if completed is None:
-        completed = source.get("completed_steps")
+def _skipped_phases_for_resume(*, scenario_id: str | None, resume_start_phase: str | None) -> list[str]:
+    if not scenario_id or not resume_start_phase:
+        return []
+    phase_order = PHASE_ORDER_BY_SCENARIO.get(scenario_id, ())
+    if resume_start_phase not in phase_order:
+        return []
+    return list(phase_order[: phase_order.index(resume_start_phase)])
+
+
+def normalize_checkpoint_artifact(source: dict[str, Any], *, scenario_id: str | None = None) -> dict[str, Any]:
+    config = source.get("config") if isinstance(source.get("config"), dict) else {}
+    operational_data = source.get("operational_data") if isinstance(source.get("operational_data"), dict) else {}
+    resume_summary = config.get(STATE_KEY_RESUME_SUMMARY)
+    if not isinstance(resume_summary, dict):
+        resume_summary = operational_data.get(STATE_KEY_RESUME_SUMMARY)
+    if not isinstance(resume_summary, dict):
+        resume_summary = {}
+    errors = source.get("errors") if isinstance(source.get("errors"), list) else []
+    resume_start_phase = resume_summary.get(RESUME_START_PHASE_KEY)
     return {
-        "artifact_present": True,
-        "completed_phase_count": len(completed) if isinstance(completed, list) else 0,
+        "resume_start_phase": resume_start_phase,
+        "skipped_phases": _skipped_phases_for_resume(
+            scenario_id=scenario_id,
+            resume_start_phase=resume_start_phase,
+        ),
+        "checkpoint_error_count": len(errors),
+        "identity_bound": bool(source.get("hub_identities") or source.get("operation_identity")),
     }
 
 

@@ -137,6 +137,8 @@ class TestPhaseFlowIntegration:
         assert state.get_current_phase() == Phase.COMPLETED
         assert "preflight" not in call_order
         assert call_order[0] == "primary_prep"
+        reloaded = StateManager(str(state_file))
+        assert reloaded.get_config("resume_summary") == {"resume_start_phase": "primary_prep"}
 
     def test_resume_from_activation_skips_earlier_phases(self, tmp_path):
         """When state is ACTIVATION, only activation onward should execute."""
@@ -171,6 +173,73 @@ class TestPhaseFlowIntegration:
         assert "preflight" not in call_order
         assert "primary_prep" not in call_order
         assert call_order == ["activation", "post_activation", "finalization"]
+
+    def test_resume_from_activation_persists_resume_summary(self, tmp_path):
+        """Mid-flow resume should persist the phase where execution restarted."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.ACTIVATION)
+
+        call_order = []
+        args = make_switchover_args(state_file=str(state_file))
+
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=phase_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=phase_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=phase_stub("activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=phase_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization",
+            side_effect=phase_stub("finalization", call_order),
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        reloaded = StateManager(str(state_file))
+        assert reloaded.get_config("resume_summary") == {"resume_start_phase": "activation"}
+
+    def test_resume_from_preflight_persists_resume_summary(self, tmp_path):
+        """Resuming from persisted PREFLIGHT should record a preflight restart."""
+        from lib.utils import Phase, StateManager
+
+        state_file = tmp_path / "state.json"
+        state = StateManager(str(state_file))
+        state.set_phase(Phase.PREFLIGHT)
+
+        call_order = []
+        args = make_switchover_args(state_file=str(state_file))
+
+        with patch(
+            "acm_switchover._run_phase_preflight",
+            side_effect=phase_stub("preflight", call_order),
+        ), patch(
+            "acm_switchover._run_phase_primary_prep",
+            side_effect=phase_stub("primary_prep", call_order),
+        ), patch(
+            "acm_switchover._run_phase_activation",
+            side_effect=phase_stub("activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_post_activation",
+            side_effect=phase_stub("post_activation", call_order),
+        ), patch(
+            "acm_switchover._run_phase_finalization",
+            side_effect=phase_stub("finalization", call_order),
+        ):
+            result = run_switchover(args, state, Mock(), Mock(), Mock())
+
+        assert result is True
+        assert call_order[0] == "preflight"
+        reloaded = StateManager(str(state_file))
+        assert reloaded.get_config("resume_summary") == {"resume_start_phase": "preflight"}
 
 
 @pytest.mark.unit
