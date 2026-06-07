@@ -65,6 +65,7 @@ Architecture, testing, and contribution guidelines.
 - **[Testing Guide](development/testing.md)** - How to run tests and CI/CD pipelines
 - **[CI/CD Setup](development/ci.md)** - GitHub Actions pipeline configuration
 - **[Release Validation Framework](development/release-validation-framework.md)** - Pytest-native release certification framework, profiles, and live RBAC certification scenario
+- **[Mutation Testing Notes](development/mutation-testing-plan.md)** - Deferred concept note and future Superpowers design stub
 - **[RBAC Implementation](development/rbac-implementation.md)** - Overview of RBAC features
 
 ### Implementation Notes

@@ -207,6 +207,10 @@ Observed on 2026-01-28:
 - **Critical paths**: 100% coverage for data protection logic
 - **Current status**: See coverage report for details
 
+Mutation testing is documented as a deferred concept, not an active local or CI
+gate. See [Mutation Testing Notes](mutation-testing-plan.md) for the future
+Superpowers design/spec handoff.
+
 ## Code Quality Tools
 
 ### Flake8 (Style)
