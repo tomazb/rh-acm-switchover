@@ -186,6 +186,24 @@ def test_normalize_release_artifact_guardrails_ignore_implementation_metadata(tm
     assert report == {"schema_version": "1.0", "source_present": True, "safe_path_validated": True}
 
 
+def test_normalize_checkpoint_artifact_ignores_non_mapping_resume_summary() -> None:
+    checkpoint = normalize_checkpoint_artifact(
+        {
+            "config": {"resume_summary": "activation"},
+            "operational_data": {"resume_summary": ["activation"]},
+            "errors": [{"phase": "activation", "error": "boom"}],
+        },
+        scenario_id="checkpoint-resume",
+    )
+
+    assert checkpoint == {
+        "resume_start_phase": None,
+        "skipped_phases": [],
+        "checkpoint_error_count": 1,
+        "identity_bound": False,
+    }
+
+
 def test_normalized_runtime_sources_populates_release_artifact_guardrails(tmp_path: Path) -> None:
     python_dir = tmp_path / "python"
     ansible_dir = tmp_path / "ansible"

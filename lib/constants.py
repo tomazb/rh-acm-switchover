@@ -172,6 +172,12 @@ STATE_KEY_ARGOCD_PAUSED_APPS = "argocd_paused_apps"
 STATE_KEY_ARGOCD_RUN_ID = "argocd_run_id"
 STATE_KEY_ARGOCD_PAUSE_DRY_RUN = "argocd_pause_dry_run"
 STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES = "argocd_discovery_namespaces"
+STATE_KEY_RESUME_SUMMARY = "resume_summary"
+RESUME_START_PHASE_KEY = "resume_start_phase"
+
+# Argo CD resource identifiers
+ARGOCD_APPLICATIONS_RESOURCE = "applications.argoproj.io"
+ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
 
 # RBAC validation cache keys
 RBAC_CACHE_KEY_ALL_PERMISSIONS = "all_permissions"

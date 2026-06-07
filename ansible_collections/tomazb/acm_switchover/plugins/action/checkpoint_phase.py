@@ -175,8 +175,14 @@ class ActionModule(ActionBase):
             resume_summary_changed = False
             already_done = False if execution_mode == "validate" else not should_resume_phase(checkpoint_data, phase)
             if not is_non_mutating and checkpoint_data.get("completed_phases") and not already_done:
-                current_operational_data = checkpoint_data.setdefault("operational_data", {})
-                resume_summary = current_operational_data.setdefault("resume_summary", {})
+                current_operational_data = checkpoint_data.get("operational_data")
+                if not isinstance(current_operational_data, dict):
+                    current_operational_data = {}
+                    checkpoint_data["operational_data"] = current_operational_data
+                resume_summary = current_operational_data.get("resume_summary")
+                if not isinstance(resume_summary, dict):
+                    resume_summary = {}
+                    current_operational_data["resume_summary"] = resume_summary
                 if not resume_summary.get("resume_start_phase"):
                     resume_summary["resume_start_phase"] = phase
                     resume_summary_changed = True

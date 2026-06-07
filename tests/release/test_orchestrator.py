@@ -607,6 +607,154 @@ def test_normalized_runtime_sources_ignores_argocd_items_missing_name(tmp_path: 
     assert sources["Argo CD management"]["python"] == sources["Argo CD management"]["ansible"]
 
 
+def test_normalized_runtime_sources_ignores_non_mapping_state_payloads(tmp_path: Path) -> None:
+    python_dir = tmp_path / "python"
+    ansible_dir = tmp_path / "ansible"
+    python_dir.mkdir()
+    ansible_dir.mkdir()
+    (python_dir / "switchover-report.json").write_text(
+        json.dumps({"schema_version": "1.0", "source": "acm_switchover.py", "argocd": {"run_id": "run-1"}}),
+        encoding="utf-8",
+    )
+    (ansible_dir / "switchover-report.json").write_text(
+        json.dumps({"schema_version": "1.0", "source": "tomazb.acm_switchover", "argocd": {"run_id": "run-1"}}),
+        encoding="utf-8",
+    )
+    (python_dir / "state.json").write_text(json.dumps(["not-a-mapping"]), encoding="utf-8")
+    (ansible_dir / "checkpoint.json").write_text(json.dumps(["not-a-mapping"]), encoding="utf-8")
+    results = [
+        {
+            "stream": "python",
+            "scenario_id": "argocd-managed-switchover",
+            "stdout_path": str(python_dir / "stdout.txt"),
+            "reports": [{"type": "switchover", "path": str(python_dir / "switchover-report.json")}],
+        },
+        {
+            "stream": "ansible",
+            "scenario_id": "argocd-managed-switchover",
+            "stdout_path": str(ansible_dir / "stdout.txt"),
+            "reports": [{"type": "switchover", "path": str(ansible_dir / "switchover-report.json")}],
+        },
+    ]
+
+    sources = _normalized_runtime_sources(results, discovery_clients={"secondary": FakeDiscoveryClient(primary=False)})
+
+    assert sources["Argo CD management"]["python"] == {
+        "run_id_present": True,
+        "paused_application_names": [],
+        "paused_application_count": 0,
+        "run_id_preserved_for_retry": "not_applicable",
+    }
+    assert sources["Argo CD management"]["python"] == sources["Argo CD management"]["ansible"]
+
+
+def test_normalized_runtime_sources_ignores_malformed_argocd_entries(tmp_path: Path) -> None:
+    python_dir = tmp_path / "python"
+    ansible_dir = tmp_path / "ansible"
+    python_dir.mkdir()
+    ansible_dir.mkdir()
+    (python_dir / "switchover-report.json").write_text(
+        json.dumps({"schema_version": "1.0", "source": "acm_switchover.py", "argocd": {"run_id": "run-1"}}),
+        encoding="utf-8",
+    )
+    (ansible_dir / "switchover-report.json").write_text(
+        json.dumps({"schema_version": "1.0", "source": "tomazb.acm_switchover", "argocd": {"run_id": "run-1"}}),
+        encoding="utf-8",
+    )
+    state_payload = {
+        "config": {
+            "resume_summary": {"resume_start_phase": "activation"},
+            "argocd_run_id": "run-1",
+            "argocd_discovery_namespaces": {"secondary": ["argocd"]},
+        }
+    }
+    (python_dir / "state.json").write_text(json.dumps(state_payload), encoding="utf-8")
+    (ansible_dir / "checkpoint.json").write_text(json.dumps(state_payload), encoding="utf-8")
+    results = [
+        {
+            "stream": "python",
+            "scenario_id": "argocd-managed-switchover",
+            "stdout_path": str(python_dir / "stdout.txt"),
+            "reports": [{"type": "switchover", "path": str(python_dir / "switchover-report.json")}],
+        },
+        {
+            "stream": "ansible",
+            "scenario_id": "argocd-managed-switchover",
+            "stdout_path": str(ansible_dir / "stdout.txt"),
+            "reports": [{"type": "switchover", "path": str(ansible_dir / "switchover-report.json")}],
+        },
+    ]
+    discovery_clients = {
+        "secondary": FakeDiscoveryClient(
+            primary=False,
+            applications_by_namespace={
+                "argocd": [
+                    "bad-entry",
+                    {"metadata": "bad-metadata"},
+                    {"metadata": {"annotations": "bad-annotations"}},
+                    {
+                        "metadata": {
+                            "namespace": "argocd",
+                            "name": "app-a",
+                            "annotations": {"acm-switchover.argoproj.io/paused-by": "run-1"},
+                        }
+                    },
+                ]
+            },
+        )
+    }
+
+    sources = _normalized_runtime_sources(results, discovery_clients=discovery_clients)
+
+    assert sources["Argo CD management"]["python"]["paused_application_names"] == ["secondary:argocd/app-a"]
+    assert sources["Argo CD management"]["python"] == sources["Argo CD management"]["ansible"]
+
+
+def test_normalized_runtime_sources_skips_explicitly_empty_argocd_namespace_hints(tmp_path: Path) -> None:
+    python_dir = tmp_path / "python"
+    ansible_dir = tmp_path / "ansible"
+    python_dir.mkdir()
+    ansible_dir.mkdir()
+    (python_dir / "switchover-report.json").write_text(
+        json.dumps({"schema_version": "1.0", "source": "acm_switchover.py", "argocd": {"run_id": "run-1"}}),
+        encoding="utf-8",
+    )
+    (ansible_dir / "switchover-report.json").write_text(
+        json.dumps({"schema_version": "1.0", "source": "tomazb.acm_switchover", "argocd": {"run_id": "run-1"}}),
+        encoding="utf-8",
+    )
+    state_payload = {
+        "config": {
+            "resume_summary": {"resume_start_phase": "activation"},
+            "argocd_run_id": "run-1",
+            "argocd_discovery_namespaces": {"secondary": []},
+        }
+    }
+    (python_dir / "state.json").write_text(json.dumps(state_payload), encoding="utf-8")
+    (ansible_dir / "checkpoint.json").write_text(json.dumps(state_payload), encoding="utf-8")
+    results = [
+        {
+            "stream": "python",
+            "scenario_id": "argocd-managed-switchover",
+            "stdout_path": str(python_dir / "stdout.txt"),
+            "reports": [{"type": "switchover", "path": str(python_dir / "switchover-report.json")}],
+        },
+        {
+            "stream": "ansible",
+            "scenario_id": "argocd-managed-switchover",
+            "stdout_path": str(ansible_dir / "stdout.txt"),
+            "reports": [{"type": "switchover", "path": str(ansible_dir / "switchover-report.json")}],
+        },
+    ]
+    secondary = FakeDiscoveryClient(primary=False)
+
+    sources = _normalized_runtime_sources(results, discovery_clients={"secondary": secondary})
+
+    assert ("applications.argoproj.io", None) not in secondary.calls
+    assert sources["Argo CD management"]["python"]["paused_application_names"] == []
+    assert sources["Argo CD management"]["python"] == sources["Argo CD management"]["ansible"]
+
+
 def test_runtime_parity_records_rbac_live_consistency_failure(tmp_path: Path) -> None:
     artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
     (tmp_path / "rbac-bootstrap-report.json").write_text(
@@ -634,6 +782,63 @@ def test_runtime_parity_records_rbac_live_consistency_failure(tmp_path: Path) ->
     assert payload["status"] == "failed"
     live_record = next(item for item in payload["comparisons"] if item["capability"] == "RBAC live consistency")
     assert live_record["status"] == "failed"
+
+
+def test_runtime_parity_treats_optional_rbac_live_check_as_not_applicable(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    (tmp_path / "rbac-bootstrap-report.json").write_text(
+        json.dumps({"status": "pass", "assets_applied": ["deploy/rbac/clusterrole.yaml"]}),
+        encoding="utf-8",
+    )
+    results = [
+        {
+            "stream": "ansible",
+            "scenario_id": "rbac-bootstrap",
+            "status": "passed",
+            "reports": [{"type": "rbac-bootstrap", "path": str(tmp_path / "rbac-bootstrap-report.json")}],
+        },
+        {
+            "stream": "local",
+            "scenario_id": "rbac-bootstrap-live",
+            "status": "not_applicable",
+            "assertions": [],
+            "reports": [],
+        },
+    ]
+
+    payload = _runtime_parity(artifacts, results, discovery_clients={})
+
+    assert payload["status"] == "not_applicable"
+    live_record = next(item for item in payload["comparisons"] if item["capability"] == "RBAC live consistency")
+    assert live_record["status"] == "not_applicable"
+
+
+def test_runtime_parity_flags_unknown_bootstrap_status_when_bootstrap_evidence_is_malformed(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    (tmp_path / "rbac-bootstrap-report.json").write_text(json.dumps(["bad-payload"]), encoding="utf-8")
+    results = [
+        {
+            "stream": "ansible",
+            "scenario_id": "rbac-bootstrap",
+            "reports": [
+                "bad-report-entry",
+                {"type": "rbac-bootstrap", "path": str(tmp_path / "rbac-bootstrap-report.json")},
+            ],
+        },
+        {
+            "stream": "local",
+            "scenario_id": "rbac-bootstrap-live",
+            "status": "failed",
+            "assertions": [{"status": "failed", "name": "core/pods:get@cluster"}],
+            "reports": [],
+        },
+    ]
+
+    payload = _runtime_parity(artifacts, results, discovery_clients={})
+
+    live_record = next(item for item in payload["comparisons"] if item["capability"] == "RBAC live consistency")
+    assert live_record["status"] == "failed"
+    assert live_record["differences"] == [{"field": "live_status", "ansible": "unknown", "local": "failed"}]
 
 
 def test_orchestrator_stops_before_mutation_when_baseline_check_fails(

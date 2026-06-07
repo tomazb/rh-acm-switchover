@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from lib.constants import RESUME_START_PHASE_KEY, STATE_KEY_RESUME_SUMMARY
+
 CAPABILITY_REQUIRED_FIELDS = {
     "preflight validation": (
         "status",
@@ -207,9 +209,13 @@ def _skipped_phases_for_resume(*, scenario_id: str | None, resume_start_phase: s
 def normalize_checkpoint_artifact(source: dict[str, Any], *, scenario_id: str | None = None) -> dict[str, Any]:
     config = source.get("config") if isinstance(source.get("config"), dict) else {}
     operational_data = source.get("operational_data") if isinstance(source.get("operational_data"), dict) else {}
-    resume_summary = config.get("resume_summary") or operational_data.get("resume_summary") or {}
+    resume_summary = config.get(STATE_KEY_RESUME_SUMMARY)
+    if not isinstance(resume_summary, dict):
+        resume_summary = operational_data.get(STATE_KEY_RESUME_SUMMARY)
+    if not isinstance(resume_summary, dict):
+        resume_summary = {}
     errors = source.get("errors") if isinstance(source.get("errors"), list) else []
-    resume_start_phase = resume_summary.get("resume_start_phase")
+    resume_start_phase = resume_summary.get(RESUME_START_PHASE_KEY)
     return {
         "resume_start_phase": resume_start_phase,
         "skipped_phases": _skipped_phases_for_resume(

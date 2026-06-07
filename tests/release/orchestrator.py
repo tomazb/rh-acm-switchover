@@ -14,6 +14,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from lib.constants import (
+    ARGOCD_APPLICATIONS_RESOURCE,
+    ARGOCD_PAUSED_BY_ANNOTATION,
+    RESUME_START_PHASE_KEY,
+    STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES,
+    STATE_KEY_ARGOCD_RUN_ID,
+    STATE_KEY_RESUME_SUMMARY,
+)
 from tests.release.adapters.ansible import AnsibleAdapter
 from tests.release.adapters.bash import BashAdapter
 from tests.release.adapters.common import StreamAdapter
@@ -356,14 +364,21 @@ def _result_artifact_dir(result: dict) -> Path | None:
     for key in ("stdout_path", "stderr_path"):
         if result.get(key):
             return Path(result[key]).parent
-    for report in result.get("reports", []):
+    for report in _result_reports(result):
         if report.get("path"):
             return Path(report["path"]).parent
     return None
 
 
+def _result_reports(result: dict) -> list[dict]:
+    reports = result.get("reports")
+    if not isinstance(reports, list):
+        return []
+    return [report for report in reports if isinstance(report, dict)]
+
+
 def _report_metadata(result: dict, report_type: str) -> dict | None:
-    for report in result.get("reports", []):
+    for report in _result_reports(result):
         if report.get("type") == report_type:
             return report
     return None
@@ -375,15 +390,15 @@ def _state_or_checkpoint_payload(result: dict) -> dict | None:
         return None
     for filename in ("state.json", "checkpoint.json"):
         payload = _load_report(str(artifact_dir / filename))
-        if payload:
+        if isinstance(payload, dict):
             return payload
     return None
 
 
 def _namespace_hints_by_hub(config: dict, operational_data: dict) -> dict[str, list[str]]:
-    namespace_hints = (
-        config.get("argocd_discovery_namespaces") or operational_data.get("argocd_discovery_namespaces") or {}
-    )
+    namespace_hints = config.get(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES)
+    if not isinstance(namespace_hints, dict):
+        namespace_hints = operational_data.get(STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES)
     if not isinstance(namespace_hints, dict):
         return {}
     return {
@@ -394,7 +409,7 @@ def _namespace_hints_by_hub(config: dict, operational_data: dict) -> dict[str, l
 
 
 def _argocd_retry_state(*, report_run_id: str | None, persisted_run_id: str | None, resume_summary: dict) -> str:
-    if not resume_summary.get("resume_start_phase"):
+    if not resume_summary.get(RESUME_START_PHASE_KEY):
         return "not_applicable"
     if not report_run_id or not persisted_run_id:
         return "missing"
@@ -411,12 +426,22 @@ def _argocd_pause_names(
         return []
     names: list[str] = []
     for hub_name, client in discovery_clients.items():
-        namespaces = namespaces_by_hub.get(hub_name) or [None]
+        namespaces = namespaces_by_hub.get(hub_name)
+        if namespaces is None:
+            namespaces = [None]
+        elif not namespaces:
+            continue
         for namespace in namespaces:
-            for item in client.list_resources("applications.argoproj.io", namespace):
-                metadata = item.get("metadata") or {}
-                annotations = metadata.get("annotations") or {}
-                if annotations.get("acm-switchover.argoproj.io/paused-by") == run_id:
+            for item in client.list_resources(ARGOCD_APPLICATIONS_RESOURCE, namespace):
+                if not isinstance(item, dict):
+                    continue
+                metadata = item.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                annotations = metadata.get("annotations")
+                if not isinstance(annotations, dict):
+                    annotations = {}
+                if annotations.get(ARGOCD_PAUSED_BY_ANNOTATION) == run_id:
                     item_namespace = metadata.get("namespace", namespace)
                     item_name = metadata.get("name")
                     if item_name:
@@ -438,10 +463,14 @@ def _add_argocd_source(
     operational_data = (
         state_payload.get("operational_data") if isinstance(state_payload.get("operational_data"), dict) else {}
     )
-    resume_summary = config.get("resume_summary") or operational_data.get("resume_summary") or {}
+    resume_summary = config.get(STATE_KEY_RESUME_SUMMARY)
+    if not isinstance(resume_summary, dict):
+        resume_summary = operational_data.get(STATE_KEY_RESUME_SUMMARY)
+    if not isinstance(resume_summary, dict):
+        resume_summary = {}
     argocd = payload.get("argocd") if isinstance(payload.get("argocd"), dict) else {}
     report_run_id = argocd.get("run_id")
-    persisted_run_id = config.get("argocd_run_id") or operational_data.get("argocd_run_id")
+    persisted_run_id = config.get(STATE_KEY_ARGOCD_RUN_ID) or operational_data.get(STATE_KEY_ARGOCD_RUN_ID)
     namespaces_by_hub = _namespace_hints_by_hub(config, operational_data)
     sources.setdefault("Argo CD management", {})[result["stream"]] = normalize_argocd_management(
         {
@@ -454,7 +483,7 @@ def _add_argocd_source(
             "run_id_preserved_for_retry": _argocd_retry_state(
                 report_run_id=report_run_id,
                 persisted_run_id=persisted_run_id,
-                resume_summary=resume_summary if isinstance(resume_summary, dict) else {},
+                resume_summary=resume_summary,
             ),
         }
     )
@@ -466,7 +495,7 @@ def _add_checkpoint_source(sources: dict[str, dict[str, dict]], result: dict) ->
         return
     for filename in ("checkpoint.json", "state.json"):
         payload = _load_report(str(artifact_dir / filename))
-        if payload:
+        if isinstance(payload, dict):
             sources.setdefault("checkpoints", {})[result["stream"]] = normalize_checkpoint_artifact(
                 payload,
                 scenario_id=result.get("scenario_id"),
@@ -484,11 +513,11 @@ def _normalized_runtime_sources(
     for result in results:
         if result.get("stream") in {"python", "ansible"}:
             _add_checkpoint_source(sources, result)
-        for report in result.get("reports", []):
+        for report in _result_reports(result):
             report_type = report.get("type")
             report_path = report.get("path", "")
             payload = _load_report(report_path)
-            if not payload:
+            if not isinstance(payload, dict):
                 continue
             filename = Path(report_path).name
             if report_type == "preflight":
@@ -540,20 +569,26 @@ def _rbac_live_consistency_record(results: list[dict]) -> ComparisonRecord | Non
 
     bootstrap_report = _report_metadata(bootstrap, "rbac-bootstrap") or {}
     bootstrap_payload = _load_report(bootstrap_report.get("path", "")) if bootstrap_report else None
-    bootstrap_status = str((bootstrap_payload or {}).get("status", bootstrap.get("status", "unknown")))
+    if not isinstance(bootstrap_payload, dict):
+        bootstrap_payload = {}
+    bootstrap_status = str(bootstrap_payload.get("status", bootstrap.get("status", "unknown")))
     live_status = str(live.get("status", "unknown"))
 
-    if live_status == "skipped":
+    if live_status in {"skipped", "not_applicable"}:
         record_status = "not_applicable"
         differences: list[dict[str, Any]] = []
     else:
-        bootstrap_succeeded = bootstrap_status in {"pass", "passed"}
-        live_succeeded = live_status == "passed"
-        differences = (
-            []
-            if bootstrap_succeeded == live_succeeded
-            else [{"field": "live_status", "ansible": bootstrap_status, "local": live_status}]
-        )
+        known_bootstrap_statuses = {"pass", "passed", "fail", "failed"}
+        if bootstrap_status not in known_bootstrap_statuses:
+            differences = [{"field": "live_status", "ansible": bootstrap_status, "local": live_status}]
+        else:
+            bootstrap_succeeded = bootstrap_status in {"pass", "passed"}
+            live_succeeded = live_status == "passed"
+            differences = (
+                []
+                if bootstrap_succeeded == live_succeeded
+                else [{"field": "live_status", "ansible": bootstrap_status, "local": live_status}]
+            )
         record_status = "passed" if not differences else "failed"
 
     evidence_paths = tuple(path for path in [bootstrap_report.get("path")] if path)
