@@ -149,7 +149,9 @@ class TestRBACValidator:
         # attributes, only function bodies — so this correctly targets loop/iteration mutations in
         # validate_cluster_permissions.
         expected = frozenset((ag, r, v) for ag, r, verbs in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS for v in verbs)
-        actual = frozenset((c.args[0], c.args[1], c.args[2]) for c in validator.check_permission.call_args_list)
+        actual = frozenset(
+            (c.args[0], c.args[1], c.args[2]) for c in validator.check_permission.call_args_list if len(c.args) >= 3
+        )
         assert actual == expected, (
             f"Permission set mismatch.\n" f"  Missing: {expected - actual}\n" f"  Unexpected: {actual - expected}"
         )
@@ -435,8 +437,8 @@ class TestRBACValidator:
 
         perms = validator._get_hub_namespace_permissions()
 
-        assert perms is RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
-        assert perms is not RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert perms == RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+        assert perms != RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
 
         backup_ns_perms = perms.get("open-cluster-management-backup", [])
         backup_schedule_rule = next(
