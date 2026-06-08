@@ -361,15 +361,33 @@ class TestRBACValidator:
         )
 
     def test_validate_namespace_permissions_success(self, validator):
-        """Test validate_namespace_permissions when all permissions exist."""
-        # Mock namespace_exists and check_permission
+        """validate_namespace_permissions must check the exact OPERATOR_HUB_NAMESPACE_PERMISSIONS set."""
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
 
         all_valid, errors = validator.validate_namespace_permissions()
 
         assert all_valid is True
-        assert len(errors) == 0
+        assert errors == []
+
+        # expected is built dynamically from the class constant; mutmut 3.x does not mutate class-level
+        # attributes, only function bodies — so this correctly targets loop/iteration mutations.
+        expected = frozenset(
+            (ag, r, v, ns)
+            for ns, rules in RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS.items()
+            for ag, r, verbs in rules
+            for v in verbs
+        )
+        actual = frozenset(
+            (c.args[0], c.args[1], c.args[2], c.args[3])
+            for c in validator.check_permission.call_args_list
+            if len(c.args) >= 4
+        )
+        assert actual == expected, (
+            f"Namespace permission set mismatch.\n"
+            f"  Missing: {expected - actual}\n"
+            f"  Unexpected: {actual - expected}"
+        )
 
     def test_validate_namespace_permissions_namespace_missing(self, validator):
         """Test validate_namespace_permissions when namespace doesn't exist."""
