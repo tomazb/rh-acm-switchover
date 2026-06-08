@@ -37,13 +37,13 @@
       The conventional restore-acm-passive-sync fallback is accepted only when
       acm_switchover_operation.allow_conventional_passive_restore_fallback=true.
       {{ acm_passive_restore_selection.restore_ready_reason | default('No readiness reason was reported.') }}
-  when: not _acm_activation_restore_resume
+  when: not (_acm_activation_restore_resume | bool)
 
 - name: Publish passive restore selection
   ansible.builtin.set_fact:
     acm_switchover_restore_selection:
       restore: "{{ acm_passive_restore_selection.restore }}"
-  when: not _acm_activation_restore_resume
+  when: not (_acm_activation_restore_resume | bool)
 
 - name: Publish activation restore as selection for Option-B resume
   ansible.builtin.set_fact:
@@ -54,4 +54,4 @@
           | selectattr('metadata.name', 'equalto', 'restore-acm-activate')
           | first
         }}
-  when: _acm_activation_restore_resume
+  when: _acm_activation_restore_resume | bool
