@@ -3,7 +3,7 @@
 import argparse
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Callable, Collection, Optional, Tuple
 
 from lib.constants import (
@@ -21,6 +21,7 @@ from lib.constants import (
     WORKFLOW_FORCE_STALE_STATE_OPTION,
     WORKFLOW_LAST_ERROR_MESSAGE,
     WORKFLOW_LEADING_BANNER,
+    WORKFLOW_NEXT_STEPS_HEADER,
     WORKFLOW_NO_PHASES_EXECUTED_MESSAGE,
     WORKFLOW_NO_RUNNABLE_PHASE_MATCHED_MESSAGE,
     WORKFLOW_NON_RUNNABLE_PHASE_MESSAGE,
@@ -65,6 +66,13 @@ class FailedStateConfig:
     operation_noun: str
 
 
+@dataclass(frozen=True)
+class CompletionLogConfig:
+    success_message: str
+    completed_at_message: str
+    next_step_messages: Tuple[str, ...]
+
+
 _CANONICAL_RESUME_START_PHASES = {
     Phase.PREFLIGHT: "preflight",
     Phase.PRIMARY_PREP: "primary_prep",
@@ -91,6 +99,24 @@ def log_completed_noop(
     logger.info(WORKFLOW_STATE_AGE_MESSAGE, age_minutes)
     logger.info(WORKFLOW_NO_PHASES_EXECUTED_MESSAGE)
     logger.info(WORKFLOW_STATE_FILE_MESSAGE, state.state_file)
+
+
+def log_operation_completion(
+    args: argparse.Namespace,
+    state: StateManager,
+    logger: logging.Logger,
+    config: CompletionLogConfig,
+) -> None:
+    """Mark an operation complete and log the shared completion banner."""
+    state.set_phase(Phase.COMPLETED)
+    logger.info(WORKFLOW_LEADING_BANNER)
+    logger.info(config.success_message)
+    logger.info(WORKFLOW_BANNER)
+    logger.info(config.completed_at_message, datetime.now().astimezone().isoformat())
+    logger.info(WORKFLOW_STATE_FILE_MESSAGE, getattr(args, "state_file", None))
+    logger.info(WORKFLOW_NEXT_STEPS_HEADER)
+    for message in config.next_step_messages:
+        logger.info(message)
 
 
 def handle_completed_state(

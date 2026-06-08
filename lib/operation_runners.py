@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Callable, Optional, Tuple
 
 from lib import Phase
@@ -22,13 +21,10 @@ from lib.constants import (
     SWITCHOVER_COMPLETED_AT_MESSAGE,
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
     SWITCHOVER_NEXT_STEP_MESSAGES,
-    WORKFLOW_BANNER,
-    WORKFLOW_LEADING_BANNER,
-    WORKFLOW_NEXT_STEPS_HEADER,
-    WORKFLOW_STATE_FILE_MESSAGE,
 )
 from lib.workflow import (
     CompletedStateConfig,
+    CompletionLogConfig,
     FailedStateConfig,
     FailPhaseHandler,
     FailureHook,
@@ -37,6 +33,7 @@ from lib.workflow import (
     UnexpectedPhaseHandler,
     handle_completed_state,
     handle_failed_state,
+    log_operation_completion,
     run_phase_flow,
     run_validate_only_preflight,
 )
@@ -187,15 +184,16 @@ def run_switchover_impl(
         logger.info(DRY_RUN_SWITCHOVER_NEXT_STEPS_MESSAGE)
         return True
 
-    state.set_phase(Phase.COMPLETED)
-    logger.info(WORKFLOW_LEADING_BANNER)
-    logger.info(SWITCHOVER_COMPLETED_SUCCESS_MESSAGE)
-    logger.info(WORKFLOW_BANNER)
-    logger.info(SWITCHOVER_COMPLETED_AT_MESSAGE, datetime.now().astimezone().isoformat())
-    logger.info(WORKFLOW_STATE_FILE_MESSAGE, getattr(args, "state_file", None))
-    logger.info(WORKFLOW_NEXT_STEPS_HEADER)
-    for message in SWITCHOVER_NEXT_STEP_MESSAGES:
-        logger.info(message)
+    log_operation_completion(
+        args,
+        state,
+        logger,
+        CompletionLogConfig(
+            success_message=SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
+            completed_at_message=SWITCHOVER_COMPLETED_AT_MESSAGE,
+            next_step_messages=SWITCHOVER_NEXT_STEP_MESSAGES,
+        ),
+    )
     return True
 
 
@@ -275,13 +273,14 @@ def run_restore_only_impl(
         logger.info(DRY_RUN_RESTORE_ONLY_NEXT_STEPS_MESSAGE)
         return True
 
-    state.set_phase(Phase.COMPLETED)
-    logger.info(WORKFLOW_LEADING_BANNER)
-    logger.info(RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE)
-    logger.info(WORKFLOW_BANNER)
-    logger.info(RESTORE_ONLY_COMPLETED_AT_MESSAGE, datetime.now().astimezone().isoformat())
-    logger.info(WORKFLOW_STATE_FILE_MESSAGE, getattr(args, "state_file", None))
-    logger.info(WORKFLOW_NEXT_STEPS_HEADER)
-    for message in RESTORE_ONLY_NEXT_STEP_MESSAGES:
-        logger.info(message)
+    log_operation_completion(
+        args,
+        state,
+        logger,
+        CompletionLogConfig(
+            success_message=RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
+            completed_at_message=RESTORE_ONLY_COMPLETED_AT_MESSAGE,
+            next_step_messages=RESTORE_ONLY_NEXT_STEP_MESSAGES,
+        ),
+    )
     return True

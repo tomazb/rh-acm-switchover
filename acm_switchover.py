@@ -412,6 +412,8 @@ def run_switchover(
     logger: logging.Logger,
 ):
     """Execute the main switchover workflow."""
+    # The public wrapper owns dry-run rollback because the library runner still
+    # performs durable phase bookkeeping to exercise the real workflow path.
     dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
     try:
         return _run_switchover_impl(args, state, primary, secondary, logger)
@@ -490,6 +492,8 @@ def run_restore_only(
     logger: logging.Logger,
 ) -> bool:
     """Execute restore-only workflow for single-hub restore from backup."""
+    # Keep dry-run rollback at the wrapper boundary so restore-only and full
+    # switchover discard all durable state written by shared runner helpers.
     dry_run_snapshot = state.capture_state_snapshot() if getattr(args, "dry_run", False) else None
     try:
         return _run_restore_only_impl(args, state, secondary, logger)
@@ -1122,7 +1126,7 @@ def _bind_runtime_hub_identities(
     )
 
 
-def main():  # noqa: C901
+def main():
     """Main entry point."""
     args = parse_args()
     state: Optional[StateManager] = None
@@ -1209,28 +1213,8 @@ def _collect_hub_identities(
     return runtime_bootstrap.collect_hub_identities(primary, secondary)
 
 
-def _stored_hub_identities(state: StateManager) -> dict:
-    """Return persisted hub identity records, if this state file has them."""
-    return runtime_bootstrap.stored_hub_identities(state)
-
-
-def _sanitize_context_identifier(value: str) -> str:
-    """Sanitize context string to be filesystem friendly."""
-    return runtime_bootstrap.sanitize_context_identifier(value)
-
-
 def _get_default_state_dir() -> str:
     return runtime_bootstrap.get_default_state_dir()
-
-
-def _build_default_state_file(primary_ctx: Optional[str], secondary_ctx: Optional[str]) -> str:
-    """Build the default state file path for the provided context ordering."""
-    return runtime_bootstrap.build_default_state_file(primary_ctx, secondary_ctx)
-
-
-def _find_resume_state_candidates(secondary_ctx: str) -> list[str]:
-    """Return resume-only state file candidates that target the provided secondary context."""
-    return runtime_bootstrap.find_resume_state_candidates(secondary_ctx)
 
 
 def _resolve_state_file(
@@ -1243,7 +1227,7 @@ def _resolve_state_file(
 
     Note: restore-only mode needs no special handling here because
     --restore-only forbids --primary-context, so primary_ctx is None,
-    and _build_default_state_file(None, secondary_ctx) naturally
+    and the runtime bootstrap default-state builder naturally
     produces the correct "switchover-restore-only__<sec>.json" filename.
     """
     return runtime_bootstrap.resolve_state_file(
@@ -1252,16 +1236,6 @@ def _resolve_state_file(
         secondary_ctx=secondary_ctx,
         argocd_resume_only=argocd_resume_only,
     )
-
-
-def _state_contexts(state: StateManager) -> tuple[Optional[str], Optional[str]]:
-    """Return stored primary/secondary contexts from state."""
-    return runtime_bootstrap.state_contexts(state)
-
-
-def _client_context_name(client: Optional[KubeClient]) -> Optional[str]:
-    """Return a client context name only when it is available as a plain string."""
-    return runtime_bootstrap.client_context_name(client)
 
 
 def _prepare_argocd_resume_clients(

@@ -322,6 +322,14 @@ POD_READINESS_TOLERANCE = 0.8
 # Python CLI report artifact schema
 REPORT_SCHEMA_VERSION = "1.0"
 REPORT_SOURCE_PYTHON_CLI = "python-cli"
+REPORT_TYPE_PREFLIGHT = "preflight"
+REPORT_TYPE_DECOMMISSION = "decommission"
+REPORT_TYPE_RESTORE = "restore"
+REPORT_TYPE_SWITCHOVER = "switchover"
+REPORT_FILENAME_PREFLIGHT = "preflight-report.json"
+REPORT_FILENAME_DECOMMISSION = "decommission-report.json"
+REPORT_FILENAME_RESTORE_ONLY = "restore-only-report.json"
+REPORT_FILENAME_SWITCHOVER = "switchover-report.json"
 REPORT_PHASE_PREFLIGHT = "preflight"
 # Report status value, not a password.
 REPORT_STATUS_PASS = "pass"  # nosec B105
