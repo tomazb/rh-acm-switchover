@@ -133,8 +133,8 @@ may change.
 | 1 | `lib/validation.py` | `tests/test_validation.py`, `tests/test_validation_parity.py`, collection validation parity fixtures |
 | 1 | `lib/rbac_validator.py` | `tests/test_rbac_validator.py`, `tests/test_rbac_collection_parity.py`, collection RBAC parity |
 | 1 | `lib/utils.py` | `tests/test_utils.py`, checkpoint/resume tests, hub identity binding parity |
-| 1 | `modules/decommission.py` | destructive-operation safety, dry-run behavior, collection decommission contracts |
-| 1 | `modules/activation.py` | passive/full activation waits, stale restore handling, collection activation parity |
+| 1 | `modules/decommission.py` | `tests/test_decommission.py`, destructive-operation safety, dry-run behavior, collection decommission contracts |
+| 1 | `modules/activation.py` | `tests/test_activation.py`, passive/full activation waits, stale restore handling, collection activation parity |
 | 2 | remaining `lib/` and `modules/` | preflight, finalization, primary prep, post-activation, Argo CD, waiter behavior |
 | 3 | collection `plugins/module_utils/` and `plugins/modules/` | validation, checkpoint, GitOps, klusterlet, result, report, and module contracts |
 
