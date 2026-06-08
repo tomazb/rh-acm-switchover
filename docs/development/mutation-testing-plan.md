@@ -1,23 +1,29 @@
-# Mutation Testing Notes and Future Design Stub
+# Mutation Testing Design Handoff
 
-> Status: deferred concept note. This is not an implementation plan.
+> Status: deferred design handoff. This is not an implementation plan and it is
+> not approval to add mutation testing to the normal developer or CI path.
 
 This document captures why mutation testing is worth considering for
-`rh-acm-switchover` and what a later design/spec should decide. Implementation is
-deferred until the current Thermos PR sequence is complete or explicitly paused.
-When that happens, start a fresh Superpowers workflow:
+`rh-acm-switchover`, what an approved design/spec should decide, and how a later
+implementation should keep mutation testing scoped, parity-aware, and useful.
+Implementation remains deferred until the current Thermos PR sequence is complete
+or explicitly paused.
+
+When the start conditions at the end of this document are met, use this handoff
+with a fresh Superpowers workflow:
 
 1. Use `superpowers:brainstorming` to write and approve a design/spec.
 2. Use `superpowers:writing-plans` to turn the approved design into an implementation plan.
 3. Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` only after the design and plan are approved.
+4. Use `.claude/skills/mutation-testing/SKILL.md` as the repo-local skill for target selection, safe runs, survivor triage, and baseline reporting.
 
 ## Why Mutation Testing
 
 Line coverage tells us which code ran during tests, not whether tests would catch
 a behavior change. Mutation testing fills that gap: a tool introduces small
 source changes, such as flipped comparisons, removed statements, changed
-constants, or swapped booleans, and then re-runs the relevant tests. A mutant
-that survives marks behavior that the current tests do not actually assert.
+constants, or swapped booleans, and then re-runs relevant tests. A mutant that
+survives marks behavior that the current tests do not actually assert.
 
 For this repo, surviving mutants are useful when they point at missing negative
 coverage in safety-sensitive paths. The highest-value examples match the project
@@ -34,7 +40,7 @@ review guidelines:
 Mutation testing is not a substitute for existing unit, parity, release, or E2E
 tests. It is a diagnostic tool for finding weak assertions.
 
-## Boundaries
+## Non-Goals And Boundaries
 
 Any future implementation should keep mutation testing off the normal developer
 critical path unless a later design explicitly changes this after measured
@@ -42,30 +48,66 @@ runtime data.
 
 - Do not add mutation testing to `./run_tests.sh`.
 - Do not make it a required per-PR gate at the start.
-- Run it one target module or target behavior area at a time.
+- Do not run mutation testing against live-cluster E2E suites.
+- Do not apply mutants to disk unless the checkout is clean and the operator
+  explicitly asks to inspect a selected mutant locally.
+- Run it one target module, function group, or behavior slice at a time.
 - Treat first results as diagnostic baseline data, not immediate failure criteria.
 - Preserve the dual-supported parity contract: survivors in shared behavior must
   be triaged against both the Python CLI and the Ansible collection.
 
 ## Candidate Tooling Inputs
 
-`mutmut` is the current candidate because it fits the repo's pytest-based test
+`mutmut` remains the leading candidate because it fits the repo's pytest-based
 stack and has a simpler local workflow than heavier distributed mutation tools.
-The previously explored candidate version range was `mutmut>=2.5,<3`.
+The previously explored version range, `mutmut>=2.5,<3`, is now only a historical
+input. Revalidate tooling before implementation.
 
-These are design inputs, not final decisions:
+As of 2026-06-08, the candidate split is:
 
-- Revalidate the installed `mutmut` CLI and config behavior before implementation.
+- Prefer a current `mutmut` 3.x pin for the first approved implementation if the
+  spike confirms that function-level mutation is enough for the initial targets.
+- Keep `mutmut` 2.5.x as a fallback only if the approved design needs mutation of
+  code outside functions; upstream documentation says `mutmut` 3+ has a different
+  execution model and points users to `mutmut` 2 for code outside functions.
 - Pin only in `requirements-dev.txt`; do not add mutation tooling to runtime dependencies.
-- Keep any cache or result output out of tracked source files.
+- Keep mutation caches and reports out of tracked source files.
 - Prefer a thin repo wrapper over requiring contributors to remember raw tool flags.
 - If a future design chooses another tool, update this document or replace it with
   the approved design/spec.
 
+Tool facts to re-check during the design/spec:
+
+- current `mutmut` release and Python support on PyPI
+- `source_paths`, `pytest_add_cli_args_test_selection`, `also_copy`,
+  `only_mutate`, `do_not_mutate`, `mutate_only_covered_lines`, and
+  `max_stack_depth` behavior in the installed version
+- command behavior for focused module/function runs, `browse`, `show`, and any
+  machine-readable output used by CI artifacts
+- behavior on Linux runners and developer machines with fork support
+
+## Candidate Repo Integration Shape
+
+The first implementation PR should be small and reversible. It should add local
+mutation-testing capability without changing normal verification behavior.
+
+Candidate file changes:
+
+| Area | Candidate change | Notes |
+| --- | --- | --- |
+| Dependency | add pinned `mutmut` candidate to `requirements-dev.txt` | dev dependency only |
+| Config | add a minimal `[mutmut]` section to `setup.cfg` only after a spike | keep source/test scope explicit |
+| Wrapper | add `tools/run_mutation_tests.py` or `scripts/run_mutation_tests.sh` | wrapper should validate inputs and print the exact underlying command |
+| Ignore rules | add mutation cache/report paths to `.gitignore` | expected candidates: `mutants/`, `.mutmut-cache/`, `mutation-reports/` |
+| Docs | update `docs/development/testing.md` with an on-demand mutation section | keep separate from `./run_tests.sh` |
+| CI | optional report-only workflow after local baseline | use `workflow_dispatch` first; scheduled later if useful |
+
+Do not add thresholds, badges, or required checks in the first implementation PR.
+
 ## Candidate Safety Requirements
 
-The future wrapper or workflow should be designed to fail early before it mutates
-the wrong files or creates noisy repo state.
+The future wrapper or workflow should fail early before it mutates the wrong
+files or creates noisy repo state.
 
 - Assert the expected mutation-tool version before running.
 - Require explicit source and test targets for normal runs.
@@ -73,7 +115,10 @@ the wrong files or creates noisy repo state.
   unless an explicit local-only override such as `--allow-dirty` is provided.
 - Default diff-only runs to the active base branch rather than hard-coding
   `origin/main`; prefer `GITHUB_BASE_REF`, then current upstream, then `origin/ansible`.
-- Ignore mutation caches and generated reports through `.gitignore`.
+- Run an unmutated targeted pytest command first and stop if it fails.
+- Refuse live E2E markers and commands that require real cluster contexts.
+- Record the exact commit, tool version, source target, test target, and command in
+  every baseline artifact.
 - Keep scheduled CI report-only at first.
 
 ## Candidate Phase Targets
@@ -84,11 +129,12 @@ may change.
 
 | Phase | Candidate source targets | Candidate test focus |
 | --- | --- | --- |
-| 1 | `lib/validation.py` | CLI validation, safe-path behavior, validation parity fixtures |
-| 1 | `lib/rbac_validator.py` | Python RBAC tests, RBAC integration tests, collection RBAC parity |
-| 1 | `lib/utils.py` | StateManager, checkpoint/resume, hub identity binding |
-| 1 | `modules/decommission.py` | destructive-operation safety, dry-run behavior, collection decommission contracts |
-| 1 | `modules/activation.py` | passive/full activation waits, stale restore handling, collection activation parity |
+| 0 | one narrow spike target from Phase 1 | validate tool version, config, wrapper UX, runtime, output, and noise |
+| 1 | `lib/validation.py` | `tests/test_validation.py`, `tests/test_validation_parity.py`, collection validation parity fixtures |
+| 1 | `lib/rbac_validator.py` | `tests/test_rbac_validator.py`, `tests/test_rbac_collection_parity.py`, collection RBAC parity |
+| 1 | `lib/utils.py` | `tests/test_utils.py`, checkpoint/resume tests, hub identity binding parity |
+| 1 | `modules/decommission.py` | `tests/test_decommission.py`, destructive-operation safety, dry-run behavior, collection decommission contracts |
+| 1 | `modules/activation.py` | `tests/test_activation.py`, passive/full activation waits, stale restore handling, collection activation parity |
 | 2 | remaining `lib/` and `modules/` | preflight, finalization, primary prep, post-activation, Argo CD, waiter behavior |
 | 3 | collection `plugins/module_utils/` and `plugins/modules/` | validation, checkpoint, GitOps, klusterlet, result, report, and module contracts |
 
@@ -102,12 +148,25 @@ divergence through the existing parity process.
 The first useful output is a baseline of surviving mutants by target area. A later
 implementation should define the exact artifact format rather than assuming one.
 
+Candidate baseline fields:
+
+- commit SHA and branch
+- tool name and version
+- source target and test target
+- exact wrapper command and underlying mutation command
+- unmutated pytest command and result
+- mutant counts by status: killed, survived, timeout, suspicious, skipped, equivalent
+- top surviving mutants by operational risk
+- parity impact classification for each high-value survivor
+- next action: add assertion, add parity coverage, mark equivalent with reason, or defer
+
 Candidate outputs:
 
 - text summary from the mutation tool
 - `mutmut show <id>` output for selected survivors
-- HTML report for manual inspection
-- optional JUnit/XML or generated JSON summary if scheduled CI needs stable artifacts
+- HTML report for manual inspection if available in the chosen tool/version
+- optional generated JSON summary if scheduled CI needs stable artifacts
+- optional JUnit/XML only if the chosen tool or wrapper can generate it without fragile parsing
 
 Do not introduce per-module score thresholds until a module has a reviewed
 baseline and high-value survivors have been triaged. Thresholds should be a
@@ -116,7 +175,25 @@ killed or explicitly excluded.
 
 Equivalent or intentional mutants need an auditable reason. Use a tool-supported
 exclusion such as `# pragma: no mutate` or config exclusion only when the mutant
-is genuinely equivalent or not operationally meaningful.
+is genuinely equivalent or not operationally meaningful. Prefer targeted
+exclusions near the source over broad config suppression.
+
+## Survivor Triage Policy
+
+Classify each surviving mutant before changing tests:
+
+| Classification | Meaning | Expected action |
+| --- | --- | --- |
+| Missing assertion | Existing test reaches behavior but does not assert the mutated outcome | strengthen the smallest relevant test |
+| Missing scenario | No focused test covers the behavior | add a targeted unit, integration, or parity test |
+| Parity gap | Survivor exposes behavior shared by Python and collection | add/confirm both sides, or document approved divergence |
+| Equivalent | Mutant does not change observable behavior | record reason; use narrow exclusion only after review |
+| Incidental/noisy | Mutant is reached only through broad incidental tests | refine test selection, stack depth, or target scope |
+| Tool/runtime issue | Timeout, import isolation issue, or unsupported construct | record as tooling debt; do not treat as weak coverage |
+
+A survivor in a safety-sensitive path should be prioritized over score improvement.
+Killing one wrong-cluster, RBAC, dry-run, checkpoint, or activation-wait mutant is
+more valuable than improving aggregate score on low-risk boilerplate.
 
 ## Deferred Design Questions
 
@@ -125,18 +202,20 @@ The future Superpowers design/spec should answer these before implementation:
 - Should the first implementation target Python-only safety modules, paired
   Python/collection parity slices, or collection-local modules first?
 - Should the first implementation PR add local tooling only, or also add a
-  scheduled report-only workflow?
-- Which artifact format is required for CI: text/HTML only, JUnit/XML, generated
-  JSON, or a combination?
+  report-only `workflow_dispatch` CI job?
+- Which `mutmut` major version should be pinned after the spike, and why?
+- What artifact format is required for CI: text/HTML only, generated JSON, JUnit/XML,
+  or a combination?
 - What is the first acceptable baseline: record survivors only, or kill selected
   Phase 1 survivors before adding any scheduled workflow?
 - How should the wrapper map source files to focused tests while avoiding stale or
   under-scoped test selections?
 - What exact policy should apply when a survivor exposes a dual-supported parity gap?
+- How should equivalent mutants be reviewed so exclusions stay narrow and auditable?
 
 ## Start Conditions For Future Work
 
-Do not implement mutation testing from this concept note alone. Start the real
+Do not implement mutation testing from this design handoff alone. Start the real
 work only when all of these are true:
 
 - The current Thermos PR sequence is complete or explicitly paused.
@@ -146,3 +225,5 @@ work only when all of these are true:
   `docs/ansible-collection/test-migration-catalog.md`.
 - A fresh Superpowers design/spec is written, reviewed, and approved.
 - A Superpowers implementation plan is written from that approved design/spec.
+- The repo-local `.claude/skills/mutation-testing/SKILL.md` skill is used to keep
+  the implementation and triage workflow consistent with this handoff.
