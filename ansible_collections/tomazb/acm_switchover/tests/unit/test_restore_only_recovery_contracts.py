@@ -94,9 +94,9 @@ def test_verify_passive_sync_skips_assert_for_option_b_resume_state():
         "The passive restore assert must be guarded by the _acm_activation_restore_resume flag "
         "so that option-B resume (only restore-acm-activate present) is not rejected"
     )
-    assert "not" in when_clause, (
-        "The passive restore assert must be skipped (not asserted) when in the option-B resume state"
-    )
+    assert (
+        "not" in when_clause
+    ), "The passive restore assert must be skipped (not asserted) when in the option-B resume state"
 
 
 def test_verify_passive_sync_publishes_activation_restore_in_resume_state():
