@@ -43,6 +43,7 @@ from acm_switchover import (
     run_switchover,
     validate_args,
 )
+from lib import KubeClient
 from lib import argocd as argocd_lib
 from lib.constants import (
     DRY_RUN_RESTORE_ONLY_COMPLETION_MESSAGE,
@@ -1556,7 +1557,7 @@ class TestArgocdResumeDelegation:
     def test_prepare_argocd_resume_clients_delegates_to_lib_module(self):
         args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", dry_run=False, force=False)
         state = Mock()
-        paused_apps = [{"hub": "secondary", "namespace": "argocd", "name": "app-1"}]
+        paused_apps = [{"hub": HUB_ROLE_SECONDARY, "namespace": "argocd", "name": "app-1"}]
         primary = Mock()
         secondary = Mock()
         logger = Mock()
@@ -1584,6 +1585,7 @@ class TestArgocdResumeDelegation:
             secondary,
             logger,
             allow_primary_load_from_state=True,
+            kube_client_factory=KubeClient,
         )
 
     def test_run_argocd_resume_only_delegates_to_lib_module(self):
@@ -1597,7 +1599,7 @@ class TestArgocdResumeDelegation:
             result = _run_argocd_resume_only(args, state, primary, secondary, logger)
 
         assert result is True
-        run_resume.assert_called_once_with(args, state, primary, secondary, logger)
+        run_resume.assert_called_once_with(args, state, primary, secondary, logger, kube_client_factory=KubeClient)
 
     def test_attempt_argocd_resume_on_failure_delegates_to_lib_module(self):
         args = SimpleNamespace(argocd_resume_on_failure=True, restore_only=False, force=False)
@@ -1612,7 +1614,14 @@ class TestArgocdResumeDelegation:
         ) as attempt_resume:
             _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
 
-        attempt_resume.assert_called_once_with(args, state, primary, secondary, logger)
+        attempt_resume.assert_called_once_with(
+            args,
+            state,
+            primary,
+            secondary,
+            logger,
+            kube_client_factory=KubeClient,
+        )
 
 
 @pytest.mark.unit

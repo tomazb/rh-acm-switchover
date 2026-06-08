@@ -534,7 +534,14 @@ def _attempt_argocd_resume_on_failure(
     Called when a phase handler returns False and --argocd-resume-on-failure is set.
     Resume errors are logged but never mask the original failure.
     """
-    argocd_resume.attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+    argocd_resume.attempt_argocd_resume_on_failure(
+        args,
+        state,
+        primary,
+        secondary,
+        logger,
+        kube_client_factory=KubeClient,
+    )
 
 
 def _fail_phase(state: StateManager, message: str, logger: logging.Logger) -> bool:
@@ -1385,6 +1392,7 @@ def _prepare_argocd_resume_clients(
         secondary,
         logger,
         allow_primary_load_from_state=allow_primary_load_from_state,
+        kube_client_factory=KubeClient,
     )
 
 
@@ -1396,12 +1404,14 @@ def _run_argocd_resume_only(
     logger: logging.Logger,
 ) -> bool:
     """Load state and restore Argo CD auto-sync for previously paused Applications, then exit."""
-    previous_kube_client = getattr(argocd_resume, "KubeClient")
-    setattr(argocd_resume, "KubeClient", KubeClient)
-    try:
-        return argocd_resume.run_argocd_resume_only(args, state, primary, secondary, logger)
-    finally:
-        setattr(argocd_resume, "KubeClient", previous_kube_client)
+    return argocd_resume.run_argocd_resume_only(
+        args,
+        state,
+        primary,
+        secondary,
+        logger,
+        kube_client_factory=KubeClient,
+    )
 
 
 def _execute_operation(

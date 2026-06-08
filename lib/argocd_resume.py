@@ -27,6 +27,7 @@ def prepare_argocd_resume_clients(
     logger: logging.Logger,
     *,
     allow_primary_load_from_state: bool,
+    kube_client_factory: type[KubeClient] = KubeClient,
 ) -> tuple[Optional[KubeClient], Optional[KubeClient]]:
     """Resolve client mapping and validate hub identity bindings before resume."""
     resume_primary = primary
@@ -75,7 +76,7 @@ def prepare_argocd_resume_clients(
                 "Argo CD resume primary context omitted; loading recorded primary hub client: %s",
                 stored_primary_ctx,
             )
-            resume_primary = KubeClient(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
+            resume_primary = kube_client_factory(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
 
     stored_identities = runtime_bootstrap.stored_hub_identities(state)
     if stored_identities.get(HUB_ROLE_PRIMARY) and resume_primary is None and stored_primary_ctx:
@@ -86,7 +87,7 @@ def prepare_argocd_resume_clients(
                 "Argo CD resume identity validation loading recorded primary hub client: %s",
                 stored_primary_ctx,
             )
-            resume_primary = KubeClient(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
+            resume_primary = kube_client_factory(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
 
     if not stored_identities:
         if not getattr(args, "force", False):
@@ -128,6 +129,8 @@ def run_argocd_resume_only(
     primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
+    *,
+    kube_client_factory: type[KubeClient] = KubeClient,
 ) -> bool:
     """Load state and restore Argo CD auto-sync for previously paused Applications, then exit."""
     if state.get_config(STATE_KEY_ARGOCD_PAUSE_DRY_RUN, False):
@@ -155,6 +158,7 @@ def run_argocd_resume_only(
             secondary,
             logger,
             allow_primary_load_from_state=True,
+            kube_client_factory=kube_client_factory,
         )
     except Exception as exc:
         logger.error("Resume-only hub identity validation failed: %s", exc)
@@ -185,6 +189,8 @@ def attempt_argocd_resume_on_failure(
     primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
+    *,
+    kube_client_factory: type[KubeClient] = KubeClient,
 ) -> None:
     """Best-effort resume of paused ArgoCD Applications after a switchover failure."""
     if not getattr(args, "argocd_resume_on_failure", False):
@@ -209,6 +215,7 @@ def attempt_argocd_resume_on_failure(
             secondary,
             logger,
             allow_primary_load_from_state=False,
+            kube_client_factory=kube_client_factory,
         )
         summary = argocd_lib.resume_recorded_applications(
             paused_apps,

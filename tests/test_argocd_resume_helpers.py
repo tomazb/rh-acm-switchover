@@ -10,7 +10,15 @@ from lib.argocd_resume import (
     prepare_argocd_resume_clients,
     run_argocd_resume_only,
 )
-from lib.constants import HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY, STEP_PAUSE_ARGOCD_APPS
+from lib.constants import (
+    HUB_ROLE_PRIMARY,
+    HUB_ROLE_SECONDARY,
+    STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
+    STATE_KEY_ARGOCD_PAUSED_APPS,
+    STATE_KEY_ARGOCD_RUN_ID,
+    STEP_PAUSE_ARGOCD_APPS,
+)
+from lib.kube_client import KubeClient
 
 
 def _identity_client(context, uid):
@@ -30,8 +38,8 @@ def _mock_state(paused_apps, *, primary_ctx="hub-a", secondary_ctx="hub-b", iden
         }
     state.ensure_hub_identities = Mock()
     state.get_config.side_effect = lambda key, default=None: {
-        "argocd_run_id": "run-1",
-        "argocd_paused_apps": paused_apps,
+        STATE_KEY_ARGOCD_RUN_ID: "run-1",
+        STATE_KEY_ARGOCD_PAUSED_APPS: paused_apps,
     }.get(key, default)
     state.clear_step_completed = Mock()
     return state
@@ -85,20 +93,21 @@ def test_prepare_resume_clients_loads_primary_client_only_when_allowed():
     state = _mock_state(paused_apps)
     secondary = _identity_client("hub-b", "uid-secondary")
     created_primary = _identity_client("hub-a", "uid-primary")
+    kube_client_factory = Mock(return_value=created_primary)
     logger = logging.getLogger("test.prepare.load_primary")
 
-    with patch("lib.argocd_resume.KubeClient", return_value=created_primary) as kube_client:
-        resume_primary, resume_secondary = prepare_argocd_resume_clients(
-            args,
-            state,
-            paused_apps,
-            None,
-            secondary,
-            logger,
-            allow_primary_load_from_state=True,
-        )
+    resume_primary, resume_secondary = prepare_argocd_resume_clients(
+        args,
+        state,
+        paused_apps,
+        None,
+        secondary,
+        logger,
+        allow_primary_load_from_state=True,
+        kube_client_factory=kube_client_factory,
+    )
 
-    kube_client.assert_called_once_with("hub-a", dry_run=False)
+    kube_client_factory.assert_called_once_with("hub-a", dry_run=False)
     assert resume_primary is created_primary
     assert resume_secondary is secondary
 
@@ -107,9 +116,9 @@ def test_run_argocd_resume_only_rejects_dry_run_pause_state():
     paused_apps = [{"hub": HUB_ROLE_SECONDARY, "namespace": "argocd", "name": "app-2"}]
     state = Mock()
     state.get_config.side_effect = lambda key, default=None: {
-        "argocd_pause_dry_run": True,
-        "argocd_run_id": "run-1",
-        "argocd_paused_apps": paused_apps,
+        STATE_KEY_ARGOCD_PAUSE_DRY_RUN: True,
+        STATE_KEY_ARGOCD_RUN_ID: "run-1",
+        STATE_KEY_ARGOCD_PAUSED_APPS: paused_apps,
     }.get(key, default)
     args = SimpleNamespace()
     primary = Mock()
@@ -150,6 +159,7 @@ def test_run_argocd_resume_only_uses_prepare_clients_and_resume_recorded_applica
         secondary,
         logger,
         allow_primary_load_from_state=True,
+        kube_client_factory=KubeClient,
     )
     resume_recorded.assert_called_once_with(
         paused_apps,
@@ -174,12 +184,22 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
     with patch(
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
-    ), patch(
-        "lib.argocd_resume.argocd_lib.resume_recorded_applications"
-    ) as resume_recorded, patch("lib.argocd_resume.clear_argocd_pause_state") as clear_pause_state:
+    ) as prepare_clients, patch("lib.argocd_resume.argocd_lib.resume_recorded_applications") as resume_recorded, patch(
+        "lib.argocd_resume.clear_argocd_pause_state"
+    ) as clear_pause_state:
         resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=0, failed=0)
         attempt_argocd_resume_on_failure(args, partial_state, primary, secondary, logger)
 
+    prepare_clients.assert_called_once_with(
+        args,
+        partial_state,
+        paused_apps,
+        primary,
+        secondary,
+        logger,
+        allow_primary_load_from_state=False,
+        kube_client_factory=KubeClient,
+    )
     clear_pause_state.assert_not_called()
     partial_state.clear_step_completed.assert_not_called()
 
@@ -187,11 +207,21 @@ def test_attempt_argocd_resume_on_failure_clears_pause_state_only_after_full_suc
     with patch(
         "lib.argocd_resume.prepare_argocd_resume_clients",
         return_value=(primary, secondary),
-    ), patch(
-        "lib.argocd_resume.argocd_lib.resume_recorded_applications"
-    ) as resume_recorded, patch("lib.argocd_resume.clear_argocd_pause_state") as clear_pause_state:
+    ) as prepare_clients, patch("lib.argocd_resume.argocd_lib.resume_recorded_applications") as resume_recorded, patch(
+        "lib.argocd_resume.clear_argocd_pause_state"
+    ) as clear_pause_state:
         resume_recorded.return_value = argocd_lib.ResumeSummary(restored=1, already_resumed=1, failed=0)
         attempt_argocd_resume_on_failure(args, success_state, primary, secondary, logger)
 
+    prepare_clients.assert_called_once_with(
+        args,
+        success_state,
+        paused_apps,
+        primary,
+        secondary,
+        logger,
+        allow_primary_load_from_state=False,
+        kube_client_factory=KubeClient,
+    )
     clear_pause_state.assert_called_once_with(success_state)
     success_state.clear_step_completed.assert_called_once_with(STEP_PAUSE_ARGOCD_APPS)
