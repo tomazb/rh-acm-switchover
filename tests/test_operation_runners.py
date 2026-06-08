@@ -204,6 +204,7 @@ def test_run_switchover_impl_tolerates_missing_optional_args():
     delattr(args, "validate_only")
     delattr(args, "state_file")
     state = Mock()
+    state.state_file = ".state/switchover-test.json"
     primary = Mock()
     secondary = Mock()
     logger = Mock()
@@ -228,7 +229,9 @@ def test_run_switchover_impl_tolerates_missing_optional_args():
     assert result is True
     validate_only.assert_not_called()
     run_phase_flow.assert_called_once()
-    assert (WORKFLOW_STATE_FILE_MESSAGE, None) in [call.args for call in logger.info.call_args_list]
+    assert (WORKFLOW_STATE_FILE_MESSAGE, ".state/switchover-test.json") in [
+        call.args for call in logger.info.call_args_list
+    ]
 
 
 def test_run_restore_only_impl_uses_validate_only_preflight_shortcut():
@@ -297,6 +300,7 @@ def test_run_restore_only_impl_tolerates_missing_optional_args():
     delattr(args, "validate_only")
     delattr(args, "state_file")
     state = Mock()
+    state.state_file = ".state/restore-only-test.json"
     secondary = Mock()
     logger = Mock()
     hooks = RestoreOnlyRunnerHooks(
@@ -322,4 +326,6 @@ def test_run_restore_only_impl_tolerates_missing_optional_args():
     run_phase_flow.assert_called_once()
     assert args.method == DEFAULT_RESTORE_METHOD
     assert args.old_hub_action == DEFAULT_OLD_HUB_ACTION
-    assert (WORKFLOW_STATE_FILE_MESSAGE, None) in [call.args for call in logger.info.call_args_list]
+    assert (WORKFLOW_STATE_FILE_MESSAGE, ".state/restore-only-test.json") in [
+        call.args for call in logger.info.call_args_list
+    ]

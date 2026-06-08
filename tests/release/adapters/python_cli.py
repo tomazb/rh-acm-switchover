@@ -11,6 +11,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
+from lib.constants import (
+    REPORT_FILENAME_DECOMMISSION,
+    REPORT_FILENAME_PREFLIGHT,
+    REPORT_FILENAME_RESTORE_ONLY,
+    REPORT_FILENAME_SWITCHOVER,
+    REPORT_TYPE_DECOMMISSION,
+    REPORT_TYPE_PREFLIGHT,
+    REPORT_TYPE_RESTORE,
+    REPORT_TYPE_SWITCHOVER,
+)
 from tests.release.reporting.artifacts import write_capture_artifact
 
 from .common import AssertionRecord, ReportArtifact, StreamResult
@@ -28,15 +38,15 @@ def _decode(data: str | bytes | None) -> str:
 
 
 REPORT_NAMES: dict[str, tuple[str, str]] = {
-    "preflight": ("preflight", "preflight-report.json"),
-    "python-passive-switchover": ("switchover", "switchover-report.json"),
-    "python-restore-only": ("restore", "restore-only-report.json"),
-    "argocd-managed-switchover": ("switchover", "switchover-report.json"),
-    "full-restore": ("switchover", "switchover-report.json"),
-    "checkpoint-resume": ("switchover", "switchover-report.json"),
-    "decommission": ("decommission", "decommission-report.json"),
-    "failure-injection": ("switchover", "switchover-report.json"),
-    "soak": ("switchover", "switchover-report.json"),
+    "preflight": (REPORT_TYPE_PREFLIGHT, REPORT_FILENAME_PREFLIGHT),
+    "python-passive-switchover": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
+    "python-restore-only": (REPORT_TYPE_RESTORE, REPORT_FILENAME_RESTORE_ONLY),
+    "argocd-managed-switchover": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
+    "full-restore": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
+    "checkpoint-resume": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
+    "decommission": (REPORT_TYPE_DECOMMISSION, REPORT_FILENAME_DECOMMISSION),
+    "failure-injection": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
+    "soak": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
 }
 
 

@@ -5,6 +5,16 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from lib.constants import (
+    REPORT_FILENAME_DECOMMISSION,
+    REPORT_FILENAME_PREFLIGHT,
+    REPORT_FILENAME_RESTORE_ONLY,
+    REPORT_FILENAME_SWITCHOVER,
+    REPORT_TYPE_DECOMMISSION,
+    REPORT_TYPE_PREFLIGHT,
+    REPORT_TYPE_RESTORE,
+    REPORT_TYPE_SWITCHOVER,
+)
 from lib.exceptions import SwitchoverError
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import build_operation_report, write_json_report_artifact
@@ -14,12 +24,12 @@ from lib.utils import Phase, StateManager
 def report_target(args: Any) -> tuple[str, str]:
     """Return report type and filename for the current Python CLI operation."""
     if getattr(args, "validate_only", False):
-        return "preflight", "preflight-report.json"
+        return REPORT_TYPE_PREFLIGHT, REPORT_FILENAME_PREFLIGHT
     if getattr(args, "decommission", False):
-        return "decommission", "decommission-report.json"
+        return REPORT_TYPE_DECOMMISSION, REPORT_FILENAME_DECOMMISSION
     if getattr(args, "restore_only", False):
-        return "restore", "restore-only-report.json"
-    return "switchover", "switchover-report.json"
+        return REPORT_TYPE_RESTORE, REPORT_FILENAME_RESTORE_ONLY
+    return REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER
 
 
 def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:

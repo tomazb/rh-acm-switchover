@@ -13,10 +13,13 @@ from lib.argocd_coordinator import ArgoCDPauseCoordinator
 from lib.constants import (
     BACKUP_NAMESPACE,
     DISABLE_AUTO_IMPORT_ANNOTATION,
+    HUB_ROLE_PRIMARY,
+    HUB_ROLE_SECONDARY,
     LOCAL_CLUSTER_NAME,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
+    STEP_PAUSE_ARGOCD_APPS,
     THANOS_COMPACTOR_LABEL_SELECTOR,
     THANOS_COMPACTOR_STATEFULSET,
 )
@@ -64,12 +67,12 @@ class PrimaryPreparation:
             # Optional: Pause Argo CD auto-sync for ACM-touching Applications (both hubs)
             if self.argocd_manage:
                 if self.dry_run:
-                    if self.state.is_step_completed("pause_argocd_apps"):
+                    if self.state.is_step_completed(STEP_PAUSE_ARGOCD_APPS):
                         logger.info("Argo CD pause already completed, skipping")
                     else:
                         self._pause_argocd_acm_apps()
                 else:
-                    with self.state.step("pause_argocd_apps", logger) as should_run:
+                    with self.state.step(STEP_PAUSE_ARGOCD_APPS, logger) as should_run:
                         if should_run:
                             self._pause_argocd_acm_apps()
 
@@ -108,7 +111,7 @@ class PrimaryPreparation:
 
     def _pause_argocd_acm_apps(self) -> None:
         """Pause auto-sync for ACM-touching Argo CD Applications on primary and optionally secondary hub."""
-        hubs = [(self.primary, "primary")] + ([(self.secondary, "secondary")] if self.secondary else [])
+        hubs = [(self.primary, HUB_ROLE_PRIMARY)] + ([(self.secondary, HUB_ROLE_SECONDARY)] if self.secondary else [])
         coordinator = ArgoCDPauseCoordinator(self.state, self.dry_run)
         try:
             paused_apps, failure_count = coordinator.pause_hubs(hubs)

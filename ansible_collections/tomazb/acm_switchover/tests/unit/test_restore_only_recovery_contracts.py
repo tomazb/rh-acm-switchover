@@ -97,6 +97,10 @@ def test_verify_passive_sync_skips_assert_for_option_b_resume_state():
     assert (
         "not" in when_clause
     ), "The passive restore assert must be skipped (not asserted) when in the option-B resume state"
+    assert "not (_acm_activation_restore_resume | bool)" in when_clause, (
+        "The passive restore assert must boolean-cast _acm_activation_restore_resume; "
+        "without | bool, a string-valued Ansible fact can take the wrong truthiness path"
+    )
 
 
 def test_verify_passive_sync_publishes_activation_restore_in_resume_state():

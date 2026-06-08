@@ -10,6 +10,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
+from lib.constants import (
+    REPORT_FILENAME_DECOMMISSION,
+    REPORT_FILENAME_PREFLIGHT,
+    REPORT_FILENAME_RESTORE_ONLY,
+    REPORT_FILENAME_SWITCHOVER,
+    REPORT_TYPE_DECOMMISSION,
+    REPORT_TYPE_PREFLIGHT,
+    REPORT_TYPE_RESTORE,
+    REPORT_TYPE_SWITCHOVER,
+)
 from tests.release.reporting.artifacts import write_capture_artifact
 
 from .common import AssertionRecord, ReportArtifact, StreamResult
@@ -26,11 +36,11 @@ PLAYBOOKS: dict[str, str] = {
 }
 
 REPORT_NAMES: dict[str, tuple[str, str]] = {
-    "preflight": ("preflight", "preflight-report.json"),
-    "ansible-passive-switchover": ("switchover", "switchover-report.json"),
-    "ansible-restore-only": ("restore", "restore-only-report.json"),
-    "argocd-managed-switchover": ("switchover", "switchover-report.json"),
-    "decommission": ("decommission", "decommission-report.json"),
+    "preflight": (REPORT_TYPE_PREFLIGHT, REPORT_FILENAME_PREFLIGHT),
+    "ansible-passive-switchover": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
+    "ansible-restore-only": (REPORT_TYPE_RESTORE, REPORT_FILENAME_RESTORE_ONLY),
+    "argocd-managed-switchover": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
+    "decommission": (REPORT_TYPE_DECOMMISSION, REPORT_FILENAME_DECOMMISSION),
     "rbac-bootstrap": ("rbac-bootstrap", "rbac-bootstrap-report.json"),
 }
 
@@ -130,7 +140,7 @@ class AnsibleAdapter:
         if scenario_id == "decommission":
             extra_vars["acm_switchover_operation"]["dry_run"] = True
             extra_vars["acm_switchover_execution"]["mode"] = "dry_run"
-            extra_vars["summary_path"] = str(self.scenario_dir(scenario_id) / "decommission-report.json")
+            extra_vars["summary_path"] = str(self.scenario_dir(scenario_id) / REPORT_FILENAME_DECOMMISSION)
             extra_vars["acm_switchover_decommission"] = {
                 "confirm": True,
                 "has_observability": "auto",

@@ -6,6 +6,8 @@ import pytest
 
 from lib import argocd as argocd_lib
 from lib.argocd_resume import (
+    _ensure_resume_identity_data,
+    _required_resume_roles,
     attempt_argocd_resume_on_failure,
     prepare_argocd_resume_clients,
     run_argocd_resume_only,
@@ -18,6 +20,7 @@ from lib.constants import (
     STATE_KEY_ARGOCD_RUN_ID,
     STEP_PAUSE_ARGOCD_APPS,
 )
+from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 
 
@@ -75,7 +78,7 @@ def test_prepare_resume_clients_requires_force_for_missing_hub_identities():
     secondary = _identity_client("hub-b", "uid-secondary")
     logger = logging.getLogger("test.prepare.identity_missing")
 
-    with pytest.raises(ValueError, match="missing hub identity data"):
+    with pytest.raises(SwitchoverError, match="missing hub identity data"):
         prepare_argocd_resume_clients(
             args,
             state,
@@ -110,6 +113,49 @@ def test_prepare_resume_clients_loads_primary_client_only_when_allowed():
     kube_client_factory.assert_called_once_with("hub-a", dry_run=False)
     assert resume_primary is created_primary
     assert resume_secondary is secondary
+
+
+def test_required_resume_roles_combines_paused_apps_and_stored_identities():
+    paused_apps = [
+        {"hub": HUB_ROLE_PRIMARY, "namespace": "argocd", "name": "app-1"},
+        {"hub": "unknown", "namespace": "argocd", "name": "ignored"},
+        "not-a-mapping",
+    ]
+    stored_identities = {
+        HUB_ROLE_SECONDARY: {"context": "hub-b", "cluster_uid": "uid-secondary"},
+        "legacy": {"context": "legacy", "cluster_uid": "uid-legacy"},
+    }
+
+    assert _required_resume_roles(paused_apps, stored_identities) == {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
+
+
+def test_required_resume_roles_ignores_malformed_stored_identities():
+    paused_apps = [{"hub": HUB_ROLE_PRIMARY, "namespace": "argocd", "name": "app-1"}]
+
+    assert _required_resume_roles(paused_apps, "not-a-mapping") == {HUB_ROLE_PRIMARY}
+
+
+def test_ensure_resume_identity_data_requires_force_for_missing_identities():
+    args = SimpleNamespace(force=False)
+    logger = logging.getLogger("test.prepare.identity_data")
+
+    with pytest.raises(SwitchoverError, match="missing hub identity data"):
+        _ensure_resume_identity_data(args, {}, logger)
+
+
+def test_ensure_resume_identity_data_rejects_malformed_state_without_force():
+    args = SimpleNamespace(force=False)
+    logger = logging.getLogger("test.prepare.identity_data_malformed")
+
+    with pytest.raises(SwitchoverError, match="missing hub identity data"):
+        _ensure_resume_identity_data(args, "not-a-mapping", logger)
+
+
+def test_ensure_resume_identity_data_allows_legacy_state_with_force():
+    args = SimpleNamespace(force=True)
+    logger = logging.getLogger("test.prepare.identity_data_force")
+
+    _ensure_resume_identity_data(args, {}, logger)
 
 
 def test_run_argocd_resume_only_rejects_dry_run_pause_state():

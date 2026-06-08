@@ -10,18 +10,134 @@ from lib.constants import (
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
     STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
+    STATE_KEY_ARGOCD_PAUSED_APP_HUB,
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
     STEP_PAUSE_ARGOCD_APPS,
 )
+from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import Phase
+
+
+def _required_resume_roles(paused_apps: list[Any], stored_identities: Any) -> set[str]:
+    """Return hub roles that need live identity validation for a resume attempt."""
+    known_hub_roles = {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
+    required_roles = {
+        entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB)
+        for entry in paused_apps
+        if isinstance(entry, dict) and entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB) in known_hub_roles
+    }
+    if isinstance(stored_identities, dict):
+        required_roles.update(role for role in stored_identities.keys() if role in known_hub_roles)
+    return required_roles
+
+
+def _ensure_resume_identity_data(args: Any, stored_identities: Any, logger: logging.Logger) -> None:
+    """Reject legacy resume state without identity data unless the operator forces it."""
+    if isinstance(stored_identities, dict) and stored_identities:
+        return
+
+    if not getattr(args, "force", False):
+        raise SwitchoverError(
+            "Argo CD resume state is missing hub identity data for recorded paused Applications. "
+            "Refusing to resume because context names alone cannot prove the same live clusters. "
+            "Use --force after manual verification to bind this legacy state to the current hubs."
+        )
+    logger.warning(
+        "Argo CD resume state is missing hub identity data; "
+        "--force used, binding legacy state to the current hubs for this resume attempt."
+    )
+
+
+def _resolve_recorded_context_mapping(
+    args: Any,
+    state: Any,
+    primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+    logger: logging.Logger,
+) -> tuple[Optional[KubeClient], Optional[KubeClient], Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """Resolve resume client mapping from recorded and current context names."""
+    resume_primary = primary
+    resume_secondary = secondary
+
+    stored_primary_ctx, stored_secondary_ctx = runtime_bootstrap.state_contexts(state)
+    current_primary_ctx = getattr(args, "primary_context", None) or runtime_bootstrap.client_context_name(primary)
+    current_secondary_ctx = getattr(args, "secondary_context", None) or runtime_bootstrap.client_context_name(secondary)
+
+    if not (stored_primary_ctx or stored_secondary_ctx):
+        return (
+            resume_primary,
+            resume_secondary,
+            stored_primary_ctx,
+            stored_secondary_ctx,
+            current_primary_ctx,
+            current_secondary_ctx,
+        )
+
+    if stored_primary_ctx == current_secondary_ctx and stored_secondary_ctx == current_primary_ctx:
+        logger.info("Argo CD resume contexts are reversed from the recorded state; swapping client mapping.")
+        resume_primary, resume_secondary = secondary, primary
+    elif (current_primary_ctx is not None and stored_primary_ctx != current_primary_ctx) or (
+        current_secondary_ctx is not None and stored_secondary_ctx != current_secondary_ctx
+    ):
+        if not getattr(args, "force", False):
+            raise SwitchoverError(
+                "Argo CD resume contexts "
+                f"({current_primary_ctx}/{current_secondary_ctx}) differ from recorded state "
+                f"({stored_primary_ctx}/{stored_secondary_ctx}). "
+                "This may indicate wrong-hub resume. Use --force to override, "
+                "or --state-file to specify the correct state."
+            )
+        logger.warning(
+            "Argo CD resume contexts (%s/%s) differ from recorded state (%s/%s); "
+            "--force used, preserving state and using the provided client mapping.",
+            current_primary_ctx,
+            current_secondary_ctx,
+            stored_primary_ctx,
+            stored_secondary_ctx,
+        )
+
+    return (
+        resume_primary,
+        resume_secondary,
+        stored_primary_ctx,
+        stored_secondary_ctx,
+        current_primary_ctx,
+        current_secondary_ctx,
+    )
+
+
+def _load_recorded_primary_client(
+    args: Any,
+    resume_primary: Optional[KubeClient],
+    secondary: Optional[KubeClient],
+    stored_primary_ctx: Optional[str],
+    current_secondary_ctx: Optional[str],
+    logger: logging.Logger,
+    *,
+    allow_primary_load_from_state: bool,
+    kube_client_factory: type[KubeClient],
+    log_message: str,
+) -> Optional[KubeClient]:
+    """Return a primary resume client from existing mapping, secondary swap, or recorded state."""
+    if resume_primary is not None or not stored_primary_ctx:
+        return resume_primary
+
+    if stored_primary_ctx == current_secondary_ctx and secondary is not None:
+        return secondary
+
+    if allow_primary_load_from_state:
+        logger.info(log_message, stored_primary_ctx)
+        return kube_client_factory(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
+
+    return resume_primary
 
 
 def prepare_argocd_resume_clients(
     args: Any,
     state: Any,
-    paused_apps: list[dict[str, Any]],
+    paused_apps: list[Any],
     primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
@@ -30,86 +146,62 @@ def prepare_argocd_resume_clients(
     kube_client_factory: type[KubeClient] = KubeClient,
 ) -> tuple[Optional[KubeClient], Optional[KubeClient]]:
     """Resolve client mapping and validate hub identity bindings before resume."""
-    resume_primary = primary
-    resume_secondary = secondary
+    (
+        resume_primary,
+        resume_secondary,
+        stored_primary_ctx,
+        _stored_secondary_ctx,
+        _current_primary_ctx,
+        current_secondary_ctx,
+    ) = _resolve_recorded_context_mapping(args, state, primary, secondary, logger)
 
-    stored_primary_ctx, stored_secondary_ctx = runtime_bootstrap.state_contexts(state)
-    current_primary_ctx = getattr(args, "primary_context", None) or runtime_bootstrap.client_context_name(primary)
-    current_secondary_ctx = getattr(args, "secondary_context", None) or runtime_bootstrap.client_context_name(secondary)
-
-    if stored_primary_ctx or stored_secondary_ctx:
-        if stored_primary_ctx == current_secondary_ctx and stored_secondary_ctx == current_primary_ctx:
-            logger.info("Argo CD resume contexts are reversed from the recorded state; swapping client mapping.")
-            resume_primary, resume_secondary = secondary, primary
-        elif (current_primary_ctx is not None and stored_primary_ctx != current_primary_ctx) or (
-            current_secondary_ctx is not None and stored_secondary_ctx != current_secondary_ctx
-        ):
-            if not getattr(args, "force", False):
-                raise ValueError(
-                    "Argo CD resume contexts "
-                    f"({current_primary_ctx}/{current_secondary_ctx}) differ from recorded state "
-                    f"({stored_primary_ctx}/{stored_secondary_ctx}). "
-                    "This may indicate wrong-hub resume. Use --force to override, "
-                    "or --state-file to specify the correct state."
-                )
-            logger.warning(
-                "Argo CD resume contexts (%s/%s) differ from recorded state (%s/%s); "
-                "--force used, preserving state and using the provided client mapping.",
-                current_primary_ctx,
-                current_secondary_ctx,
-                stored_primary_ctx,
-                stored_secondary_ctx,
-            )
-
-    primary_apps_recorded = any(isinstance(item, dict) and item.get("hub") == HUB_ROLE_PRIMARY for item in paused_apps)
+    primary_apps_recorded = any(
+        isinstance(item, dict) and item.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB) == HUB_ROLE_PRIMARY for item in paused_apps
+    )
     if primary_apps_recorded and resume_primary is None:
         if not stored_primary_ctx:
-            raise ValueError(
+            raise SwitchoverError(
                 "Argo CD resume state references Applications paused on the primary hub, "
                 "but the recorded primary context is missing. Pass --primary-context or "
                 "--state-file for a valid switchover state."
             )
-        if stored_primary_ctx == current_secondary_ctx and secondary is not None:
-            resume_primary = secondary
-        elif allow_primary_load_from_state:
-            logger.info(
-                "Argo CD resume primary context omitted; loading recorded primary hub client: %s",
-                stored_primary_ctx,
-            )
-            resume_primary = kube_client_factory(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
-
-    stored_identities = runtime_bootstrap.stored_hub_identities(state)
-    if stored_identities.get(HUB_ROLE_PRIMARY) and resume_primary is None and stored_primary_ctx:
-        if stored_primary_ctx == current_secondary_ctx and secondary is not None:
-            resume_primary = secondary
-        elif allow_primary_load_from_state:
-            logger.info(
-                "Argo CD resume identity validation loading recorded primary hub client: %s",
-                stored_primary_ctx,
-            )
-            resume_primary = kube_client_factory(stored_primary_ctx, dry_run=getattr(args, "dry_run", False))
-
-    if not stored_identities:
-        if not getattr(args, "force", False):
-            raise ValueError(
-                "Argo CD resume state is missing hub identity data for recorded paused Applications. "
-                "Refusing to resume because context names alone cannot prove the same live clusters. "
-                "Use --force after manual verification to bind this legacy state to the current hubs."
-            )
-        logger.warning(
-            "Argo CD resume state is missing hub identity data; "
-            "--force used, binding legacy state to the current hubs for this resume attempt."
+        resume_primary = _load_recorded_primary_client(
+            args,
+            resume_primary,
+            secondary,
+            stored_primary_ctx,
+            current_secondary_ctx,
+            logger,
+            allow_primary_load_from_state=allow_primary_load_from_state,
+            kube_client_factory=kube_client_factory,
+            log_message="Argo CD resume primary context omitted; loading recorded primary hub client: %s",
         )
 
+    stored_identities = runtime_bootstrap.stored_hub_identities(state)
+    if (
+        isinstance(stored_identities, dict)
+        and stored_identities.get(HUB_ROLE_PRIMARY)
+        and resume_primary is None
+        and stored_primary_ctx
+    ):
+        resume_primary = _load_recorded_primary_client(
+            args,
+            resume_primary,
+            secondary,
+            stored_primary_ctx,
+            current_secondary_ctx,
+            logger,
+            allow_primary_load_from_state=allow_primary_load_from_state,
+            kube_client_factory=kube_client_factory,
+            log_message="Argo CD resume identity validation loading recorded primary hub client: %s",
+        )
+
+    _ensure_resume_identity_data(args, stored_identities, logger)
     live_identities = runtime_bootstrap.collect_hub_identities(resume_primary, resume_secondary)
-    known_hub_roles = {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
-    required_roles = {
-        entry.get("hub") for entry in paused_apps if isinstance(entry, dict) and entry.get("hub") in known_hub_roles
-    }
-    required_roles.update(role for role in stored_identities.keys() if role in known_hub_roles)
+    required_roles = _required_resume_roles(paused_apps, stored_identities)
     missing_roles = sorted(role for role in required_roles if role not in live_identities)
     if missing_roles:
-        raise ValueError(
+        raise SwitchoverError(
             "Argo CD resume hub identity validation failed: missing live client for recorded "
             + ", ".join(missing_roles)
             + " hub identity."

@@ -9,26 +9,36 @@ from lib.cli_outcomes import (
     run_setup_mode,
     write_python_report,
 )
+from lib.constants import (
+    REPORT_FILENAME_DECOMMISSION,
+    REPORT_FILENAME_PREFLIGHT,
+    REPORT_FILENAME_RESTORE_ONLY,
+    REPORT_FILENAME_SWITCHOVER,
+    REPORT_TYPE_DECOMMISSION,
+    REPORT_TYPE_PREFLIGHT,
+    REPORT_TYPE_RESTORE,
+    REPORT_TYPE_SWITCHOVER,
+)
 from lib.exceptions import SwitchoverError
 from lib.utils import Phase
 
 
 def test_report_target_maps_cli_modes():
     assert report_target(SimpleNamespace(validate_only=True, decommission=False, restore_only=False)) == (
-        "preflight",
-        "preflight-report.json",
+        REPORT_TYPE_PREFLIGHT,
+        REPORT_FILENAME_PREFLIGHT,
     )
     assert report_target(SimpleNamespace(validate_only=False, decommission=True, restore_only=False)) == (
-        "decommission",
-        "decommission-report.json",
+        REPORT_TYPE_DECOMMISSION,
+        REPORT_FILENAME_DECOMMISSION,
     )
     assert report_target(SimpleNamespace(validate_only=False, decommission=False, restore_only=True)) == (
-        "restore",
-        "restore-only-report.json",
+        REPORT_TYPE_RESTORE,
+        REPORT_FILENAME_RESTORE_ONLY,
     )
     assert report_target(SimpleNamespace(validate_only=False, decommission=False, restore_only=False)) == (
-        "switchover",
-        "switchover-report.json",
+        REPORT_TYPE_SWITCHOVER,
+        REPORT_FILENAME_SWITCHOVER,
     )
 
 
