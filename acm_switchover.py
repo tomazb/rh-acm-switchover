@@ -33,6 +33,7 @@ from lib import (
 from lib import argocd as argocd_lib
 from lib import (
     argocd_resume,
+    cli_outcomes,
     operation_runners,
     runtime_bootstrap,
     setup_logging,
@@ -57,14 +58,9 @@ from lib.constants import (
     STEP_PAUSE_ARGOCD_APPS,
     TOKEN_DURATION_DEFAULT,
 )
-from lib.exceptions import StateLoadError, StateLockError, SwitchoverError
+from lib.exceptions import StateLoadError, StateLockError
 from lib.gitops_detector import GitOpsCollector
-from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
-from lib.report_artifacts import (
-    build_operation_report,
-    validate_report_artifact_directory,
-    write_json_report_artifact,
-)
+from lib.report_artifacts import validate_report_artifact_directory
 from lib.validation import InputValidator, ValidationError
 from modules import (
     Decommission,
@@ -958,66 +954,12 @@ def run_decommission(
 
 def _report_target(args: argparse.Namespace) -> tuple[str, str]:
     """Return report type and filename for the current Python CLI operation."""
-    if getattr(args, "validate_only", False):
-        return "preflight", "preflight-report.json"
-    if getattr(args, "decommission", False):
-        return "decommission", "decommission-report.json"
-    if getattr(args, "restore_only", False):
-        return "restore", "restore-only-report.json"
-    return "switchover", "switchover-report.json"
+    return cli_outcomes.report_target(args)
 
 
 def _phase_report_from_state(state_snapshot: dict) -> dict:
     """Build a compact phase map from durable state."""
-    phases: dict[str, dict[str, Any]] = {}
-    phase_by_step_prefix = {
-        "preflight": "preflight",
-        "pause_argocd": "preflight",
-        "pause_backup": "primary_prep",
-        "disable_auto_import": "primary_prep",
-        "scale_down": "primary_prep",
-        "verify_passive_sync": "activation",
-        "activate_managed_clusters": "activation",
-        "create_full_restore": "activation",
-        "wait_restore_completion": "activation",
-        "apply_immediate_import": "activation",
-        "verify_managed_clusters": "post_activation",
-        "verify_klusterlet": "post_activation",
-        "enable_backup_schedule": "finalization",
-        "verify_backup_schedule": "finalization",
-        "fix_backup_collision": "finalization",
-        "verify_new_backups": "finalization",
-        "verify_backup_integrity": "finalization",
-        "verify_mch_health": "finalization",
-        "handle_old_hub": "finalization",
-    }
-
-    for step in state_snapshot.get("completed_steps", []) or []:
-        name = step.get("name", "")
-        phase = next(
-            (value for prefix, value in phase_by_step_prefix.items() if name.startswith(prefix)),
-            None,
-        )
-        if not phase:
-            continue
-        phase_entry = phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})
-        phase_entry["steps"].append(name)
-
-    current_phase = state_snapshot.get("current_phase")
-    if current_phase == Phase.FAILED.value:
-        errors = state_snapshot.get("errors", []) or []
-        failed_phase_value = (errors[-1] or {}).get("phase") if errors else None
-        failed_phase = {
-            Phase.PREFLIGHT.value: "preflight",
-            Phase.PRIMARY_PREP.value: "primary_prep",
-            Phase.ACTIVATION.value: "activation",
-            Phase.POST_ACTIVATION.value: "post_activation",
-            Phase.FINALIZATION.value: "finalization",
-        }.get(failed_phase_value)
-        if failed_phase:
-            phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})["status"] = "fail"
-
-    return phases
+    return cli_outcomes.phase_report_from_state(state_snapshot)
 
 
 def _write_python_report(
@@ -1027,26 +969,17 @@ def _write_python_report(
     logger: logging.Logger,
 ) -> None:
     """Write a Python CLI report artifact when --report-dir is set."""
-    report_dir = getattr(args, "report_dir", None)
-    if not report_dir or state is None:
-        return
+    cli_outcomes.write_python_report(args, state, status, logger)
 
-    try:
-        report_type, filename = _report_target(args)
-        state_snapshot = state.capture_state_snapshot()
-        report = build_operation_report(
-            report_type=report_type,
-            status=status,
-            source=PYTHON_REPORT_SOURCE,
-            args=args,
-            state_snapshot=state_snapshot,
-            phases=_phase_report_from_state(state_snapshot),
-        )
-        destination = os.path.join(report_dir, filename)
-        written_path = write_json_report_artifact(report, destination)
-        logger.info("Wrote report artifact: %s", written_path)
-    except Exception as exc:
-        logger.error("Failed to write report artifact: %s", exc)
+
+def _build_cli_operation_hooks() -> cli_outcomes.CliOperationHooks:
+    return cli_outcomes.CliOperationHooks(
+        bind_runtime_hub_identities=_bind_runtime_hub_identities,
+        run_argocd_resume_only=_run_argocd_resume_only,
+        execute_operation=_execute_operation,
+        write_python_report=_write_python_report,
+        gitops_reporter_factory=GitOpsCollector.get_instance,
+    )
 
 
 def run_setup(
@@ -1222,21 +1155,16 @@ def main():  # noqa: C901
     # Setup mode doesn't need state tracking or Kubernetes clients
     # It uses the admin-kubeconfig directly via the shell script
     if args.setup:
-        try:
-            success = run_setup(args, logger)
-        except KeyboardInterrupt:
-            logger.warning("\n\nSetup interrupted by user")
-            sys.exit(EXIT_INTERRUPT)
-        except Exception as exc:
-            logger.error("\n✗ Setup failed: %s", exc, exc_info=args.verbose)
-            sys.exit(EXIT_FAILURE)
-
-        if success:
-            logger.info("\n✓ Setup completed successfully!")
-            sys.exit(EXIT_SUCCESS)
-        else:
-            logger.error("\n✗ Setup failed!")
-            sys.exit(EXIT_FAILURE)
+        sys.exit(
+            cli_outcomes.run_setup_mode(
+                args,
+                logger,
+                run_setup=run_setup,
+                exit_success=EXIT_SUCCESS,
+                exit_failure=EXIT_FAILURE,
+                exit_interrupt=EXIT_INTERRUPT,
+            )
+        )
 
     if getattr(args, "argocd_resume_only", False) and not os.path.exists(resolved_state_file):
         logger.error(
@@ -1248,57 +1176,20 @@ def main():  # noqa: C901
 
     runtime = _prepare_runtime(args, logger, resolved_state_file)
     state = runtime.state
-    primary = runtime.primary
-    secondary = runtime.secondary
-    should_bind_state = runtime.should_bind_state
-    should_record_state_errors = runtime.should_record_state_errors
 
-    operation_exit_code = EXIT_FAILURE
-    try:
-        if should_bind_state:
-            _bind_runtime_hub_identities(args, state, primary, secondary)
-        if getattr(args, "argocd_resume_only", False):
-            success = _run_argocd_resume_only(args, state, primary, secondary, logger)
-        else:
-            success = _execute_operation(args, state, primary, secondary, logger)
-    except KeyboardInterrupt:
-        logger.warning("\n\nOperation interrupted by user")
-        logger.info("State saved to: %s", args.state_file)
-        logger.info("Re-run the same command to resume from last successful step")
-        operation_exit_code = EXIT_INTERRUPT
-    except SwitchoverError as exc:
-        logger.error("\n✗ %s", exc)
-        if should_record_state_errors:
-            state.add_error(str(exc))
-        operation_exit_code = EXIT_FAILURE
-    except Exception as exc:
-        logger.error("\n✗ Unexpected error: %s", exc, exc_info=args.verbose)
-        if should_record_state_errors:
-            state.add_error(str(exc))
-        operation_exit_code = EXIT_FAILURE
-    else:
-        if success:
-            if getattr(args, "argocd_resume_only", False):
-                logger.info("\n✓ Argo CD resume completed successfully!")
-            else:
-                logger.info("\n✓ Operation completed successfully!")
-            operation_exit_code = EXIT_SUCCESS
-        else:
-            if getattr(args, "argocd_resume_only", False):
-                logger.error("\n✗ Argo CD resume failed or had nothing to restore.")
-            else:
-                logger.error("\n✗ Operation failed!")
-            operation_exit_code = EXIT_FAILURE
-    finally:
-        # Print GitOps detection report if any markers were found
-        _write_python_report(
-            args,
-            state,
-            "pass" if operation_exit_code == EXIT_SUCCESS else "fail",
-            logger,
-        )
-        GitOpsCollector.get_instance().print_report()
-
+    operation_exit_code = cli_outcomes.run_operation_mode(
+        args,
+        state,
+        runtime.primary,
+        runtime.secondary,
+        logger,
+        should_bind_state=runtime.should_bind_state,
+        should_record_state_errors=runtime.should_record_state_errors,
+        hooks=_build_cli_operation_hooks(),
+        exit_success=EXIT_SUCCESS,
+        exit_failure=EXIT_FAILURE,
+        exit_interrupt=EXIT_INTERRUPT,
+    )
     sys.exit(operation_exit_code)
 
 
