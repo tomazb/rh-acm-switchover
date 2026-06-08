@@ -113,7 +113,7 @@ def log_operation_completion(
     logger.info(config.success_message)
     logger.info(WORKFLOW_BANNER)
     logger.info(config.completed_at_message, datetime.now().astimezone().isoformat())
-    logger.info(WORKFLOW_STATE_FILE_MESSAGE, getattr(args, "state_file", None))
+    logger.info(WORKFLOW_STATE_FILE_MESSAGE, state.state_file)
     logger.info(WORKFLOW_NEXT_STEPS_HEADER)
     for message in config.next_step_messages:
         logger.info(message)

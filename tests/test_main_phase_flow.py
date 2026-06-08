@@ -818,6 +818,7 @@ class TestRestoreOnlyFlow:
         state.get_current_phase.side_effect = lambda: current[0]
         state.set_phase.side_effect = track_phase
         state.get_state_age.return_value = None
+        state.state_file = ".state/restore-only-phase-flow.json"
         secondary = Mock()
 
         called_with_primary = []

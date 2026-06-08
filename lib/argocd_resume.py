@@ -10,31 +10,36 @@ from lib.constants import (
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
     STATE_KEY_ARGOCD_PAUSE_DRY_RUN,
+    STATE_KEY_ARGOCD_PAUSED_APP_HUB,
     STATE_KEY_ARGOCD_PAUSED_APPS,
     STATE_KEY_ARGOCD_RUN_ID,
     STEP_PAUSE_ARGOCD_APPS,
 )
+from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import Phase
 
 
-def _required_resume_roles(paused_apps: list[dict[str, Any]], stored_identities: dict[str, Any]) -> set[str]:
+def _required_resume_roles(paused_apps: list[Any], stored_identities: Any) -> set[str]:
     """Return hub roles that need live identity validation for a resume attempt."""
     known_hub_roles = {HUB_ROLE_PRIMARY, HUB_ROLE_SECONDARY}
     required_roles = {
-        entry.get("hub") for entry in paused_apps if isinstance(entry, dict) and entry.get("hub") in known_hub_roles
+        entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB)
+        for entry in paused_apps
+        if isinstance(entry, dict) and entry.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB) in known_hub_roles
     }
-    required_roles.update(role for role in stored_identities.keys() if role in known_hub_roles)
+    if isinstance(stored_identities, dict):
+        required_roles.update(role for role in stored_identities.keys() if role in known_hub_roles)
     return required_roles
 
 
-def _ensure_resume_identity_data(args: Any, stored_identities: dict[str, Any], logger: logging.Logger) -> None:
+def _ensure_resume_identity_data(args: Any, stored_identities: Any, logger: logging.Logger) -> None:
     """Reject legacy resume state without identity data unless the operator forces it."""
-    if stored_identities:
+    if isinstance(stored_identities, dict) and stored_identities:
         return
 
     if not getattr(args, "force", False):
-        raise ValueError(
+        raise SwitchoverError(
             "Argo CD resume state is missing hub identity data for recorded paused Applications. "
             "Refusing to resume because context names alone cannot prove the same live clusters. "
             "Use --force after manual verification to bind this legacy state to the current hubs."
@@ -77,7 +82,7 @@ def _resolve_recorded_context_mapping(
         current_secondary_ctx is not None and stored_secondary_ctx != current_secondary_ctx
     ):
         if not getattr(args, "force", False):
-            raise ValueError(
+            raise SwitchoverError(
                 "Argo CD resume contexts "
                 f"({current_primary_ctx}/{current_secondary_ctx}) differ from recorded state "
                 f"({stored_primary_ctx}/{stored_secondary_ctx}). "
@@ -132,7 +137,7 @@ def _load_recorded_primary_client(
 def prepare_argocd_resume_clients(
     args: Any,
     state: Any,
-    paused_apps: list[dict[str, Any]],
+    paused_apps: list[Any],
     primary: Optional[KubeClient],
     secondary: Optional[KubeClient],
     logger: logging.Logger,
@@ -150,10 +155,12 @@ def prepare_argocd_resume_clients(
         current_secondary_ctx,
     ) = _resolve_recorded_context_mapping(args, state, primary, secondary, logger)
 
-    primary_apps_recorded = any(isinstance(item, dict) and item.get("hub") == HUB_ROLE_PRIMARY for item in paused_apps)
+    primary_apps_recorded = any(
+        isinstance(item, dict) and item.get(STATE_KEY_ARGOCD_PAUSED_APP_HUB) == HUB_ROLE_PRIMARY for item in paused_apps
+    )
     if primary_apps_recorded and resume_primary is None:
         if not stored_primary_ctx:
-            raise ValueError(
+            raise SwitchoverError(
                 "Argo CD resume state references Applications paused on the primary hub, "
                 "but the recorded primary context is missing. Pass --primary-context or "
                 "--state-file for a valid switchover state."
@@ -171,7 +178,12 @@ def prepare_argocd_resume_clients(
         )
 
     stored_identities = runtime_bootstrap.stored_hub_identities(state)
-    if stored_identities.get(HUB_ROLE_PRIMARY) and resume_primary is None and stored_primary_ctx:
+    if (
+        isinstance(stored_identities, dict)
+        and stored_identities.get(HUB_ROLE_PRIMARY)
+        and resume_primary is None
+        and stored_primary_ctx
+    ):
         resume_primary = _load_recorded_primary_client(
             args,
             resume_primary,
@@ -189,7 +201,7 @@ def prepare_argocd_resume_clients(
     required_roles = _required_resume_roles(paused_apps, stored_identities)
     missing_roles = sorted(role for role in required_roles if role not in live_identities)
     if missing_roles:
-        raise ValueError(
+        raise SwitchoverError(
             "Argo CD resume hub identity validation failed: missing live client for recorded "
             + ", ".join(missing_roles)
             + " hub identity."

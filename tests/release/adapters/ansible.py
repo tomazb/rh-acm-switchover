@@ -140,7 +140,7 @@ class AnsibleAdapter:
         if scenario_id == "decommission":
             extra_vars["acm_switchover_operation"]["dry_run"] = True
             extra_vars["acm_switchover_execution"]["mode"] = "dry_run"
-            extra_vars["summary_path"] = str(self.scenario_dir(scenario_id) / "decommission-report.json")
+            extra_vars["summary_path"] = str(self.scenario_dir(scenario_id) / REPORT_FILENAME_DECOMMISSION)
             extra_vars["acm_switchover_decommission"] = {
                 "confirm": True,
                 "has_observability": "auto",
