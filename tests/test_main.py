@@ -24,9 +24,11 @@ from acm_switchover import (
     _fail_phase,
     _fail_unexpected_phase_state,
     _initialize_clients,
+    _phase_report_from_state,
     _prepare_argocd_resume_clients,
     _prepare_runtime,
     _report_argocd_acm_impact,
+    _report_target,
     _run_argocd_resume_only,
     _run_phase_activation,
     _run_phase_finalization,
@@ -36,10 +38,12 @@ from acm_switchover import (
     _run_restore_only_argocd_pause,
     _run_restore_only_impl,
     _run_switchover_impl,
+    _write_python_report,
     main,
     parse_args,
     run_decommission,
     run_restore_only,
+    run_setup,
     run_switchover,
     validate_args,
 )
@@ -2958,3 +2962,145 @@ class TestInitializeClients:
         assert primary is None
         assert secondary is kube_client.return_value
         kube_client.assert_called_once_with("restore-hub", dry_run=True)
+
+
+@pytest.mark.unit
+class TestCliOutcomesDelegation:
+    """Tests that acm_switchover.py delegates outcome/report handling to lib.cli_outcomes."""
+
+    def test_report_target_delegates_to_cli_outcomes_module(self):
+        args = SimpleNamespace(validate_only=False, decommission=False, restore_only=True)
+
+        with patch(
+            "acm_switchover.cli_outcomes.report_target",
+            return_value=("restore", "restore-only-report.json"),
+        ) as report_target:
+            assert _report_target(args) == ("restore", "restore-only-report.json")
+
+        report_target.assert_called_once_with(args)
+
+    def test_write_python_report_delegates_to_cli_outcomes_module(self):
+        args = SimpleNamespace(report_dir="/tmp/reports")
+        state = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.cli_outcomes.write_python_report", return_value=None) as write_report:
+            _write_python_report(args, state, "pass", logger)
+
+        write_report.assert_called_once_with(args, state, "pass", logger)
+
+    def test_phase_report_from_state_delegates_to_cli_outcomes_module(self):
+        snapshot = {"completed_steps": [], "current_phase": "INIT", "errors": []}
+
+        with patch(
+            "acm_switchover.cli_outcomes.phase_report_from_state",
+            return_value={"preflight": {"status": "pass"}},
+        ) as phase_report:
+            assert _phase_report_from_state(snapshot) == {"preflight": {"status": "pass"}}
+
+        phase_report.assert_called_once_with(snapshot)
+
+    def test_main_setup_branch_delegates_to_cli_outcomes_setup_helper(self):
+        args = SimpleNamespace(
+            verbose=False,
+            log_format="text",
+            state_file="state.json",
+            primary_context="primary",
+            secondary_context="secondary",
+            skip_gitops_check=False,
+            validate_only=False,
+            argocd_manage=False,
+            setup=True,
+            reset_state=False,
+            argocd_resume_only=False,
+        )
+        logger = Mock()
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging",
+            return_value=logger,
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file",
+            return_value="state.json",
+        ), patch(
+            "acm_switchover._prepare_runtime",
+        ) as prepare_runtime, patch(
+            "acm_switchover.cli_outcomes.run_setup_mode",
+            return_value=EXIT_SUCCESS,
+        ) as run_setup_mode:
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        prepare_runtime.assert_not_called()
+        run_setup_mode.assert_called_once_with(
+            args,
+            logger,
+            run_setup=run_setup,
+            exit_success=EXIT_SUCCESS,
+            exit_failure=EXIT_FAILURE,
+            exit_interrupt=EXIT_INTERRUPT,
+        )
+
+    def test_main_non_setup_branch_delegates_to_cli_outcomes_operation_helper(self):
+        args = SimpleNamespace(
+            verbose=False,
+            log_format="text",
+            state_file="state.json",
+            primary_context="primary",
+            secondary_context="secondary",
+            skip_gitops_check=False,
+            validate_only=False,
+            argocd_manage=False,
+            setup=False,
+            reset_state=False,
+            argocd_resume_only=False,
+        )
+        logger = Mock()
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        runtime = SimpleNamespace(
+            state=state,
+            primary=primary,
+            secondary=secondary,
+            should_bind_state=True,
+            should_record_state_errors=True,
+        )
+
+        with patch("acm_switchover.parse_args", return_value=args), patch(
+            "acm_switchover.setup_logging",
+            return_value=logger,
+        ), patch("acm_switchover.validate_args"), patch(
+            "acm_switchover._resolve_state_file",
+            return_value="state.json",
+        ), patch(
+            "acm_switchover.os.path.exists",
+            return_value=True,
+        ), patch(
+            "acm_switchover._prepare_runtime",
+            return_value=runtime,
+        ), patch(
+            "acm_switchover._build_cli_operation_hooks",
+            return_value="hooks",
+        ), patch(
+            "acm_switchover.cli_outcomes.run_operation_mode",
+            return_value=EXIT_SUCCESS,
+        ) as run_operation_mode:
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == EXIT_SUCCESS
+        run_operation_mode.assert_called_once_with(
+            args,
+            state,
+            primary,
+            secondary,
+            logger,
+            should_bind_state=True,
+            should_record_state_errors=True,
+            hooks="hooks",
+            exit_success=EXIT_SUCCESS,
+            exit_failure=EXIT_FAILURE,
+            exit_interrupt=EXIT_INTERRUPT,
+        )
