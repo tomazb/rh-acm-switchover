@@ -7,6 +7,19 @@
       {{ acm_activation_restores_info.resources | default([]) }}
   register: acm_passive_restore_selection
 
+- name: Flag Option-B activation-restore resume state
+  ansible.builtin.set_fact:
+    _acm_activation_restore_resume: >-
+      {{
+        acm_switchover_operation.activation_method | default('patch') == 'restore'
+        and (acm_passive_restore_selection.sync_enabled_count | default(0) | int) == 0
+        and (
+          acm_activation_restores_info.resources | default([])
+          | selectattr('metadata.name', 'equalto', 'restore-acm-activate')
+          | list | length
+        ) > 0
+      }}
+
 - name: Require ready passive sync restore on the secondary hub
   ansible.builtin.assert:
     that:
@@ -24,8 +37,21 @@
       The conventional restore-acm-passive-sync fallback is accepted only when
       acm_switchover_operation.allow_conventional_passive_restore_fallback=true.
       {{ acm_passive_restore_selection.restore_ready_reason | default('No readiness reason was reported.') }}
+  when: not (_acm_activation_restore_resume | bool)
 
 - name: Publish passive restore selection
   ansible.builtin.set_fact:
     acm_switchover_restore_selection:
       restore: "{{ acm_passive_restore_selection.restore }}"
+  when: not (_acm_activation_restore_resume | bool)
+
+- name: Publish activation restore as selection for Option-B resume
+  ansible.builtin.set_fact:
+    acm_switchover_restore_selection:
+      restore: >-
+        {{
+          acm_activation_restores_info.resources | default([])
+          | selectattr('metadata.name', 'equalto', 'restore-acm-activate')
+          | first
+        }}
+  when: _acm_activation_restore_resume | bool

@@ -69,15 +69,46 @@ def test_verify_passive_sync_passes_activation_method_to_restore_selector():
 
 
 def test_verify_passive_sync_requires_passive_restore_candidate():
-    """Passive activation precheck must reject stale restore-acm-activate objects."""
+    """Passive activation precheck requires sync-enabled restore for patch mode and initial option-B runs."""
     text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
     assert "sync_enabled_count" in text, (
-        "verify_passive_sync.yml must still reject stale activation restores "
-        "when no passive restore candidate is present"
+        "verify_passive_sync.yml must check sync_enabled_count so that patch-mode runs "
+        "and initial option-B runs (before activation restore is created) require a passive sync restore"
     )
     assert "allow_conventional_passive_restore_fallback" in text, (
         "verify_passive_sync.yml must put conventional-name passive restore compatibility "
         "behind an explicit opt-in variable"
+    )
+
+
+def test_verify_passive_sync_skips_assert_for_option_b_resume_state():
+    """verify_passive_sync.yml must not fail when activation_method=restore and only restore-acm-activate exists."""
+    tasks = yaml.safe_load((ACTIVATION_TASKS / "verify_passive_sync.yml").read_text())
+
+    assert_tasks = [t for t in tasks if "ansible.builtin.assert" in t]
+    assert assert_tasks, "verify_passive_sync.yml must contain a passive restore assert"
+
+    assert_task = assert_tasks[0]
+    when_clause = str(assert_task.get("when", ""))
+    assert "_acm_activation_restore_resume" in when_clause, (
+        "The passive restore assert must be guarded by the _acm_activation_restore_resume flag "
+        "so that option-B resume (only restore-acm-activate present) is not rejected"
+    )
+    assert (
+        "not" in when_clause
+    ), "The passive restore assert must be skipped (not asserted) when in the option-B resume state"
+
+
+def test_verify_passive_sync_publishes_activation_restore_in_resume_state():
+    """verify_passive_sync.yml must publish restore-acm-activate as selection for option-B resume."""
+    text = (ACTIVATION_TASKS / "verify_passive_sync.yml").read_text()
+    assert "restore-acm-activate" in text, (
+        "verify_passive_sync.yml must reference restore-acm-activate to handle the resume state "
+        "where only the activation Restore is present"
+    )
+    assert "_acm_activation_restore_resume" in text, (
+        "verify_passive_sync.yml must set a resume-state flag to guard the passive-sync assert "
+        "and choose the correct publish task"
     )
 
 
