@@ -136,7 +136,8 @@ import logging
 import os
 from typing import Any, Optional
 
-from lib.report_artifacts import PYTHON_REPORT_SOURCE, build_operation_report, write_json_report_artifact
+from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
+from lib.report_artifacts import build_operation_report, write_json_report_artifact
 from lib.utils import Phase, StateManager
 
 

@@ -51,6 +51,26 @@ def test_phase_report_from_state_marks_completed_and_failed_phases():
     assert phases["activation"]["status"] == "fail"
 
 
+def test_phase_report_from_state_ignores_malformed_snapshot_entries():
+    state_snapshot = {
+        "completed_steps": [
+            "not-a-step-mapping",
+            {"name": "pause_backup_schedule"},
+            None,
+        ],
+        "current_phase": Phase.FAILED.value,
+        "errors": [
+            "not-an-error-mapping",
+            {"phase": Phase.ACTIVATION.value, "message": "boom"},
+        ],
+    }
+
+    phases = phase_report_from_state(state_snapshot)
+
+    assert phases["primary_prep"]["steps"] == ["pause_backup_schedule"]
+    assert phases["activation"]["status"] == "fail"
+
+
 def test_write_python_report_is_noop_without_report_dir_or_state():
     logger = Mock()
 
@@ -316,6 +336,40 @@ def test_run_operation_mode_handles_keyboard_interrupt_without_recording_state_e
     logger.warning.assert_called_once_with("\n\nOperation interrupted by user")
     logger.info.assert_any_call("State saved to: %s", "state.json")
     logger.info.assert_any_call("Re-run the same command to resume from last successful step")
+    hooks.write_python_report.assert_called_once_with(args, state, "fail", logger)
+    reporter.print_report.assert_called_once()
+
+
+def test_run_operation_mode_handles_keyboard_interrupt_without_state_file_attribute():
+    args = SimpleNamespace(argocd_resume_only=False, verbose=False)
+    state = Mock()
+    logger = Mock()
+    reporter = Mock()
+    hooks = CliOperationHooks(
+        bind_runtime_hub_identities=Mock(side_effect=KeyboardInterrupt),
+        run_argocd_resume_only=Mock(),
+        execute_operation=Mock(),
+        write_python_report=Mock(),
+        gitops_reporter_factory=lambda: reporter,
+    )
+
+    exit_code = run_operation_mode(
+        args,
+        state,
+        Mock(),
+        Mock(),
+        logger,
+        should_bind_state=True,
+        should_record_state_errors=True,
+        hooks=hooks,
+        exit_success=0,
+        exit_failure=1,
+        exit_interrupt=130,
+    )
+
+    assert exit_code == 130
+    state.add_error.assert_not_called()
+    logger.info.assert_any_call("State saved to: %s", None)
     hooks.write_python_report.assert_called_once_with(args, state, "fail", logger)
     reporter.print_report.assert_called_once()
 

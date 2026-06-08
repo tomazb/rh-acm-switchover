@@ -47,7 +47,16 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
         "handle_old_hub": "finalization",
     }
 
-    for step in state_snapshot.get("completed_steps", []) or []:
+    if not isinstance(state_snapshot, dict):
+        return phases
+
+    completed_steps = state_snapshot.get("completed_steps", [])
+    if not isinstance(completed_steps, list):
+        completed_steps = []
+
+    for step in completed_steps:
+        if not isinstance(step, dict):
+            continue
         name = step.get("name", "")
         phase = next((value for prefix, value in phase_by_step_prefix.items() if name.startswith(prefix)), None)
         if not phase:
@@ -55,8 +64,12 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
         phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})["steps"].append(name)
 
     if state_snapshot.get("current_phase") == Phase.FAILED.value:
-        errors = state_snapshot.get("errors", []) or []
-        failed_phase_value = (errors[-1] or {}).get("phase") if errors else None
+        errors = state_snapshot.get("errors", [])
+        if not isinstance(errors, list):
+            errors = []
+
+        last_error = errors[-1] if errors else None
+        failed_phase_value = last_error.get("phase") if isinstance(last_error, dict) else None
         failed_phase = {
             Phase.PREFLIGHT.value: "preflight",
             Phase.PRIMARY_PREP.value: "primary_prep",
@@ -155,7 +168,7 @@ def run_operation_mode(
             success = hooks.execute_operation(args, state, primary, secondary, logger)
     except KeyboardInterrupt:
         logger.warning("\n\nOperation interrupted by user")
-        logger.info("State saved to: %s", args.state_file)
+        logger.info("State saved to: %s", getattr(args, "state_file", None))
         logger.info("Re-run the same command to resume from last successful step")
         exit_code = exit_interrupt
     except SwitchoverError as exc:
