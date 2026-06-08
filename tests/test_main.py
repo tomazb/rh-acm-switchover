@@ -24,6 +24,7 @@ from acm_switchover import (
     _fail_phase,
     _fail_unexpected_phase_state,
     _initialize_clients,
+    _prepare_argocd_resume_clients,
     _prepare_runtime,
     _report_argocd_acm_impact,
     _run_argocd_resume_only,
@@ -53,11 +54,13 @@ from lib.constants import (
     EXIT_SUCCESS,
     EXPECTED_MANAGED_CLUSTER_COUNT_KEY,
     EXPECTED_MANAGED_CLUSTER_NAMES_KEY,
+    HUB_ROLE_SECONDARY,
     MANAGED_CLUSTER_EXPECTATION_DERIVED_FROM_PREFLIGHT,
     MANAGED_CLUSTER_EXPECTATION_EXPLICIT_EMPTY_ALLOWED,
     MANAGED_CLUSTER_EXPECTATION_KEY,
     MANAGED_CLUSTER_EXPECTATION_RESTORE_ONLY,
     RESTORE_ONLY_COMPLETED_SUCCESS_MESSAGE,
+    STEP_PAUSE_ARGOCD_APPS,
     SWITCHOVER_COMPLETED_SUCCESS_MESSAGE,
     TOKEN_DURATION_DEFAULT,
 )
@@ -1043,14 +1046,14 @@ class TestSwitchoverPhaseFlow:
 
         with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = ([{"hub": "secondary", "name": "app-1"}], 0)
+            coordinator.pause_hubs.return_value = ([{"hub": HUB_ROLE_SECONDARY, "name": "app-1"}], 0)
             state.get_config.return_value = "run-1"
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
         assert result is True
         coordinator_class.assert_called_once_with(state, dry_run=True)
-        coordinator.pause_hubs.assert_called_once_with([(secondary, "secondary")])
+        coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         state.mark_step_completed.assert_not_called()
 
     def test_restore_only_argocd_pause_dry_run_fails_on_blockers(self):
@@ -1071,7 +1074,7 @@ class TestSwitchoverPhaseFlow:
 
         assert result is False
         coordinator_class.assert_called_once_with(state, dry_run=True)
-        coordinator.pause_hubs.assert_called_once_with([(secondary, "secondary")])
+        coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
         fail_phase.assert_called_once_with(state, "Argo CD auto-sync pause failed for 1 Application(s)", logger)
         state.mark_step_completed.assert_not_called()
 
@@ -1084,14 +1087,14 @@ class TestSwitchoverPhaseFlow:
 
         with patch("acm_switchover.ArgoCDPauseCoordinator") as coordinator_class:
             coordinator = coordinator_class.return_value
-            coordinator.pause_hubs.return_value = ([{"hub": "secondary", "name": "app-1"}], 0)
+            coordinator.pause_hubs.return_value = ([{"hub": HUB_ROLE_SECONDARY, "name": "app-1"}], 0)
 
             result = _run_restore_only_argocd_pause(args, state, None, secondary, logger)
 
         assert result is True
         coordinator_class.assert_called_once_with(state, dry_run=False)
-        coordinator.pause_hubs.assert_called_once_with([(secondary, "secondary")])
-        state.mark_step_completed.assert_called_once_with("pause_argocd_apps")
+        coordinator.pause_hubs.assert_called_once_with([(secondary, HUB_ROLE_SECONDARY)])
+        state.mark_step_completed.assert_called_once_with(STEP_PAUSE_ARGOCD_APPS)
 
     def test_run_switchover_resume_from_failed_state_retries_failed_phase(self, tmp_path):
         """Verify that run_switchover resumes from the phase that failed when state is FAILED."""
@@ -1546,6 +1549,70 @@ class TestOperationRunnerDelegation:
         assert hooks.decommission_runner is run_decommission
         assert hooks.restore_only_runner is run_restore_only
         assert hooks.switchover_runner is run_switchover
+
+
+@pytest.mark.unit
+class TestArgocdResumeDelegation:
+    def test_prepare_argocd_resume_clients_delegates_to_lib_module(self):
+        args = SimpleNamespace(primary_context="hub-a", secondary_context="hub-b", dry_run=False, force=False)
+        state = Mock()
+        paused_apps = [{"hub": "secondary", "namespace": "argocd", "name": "app-1"}]
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+
+        with patch(
+            "acm_switchover.argocd_resume.prepare_argocd_resume_clients",
+            return_value=(primary, secondary),
+        ) as prepare_clients:
+            result = _prepare_argocd_resume_clients(
+                args,
+                state,
+                paused_apps,
+                primary,
+                secondary,
+                logger,
+                allow_primary_load_from_state=True,
+            )
+
+        assert result == (primary, secondary)
+        prepare_clients.assert_called_once_with(
+            args,
+            state,
+            paused_apps,
+            primary,
+            secondary,
+            logger,
+            allow_primary_load_from_state=True,
+        )
+
+    def test_run_argocd_resume_only_delegates_to_lib_module(self):
+        args = SimpleNamespace()
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+
+        with patch("acm_switchover.argocd_resume.run_argocd_resume_only", return_value=True) as run_resume:
+            result = _run_argocd_resume_only(args, state, primary, secondary, logger)
+
+        assert result is True
+        run_resume.assert_called_once_with(args, state, primary, secondary, logger)
+
+    def test_attempt_argocd_resume_on_failure_delegates_to_lib_module(self):
+        args = SimpleNamespace(argocd_resume_on_failure=True, restore_only=False, force=False)
+        state = Mock()
+        primary = Mock()
+        secondary = Mock()
+        logger = Mock()
+
+        with patch(
+            "acm_switchover.argocd_resume.attempt_argocd_resume_on_failure",
+            return_value=None,
+        ) as attempt_resume:
+            _attempt_argocd_resume_on_failure(args, state, primary, secondary, logger)
+
+        attempt_resume.assert_called_once_with(args, state, primary, secondary, logger)
 
 
 @pytest.mark.unit
