@@ -402,6 +402,30 @@ class TestRBACValidator:
         assert validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE)) == 1
         assert validator.client.namespace_exists.call_args_list.count(call(MCE_NAMESPACE)) == 1
 
+    def test_validator_role_gets_read_only_namespace_permissions(self, mock_client):
+        """Validator role must receive read-only namespace permissions, not operator write permissions."""
+        mock_client.context = "test-context"
+        validator = RBACValidator(mock_client, role="validator")
+
+        perms = validator._get_hub_namespace_permissions()
+
+        assert perms is RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+        assert perms is not RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+
+        backup_ns_perms = perms.get("open-cluster-management-backup", [])
+        backup_schedule_rule = next(
+            (
+                rule
+                for rule in backup_ns_perms
+                if rule[0] == "cluster.open-cluster-management.io" and rule[1] == "backupschedules"
+            ),
+            None,
+        )
+        assert backup_schedule_rule is not None, "backupschedules rule missing from validator permissions"
+        assert "create" not in backup_schedule_rule[2], "validator must not have create on backupschedules"
+        assert "patch" not in backup_schedule_rule[2], "validator must not have patch on backupschedules"
+        assert "delete" not in backup_schedule_rule[2], "validator must not have delete on backupschedules"
+
     def test_validate_all_permissions_success(self, validator):
         """Test validate_all_permissions when all checks pass."""
         validator.check_permission = MagicMock(return_value=(True, ""))
