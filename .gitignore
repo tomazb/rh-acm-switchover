@@ -56,3 +56,8 @@ graphify-out/
 .claude/agent-memory-local/
 
 review/graphify/
+
+# Mutation testing artifacts (on-demand only; not part of normal CI or test path)
+mutants/
+.mutmut-cache/
+mutation-reports/
