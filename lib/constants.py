@@ -198,6 +198,13 @@ STATE_KEY_ARGOCD_DISCOVERY_NAMESPACES = "argocd_discovery_namespaces"
 STATE_KEY_RESUME_SUMMARY = "resume_summary"
 RESUME_START_PHASE_KEY = "resume_start_phase"
 
+# Hub role identifiers
+HUB_ROLE_PRIMARY = "primary"
+HUB_ROLE_SECONDARY = "secondary"
+
+# Durable workflow step identifiers
+STEP_PAUSE_ARGOCD_APPS = "pause_argocd_apps"
+
 # Argo CD resource identifiers
 ARGOCD_APPLICATIONS_RESOURCE = "applications.argoproj.io"
 ARGOCD_PAUSED_BY_ANNOTATION = "acm-switchover.argoproj.io/paused-by"
