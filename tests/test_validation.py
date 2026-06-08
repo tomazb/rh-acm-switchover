@@ -733,6 +733,121 @@ class TestCLIArgumentValidation:
         )
         InputValidator.validate_all_cli_args(args)  # Should not raise
 
+    def test_validate_all_cli_args_rejects_invalid_secondary_context(self):
+        """validate_all_cli_args must apply context validation to secondary_context."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="invalid context!",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            decommission=False,
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_rejects_invalid_method_via_integration(self):
+        """validate_all_cli_args must call validate_cli_method for invalid method values."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="invalid-method",
+            old_hub_action="secondary",
+            log_format="text",
+            decommission=False,
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_rejects_invalid_activation_method_via_integration(self):
+        """validate_all_cli_args must call validate_cli_activation_method for invalid values."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            activation_method="bogus-activation",
+            old_hub_action="secondary",
+            log_format="text",
+            decommission=False,
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_rejects_invalid_old_hub_action_via_integration(self):
+        """validate_all_cli_args must call validate_cli_old_hub_action for invalid values."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="bogus-action",
+            log_format="text",
+            decommission=False,
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_rejects_invalid_log_format_via_integration(self):
+        """validate_all_cli_args must call validate_cli_log_format for invalid values."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="bogus-format",
+            decommission=False,
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_rejects_unsafe_state_file_via_integration(self):
+        """validate_all_cli_args must call validate_safe_filesystem_path for state_file."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            log_format="text",
+            state_file="../../../etc/passwd",
+            decommission=False,
+        )
+        with pytest.raises(SecurityValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_allows_restore_activation_with_passive_method(self):
+        """passive + restore is a valid activation combination and must not raise."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            activation_method="restore",
+            old_hub_action="secondary",
+            log_format="text",
+            decommission=False,
+        )
+        InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_allows_disable_observability_with_secondary_old_hub_action(self):
+        """disable_observability_on_secondary with old_hub_action=secondary must not raise."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            disable_observability_on_secondary=True,
+            log_format="text",
+            decommission=False,
+        )
+        InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_allows_valid_token_duration_in_setup_mode(self):
+        """A correctly formatted token-duration must not raise in setup mode."""
+        args = MockArgs(
+            setup=True,
+            admin_kubeconfig="./config/kubeconfig",
+            token_duration="48h",
+        )
+        InputValidator.validate_all_cli_args(args)
+
 
 class TestKubernetesResourceValidation:
     """Test Kubernetes resource name validation."""
