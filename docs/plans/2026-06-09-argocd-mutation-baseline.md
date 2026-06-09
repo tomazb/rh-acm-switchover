@@ -6,7 +6,7 @@
 
 **Architecture:** This is a baseline/triage plan, not a survivor-kill plan. The workflow first proves the unmutated Python and collection Argo CD lanes are green, then temporarily repoints `[mutmut]` in `setup.cfg` to `lib/argocd.py`, runs the spike, classifies the top survivors against both form factors, records the baseline, and restores the default `setup.cfg` target afterward.
 
-**Tech Stack:** Python 3.14, pytest, mutmut 3.6.x, GitHub CLI, Python CLI Argo CD helpers, Ansible collection Argo CD role/unit tests
+**Tech Stack:** Python >=3.10, pytest, mutmut 3.6.x, GitHub CLI, Python CLI Argo CD helpers, Ansible collection Argo CD role/unit tests
 
 ---
 
@@ -174,13 +174,14 @@ Run:
 ```bash
 source .venv/bin/activate
 python -c "
-import sys; sys.argv = ['mutmut']
-from mutmut.configuration import Config
-Config.ensure_loaded()
-c = Config.get()
-print('source_paths:', c.source_paths)
-print('pytest_add_cli_args_test_selection:', c.pytest_add_cli_args_test_selection)
-print('do_not_mutate_patterns:', c.do_not_mutate_patterns)
+import configparser
+config = configparser.ConfigParser()
+config.read('setup.cfg')
+if 'mutmut' not in config:
+    raise SystemExit('Error: [mutmut] section not found in setup.cfg')
+print('source_paths:', config.get('mutmut', 'source_paths', fallback=None))
+print('pytest_add_cli_args_test_selection:', config.get('mutmut', 'pytest_add_cli_args_test_selection', fallback=None))
+print('do_not_mutate_patterns:', config.get('mutmut', 'do_not_mutate_patterns', fallback=None))
 "
 ```
 
@@ -233,11 +234,13 @@ source .venv/bin/activate
 python3 -c "
 import json
 from collections import Counter
-meta = json.load(open('mutants/lib/argocd.py.meta'))
+with open('mutants/lib/argocd.py.meta', encoding='utf-8') as f:
+    meta = json.load(f)
 exit_codes = meta.get('exit_code_by_key', {})
 survived = sum(1 for v in exit_codes.values() if v == 0)
-killed = sum(1 for v in exit_codes.values() if v != 0)
-print(f'Total: {len(exit_codes)} | Killed: {killed} | Survived: {survived}')
+killed = sum(1 for v in exit_codes.values() if v == 1)
+other = sum(1 for v in exit_codes.values() if v not in (0, 1))
+print(f'Total: {len(exit_codes)} | Killed: {killed} | Survived: {survived} | Other: {other}')
 func_survived = Counter()
 for key, code in exit_codes.items():
     if code == 0:
