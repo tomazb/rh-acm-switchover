@@ -186,12 +186,13 @@ Config.ensure_loaded()
 c = Config.get()
 print('source_paths:', c.source_paths)
 print('pytest_add_cli_args_test_selection:', c.pytest_add_cli_args_test_selection)
+print('also_copy:', c.also_copy)
 print('do_not_mutate_patterns:', c.do_not_mutate_patterns)
 "
 ```
 
 Expected: `source_paths` points at `lib/argocd.py`, the Python Argo CD tests are
-selected, `also_copy` includes both `lib/` and the collection
+selected, `also_copy` prints both `lib/` and the collection
 `plugins/module_utils/` path, and only the narrow logger/raise patterns are
 configured.
 
