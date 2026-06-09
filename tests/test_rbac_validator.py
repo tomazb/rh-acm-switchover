@@ -147,7 +147,7 @@ class TestRBACValidator:
 
         # expected is built dynamically from the class constant; mutmut 3.x does not mutate class-level
         # attributes, only function bodies — so this correctly targets loop/iteration mutations in
-        # validate_cluster_permissions.
+        # validate_cluster_permissions while still asserting exact call shape and coverage.
         expected = frozenset((ag, r, v) for ag, r, verbs in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS for v in verbs)
         all_calls = validator.check_permission.call_args_list
         assert all(len(c.args) == 3 for c in all_calls), (
