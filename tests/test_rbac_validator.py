@@ -150,9 +150,9 @@ class TestRBACValidator:
         # validate_cluster_permissions while still asserting exact call shape and coverage.
         expected = frozenset((ag, r, v) for ag, r, verbs in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS for v in verbs)
         all_calls = validator.check_permission.call_args_list
-        assert all(len(c.args) == 3 for c in all_calls), (
-            f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 3]}"
-        )
+        assert all(
+            len(c.args) == 3 for c in all_calls
+        ), f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 3]}"
         actual = frozenset((c.args[0], c.args[1], c.args[2]) for c in all_calls)
         assert actual == expected, (
             f"Permission set mismatch.\n" f"  Missing: {expected - actual}\n" f"  Unexpected: {actual - expected}"
@@ -342,6 +342,23 @@ class TestRBACValidator:
             not in validator.check_permission.call_args_list
         )
 
+    def test_validate_cluster_permissions_skips_base_observability_permissions(self, validator):
+        """skip_observability=True must filter out observability-tagged entries in the base cluster loop.
+
+        The 'observability' string check guards the standard cluster_permissions loop (not just
+        the finalization path). This test catches mutations that change that string.
+        """
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_cluster_permissions(skip_observability=True)
+
+        assert all_valid is True
+        assert errors == []
+        checked = {(c.args[0], c.args[1], c.args[2]) for c in validator.check_permission.call_args_list}
+        # Base cluster permissions include multiclusterobservabilities get/list — both must be skipped.
+        assert ("observability.open-cluster-management.io", "multiclusterobservabilities", "get") not in checked
+        assert ("observability.open-cluster-management.io", "multiclusterobservabilities", "list") not in checked
+
     def test_validate_cluster_permissions_deduplicates_mco_delete_when_both_paths_request_it(self, validator):
         """MCO delete should be checked once when decommission and finalization both require it."""
         validator.check_permission = MagicMock(return_value=(True, ""))
@@ -383,13 +400,10 @@ class TestRBACValidator:
             for v in verbs
         )
         all_calls = validator.check_permission.call_args_list
-        assert all(len(c.args) == 4 for c in all_calls), (
-            f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 4]}"
-        )
-        actual = frozenset(
-            (c.args[0], c.args[1], c.args[2], c.args[3])
-            for c in all_calls
-        )
+        assert all(
+            len(c.args) == 4 for c in all_calls
+        ), f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 4]}"
+        actual = frozenset((c.args[0], c.args[1], c.args[2], c.args[3]) for c in all_calls)
         assert actual == expected, (
             f"Namespace permission set mismatch.\n"
             f"  Missing: {expected - actual}\n"
@@ -442,8 +456,8 @@ class TestRBACValidator:
 
         perms = validator._get_hub_namespace_permissions()
 
-        assert perms == RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
-        assert perms != RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert perms is RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+        assert perms is not RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
 
         backup_ns_perms = perms.get("open-cluster-management-backup", [])
         backup_schedule_rule = next(
@@ -458,6 +472,25 @@ class TestRBACValidator:
         assert "create" not in backup_schedule_rule[2], "validator must not have create on backupschedules"
         assert "patch" not in backup_schedule_rule[2], "validator must not have patch on backupschedules"
         assert "delete" not in backup_schedule_rule[2], "validator must not have delete on backupschedules"
+
+    def test_validator_role_gets_read_only_cluster_permissions(self, mock_client):
+        """Validator role must receive read-only cluster permissions, not operator write permissions."""
+        mock_client.context = "test-context"
+        validator = RBACValidator(mock_client, role="validator")
+
+        perms = validator._get_cluster_permissions()
+
+        assert perms is RBACValidator.VALIDATOR_CLUSTER_PERMISSIONS
+        assert perms is not RBACValidator.OPERATOR_CLUSTER_PERMISSIONS
+
+        # Spot-check: validator must NOT have delete on managedclusters (an operator-only write permission)
+        mc_rule = next(
+            (r for r in perms if r[0] == "cluster.open-cluster-management.io" and r[1] == "managedclusters"),
+            None,
+        )
+        assert mc_rule is not None, "managedclusters rule missing from validator cluster permissions"
+        assert "delete" not in mc_rule[2], "validator must not have delete on managedclusters"
+        assert "patch" not in mc_rule[2], "validator must not have patch on managedclusters"
 
     def test_validate_all_permissions_success(self, validator):
         """Test validate_all_permissions when all checks pass."""
@@ -566,6 +599,31 @@ class TestRBACValidator:
         assert "mutated namespace error" not in report
         assert "mutated extra error" not in report
 
+    def test_generate_permission_report_forwards_all_kwargs_to_validate_all_permissions(self, validator):
+        """generate_permission_report must forward all keyword arguments unchanged to validate_all_permissions.
+
+        Mutations that drop or replace an argument (e.g. include_decommission=None instead of
+        include_decommission=include_decommission) change which permissions are validated without
+        any error being raised.
+        """
+        validator.validate_all_permissions = MagicMock(return_value=(True, {}))
+
+        validator.generate_permission_report(
+            include_decommission=True,
+            include_old_hub_finalization=True,
+            skip_observability=True,
+            argocd_mode="check",
+            argocd_install_type="operator",
+        )
+
+        validator.validate_all_permissions.assert_called_once_with(
+            include_decommission=True,
+            include_old_hub_finalization=True,
+            skip_observability=True,
+            argocd_mode="check",
+            argocd_install_type="operator",
+        )
+
     def test_validate_decommission_permissions_reuses_cached_summary(self, validator):
         """Repeated decommission validation should reuse the first summary for the same options."""
         validator.client.namespace_exists.return_value = True
@@ -582,6 +640,39 @@ class TestRBACValidator:
         assert len(validator.check_permission.call_args_list) == first_call_count
         assert validator.client.namespace_exists.call_args_list.count(call(ACM_NAMESPACE)) == 1
 
+    def test_validate_decommission_permissions_checks_exact_permission_set(self, validator):
+        """validate_decommission_permissions must check the complete DECOMMISSION permission sets.
+
+        Mutations that skip loop iterations, change permission names/verbs, or alter namespace
+        routing are caught because this test asserts the exact frozenset of check_permission calls.
+        """
+        validator.client.namespace_exists.return_value = True
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_decommission_permissions(skip_observability=False)
+
+        assert all_valid is True
+        assert errors == {}
+
+        expected = frozenset(
+            (ag, r, v, None) for ag, r, vbs in RBACValidator.DECOMMISSION_CLUSTER_PERMISSIONS for v in vbs
+        ) | frozenset(
+            (ag, r, v, ns)
+            for ns, perms in RBACValidator.DECOMMISSION_NAMESPACE_PERMISSIONS.items()
+            for ag, r, vbs in perms
+            for v in vbs
+        )
+        actual = frozenset(
+            (c.args[0], c.args[1], c.args[2], c.args[3])
+            for c in validator.check_permission.call_args_list
+            if len(c.args) >= 4
+        )
+        assert actual == expected, (
+            f"Decommission permission set mismatch.\n"
+            f"  Missing: {expected - actual}\n"
+            f"  Unexpected: {actual - expected}"
+        )
+
     def test_validate_managed_cluster_permissions_success(self, validator):
         """Test validate_managed_cluster_permissions when all permissions exist."""
         validator.client.namespace_exists.return_value = True
@@ -593,6 +684,33 @@ class TestRBACValidator:
         assert len(errors) == 0
         # Verify it checked the agent namespace
         validator.client.namespace_exists.assert_called_with("open-cluster-management-agent")
+
+    def test_validate_managed_cluster_permissions_checks_exact_permission_set(self, validator):
+        """validate_managed_cluster_permissions must check the exact OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS set."""
+        validator.client.namespace_exists.return_value = True
+        validator.check_permission = MagicMock(return_value=(True, ""))
+
+        all_valid, errors = validator.validate_managed_cluster_permissions()
+
+        assert all_valid is True
+        assert errors == []
+
+        expected = frozenset(
+            (ag, r, v, ns)
+            for ns, perms in RBACValidator.OPERATOR_MANAGED_CLUSTER_NAMESPACE_PERMISSIONS.items()
+            for ag, r, vbs in perms
+            for v in vbs
+        )
+        actual = frozenset(
+            (c.args[0], c.args[1], c.args[2], c.args[3])
+            for c in validator.check_permission.call_args_list
+            if len(c.args) >= 4
+        )
+        assert actual == expected, (
+            f"Managed cluster permission set mismatch.\n"
+            f"  Missing: {expected - actual}\n"
+            f"  Unexpected: {actual - expected}"
+        )
 
     def test_validate_managed_cluster_permissions_namespace_missing(self, validator):
         """Test validate_managed_cluster_permissions when namespace doesn't exist."""
