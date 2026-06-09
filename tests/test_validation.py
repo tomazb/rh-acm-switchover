@@ -10,6 +10,7 @@ import pytest
 
 from lib.exceptions import ConfigurationError
 from lib.validation import (
+    CONTEXT_NAME_MAX_LENGTH,
     InputValidator,
     SecurityValidationError,
     ValidationError,
@@ -65,6 +66,11 @@ class TestCLIArgumentValidation:
         for name in invalid_names:
             with pytest.raises(ValidationError):
                 InputValidator.validate_context_name(name)
+
+    def test_validate_context_name_accepts_at_max_length(self):
+        """A context name of exactly CONTEXT_NAME_MAX_LENGTH characters must pass (boundary: > not >=)."""
+        name = "a" * CONTEXT_NAME_MAX_LENGTH
+        InputValidator.validate_context_name(name)  # must not raise
 
     def test_valid_cli_methods(self):
         """Test valid CLI methods."""
@@ -847,6 +853,69 @@ class TestCLIArgumentValidation:
             token_duration="48h",
         )
         InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_rejects_non_interactive_without_decommission(self):
+        """--non-interactive is only valid with --decommission; without it must raise."""
+        args = MockArgs(
+            primary_context="primary-hub",
+            secondary_context="secondary-hub",
+            method="passive",
+            old_hub_action="secondary",
+            non_interactive=True,
+            decommission=False,
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_setup_rejects_falsy_admin_kubeconfig(self):
+        """--setup mode must raise when admin_kubeconfig is falsy (None or empty).
+        The error must come from the required-field guard, not from path validation."""
+        args = MockArgs(
+            setup=True,
+            admin_kubeconfig=None,
+        )
+        with pytest.raises(ValidationError, match="admin-kubeconfig is required"):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_setup_rejects_invalid_role(self):
+        """--setup mode must raise when --role is not one of operator, validator, both."""
+        args = MockArgs(
+            setup=True,
+            admin_kubeconfig="./config/kubeconfig",
+            role="invalid-role",
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_setup_without_include_decommission_and_validator_role_passes(self):
+        """setup mode with role=validator but no include_decommission attr must not raise the
+        include-decommission error (getattr default must be False, not True)."""
+        args = MockArgs(
+            setup=True,
+            admin_kubeconfig="./config/kubeconfig",
+            role="validator",
+        )
+        InputValidator.validate_all_cli_args(args)  # must not raise
+
+    def test_validate_all_cli_args_setup_rejects_invalid_token_duration(self):
+        """--setup mode must raise when --token-duration format is invalid."""
+        args = MockArgs(
+            setup=True,
+            admin_kubeconfig="./config/kubeconfig",
+            token_duration="bad-format",
+        )
+        with pytest.raises(ValidationError):
+            InputValidator.validate_all_cli_args(args)
+
+    def test_validate_all_cli_args_setup_rejects_unsafe_output_dir(self):
+        """--setup mode must raise SecurityValidationError when --output-dir traverses outside cwd."""
+        args = MockArgs(
+            setup=True,
+            admin_kubeconfig="./config/kubeconfig",
+            output_dir="../../../tmp/output",
+        )
+        with pytest.raises(SecurityValidationError):
+            InputValidator.validate_all_cli_args(args)
 
 
 class TestKubernetesResourceValidation:
