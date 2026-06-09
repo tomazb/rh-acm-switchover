@@ -136,7 +136,7 @@ surface carries the same operator-facing behavior.
   - missing scenario
   - parity gap
   - equivalent
-  - tooling issue
+  - tool/runtime issue
 - The spike ends with a clear next action:
   - no-op
   - targeted test strengthening
