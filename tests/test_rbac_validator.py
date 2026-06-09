@@ -150,9 +150,9 @@ class TestRBACValidator:
         # validate_cluster_permissions while still asserting exact call shape and coverage.
         expected = frozenset((ag, r, v) for ag, r, verbs in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS for v in verbs)
         all_calls = validator.check_permission.call_args_list
-        assert all(len(c.args) == 3 for c in all_calls), (
-            f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 3]}"
-        )
+        assert all(
+            len(c.args) == 3 for c in all_calls
+        ), f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 3]}"
         actual = frozenset((c.args[0], c.args[1], c.args[2]) for c in all_calls)
         assert actual == expected, (
             f"Permission set mismatch.\n" f"  Missing: {expected - actual}\n" f"  Unexpected: {actual - expected}"
@@ -359,6 +359,7 @@ class TestRBACValidator:
         assert ("observability.open-cluster-management.io", "multiclusterobservabilities", "get") not in checked
         assert ("observability.open-cluster-management.io", "multiclusterobservabilities", "list") not in checked
 
+    def test_validate_cluster_permissions_deduplicates_mco_delete_when_both_paths_request_it(self, validator):
         """MCO delete should be checked once when decommission and finalization both require it."""
         validator.check_permission = MagicMock(return_value=(True, ""))
 
@@ -399,13 +400,10 @@ class TestRBACValidator:
             for v in verbs
         )
         all_calls = validator.check_permission.call_args_list
-        assert all(len(c.args) == 4 for c in all_calls), (
-            f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 4]}"
-        )
-        actual = frozenset(
-            (c.args[0], c.args[1], c.args[2], c.args[3])
-            for c in all_calls
-        )
+        assert all(
+            len(c.args) == 4 for c in all_calls
+        ), f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 4]}"
+        actual = frozenset((c.args[0], c.args[1], c.args[2], c.args[3]) for c in all_calls)
         assert actual == expected, (
             f"Namespace permission set mismatch.\n"
             f"  Missing: {expected - actual}\n"
@@ -458,8 +456,8 @@ class TestRBACValidator:
 
         perms = validator._get_hub_namespace_permissions()
 
-        assert perms == RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
-        assert perms != RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
+        assert perms is RBACValidator.VALIDATOR_HUB_NAMESPACE_PERMISSIONS
+        assert perms is not RBACValidator.OPERATOR_HUB_NAMESPACE_PERMISSIONS
 
         backup_ns_perms = perms.get("open-cluster-management-backup", [])
         backup_schedule_rule = next(
@@ -626,6 +624,7 @@ class TestRBACValidator:
             argocd_install_type="operator",
         )
 
+    def test_validate_decommission_permissions_reuses_cached_summary(self, validator):
         """Repeated decommission validation should reuse the first summary for the same options."""
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
@@ -674,6 +673,7 @@ class TestRBACValidator:
             f"  Unexpected: {actual - expected}"
         )
 
+    def test_validate_managed_cluster_permissions_success(self, validator):
         """Test validate_managed_cluster_permissions when all permissions exist."""
         validator.client.namespace_exists.return_value = True
         validator.check_permission = MagicMock(return_value=(True, ""))
