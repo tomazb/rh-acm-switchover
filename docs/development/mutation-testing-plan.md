@@ -184,8 +184,8 @@ exclusions near the source over broad config suppression.
 - **Baseline branch:** `mutation/argocd-baseline`
 - **Baseline commit:** `4722efd227ea757d4de835720a882021ad1cdb57`
 - **Python baseline command/result:** `python -m pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q` → `67 passed`
-- **Collection unit lane command/result:** `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_argocd_autosync.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_argocd_filter.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_discovery_safety.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_hub_parameterization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_manage_role_contracts.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_resume_on_failure.py -q` → `114 passed`
-- **Collection integration lane command/result:** `python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_argocd_manage_role.py -q` → `5 passed`
+- **Collection unit lane command/result:** `PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_argocd_autosync.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_argocd_filter.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_discovery_safety.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_hub_parameterization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_manage_role_contracts.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_resume_on_failure.py -q` → `114 passed`
+- **Collection integration lane command/result:** `PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_argocd_manage_role.py -q` → `5 passed`
 - **Mutation tool/version:** `mutmut 3.6.0`
 - **Mutation command:** `mutmut run` (using a temporary Argo CD-focused `[mutmut]` config in `setup.cfg`)
 - **Counts:** `total 556 / killed 353 / survived 203 / not_checked 0`
@@ -196,7 +196,8 @@ Baseline note for reruns:
   `ansible_collections/tomazb/acm_switchover/plugins/module_utils/`.
 - The valid Argo CD baseline above was captured with a temporary Argo CD-focused
   `[mutmut]` config in `setup.cfg`; `setup.cfg` was restored afterward, so reruns
-  must reconstruct or reuse that focused config instead of using final HEAD as-is.
+  must reconstruct or reuse that focused config instead of using final HEAD as-is
+  (see Task 5 in `docs/plans/2026-06-09-argocd-mutation-baseline.md`).
 - Valid `lib/argocd.py` baselines therefore require `[mutmut] also_copy` to copy
   both `lib/` and
   `ansible_collections/tomazb/acm_switchover/plugins/module_utils/` into the
