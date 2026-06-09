@@ -1,7 +1,5 @@
 # RBACValidator Mutation Resolution Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Kill the highest-value surviving mutants in `lib/rbac_validator.py` and establish a documented baseline.
 
 **Architecture:** Three changes: (1) add `do_not_mutate_patterns` to suppress ~200 equivalent logger-call survivors; (2) add a test that catches the `_get_hub_namespace_permissions` role-inversion mutant (validator gets operator permissions — an RBAC safety gap); (3) add `call_args_list` assertions to the cluster-permissions and namespace-permissions success tests so that mutations to permission names/verbs/namespaces are caught.

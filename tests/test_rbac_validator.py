@@ -149,9 +149,11 @@ class TestRBACValidator:
         # attributes, only function bodies — so this correctly targets loop/iteration mutations in
         # validate_cluster_permissions.
         expected = frozenset((ag, r, v) for ag, r, verbs in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS for v in verbs)
-        actual = frozenset(
-            (c.args[0], c.args[1], c.args[2]) for c in validator.check_permission.call_args_list if len(c.args) >= 3
+        all_calls = validator.check_permission.call_args_list
+        assert all(len(c.args) == 3 for c in all_calls), (
+            f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 3]}"
         )
+        actual = frozenset((c.args[0], c.args[1], c.args[2]) for c in all_calls)
         assert actual == expected, (
             f"Permission set mismatch.\n" f"  Missing: {expected - actual}\n" f"  Unexpected: {actual - expected}"
         )
@@ -380,10 +382,13 @@ class TestRBACValidator:
             for ag, r, verbs in rules
             for v in verbs
         )
+        all_calls = validator.check_permission.call_args_list
+        assert all(len(c.args) == 4 for c in all_calls), (
+            f"Unexpected check_permission call shape: {[len(c.args) for c in all_calls if len(c.args) != 4]}"
+        )
         actual = frozenset(
             (c.args[0], c.args[1], c.args[2], c.args[3])
-            for c in validator.check_permission.call_args_list
-            if len(c.args) >= 4
+            for c in all_calls
         )
         assert actual == expected, (
             f"Namespace permission set mismatch.\n"
