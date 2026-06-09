@@ -145,13 +145,9 @@ class TestRBACValidator:
         assert all_valid is True
         assert errors == []
 
-        # expected is built dynamically from the class constant; mutmut 3.x does not mutate class-level
-        # attributes, only function bodies — so this correctly targets loop/iteration mutations in
-        # validate_cluster_permissions.
+        # Assert that every expected cluster permission was checked — no more, no less.
         expected = frozenset((ag, r, v) for ag, r, verbs in RBACValidator.OPERATOR_CLUSTER_PERMISSIONS for v in verbs)
-        actual = frozenset(
-            (c.args[0], c.args[1], c.args[2]) for c in validator.check_permission.call_args_list if len(c.args) >= 3
-        )
+        actual = frozenset((c.args[0], c.args[1], c.args[2]) for c in validator.check_permission.call_args_list)
         assert actual == expected, (
             f"Permission set mismatch.\n" f"  Missing: {expected - actual}\n" f"  Unexpected: {actual - expected}"
         )
