@@ -76,7 +76,7 @@ These rules are **non-negotiable**. Violating any one of them means the refactor
 5. **Preserve all logging** — every `logger.info/warning/error` call must produce the same output
 6. **Preserve all state tracking** — every `is_step_completed` / `mark_step_completed` / `state.step()` call stays
 7. **Preserve exception types** — if a method raises `SwitchoverError`, the refactored version raises the same
-8. **Tests must pass** — run targeted tests and the relevant full verification before completion
+8. **Tests must pass** — run targeted tests plus `./run_tests.sh` or equivalent CI gates before completion
 
 ## When Not To Simplify
 
@@ -273,14 +273,17 @@ After:
 ```python
 from lib.waiter import WaitConditionResult, wait_for_condition
 
+matched_result = {}
+
 def _poll_something() -> WaitConditionResult:
     result = self._check_something()
     if result:
+        matched_result["value"] = result
         return WaitConditionResult.complete("condition met")
     return WaitConditionResult.pending("condition not met")
 
 success = wait_for_condition(
-    "waiting for X",
+    "X",
     _poll_something,
     timeout=timeout,
     interval=interval,
@@ -288,6 +291,7 @@ success = wait_for_condition(
 )
 if not success:
     raise SwitchoverError(f"Timed out waiting for X after {timeout}s")
+return matched_result["value"]
 ```
 
 **Only apply when the manual loop is a straightforward poll-until-true pattern.**
@@ -301,17 +305,17 @@ The project has a `@dry_run_skip` decorator in `lib/utils.py`. Replace manual ch
 
 Before:
 ```python
-def scale_deployment(self, name, namespace, replicas):
+def cleanup_temp_resources(self):
     if self.dry_run:
-        logger.info("[DRY-RUN] Would scale deployment %s/%s to %d replicas", namespace, name, replicas)
-        return {}
+        logger.info("[DRY-RUN] Would clean up temporary resources")
+        return None
     # ... actual implementation ...
 ```
 
 After:
 ```python
-@dry_run_skip(message="Would scale deployment", return_value={})
-def scale_deployment(self, name, namespace, replicas):
+@dry_run_skip(message="Would clean up temporary resources", return_value=None)
+def cleanup_temp_resources(self):
     # ... actual implementation ...
 ```
 
@@ -325,6 +329,9 @@ def scale_deployment(self, name, namespace, replicas):
 - The dry-run path computes a mock return value
 - The dry-run log message includes runtime values that must be preserved
 - The method already has `@dry_run_skip`
+
+For example, do not convert `scale_deployment` if its dry-run log includes
+namespace/name/replica values that `dry_run_skip` cannot reproduce.
 
 #### Transform 5: Remove Dead Code
 
@@ -488,13 +495,4 @@ note.
 
 ## After All Edits
 
-Run `git diff --stat` to show the change summary.
-
-Do NOT commit. Tell the user they can review with `git diff` and commit when ready.
-
----
-
-## What Good Simplification Looks Like
-
-After applying this skill, the target file should read top-to-bottom, keep methods
-near one screen, use consistent patterns, and avoid dead paths or redundant indirection.
+Run `git diff --stat`. Do NOT commit unless the user asked for a commit.
