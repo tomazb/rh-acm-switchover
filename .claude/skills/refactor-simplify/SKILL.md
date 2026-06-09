@@ -1,6 +1,6 @@
 ---
 name: refactor-simplify
-description: Safely simplify a Python module by extracting long methods, consolidating boilerplate, and applying existing patterns. Usage - /refactor-simplify modules/finalization.py  or  /refactor-simplify --review modules/finalization.py
+description: Use when simplifying or reviewing Python modules for safer refactoring, long methods, duplicated boilerplate, manual polling loops, dry-run guards, dead code, or readability cleanup without behavior changes.
 ---
 
 # Safe Code Simplification
@@ -10,30 +10,13 @@ project patterns consistently and breaks long methods into smaller, testable pie
 
 ## Philosophy
 
-### 1. Functionality Is Sacred
-
-Never change behavior. Inputs, outputs, side effects, error handling, log messages,
-state transitions, and edge cases must remain identical. If you cannot prove
-preservation, do not make the change.
-
-### 2. Readability Over Brevity
-
-Fewer lines is not the goal. Clearer lines are. A longer `if` block that reads like
-prose is better than a dense one-liner that needs mental parsing. Method extraction
-should make the orchestrator read like a table of contents.
-
-### 3. Respect The Codebase
-
-Before touching code, read `CLAUDE.md` (or `AGENTS.md`), `setup.cfg`, and the
-surrounding code in the same module. The local conventions override your preferences
-and the patterns in this skill. If the project uses `logger.info("Starting %s...", name)`,
-keep that style — do not switch to f-strings.
-
-### 4. Scope Discipline
-
-Touch only the file the user asked about and code needed to support the
-simplification. Do not broaden the diff with unrelated cleanup. If you spot an
-issue in another file, mention it in the summary — do not fix it.
+- **Functionality is sacred**: preserve inputs, outputs, side effects, errors,
+  logs, state transitions, and edge cases exactly.
+- **Readability over brevity**: fewer lines is not the goal; clearer code is.
+- **Respect the codebase**: read local instructions, config, and surrounding
+  code before applying this skill. Local conventions override this guide.
+- **Scope discipline**: touch only the requested file and code needed to support
+  its simplification. Mention unrelated opportunities; do not fix them.
 
 ## Arguments
 
@@ -41,14 +24,23 @@ The user provides a file path relative to the repository root (e.g., `modules/fi
 
 Optional flag: `--review` for Review-Only mode (analysis without edits).
 
-If no argument is provided, ask the user which file to simplify. Suggest the
-highest-impact candidates:
+Usage examples:
 
-1. `modules/finalization.py` (1,624 lines — `_fix_backup_schedule_collision` is 178 lines)
-2. `modules/post_activation.py` (1,259 lines — `_load_kubeconfig_data` is 120 lines)
-3. `modules/activation.py` (956 lines — `_verify_patch_applied` is 102 lines)
-4. `acm_switchover.py` (1,082 lines — `parse_args` is 231 lines)
-5. `modules/preflight/backup_validators.py` (695 lines — 3 `run()` methods >100 lines)
+```bash
+/refactor-simplify modules/finalization.py
+/refactor-simplify --review modules/finalization.py
+```
+
+If no argument is provided, ask the user which file to simplify. Generate
+current candidates instead of relying on stale counts:
+
+```bash
+wc -l modules/*.py modules/preflight/*.py acm_switchover.py
+rg -n 'def .+\(' modules lib acm_switchover.py
+```
+
+Suggest the largest/highest-impact files and mention the method names that look
+longest from the current source.
 
 ## Operating Modes
 
@@ -84,7 +76,7 @@ These rules are **non-negotiable**. Violating any one of them means the refactor
 5. **Preserve all logging** — every `logger.info/warning/error` call must produce the same output
 6. **Preserve all state tracking** — every `is_step_completed` / `mark_step_completed` / `state.step()` call stays
 7. **Preserve exception types** — if a method raises `SwitchoverError`, the refactored version raises the same
-8. **Tests must pass** — run `./run_tests.sh` before and after; zero regressions allowed
+8. **Tests must pass** — run targeted tests and the relevant full verification before completion
 
 ## When Not To Simplify
 
@@ -115,7 +107,7 @@ Before analyzing the target file, read these files to understand project convent
 1. `AGENTS.md` (or `CLAUDE.md`) — project-level AI instructions, patterns, constants usage
 2. `setup.cfg` — formatter, linter, and test configuration
 3. `lib/constants.py` — verify any magic strings used in the target file
-4. `lib/waiter.py` — understand `wait_for_condition()` signature for Transform 3
+4. `lib/waiter.py` and `lib/utils.py` — verify helper signatures before using Transforms 3 or 4
 
 This ensures your simplifications align with the codebase, not just generic best practices.
 
@@ -279,17 +271,29 @@ raise SwitchoverError("Timed out waiting for X")
 
 After:
 ```python
-from lib.waiter import wait_for_condition
+from lib.waiter import WaitConditionResult, wait_for_condition
 
-return wait_for_condition(
-    condition_fn=self._check_something,
+def _poll_something() -> WaitConditionResult:
+    result = self._check_something()
+    if result:
+        return WaitConditionResult.complete("condition met")
+    return WaitConditionResult.pending("condition not met")
+
+success = wait_for_condition(
+    "waiting for X",
+    _poll_something,
     timeout=timeout,
     interval=interval,
-    description="waiting for X",
+    logger=logger,
 )
+if not success:
+    raise SwitchoverError(f"Timed out waiting for X after {timeout}s")
 ```
 
-**Only apply when the manual loop is a straightforward poll-until-true pattern.** If the loop has complex retry logic, partial results, or side effects between iterations, leave it as-is.
+**Only apply when the manual loop is a straightforward poll-until-true pattern.**
+`condition_fn` must return `WaitConditionResult`; do not pass a callback that
+returns a bare bool or object. If the loop has complex retry logic, partial
+results, or side effects between iterations, leave it as-is.
 
 #### Transform 4: Convert Manual Dry-Run Checks to `@dry_run_skip`
 
@@ -306,7 +310,7 @@ def scale_deployment(self, name, namespace, replicas):
 
 After:
 ```python
-@dry_run_skip(message="Would scale deployment {name} in {namespace} to {replicas} replicas", return_value={})
+@dry_run_skip(message="Would scale deployment", return_value={})
 def scale_deployment(self, name, namespace, replicas):
     # ... actual implementation ...
 ```
@@ -314,11 +318,12 @@ def scale_deployment(self, name, namespace, replicas):
 **Only apply when:**
 - The dry-run block is at the top of the method (guard clause pattern)
 - The return value is a simple literal (`{}`, `None`, `True`, `[]`)
-- The log message can be expressed as a format string using the method's parameter names
+- The exact dry-run log message can be preserved with a static message
 
 **Do NOT apply when:**
 - The dry-run check is in the middle of the method with conditional logic
 - The dry-run path computes a mock return value
+- The dry-run log message includes runtime values that must be preserved
 - The method already has `@dry_run_skip`
 
 #### Transform 5: Remove Dead Code
@@ -472,47 +477,12 @@ and list what the user should run manually.
 
 ### Phase 4: Summarize
 
-Present a summary tailored to the mode:
-
-**Apply-Changes mode:**
-```
-Simplification complete for <file>:
-
-  Before: N lines
-  After:  M lines (K lines removed, -X%)
-
-  Transforms applied:
-    ✓ Extracted 3 methods from _fix_backup_schedule_collision    [safe]
-    ✓ Consolidated 2 identical error handlers                    [safe]
-    ✓ Replaced 1 manual poll loop with wait_for_condition()      [needs-care]
-    ✗ Skipped: no manual dry-run checks found
-    ⚠ Deferred: _verify_backup_integrity has complex retry logic [risky — suggest only]
-
-  Tests: All passing (N tests, targeted + full suite)
-  Verification gaps: None (or: "no tests cover _poll_backup_completion")
-```
-
-**Review-Only mode:**
-```
-Simplification assessment for <file>:
-
-  Current: N lines, M methods, K methods >80 lines
-
-  Top opportunities (ranked by impact):
-    1. [HIGH]   Extract _fix_backup_schedule_collision → 3 methods (-80 lines) [safe]
-    2. [HIGH]   Consolidate 3 identical error handlers (-40 lines) [safe]
-    3. [MEDIUM] Replace 2 poll loops with wait_for_condition() (-30 lines) [needs-care]
-    4. [LOW]    4 Python idiom quick-wins (-8 lines) [safe]
-
-  Intentionally deferred:
-    - _verify_backup_integrity: complex retry with partial results, leave as-is
-    - Lines 445-450: redundant-looking check may guard against ACM 2.11 quirk
-
-  Estimated total reduction: ~158 lines (-10%)
-```
-
-Include any simplification opportunities spotted in **other files** as a brief
-note at the end — do not fix them, just mention them for a future pass.
+Tailor the summary to the mode. For Apply-Changes mode, include before/after
+line counts, transforms applied, deferred risky suggestions, tests run, and
+verification gaps. For Review-Only mode, include current size, top ranked
+opportunities, estimated reduction, risk tags, and intentionally deferred
+suggestions. Mention opportunities in other files only as a brief future-work
+note.
 
 ---
 
@@ -526,10 +496,5 @@ Do NOT commit. Tell the user they can review with `git diff` and commit when rea
 
 ## What Good Simplification Looks Like
 
-After applying this skill, the target file should:
-
-- Read top-to-bottom without forcing the reader to hold >3 things in working memory
-- Have methods that fit on one screen (~40-60 lines) with clear orchestrator methods
-- Use one consistent pattern per concept (waiter, dry-run, error handling)
-- Contain no dead paths, unused variables, or redundant indirection
-- Be easier to debug during an incident and easier to extend for the next feature
+After applying this skill, the target file should read top-to-bottom, keep methods
+near one screen, use consistent patterns, and avoid dead paths or redundant indirection.
