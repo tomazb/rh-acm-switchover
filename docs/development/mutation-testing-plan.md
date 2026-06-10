@@ -178,6 +178,57 @@ exclusion such as `# pragma: no mutate` or config exclusion only when the mutant
 is genuinely equivalent or not operationally meaningful. Prefer targeted
 exclusions near the source over broad config suppression.
 
+### Phase 2 baseline: `lib/argocd.py` (2026-06-09)
+
+- **Source target:** `lib/argocd.py`
+- **Baseline branch:** `mutation/argocd-baseline`
+- **Baseline commit:** `4722efd227ea757d4de835720a882021ad1cdb57`
+- **Python baseline command/result:** `python -m pytest tests/test_argocd.py tests/test_argocd_constants_parity.py -q` → `67 passed`
+- **Collection unit lane command/result:** `PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_argocd_autosync.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_argocd_filter.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_discovery_safety.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_hub_parameterization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_manage_role_contracts.py ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_resume_on_failure.py -q` → `114 passed`
+- **Collection integration lane command/result:** `PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_argocd_manage_role.py -q` → `5 passed`
+- **Mutation tool/version:** `mutmut 3.6.0`
+- **Mutation command:** `mutmut run` (using a temporary Argo CD-focused `[mutmut]` config in `setup.cfg`)
+- **Counts:** `total 556 / killed 353 / survived 203 / not_checked 0`
+
+Baseline note for reruns:
+
+- `tests/test_argocd_constants_parity.py` imports collection Argo CD helpers from
+  `ansible_collections/tomazb/acm_switchover/plugins/module_utils/`.
+- The valid Argo CD baseline above was captured with a temporary Argo CD-focused
+  `[mutmut]` config in `setup.cfg`; `setup.cfg` was restored afterward, so reruns
+  must reconstruct or reuse that focused config instead of using final HEAD as-is
+  (see Task 5 in `docs/plans/2026-06-09-argocd-mutation-baseline.md`).
+- Valid `lib/argocd.py` baselines therefore require `[mutmut] also_copy` to copy
+  both `lib/` and
+  `ansible_collections/tomazb/acm_switchover/plugins/module_utils/` into the
+  mutant workspace. Without that copy, parity-test imports drift from the
+  mutant environment and the baseline is not comparable.
+
+Direct pause-patch payload drift is already comparatively well-covered by
+`tests/test_argocd_constants_parity.py` plus collection
+`test_acm_argocd_autosync.py`; the top surviving Argo CD mutants cluster around
+post-patch ground-truth verification, ApplicationSet safety boundaries,
+discovery helper mocks, and resume-on-failure replay paths instead.
+
+| Survivor group | Representative survivors | Class | Why it survived / parity read |
+| --- | --- | --- | --- |
+| Pause verification after patch errors | `lib.argocd.x__pause_ground_truth_applied__mutmut_2`, `lib.argocd.x__pause_ground_truth_applied__mutmut_24` | missing scenario | Python tests cover successful re-read recovery and explicit re-read failure, but not `None`/partial re-read shapes after a patch error. Collection contracts verify the live re-read/fail path in `pause.yml`, so this is not pure Argo CD parity drift, but the Python helper still needs a tighter negative-path scenario matrix. |
+| ApplicationSet and child-Application safety boundary | `lib.argocd.x_find_argocd_pause_blockers__mutmut_4` | parity gap | The mutant would block any ACM-touching app, not only ApplicationSet-managed child Applications. Python tests cover positive blocker cases, and collection tests cover the same shared behavior, but neither side currently asserts the negative shared case that an ACM-touching app without an `ApplicationSet` owner must remain eligible for managed pause. |
+| Stale `status.resources` boundary | `lib.argocd.x__status_resources_are_stale__mutmut_31` | parity gap | Python and collection both assert the stale `<` case, but neither side nails the equality boundary (`observedGeneration == generation`). Because `unknown-acm-impact` blocking is dual-supported, this survivor is shared-behavior debt rather than Python-only noise. |
+| ApplicationSet owner-name fallback text | `lib.argocd.x__applicationset_owner_name__mutmut_27` | parity gap | Both implementations generate the same blocker message shape, and both test suites only exercise named parents such as `parent-set`. Missing-name fallback text remains under-specified on both sides, so this is a small but real shared contract gap. |
+| Resume-on-failure pause-state replay | `lib.argocd.x_resume_recorded_applications__mutmut_22`, `lib.argocd.x_resume_recorded_applications__mutmut_41`, `lib.argocd.x_resume_recorded_applications__mutmut_74` | missing scenario | The Python suite has only a narrow invalid-entry test for `resume_recorded_applications`, leaving malformed keys, multi-entry replay, early-break, and wrong-argument mutants alive. Collection unit coverage proves the shared resume-on-failure workflow shape (guards, run_id reuse, trusted namespace reuse), but it does not map one-for-one to this Python helper, so the immediate gap is missing Python scenario coverage. |
+| CRD/Application discovery helper call signatures | `lib.argocd.x__get_crd_presence__mutmut_10`, `lib.argocd.x__list_argocd_applications_once__mutmut_9`, `lib.argocd.x_detect_argocd_installation__mutmut_65` | tool/runtime issue | Several survivors delete or rename Kubernetes client kwargs or result keys that permissive `MagicMock`-based tests still accept. Collection discovery tests already exercise fail-closed rescue behavior at the role layer, so these survivors mostly reflect mock looseness and import/runtime isolation limitations rather than a shared operator-facing parity problem. |
+| Helper default/fallback noise | `lib.argocd.x_has_applicationset_owner__mutmut_3`, `lib.argocd.x_detect_argocd_installation__mutmut_23` | equivalent | These representative mutants keep the same observable behavior (`or []` still normalizes missing owner references; `install_type_override = ""` behaves like `None` in the existing `or "vanilla"` flow). They should not drive follow-up work unless a later review wants a narrow `no mutate` exclusion. |
+
+**Next action recommendation:** keep this as a recorded baseline only for now.
+The next triage/apply slice should prioritize the shared-behavior survivors
+first: ordinary ACM-touching apps vs `ApplicationSet` ownership, the
+`observedGeneration == generation` boundary, and the owner-name fallback text.
+After that, add a Python-only negative-path matrix for
+`resume_recorded_applications` and `_pause_ground_truth_applied`. Treat the
+discovery-helper signature survivors as tooling debt unless a later focused run
+switches those mocks to stricter call-argument assertions.
+
 ## Survivor Triage Policy
 
 Classify each surviving mutant before changing tests:
