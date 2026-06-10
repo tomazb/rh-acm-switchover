@@ -168,6 +168,79 @@ Candidate outputs:
 - optional generated JSON summary if scheduled CI needs stable artifacts
 - optional JUnit/XML only if the chosen tool or wrapper can generate it without fragile parsing
 
+## Phase 2 Baseline Records
+
+### `modules/post_activation.py` baseline (`mutation/post-activation-baseline` @ `968720b9b6dd8f58250b29a024b277efbd487da1`)
+
+- Source target: `modules/post_activation.py`
+- Base branch: `ansible`
+- Focused Python test target: `tests/test_post_activation.py`
+- Collection parity targets:
+  - `ansible_collections/tomazb/acm_switchover/tests/unit/test_post_activation_regressions.py`
+  - `ansible_collections/tomazb/acm_switchover/tests/unit/test_post_activation_observability.py`
+  - `ansible_collections/tomazb/acm_switchover/tests/unit/test_klusterlet_remediation.py`
+  - `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_managedcluster_status.py`
+  - `ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py`
+  - `ansible_collections/tomazb/acm_switchover/tests/unit/test_shared_ansible_logic_contracts.py`
+  - `ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -k post_activation`
+
+#### Unmutated baseline
+
+- Python baseline command/result:
+  - Command: `source .venv/bin/activate && python -m pytest tests/test_post_activation.py -q`
+  - Result: PASS (`119 passed in 0.96s`)
+- Collection unit/contracts lane command/result:
+  - Command: `source .venv/bin/activate && PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_post_activation_regressions.py ansible_collections/tomazb/acm_switchover/tests/unit/test_post_activation_observability.py ansible_collections/tomazb/acm_switchover/tests/unit/test_klusterlet_remediation.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_managedcluster_status.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py ansible_collections/tomazb/acm_switchover/tests/unit/test_shared_ansible_logic_contracts.py -q`
+  - Result: PASS (`87 passed in 0.37s`)
+- Collection integration lane command/result:
+  - Command: `source .venv/bin/activate && PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -k post_activation -q`
+  - Result: PASS (`1 passed, 9 deselected in 20.86s`)
+
+#### Mutation tool baseline
+
+- Tool/version: `mutmut 3.6.0`
+- Command: `source .venv/bin/activate && rm -rf mutants/ && mutmut run`
+- Result source of truth: `mutants/modules/post_activation.py.meta`
+- Counts:
+  - Total: `1389`
+  - Killed: `840`
+  - Survived: `544`
+  - Not checked: `0`
+  - Other statuses: `{-24: 5}` (`mutmut show` reports these as runtime timeouts)
+- Top survivor-heavy functions:
+  - `78` — `_wait_for_observatorium_api_rollout`
+  - `65` — `_verify_observability_pods`
+  - `38` — `_non_local_managed_cluster_names`
+  - `37` — `_verify_disable_auto_import_cleared`
+  - `37` — `_load_kubeconfig_data`
+  - `24` — `_patch_or_create_bootstrap_secret`
+  - `24` — `_wait_for_secret_visibility`
+  - `20` — `_restart_klusterlet`
+  - `19` — `_check_klusterlet_connection`
+  - `18` — `_restart_observatorium_api`
+
+#### High-value survivor classification
+
+| Mutant | Risk area | Class | Evidence / why it survived |
+| --- | --- | --- | --- |
+| `modules.post_activation.xǁPostActivationVerificationǁ_wait_for_observatorium_api_rollout__mutmut_7` | observability rollout readiness | missing assertion | Python tests prove replica-count gating, but the restart path only asserts `get_deployment()` call count, so `name=None` / `namespace=None` rollout fetches survive. Collection coverage already locks the shared rollout contract via `verify_observability.yml` and `test_post_activation_observability.py` assertions on `observedGeneration`, `updatedReplicas`, `availableReplicas`, `readyReplicas`, and `unavailableReplicas`. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_wait_for_observatorium_api_rollout__mutmut_6` | observability polling / timeout budget | tool/runtime issue | Mutating the rollout fetch to `deployment = None` does not produce a fast assertion failure; it burns the real sleep budget inside the polling loop and times out under mutmut. Record this as mutation-runner/runtime noise, not as evidence that the unmutated timeout contract is wrong. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_verify_observability_pods__mutmut_20` and `__mutmut_21` | observability unhealthy-pod fail-closed behavior | parity gap | Python covers `OOMKilled`, non-zero terminated exit codes, failed/unknown phases, and readiness thresholds, but it does not explicitly pin `terminated.reason == "Error"`. The collection `verify_observability.yml` and `test_post_activation_observability.py` currently inspect phase/Ready/waiting reasons only, so terminated-container fail-closed semantics are not aligned across both form factors yet. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_verify_disable_auto_import_cleared__mutmut_2` | auto-import cleanup correctness after activation | missing scenario | The survivor weakens the initial `force_refresh=True` read to `force_refresh=None`. Current Python tests cover clean/fail/patch flows, but they never pre-seed `_cached_managed_clusters` to prove the pre-patch read must bypass stale cache. The collection cleanup task always performs a live read before patching and a second live read before asserting success. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_patch_or_create_bootstrap_secret__mutmut_1` and `__mutmut_13` | klusterlet remediation secret patch/create path | missing assertion | Python exercises the helper only indirectly through `_force_klusterlet_reconnect()` and mostly asserts call counts, so wrong `name` / `namespace` / `body` values survive. The collection remediation module has stronger tuple-level assertions for patched/created bootstrap secrets in `test_acm_klusterlet_modules.py`, so this is primarily a Python assertion gap. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_wait_for_secret_visibility__mutmut_17` | klusterlet remediation wait/poll diagnostics | parity gap | Python exposes a distinct bootstrap-secret visibility wait with public pending details, but the collection remediation helper does not currently implement a matching visibility wait before restart. Treat this as a shared-behavior review item before spending time on Python-only mutant killing. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_restart_klusterlet__mutmut_2` | klusterlet restart patch semantics | parity gap | Mutating the restart patch body (`"spec"` → `"XXspecXX"`) survives because Python only checks that a restart call happened. Collection tests assert that a deployment restart call occurs, but they do not currently pin the patch body shape either, so the shared restart contract still lacks exact payload assertions. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_check_klusterlet_connection__mutmut_21` | wrong-hub detection / fallback secret lookup | missing assertion | Python verifies verified/wrong-hub/unreachable/failed result classes, but it does not assert the fallback bootstrap secret name/namespace passed to `read_namespaced_secret()`. The collection probe module already exercises verified/wrong-hub/skip outcomes, so this survivor is mainly a Python helper-call assertion gap rather than a collection-wide blind spot. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_load_kubeconfig_data__mutmut_34` | kubeconfig discovery for wrong-hub remediation | missing assertion | `tests/test_post_activation.py::test_load_kubeconfig_default_path` does exercise the fallback branch with `KUBECONFIG` unset, but it only asserts that the helper returns a `dict`. The mutant changes `os.path.expanduser("~/.kube/config")` to `os.path.expanduser(None)`, which is swallowed by the helper's broad exception handling and still returns `{}`, so the current test reaches the branch without asserting the intended fallback behavior. |
+| `modules.post_activation.xǁPostActivationVerificationǁ_non_local_managed_cluster_names__mutmut_9` | helper-only cluster-name discovery | incidental/noisy | The surviving mutations are mostly argument-string/default tweaks on the helper’s `list_custom_resources()` call. They do not currently outrank the rollout, observability, or klusterlet survivors for mutation follow-up priority. |
+
+#### Next action recommendation
+
+1. Do **not** ratchet a module threshold on `modules/post_activation.py` yet; the shared-behavior survivors still mix Python-only assertion gaps with unresolved parity questions.
+2. Prioritize future kill work on Python call-argument assertions for observatorium rollout fetches, bootstrap secret patch/create calls, and klusterlet fallback secret reads.
+3. Resolve parity intent first for two shared-behavior concerns before writing more tests: terminated-container observability failures and bootstrap-secret visibility wait semantics.
+4. Keep `_non_local_managed_cluster_names()` in a lower-priority helper-noise bucket, but treat `_load_kubeconfig_data()` as a real Python assertion follow-up once the higher-risk rollout and klusterlet gaps are addressed.
+
 Do not introduce per-module score thresholds until a module has a reviewed
 baseline and high-value survivors have been triaged. Thresholds should be a
 ratchet: start with Phase 1 targets only, then raise expectations as survivors are
