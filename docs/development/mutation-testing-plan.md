@@ -427,6 +427,93 @@ state-persistence contracts.
    survivors lower priority unless diagnostic wording becomes part of an
    operator-facing contract.
 
+## Phase 2 Baseline Record: `modules/finalization.py`
+
+- Date: 2026-06-11
+- Source target: `modules/finalization.py`
+- Focused Python test target: `tests/test_finalization.py tests/test_backup_schedule.py`
+- Provenance:
+  - base branch: `ansible`
+  - baseline/fix branch: `mutation/finalization-baseline`
+  - baseline branch HEAD commit: `5b85a666c26332073090cb9a2f26a060c7ef0664`
+  - worktree: `<repo-root>/.worktrees/mutation-finalization-baseline`
+
+### Unmutated baseline lanes
+
+- Python baseline: `.venv/bin/python -m pytest tests/test_finalization.py tests/test_backup_schedule.py -q` - PASS (`102 passed`)
+- Collection unit/contracts lane: `PYTHONPATH=. .venv/bin/python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_verification.py ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_old_hub_safety.py ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_old_hub_parity.py ansible_collections/tomazb/acm_switchover/tests/unit/test_restore_only_recovery_contracts.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_backup_schedule.py -q` - PASS (`78 passed`)
+- Collection finalization integration lane: `PYTHONPATH=. .venv/bin/python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -k finalization -q` - PASS (`2 passed, 8 deselected`)
+- Collection restore-only integration lane: `PYTHONPATH=. .venv/bin/python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_restore_only_role.py -q` - PASS (`1 passed`)
+
+### Mutation baseline
+
+- Tool/version: `mutmut 3.6.0`
+- Config target: temporary `setup.cfg` `[mutmut]` with `source_paths = modules/finalization.py`, Python test selection above, `also_copy = lib/` and `modules/`, and exclusions limited to `raise .*Error\(` plus `logger\.`
+- Baseline command: `rm -rf mutants/ && .venv/bin/mutmut run`
+- Result source of truth: `mutants/modules/finalization.py.meta`
+- Counts: total `1170`, killed `440`, survived `688`, timeouts `42`, not_checked/suspicious `0`
+- Survivor-heavy functions:
+  - `_verify_old_hub_state`: `81`
+  - `_disable_observability_on_old_hub`: `68`
+  - `_wait_for_backup_schedule_deletion`: `60`
+  - `_check_velero_logs_for_backup`: `53`
+  - `_archive_restore_details`: `52`
+  - `_cleanup_restore_resources`: `45`
+  - `_backup_effective_timestamp`: `43`
+  - `_wait_for_primary_restore_deletion`: `43`
+  - `finalize`: `42`
+  - `_parse_cron_interval_seconds`: `41`
+
+### Finalization survivor resolution: top three groups (2026-06-11)
+
+Scope: test-only resolution for the first three high-risk survivor groups
+selected by the required priority order. No production behavior, CLI surface,
+report schema, parity status, or operator workflow changed.
+
+Selected groups:
+
+- `_disable_observability_on_old_hub`: old-hub MCO delete target, dry-run
+  safety, and termination wait target. Python tests now pin the list/delete API
+  group, version, plural, resource name, delete timeout, pod namespace, wait
+  description, wait timeout, and wait interval.
+- `_cleanup_restore_resources`: restore cleanup list/delete target safety.
+  Python tests now pin the Restore API group, version, plural, backup namespace,
+  restore name, and delete timeout.
+- `_wait_for_backup_schedule_deletion`: BackupSchedule repair/continuity polling
+  and fail-closed UID safety. Python tests now execute the wait callback, pin the
+  BackupSchedule API group/version/plural/name/namespace, assert pending detail,
+  assert cache invalidation on final re-read, and assert a changed UID raises.
+
+Post-fix verification:
+
+- `.venv/bin/python -m pytest tests/test_finalization.py tests/test_backup_schedule.py -q` - PASS (`104 passed`)
+- `PYTHONPATH=. .venv/bin/python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_verification.py ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_old_hub_safety.py ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_old_hub_parity.py ansible_collections/tomazb/acm_switchover/tests/unit/test_restore_only_recovery_contracts.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_backup_schedule.py -q` - PASS (`78 passed`)
+- `PYTHONPATH=. .venv/bin/python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -k finalization -q` - PASS (`2 passed, 8 deselected`)
+- `PYTHONPATH=. .venv/bin/python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_restore_only_role.py -q` - PASS (`1 passed`)
+- `rm -rf mutants/ && .venv/bin/mutmut run` - total `1170`, killed `551`, survived `577`, timeouts `42`
+
+Resolved-group count movement:
+
+- `_disable_observability_on_old_hub`: survived `68` -> `31`
+- `_cleanup_restore_resources`: survived `45` -> `13`
+- `_wait_for_backup_schedule_deletion`: survived `60` -> `18`
+
+Remaining survivors from this focused run are outside the top-three resolution
+scope. The largest remaining groups are `_verify_old_hub_state`,
+`_check_velero_logs_for_backup`, `_archive_restore_details`,
+`_backup_effective_timestamp`, and `_wait_for_primary_restore_deletion`.
+
+### Next action recommendation
+
+1. Treat the selected finalization groups as improved, not fully exhausted; their
+   remaining survivors are lower-risk helper/logging/default-shape mutations
+   compared with the now-pinned API targets.
+2. Prioritize the next pass on `_verify_old_hub_state` and
+   `_wait_for_primary_restore_deletion` because they sit in old-hub secondary
+   safety.
+3. Review `_check_velero_logs_for_backup` and `_archive_restore_details` as
+   diagnostic/helper survivors before spending more mutation budget on them.
+
 ## Survivor Triage Policy
 
 Classify each surviving mutant before changing tests:
