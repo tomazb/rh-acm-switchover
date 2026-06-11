@@ -708,7 +708,10 @@ class TestPrimaryPreparation:
 
     def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client, mock_state_manager):
         """Test pausing backup schedule for ACM 2.12+."""
-        backup_schedule = {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        backup_schedule = {
+            "metadata": {"name": "schedule-rhacm", "resourceVersion": "12345"},
+            "spec": {"paused": False},
+        }
         mock_primary_client.list_custom_resources.return_value = [backup_schedule]
 
         def patch_side_effect(**_kwargs):
@@ -776,7 +779,7 @@ class TestPrimaryPreparation:
     def test_pause_backup_schedule_already_paused_persists_when_no_saved_schedule_exists(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager
     ):
-        """Test when backup schedule is already paused."""
+        """Already-paused reruns must persist the BackupSchedule when no saved schedule exists."""
         backup_schedule = {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
         mock_primary_client.list_custom_resources.return_value = [backup_schedule]
         mock_state_manager.get_config.return_value = None
