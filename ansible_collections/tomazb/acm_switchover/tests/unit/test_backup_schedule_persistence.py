@@ -8,6 +8,10 @@ ROLES_DIR = Path(__file__).resolve().parents[2] / "roles"
 PRIMARY_PREP_TASKS = ROLES_DIR / "primary_prep" / "tasks"
 
 
+def _load_pause_backups_tasks() -> list[dict]:
+    return yaml.safe_load((PRIMARY_PREP_TASKS / "pause_backups.yml").read_text())
+
+
 def test_pause_backups_captures_saved_backup_schedule_body():
     """primary_prep must persist a reusable BackupSchedule body before pause/delete."""
     text = (PRIMARY_PREP_TASKS / "pause_backups.yml").read_text()
@@ -44,7 +48,7 @@ def test_pause_backups_captures_backup_schedule_before_acm_211_delete():
 
 def test_pause_backups_delete_branch_restores_saved_schedule_on_failure():
     """Failed ACM 2.11 delete flow must have an explicit restore path using the saved body."""
-    tasks = yaml.safe_load((PRIMARY_PREP_TASKS / "pause_backups.yml").read_text())
+    tasks = _load_pause_backups_tasks()
     delete_block = next(task for task in tasks if task.get("name") == "Delete BackupSchedule for ACM 2.11 pause")
     rescue_text = str(delete_block.get("rescue", []))
 
@@ -52,3 +56,39 @@ def test_pause_backups_delete_branch_restores_saved_schedule_on_failure():
     assert "acm_switchover_saved_backup_schedule" in rescue_text
     assert "Fail after BackupSchedule pause delete failure" in rescue_text
     assert "ignore_errors" not in rescue_text
+
+
+def test_pause_backups_patch_targets_primary_backup_schedule_resource():
+    """ACM 2.12+ pause must patch the primary hub BackupSchedule with exact API targeting."""
+    tasks = _load_pause_backups_tasks()
+    patch_task = next(task for task in tasks if task.get("name") == "Patch BackupSchedule to paused state")
+    k8s_args = patch_task["kubernetes.core.k8s"]
+
+    assert k8s_args["kubeconfig"] == "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    assert k8s_args["context"] == "{{ acm_switchover_hubs.primary.context }}"
+    assert k8s_args["state"] == "patched"
+    assert k8s_args["api_version"] == "cluster.open-cluster-management.io/v1beta1"
+    assert k8s_args["kind"] == "BackupSchedule"
+    assert k8s_args["name"] == "{{ item.metadata.name }}"
+    assert k8s_args["namespace"] == "{{ item.metadata.namespace | default('open-cluster-management-backup') }}"
+    assert k8s_args["definition"] == "{{ acm_backup_schedule_operation.operation.patch }}"
+
+
+def test_pause_backups_delete_targets_primary_backup_schedule_resource():
+    """ACM 2.11 pause must delete the primary hub BackupSchedule with exact API targeting."""
+    tasks = _load_pause_backups_tasks()
+    delete_block = next(task for task in tasks if task.get("name") == "Delete BackupSchedule for ACM 2.11 pause")
+    delete_task = next(
+        task
+        for task in delete_block["block"]
+        if task.get("name") == "Delete BackupSchedule resource for ACM 2.11 pause"
+    )
+    k8s_args = delete_task["kubernetes.core.k8s"]
+
+    assert k8s_args["kubeconfig"] == "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    assert k8s_args["context"] == "{{ acm_switchover_hubs.primary.context }}"
+    assert k8s_args["state"] == "absent"
+    assert k8s_args["api_version"] == "cluster.open-cluster-management.io/v1beta1"
+    assert k8s_args["kind"] == "BackupSchedule"
+    assert k8s_args["name"] == "{{ item.metadata.name }}"
+    assert k8s_args["namespace"] == "{{ item.metadata.namespace | default('open-cluster-management-backup') }}"

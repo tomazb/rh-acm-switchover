@@ -349,16 +349,83 @@ switches those mocks to stricter call-argument assertions.
 | `prepare__mutmut_3`, `4`, `5`, `7`, `9`, `13`, `15`, `19`, `21` | Optional logger wiring on `state.step(...)` wrappers for Argo CD, BackupSchedule, auto-import, and Thanos orchestration | `lib/utils.py`, `tests/test_primary_prep.py` | incidental/noisy | Full-name diff inspection shows these mutants only remove or reshape the optional `logger` argument passed into `StateManager.step()`. `StepContext` still executes and records the same step names; the only behavioral loss is informational \"already completed\" logging, so these survivors are noisy rather than a missed safety assertion. |
 | `__init____mutmut_9` | Secondary hub reference dropped during construction, which would skip secondary-hub Argo CD pause when dual-hub coordination is enabled | `ansible_collections/tomazb/acm_switchover/roles/primary_prep/tasks/main.yml`, `ansible_collections/tomazb/acm_switchover/tests/unit/test_argocd_hub_parameterization.py` | missing scenario | The collection explicitly pauses both hubs during `primary_prep`, but the Python tests do not construct `PrimaryPreparation(..., secondary_client=...)` and assert that the secondary hub participates in Argo CD coordination. |
 
+### Primary-prep survivor resolution: top three groups (2026-06-11)
+
+Scope: test-only resolution for the top three primary-prep survivor groups. No
+production behavior, CLI surface, report schema, parity status, or operator
+workflow changed.
+
+Commands run:
+
+- Baseline before edits:
+  - `python -m pytest tests/test_primary_prep.py -q` — PASS (`39 passed`)
+  - `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_primary_prep_auto_import.py ansible_collections/tomazb/acm_switchover/tests/unit/test_backup_schedule_persistence.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_backup_schedule.py -q` — PASS (`29 passed`)
+  - `python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -k primary_prep -q` — PASS (`2 passed, 8 deselected`)
+- After test additions:
+  - `python -m pytest tests/test_primary_prep.py -q` — PASS (`42 passed`)
+  - `python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_primary_prep_auto_import.py ansible_collections/tomazb/acm_switchover/tests/unit/test_backup_schedule_persistence.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_backup_schedule.py -q` — PASS (`31 passed`)
+  - `python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -k primary_prep -q` — PASS (`2 passed, 8 deselected`)
+- Tool checks:
+  - `python -m pip show mutmut` — no global package on this shell path
+  - `.venv/bin/python -m pip show mutmut` — `mutmut 3.6.0`
+  - `.venv/bin/mutmut --help` — available commands include `run`, `results`, `show`
+- Focused mutation confirmation:
+  - temporary `[mutmut]`: `source_paths = modules/primary_prep.py`, `pytest_add_cli_args_test_selection = tests/test_primary_prep.py`, `also_copy = lib/` and `modules/`, exclusions limited to `raise .*Error\(` and `logger\..*\(`
+  - `rm -rf mutants/`
+  - `.venv/bin/mutmut run`
+  - `.venv/bin/mutmut results | head -40`
+  - restored the default `[mutmut]` target afterward
+
+Final focused mutation counts:
+
+- Total: `249`
+- Killed: `213`
+- Survived: `36`
+- Not checked/timeouts/suspicious: `0`
+
+Resolved groups:
+
+- BackupSchedule wrong-resource targeting: resolved. The listed wrong-target
+  mutants (`_pause_backup_schedule__mutmut_2`, `3`, `10`, `73`, `78`, `84`) now
+  have exit code `1`. Python tests now pin list, patch, and delete calls to the
+  BackupSchedule API group/version/plural, backup namespace, resource name, and
+  patch payload. Collection tests now pin the matching `pause_backups.yml`
+  patch/delete task API version, kind, namespace default, primary kubeconfig,
+  primary context, and state.
+- `saved_backup_schedule` persistence: resolved. The persistence mutants
+  (`_pause_backup_schedule__mutmut_50`, `51`, `52`, `53`, `64`) now have exit
+  code `1`. Python tests assert the saved schedule is written before patch/delete
+  mutation and that already-paused reruns persist only when no saved schedule is
+  present.
+- Thanos compactor false-success/skipped-verification: resolved. The targeted
+  Thanos mutants (`_scale_down_thanos_compactor__mutmut_8`, `9`, `10`, `11`,
+  `12`, `35`, `40`) now have exit code `1`. Python tests now pin the pod
+  verification namespace and selector in both the wait condition and timeout
+  recheck, and directly assert 404 maps to `SwitchoverError`. Collection tests
+  now pin the pod query namespace plus primary hub kubeconfig/context.
+
+Remaining survivors from this focused run are outside the top-three resolution
+scope. They remain classified according to the baseline table: Argo CD success
+logging and optional `StateManager.step()` logger wiring are incidental/noisy;
+disable-auto-import survivors are incidental/noisy malformed-fixture or
+bookkeeping cases; execute-mode Argo CD step persistence and secondary-hub Argo
+CD pause participation remain missing-scenario follow-ups. The residual
+`_pause_backup_schedule` survivors are helper context-string/logging mutations
+around multiple-schedule diagnostics rather than the resolved wrong-resource or
+state-persistence contracts.
+
 ### Next action recommendation
 
-1. Next recommended action: write a dedicated parity-aware survivor-resolution design/implementation plan before any fixes.
-2. Follow-up type: parity-aware. The primary-prep baseline is a shared-behavior review, so survivor resolution should stay anchored to both the Python CLI and the collection rather than leaning into Python-only assertion work.
-3. Top 3 survivor groups for that plan:
-   - BackupSchedule wrong-resource targeting on list/patch calls
-   - `saved_backup_schedule` persistence before pause/delete and on already-paused reruns
-   - Thanos premature-success / skipped-verification risk in selector/wait behavior
-4. Treat the disable-auto-import and Argo CD `run_id` logging survivors as baseline noise unless a later review shows operator-visible impact beyond logging or malformed fixture shapes.
-5. Add focused coverage for execute-mode Argo CD step persistence and secondary-hub pause coordination after the parity-aware plan addresses the top shared-behavior survivors.
+1. The original top three shared-behavior survivor groups are resolved by the
+   2026-06-11 test-only pass above.
+2. Treat the disable-auto-import and Argo CD `run_id` logging survivors as
+   baseline noise unless a later review shows operator-visible impact beyond
+   logging or malformed fixture shapes.
+3. Add focused coverage for execute-mode Argo CD step persistence and
+   secondary-hub pause coordination in a separate parity-aware pass.
+4. Keep residual `_pause_backup_schedule` helper context-string/logging
+   survivors lower priority unless diagnostic wording becomes part of an
+   operator-facing contract.
 
 ## Survivor Triage Policy
 
