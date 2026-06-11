@@ -6,7 +6,7 @@
 
 **Architecture:** This is a baseline/triage plan, not a survivor-kill plan. The workflow first proves the unmutated Python and collection post-activation lanes are green, then temporarily repoints `[mutmut]` in `setup.cfg` to `modules/post_activation.py`, runs the spike, classifies the top survivors against both form factors, records the baseline, and restores the default `setup.cfg` target afterward.
 
-**Tech Stack:** Python 3.14, pytest, mutmut 3.6.x, Python CLI post-activation verification, Ansible collection post-activation role/unit tests
+**Tech Stack:** Python 3.10+, pytest, mutmut 3.6.x, Python CLI post-activation verification, Ansible collection post-activation role/unit tests
 
 ---
 
@@ -232,7 +232,7 @@ Run:
 
 ```bash
 source .venv/bin/activate
-python3 -c "
+python -c "
 import json
 from collections import Counter
 meta = json.load(open('mutants/modules/post_activation.py.meta'))

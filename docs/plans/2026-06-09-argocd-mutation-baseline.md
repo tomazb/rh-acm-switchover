@@ -159,13 +159,19 @@ source_paths = lib/argocd.py
 pytest_add_cli_args_test_selection =
     tests/test_argocd.py
     tests/test_argocd_constants_parity.py
-also_copy = lib/
+also_copy =
+    lib/
+    ansible_collections/tomazb/acm_switchover/plugins/module_utils/
 do_not_mutate_patterns =
     raise .*Error\(
     logger\.(info|debug|warning|error|exception)\(
 ```
 
-Do **not** add broader exclusions in the first spike. If new equivalent patterns appear later, review them from actual survivors first.
+The extra `also_copy` path is required because `tests/test_argocd_constants_parity.py`
+imports collection Argo CD helpers from
+`ansible_collections/tomazb/acm_switchover/plugins/module_utils/`. Do **not** add
+broader exclusions in the first spike. If new equivalent patterns appear later,
+review them from actual survivors first.
 
 ### Step 2: Verify the config parses
 
@@ -174,18 +180,21 @@ Run:
 ```bash
 source .venv/bin/activate
 python -c "
-import configparser
-config = configparser.ConfigParser()
-config.read('setup.cfg')
-if 'mutmut' not in config:
-    raise SystemExit('Error: [mutmut] section not found in setup.cfg')
-print('source_paths:', config.get('mutmut', 'source_paths', fallback=None))
-print('pytest_add_cli_args_test_selection:', config.get('mutmut', 'pytest_add_cli_args_test_selection', fallback=None))
-print('do_not_mutate_patterns:', config.get('mutmut', 'do_not_mutate_patterns', fallback=None))
+import sys; sys.argv = ['mutmut']
+from mutmut.configuration import Config
+Config.ensure_loaded()
+c = Config.get()
+print('source_paths:', c.source_paths)
+print('pytest_add_cli_args_test_selection:', c.pytest_add_cli_args_test_selection)
+print('also_copy:', c.also_copy)
+print('do_not_mutate_patterns:', c.do_not_mutate_patterns)
 "
 ```
 
-Expected: `source_paths` points at `lib/argocd.py`, the Python Argo CD tests are selected, and only the narrow logger/raise patterns are configured.
+Expected: `source_paths` points at `lib/argocd.py`, the Python Argo CD tests are
+selected, `also_copy` prints both `lib/` and the collection
+`plugins/module_utils/` path, and only the narrow logger/raise patterns are
+configured.
 
 ### Step 3: Commit the temporary spike config
 
@@ -293,7 +302,7 @@ For each high-value survivor, assign exactly one class:
 - missing scenario
 - parity gap
 - equivalent
-- tooling issue
+- tool/runtime issue
 
 Use the collection lanes to decide whether a survivor is Python-only noise or a
 shared-behavior concern.
