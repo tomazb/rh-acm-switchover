@@ -18,10 +18,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import modules.primary_prep as primary_prep_module
 from lib import argocd as argocd_lib
 from lib.constants import (
+    BACKUP_NAMESPACE,
     DISABLE_AUTO_IMPORT_ANNOTATION,
     OBSERVABILITY_NAMESPACE,
     OBSERVABILITY_TERMINATE_INTERVAL,
     OBSERVABILITY_TERMINATE_TIMEOUT,
+    THANOS_COMPACTOR_LABEL_SELECTOR,
 )
 from lib.exceptions import SwitchoverError
 from lib.waiter import WaitConditionResult
@@ -704,28 +706,106 @@ class TestPrimaryPreparation:
         assert not any(call.args[0] == "argocd_paused_apps" for call in mock_state_manager.set_config.call_args_list)
         assert state_config["argocd_paused_apps"] == [recorded_entry]
 
-    def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client):
+    def test_pause_backup_schedule_acm_212(self, primary_prep_with_obs, mock_primary_client, mock_state_manager):
         """Test pausing backup schedule for ACM 2.12+."""
-        mock_primary_client.list_custom_resources.return_value = [
-            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
-        ]
+        backup_schedule = {
+            "metadata": {"name": "schedule-rhacm", "resourceVersion": "12345"},
+            "spec": {"paused": False},
+        }
+        mock_primary_client.list_custom_resources.return_value = [backup_schedule]
+
+        def patch_side_effect(**_kwargs):
+            mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+            return True
+
+        mock_primary_client.patch_custom_resource.side_effect = patch_side_effect
 
         primary_prep_with_obs._pause_backup_schedule()
 
-        mock_primary_client.patch_custom_resource.assert_called_once()
-        call_kwargs = mock_primary_client.patch_custom_resource.call_args[1]
-        assert call_kwargs["patch"] == {"spec": {"paused": True}}
+        mock_primary_client.list_custom_resources.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            namespace=BACKUP_NAMESPACE,
+            max_items=2,
+        )
+        mock_primary_client.patch_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name="schedule-rhacm",
+            patch={"spec": {"paused": True}},
+            namespace=BACKUP_NAMESPACE,
+        )
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
-    def test_pause_backup_schedule_already_paused(self, primary_prep_with_obs, mock_primary_client):
-        """Test when backup schedule is already paused."""
+    def test_pause_backup_schedule_acm_211_delete_targets_backup_schedule(
+        self, mock_primary_client, mock_state_manager
+    ):
+        """ACM 2.11 pause must snapshot then delete the BackupSchedule by exact resource target."""
+        backup_schedule = {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": False}}
+        prep = PrimaryPreparation(
+            primary_client=mock_primary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.11.6",
+            has_observability=False,
+        )
+        mock_primary_client.list_custom_resources.return_value = [backup_schedule]
+
+        def delete_side_effect(**_kwargs):
+            mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+            return True
+
+        mock_primary_client.delete_custom_resource.side_effect = delete_side_effect
+
+        prep._pause_backup_schedule()
+
+        mock_primary_client.list_custom_resources.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            namespace=BACKUP_NAMESPACE,
+            max_items=2,
+        )
+        mock_primary_client.delete_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name="schedule-rhacm",
+            namespace=BACKUP_NAMESPACE,
+        )
+        mock_primary_client.patch_custom_resource.assert_not_called()
+
+    def test_pause_backup_schedule_already_paused_persists_when_no_saved_schedule_exists(
+        self, primary_prep_with_obs, mock_primary_client, mock_state_manager
+    ):
+        """Already-paused reruns must persist the BackupSchedule when no saved schedule exists."""
+        backup_schedule = {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
+        mock_primary_client.list_custom_resources.return_value = [backup_schedule]
+        mock_state_manager.get_config.return_value = None
+
+        primary_prep_with_obs._pause_backup_schedule()
+
+        mock_state_manager.get_config.assert_called_once_with("saved_backup_schedule")
+        mock_state_manager.set_config.assert_called_once_with("saved_backup_schedule", backup_schedule)
+        mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
+
+    def test_pause_backup_schedule_already_paused_keeps_existing_saved_schedule(
+        self, primary_prep_with_obs, mock_primary_client, mock_state_manager
+    ):
+        """Already-paused reruns must not overwrite a previously saved BackupSchedule."""
         mock_primary_client.list_custom_resources.return_value = [
             {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": True}}
         ]
+        mock_state_manager.get_config.return_value = {"metadata": {"name": "previous-schedule"}}
 
         primary_prep_with_obs._pause_backup_schedule()
 
-        # Should not patch if already paused
+        mock_state_manager.get_config.assert_called_once_with("saved_backup_schedule")
+        mock_state_manager.set_config.assert_not_called()
         mock_primary_client.patch_custom_resource.assert_not_called()
+        mock_primary_client.delete_custom_resource.assert_not_called()
 
     def test_pause_backup_schedule_not_found(self, primary_prep_with_obs, mock_primary_client):
         """Test when no backup schedule exists."""
@@ -844,7 +924,12 @@ class TestPrimaryPreparation:
         """Test scaling down Thanos compactor."""
         mock_primary_client.scale_statefulset.return_value = {"status": "scaled"}
         mock_primary_client.get_pods.return_value = []  # No pods after scaling down
-        mock_wait.return_value = True
+
+        def wait_side_effect(_description, condition_fn, **_kwargs):
+            assert condition_fn() == WaitConditionResult.complete("all Thanos compactor pods terminated")
+            return True
+
+        mock_wait.side_effect = wait_side_effect
 
         primary_prep_with_obs._scale_down_thanos_compactor()
 
@@ -857,7 +942,10 @@ class TestPrimaryPreparation:
         _, condition_fn = mock_wait.call_args.args[:2]
         assert mock_wait.call_args.kwargs["timeout"] == OBSERVABILITY_TERMINATE_TIMEOUT
         assert mock_wait.call_args.kwargs["interval"] == OBSERVABILITY_TERMINATE_INTERVAL
-        assert condition_fn() == WaitConditionResult.complete("all Thanos compactor pods terminated")
+        mock_primary_client.get_pods.assert_called_once_with(
+            namespace=OBSERVABILITY_NAMESPACE,
+            label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+        )
 
     def test_prepare_with_thanos_404_blocks(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog
@@ -883,6 +971,22 @@ class TestPrimaryPreparation:
         assert "Failed to scale down Thanos compactor" in caplog.text
         mock_primary_client.get_pods.assert_not_called()
 
+    def test_scale_down_thanos_404_maps_to_switchover_error(self, primary_prep_with_obs, mock_primary_client, caplog):
+        """A missing Thanos StatefulSet must fail closed with the domain error expected by prepare()."""
+        mock_primary_client.scale_statefulset.side_effect = primary_prep_module.ApiException(
+            status=404,
+            reason="Not Found",
+        )
+
+        with (
+            caplog.at_level(logging.ERROR, logger="acm_switchover"),
+            pytest.raises(SwitchoverError, match="Thanos compactor StatefulSet not found"),
+        ):
+            primary_prep_with_obs._scale_down_thanos_compactor()
+
+        assert "Failed to scale down Thanos compactor: StatefulSet not found" in caplog.text
+        mock_primary_client.get_pods.assert_not_called()
+
     @patch("modules.primary_prep.wait_for_condition")
     def test_scale_down_thanos_pods_remaining_blocks(self, mock_wait, primary_prep_with_obs, mock_primary_client):
         """Thanos pods still running after scale-down should block primary prep."""
@@ -895,6 +999,10 @@ class TestPrimaryPreparation:
 
         assert "Thanos compactor still has 1 pod(s) running after scale-down timeout" in str(exc_info.value)
         mock_wait.assert_called_once()
+        mock_primary_client.get_pods.assert_called_once_with(
+            namespace=OBSERVABILITY_NAMESPACE,
+            label_selector=THANOS_COMPACTOR_LABEL_SELECTOR,
+        )
 
     def test_prepare_with_thanos_api_exception_fails_as_real_error(
         self, primary_prep_with_obs, mock_primary_client, mock_state_manager, caplog

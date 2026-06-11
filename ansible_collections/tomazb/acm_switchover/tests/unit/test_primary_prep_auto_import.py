@@ -75,7 +75,10 @@ def test_scale_observability_blocks_when_thanos_pods_remain():
 
     assert "ansible.builtin.pause" not in text
     assert pod_queries, "scale_observability.yml must query Thanos compactor pods after scaling"
+    assert pod_queries[0]["kubernetes.core.k8s_info"]["namespace"] == "open-cluster-management-observability"
     assert "app.kubernetes.io/name=thanos-compact" in str(pod_queries[0])
+    assert pod_queries[0]["kubernetes.core.k8s_info"]["kubeconfig"] == "{{ acm_switchover_hubs.primary.kubeconfig }}"
+    assert pod_queries[0]["kubernetes.core.k8s_info"]["context"] == "{{ acm_switchover_hubs.primary.context }}"
     assert pod_queries[0].get("retries") == 30
     assert pod_queries[0].get("delay") == 10
     assert pod_queries[0].get("failed_when") is False
