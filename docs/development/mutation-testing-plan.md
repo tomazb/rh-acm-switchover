@@ -163,7 +163,7 @@ Candidate baseline fields:
 Candidate outputs:
 
 - text summary from the mutation tool
-- `mutmut show <id>` output for selected survivors
+- `mutmut show <full-mutant-key>` output for selected survivors
 - HTML report for manual inspection if available in the chosen tool/version
 - optional generated JSON summary if scheduled CI needs stable artifacts
 - optional JUnit/XML only if the chosen tool or wrapper can generate it without fragile parsing
@@ -200,7 +200,7 @@ exclusions near the source over broad config suppression.
 - Tool/version: `mutmut 3.6.0`
 - Config target: `setup.cfg` `[mutmut]` with `source_paths = modules/primary_prep.py` and `pytest_add_cli_args_test_selection = tests/test_primary_prep.py`
 - Baseline command: `source .venv/bin/activate && rm -rf mutants/ && mutmut run`
-- Inspection commands: `source .venv/bin/activate && mutmut results | head -40`; `source .venv/bin/activate && mutmut show <id>`
+- Inspection commands: `source .venv/bin/activate && mutmut results | head -40`; `source .venv/bin/activate && mutmut show <full-mutant-key>`
 - `mutmut show` requires the full mutant key copied from `mutmut results` (for example `modules.primary_prep.xǁPrimaryPreparationǁprepare__mutmut_2`); the earlier `FileNotFoundError` came from trying the short suffix form instead.
 - Counts: total `249`, killed `140`, survived `109`, not_checked `0`
 - Additional status buckets: none (`{}`)
