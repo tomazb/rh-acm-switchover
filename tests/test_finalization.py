@@ -1155,10 +1155,78 @@ class TestFinalization:
     ):
         """If the final re-check sees absence after timeout, deletion completed."""
         mock_secondary_client.get_custom_resource.return_value = None
+        finalization._cached_schedules = [{"metadata": {"name": "cached"}}]
 
         finalization._wait_for_backup_schedule_deletion("schedule", "uid-old", timeout=1, interval=1)
 
-        mock_wait.assert_called_once()
+        mock_wait.assert_called_once_with(
+            "BackupSchedule schedule deletion",
+            ANY,
+            timeout=1,
+            interval=1,
+            logger=finalization_module.logger,
+        )
+        mock_secondary_client.get_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name="schedule",
+            namespace=finalization_module.BACKUP_NAMESPACE,
+        )
+        assert finalization._cached_schedules is None
+
+    @patch("modules.finalization.wait_for_condition")
+    def test_wait_for_backup_schedule_deletion_polls_exact_schedule_target(
+        self, mock_wait, finalization, mock_secondary_client
+    ):
+        """Deletion polling should query the exact BackupSchedule object and report pending while it remains."""
+        mock_secondary_client.get_custom_resource.return_value = {"metadata": {"name": "schedule", "uid": "uid-old"}}
+
+        def capture_wait(description, condition_fn, **kwargs):
+            assert description == "BackupSchedule schedule deletion"
+            assert kwargs["timeout"] == 7
+            assert kwargs["interval"] == 3
+            result = condition_fn()
+            assert isinstance(result, WaitConditionResult)
+            assert result.done is False
+            assert result.public_detail == "still present (uid=uid-old)"
+            return True
+
+        mock_wait.side_effect = capture_wait
+
+        finalization._wait_for_backup_schedule_deletion("schedule", "uid-old", timeout=7, interval=3)
+
+        mock_secondary_client.get_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name="schedule",
+            namespace=finalization_module.BACKUP_NAMESPACE,
+        )
+
+    @patch("modules.finalization.wait_for_condition")
+    def test_wait_for_backup_schedule_deletion_fails_closed_on_uid_change(
+        self, mock_wait, finalization, mock_secondary_client
+    ):
+        """Deletion polling must stop if another BackupSchedule appears with a different uid."""
+        mock_secondary_client.get_custom_resource.return_value = {"metadata": {"name": "schedule", "uid": "uid-new"}}
+
+        def capture_wait(_description, condition_fn, **_kwargs):
+            condition_fn()
+            return True
+
+        mock_wait.side_effect = capture_wait
+
+        with pytest.raises(SwitchoverError, match="different uid"):
+            finalization._wait_for_backup_schedule_deletion("schedule", "uid-old", timeout=7, interval=3)
+
+        mock_secondary_client.get_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="backupschedules",
+            name="schedule",
+            namespace=finalization_module.BACKUP_NAMESPACE,
+        )
 
     @patch("modules.finalization.time.sleep")
     def test_fix_backup_schedule_collision_treats_409_with_healthy_schedule_as_success(
@@ -1284,7 +1352,26 @@ class TestFinalization:
 
         fin._disable_observability_on_old_hub()
 
-        primary.delete_custom_resource.assert_called_once()
+        primary.list_custom_resources.assert_called_once_with(
+            group="observability.open-cluster-management.io",
+            version="v1beta2",
+            plural="multiclusterobservabilities",
+        )
+        primary.delete_custom_resource.assert_called_once_with(
+            group="observability.open-cluster-management.io",
+            version="v1beta2",
+            plural="multiclusterobservabilities",
+            name="observability",
+            timeout_seconds=finalization_module.DELETE_REQUEST_TIMEOUT,
+        )
+        primary.get_pods.assert_called_once_with(namespace=finalization_module.OBSERVABILITY_NAMESPACE)
+        mock_wait.assert_called_once_with(
+            "observability pod termination on old hub",
+            ANY,
+            timeout=finalization_module.OBSERVABILITY_TERMINATE_TIMEOUT,
+            interval=finalization_module.OBSERVABILITY_TERMINATE_INTERVAL,
+            logger=finalization_module.logger,
+        )
 
     @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.finalization.wait_for_condition")
@@ -1512,6 +1599,11 @@ class TestFinalization:
         with patch.object(finalization_module, "logger") as logger:
             fin._disable_observability_on_old_hub()
 
+        primary.list_custom_resources.assert_called_once_with(
+            group="observability.open-cluster-management.io",
+            version="v1beta2",
+            plural="multiclusterobservabilities",
+        )
         primary.delete_custom_resource.assert_not_called()
         primary.get_pods.assert_not_called()
         logger.info.assert_any_call("[DRY-RUN] Would delete MultiClusterObservability: %s", "observability")
@@ -1877,6 +1969,13 @@ class TestFinalization:
 
         finalization._cleanup_restore_resources()
 
+        mock_secondary_client.list_custom_resources.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="restores",
+            namespace=finalization_module.BACKUP_NAMESPACE,
+        )
+
         # Verify archive was saved to state
         mock_state_manager.set_config.assert_called_once()
         call_args = mock_state_manager.set_config.call_args
@@ -1890,7 +1989,14 @@ class TestFinalization:
         assert archived[0]["archived_at"] is not None
 
         # Verify delete was called
-        mock_secondary_client.delete_custom_resource.assert_called_once()
+        mock_secondary_client.delete_custom_resource.assert_called_once_with(
+            group="cluster.open-cluster-management.io",
+            version="v1beta1",
+            plural="restores",
+            name="restore-acm-passive-sync",
+            namespace=finalization_module.BACKUP_NAMESPACE,
+            timeout_seconds=finalization_module.DELETE_REQUEST_TIMEOUT,
+        )
 
     @pytest.mark.parametrize(
         ("delete_error", "expect_warning"),
