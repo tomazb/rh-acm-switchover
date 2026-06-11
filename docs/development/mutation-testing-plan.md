@@ -186,7 +186,7 @@ exclusions near the source over broad config suppression.
 - Provenance:
   - base branch: `ansible`
   - baseline branch: `mutation/primary-prep-baseline`
-  - baseline commit: `f1625c3876028aa9f3d99d475459650d6c3818eb`
+  - baseline branch HEAD commit: `f1625c3876028aa9f3d99d475459650d6c3818eb`
   - worktree: `/home/tomaz/sources/rh-acm-switchover/.worktrees/mutation-primary-prep-baseline`
 
 ### Unmutated baseline lanes
@@ -227,9 +227,14 @@ exclusions near the source over broad config suppression.
 
 ### Next action recommendation
 
-1. Prioritize the parity-gap survivors first: add Python assertions that mirror the already-green collection contracts for BackupSchedule targeting, saved-schedule persistence, and Thanos selector/wait behavior.
-2. Treat the disable-auto-import and Argo CD `run_id` logging survivors as baseline noise unless a later review shows operator-visible impact beyond logging or malformed fixture shapes.
-3. Add focused Python coverage for execute-mode Argo CD step persistence and secondary-hub pause coordination, which are the remaining meaningful non-parity-gap survivors in the `prepare` / `__init__` families.
+1. Next recommended action: write a dedicated parity-aware survivor-resolution design/implementation plan before any fixes.
+2. Follow-up type: parity-aware. The primary-prep baseline is a shared-behavior review, so survivor resolution should stay anchored to both the Python CLI and the collection rather than leaning into Python-only assertion work.
+3. Top 3 survivor groups for that plan:
+   - BackupSchedule wrong-resource targeting on list/patch calls
+   - `saved_backup_schedule` persistence before pause/delete and on already-paused reruns
+   - Thanos premature-success / skipped-verification risk in selector/wait behavior
+4. Treat the disable-auto-import and Argo CD `run_id` logging survivors as baseline noise unless a later review shows operator-visible impact beyond logging or malformed fixture shapes.
+5. Add focused coverage for execute-mode Argo CD step persistence and secondary-hub pause coordination after the parity-aware plan addresses the top shared-behavior survivors.
 
 ## Survivor Triage Policy
 
