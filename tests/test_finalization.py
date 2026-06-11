@@ -1365,10 +1365,13 @@ class TestFinalization:
             timeout_seconds=finalization_module.DELETE_REQUEST_TIMEOUT,
         )
         primary.get_pods.assert_called_once_with(namespace=finalization_module.OBSERVABILITY_NAMESPACE)
-        mock_wait.assert_called_once()
-        assert mock_wait.call_args.args == ("observability pod termination on old hub", ANY)
-        assert mock_wait.call_args.kwargs["timeout"] == finalization_module.OBSERVABILITY_TERMINATE_TIMEOUT
-        assert mock_wait.call_args.kwargs["interval"] == finalization_module.OBSERVABILITY_TERMINATE_INTERVAL
+        mock_wait.assert_called_once_with(
+            "observability pod termination on old hub",
+            ANY,
+            timeout=finalization_module.OBSERVABILITY_TERMINATE_TIMEOUT,
+            interval=finalization_module.OBSERVABILITY_TERMINATE_INTERVAL,
+            logger=finalization_module.logger,
+        )
 
     @patch("lib.gitops_detector.record_gitops_markers")
     @patch("modules.finalization.wait_for_condition")
