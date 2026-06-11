@@ -178,6 +178,56 @@ exclusion such as `# pragma: no mutate` or config exclusion only when the mutant
 is genuinely equivalent or not operationally meaningful. Prefer targeted
 exclusions near the source over broad config suppression.
 
+## Phase 2 Baseline Record: `modules/primary_prep.py`
+
+- Date: 2026-06-11
+- Source target: `modules/primary_prep.py`
+- Focused Python test target: `tests/test_primary_prep.py`
+- Provenance:
+  - base branch: `ansible`
+  - baseline branch: `mutation/primary-prep-baseline`
+  - baseline commit: `f1625c3876028aa9f3d99d475459650d6c3818eb`
+  - worktree: `/home/tomaz/sources/rh-acm-switchover/.worktrees/mutation-primary-prep-baseline`
+
+### Unmutated baseline lanes
+
+- Python baseline: `source .venv/bin/activate && python -m pytest tests/test_primary_prep.py -q` — PASS (`39 passed`)
+- Collection unit/contracts lane: `source .venv/bin/activate && PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/test_primary_prep_auto_import.py ansible_collections/tomazb/acm_switchover/tests/unit/test_backup_schedule_persistence.py -q` — PASS (`10 passed`)
+- Collection integration/scenario lane: `source .venv/bin/activate && PYTHONPATH=. python -m pytest ansible_collections/tomazb/acm_switchover/tests/integration/test_switchover_roles.py -k primary_prep -q` — PASS (`2 passed, 8 deselected`)
+
+### Mutation baseline
+
+- Tool/version: `mutmut 3.6.0`
+- Config target: `setup.cfg` `[mutmut]` with `source_paths = modules/primary_prep.py` and `pytest_add_cli_args_test_selection = tests/test_primary_prep.py`
+- Baseline command: `source .venv/bin/activate && rm -rf mutants/ && mutmut run`
+- Inspection commands: `source .venv/bin/activate && mutmut results | head -40`; `source .venv/bin/activate && mutmut show <id>`
+- Counts: total `249`, killed `140`, survived `109`, not_checked `0`
+- Additional status buckets: none (`{}`)
+- Survivor-heavy functions:
+  - `_pause_backup_schedule`: `70`
+  - `_scale_down_thanos_compactor`: `15`
+  - `prepare`: `10`
+  - `_disable_auto_import`: `8`
+  - `_pause_argocd_acm_apps`: `5`
+  - `__init__`: `1`
+
+### High-value survivor classification
+
+| Survivor group | Risk area | Collection evidence | Class | Baseline note |
+| --- | --- | --- | --- | --- |
+| `_pause_backup_schedule__mutmut_2`, `3`, `10`, `73`, `78`, `84` | BackupSchedule wrong-resource targeting (`group`, `version`, `namespace`) on list/patch calls | `roles/primary_prep/tasks/pause_backups.yml`, `tests/unit/plugins/modules/test_acm_backup_schedule.py`, `tests/integration/test_switchover_roles.py` | parity gap | Python tests assert patch payload and version branching, but they do not assert the exact `list_custom_resources()`, `patch_custom_resource()`, or delete-path targeting kwargs that the collection keeps explicit. |
+| `_pause_backup_schedule__mutmut_50`, `51`, `52`, `53`, `64` | `saved_backup_schedule` persistence before pause/delete and on already-paused reruns | `tests/unit/test_backup_schedule_persistence.py`, `roles/primary_prep/tasks/main.yml` | parity gap | The collection treats saved schedule persistence as a checkpoint/finalization contract; Python tests do not currently assert the corresponding state writes on the already-paused or pre-mutation paths. |
+| `_scale_down_thanos_compactor__mutmut_8`, `9`, `10`, `11`, `12`, `35`, `40` | Thanos pod-query selector/namespace handling, bounded wait semantics, and missing-compactor fail-closed behavior | `tests/unit/test_primary_prep_auto_import.py`, `roles/primary_prep/tasks/scale_observability.yml` | parity gap | The collection contract explicitly checks the selector, namespace, retries/delay, and fail-on-remaining-pods flow. Python tests verify the scale call and timeout raise, but not the exact pod-query targeting or the 404 mapping in a way that kills these mutants. |
+| `_disable_auto_import__mutmut_4`, `8`, `10`, `23`, `25`, `42`, `43`, `44` | Disable-auto-import bookkeeping and malformed-metadata fallbacks | `tests/unit/test_primary_prep_auto_import.py`, `roles/primary_prep/tasks/manage_auto_import.yml` | incidental/noisy | No surviving mutant changed the real shared contract: annotation patching of non-local clusters and `local-cluster` exclusion remain covered. The survivors only affect log-count bookkeeping or unrealistic malformed `metadata` dict shapes. |
+| `_pause_argocd_acm_apps__mutmut_10`, `11`, `12`, `13`, `14` | Argo CD success-path `run_id` resume-hint logging after pause | `roles/primary_prep/tasks/main.yml`, `tests/unit/test_argocd_resume_on_failure.py` | incidental/noisy | The collection already persists and rehydrates `argocd_run_id` for checkpoint/resume. These Python survivors only change whether the success log prints the run ID, not whether pause state is recorded. |
+| `prepare__mutmut_2`, `3`, `4`, `5`, `7`, `9`, `13`, `15`, `19`, `21` | Top-level phase orchestration triage blocked by tool lookup failure | `mutmut results`, `mutants/modules/primary_prep.py.meta` | tool/runtime issue | `mutmut results` reports these survivors, but `mutmut show <id>` raised `FileNotFoundError` for the `prepare` mutant names under `mutmut 3.6.0`, so this family could not be diff-inspected in the same way as the function-level survivors above. |
+
+### Next action recommendation
+
+1. Prioritize the parity-gap survivors first: add Python assertions that mirror the already-green collection contracts for BackupSchedule targeting, saved-schedule persistence, and Thanos selector/wait behavior.
+2. Treat the disable-auto-import and Argo CD `run_id` logging survivors as baseline noise unless a later review shows operator-visible impact beyond logging or malformed fixture shapes.
+3. Resolve the `mutmut show` lookup failure for `prepare` survivors before planning follow-up work on the phase-orchestration family.
+
 ## Survivor Triage Policy
 
 Classify each surviving mutant before changing tests:
