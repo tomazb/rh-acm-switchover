@@ -94,7 +94,7 @@ def test_remediation_unexpected_failure_after_secret_apply_still_reports_changed
 Run: `python3 -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py::test_remediation_unexpected_failure_after_secret_apply_still_reports_changed -q`
 Expected: FAIL with `assert False is True` on the `changed` assertion.
 
-- [ ] **Step 3: Minimal implementation**
+- [x] **Step 3: Minimal implementation**
 
 In `remediate_one_cluster`, move `changed = False` from inside the `try`
 (currently next to the client factory calls, line 482) to just before the
@@ -121,12 +121,12 @@ In `remediate_one_cluster`, move `changed = False` from inside the `try`
         )
 ```
 
-- [ ] **Step 4: Run test to verify it passes, plus the klusterlet suites**
+- [x] **Step 4: Run test to verify it passes, plus the klusterlet suites**
 
 Run: `python3 -m pytest ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py ansible_collections/tomazb/acm_switchover/tests/unit/test_klusterlet_remediation.py -q`
 Expected: all pass (47 baseline + 1 new).
 
-- [ ] **Step 5: Format and commit**
+- [x] **Step 5: Format and commit**
 
 ```bash
 black --line-length 120 ansible_collections/tomazb/acm_switchover/plugins/module_utils/klusterlet.py ansible_collections/tomazb/acm_switchover/tests/unit/plugins/modules/test_acm_klusterlet_modules.py
