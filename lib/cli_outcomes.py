@@ -196,6 +196,8 @@ def run_operation_mode(
         exit_code = exit_interrupt
     except StateIdentityMismatch as exc:
         # The binding guard refused this state file; never write into it.
+        # The finally block still emits a report from a read-only snapshot,
+        # which is deliberate: it aids diagnosis without mutating the file.
         logger.error("\n✗ %s", exc)
         exit_code = exit_failure
     except SwitchoverError as exc:

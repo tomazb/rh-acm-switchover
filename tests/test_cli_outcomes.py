@@ -108,8 +108,8 @@ def test_phase_report_from_state_prefers_recorded_phase():
     """A phase recorded at completion time wins over the static fallback map."""
     state_snapshot = {
         "completed_steps": [
-            # restore-only records this step outside primary_prep
-            {"name": "pause_argocd_apps", "phase": "activation"},
+            # restore-only runs the pause under PREFLIGHT (lib/operation_runners.py)
+            {"name": "pause_argocd_apps", "phase": "preflight"},
             # invalid recorded phase falls back to the static map
             {"name": "pause_backup_schedule", "phase": "not-a-phase"},
         ],
@@ -119,7 +119,7 @@ def test_phase_report_from_state_prefers_recorded_phase():
 
     phases = phase_report_from_state(state_snapshot)
 
-    assert phases["activation"]["steps"] == ["pause_argocd_apps"]
+    assert phases["preflight"]["steps"] == ["pause_argocd_apps"]
     assert phases["primary_prep"]["steps"] == ["pause_backup_schedule"]
 
 
@@ -132,7 +132,11 @@ def test_phase_report_from_state_step_names_match_source():
     from lib.cli_outcomes import fallback_phase_for_step
 
     repo_root = Path(__file__).resolve().parent.parent
-    sources = sorted((repo_root / "modules").rglob("*.py")) + [repo_root / "acm_switchover.py"]
+    sources = (
+        sorted((repo_root / "modules").rglob("*.py"))
+        + sorted((repo_root / "lib").rglob("*.py"))
+        + [repo_root / "acm_switchover.py"]
+    )
     pattern = re.compile(
         r"""(?:\.step|is_step_completed|mark_step_completed|clear_step_completed|step_name\s*=)\s*\(?\s*["']([^"']+)["']"""
     )

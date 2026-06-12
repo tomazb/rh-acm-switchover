@@ -510,7 +510,11 @@ class StateManager:
         self._write_state(self.state)
 
     def mark_step_completed(self, step_name: str) -> None:
-        """Mark a step as completed, recording the report phase active at the time."""
+        """Mark a step as completed, recording the report phase active at the time.
+
+        The recorded "phase" is a report-artifact name (e.g. "primary_prep"),
+        not a raw Phase value like the "phase" field on error entries.
+        """
         if not self.is_step_completed(step_name):
             entry = {"name": step_name, "timestamp": _utc_timestamp()}
             try:
@@ -543,7 +547,7 @@ class StateManager:
         completed, executing it if not, and marking it completed afterward.
 
         Usage:
-            with self.state.step("my_step", logger) as should_run:
+            with self.state.step("pause_backup_schedule", logger) as should_run:
                 if should_run:
                     self._do_actual_work()
 
