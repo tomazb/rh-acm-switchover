@@ -448,6 +448,7 @@ def remediate_one_cluster(
         steps = {key: "skipped" for key in steps}
         return _result(cluster_name, "skipped", steps, reason="no_managed_cluster_kubeconfig")
 
+    changed = False
     try:
         import_secret = read_secret(
             secondary_client,
@@ -479,7 +480,6 @@ def remediate_one_cluster(
 
         managed_core = core_client_factory(kubeconfig, context)
         apps_client = apps_client_factory(kubeconfig, context)
-        changed = False
         steps["bootstrap_secret_deleted"] = "not_required"
         try:
             managed_core.patch_namespaced_secret(
@@ -577,6 +577,7 @@ def remediate_one_cluster(
             "failed",
             _mark_pending_not_run(steps),
             reason=error_summary(exc),
+            changed=changed,
         )
 
 

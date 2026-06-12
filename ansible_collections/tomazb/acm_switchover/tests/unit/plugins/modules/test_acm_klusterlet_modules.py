@@ -634,6 +634,52 @@ def test_remediation_reports_restart_failure():
     assert "restart failed" in result["results"][0]["reason"]
 
 
+def test_remediation_unexpected_failure_after_secret_apply_still_reports_changed(monkeypatch):
+    secondary = FakeCoreClient({("cluster-a", "cluster-a-import"): _import_secret("https://new.example:6443")})
+    managed = FakeCoreClient(
+        {
+            (
+                MANAGED_CLUSTER_AGENT_NAMESPACE,
+                BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+            ): _hub_secret(
+                "https://old.example:6443",
+                name=BOOTSTRAP_HUB_KUBECONFIG_SECRET_NAME,
+            )
+        }
+    )
+    apps = FakeAppsClient()
+
+    def core_client_factory(kubeconfig: str, context: str | None = None):
+        return secondary if kubeconfig == "hub" else managed
+
+    def apps_client_factory(kubeconfig: str, context: str | None = None) -> FakeAppsClient:
+        return apps
+
+    class ExplodingDatetime:
+        @staticmethod
+        def now(tz=None):
+            raise RuntimeError("clock unavailable")
+
+    monkeypatch.setattr(klusterlet_utils, "datetime", ExplodingDatetime)
+
+    result = remediate_klusterlets(
+        secondary_hub={"kubeconfig": "hub"},
+        managed_clusters={"cluster-a": {"kubeconfig": "cluster-a"}},
+        pending_clusters=["cluster-a"],
+        workers=1,
+        core_client_factory=core_client_factory,
+        apps_client_factory=apps_client_factory,
+    )
+
+    # The bootstrap secret was already patched before the unexpected error,
+    # so the cluster result must not claim the remediation left no changes.
+    assert managed.patched, "precondition: secret apply must happen before the failure"
+    assert result["results"][0]["status"] == "failed"
+    assert "clock unavailable" in result["results"][0]["reason"]
+    assert result["results"][0]["changed"] is True
+    assert result["changed"] is True
+
+
 def test_remediation_preserves_best_effort_partial_failure():
     secondary = FakeCoreClient(
         {
