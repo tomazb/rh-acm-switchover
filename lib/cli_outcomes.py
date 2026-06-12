@@ -18,7 +18,7 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import build_operation_report, write_json_report_artifact
-from lib.utils import Phase, StateManager
+from lib.utils import Phase, StateIdentityMismatch, StateManager
 
 
 def report_target(args: Any) -> tuple[str, str]:
@@ -181,6 +181,10 @@ def run_operation_mode(
         logger.info("State saved to: %s", getattr(args, "state_file", None))
         logger.info("Re-run the same command to resume from last successful step")
         exit_code = exit_interrupt
+    except StateIdentityMismatch as exc:
+        # The binding guard refused this state file; never write into it.
+        logger.error("\n✗ %s", exc)
+        exit_code = exit_failure
     except SwitchoverError as exc:
         logger.error("\n✗ %s", exc)
         if should_record_state_errors:

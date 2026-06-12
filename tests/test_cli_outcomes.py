@@ -20,7 +20,7 @@ from lib.constants import (
     REPORT_TYPE_SWITCHOVER,
 )
 from lib.exceptions import SwitchoverError
-from lib.utils import Phase
+from lib.utils import Phase, StateIdentityMismatch
 
 
 def test_report_target_maps_cli_modes():
@@ -449,6 +449,43 @@ def test_run_operation_mode_handles_switchover_error_without_exc_info():
     assert exit_code == 1
     logger.error.assert_called_once_with("\n✗ %s", failure)
     state.add_error.assert_called_once_with("bad news")
+    hooks.write_python_report.assert_called_once_with(args, state, "fail", logger)
+    reporter.print_report.assert_called_once()
+
+
+def test_run_operation_mode_identity_mismatch_never_touches_state():
+    """A refused identity binding must not write errors into the refused state file."""
+    args = SimpleNamespace(argocd_resume_only=False, verbose=False, state_file="state.json")
+    state = Mock()
+    logger = Mock()
+    reporter = Mock()
+    failure = StateIdentityMismatch("primary hub identity mismatch")
+    hooks = CliOperationHooks(
+        bind_runtime_hub_identities=Mock(side_effect=failure),
+        run_argocd_resume_only=Mock(),
+        execute_operation=Mock(),
+        write_python_report=Mock(),
+        gitops_reporter_factory=lambda: reporter,
+    )
+
+    exit_code = run_operation_mode(
+        args,
+        state,
+        Mock(),
+        Mock(),
+        logger,
+        should_bind_state=True,
+        should_record_state_errors=True,
+        hooks=hooks,
+        exit_success=0,
+        exit_failure=1,
+        exit_interrupt=130,
+    )
+
+    assert exit_code == 1
+    state.add_error.assert_not_called()
+    logger.error.assert_any_call("\n✗ %s", failure)
+    hooks.execute_operation.assert_not_called()
     hooks.write_python_report.assert_called_once_with(args, state, "fail", logger)
     reporter.print_report.assert_called_once()
 
