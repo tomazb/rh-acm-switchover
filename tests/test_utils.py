@@ -1259,8 +1259,8 @@ class TestDryRunSkipDecorator:
         assert result2 == "executed"
         assert obj2.executed is True
 
-    def test_decorator_with_missing_attribute(self):
-        """When dry_run attribute doesn't exist at all, skip safely."""
+    def test_decorator_with_missing_attribute_raises(self):
+        """When the dry_run attribute doesn't exist, fail closed with an error."""
 
         class TestClass:
             def __init__(self):
@@ -1273,10 +1273,26 @@ class TestDryRunSkipDecorator:
                 return "executed"
 
         obj = TestClass()
-        result = obj.test_method()
+        with pytest.raises(RuntimeError, match="dry_run"):
+            obj.test_method()
+        assert obj.executed is False
 
-        # Should skip since attribute is missing (safe default)
-        assert result == "skipped"
+    def test_decorator_with_none_attribute_raises(self):
+        """When the dry_run attribute is present but None, fail closed with an error."""
+
+        class TestClass:
+            def __init__(self):
+                self.dry_run = None
+                self.executed = False
+
+            @dry_run_skip(message="None attr", return_value="skipped")
+            def test_method(self):
+                self.executed = True
+                return "executed"
+
+        obj = TestClass()
+        with pytest.raises(RuntimeError, match="dry_run"):
+            obj.test_method()
         assert obj.executed is False
 
     def test_decorator_with_arguments(self):
@@ -1359,14 +1375,14 @@ class TestDryRunSkipDecorator:
         mock_get_logger.assert_called_with("acm_switchover")
         mock_logger.info.assert_called_with("[DRY-RUN] %s", "Custom skip message")
 
-    def test_decorator_skips_when_intermediate_attribute_is_none(self):
-        """When an intermediate in the dot-path is None, default to skipping (safe)."""
+    def test_decorator_raises_when_intermediate_attribute_is_none(self):
+        """When an intermediate in the dot-path is None, fail closed with an error."""
 
         class Outer:
             client = None  # intermediate is None
 
         @dry_run_skip(
-            message="Should skip safely",
+            message="Should fail closed",
             return_value="skipped",
             dry_run_attr="client.dry_run",
         )
@@ -1374,8 +1390,8 @@ class TestDryRunSkipDecorator:
             return "executed"
 
         obj = Outer()
-        result = guarded_method(obj)
-        assert result == "skipped"
+        with pytest.raises(RuntimeError, match="client.dry_run"):
+            guarded_method(obj)
 
 
 @pytest.mark.unit
