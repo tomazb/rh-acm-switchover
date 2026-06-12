@@ -2,7 +2,8 @@
 - name: Announce manifest deployment (dry_run)
   ansible.builtin.debug:
     msg: >-
-      [dry_run] Would apply {{ _rbac_plan.role }} RBAC resources from:
+      [dry_run] Would apply {{ _rbac_plan.role }} RBAC resources
+      for {{ _rbac_plan.role_targets | default([_rbac_plan.role]) | join(', ') }} from:
       {{ _rbac_plan.assets | join(', ') }}
   when: acm_switchover_execution.mode | default('dry_run') == 'dry_run'
 

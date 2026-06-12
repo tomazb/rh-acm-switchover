@@ -15,7 +15,7 @@
   when: >-
     (
       ((item.get('metadata') or {}).get('labels') or {}).get('app.kubernetes.io/role', '')
-      == _rbac_plan.role
+      in (_rbac_plan.role_targets | default([_rbac_plan.role]))
     )
     or (
       ((item.get('metadata') or {}).get('labels') or {}).get('app.kubernetes.io/role', '') == 'common'

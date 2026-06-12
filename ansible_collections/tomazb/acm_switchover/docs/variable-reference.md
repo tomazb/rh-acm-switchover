@@ -197,8 +197,8 @@ warns and continues so the result matches the Python CLI's warning behavior.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `role` | str | `operator` | Role profile: `operator` (write) or `validator` (read-only) |
-| `include_decommission` | bool | `false` | Append decommission-scoped ClusterRole manifests for `ClusterDeployment` list safety validation plus `ManagedCluster`, `MultiClusterHub`, and `MultiClusterObservability` delete; baseline operator RBAC already grants `MultiClusterObservability` delete for normal old-hub finalization |
+| `role` | str | `operator` | Role profile: `operator` (write), `validator` (read-only), or `both` |
+| `include_decommission` | bool | `false` | Append decommission-scoped ClusterRole manifests for `ClusterDeployment` list safety validation plus `ManagedCluster`, `MultiClusterHub`, and `MultiClusterObservability` delete; valid with `role: operator` or `role: both`; baseline operator RBAC already grants `MultiClusterObservability` delete for normal old-hub finalization |
 | `generate_kubeconfigs` | bool | `false` | Generate kubeconfigs after manifest apply |
 | `validate_permissions` | bool | `false` | Run `acm_rbac_validate` after apply |
 | `token_duration` | str | `24h` | Token validity duration for generated service account kubeconfigs |
@@ -218,4 +218,4 @@ warns and continues so the result matches the Python CLI's warning behavior.
 |----------|----------|------------|
 | `acm_switchover_discovery_result` | discovery | `playbook`, `hub_role`, `status` |
 | `acm_switchover_decommission_result` | decommission | `phase`, `mode`, `status` |
-| `acm_switchover_rbac_bootstrap_result` | rbac_bootstrap | `phase`, `mode`, `role`, `assets_applied`, `generated_kubeconfig`, `status` |
+| `acm_switchover_rbac_bootstrap_result` | rbac_bootstrap | `phase`, `mode`, `role`, `assets_applied`, `generated_kubeconfig`, `generated_kubeconfigs`, `status` |
