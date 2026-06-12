@@ -21,6 +21,12 @@ def _extract_set_fact_values(tasks: list[dict], key: str) -> list[str]:
     return values
 
 
+def _summary_values_referencing(tasks: list[dict], result_variable: str) -> list[str]:
+    values = _extract_set_fact_values(tasks, "acm_switchover_argocd_summary")
+    values.extend(_extract_set_fact_values(tasks, "acm_switchover_argocd_summary_by_hub"))
+    return [value for value in values if result_variable in value]
+
+
 def test_pause_summary_is_aggregated_not_overwritten():
     """pause.yml must accumulate paused totals instead of overwriting per hub."""
     tasks = _load_yaml("pause.yml")
@@ -40,6 +46,16 @@ def test_pause_summary_is_aggregated_not_overwritten():
         assert "_argocd_discover_hub" in value
 
 
+def test_pause_summary_defaults_empty_results_when_patch_loop_is_skipped():
+    """pause.yml must tolerate a registered result without a results list."""
+    tasks = _load_yaml("pause.yml")
+    values = _summary_values_referencing(tasks, "acm_argocd_pause_results.results")
+
+    assert values, "pause.yml must aggregate live pause result counts"
+    for value in values:
+        assert "acm_argocd_pause_results.results | default([])" in value
+
+
 def test_resume_summary_is_aggregated_not_overwritten():
     """resume.yml must accumulate restored totals instead of overwriting per hub."""
     tasks = _load_yaml("resume.yml")
@@ -57,3 +73,13 @@ def test_resume_summary_is_aggregated_not_overwritten():
     for value in by_hub_values:
         assert "acm_switchover_argocd_summary_by_hub" in value
         assert "_argocd_discover_hub" in value
+
+
+def test_resume_summary_defaults_empty_results_when_patch_loop_is_skipped():
+    """resume.yml must tolerate a registered result without a results list."""
+    tasks = _load_yaml("resume.yml")
+    values = _summary_values_referencing(tasks, "acm_argocd_resume_results.results")
+
+    assert values, "resume.yml must aggregate live resume result counts"
+    for value in values:
+        assert "acm_argocd_resume_results.results | default([])" in value

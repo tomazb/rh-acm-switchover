@@ -69,6 +69,16 @@ class TestBackupScheduleManager:
         # Should not patch if paused field doesn't exist (default enabled)
         mock_kube_client.patch_custom_resource.assert_not_called()
 
+    def test_explicit_null_paused_field_is_treated_as_enabled(self, schedule_manager, mock_kube_client):
+        """Treat spec.paused=null the same as the collection: enabled unless literally true."""
+        mock_kube_client.list_custom_resources.return_value = [
+            {"metadata": {"name": "schedule-rhacm"}, "spec": {"paused": None}}
+        ]
+
+        schedule_manager.ensure_enabled("2.12.0")
+
+        mock_kube_client.patch_custom_resource.assert_not_called()
+
     def test_unpause_schedule_acm_212_and_above(self, schedule_manager, mock_kube_client):
         """Test unpausing schedule for ACM 2.12.0+."""
         mock_kube_client.list_custom_resources.return_value = [

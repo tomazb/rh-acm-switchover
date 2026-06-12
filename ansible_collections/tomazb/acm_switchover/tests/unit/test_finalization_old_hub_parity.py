@@ -61,6 +61,13 @@ def test_verify_old_hub_state_checks_clusters_and_backup_schedule():
     assert "paused" in text
 
 
+def test_verify_old_hub_state_treats_null_paused_as_enabled():
+    """Old-hub regression checks must not treat spec.paused=null as paused."""
+    text = (FINALIZATION_TASKS / "verify_old_hub_state.yml").read_text()
+
+    assert ".get('paused', false) | bool" in text
+
+
 def test_handle_old_hub_decommission_includes_decommission_role():
     """old_hub_action=decommission must execute the collection decommission role."""
     tasks = yaml.safe_load((FINALIZATION_TASKS / "handle_old_hub.yml").read_text())

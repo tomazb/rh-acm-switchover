@@ -77,7 +77,7 @@ class BackupScheduleManager:
 
         paused = schedule.get("spec", {}).get("paused")
 
-        if paused is False or "paused" not in schedule.get("spec", {}):
+        if paused is not True:
             logger.info(
                 "BackupSchedule %s already enabled on %s",
                 schedule_name,
