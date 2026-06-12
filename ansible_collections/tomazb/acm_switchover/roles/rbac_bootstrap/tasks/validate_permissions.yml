@@ -1,7 +1,7 @@
 ---
 - name: Validate permissions for requested RBAC role targets
   ansible.builtin.include_tasks: validate_permission_target.yml
-  loop: "{{ _rbac_plan.role_targets | default([acm_switchover_rbac_bootstrap.role]) }}"
+  loop: "{{ _rbac_plan.role_targets | default([(acm_switchover_rbac_bootstrap | default({})).get('role', 'operator')]) }}"
   loop_control:
     loop_var: _rbac_bootstrap_role_target
     label: "{{ _rbac_bootstrap_role_target }}"

@@ -376,8 +376,9 @@ python check_rbac.py \
 
 # Include decommission permissions for ManagedCluster and MultiClusterHub teardown
 # (requires the optional decommission RBAC extension)
-# Note: --include-decommission is only valid with --role operator.
-# Combining it with --role validator is rejected with an explicit error.
+# Note: check_rbac.py validates concrete roles, so --include-decommission is only
+# valid with --role operator here. During setup/bootstrap, role=both applies and
+# validates the operator decommission extension plus the validator profile.
 python check_rbac.py --include-decommission --role operator
 ```
 

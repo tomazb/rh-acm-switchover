@@ -26,6 +26,8 @@ options:
   include_decommission:
     description:
       - Whether to append decommission-scoped ClusterRole manifests to the asset list.
+      - Valid with C(operator) and C(both). Rejected with C(validator) because
+        decommission permissions are operator-only.
     type: bool
     default: false
   generate_kubeconfigs:

@@ -18,7 +18,7 @@
       }}
     _rbac_bootstrap_target_include_decommission: >-
       {{
-        acm_switchover_rbac_bootstrap.include_decommission
+        (acm_switchover_rbac_bootstrap | default({})).get('include_decommission') | default(false) | bool
         if _rbac_bootstrap_role_target == 'operator'
         else false
       }}
@@ -35,8 +35,8 @@
 
 - name: Run SubjectAccessReview checks for bootstrap service account
   kubernetes.core.k8s:
-    kubeconfig: "{{ acm_switchover_hubs.primary.kubeconfig }}"
-    context: "{{ acm_switchover_hubs.primary.context }}"
+    kubeconfig: "{{ (acm_switchover_hubs | default({})).get('primary', {}).get('kubeconfig') | default(omit, true) }}"
+    context: "{{ (acm_switchover_hubs | default({})).get('primary', {}).get('context') | default(omit, true) }}"
     state: present
     definition:
       apiVersion: authorization.k8s.io/v1

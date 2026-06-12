@@ -72,3 +72,4 @@ def test_dev_requirements_exclude_known_vulnerable_versions():
     python311_requirements = _requirements_for_python(ansible_requirements, "3.11")
     assert len(python311_requirements) == 1
     assert Version("2.18.1") in python311_requirements[0].specifier
+    assert Version("2.18.0") not in python311_requirements[0].specifier
