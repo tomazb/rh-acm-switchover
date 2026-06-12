@@ -123,6 +123,18 @@ class Phase(Enum):
     FAILED = "failed"
 
 
+# Report-artifact phase names keyed by execution phase. Legacy secondary-verify
+# folds into activation, matching the canonical resume mapping in lib/workflow.py.
+REPORT_PHASE_NAMES = {
+    Phase.PREFLIGHT: "preflight",
+    Phase.PRIMARY_PREP: "primary_prep",
+    Phase.SECONDARY_VERIFY: "activation",
+    Phase.ACTIVATION: "activation",
+    Phase.POST_ACTIVATION: "post_activation",
+    Phase.FINALIZATION: "finalization",
+}
+
+
 def _utc_timestamp() -> str:
     """Return an ISO-8601 timestamp in UTC."""
     return datetime.now(timezone.utc).isoformat()
@@ -498,9 +510,16 @@ class StateManager:
         self._write_state(self.state)
 
     def mark_step_completed(self, step_name: str) -> None:
-        """Mark a step as completed."""
+        """Mark a step as completed, recording the report phase active at the time."""
         if not self.is_step_completed(step_name):
-            self.state["completed_steps"].append({"name": step_name, "timestamp": _utc_timestamp()})
+            entry = {"name": step_name, "timestamp": _utc_timestamp()}
+            try:
+                report_phase = REPORT_PHASE_NAMES.get(Phase(self.state.get("current_phase")))
+            except ValueError:
+                report_phase = None
+            if report_phase:
+                entry["phase"] = report_phase
+            self.state["completed_steps"].append(entry)
             self._dirty = True
             self.save_state()
 

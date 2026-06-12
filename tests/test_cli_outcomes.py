@@ -47,7 +47,7 @@ def test_phase_report_from_state_marks_completed_and_failed_phases():
         "completed_steps": [
             {"name": "preflight_cluster_access"},
             {"name": "pause_backup_schedule"},
-            {"name": "verify_managed_clusters"},
+            {"name": "verify_clusters_connected"},
         ],
         "current_phase": Phase.FAILED.value,
         "errors": [{"phase": Phase.ACTIVATION.value, "message": "boom"}],
@@ -57,8 +57,94 @@ def test_phase_report_from_state_marks_completed_and_failed_phases():
 
     assert phases["preflight"]["status"] == "pass"
     assert phases["primary_prep"]["steps"] == ["pause_backup_schedule"]
-    assert phases["post_activation"]["steps"] == ["verify_managed_clusters"]
+    assert phases["post_activation"]["steps"] == ["verify_clusters_connected"]
     assert phases["activation"]["status"] == "fail"
+
+
+def test_phase_report_from_state_maps_every_recorded_step_name():
+    """Every step name the CLI actually records must land in a report phase."""
+    expected_phase_by_step = {
+        "pause_argocd_apps": "primary_prep",
+        "pause_backup_schedule": "primary_prep",
+        "disable_auto_import": "primary_prep",
+        "scale_down_thanos": "primary_prep",
+        "verify_passive_sync": "activation",
+        "activate_managed_clusters": "activation",
+        "create_full_restore": "activation",
+        "wait_restore_completion": "activation",
+        "apply_immediate_import_annotations": "activation",
+        "verify_clusters_connected": "post_activation",
+        "verify_klusterlet_connections": "post_activation",
+        "verify_auto_import_cleanup": "post_activation",
+        "scale_up_observability_components": "post_activation",
+        "restart_observatorium_api": "post_activation",
+        "verify_observability_pods": "post_activation",
+        "verify_metrics_collection": "post_activation",
+        "enable_backup_schedule": "finalization",
+        "verify_backup_schedule_enabled": "finalization",
+        "fix_backup_collision": "finalization",
+        "verify_new_backups": "finalization",
+        "verify_backup_integrity": "finalization",
+        "verify_mch_health": "finalization",
+        "handle_old_hub": "finalization",
+        "verify_old_hub_state": "finalization",
+        "disable_observability_on_secondary": "finalization",
+        "reset_auto_import_strategy": "finalization",
+    }
+
+    state_snapshot = {
+        "completed_steps": [{"name": name} for name in expected_phase_by_step],
+        "current_phase": Phase.COMPLETED.value,
+        "errors": [],
+    }
+
+    phases = phase_report_from_state(state_snapshot)
+
+    reported_phase_by_step = {step: phase for phase, entry in phases.items() for step in entry["steps"]}
+    assert reported_phase_by_step == expected_phase_by_step
+
+
+def test_phase_report_from_state_prefers_recorded_phase():
+    """A phase recorded at completion time wins over the static fallback map."""
+    state_snapshot = {
+        "completed_steps": [
+            # restore-only records this step outside primary_prep
+            {"name": "pause_argocd_apps", "phase": "activation"},
+            # invalid recorded phase falls back to the static map
+            {"name": "pause_backup_schedule", "phase": "not-a-phase"},
+        ],
+        "current_phase": Phase.COMPLETED.value,
+        "errors": [],
+    }
+
+    phases = phase_report_from_state(state_snapshot)
+
+    assert phases["activation"]["steps"] == ["pause_argocd_apps"]
+    assert phases["primary_prep"]["steps"] == ["pause_backup_schedule"]
+
+
+def test_phase_report_from_state_step_names_match_source():
+    """Contract: every step-name literal in the CLI source resolves to a report phase."""
+    import re
+    from pathlib import Path
+
+    from lib import constants
+    from lib.cli_outcomes import fallback_phase_for_step
+
+    repo_root = Path(__file__).resolve().parent.parent
+    sources = sorted((repo_root / "modules").rglob("*.py")) + [repo_root / "acm_switchover.py"]
+    pattern = re.compile(
+        r"""(?:\.step|is_step_completed|mark_step_completed|clear_step_completed|step_name\s*=)\s*\(?\s*["']([^"']+)["']"""
+    )
+
+    step_names = set()
+    for source in sources:
+        step_names.update(pattern.findall(source.read_text()))
+    step_names.update(value for name, value in vars(constants).items() if name.startswith("STEP_"))
+
+    assert step_names, "source scan found no step names; the regex is broken"
+    unmapped = sorted(name for name in step_names if fallback_phase_for_step(name) is None)
+    assert not unmapped, f"steps missing from the report phase map: {unmapped}"
 
 
 def test_phase_report_from_state_ignores_malformed_snapshot_entries():

@@ -88,6 +88,21 @@ class TestStateManager:
         assert completed[0]["name"] == "step1"
         assert "timestamp" in completed[0]
 
+    def test_mark_step_completed_records_report_phase(self, state_manager):
+        """Steps record the report phase active at completion time."""
+        state_manager.set_phase(Phase.PRIMARY_PREP)
+        state_manager.mark_step_completed("step1")
+
+        completed = state_manager.state["completed_steps"]
+        assert completed[0]["phase"] == "primary_prep"
+
+    def test_mark_step_completed_omits_phase_when_unmapped(self, state_manager):
+        """Phases with no report mapping (e.g. init) don't record a phase key."""
+        state_manager.mark_step_completed("step1")
+
+        completed = state_manager.state["completed_steps"]
+        assert "phase" not in completed[0]
+
     def test_mark_step_completed_persists_immediately(self, tmp_path):
         """Completed steps should be persisted without explicit save_state."""
         state_path = tmp_path / "state-step.json"

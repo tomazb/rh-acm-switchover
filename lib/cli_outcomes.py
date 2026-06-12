@@ -18,7 +18,46 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import build_operation_report, write_json_report_artifact
-from lib.utils import Phase, StateIdentityMismatch, StateManager
+from lib.utils import REPORT_PHASE_NAMES, Phase, StateIdentityMismatch, StateManager
+
+# Fallback for state entries recorded before completion-time phases existed.
+# Matched by prefix so e.g. verify_backup_schedule_enabled still resolves.
+_PHASE_BY_STEP_PREFIX = {
+    "preflight": "preflight",
+    "pause_argocd": "primary_prep",
+    "pause_backup": "primary_prep",
+    "disable_auto_import": "primary_prep",
+    "scale_down": "primary_prep",
+    "verify_passive_sync": "activation",
+    "activate_managed_clusters": "activation",
+    "create_full_restore": "activation",
+    "wait_restore_completion": "activation",
+    "apply_immediate_import": "activation",
+    "verify_clusters_connected": "post_activation",
+    "verify_klusterlet": "post_activation",
+    "verify_auto_import_cleanup": "post_activation",
+    "scale_up_observability": "post_activation",
+    "restart_observatorium_api": "post_activation",
+    "verify_observability_pods": "post_activation",
+    "verify_metrics_collection": "post_activation",
+    "enable_backup_schedule": "finalization",
+    "verify_backup_schedule": "finalization",
+    "fix_backup_collision": "finalization",
+    "verify_new_backups": "finalization",
+    "verify_backup_integrity": "finalization",
+    "verify_mch_health": "finalization",
+    "handle_old_hub": "finalization",
+    "verify_old_hub_state": "finalization",
+    "disable_observability_on_secondary": "finalization",
+    "reset_auto_import_strategy": "finalization",
+}
+
+_REPORT_PHASE_VALUES = frozenset(REPORT_PHASE_NAMES.values())
+
+
+def fallback_phase_for_step(step_name: str) -> Optional[str]:
+    """Resolve a step name to its report phase via the static prefix map."""
+    return next((value for prefix, value in _PHASE_BY_STEP_PREFIX.items() if step_name.startswith(prefix)), None)
 
 
 def report_target(args: Any) -> tuple[str, str]:
@@ -35,27 +74,6 @@ def report_target(args: Any) -> tuple[str, str]:
 def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
     """Build a compact phase map from durable state."""
     phases: dict[str, dict[str, Any]] = {}
-    phase_by_step_prefix = {
-        "preflight": "preflight",
-        "pause_argocd": "preflight",
-        "pause_backup": "primary_prep",
-        "disable_auto_import": "primary_prep",
-        "scale_down": "primary_prep",
-        "verify_passive_sync": "activation",
-        "activate_managed_clusters": "activation",
-        "create_full_restore": "activation",
-        "wait_restore_completion": "activation",
-        "apply_immediate_import": "activation",
-        "verify_managed_clusters": "post_activation",
-        "verify_klusterlet": "post_activation",
-        "enable_backup_schedule": "finalization",
-        "verify_backup_schedule": "finalization",
-        "fix_backup_collision": "finalization",
-        "verify_new_backups": "finalization",
-        "verify_backup_integrity": "finalization",
-        "verify_mch_health": "finalization",
-        "handle_old_hub": "finalization",
-    }
 
     if not isinstance(state_snapshot, dict):
         return phases
@@ -68,7 +86,8 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
         if not isinstance(step, dict):
             continue
         name = step.get("name", "")
-        phase = next((value for prefix, value in phase_by_step_prefix.items() if name.startswith(prefix)), None)
+        recorded_phase = step.get("phase")
+        phase = recorded_phase if recorded_phase in _REPORT_PHASE_VALUES else fallback_phase_for_step(name)
         if not phase:
             continue
         phases.setdefault(phase, {"phase": phase, "status": "pass", "steps": []})["steps"].append(name)
@@ -80,13 +99,7 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
 
         last_error = errors[-1] if errors else None
         failed_phase_value = last_error.get("phase") if isinstance(last_error, dict) else None
-        failed_phase = {
-            Phase.PREFLIGHT.value: "preflight",
-            Phase.PRIMARY_PREP.value: "primary_prep",
-            Phase.ACTIVATION.value: "activation",
-            Phase.POST_ACTIVATION.value: "post_activation",
-            Phase.FINALIZATION.value: "finalization",
-        }.get(failed_phase_value)
+        failed_phase = {phase.value: name for phase, name in REPORT_PHASE_NAMES.items()}.get(failed_phase_value)
         if failed_phase:
             phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})["status"] = "fail"
 
