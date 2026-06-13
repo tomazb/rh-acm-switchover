@@ -82,7 +82,6 @@ class Finalization:
         self.dry_run = dry_run
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
-        self.disable_observability_on_secondary = disable_observability_on_secondary
         self.restore_only = restore_only
         self.backup_manager = BackupScheduleManager(
             secondary_client,

@@ -1336,7 +1336,6 @@ class TestFinalization:
             acm_version="2.14.0",
             primary_client=primary,
             old_hub_action="secondary",
-            disable_observability_on_secondary=True,
         )
         primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
         primary.get_pods.return_value = []
@@ -1394,7 +1393,6 @@ class TestFinalization:
             acm_version="2.14.0",
             primary_client=primary,
             old_hub_action="secondary",
-            disable_observability_on_secondary=True,
         )
         primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
         primary.get_pods.return_value = []
@@ -1427,7 +1425,6 @@ class TestFinalization:
             acm_version="2.14.0",
             primary_client=primary,
             old_hub_action="secondary",
-            disable_observability_on_secondary=True,
         )
         primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
         primary.get_pods.return_value = []
@@ -1459,7 +1456,6 @@ class TestFinalization:
             acm_version="2.14.0",
             primary_client=primary,
             old_hub_action="secondary",
-            disable_observability_on_secondary=True,
         )
         primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
         primary.get_pods.return_value = []
@@ -1566,7 +1562,6 @@ class TestFinalization:
             acm_version="2.14.0",
             primary_client=primary,
             old_hub_action="secondary",
-            disable_observability_on_secondary=True,
         )
         primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
         primary.get_pods.return_value = [{"metadata": {"name": "obs-pod"}}]
@@ -1591,7 +1586,6 @@ class TestFinalization:
             acm_version="2.14.0",
             primary_client=primary,
             old_hub_action="secondary",
-            disable_observability_on_secondary=True,
             dry_run=True,
         )
         primary.list_custom_resources.return_value = [{"metadata": {"name": "observability", "labels": {}}}]
@@ -1765,6 +1759,41 @@ class TestFinalization:
                 assert result is True
                 mock_disable.assert_not_called()
                 mock_verify.assert_called_once()
+
+    def test_finalize_deletes_old_hub_observability_when_deprecated_flag_is_false(
+        self, mock_secondary_client, mock_state_manager, mock_backup_manager
+    ):
+        """Detected observability should trigger old-hub MCO deletion without the deprecated flag."""
+        primary = Mock()
+        fin = Finalization(
+            secondary_client=mock_secondary_client,
+            state_manager=mock_state_manager,
+            acm_version="2.14.0",
+            primary_client=primary,
+            primary_has_observability=True,
+            old_hub_action="secondary",
+            disable_observability_on_secondary=False,
+        )
+
+        with (
+            patch.object(fin, "_disable_observability_on_old_hub") as mock_disable,
+            patch.object(fin, "_enable_backup_schedule"),
+            patch.object(fin, "_verify_backup_schedule_enabled"),
+            patch.object(fin, "_fix_backup_schedule_collision"),
+            patch.object(fin, "_get_backup_verify_timeout", return_value=1),
+            patch.object(fin, "_verify_new_backups"),
+            patch.object(fin, "_verify_backup_integrity"),
+            patch.object(fin, "_verify_multiclusterhub_health"),
+            patch.object(fin, "_run_reset_auto_import_strategy_step"),
+            patch.object(fin, "_setup_old_hub_as_secondary") as mock_setup_old_hub,
+            patch.object(fin, "_verify_old_hub_state"),
+        ):
+            result = fin.finalize()
+
+        assert result is True
+        mock_disable.assert_called_once_with()
+        mock_setup_old_hub.assert_called_once_with()
+        assert "disable_observability_on_secondary" not in vars(fin)
 
     def test_handle_old_hub_secondary_skips_safely_when_primary_client_is_absent(
         self, mock_secondary_client, mock_state_manager, mock_backup_manager
