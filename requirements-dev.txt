@@ -20,7 +20,8 @@ bandit>=1.7.5
 pip-audit>=2.6.0
 
 # Patched direct/transitive dependencies (pip-audit output)
-ansible-core>=2.18.1
+ansible-core>=2.17.14,<2.18; python_version < "3.11"
+ansible-core>=2.18.1; python_version >= "3.11"
 authlib>=1.6.7
 setuptools>=78.1.1
 filelock>=3.20.3

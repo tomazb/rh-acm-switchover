@@ -79,7 +79,7 @@ ARGOCD_ACM_KINDS = {
     "ClusterDeployment",
 }
 
-RBAC_VALID_ROLES = ("operator", "validator")
+RBAC_VALID_ROLES = ("operator", "validator", "both")
 RBAC_BASE_ASSETS = [
     "deploy/rbac/namespace.yaml",
     "deploy/rbac/serviceaccount.yaml",

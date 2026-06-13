@@ -534,7 +534,7 @@ def test_collection_ssar_tasks_split_resource_subresources():
     """Kubernetes access reviews require resource and subresource fields to be separate."""
     for path in [
         PREFLIGHT_TASKS / "run_ssar.yml",
-        ROLES_DIR / "rbac_bootstrap" / "tasks" / "validate_permissions.yml",
+        ROLES_DIR / "rbac_bootstrap" / "tasks" / "validate_permission_target.yml",
     ]:
         text = path.read_text()
         assert "resource: \"{{ item.1.split('/')[0] }}\"" in text

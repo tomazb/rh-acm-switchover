@@ -3,6 +3,7 @@
 import pytest
 
 from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_bootstrap import (
+    expand_rbac_role_targets,
     main,
     select_rbac_assets,
 )
@@ -32,6 +33,19 @@ def test_validator_role_returns_base_assets():
     assets = select_rbac_assets(role="validator", include_decommission=False)
     assert len(assets) == 6
     assert "deploy/rbac/serviceaccount.yaml" in assets
+
+
+def test_both_role_returns_base_assets_and_expands_targets():
+    assets = select_rbac_assets(role="both", include_decommission=False)
+
+    assert len(assets) == 6
+    assert expand_rbac_role_targets("both") == ["operator", "validator"]
+
+
+def test_both_role_allows_decommission_assets():
+    assets = select_rbac_assets(role="both", include_decommission=True)
+
+    assert any("decommission" in path for path in assets)
 
 
 def test_validator_role_rejects_decommission_assets():
@@ -68,4 +82,4 @@ def test_main_maps_invalid_role_combination_to_fail_json(monkeypatch):
 
     main()
 
-    assert captured["fail"] == {"msg": "include_decommission is only valid for the operator role."}
+    assert captured["fail"] == {"msg": "include_decommission is only valid for the operator role or both."}

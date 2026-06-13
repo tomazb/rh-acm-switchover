@@ -6,6 +6,8 @@ from pathlib import Path
 import yaml
 from jinja2 import Environment
 
+from ansible_collections.tomazb.acm_switchover.plugins.modules.acm_rbac_bootstrap import expand_rbac_role_targets
+
 ROLES_DIR = Path(__file__).resolve().parents[2] / "roles"
 RBAC_BOOTSTRAP_TASKS = ROLES_DIR / "rbac_bootstrap" / "tasks"
 
@@ -39,10 +41,17 @@ def test_generate_kubeconfigs_invokes_packaged_script_for_selected_service_accou
     assert packaged_duration.group(1) == "24h"
     assert "default: 24h" in packaged_script_text
 
-    command_task = next(task for task in tasks if task.get("ansible.builtin.command"))
+    command_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Generate kubeconfig from service account" and task.get("ansible.builtin.command")
+    )
     argv = command_task["ansible.builtin.command"]["argv"]
     token_duration_arg = argv[argv.index("--token-duration") + 1]
-    assert token_duration_arg == "{{ acm_switchover_rbac_bootstrap.token_duration | default('24h', true) }}"
+    assert (
+        token_duration_arg
+        == "{{ (acm_switchover_rbac_bootstrap | default({})).get('token_duration', '24h') | default('24h', true) }}"
+    )
 
     copy_tasks = [task for task in tasks if task.get("ansible.builtin.copy")]
     assert copy_tasks, "generated kubeconfig stdout must be written to a durable file"
@@ -56,8 +65,7 @@ def test_generate_kubeconfigs_validates_output_path_before_writing_credentials()
     validate_index = next(
         idx
         for idx, task in enumerate(tasks)
-        if task.get("tomazb.acm_switchover.acm_safe_path_validate", {}).get("path")
-        == "{{ _rbac_bootstrap_kubeconfig_path }}"
+        if task.get("tomazb.acm_switchover.acm_safe_path_validate", {}).get("path") == "{{ item.path }}"
     )
     file_index = next(idx for idx, task in enumerate(tasks) if task.get("ansible.builtin.file"))
     copy_index = next(idx for idx, task in enumerate(tasks) if task.get("ansible.builtin.copy"))
@@ -68,14 +76,56 @@ def test_generate_kubeconfigs_validates_output_path_before_writing_credentials()
     assert validate_task.get("path_type") == "artifact"
 
 
+def test_generate_kubeconfigs_expands_all_planned_role_targets():
+    """role=both must generate one kubeconfig per concrete role target."""
+    text = (RBAC_BOOTSTRAP_TASKS / "generate_kubeconfigs.yml").read_text()
+    tasks = _load_tasks("generate_kubeconfigs.yml")
+
+    assert "_rbac_plan.role_targets" in text
+    assert "acm_switchover_rbac_bootstrap_generated_kubeconfigs" in text
+
+    command_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Generate kubeconfig from service account"
+        and task.get("ansible.builtin.command")
+        and task.get("loop") == "{{ _rbac_bootstrap_kubeconfig_targets }}"
+    )
+    copy_task = next(
+        task
+        for task in tasks
+        if task.get("name") == "Write generated service account kubeconfig"
+        and task.get("ansible.builtin.copy")
+        and task.get("loop") == "{{ _rbac_generated_kubeconfigs.results | default([]) }}"
+    )
+
+    assert command_task["loop"] == "{{ _rbac_bootstrap_kubeconfig_targets }}"
+    assert copy_task["loop"] == "{{ _rbac_generated_kubeconfigs.results | default([]) }}"
+
+
 def test_validate_permissions_impersonates_bootstrapped_service_account():
     """Bootstrap validation must check the created service account, not the admin credential."""
-    text = (RBAC_BOOTSTRAP_TASKS / "validate_permissions.yml").read_text()
+    text = (RBAC_BOOTSTRAP_TASKS / "validate_permission_target.yml").read_text()
 
     assert "SubjectAccessReview" in text
     assert "SelfSubjectAccessReview" not in text
     assert "system:serviceaccount:acm-switchover:" in text
     assert "include_role" not in text
+
+
+def test_validate_permissions_expands_all_planned_role_targets():
+    """role=both must validate operator and validator permissions separately."""
+    tasks = _load_tasks("validate_permissions.yml")
+    include_task = next(
+        task for task in tasks if task.get("ansible.builtin.include_tasks") == "validate_permission_target.yml"
+    )
+
+    assert include_task["ansible.builtin.include_tasks"] == "validate_permission_target.yml"
+    assert (
+        include_task["loop"]
+        == "{{ _rbac_plan.role_targets | default([(acm_switchover_rbac_bootstrap | default({})).get('role', 'operator')]) }}"
+    )
+    assert include_task["loop_control"]["loop_var"] == "_rbac_bootstrap_role_target"
 
 
 def test_manifest_filter_uses_positive_role_or_common_labels_only():
@@ -95,7 +145,8 @@ def _manifest_filter_applies(item: dict, role: str) -> bool:
     apply_task = next(task for task in tasks if task.get("name") == "Apply filtered RBAC resources from manifest file")
     expression = Environment().compile_expression(apply_task["when"])
 
-    return bool(expression(item=item, _rbac_plan={"role": role}))
+    role_targets = expand_rbac_role_targets(role)
+    return bool(expression(item=item, _rbac_plan={"role": role, "role_targets": role_targets}))
 
 
 def test_manifest_filter_positive_matching_behavior():
@@ -119,6 +170,26 @@ def test_manifest_filter_positive_matching_behavior():
             }
         },
         "operator",
+    )
+    assert _manifest_filter_applies(
+        {
+            "metadata": {
+                "labels": {
+                    "app.kubernetes.io/role": "operator",
+                }
+            }
+        },
+        "both",
+    )
+    assert _manifest_filter_applies(
+        {
+            "metadata": {
+                "labels": {
+                    "app.kubernetes.io/role": "validator",
+                }
+            }
+        },
+        "both",
     )
     assert _manifest_filter_applies(
         {

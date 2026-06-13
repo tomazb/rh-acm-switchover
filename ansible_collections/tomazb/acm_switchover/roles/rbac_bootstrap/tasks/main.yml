@@ -25,6 +25,7 @@
       role: "{{ acm_switchover_rbac_bootstrap.role }}"
       assets_applied: "{{ _rbac_plan.assets }}"
       generated_kubeconfig: "{{ acm_switchover_rbac_bootstrap_generated_kubeconfig | default('') }}"
+      generated_kubeconfigs: "{{ acm_switchover_rbac_bootstrap_generated_kubeconfigs | default({}) }}"
       status: pass
 
 - name: Resolve summary path to absolute

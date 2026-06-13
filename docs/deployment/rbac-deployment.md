@@ -52,9 +52,9 @@ ansible-playbook ansible_collections/tomazb/acm_switchover/playbooks/rbac_bootst
   -e '{"acm_switchover_rbac_bootstrap":{"role":"operator","generate_kubeconfigs":true,"validate_permissions":true,"output_dir":"./kubeconfigs"}}'
 
 # The playbook will:
-# 1. Deploy all RBAC resources (namespace, SA, roles, bindings)
-# 2. Generate a kubeconfig with unique user name
-# 3. Validate permissions with the collection RBAC validator
+# 1. Deploy selected RBAC resources (namespace, SA, roles, bindings)
+# 2. Generate role-specific kubeconfig files with unique user names
+# 3. Validate selected role permissions with the collection RBAC validator
 ```
 
 The collection kubeconfig generator sanitizes context names containing `/` or
@@ -64,12 +64,16 @@ file such as `kubeconfigs/admin_api-prod.example.com_6443-operator.yaml`.
 Use an absolute kubeconfig path in JSON extra-vars; shell shortcuts such as `~`
 are not expanded inside quoted JSON values.
 
-This bootstrap path deploys the baseline operator role only. The baseline role
-includes the `MultiClusterObservability` delete permission used by normal
-old-hub finalization when observability is present; it does not include
-`ManagedCluster` or `MultiClusterHub` delete permissions for decommission. Set
+Set `acm_switchover_rbac_bootstrap.role` to `operator`, `validator`, or `both`.
+The `both` profile applies both role-specific manifest sets and generates both
+`<context>-operator.yaml` and `<context>-validator.yaml` when kubeconfig
+generation is enabled. The baseline operator role includes the
+`MultiClusterObservability` delete permission used by normal old-hub
+finalization when observability is present; it does not include `ManagedCluster`
+or `MultiClusterHub` delete permissions for decommission. Set
 `acm_switchover_rbac_bootstrap.include_decommission=true` only for service
-accounts that must run old-hub teardown.
+accounts that must run old-hub teardown; it is valid with `role: operator` or
+`role: both`.
 
 ### Deprecated Bash Bootstrap
 
@@ -372,8 +376,9 @@ python check_rbac.py \
 
 # Include decommission permissions for ManagedCluster and MultiClusterHub teardown
 # (requires the optional decommission RBAC extension)
-# Note: --include-decommission is only valid with --role operator.
-# Combining it with --role validator is rejected with an explicit error.
+# Note: check_rbac.py validates concrete roles, so --include-decommission is only
+# valid with --role operator here. During setup/bootstrap, role=both applies and
+# validates the operator decommission extension plus the validator profile.
 python check_rbac.py --include-decommission --role operator
 ```
 

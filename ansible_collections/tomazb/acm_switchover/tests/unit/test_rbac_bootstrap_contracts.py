@@ -30,10 +30,10 @@ def _rbac_manifest_files(root):
 
 
 def test_bootstrap_permission_validation_covers_shipped_argocd_rules():
-    tasks = _load_tasks("validate_permissions.yml")
+    tasks = _load_tasks("validate_permission_target.yml")
     validation_tasks = [task for task in tasks if "tomazb.acm_switchover.acm_rbac_validate" in task]
 
-    assert validation_tasks, "validate_permissions.yml must expand RBAC requirements"
+    assert validation_tasks, "validate_permission_target.yml must expand RBAC requirements"
     for task in validation_tasks:
         module_args = task["tomazb.acm_switchover.acm_rbac_validate"]
         assert "argocd_mode" in module_args
