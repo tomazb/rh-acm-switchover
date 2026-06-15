@@ -17,12 +17,18 @@ def build_summary(
     recovery: dict,
     mandatory_argocd: dict,
     release_metadata: dict,
+    matrix_validation: dict | None = None,
 ) -> dict:
+    matrix_validation = matrix_validation or {"status": "passed", "reasons": []}
     failure_reasons: list[str] = []
     if release_mode != "certification":
         failure_reasons.append("release mode is not certification")
     if not certification_eligible:
         failure_reasons.append("run is not certification eligible")
+    if matrix_validation.get("status") != "passed":
+        reasons = matrix_validation.get("reasons") or ["matrix validation failed"]
+        for reason in reasons:
+            failure_reasons.append(f"matrix validation failed: {reason}")
     for scenario_id in _failed_required_scenarios(required_scenarios):
         failure_reasons.append(f"required scenario failed: {scenario_id}")
     runtime_parity_expectations = {"passed"} if release_mode == "certification" else {"passed", "not_applicable"}
@@ -54,6 +60,7 @@ def build_summary(
         "optional_scenarios": optional_scenarios,
         "mandatory_argocd": mandatory_argocd,
         "release_metadata": release_metadata,
+        "matrix_validation": matrix_validation,
         "runtime_parity": runtime_parity,
         "artifact_redaction": artifact_redaction,
         "final_baseline": final_baseline,

@@ -17,6 +17,10 @@ def test_render_release_report_contains_required_sections() -> None:
             "final_baseline": {"status": "passed"},
             "recovery": {"status": "passed"},
             "release_metadata": {"status": "passed"},
+            "matrix_validation": {
+                "status": "failed",
+                "reasons": ["mutating scenario sequence requires reset/recovery between scenarios"],
+            },
             "failure_reasons": ["required scenario failed: preflight"],
             "warnings": [],
         },
@@ -25,6 +29,8 @@ def test_render_release_report_contains_required_sections() -> None:
 
     assert "## Run Identity" in report
     assert "## Runtime Parity Summary" in report
+    assert "## Matrix Validation" in report
+    assert "requires reset/recovery" in report
     assert "required scenario failed: preflight" in report
     assert "NO-GO" in report
 

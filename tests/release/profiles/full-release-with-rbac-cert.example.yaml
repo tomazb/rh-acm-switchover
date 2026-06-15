@@ -26,6 +26,9 @@ streams:
   - id: python
   - id: ansible
 scenarios:
+  # Phase 1 safety note: this profile documents the intended full
+  # multi-mutation matrix, but certification blocks it until reset/recovery
+  # sequencing is implemented.
   - id: static-gates
   - id: lab-readiness
   - id: baseline-check
@@ -59,6 +62,7 @@ argocd:
     - openshift-gitops
 baseline:
   initial_primary: primary
+  final_primary: secondary
   lab_readiness:
     required: true
     backup_storage_location:

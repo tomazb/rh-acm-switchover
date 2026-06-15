@@ -26,6 +26,9 @@ streams:
   - id: python
   - id: ansible
 scenarios:
+  # Phase 1 safety note: this profile documents the intended full
+  # multi-mutation matrix, but certification blocks it until reset/recovery
+  # sequencing is implemented.
   - id: static-gates
   - id: lab-readiness
   - id: baseline-check
@@ -46,6 +49,7 @@ argocd:
         app.kubernetes.io/part-of: acm-switchover-fixture
 baseline:
   initial_primary: primary
+  final_primary: secondary
 limits: {}
 recovery: {}
 artifacts:

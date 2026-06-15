@@ -22,9 +22,12 @@ from lib.constants import (
     STATE_KEY_ARGOCD_RUN_ID,
     STATE_KEY_RESUME_SUMMARY,
 )
+from tests.release.adapters.ansible import SUPPORTED_SCENARIO_IDS as ANSIBLE_SUPPORTED_SCENARIO_IDS
 from tests.release.adapters.ansible import AnsibleAdapter
+from tests.release.adapters.bash import SUPPORTED_SCENARIO_IDS as BASH_SUPPORTED_SCENARIO_IDS
 from tests.release.adapters.bash import BashAdapter
 from tests.release.adapters.common import StreamAdapter
+from tests.release.adapters.python_cli import SUPPORTED_SCENARIO_IDS as PYTHON_SUPPORTED_SCENARIO_IDS
 from tests.release.adapters.python_cli import PythonCliAdapter
 from tests.release.baseline.assertions import assert_baseline
 from tests.release.baseline.discovery import HubDiscoveryClient, discover_hub_facts
@@ -48,7 +51,12 @@ from tests.release.contracts.models import (
 from tests.release.reporting.artifacts import ReleaseArtifacts
 from tests.release.reporting.render import render_release_report
 from tests.release.reporting.summary import build_summary
-from tests.release.scenarios.catalog import ScenarioDefinition, select_release_matrix
+from tests.release.scenarios.catalog import (
+    ScenarioDefinition,
+    matrix_validation_results,
+    select_release_matrix,
+    validate_release_matrix,
+)
 from tests.release.scenarios.runtime_parity import (
     CAPABILITY_REQUIRED_FIELDS,
     ComparisonRecord,
@@ -65,6 +73,11 @@ from tests.release.scenarios.runtime_parity import (
 )
 
 GateRunner = Callable[[GateCommand, Path], GateResult]
+DEFAULT_ADAPTER_SUPPORTED_SCENARIOS = {
+    "bash": BASH_SUPPORTED_SCENARIO_IDS,
+    "python": PYTHON_SUPPORTED_SCENARIO_IDS,
+    "ansible": ANSIBLE_SUPPORTED_SCENARIO_IDS,
+}
 
 
 class OcDiscoveryClient:
@@ -152,6 +165,17 @@ def build_default_adapters(
             artifact_dir=artifact_dir,
         ),
     }
+
+
+def _adapter_supported_scenarios(adapters: Mapping[str, StreamAdapter]) -> dict[str, frozenset[str]]:
+    supported = {}
+    for stream, default_supported in DEFAULT_ADAPTER_SUPPORTED_SCENARIOS.items():
+        adapter = adapters.get(stream)
+        if adapter is None:
+            supported[stream] = frozenset()
+            continue
+        supported[stream] = frozenset(getattr(adapter, "supported_scenario_ids", default_supported))
+    return supported
 
 
 def _certification_eligible(
@@ -292,11 +316,15 @@ def _execute_stream_scenarios(
     scenario_profiles: Mapping[str, ScenarioProfile],
     stream_profiles: Mapping[str, StreamProfile],
     adapters: Mapping[str, StreamAdapter],
+    skipped_pairs: set[tuple[str, str]] | None = None,
 ) -> list[dict]:
     results: list[dict] = []
+    skipped_pairs = skipped_pairs or set()
     for scenario in scenarios:
         for stream in scenario.streams:
             if stream == "local":
+                continue
+            if (scenario.id, stream) in skipped_pairs:
                 continue
             adapter = adapters.get(stream)
             if adapter is None:
@@ -746,7 +774,9 @@ def _finalize_run(
     recovery: dict,
     mandatory_argocd: dict,
     release_metadata: dict,
+    matrix_validation: dict | None = None,
 ) -> dict:
+    matrix_validation = matrix_validation or {"schema_version": 1, "status": "passed", "blocked": False, "reasons": []}
     scenario_statuses = [_aggregate_status(scenario, results) for scenario in matrix.scenarios]
     artifacts.write_json(
         "scenario-results.json",
@@ -754,6 +784,7 @@ def _finalize_run(
             "schema_version": 1,
             "results": results,
             "scenario_statuses": scenario_statuses,
+            "matrix_validation": matrix_validation,
         },
     )
     required_scenarios = [item for item in scenario_statuses if item["required"]]
@@ -774,6 +805,7 @@ def _finalize_run(
         recovery=recovery,
         mandatory_argocd=mandatory_argocd,
         release_metadata=release_metadata,
+        matrix_validation=matrix_validation,
     )
     artifacts.write_json("summary.json", summary)
     final_manifest = {
@@ -782,6 +814,10 @@ def _finalize_run(
         "certification_eligible": summary["certification_eligible"],
         "warnings": summary["warnings"],
         "failure_reasons": summary["failure_reasons"],
+        "matrix": {
+            **manifest.get("matrix", {}),
+            "validation": matrix_validation,
+        },
     }
     artifacts.write_json("manifest.json", final_manifest)
     (artifacts.run_dir / "release-report.md").write_text(
@@ -830,6 +866,13 @@ def _run_release_certification(
         artifact_dir=artifacts.run_dir,
         repo_root=repo_root,
     )
+    matrix_validation_result = validate_release_matrix(
+        matrix=matrix,
+        release_mode=release_options.mode or "certification",
+        scenario_filters=release_options.scenarios,
+        adapter_supported_scenarios=_adapter_supported_scenarios(adapters),
+    )
+    matrix_validation = matrix_validation_result.to_dict()
     certification_eligible = _certification_eligible(
         release_options=release_options,
         discovery_clients=discovery_clients,
@@ -850,6 +893,7 @@ def _run_release_certification(
         "matrix": {
             "scenario_ids": list(matrix.scenario_ids),
             "hash": matrix.matrix_hash,
+            "validation": matrix_validation,
         },
         "git": git_checkout,
         "release_metadata": release_metadata,
@@ -859,7 +903,7 @@ def _run_release_certification(
     }
     artifacts.write_json("manifest.json", manifest)
 
-    results: list[dict] = []
+    results: list[dict] = matrix_validation_results(matrix_validation_result)
     scenario_profiles = _scenario_profiles(profile.scenarios)
     stream_profiles = _stream_profiles(profile.streams)
     scenarios_by_id = {scenario.id: scenario for scenario in matrix.scenarios}
@@ -897,6 +941,7 @@ def _run_release_certification(
                 recovery=recovery,
                 mandatory_argocd=({"status": "not_applicable"} if profile.argocd.mandatory else {"status": "passed"}),
                 release_metadata=release_metadata,
+                matrix_validation=matrix_validation,
             )
 
     initial_fingerprint = _discover_fingerprint(
@@ -961,6 +1006,27 @@ def _run_release_certification(
             recovery=recovery,
             mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
             release_metadata=release_metadata,
+            matrix_validation=matrix_validation,
+        )
+
+    if matrix_validation_result.blocked:
+        runtime_parity = _not_applicable_artifact()
+        artifacts.write_json("runtime-parity.json", runtime_parity)
+        final_baseline = {"status": "not_applicable", "assertions": []}
+        artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
+        return _finalize_run(
+            artifacts=artifacts,
+            release_options=release_options,
+            matrix=matrix,
+            manifest=manifest,
+            certification_eligible=certification_eligible,
+            results=results,
+            runtime_parity=runtime_parity,
+            final_baseline=final_baseline,
+            recovery=recovery,
+            mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
+            release_metadata=release_metadata,
+            matrix_validation=matrix_validation,
         )
 
     results.extend(
@@ -969,6 +1035,7 @@ def _run_release_certification(
             scenario_profiles=scenario_profiles,
             stream_profiles=stream_profiles,
             adapters=adapters,
+            skipped_pairs=set(matrix_validation_result.not_applicable_pairs),
         )
     )
 
@@ -1090,6 +1157,7 @@ def _run_release_certification(
         recovery=recovery,
         mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
         release_metadata=release_metadata,
+        matrix_validation=matrix_validation,
     )
 
 
