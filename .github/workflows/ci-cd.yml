@@ -14,6 +14,7 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12']
     
@@ -42,7 +43,16 @@ jobs:
         
     - name: Run root tests with coverage
       run: |
-        python -m pytest tests/ --ignore=tests/release -v -m "not e2e" --cov=. --cov-report=xml --cov-report=html --cov-report=term
+        python -m pytest tests/ --ignore=tests/release -v -m "not e2e" --cov=. --cov-report=xml --cov-report=html --cov-report=term --junitxml=pytest-results-${{ matrix.python-version }}.xml
+
+    - name: Archive pytest results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pytest-results-${{ matrix.python-version }}
+        path: pytest-results-${{ matrix.python-version }}.xml
+        if-no-files-found: ignore
+        retention-days: 7
         
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
