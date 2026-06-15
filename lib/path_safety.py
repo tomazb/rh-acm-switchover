@@ -75,6 +75,11 @@ def validate_safe_filesystem_path(path: str, field_name: str) -> None:
         return
 
     absolute_path = Path(path)
+    # Reject clearly out-of-policy absolute paths before filesystem inspection.
+    # Some protected directories (for example /root on GitHub-hosted runners)
+    # can raise PermissionError on Path.exists(); validation should report a
+    # controlled SecurityValidationError instead of leaking raw OS errors.
+    _allowed_root(absolute_path.absolute(), description="Absolute path", path_label=path)
     if absolute_path.exists():
         resolved_path = absolute_path.resolve()
     else:
