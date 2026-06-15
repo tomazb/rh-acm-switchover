@@ -84,6 +84,48 @@ def test_summary_includes_matrix_validation_failures() -> None:
     )
 
 
+def test_summary_defaults_missing_matrix_validation_to_passed() -> None:
+    summary = build_summary(
+        release_mode="certification",
+        certification_eligible=True,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "passed"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+        matrix_validation=None,
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["matrix_validation"] == {"status": "passed", "reasons": []}
+
+
+def test_summary_fails_closed_for_malformed_matrix_validation_payload() -> None:
+    summary = build_summary(
+        release_mode="certification",
+        certification_eligible=True,
+        required_scenarios=[{"scenario_id": "preflight", "status": "passed"}],
+        optional_scenarios=[],
+        runtime_parity={"status": "passed"},
+        artifact_redaction={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed"},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+        matrix_validation=["bad"],
+    )
+
+    assert summary["status"] == "failed"
+    assert summary["matrix_validation"] == {
+        "status": "failed",
+        "reasons": ["matrix validation payload is malformed"],
+    }
+    assert "matrix validation failed: matrix validation payload is malformed" in summary["failure_reasons"]
+
+
 def test_debug_summary_allows_missing_runtime_parity() -> None:
     summary = build_summary(
         release_mode="debug",

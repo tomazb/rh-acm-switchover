@@ -5,11 +5,26 @@ def _lines_for_scenarios(items: list[dict]) -> list[str]:
     return [f"- `{item['scenario_id']}`: `{item.get('status', 'unknown')}`" for item in items]
 
 
-def _lines_for_matrix_validation(matrix_validation: dict) -> list[str]:
+def _matrix_validation_payload(matrix_validation: object | None) -> dict:
+    if matrix_validation is None:
+        return {"status": "passed", "reasons": []}
+    if isinstance(matrix_validation, dict):
+        return matrix_validation
+    return {"status": "failed", "reasons": ["matrix validation payload is malformed"]}
+
+
+def _lines_for_matrix_validation(matrix_validation: object | None) -> list[str]:
+    matrix_validation = _matrix_validation_payload(matrix_validation)
     lines = [f"- Status: `{matrix_validation.get('status', 'unknown')}`"]
     issues = matrix_validation.get("issues") or []
     if issues:
+        if not isinstance(issues, list):
+            lines.append("- malformed matrix validation issue")
+            return lines
         for issue in issues:
+            if not isinstance(issue, dict):
+                lines.append("- malformed matrix validation issue")
+                continue
             stream = issue.get("stream") or "n/a"
             required = str(bool(issue.get("required", False))).lower()
             lines.append(
@@ -25,7 +40,7 @@ def _lines_for_matrix_validation(matrix_validation: dict) -> list[str]:
 
 def render_release_report(summary: dict, manifest: dict) -> str:
     decision = "GO" if summary.get("status") == "passed" and summary.get("certification_eligible") else "NO-GO"
-    matrix_validation = summary.get("matrix_validation", {})
+    matrix_validation = summary.get("matrix_validation")
     lines = [
         "# Release Validation Report",
         "",

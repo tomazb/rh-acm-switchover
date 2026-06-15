@@ -5,6 +5,14 @@ def _failed_required_scenarios(required_scenarios: list[dict]) -> list[str]:
     return [item["scenario_id"] for item in required_scenarios if item.get("status") != "passed"]
 
 
+def _matrix_validation_payload(matrix_validation: object | None) -> dict:
+    if matrix_validation is None:
+        return {"status": "passed", "reasons": []}
+    if isinstance(matrix_validation, dict):
+        return matrix_validation
+    return {"status": "failed", "reasons": ["matrix validation payload is malformed"]}
+
+
 def build_summary(
     *,
     release_mode: str,
@@ -17,9 +25,9 @@ def build_summary(
     recovery: dict,
     mandatory_argocd: dict,
     release_metadata: dict,
-    matrix_validation: dict | None = None,
+    matrix_validation: object | None = None,
 ) -> dict:
-    matrix_validation = matrix_validation or {"status": "passed", "reasons": []}
+    matrix_validation = _matrix_validation_payload(matrix_validation)
     failure_reasons: list[str] = []
     if release_mode != "certification":
         failure_reasons.append("release mode is not certification")
