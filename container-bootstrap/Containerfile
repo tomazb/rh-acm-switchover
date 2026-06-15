@@ -37,8 +37,8 @@ ARG JQ_VERSION=1.7.1
 ARG PYTHON_VERSION=3.12
 ARG JQ_LINUX_AMD64_SHA256=5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5
 ARG JQ_LINUX_ARM64_SHA256=4dd2d8a0661df0b22f1bb9a1f9830f06b6f3b8f7d91211a1ef5d7c4f06a8b4a5
-ARG OPENSHIFT_CLIENT_LINUX_AMD64_SHA256=9440dc8ce8c1305b450c2aa8188a6a5fda69f4dd52d69c761715cd12e1aefdf8
-ARG OPENSHIFT_CLIENT_LINUX_ARM64_SHA256=dd09d32e1b6a53466934c58360c8044212706aeaa04b1f827f284bac0ceb8a64
+ARG OPENSHIFT_CLIENT_LINUX_AMD64_SHA256=""
+ARG OPENSHIFT_CLIENT_LINUX_ARM64_SHA256=""
 
 USER root
 
@@ -87,14 +87,28 @@ RUN set -eu; \
         echo "Unsupported architecture: ${ARCH}" >&2; \
         exit 1; \
     fi; \
-    curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/${OC_ARCH}/clients/ocp/stable-${OC_VERSION}/openshift-client-linux.tar.gz" \
+    OC_BASE_URL="https://mirror.openshift.com/pub/openshift-v4/${OC_ARCH}/clients/ocp/stable-${OC_VERSION}"; \
+    curl -fsSL "${OC_BASE_URL}/openshift-client-linux.tar.gz" \
         -o /tmp/openshift-client-linux.tar.gz; \
-    printf '%s  %s\n' "${OC_SHA256}" "/tmp/openshift-client-linux.tar.gz" \
-        > /tmp/openshift-client-linux.tar.gz.sha256; \
+    if [ -n "${OC_SHA256}" ]; then \
+        printf '%s  %s\n' "${OC_SHA256}" "/tmp/openshift-client-linux.tar.gz" \
+            > /tmp/openshift-client-linux.tar.gz.sha256; \
+    else \
+        curl -fsSL "${OC_BASE_URL}/sha256sum.txt" -o /tmp/openshift-client-linux.tar.gz.sha256.remote; \
+        OC_SHA256=$(grep -E '(^|[[:space:]])openshift-client-linux\.tar\.gz$' \
+            /tmp/openshift-client-linux.tar.gz.sha256.remote | head -n 1 | cut -d ' ' -f 1); \
+        if [ -z "${OC_SHA256}" ]; then \
+            echo "Unable to find openshift-client-linux.tar.gz in ${OC_BASE_URL}/sha256sum.txt" >&2; \
+            exit 1; \
+        fi; \
+        printf '%s  %s\n' "${OC_SHA256}" "/tmp/openshift-client-linux.tar.gz" \
+            > /tmp/openshift-client-linux.tar.gz.sha256; \
+    fi; \
     sha256sum -c /tmp/openshift-client-linux.tar.gz.sha256; \
     tar -xzf /tmp/openshift-client-linux.tar.gz -C /usr/local/bin oc kubectl; \
     chmod 0755 /usr/local/bin/oc /usr/local/bin/kubectl; \
-    rm -f /tmp/openshift-client-linux.tar.gz /tmp/openshift-client-linux.tar.gz.sha256
+    rm -f /tmp/openshift-client-linux.tar.gz /tmp/openshift-client-linux.tar.gz.sha256 \
+        /tmp/openshift-client-linux.tar.gz.sha256.remote
 
 # Copy Python packages from builder
 COPY --from=builder /opt/app-root/lib/python3.12/site-packages /usr/lib/python3.12/site-packages
