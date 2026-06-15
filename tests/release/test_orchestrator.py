@@ -950,8 +950,15 @@ def test_orchestrator_blocks_required_unsupported_pair_before_adapter_execution(
     )
     release_profile = replace(loaded, profile=profile)
     artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    primary = FakeDiscoveryClient(primary=True)
+    secondary = FakeDiscoveryClient(primary=False)
     python = FakeAdapter("python")
     ansible = FakeAdapter("ansible")
+    gate_calls = []
+
+    def tracking_gate(command: GateCommand, artifact_dir: Path) -> GateResult:
+        gate_calls.append(command.gate_id)
+        return _passing_gate(command, artifact_dir)
 
     summary = run_release_certification(
         release_options=replace(_release_options(tmp_path), scenarios=("full-restore",)),
@@ -959,11 +966,11 @@ def test_orchestrator_blocks_required_unsupported_pair_before_adapter_execution(
         artifacts=artifacts,
         repo_root=Path.cwd(),
         discovery_clients={
-            "primary": FakeDiscoveryClient(primary=True),
-            "secondary": FakeDiscoveryClient(primary=False),
+            "primary": primary,
+            "secondary": secondary,
         },
         adapters={"python": python, "ansible": ansible},
-        gate_runner=_passing_gate,
+        gate_runner=tracking_gate,
     )
 
     scenario_results = json.loads((artifacts.run_dir / "scenario-results.json").read_text(encoding="utf-8"))
@@ -975,9 +982,23 @@ def test_orchestrator_blocks_required_unsupported_pair_before_adapter_execution(
     assert full_restore["status"] == "failed"
     assert full_restore["assertions"][0]["name"] == "matrix-support"
     assert scenario_results["matrix_validation"]["status"] == "failed"
+    assert summary["status"] == "failed"
     assert any("matrix validation failed" in reason for reason in summary["failure_reasons"])
+    assert primary.calls == []
+    assert secondary.calls == []
     assert python.calls == []
     assert ansible.calls == []
+    assert gate_calls == []
+    for filename in [
+        "manifest.json",
+        "scenario-results.json",
+        "runtime-parity.json",
+        "recovery.json",
+        "redaction.json",
+        "summary.json",
+        "release-report.md",
+    ]:
+        assert (artifacts.run_dir / filename).exists()
 
 
 def test_orchestrator_records_optional_unsupported_pair_as_not_applicable(

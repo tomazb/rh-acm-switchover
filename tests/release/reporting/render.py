@@ -5,8 +5,27 @@ def _lines_for_scenarios(items: list[dict]) -> list[str]:
     return [f"- `{item['scenario_id']}`: `{item.get('status', 'unknown')}`" for item in items]
 
 
+def _lines_for_matrix_validation(matrix_validation: dict) -> list[str]:
+    lines = [f"- Status: `{matrix_validation.get('status', 'unknown')}`"]
+    issues = matrix_validation.get("issues") or []
+    if issues:
+        for issue in issues:
+            stream = issue.get("stream") or "n/a"
+            required = str(bool(issue.get("required", False))).lower()
+            lines.append(
+                f"- `{issue.get('scenario_id', 'unknown')}` / `{stream}`: "
+                f"`{issue.get('status', 'unknown')}` "
+                f"(`{issue.get('code', 'unknown')}`, required={required}) - "
+                f"{issue.get('reason', 'no reason provided')}"
+            )
+        return lines
+    lines.extend(f"- {reason}" for reason in matrix_validation.get("reasons", []))
+    return lines
+
+
 def render_release_report(summary: dict, manifest: dict) -> str:
     decision = "GO" if summary.get("status") == "passed" and summary.get("certification_eligible") else "NO-GO"
+    matrix_validation = summary.get("matrix_validation", {})
     lines = [
         "# Release Validation Report",
         "",
@@ -19,8 +38,7 @@ def render_release_report(summary: dict, manifest: dict) -> str:
         f"- Status: `{summary.get('release_metadata', {}).get('status', 'unknown')}`",
         "",
         "## Matrix Validation",
-        f"- Status: `{summary.get('matrix_validation', {}).get('status', 'unknown')}`",
-        *[f"- {reason}" for reason in summary.get("matrix_validation", {}).get("reasons", [])],
+        *_lines_for_matrix_validation(matrix_validation),
         "",
         "## Required Scenario Results",
         *_lines_for_scenarios(summary.get("required_scenarios", [])),

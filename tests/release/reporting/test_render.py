@@ -20,6 +20,24 @@ def test_render_release_report_contains_required_sections() -> None:
             "matrix_validation": {
                 "status": "failed",
                 "reasons": ["mutating scenario sequence requires reset/recovery between scenarios"],
+                "issues": [
+                    {
+                        "scenario_id": "ansible-passive-switchover",
+                        "stream": None,
+                        "status": "failed",
+                        "required": True,
+                        "code": "matrix-lifecycle",
+                        "reason": "mutating scenario sequence requires reset/recovery between scenarios",
+                    },
+                    {
+                        "scenario_id": "full-restore",
+                        "stream": "ansible",
+                        "status": "not_applicable",
+                        "required": False,
+                        "code": "matrix-support",
+                        "reason": "ansible stream does not implement this scenario in Phase 1",
+                    },
+                ],
             },
             "failure_reasons": ["required scenario failed: preflight"],
             "warnings": [],
@@ -31,6 +49,11 @@ def test_render_release_report_contains_required_sections() -> None:
     assert "## Runtime Parity Summary" in report
     assert "## Matrix Validation" in report
     assert "requires reset/recovery" in report
+    assert "`full-restore` / `ansible`: `not_applicable`" in report
+    assert "`matrix-support`, required=false" in report
+    assert "ansible stream does not implement this scenario in Phase 1" in report
+    assert "`ansible-passive-switchover` / `n/a`: `failed`" in report
+    assert "`matrix-lifecycle`, required=true" in report
     assert "required scenario failed: preflight" in report
     assert "NO-GO" in report
 

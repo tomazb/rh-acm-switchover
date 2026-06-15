@@ -860,7 +860,6 @@ def _run_release_certification(
     )
     recovery = _initial_recovery_state(release_profile)
     artifacts.write_json("recovery.json", recovery)
-    discovery_clients = discovery_clients or build_default_discovery_clients(release_profile)
     adapters = adapters or build_default_adapters(
         release_profile=release_profile,
         artifact_dir=artifacts.run_dir,
@@ -873,6 +872,54 @@ def _run_release_certification(
         adapter_supported_scenarios=_adapter_supported_scenarios(adapters),
     )
     matrix_validation = matrix_validation_result.to_dict()
+
+    def build_manifest(certification_eligible: bool) -> dict:
+        return {
+            "schema_version": 1,
+            "run_id": artifacts.run_id,
+            "status": "running",
+            "profile": {
+                "name": profile.name,
+                "path": str(release_profile.path),
+                "sha256": release_profile.sha256,
+            },
+            "matrix": {
+                "scenario_ids": list(matrix.scenario_ids),
+                "hash": matrix.matrix_hash,
+                "validation": matrix_validation,
+            },
+            "git": git_checkout,
+            "release_metadata": release_metadata,
+            "certification_eligible": certification_eligible,
+            "warnings": [],
+            "failure_reasons": [],
+        }
+
+    if matrix_validation_result.blocked:
+        certification_eligible = False
+        manifest = build_manifest(certification_eligible)
+        artifacts.write_json("manifest.json", manifest)
+        results = matrix_validation_results(matrix_validation_result)
+        runtime_parity = _not_applicable_artifact()
+        artifacts.write_json("runtime-parity.json", runtime_parity)
+        final_baseline = {"status": "not_applicable", "assertions": []}
+        artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
+        return _finalize_run(
+            artifacts=artifacts,
+            release_options=release_options,
+            matrix=matrix,
+            manifest=manifest,
+            certification_eligible=certification_eligible,
+            results=results,
+            runtime_parity=runtime_parity,
+            final_baseline=final_baseline,
+            recovery=recovery,
+            mandatory_argocd=({"status": "not_applicable"} if profile.argocd.mandatory else {"status": "passed"}),
+            release_metadata=release_metadata,
+            matrix_validation=matrix_validation,
+        )
+
+    discovery_clients = discovery_clients or build_default_discovery_clients(release_profile)
     certification_eligible = _certification_eligible(
         release_options=release_options,
         discovery_clients=discovery_clients,
@@ -881,26 +928,7 @@ def _run_release_certification(
         release_metadata=release_metadata,
     )
 
-    manifest = {
-        "schema_version": 1,
-        "run_id": artifacts.run_id,
-        "status": "running",
-        "profile": {
-            "name": profile.name,
-            "path": str(release_profile.path),
-            "sha256": release_profile.sha256,
-        },
-        "matrix": {
-            "scenario_ids": list(matrix.scenario_ids),
-            "hash": matrix.matrix_hash,
-            "validation": matrix_validation,
-        },
-        "git": git_checkout,
-        "release_metadata": release_metadata,
-        "certification_eligible": certification_eligible,
-        "warnings": [],
-        "failure_reasons": [],
-    }
+    manifest = build_manifest(certification_eligible)
     artifacts.write_json("manifest.json", manifest)
 
     results: list[dict] = matrix_validation_results(matrix_validation_result)
@@ -990,26 +1018,6 @@ def _run_release_certification(
         lab_readiness_status=lab_readiness.status,
         initial_baseline_status=initial_baseline.status,
     ):
-        runtime_parity = _not_applicable_artifact()
-        artifacts.write_json("runtime-parity.json", runtime_parity)
-        final_baseline = {"status": "not_applicable", "assertions": []}
-        artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
-        return _finalize_run(
-            artifacts=artifacts,
-            release_options=release_options,
-            matrix=matrix,
-            manifest=manifest,
-            certification_eligible=certification_eligible,
-            results=results,
-            runtime_parity=runtime_parity,
-            final_baseline=final_baseline,
-            recovery=recovery,
-            mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
-            release_metadata=release_metadata,
-            matrix_validation=matrix_validation,
-        )
-
-    if matrix_validation_result.blocked:
         runtime_parity = _not_applicable_artifact()
         artifacts.write_json("runtime-parity.json", runtime_parity)
         final_baseline = {"status": "not_applicable", "assertions": []}
