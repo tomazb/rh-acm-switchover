@@ -342,15 +342,24 @@ jobs:
       uses: docker/setup-buildx-action@v3
 
     - name: Build container image
-      uses: docker/build-push-action@v5
+      shell: bash
+      run: |
+        set -o pipefail
+        docker buildx build \
+          --progress=plain \
+          --load \
+          --tag acm-switchover:test \
+          --file ./container-bootstrap/Containerfile \
+          . 2>&1 | tee container-build.log
+
+    - name: Archive container build log
+      if: always()
+      uses: actions/upload-artifact@v4
       with:
-        context: .
-        file: ./container-bootstrap/Containerfile
-        push: false
-        load: true
-        tags: acm-switchover:test
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        name: container-build-log
+        path: container-build.log
+        if-no-files-found: ignore
+        retention-days: 7
 
     - name: Test container
       run: |
