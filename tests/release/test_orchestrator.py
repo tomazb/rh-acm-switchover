@@ -19,11 +19,13 @@ from tests.release.contracts.models import (
 )
 from tests.release.orchestrator import (
     OcDiscoveryClient,
+    _finalize_run,
     _normalized_runtime_sources,
     _runtime_parity,
     run_release_certification,
 )
 from tests.release.reporting.artifacts import ReleaseArtifacts
+from tests.release.scenarios.catalog import select_release_matrix
 
 
 class FakeDiscoveryClient:
@@ -187,6 +189,51 @@ def _passing_gate(command: GateCommand, artifact_dir: Path) -> GateResult:
         str(stderr),
         True,
     )
+
+
+def test_finalize_run_fails_closed_for_empty_matrix_validation_payload(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    artifacts.write_json("redaction.json", {"schema_version": 1, "rejected_artifacts": [], "warnings": []})
+    matrix = select_release_matrix(
+        enabled_streams=("python", "ansible"),
+        scenario_filters=(),
+        stream_filters=(),
+        profile_scenarios=(ScenarioProfile(id="static-gates"),),
+    )
+    manifest = {
+        "schema_version": 1,
+        "run_id": "run-1",
+        "profile": {"name": "test-profile"},
+        "matrix": {"scenario_ids": list(matrix.scenario_ids), "hash": matrix.matrix_hash},
+        "warnings": [],
+    }
+
+    summary = _finalize_run(
+        artifacts=artifacts,
+        release_options=_release_options(tmp_path),
+        matrix=matrix,
+        manifest=manifest,
+        certification_eligible=True,
+        results=[
+            {
+                "stream": "local",
+                "scenario_id": "static-gates",
+                "status": "passed",
+                "required": True,
+                "assertions": [],
+            }
+        ],
+        runtime_parity={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed", "hard_stops": []},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+        matrix_validation={},
+    )
+
+    assert summary["status"] == "failed"
+    assert summary["matrix_validation"] == {}
+    assert "matrix validation failed: matrix validation failed" in summary["failure_reasons"]
 
 
 def test_orchestrator_writes_required_artifacts_with_fake_lab(tmp_path: Path) -> None:

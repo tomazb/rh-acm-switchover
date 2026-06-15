@@ -12,6 +12,7 @@ from tests.release.scenarios.catalog import (
     SCENARIO_SUPPORT_BY_ID,
     SCENARIOS_BY_ID,
     V1_SCENARIOS,
+    matrix_validation_results,
     select_release_matrix,
     validate_release_matrix,
 )
@@ -230,6 +231,7 @@ def test_matrix_validation_records_optional_unsupported_pairs_as_not_applicable(
     assert validation.issues[0].status == "not_applicable"
     assert validation.issues[0].scenario_id == "full-restore"
     assert validation.issues[0].stream == "ansible"
+    assert validation.issues[0].reason == "ansible stream does not implement this scenario in Phase 1"
 
 
 def test_matrix_validation_fails_required_unsupported_pairs() -> None:
@@ -289,6 +291,33 @@ def test_matrix_validation_blocks_unsafe_mutating_sequences_in_certification() -
     assert any("requires reset/recovery" in issue.reason for issue in validation.issues)
 
 
+def test_matrix_validation_blocks_single_mutating_scenario_across_multiple_streams() -> None:
+    selected = select_release_matrix(
+        enabled_streams=("python", "ansible"),
+        scenario_filters=("argocd-managed-switchover",),
+        stream_filters=(),
+        profile_scenarios=(ScenarioProfile(id="argocd-managed-switchover", required=True),),
+    )
+
+    validation = validate_release_matrix(
+        matrix=selected,
+        release_mode="focused-rerun",
+        scenario_filters=("argocd-managed-switchover",),
+        adapter_supported_scenarios={
+            "bash": BASH_SUPPORTED_SCENARIOS,
+            "python": PYTHON_SUPPORTED_SCENARIOS,
+            "ansible": ANSIBLE_SUPPORTED_SCENARIOS,
+        },
+    )
+
+    assert validation.status == "failed"
+    assert validation.blocked is True
+    assert any(
+        "argocd-managed-switchover/python -> argocd-managed-switchover/ansible" in issue.reason
+        for issue in validation.issues
+    )
+
+
 def test_matrix_validation_allows_focused_single_mutating_rerun() -> None:
     selected = select_release_matrix(
         enabled_streams=("python", "ansible"),
@@ -310,3 +339,35 @@ def test_matrix_validation_allows_focused_single_mutating_rerun() -> None:
 
     assert validation.status == "passed"
     assert validation.blocked is False
+
+
+def test_matrix_validation_results_use_na_stream_for_matrix_level_issues() -> None:
+    selected = select_release_matrix(
+        enabled_streams=("python", "ansible"),
+        scenario_filters=(),
+        stream_filters=(),
+        profile_scenarios=(
+            ScenarioProfile(id="python-passive-switchover", required=True),
+            ScenarioProfile(id="ansible-passive-switchover", required=True),
+        ),
+    )
+
+    validation = validate_release_matrix(
+        matrix=selected,
+        release_mode="certification",
+        scenario_filters=(),
+        adapter_supported_scenarios={
+            "bash": BASH_SUPPORTED_SCENARIOS,
+            "python": PYTHON_SUPPORTED_SCENARIOS,
+            "ansible": ANSIBLE_SUPPORTED_SCENARIOS,
+        },
+    )
+
+    results = matrix_validation_results(validation)
+
+    assert any(
+        result["scenario_id"] == "ansible-passive-switchover"
+        and result["stream"] == "n/a"
+        and result["status"] == "failed"
+        for result in results
+    )

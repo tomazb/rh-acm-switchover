@@ -776,7 +776,8 @@ def _finalize_run(
     release_metadata: dict,
     matrix_validation: dict | None = None,
 ) -> dict:
-    matrix_validation = matrix_validation or {"schema_version": 1, "status": "passed", "blocked": False, "reasons": []}
+    if matrix_validation is None:
+        matrix_validation = {"schema_version": 1, "status": "passed", "blocked": False, "reasons": []}
     scenario_statuses = [_aggregate_status(scenario, results) for scenario in matrix.scenarios]
     artifacts.write_json(
         "scenario-results.json",

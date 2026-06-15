@@ -348,10 +348,10 @@ def _support_reason(
     stream: str,
     supported_scenario_ids: frozenset[str],
 ) -> str | None:
-    if scenario.id not in supported_scenario_ids:
-        return f"{stream} stream does not implement scenario {scenario.id}"
     if stream in scenario.support.unsupported_stream_reasons:
         return scenario.support.unsupported_stream_reasons[stream]
+    if scenario.id not in supported_scenario_ids:
+        return f"{stream} stream does not implement scenario {scenario.id}"
     if not scenario.support.certification_supported and scenario.support.unsupported_reason:
         return scenario.support.unsupported_reason
     return None
@@ -369,16 +369,19 @@ def _focused_single_mutating_rerun(
     return len(requested_mutating) == 1
 
 
-def _has_executable_stream(
+def _executable_streams(
     scenario: ScenarioDefinition,
     blocked_pairs: set[tuple[str, str]],
-) -> bool:
-    for stream in scenario.streams:
-        if stream == "local":
-            return True
-        if (scenario.id, stream) not in blocked_pairs:
-            return True
-    return False
+) -> tuple[str, ...]:
+    return tuple(
+        stream for stream in scenario.streams if stream == "local" or (scenario.id, stream) not in blocked_pairs
+    )
+
+
+def _execution_label(scenario: ScenarioDefinition, stream: str) -> str:
+    if stream == "local":
+        return scenario.id
+    return f"{scenario.id}/{stream}"
 
 
 def validate_release_matrix(
@@ -432,18 +435,18 @@ def validate_release_matrix(
         for issue in issues
         if issue.stream is not None and issue.status in {"failed", "not_applicable"}
     }
-    mutating_scenarios = [
-        scenario
+    mutating_executions = [
+        (scenario, stream)
         for scenario in matrix.scenarios
-        if scenario.lifecycle.mutates_lab
-        and scenario.lifecycle.reset_required
-        and _has_executable_stream(scenario, blocked_pairs)
+        if scenario.lifecycle.mutates_lab and scenario.lifecycle.reset_required
+        for stream in _executable_streams(scenario, blocked_pairs)
     ]
-    if len(mutating_scenarios) > 1 and not _focused_single_mutating_rerun(
+    allow_focused_single_mutating_execution = len(mutating_executions) == 1 and _focused_single_mutating_rerun(
         release_mode=release_mode,
         scenario_filters=scenario_filters,
-    ):
-        for previous, current in zip(mutating_scenarios, mutating_scenarios[1:]):
+    )
+    if len(mutating_executions) > 1 and not allow_focused_single_mutating_execution:
+        for (previous, previous_stream), (current, current_stream) in zip(mutating_executions, mutating_executions[1:]):
             if current.id in previous.lifecycle.allowed_followup_scenarios:
                 continue
             issues.append(
@@ -454,7 +457,7 @@ def validate_release_matrix(
                     required=current.required,
                     reason=(
                         "mutating scenario sequence requires reset/recovery between scenarios: "
-                        f"{previous.id} -> {current.id}"
+                        f"{_execution_label(previous, previous_stream)} -> {_execution_label(current, current_stream)}"
                     ),
                     code="matrix-lifecycle",
                 )
@@ -473,7 +476,7 @@ def matrix_validation_results(validation: MatrixValidationResult) -> list[dict[s
     for issue in validation.issues:
         results.append(
             {
-                "stream": issue.stream or "local",
+                "stream": issue.stream or "n/a",
                 "scenario_id": issue.scenario_id,
                 "status": issue.status,
                 "required": issue.required,
