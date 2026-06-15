@@ -33,7 +33,7 @@ Before implementation begins for any remaining Thermos slice:
 
 This gate applies to the remaining deep-scan queue (`PR 24` onward) and to any new Thermos follow-up slice added later.
 
-**Last Updated:** 2026-06-08
+**Last Updated:** 2026-06-13
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -78,6 +78,30 @@ Execution order for the deep-scan queue:
 cleared on 2026-06-07 after `PR 26` merged; `PR 27` extracted the
 runtime/bootstrap seam, and `PR 28` now records the remaining slice map for the
 follow-up implementation PRs.
+
+## Thermos Review #1 Revalidation (2026-06-13)
+
+Current `ansible` HEAD `f52a19d4` was revalidated against the operator-supplied
+Thermos review captured in
+`docs/plans/2026-06-13-thermos-ansible-review-findings.md`.
+
+- `B1`, `H1`, `H2`, `H3`, `M2`-`M5`, and `L2`-`L7` remain real.
+- `B1` is a low-risk cleanup only: old-hub `MultiClusterObservability` deletion is
+  already documented, parity-tested, and no longer gated by the deprecated
+  `--disable-observability-on-secondary` flag.
+- `M1` is lower value after `PR 29`-`PR 31` extracted the major orchestration
+  seams.
+- `L1` is already covered by path-safety tests; no immediate PR is planned.
+
+Follow-up order after `PR 32`:
+
+1. `H2` - add custom-resource access helpers and collapse repeated
+   group/version/plural call-site boilerplate.
+2. `H1` - derive the Python validator RBAC table from the Python operator table
+   while keeping cross-surface parity tests.
+3. `M4` - add `StateManager.get_completed_steps()` /
+   `get_step_timestamp(name)` and remove direct `StateManager.state` reach-through.
+4. `H3` - decompose large modules only through separate design-gated PRs.
 
 ## Finding Validation Matrix
 
@@ -163,6 +187,7 @@ follow-up implementation PRs.
 | 29 | merged | `refactor/thermos-29-operation-runners` | `.worktrees/thermos-29-operation-runners` | F44 operation/phase-flow runner extraction | https://github.com/tomazb/rh-acm-switchover/pull/104 | Added design spec `docs/superpowers/specs/2026-06-07-pr29-operation-runner-design.md` and implementation plan `docs/superpowers/plans/2026-06-07-pr29-operation-runner-extraction.md`. `lib/operation_runners.py` now owns dispatch plus switchover/restore-only runner orchestration. `acm_switchover.py` keeps thin compatibility wrappers and `_run_restore_only_argocd_pause()` remains in place for PR30. Verification: `python -m pytest tests/test_operation_runners.py tests/test_main.py tests/test_main_phase_flow.py tests/test_documentation_guardrails.py -q` passed (`169 passed`); `graphify update .` passed; `git diff --check` passed; final `./run_tests.sh` passed after touched-file import sorting (`1435 passed, 6 skipped` root unit lane; `212 passed, 1 skipped` release lane; `black --check`, `isort --check-only`, `mypy`, `bandit`, `pip-audit`, and compile checks all passed). PR #104 merged 2026-06-07. |
 | 30 | merged | `refactor/thermos-30-argocd-resume-safety` | `.worktrees/thermos-30-argocd-resume` | F44 Argo CD resume safety extraction | https://github.com/tomazb/rh-acm-switchover/pull/106 | Added design spec `docs/superpowers/specs/2026-06-08-pr30-argocd-resume-safety-design.md` and implementation plan `docs/superpowers/plans/2026-06-08-pr30-argocd-resume-safety.md`. `lib/argocd_resume.py` now owns `_prepare_argocd_resume_clients()`, `_run_argocd_resume_only()`, and `_attempt_argocd_resume_on_failure()`; `acm_switchover.py` keeps compatibility wrappers, and `_run_restore_only_argocd_pause()` remains in place and out of scope for this slice. Verification: `python -m pytest tests/test_argocd_resume_helpers.py tests/test_main_argocd_resume.py tests/test_main.py tests/test_main_phase_flow.py tests/test_operation_runners.py tests/test_documentation_guardrails.py -q` passed (`213 passed`); repo mypy scope passed; `graphify update .` passed; `git diff --check` passed; CodeRabbit re-review reported `No findings`; earlier branch validation also completed a full strict `./run_tests.sh` pass before the final constants/import cleanup, followed by fresh post-review focused checks. PR #106 merged 2026-06-08. |
 | 31 | merged | `refactor/thermos-31-cli-report-orchestration` | `.worktrees/thermos-31-cli-reporting` | F44 CLI outcome/report orchestration extraction | https://github.com/tomazb/rh-acm-switchover/pull/107 | Added design spec `docs/superpowers/specs/2026-06-08-pr31-cli-outcome-report-design.md` and implementation plan `docs/superpowers/plans/2026-06-08-pr31-cli-outcome-report-orchestration.md`. `lib/cli_outcomes.py` now owns report target selection, phase summarization, Python report writing, setup-mode outcome handling, and the non-setup completion shell; `acm_switchover.py` keeps thin compatibility wrappers plus entrypoint ordering and delegates setup/runtime outcome handling through the extracted helper module. Verification: `python -m pytest tests/test_cli_outcomes.py tests/test_main.py tests/test_report_artifacts.py tests/test_main_phase_flow.py -q` passed (`167 passed`); `python -m pytest tests/test_documentation_guardrails.py -q` passed (`24 passed`); `graphify update .` passed; `git diff --check` passed; final `./run_tests.sh` passed after formatting the new direct test file with Black during verification. PR #107 merged 2026-06-08 at `fb90d62`. |
+| 32 | in_progress | `docs/thermos-32-review-validation` | `.worktrees/thermos-32-review-validation` | Thermos Review #1 validation + B1 cleanup | TBD | Scope: track the 2026-06-13 Thermos review, add the validated findings document, and remove the dead Python `Finalization` deprecated-flag instance field without changing CLI compatibility or old-hub observability behavior. Planned verification: `python -m pytest tests/test_finalization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_old_hub_parity.py tests/test_documentation_guardrails.py -q`; `black --check --line-length 120 modules/finalization.py tests/test_finalization.py`; `git diff --check`; `coderabbit review --plain -t all --base ansible`. |
 
 ## Per-PR Implementation Details
 
@@ -621,6 +646,32 @@ follow-up implementation PRs.
   next worktree can begin from approved docs instead of branch-local chat
   context.
 - Documentation guardrail verification passes.
+
+### PR 32: Thermos Review Validation And B1 Cleanup
+
+**Scope**
+- Add the validated Thermos Review #1 findings document.
+- Update this tracker with the 2026-06-13 validation summary and follow-up order.
+- Resolve `B1` only by removing the dead `Finalization` instance field for the
+  deprecated observability flag.
+- Preserve constructor compatibility for `disable_observability_on_secondary` and
+  keep old-hub observability deletion automatic when observability is detected.
+
+**Files**
+- Create: `docs/plans/2026-06-13-thermos-ansible-review-findings.md`
+- Modify: `thermos-resolution-plan.md`
+- Modify: `modules/finalization.py`
+- Modify: `tests/test_finalization.py`
+
+**Acceptance Criteria**
+- The deprecated CLI flag remains accepted and documented as deprecated.
+- `Finalization(..., disable_observability_on_secondary=False)` still deletes
+  old-hub `MultiClusterObservability` when the old hub is kept as a secondary and
+  primary observability was detected.
+- Tests that directly exercise old-hub observability deletion no longer pass
+  misleading deprecated-flag arguments.
+- Targeted Python, collection parity, documentation guardrail, formatting, and
+  diff checks pass.
 
 ## Verification Command Reference
 

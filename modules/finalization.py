@@ -71,9 +71,14 @@ class Finalization:
         dry_run: bool = False,
         old_hub_action: str = "secondary",
         manage_auto_import_strategy: bool = False,
-        disable_observability_on_secondary: bool = False,
+        disable_observability_on_secondary: bool = False,  # deprecated, no-op
         restore_only: bool = False,
     ):
+        # `disable_observability_on_secondary` is deprecated and intentionally
+        # unused: old-hub observability cleanup is now driven by detected
+        # observability state, not this flag. Kept in the signature only for
+        # CLI/back-compat. Explicitly discard it to make the intent clear.
+        del disable_observability_on_secondary
         self.secondary = secondary_client
         self.state = state_manager
         self.acm_version = acm_version
@@ -82,7 +87,6 @@ class Finalization:
         self.dry_run = dry_run
         self.old_hub_action = old_hub_action  # "secondary", "decommission", or "none"
         self.manage_auto_import_strategy = manage_auto_import_strategy
-        self.disable_observability_on_secondary = disable_observability_on_secondary
         self.restore_only = restore_only
         self.backup_manager = BackupScheduleManager(
             secondary_client,
