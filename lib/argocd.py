@@ -289,7 +289,6 @@ def detect_argocd_installation(client: KubeClient) -> ArgocdDiscoveryResult:
 
 def _list_argocd_applications_once(client: KubeClient, namespace: Optional[str]) -> List[Dict[str, Any]]:
     """List Argo CD Applications for one namespace scope and surface real errors."""
-    scope_label = namespace or "cluster-wide scope"
     try:
         return client.list_custom_resources(
             group=ARGOCD_APP_GROUP,
@@ -299,16 +298,15 @@ def _list_argocd_applications_once(client: KubeClient, namespace: Optional[str])
         )
     except ApiException as e:
         if e.status == 404:
-            logger.debug("Argo CD Applications not found in %s: %s", scope_label, e)
+            logger.debug("Argo CD Applications not found while listing resources")
             return []
         logger.warning(
-            "Failed to list Argo CD Applications in %s (status=%s)",
-            scope_label,
+            "Failed to list Argo CD Applications (status=%s)",
             e.status,
         )
         raise
     except Exception as e:
-        logger.warning("Failed to list Argo CD Applications in %s: %s", scope_label, e)
+        logger.warning("Failed to list Argo CD Applications (error_type=%s)", type(e).__name__)
         raise
 
 

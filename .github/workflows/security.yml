@@ -10,6 +10,8 @@ on:
     paths:
       - 'requirements*.txt'
       - '**.py'
+      - 'container-bootstrap/**'
+      - '.github/workflows/security.yml'
 
 jobs:
   dependency-check:
@@ -251,6 +253,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [dependency-check, code-security, secrets-scan, container-security]
     if: failure()
+    permissions:
+      contents: read
+      issues: write
     
     steps:
     - name: Create issue on failure

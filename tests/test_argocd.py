@@ -909,12 +909,51 @@ class TestListArgocdApplications:
 
         assert argocd_lib.list_argocd_applications(client, namespaces=None) == []
 
+    def test_namespaced_404_log_omits_scope_and_exception_detail(self, caplog):
+        import logging
+
+        client = MagicMock()
+        client.list_custom_resources.side_effect = ApiException(status=404, reason="secret namespace detail")
+
+        with caplog.at_level(logging.DEBUG, logger="acm_switchover"):
+            assert argocd_lib.list_argocd_applications(client, namespaces=["private-gitops"]) == []
+
+        assert "private-gitops" not in caplog.text
+        assert "secret namespace detail" not in caplog.text
+
     def test_cluster_wide_non_404_raises(self):
         client = MagicMock()
         client.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
 
         with pytest.raises(ApiException):
             argocd_lib.list_argocd_applications(client, namespaces=None)
+
+    def test_namespaced_api_error_log_omits_scope(self, caplog):
+        import logging
+
+        client = MagicMock()
+        client.list_custom_resources.side_effect = ApiException(status=403, reason="Forbidden")
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            with pytest.raises(ApiException):
+                argocd_lib.list_argocd_applications(client, namespaces=["private-gitops"])
+
+        assert "private-gitops" not in caplog.text
+        assert "status=403" in caplog.text
+
+    def test_unexpected_listing_error_log_omits_scope_and_exception_detail(self, caplog):
+        import logging
+
+        client = MagicMock()
+        client.list_custom_resources.side_effect = RuntimeError("token secret detail")
+
+        with caplog.at_level(logging.WARNING, logger="acm_switchover"):
+            with pytest.raises(RuntimeError):
+                argocd_lib.list_argocd_applications(client, namespaces=["private-gitops"])
+
+        assert "private-gitops" not in caplog.text
+        assert "token secret detail" not in caplog.text
+        assert "RuntimeError" in caplog.text
 
     def test_namespaced_listing_aggregates_results(self):
         client = MagicMock()

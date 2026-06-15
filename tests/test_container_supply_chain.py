@@ -31,9 +31,14 @@ def test_container_base_images_are_digest_pinned():
         assert ":latest" not in image, f"Base image still uses a mutable latest tag: {line}"
 
 
-def test_openshift_client_default_tracks_supported_stream():
-    """The bundled OpenShift client stream should stay on the current tested default."""
-    assert "ARG OC_VERSION=4.21" in _containerfile()
+def test_openshift_client_default_tracks_supported_stream_with_mirror_checksum():
+    """The bundled OpenShift client stream should verify the mirror-published checksum."""
+    content = _containerfile()
+
+    assert "ARG OC_VERSION=4.21" in content
+    assert "stable-${OC_VERSION}" in content
+    assert "${OC_BASE_URL}/sha256sum.txt" in content
+    assert "openshift-client-linux\\.tar\\.gz" in content
 
 
 def test_binary_checksum_args_cover_supported_architectures():
@@ -84,4 +89,12 @@ def test_unsupported_architectures_fail_fast():
 
     assert "Unsupported architecture" in content
     assert content.count('echo "Unsupported architecture: ${ARCH}"') == 2
-    assert content.count("exit 1;") == 2
+    assert (
+        len(
+            re.findall(
+                r'echo "Unsupported architecture: \$\{ARCH\}" >&2; \\\n\s+exit 1;',
+                content,
+            )
+        )
+        == 2
+    )
