@@ -410,52 +410,212 @@ Hard NO-GO examples:
 - artifact redaction failure
 - dirty checkout in certification mode, matching current framework behavior
 
-## Implementation Plan
+## Implementation Roadmap
 
-Phase 0: documentation and terminology
+### Placement Recommendation
 
-- Deliver this spec and keep `docs/development/release-validation-framework.md` aligned.
-- Validation: documentation guardrail tests and `git diff --check`.
+The controller should live with the release framework, not with production switchover code.
 
-Phase 1: lab config and discovery prototype
+| Candidate | Fit | Tradeoffs |
+| --- | --- | --- |
+| `tests/release/lab_controller/` | Recommended for the controller package. It is release-only, can reuse `tests/release` contracts directly, runs in the existing non-live release helper suite, and keeps lab certification safety logic close to the matrix validator, profile loader, adapters, discovery, and artifact helpers it wraps. | The `tests/` prefix can look less authoritative than `lib/`, so the package should have clear module boundaries and a thin script entrypoint for operator use. |
+| `scripts/release/` | Good for a thin executable wrapper such as `scripts/release/run_lab_role_controller.py`. | Poor fit for core logic because scripts are harder to unit test cleanly, encourage CLI parsing mixed with safety decisions, and risk duplicating pytest framework behavior. |
+| `lib/release_controller/` | Attractive if the controller were product runtime code. | Not recommended for Phase 1 because this is release-lab certification machinery, not production CLI behavior. Putting it under `lib/` would blur support boundaries and invite imports from production paths that should remain independent of test-owned release tooling. |
 
-- Add a non-secret lab config contract for physical hubs and expected managed clusters.
-- Prototype physical identity and logical role discovery with fake discovery clients.
-- Tests: identity mismatch, ambiguous active hub, expected `mc-1`/`mc-2`/`mc-3` match, redacted discovery output.
+Recommended structure:
 
-Phase 2: role-aware profile generation
+- `tests/release/lab_controller/__init__.py` exports the stable Phase 1 API.
+- `tests/release/lab_controller/models.py` defines controller-only dataclasses and enums.
+- `tests/release/lab_controller/identity.py` validates physical hub bindings.
+- `tests/release/lab_controller/roles.py` makes logical role decisions from discovered evidence.
+- `tests/release/lab_controller/planner.py` builds known-state segments and enforces mutation boundaries.
+- `tests/release/lab_controller/profiles.py` generates static-schema release profiles for one segment.
+- `tests/release/lab_controller/artifacts.py` defines the preliminary segment artifact payload and delegates writes to existing release artifact helpers.
+- `scripts/release/run_lab_role_controller.py` is added later as a thin command-line wrapper around the package.
 
-- Generate per-segment profiles under an ignored runtime directory.
-- Preserve compatibility with `tests/release/contracts/loader.py`.
-- Tests: `hub-a` primary profile, `hub-b` primary profile, profile hash recording, credential rejection.
+Generated runtime profiles should not be written under `tests/release/profiles/` except for operator-local inputs
+under the already ignored `tests/release/profiles/local/`. Per-segment generated profiles should default under the
+operator-provided `--artifact-dir`, for example `artifacts/release-lab/<run-id>/generated-profiles/`, so they stay out
+of version control and can be redacted or withheld from publishable artifacts.
 
-Phase 3: one-segment controller wrapper
+### Phase 1 Scope
 
-- Wrap one mutating scenario with pre-discovery, profile generation, pytest invocation, post-discovery, and
-  segment decision.
-- Tests: one Python passive switchover segment with fake role transition, no mutation when initial state fails.
+Phase 1 should build deterministic safety primitives only. It should not run live switchover commands by default.
 
-Phase 4: multi-segment ping-pong certification
+1. **Data models**
+   - Add immutable models for `PhysicalHub`, `HubIdentity`, `HubObservation`, `LogicalRole`, `RoleMapping`,
+     `ManagedClusterExpectation`, `SegmentPlan`, `SegmentDecision`, `GeneratedProfileRef`, and a minimal
+     `SegmentArtifact`.
+   - Keep model fields free of kubeconfig contents and tokens. Store physical labels, context names, redacted identity
+     summaries, hashes, and artifact-relative paths.
 
-- Chain known-state segments for Python then Ansible passive switchover.
-- Tests: `hub-a` to `hub-b` to `hub-a` role transition graph, blocked second mutation when state is unproven.
+2. **Fake discovery inputs**
+   - Add test fixtures or builders that produce two physical hub observations without invoking `oc`.
+   - Cover `hub-a` active, `hub-b` active, both active, neither active, mismatched identity, and managed-cluster drift.
+   - Reuse the shape of `tests.release.baseline.discovery.HubFacts` where possible so later live discovery can adapt
+     the existing `discover_hub_facts()` output instead of inventing a second discovery vocabulary.
 
-Phase 5: recovery decision tree and artifact merger
+3. **Physical hub identity checks**
+   - Bind operator labels such as `hub-a` and `hub-b` to live evidence before planning a segment.
+   - Phase 1 may use fake identity values, but the model should leave room for `kube-system` namespace UID, API server
+     URL hash, context name, and ACM evidence.
+   - A missing, changed, duplicated, or unreadable identity is a hard NO-GO before any mutation is considered.
 
-- Implement explicit recovery outcomes and merge segment artifacts into a certification bundle.
-- Tests: both-active NO-GO, neither-active recovery-required, pre-mutation infra retry, post-mutation no auto-retry,
-  merged report includes transition and recovery evidence.
+4. **Logical role decision engine**
+   - Decide exactly one active primary from observed evidence.
+   - Return explicit decisions for `PASS`, `NO_GO`, and `RECOVERY_REQUIRED`.
+   - Treat ambiguous primary evidence, both hubs active, neither hub active, and unexpected managed cluster sets as
+     blocking states.
 
-Phase 6: Agent release-runner integration
+5. **Known-state segment planner**
+   - Accept a requested scenario plan and the current proven role mapping.
+   - Permit any number of non-mutating checks in a segment.
+   - Permit at most one lab-mutating scenario in a segment.
+   - Block a second mutation unless a previous segment produced a proven final state and the next segment starts with
+     fresh identity and role discovery.
 
-- Provide a deterministic release-control command suitable for an Agent to invoke.
-- Tests: command does not accept ad hoc mutation snippets, summarizes only artifact-derived GO/NO-GO state.
+6. **Role-aware profile generation skeleton**
+   - Generate an existing-schema release profile where `hubs.primary` and `hubs.secondary` map to the currently proven
+     physical hubs for one segment.
+   - Feed the generated file through `tests.release.contracts.loader.load_profile()` so Phase 1 remains compatible with
+     the current profile contract.
+   - Record the generated profile hash and artifact-relative path, not raw credential material, in the segment artifact.
 
-Phase 7: CI/lab hardening and docs
+7. **Artifact model skeleton**
+   - Define a schema-versioned but explicitly provisional segment artifact with initial role mapping, expected final
+     mapping, generated profile hash, decision, failure reasons, and redaction status.
+   - Use `tests.release.reporting.artifacts.ReleaseArtifacts` and `tests.release.reporting.redaction` for persistence
+     and sanitization.
 
-- Add lab-only validation guidance and update release docs without touching protected operational runbooks unless
-  explicitly approved.
-- Tests: non-live unit/helper suite remains CI-safe, live certification remains opt-in.
+### Existing Framework Reuse
+
+The controller should be a sequencing layer around the current release framework. It should reuse these pieces instead
+of duplicating them:
+
+- `tests/release/scenarios/catalog.py`
+  - `SCENARIOS_BY_ID`, `V1_SCENARIOS`, and `ScenarioLifecycle` for scenario identity and current mutation metadata.
+  - `select_release_matrix()` to derive each segment's effective matrix.
+  - `validate_release_matrix()` to preserve existing support checks and the focused single-mutation rule per segment.
+  - `matrix_validation_results()` for consistent blocked-matrix result payloads.
+- `tests/release/contracts/models.py`
+  - `HubProfile`, `ManagedClustersProfile`, `StreamProfile`, `ScenarioProfile`, `BaselineProfile`,
+    `ReleaseProfile`, and `LoadProfileResult` for generated profile compatibility.
+- `tests/release/contracts/loader.py`
+  - `load_profile()` to validate generated profiles and compute their SHA-256 hash.
+- `tests/release/contracts/schema.py`
+  - Existing credential rejection and static profile validation through the loader path; do not bypass
+    `validate_profile_contents()`.
+- `tests/release/baseline/discovery.py`
+  - `HubDiscoveryClient`, `HubFacts`, and `discover_hub_facts()` as the initial discovery vocabulary.
+- `tests/release/baseline/fingerprint.py`
+  - `build_environment_fingerprint()` for baseline evidence snapshots, while adding stricter controller identity
+    checks outside the fingerprint.
+- `tests/release/baseline/assertions.py`
+  - `assert_baseline()` for existing primary/secondary and managed-cluster assertions.
+- `tests/release/checks/lab_readiness.py`
+  - `assert_lab_readiness()` for current non-mutating readiness checks.
+- `tests/release/baseline/recovery.py`
+  - `RecoveryPolicy`, `RecoveryBudget`, and `plan_recovery_actions()` later for recorded recovery decisions, not
+    automatic live recovery in Phase 1.
+- `tests/release/reporting/artifacts.py` and `tests/release/reporting/redaction.py`
+  - `ReleaseArtifacts`, `write_capture_artifact()`, `sanitize_text()`, and `RedactionError` for safe artifact writes.
+- `tests/release/orchestrator.py`
+  - `run_release_certification()` as the delegated pytest certification entrypoint once execution is wired.
+  - `build_default_adapters()` and `build_default_discovery_clients()` as later integration points, after Phase 1
+    proves the planner and profile generator with fakes.
+- `tests/release/adapters/python_cli.py` and `tests/release/adapters/ansible.py`
+  - Existing command and extra-var construction. The controller should supply a role-aware profile and let these
+    adapters continue building stream commands.
+- `tests/release/conftest.py`
+  - Existing CLI concepts such as profile, mode, scenario filter, stream filter, artifact dir, and dirty-check policy
+    should shape the controller CLI, even if the script does not import pytest fixtures directly.
+
+### Phase 1 Tests
+
+Add focused non-live unit tests under `tests/release/lab_controller/`.
+
+- `test_roles_detect_hub_a_primary_hub_b_secondary`: fake observations show `hub-a` active with exactly
+  `mc-1`, `mc-2`, `mc-3`; the decision maps `hub-a` to logical primary and `hub-b` to logical secondary.
+- `test_roles_detect_hub_b_primary_hub_a_secondary`: same evidence after a role transition; generated mapping is
+  swapped and does not reuse stale static profile roles.
+- `test_roles_fail_ambiguous_primary`: conflicting role signals on one or both hubs produce NO-GO with no segment
+  planned.
+- `test_roles_fail_both_hubs_active`: both hubs appear primary for the expected managed cluster set; the controller
+  returns hard NO-GO.
+- `test_roles_mark_neither_hub_active_recovery_required`: neither hub has active-primary evidence; the controller
+  returns RECOVERY_REQUIRED.
+- `test_roles_fail_unexpected_managed_cluster_set`: active hub has anything other than `mc-1`, `mc-2`, `mc-3`; planning
+  stops before mutation.
+- `test_profiles_reject_stale_profile_after_role_transition`: after `hub-b` becomes primary, a generated or selected
+  profile that still maps `hubs.primary` to `hub-a` is rejected before execution.
+- `test_planner_allows_one_mutating_segment`: a segment with prerequisites, one mutating scenario, runtime parity, and
+  final baseline is accepted when the starting state is proven.
+- `test_planner_blocks_second_mutation_without_proven_state`: two mutating scenarios in the same known-state segment,
+  or a second segment without a proven prior final state, is rejected.
+
+Useful companion tests:
+
+- identity mismatch blocks planning before role evaluation.
+- generated profile loads with `load_profile()` and has a stable SHA-256.
+- segment artifact persistence rejects unsafe content through the existing redaction layer.
+- unknown catalog scenario fails closed until classified.
+
+### First CLI Contract
+
+The first operator-facing command should be a thin wrapper, not the implementation authority:
+
+```bash
+python scripts/release/run_lab_role_controller.py \
+  --lab-config tests/release/profiles/local/lab.yaml \
+  --plan tests/release/profiles/local/lab-controller-plan.yaml \
+  --artifact-dir artifacts/release-lab/20260616T000000Z
+```
+
+Initial contract:
+
+- `--lab-config` points to an operator-local, non-versioned lab description with physical labels, kubeconfig path
+  references, contexts, expected managed cluster names, and optional Argo CD/RBAC fixture expectations.
+- `--plan` points to the requested known-state segment plan.
+- `--artifact-dir` is required and receives generated profiles, segment artifacts, controller decisions, and a summary.
+- Phase 1 may add `--discovery-fixture` for non-live development and unit-test parity with fake observations.
+- The command defaults to plan/validate behavior until execution wiring is added.
+- Exit code `0` means the requested plan is safe to start or the dry plan passed. Exit code `2` means NO-GO. Exit
+  code `3` means RECOVERY_REQUIRED. Exit code `4` means invalid inputs or unsafe artifact/profile content.
+- The script must not accept arbitrary mutation commands. It accepts known catalog scenario names and delegates later
+  execution to the release framework.
+
+### Out Of Scope For First Implementation
+
+- Automatic live recovery.
+- Destructive decommission.
+- Exact JSON artifact schema finalization.
+- Agent skill or Agent-specific workflow automation.
+- Full live two-hub, three-managed-cluster certification.
+- Production CLI or collection behavior changes.
+- Release profile schema changes beyond generated files that already satisfy the current schema.
+- Live execution of multiple mutating scenarios.
+- Committed generated profiles, kubeconfig paths, cluster IDs, credentials, or artifacts.
+
+### Risks And Mitigations
+
+- **Unreliable role discovery signals**: BackupSchedule and Restore evidence alone can be misleading. Phase 1 should
+  model multiple evidence fields, fail closed on disagreement, and keep the decision engine separate from raw discovery.
+- **Accidental use of stale static profiles**: A successful switchover changes logical roles. The controller must
+  generate a fresh role-aware profile per segment, record its hash, and reject any profile whose logical roles do not
+  match the freshly discovered physical mapping.
+- **Unsafe retries after mutation**: A failed mutating scenario may leave the lab in an intermediate state. Retries must
+  be blocked unless fresh discovery proves the next starting state; post-mutation failures should produce
+  RECOVERY_REQUIRED or NO-GO, not automatic reruns.
+- **Leaking identity or kubeconfig details into artifacts**: Generated execution profiles may contain real paths. Keep
+  them in ignored/private artifact directories, store only hashes and redacted summaries in publishable artifacts, and
+  use the existing redaction layer for text outputs.
+- **Duplicated logic between controller and pytest framework**: The controller should own sequencing, identity, and
+  role safety only. Scenario selection, profile validation, adapters, baseline checks, runtime parity, summary, and
+  artifact redaction should stay in the existing release framework.
+- **Controller bypass of conservative matrix validation**: Segment planning must not weaken `validate_release_matrix()`.
+  It should call the validator for each generated segment and add stronger known-state checks around it.
+- **Operator confusion between diagnostic focused reruns and certification**: Artifacts and CLI output must say whether
+  a run is certification-eligible, diagnostic-only, NO-GO, or recovery-required.
 
 ## Open Questions
 
