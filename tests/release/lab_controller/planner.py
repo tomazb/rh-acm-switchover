@@ -286,15 +286,24 @@ def build_ping_pong_plan(*, plan_id: str = "phase4-ping-pong") -> CertificationP
     )
 
 
-def _plan_validation_reason(segment: PlannedSegment) -> str | None:
+def _plan_validation_failure(segment: PlannedSegment) -> tuple[CertificationDecision, str] | None:
     if not isinstance(getattr(segment, "expected_initial_role_state", None), DesiredRoleState):
-        return f"segment {segment.segment_id} is missing expected initial role state"
+        return (
+            CertificationDecision.BLOCKED,
+            f"segment {segment.segment_id} is missing expected initial role state",
+        )
     if _expected_role_state(segment) is None:
-        return f"segment {segment.segment_id} is missing expected final role state"
+        return (
+            CertificationDecision.BLOCKED,
+            f"segment {segment.segment_id} is missing expected final role state",
+        )
     try:
-        return scenario_segment_blocking_reason(segment.scenario_id, mutates_lab=segment.mutates_lab)
+        blocking_reason = scenario_segment_blocking_reason(segment.scenario_id, mutates_lab=segment.mutates_lab)
     except ValueError as exc:
-        return str(exc)
+        return CertificationDecision.NO_GO, str(exc)
+    if blocking_reason is not None:
+        return CertificationDecision.NO_GO, blocking_reason
+    return None
 
 
 def _transition_for_result(planned_segment: PlannedSegment, result: SegmentControllerResult) -> RoleTransition:
@@ -447,7 +456,7 @@ def _handoff_block(previous_result: SegmentRunResult, next_segment: PlannedSegme
     if not observed_next_state.matches_desired(next_segment.expected_initial_role_state):
         return _blocked_segment_result(
             next_segment,
-            decision=CertificationDecision.BLOCKED,
+            decision=CertificationDecision.NO_GO,
             reason=(
                 f"stale handoff observation for segment {next_segment.segment_id}: observed "
                 f"{_role_state_text(observed_next_state)} does not match proven final role state from "
@@ -476,6 +485,18 @@ def evaluate_certification_decision(
 
 def _copy_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(dict(payload), sort_keys=True))
+
+
+def _sanitize_payload_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _sanitize_payload_value(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_payload_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_payload_value(item) for item in value]
+    if isinstance(value, str):
+        return sanitize_artifact_text(value)
+    return value
 
 
 def _safe_segment_artifact(result: SegmentRunResult) -> tuple[dict[str, Any], bool]:
@@ -516,24 +537,41 @@ def _minimal_rejected_bundle(
     segment_results: Sequence[SegmentRunResult],
     run_decision: RunRecoveryDecision,
 ) -> CertificationArtifactBundle:
-    return CertificationArtifactBundle(
-        payload={
-            "artifact_version": 1,
-            "schema_version": 1,
-            "controller_phase": "phase5",
-            "plan_id": plan.plan_id,
-            "ordered_segments": [_planned_segment_payload(segment) for segment in plan.segments],
-            "segment_decisions": [_segment_decision_payload(result) for result in segment_results],
-            "per_segment_decisions": [_segment_decision_payload(result) for result in segment_results],
-            "final_decision": run_decision.final_decision.value,
-            "safe_to_continue": False,
-            "retry_allowed": False,
-            "manual_recovery_required": False,
-            "recovery_category": "artifact_redaction_failed",
-            "first_blocking_reason": "run artifact rejected by redaction",
-            "operator_action_hint": "review and remove unredacted sensitive artifact content before using this run",
-            "redaction_status": "rejected",
+    payload = {
+        "artifact_version": 1,
+        "schema_version": 1,
+        "controller_phase": "phase5",
+        "plan_id": plan.plan_id,
+        "final_decision": run_decision.final_decision.value,
+        "safe_to_continue": False,
+        "retry_allowed": False,
+        "manual_recovery_required": run_decision.manual_recovery_required,
+        "first_blocking_segment": run_decision.first_blocking_segment_id,
+        "first_blocking_scenario": run_decision.first_blocking_scenario_id,
+        "first_blocking_reason": run_decision.first_blocking_reason or "run artifact rejected by redaction",
+        "recovery_category": run_decision.recovery_category.value,
+        "operator_action_hint": run_decision.operator_action_hint,
+        "mutation_attempted_before_block": run_decision.mutation_attempted_before_block,
+        "mutation_completed_before_block": run_decision.mutation_completed_before_block,
+        "final_state_proven": run_decision.final_state_proven,
+        "final_role_state": _role_state_payload(run_decision.observed_final_state),
+        "ordered_segments": [_planned_segment_payload(segment) for segment in plan.segments],
+        "segment_decisions": [_segment_decision_payload(result) for result in segment_results],
+        "per_segment_decisions": [_segment_decision_payload(result) for result in segment_results],
+        "role_transition_graph": [result.role_transition.to_payload() for result in segment_results],
+        "segment_artifacts": [],
+        "final_reason": run_decision.reason,
+        "recovery_hint": run_decision.operator_action_hint,
+        "summary_counts": run_decision.summary_counts,
+        "runtime_parity": {
+            "status": "not_implemented",
+            "authoritative": False,
+            "phase": "Phase 5 deterministic planner placeholder",
         },
+        "redaction_status": "rejected",
+    }
+    return CertificationArtifactBundle(
+        payload=_sanitize_payload_value(payload),
         redaction_status="rejected",
     )
 
@@ -559,17 +597,28 @@ def merge_segment_artifacts(
             redaction_status = "rejected"
         segment_artifacts.append(segment_artifact)
 
-    final_reason_value = sanitize_artifact_text(final_reason) if final_reason is not None else run_decision.reason
-    recovery_hint_value = (
-        sanitize_artifact_text(recovery_hint) if recovery_hint is not None else run_decision.operator_action_hint
-    )
+    if redaction_status == "rejected" and run_decision.artifact_redaction_passed:
+        run_decision = evaluate_run_decision(plan, segment_results, artifact_redaction_passed=False)
+    if not run_decision.artifact_redaction_passed:
+        redaction_status = "rejected"
+
+    if redaction_status == "rejected":
+        final_decision_value = run_decision.final_decision
+        final_reason_value = run_decision.reason
+        recovery_hint_value = run_decision.operator_action_hint
+    else:
+        final_decision_value = final_decision or run_decision.final_decision
+        final_reason_value = sanitize_artifact_text(final_reason) if final_reason is not None else run_decision.reason
+        recovery_hint_value = (
+            sanitize_artifact_text(recovery_hint) if recovery_hint is not None else run_decision.operator_action_hint
+        )
     segment_decisions = [_segment_decision_payload(result) for result in segment_results]
     payload = {
         "artifact_version": 1,
         "schema_version": 1,
         "controller_phase": "phase5",
         "plan_id": plan.plan_id,
-        "final_decision": (final_decision or run_decision.final_decision).value,
+        "final_decision": final_decision_value.value,
         "safe_to_continue": run_decision.safe_to_continue,
         "retry_allowed": run_decision.retry_allowed,
         "manual_recovery_required": run_decision.manual_recovery_required,
@@ -600,6 +649,8 @@ def merge_segment_artifacts(
     try:
         validate_artifact_payload_redacted(payload)
     except ValueError:
+        if run_decision.artifact_redaction_passed:
+            run_decision = evaluate_run_decision(plan, segment_results, artifact_redaction_passed=False)
         return _minimal_rejected_bundle(plan, segment_results, run_decision)
     return CertificationArtifactBundle(payload=payload, redaction_status=redaction_status)
 
@@ -616,12 +667,13 @@ def run_certification_plan(
     previous_result: SegmentRunResult | None = None
 
     for planned_segment in plan.segments:
-        validation_reason = _plan_validation_reason(planned_segment)
-        if validation_reason is not None:
+        validation_failure = _plan_validation_failure(planned_segment)
+        if validation_failure is not None:
+            validation_decision, validation_reason = validation_failure
             segment_results.append(
                 _blocked_segment_result(
                     planned_segment,
-                    decision=CertificationDecision.BLOCKED,
+                    decision=validation_decision,
                     reason=validation_reason,
                 )
             )

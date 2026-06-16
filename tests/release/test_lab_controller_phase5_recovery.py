@@ -22,9 +22,37 @@ from tests.release.lab_controller.planner import (
     merge_segment_artifacts,
     run_certification_plan,
 )
-from tests.release.lab_controller.recovery import RecoveryCategory, evaluate_run_decision
+from tests.release.lab_controller.recovery import (
+    RecoveryCategory,
+    determine_retry_eligibility,
+    evaluate_run_decision,
+)
 
 EXPECTED_CLUSTERS = ("mc-1", "mc-2", "mc-3")
+EXPECTED_PHASE5_ARTIFACT_CONTRACT_KEYS = {
+    "artifact_version",
+    "controller_phase",
+    "plan_id",
+    "final_decision",
+    "safe_to_continue",
+    "retry_allowed",
+    "manual_recovery_required",
+    "first_blocking_segment",
+    "first_blocking_scenario",
+    "first_blocking_reason",
+    "recovery_category",
+    "operator_action_hint",
+    "mutation_attempted_before_block",
+    "mutation_completed_before_block",
+    "final_state_proven",
+    "final_role_state",
+    "ordered_segments",
+    "segment_decisions",
+    "role_transition_graph",
+    "summary_counts",
+    "runtime_parity",
+    "redaction_status",
+}
 
 
 def _identity(label: PhysicalHubLabel) -> HubIdentityEvidence:
@@ -135,6 +163,19 @@ def test_full_ping_pong_pass_has_positive_recovery_metadata() -> None:
     assert payload["retry_allowed"] is False
     assert payload["manual_recovery_required"] is False
     assert payload["final_state_proven"] is True
+
+
+def test_run_level_artifact_contains_stable_phase5_contract_keys() -> None:
+    result = _run(build_ping_pong_plan())
+    payload = result.artifact_bundle.payload
+
+    assert EXPECTED_PHASE5_ARTIFACT_CONTRACT_KEYS <= set(payload)
+    assert payload["final_decision"] == result.recovery_summary.final_decision.value
+    assert payload["summary_counts"]["total_segments"] == len(result.plan.segments)
+    assert (
+        payload["final_role_state"]["primary_physical_hub"]
+        == payload["role_transition_graph"][-1]["observed_final_primary_physical_hub"]
+    )
 
 
 def test_no_go_segment_records_blocking_segment_and_sanitized_reason() -> None:
@@ -248,6 +289,36 @@ def test_infra_retryable_is_downgraded_when_mutation_was_attempted() -> None:
     assert summary.mutation_attempted_before_block is True
 
 
+def test_infra_retryable_requires_initial_state_to_match_expected() -> None:
+    result = _run(build_ping_pong_plan())
+    retryable = replace(
+        result.segment_results[0],
+        decision=CertificationDecision.INFRA_RETRYABLE,
+        controller_result=replace(
+            result.segment_results[0].controller_result,
+            observed_initial_role_state=ObservedRoleState(
+                PhysicalHubLabel.HUB_B,
+                PhysicalHubLabel.HUB_A,
+            ),
+            execution_result=replace(
+                result.segment_results[0].controller_result.execution_result,
+                status=ScenarioExecutionStatus.FAILED,
+                retryable_infra_failure=True,
+                mutation_attempted=False,
+            ),
+        ),
+    )
+
+    eligibility = determine_retry_eligibility(retryable)
+    summary = evaluate_run_decision(result.plan, (retryable,), artifact_redaction_passed=True)
+
+    assert eligibility.retry_allowed is False
+    assert eligibility.initial_state_proven is True
+    assert summary.final_decision is CertificationDecision.NO_GO
+    assert summary.retry_allowed is False
+    assert summary.manual_recovery_required is False
+
+
 def test_blocked_plan_config_issue_is_not_retryable() -> None:
     result = _run(CertificationPlan(plan_id="empty", segments=()))
 
@@ -263,7 +334,7 @@ def test_wrong_handoff_state_blocks_without_retry() -> None:
 
     result = _run(_replace_segment(plan, 2, stale_verification))
 
-    assert result.recovery_summary.final_decision is CertificationDecision.BLOCKED
+    assert result.recovery_summary.final_decision is CertificationDecision.NO_GO
     assert result.recovery_summary.retry_allowed is False
     assert result.recovery_summary.first_blocking_segment_id == "verify-hub-b"
 
@@ -341,8 +412,8 @@ def test_destructive_scenario_in_normal_plan_is_blocked() -> None:
 
     result = _run(_replace_segment(plan, 0, destructive))
 
-    assert result.recovery_summary.final_decision is CertificationDecision.BLOCKED
-    assert result.recovery_summary.recovery_category is RecoveryCategory.PLAN_INVALID
+    assert result.recovery_summary.final_decision is CertificationDecision.NO_GO
+    assert result.recovery_summary.recovery_category is RecoveryCategory.SAFETY_BLOCKED
     assert "destructive/disposable-lab-only" in result.recovery_summary.first_blocking_reason
 
 
@@ -356,8 +427,8 @@ def test_unknown_scenario_in_plan_is_blocked() -> None:
 
     result = _run(_replace_segment(plan, 0, unknown))
 
-    assert result.recovery_summary.final_decision is CertificationDecision.BLOCKED
-    assert result.recovery_summary.recovery_category is RecoveryCategory.PLAN_INVALID
+    assert result.recovery_summary.final_decision is CertificationDecision.NO_GO
+    assert result.recovery_summary.recovery_category is RecoveryCategory.SAFETY_BLOCKED
     assert "unknown release scenario" in result.recovery_summary.first_blocking_reason
 
 
@@ -383,6 +454,51 @@ def test_nested_sensitive_payload_in_segment_artifact_is_rejected_and_sanitized(
     assert bundle.redaction_status == "rejected"
     assert raw_path not in artifact_text
     assert bundle.payload["segment_artifacts"][0]["redaction_status"] == "rejected"
+
+
+def test_run_level_redaction_failure_overrides_supplied_pass_decision() -> None:
+    result = _run(build_ping_pong_plan())
+    tampered_result = replace(
+        result.segment_results[0],
+        artifact_payload={
+            **result.segment_results[0].artifact_payload,
+            "nested": {"debug": {"credential": "raw-lab-credential"}},
+        },
+    )
+
+    bundle = merge_segment_artifacts(
+        result.plan,
+        (tampered_result,) + result.segment_results[1:],
+        run_decision=result.recovery_summary,
+        final_role_state=result.final_role_state,
+    )
+
+    assert bundle.redaction_status == "rejected"
+    assert bundle.payload["final_decision"] == "NO_GO"
+    assert bundle.payload["safe_to_continue"] is False
+    assert bundle.payload["retry_allowed"] is False
+    assert bundle.payload["recovery_category"] == "artifact_redaction_failed"
+    assert bundle.payload["summary_counts"]["no_go"] == 1
+
+
+def test_minimal_rejected_run_artifact_preserves_contract_and_sanitizes_plan_id() -> None:
+    result = _run(build_ping_pong_plan())
+    raw_path = "/home/operator/.kube/config"
+    unsafe_plan = replace(result.plan, plan_id=raw_path)
+
+    bundle = merge_segment_artifacts(
+        unsafe_plan,
+        result.segment_results,
+        run_decision=result.recovery_summary,
+        final_role_state=result.final_role_state,
+    )
+    artifact_text = json.dumps(bundle.payload, sort_keys=True)
+
+    assert bundle.redaction_status == "rejected"
+    assert EXPECTED_PHASE5_ARTIFACT_CONTRACT_KEYS <= set(bundle.payload)
+    assert bundle.payload["final_decision"] == "NO_GO"
+    assert bundle.payload["plan_id"] == "[REDACTED]"
+    assert raw_path not in artifact_text
 
 
 def test_raw_api_server_url_in_first_blocking_reason_is_sanitized() -> None:

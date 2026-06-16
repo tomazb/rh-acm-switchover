@@ -255,7 +255,7 @@ def test_stale_role_handoff_blocks_the_next_segment() -> None:
         expected_identities=_expected_identities(),
     )
 
-    assert result.decision is CertificationDecision.BLOCKED
+    assert result.decision is CertificationDecision.NO_GO
     assert result.segment_results[-1].planned_segment.segment_id == "verify-hub-b"
     assert "stale handoff observation" in result.first_blocking_reason
 
@@ -353,7 +353,7 @@ def test_unknown_scenario_in_plan_fails_closed() -> None:
         expected_identities=_expected_identities(),
     )
 
-    assert result.decision is CertificationDecision.BLOCKED
+    assert result.decision is CertificationDecision.NO_GO
     assert "unknown release scenario" in result.first_blocking_reason
 
 
@@ -372,7 +372,7 @@ def test_destructive_disposable_lab_only_scenario_cannot_pass_through_normal_pla
         expected_identities=_expected_identities(),
     )
 
-    assert result.decision is CertificationDecision.BLOCKED
+    assert result.decision is CertificationDecision.NO_GO
     assert "destructive/disposable-lab-only" in result.first_blocking_reason
 
 

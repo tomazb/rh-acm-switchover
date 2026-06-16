@@ -278,7 +278,7 @@ def determine_retry_eligibility(result: SegmentResultLike) -> RetryEligibility:
     if not _initial_state_proven(result):
         return RetryEligibility(False, False, "initial role state is not proven")
     if not _initial_state_matches_expected(result):
-        return RetryEligibility(True, True, "initial role state does not match expected initial state")
+        return RetryEligibility(False, True, "initial role state does not match expected initial state")
     return RetryEligibility(True, True, "pre-mutation infrastructure failure is retryable")
 
 
