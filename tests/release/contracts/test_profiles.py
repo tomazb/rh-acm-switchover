@@ -7,6 +7,7 @@ from tests.release.contracts import (
     ProfileValidationError,
     load_profile,
 )
+from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 
 
 def test_contracts_public_api_imports() -> None:
@@ -181,3 +182,21 @@ def test_checked_in_example_profiles_load(profile_name: str) -> None:
     assert loaded.profile.profile_version == 1
     assert loaded.profile.name
     assert loaded.sha256
+
+
+@pytest.mark.parametrize(
+    "profile_name",
+    [
+        "full-release.example.yaml",
+        "full-release-with-rbac-cert.example.yaml",
+        "argocd-release.example.yaml",
+    ],
+)
+def test_checked_in_mutating_profiles_declare_secondary_final_primary(profile_name: str) -> None:
+    loaded = load_profile(Path("tests/release/profiles") / profile_name)
+    mutating_scenarios = [
+        scenario.id for scenario in loaded.profile.scenarios if SCENARIOS_BY_ID[scenario.id].mutates_lab
+    ]
+
+    assert mutating_scenarios
+    assert loaded.profile.baseline.final_primary == "secondary"

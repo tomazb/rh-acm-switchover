@@ -34,6 +34,7 @@ PLAYBOOKS: dict[str, str] = {
     "decommission": f"{_COLLECTION_PLAYBOOKS_PREFIX}/decommission.yml",
     "rbac-bootstrap": f"{_COLLECTION_PLAYBOOKS_PREFIX}/rbac_bootstrap.yml",
 }
+SUPPORTED_SCENARIO_IDS = frozenset(PLAYBOOKS)
 
 REPORT_NAMES: dict[str, tuple[str, str]] = {
     "preflight": (REPORT_TYPE_PREFLIGHT, REPORT_FILENAME_PREFLIGHT),
@@ -65,6 +66,10 @@ class AnsibleAdapter:
     primary_kubeconfig: str
     secondary_kubeconfig: str
     artifact_dir: Path
+
+    @property
+    def supported_scenario_ids(self) -> frozenset[str]:
+        return SUPPORTED_SCENARIO_IDS
 
     def scenario_dir(self, scenario_id: str) -> Path:
         return self.artifact_dir / "scenarios" / scenario_id / "ansible"

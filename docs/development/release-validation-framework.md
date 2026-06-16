@@ -11,13 +11,14 @@ Release validation is intentionally explicit. `./run_tests.sh` now runs the non-
 The live certification entrypoint calls `tests.release.orchestrator.run_release_certification`, which wires:
 
 1. profile loading and profile-aware matrix selection
-2. git checkout inspection plus release metadata consistency validation
-3. static gates
-4. initial live discovery, lab readiness, and baseline assertions
-5. Bash, Python, and Ansible stream adapters
-6. runtime parity for supported normalized report data
-7. final live discovery, baseline assertions, and recovery artifact state
-8. `scenario-results.json`, `runtime-parity.json`, `summary.json`, and `release-report.md`
+2. matrix lifecycle/support validation
+3. git checkout inspection plus release metadata consistency validation
+4. static gates
+5. initial live discovery, lab readiness, and baseline assertions
+6. Bash, Python, and Ansible stream adapters for executable scenario/stream pairs
+7. runtime parity for supported normalized report data
+8. final live discovery, baseline assertions, and recovery artifact state
+9. `scenario-results.json`, `runtime-parity.json`, `summary.json`, and `release-report.md`
 
 Injected fake discovery clients or fake stream adapters are accepted for unit tests only. A run using participants marked `test_only` is not certification eligible.
 
@@ -32,9 +33,11 @@ Profiles describe the lab, enabled streams, required scenarios, release metadata
 
 Use the examples as templates for real lab profiles. Do not commit real kubeconfig paths, cluster identifiers that should stay private, or credentials. When a profile defines `release.metadata_files`, the harness validates that each listed file exists and references `release.expected_version`, then records a stable metadata hash in the manifest. `recovery.total_budget_minutes` is also copied into `recovery.json` so the emitted artifacts reflect the configured recovery budget even when no automatic recovery action runs.
 
+The Phase 1 matrix validator is intentionally conservative. It blocks required scenario/stream pairs that are not implemented by the current adapters, records optional unsupported pairs as `not_applicable`, and rejects multi-mutation certification sequences until reset/recovery sequencing exists. The checked-in full profiles document the intended full matrix, but they are expected to produce a NO-GO matrix-validation result rather than a fully RC-ready certification pass in Phase 1.
+
 ## Invocation
 
-Run a full certification pass with an explicit profile:
+Attempt the full certification matrix with an explicit profile. In Phase 1, the checked-in full profiles are expected to produce a matrix-validation NO-GO until reset/recovery sequencing is implemented:
 
 ```bash
 python -m pytest tests/release/test_release_certification.py --release-profile tests/release/profiles/full-release.example.yaml --release-mode certification
@@ -56,19 +59,21 @@ You can also filter by stream with `--release-stream python`, `--release-stream 
 
 Profile scenario declarations define the default matrix for a run. CLI scenario and stream filters narrow that profile-declared set, while mutating scenario filters automatically add prerequisites and final checks. Focused reruns are currently filter-based only; the harness does not support resuming or rerunning from a previous artifact directory.
 
+A focused rerun may select one mutating scenario plus its automatic prerequisites and final checks. Because focused reruns are not `certification` mode, they remain non-certification-eligible even when all selected checks pass.
+
 ## Artifacts
 
 Each run writes a timestamped artifact directory under the profile's artifact root, unless overridden with `--release-artifact-dir`. Required outputs are:
 
-- `manifest.json` records run identity, profile data, git checkout state, release metadata status/hash, command context, and eligibility state.
-- `scenario-results.json` records scenario outcomes.
+- `manifest.json` records run identity, profile data, matrix hash and validation status, git checkout state, release metadata status/hash, command context, and eligibility state.
+- `scenario-results.json` records scenario outcomes plus matrix validation issues.
 - `runtime-parity.json` records normalized cross-stream parity comparisons.
 - `recovery.json` records the configured recovery budget and any hard-stop state observed by the harness.
 - `redaction.json` records artifact scanning, redaction counts, and rejected outputs from the shared artifact writer used by stream adapters and static gates.
 - `summary.json` records final fail-closed status and failure reasons.
 - `release-report.md` renders the operator-readable release validation report.
 
-The final `release-report.md` includes run identity, release metadata consistency, required and optional scenario results, mandatory Argo CD certification, runtime parity, recovery, artifact redaction, final baseline status, and the final GO/NO-GO decision.
+The final `release-report.md` includes run identity, release metadata consistency, matrix validation, required and optional scenario results, mandatory Argo CD certification, runtime parity, recovery, artifact redaction, final baseline status, and the final GO/NO-GO decision.
 
 ## Safety Notes
 

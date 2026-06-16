@@ -19,11 +19,13 @@ from tests.release.contracts.models import (
 )
 from tests.release.orchestrator import (
     OcDiscoveryClient,
+    _finalize_run,
     _normalized_runtime_sources,
     _runtime_parity,
     run_release_certification,
 )
 from tests.release.reporting.artifacts import ReleaseArtifacts
+from tests.release.scenarios.catalog import select_release_matrix
 
 
 class FakeDiscoveryClient:
@@ -129,6 +131,37 @@ class RealisticAdapter(FakeAdapter):
     test_only = False
 
 
+class SwitchingAdapter(FakeAdapter):
+    def __init__(
+        self,
+        stream: str,
+        *,
+        primary_client: FakeDiscoveryClient,
+        secondary_client: FakeDiscoveryClient,
+    ) -> None:
+        super().__init__(stream)
+        self.primary_client = primary_client
+        self.secondary_client = secondary_client
+
+    def execute(
+        self,
+        scenario_id: str,
+        *,
+        timeout_seconds: int | None,
+        env: dict | None,
+        extra_args: tuple[str, ...],
+    ):
+        result = super().execute(
+            scenario_id,
+            timeout_seconds=timeout_seconds,
+            env=env,
+            extra_args=extra_args,
+        )
+        self.primary_client.primary = False
+        self.secondary_client.primary = True
+        return result
+
+
 def _release_options(tmp_path: Path, *, mode: str = "certification") -> ReleaseOptions:
     return ReleaseOptions(
         profile_path=Path("tests/release/profiles/dev-minimal.example.yaml"),
@@ -156,6 +189,51 @@ def _passing_gate(command: GateCommand, artifact_dir: Path) -> GateResult:
         str(stderr),
         True,
     )
+
+
+def test_finalize_run_fails_closed_for_empty_matrix_validation_payload(tmp_path: Path) -> None:
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    artifacts.write_json("redaction.json", {"schema_version": 1, "rejected_artifacts": [], "warnings": []})
+    matrix = select_release_matrix(
+        enabled_streams=("python", "ansible"),
+        scenario_filters=(),
+        stream_filters=(),
+        profile_scenarios=(ScenarioProfile(id="static-gates"),),
+    )
+    manifest = {
+        "schema_version": 1,
+        "run_id": "run-1",
+        "profile": {"name": "test-profile"},
+        "matrix": {"scenario_ids": list(matrix.scenario_ids), "hash": matrix.matrix_hash},
+        "warnings": [],
+    }
+
+    summary = _finalize_run(
+        artifacts=artifacts,
+        release_options=_release_options(tmp_path),
+        matrix=matrix,
+        manifest=manifest,
+        certification_eligible=True,
+        results=[
+            {
+                "stream": "local",
+                "scenario_id": "static-gates",
+                "status": "passed",
+                "required": True,
+                "assertions": [],
+            }
+        ],
+        runtime_parity={"status": "passed"},
+        final_baseline={"status": "passed"},
+        recovery={"status": "passed", "hard_stops": []},
+        mandatory_argocd={"status": "passed"},
+        release_metadata={"status": "passed"},
+        matrix_validation={},
+    )
+
+    assert summary["status"] == "failed"
+    assert summary["matrix_validation"] == {}
+    assert "matrix validation failed: matrix validation failed" in summary["failure_reasons"]
 
 
 def test_orchestrator_writes_required_artifacts_with_fake_lab(tmp_path: Path) -> None:
@@ -900,6 +978,207 @@ def test_orchestrator_required_scenario_without_executable_streams_fails(
     preflight = next(item for item in scenario_results["scenario_statuses"] if item["scenario_id"] == "preflight")
     assert preflight["status"] == "failed"
     assert "required scenario failed: preflight" in summary["failure_reasons"]
+
+
+def test_orchestrator_blocks_required_unsupported_pair_before_adapter_execution(
+    tmp_path: Path,
+) -> None:
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    profile = replace(
+        loaded.profile,
+        scenarios=loaded.profile.scenarios
+        + (
+            ScenarioProfile(
+                id="full-restore",
+                required=True,
+                streams=("ansible",),
+            ),
+        ),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    primary = FakeDiscoveryClient(primary=True)
+    secondary = FakeDiscoveryClient(primary=False)
+    python = FakeAdapter("python")
+    ansible = FakeAdapter("ansible")
+    gate_calls = []
+
+    def tracking_gate(command: GateCommand, artifact_dir: Path) -> GateResult:
+        gate_calls.append(command.gate_id)
+        return _passing_gate(command, artifact_dir)
+
+    summary = run_release_certification(
+        release_options=replace(_release_options(tmp_path), scenarios=("full-restore",)),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": primary,
+            "secondary": secondary,
+        },
+        adapters={"python": python, "ansible": ansible},
+        gate_runner=tracking_gate,
+    )
+
+    scenario_results = json.loads((artifacts.run_dir / "scenario-results.json").read_text(encoding="utf-8"))
+    full_restore = next(
+        item
+        for item in scenario_results["results"]
+        if item["scenario_id"] == "full-restore" and item["stream"] == "ansible"
+    )
+    assert full_restore["status"] == "failed"
+    assert full_restore["assertions"][0]["name"] == "matrix-support"
+    assert scenario_results["matrix_validation"]["status"] == "failed"
+    assert summary["status"] == "failed"
+    assert any("matrix validation failed" in reason for reason in summary["failure_reasons"])
+    assert primary.calls == []
+    assert secondary.calls == []
+    assert python.calls == []
+    assert ansible.calls == []
+    assert gate_calls == []
+    for filename in [
+        "manifest.json",
+        "scenario-results.json",
+        "runtime-parity.json",
+        "recovery.json",
+        "redaction.json",
+        "summary.json",
+        "release-report.md",
+    ]:
+        assert (artifacts.run_dir / filename).exists()
+
+
+def test_orchestrator_records_optional_unsupported_pair_as_not_applicable(
+    tmp_path: Path,
+) -> None:
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    profile = replace(
+        loaded.profile,
+        scenarios=loaded.profile.scenarios
+        + (
+            ScenarioProfile(
+                id="full-restore",
+                required=False,
+                streams=("ansible",),
+            ),
+        ),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    python = FakeAdapter("python")
+    ansible = FakeAdapter("ansible")
+
+    summary = run_release_certification(
+        release_options=_release_options(tmp_path),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": FakeDiscoveryClient(primary=True),
+            "secondary": FakeDiscoveryClient(primary=False),
+        },
+        adapters={"python": python, "ansible": ansible},
+        gate_runner=_passing_gate,
+    )
+
+    scenario_results = json.loads((artifacts.run_dir / "scenario-results.json").read_text(encoding="utf-8"))
+    full_restore = next(
+        item
+        for item in scenario_results["results"]
+        if item["scenario_id"] == "full-restore" and item["stream"] == "ansible"
+    )
+    assert full_restore["status"] == "not_applicable"
+    assert full_restore["assertions"][0]["name"] == "matrix-support"
+    assert scenario_results["matrix_validation"]["status"] == "passed"
+    assert [call["scenario_id"] for call in ansible.calls] == ["preflight"]
+    assert "matrix validation failed" not in "\n".join(summary["failure_reasons"])
+
+
+def test_orchestrator_blocks_unsafe_mutating_sequence_and_reports_matrix_validation(
+    tmp_path: Path,
+) -> None:
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    profile = replace(
+        loaded.profile,
+        baseline=replace(loaded.profile.baseline, final_primary="secondary"),
+        scenarios=(
+            ScenarioProfile(id="static-gates"),
+            ScenarioProfile(id="lab-readiness"),
+            ScenarioProfile(id="baseline-check"),
+            ScenarioProfile(id="preflight"),
+            ScenarioProfile(id="python-passive-switchover", required=True),
+            ScenarioProfile(id="ansible-passive-switchover", required=True),
+            ScenarioProfile(id="runtime-parity"),
+            ScenarioProfile(id="final-baseline-check"),
+        ),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    python = FakeAdapter("python")
+    ansible = FakeAdapter("ansible")
+
+    summary = run_release_certification(
+        release_options=_release_options(tmp_path),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": FakeDiscoveryClient(primary=True),
+            "secondary": FakeDiscoveryClient(primary=False),
+        },
+        adapters={"python": python, "ansible": ansible},
+        gate_runner=_passing_gate,
+    )
+
+    manifest = json.loads((artifacts.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    scenario_results = json.loads((artifacts.run_dir / "scenario-results.json").read_text(encoding="utf-8"))
+    report = (artifacts.run_dir / "release-report.md").read_text(encoding="utf-8")
+    assert summary["matrix_validation"]["status"] == "failed"
+    assert manifest["matrix"]["validation"]["status"] == "failed"
+    assert scenario_results["matrix_validation"]["status"] == "failed"
+    assert "requires reset/recovery" in report
+    assert "## Matrix Validation" in report
+    assert python.calls == []
+    assert ansible.calls == []
+
+
+def test_orchestrator_allows_focused_single_mutating_rerun_but_keeps_it_non_certification(
+    tmp_path: Path,
+) -> None:
+    loaded = load_profile("tests/release/profiles/dev-minimal.example.yaml")
+    profile = replace(
+        loaded.profile,
+        baseline=replace(loaded.profile.baseline, final_primary="secondary"),
+        scenarios=loaded.profile.scenarios + (ScenarioProfile(id="python-passive-switchover", required=True),),
+    )
+    release_profile = replace(loaded, profile=profile)
+    artifacts = ReleaseArtifacts.create(root=tmp_path, run_id="run-1")
+    primary = FakeDiscoveryClient(primary=True)
+    secondary = FakeDiscoveryClient(primary=False)
+    python = SwitchingAdapter("python", primary_client=primary, secondary_client=secondary)
+    ansible = FakeAdapter("ansible")
+
+    summary = run_release_certification(
+        release_options=replace(
+            _release_options(tmp_path, mode="focused-rerun"),
+            scenarios=("python-passive-switchover",),
+        ),
+        release_profile=release_profile,
+        artifacts=artifacts,
+        repo_root=Path.cwd(),
+        discovery_clients={
+            "primary": primary,
+            "secondary": secondary,
+        },
+        adapters={"python": python, "ansible": ansible},
+        gate_runner=_passing_gate,
+    )
+
+    assert summary["matrix_validation"]["status"] == "passed"
+    assert summary["certification_eligible"] is False
+    assert "release mode is not certification" in summary["failure_reasons"]
+    assert [call["scenario_id"] for call in python.calls] == ["python-passive-switchover"]
+    assert ansible.calls == []
 
 
 def test_orchestrator_blocks_dirty_checkout_without_allow_dirty(

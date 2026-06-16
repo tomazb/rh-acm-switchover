@@ -18,6 +18,7 @@ SCRIPT_BY_SCENARIO = {
     "bash-discovery": "scripts/discover-hub.sh",
     "bash-postflight": "scripts/postflight-check.sh",
 }
+SUPPORTED_SCENARIO_IDS = frozenset(SCRIPT_BY_SCENARIO)
 
 
 _BASH_COMMAND_TIMEOUT_SECONDS = 3600
@@ -42,6 +43,10 @@ class BashAdapter:
     primary_kubeconfig: str
     secondary_kubeconfig: str
     artifact_dir: Path
+
+    @property
+    def supported_scenario_ids(self) -> frozenset[str]:
+        return SUPPORTED_SCENARIO_IDS
 
     def scenario_dir(self, scenario_id: str) -> Path:
         return self.artifact_dir / "scenarios" / scenario_id / "bash"

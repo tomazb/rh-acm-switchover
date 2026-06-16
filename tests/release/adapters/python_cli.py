@@ -48,6 +48,7 @@ REPORT_NAMES: dict[str, tuple[str, str]] = {
     "failure-injection": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
     "soak": (REPORT_TYPE_SWITCHOVER, REPORT_FILENAME_SWITCHOVER),
 }
+SUPPORTED_SCENARIO_IDS = frozenset(REPORT_NAMES)
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,10 @@ class PythonCliAdapter:
     artifact_dir: Path
     method: str = "passive"
     old_hub_action: str = "secondary"
+
+    @property
+    def supported_scenario_ids(self) -> frozenset[str]:
+        return SUPPORTED_SCENARIO_IDS
 
     def _build_env(self, scenario_id: str, extra_env: Mapping[str, str] | None = None) -> dict[str, str]:
         """Build subprocess environment with KUBECONFIG set from adapter fields.
