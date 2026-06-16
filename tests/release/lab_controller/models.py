@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
@@ -126,21 +126,84 @@ class ControllerDecision:
 
 @dataclass(frozen=True)
 class PhysicalHubConfig:
+    """Stable physical lab inventory for one hub.
+
+    physical_label is an inventory label such as hub-a or hub-b. It is not a logical
+    primary/secondary role and must be mapped from proven role evidence for each segment.
+    """
+
     physical_label: PhysicalHubLabel
     kubeconfig_reference: str
     context_name: str
+    expected_identity: HubIdentityEvidence | None = None
     acm_namespace: str = "open-cluster-management"
+
+
+@dataclass(frozen=True)
+class ManagedClusterInventory:
+    expected_names: tuple[str, ...]
+    contexts: Mapping[str, str] = field(default_factory=dict)
+    require_observability: bool = True
+
+
+@dataclass(frozen=True)
+class LabReleaseMetadata:
+    expected_version: str | None = None
+    candidate_tag: str | None = None
+    metadata_files: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LabArgoCDSettings:
+    mandatory: bool = False
+    namespaces: tuple[str, ...] = ()
+    expected_pause: bool = True
+    expected_resume: bool = True
+
+
+@dataclass(frozen=True)
+class LabArtifactSettings:
+    root: str
+    redaction_required: bool = True
+    fail_on_unredacted_secret: bool = True
 
 
 @dataclass(frozen=True)
 class StableLabConfig:
     physical_hubs: Mapping[PhysicalHubLabel, PhysicalHubConfig]
-    expected_managed_cluster_names: tuple[str, ...]
     enabled_streams: tuple[str, ...]
     scenario_ids: tuple[str, ...]
     profile_name: str
-    artifact_root: str
+    expected_managed_cluster_names: tuple[str, ...] = ()
+    artifact_root: str = "artifacts/release"
     argocd_namespaces: tuple[str, ...] = ()
+    managed_clusters: ManagedClusterInventory | None = None
+    release: LabReleaseMetadata | None = None
+    argocd: LabArgoCDSettings | None = None
+    artifacts: LabArtifactSettings | None = None
+
+    def __post_init__(self) -> None:
+        managed_clusters = self.managed_clusters
+        if managed_clusters is None:
+            managed_clusters = ManagedClusterInventory(expected_names=self.expected_managed_cluster_names)
+        elif not self.expected_managed_cluster_names:
+            object.__setattr__(self, "expected_managed_cluster_names", managed_clusters.expected_names)
+
+        artifacts = self.artifacts
+        if artifacts is None:
+            artifacts = LabArtifactSettings(root=self.artifact_root)
+        elif self.artifact_root == "artifacts/release":
+            object.__setattr__(self, "artifact_root", artifacts.root)
+
+        argocd = self.argocd
+        if argocd is None:
+            argocd = LabArgoCDSettings(mandatory=False, namespaces=self.argocd_namespaces)
+        elif not self.argocd_namespaces:
+            object.__setattr__(self, "argocd_namespaces", argocd.namespaces)
+
+        object.__setattr__(self, "managed_clusters", managed_clusters)
+        object.__setattr__(self, "artifacts", artifacts)
+        object.__setattr__(self, "argocd", argocd)
 
 
 @dataclass(frozen=True)
@@ -149,3 +212,9 @@ class GeneratedProfile:
     sha256: str
     logical_to_physical: dict[str, str]
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class GeneratedSegmentProfile:
+    decision: ControllerDecision
+    generated_profile: GeneratedProfile | None = None

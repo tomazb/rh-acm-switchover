@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from .decisions import no_go, pass_decision
-from .models import ControllerDecision, ObservedRoleState, SegmentDecision, SegmentPlan
+from .decisions import classify_scenario, no_go, pass_decision
+from .models import (
+    ControllerDecision,
+    GeneratedSegmentProfile,
+    ObservedRoleState,
+    ScenarioClassification,
+    SegmentDecision,
+    SegmentPlan,
+    StableLabConfig,
+)
+from .profiles import build_role_aware_profile
 
 
 def _role_state_text(state: ObservedRoleState) -> str:
@@ -75,3 +84,62 @@ def evaluate_segment_chain(
         previous_plan = plan
 
     return pass_decision("segment chain may start from proven known-state handoffs")
+
+
+def _scenario_classification_decision(plan: SegmentPlan) -> ControllerDecision:
+    try:
+        classification = classify_scenario(plan.scenario_id)
+    except ValueError as exc:
+        return no_go(str(exc))
+    if classification is ScenarioClassification.DESTRUCTIVE_DISPOSABLE_LAB_ONLY:
+        return no_go(
+            f"scenario {plan.scenario_id} is destructive/disposable-lab-only and cannot get a live segment profile"
+        )
+    if classification is ScenarioClassification.RECOVERY:
+        return no_go(f"scenario {plan.scenario_id} is a recovery scenario and cannot get a normal segment profile")
+    if classification is ScenarioClassification.LAB_MUTATING and not plan.mutates_lab:
+        return no_go(f"scenario {plan.scenario_id} is classified as lab-mutating but segment is non-mutating")
+    if (
+        classification
+        in {
+            ScenarioClassification.STATIC_ONLY,
+            ScenarioClassification.LIVE_NON_MUTATING,
+        }
+        and plan.mutates_lab
+    ):
+        return no_go(f"scenario {plan.scenario_id} is classified as non-mutating but segment is mutating")
+    return pass_decision(f"scenario {plan.scenario_id} classification allows segment profile generation")
+
+
+def generate_segment_profile(
+    plan: SegmentPlan,
+    *,
+    lab_config: StableLabConfig,
+    observed_role_state: ObservedRoleState,
+    identity_decision: ControllerDecision,
+    role_decision: ControllerDecision,
+    artifact_root: str | None = None,
+) -> GeneratedSegmentProfile:
+    """Generate a role-aware profile only after known-state segment gates pass."""
+    if role_decision.decision is not SegmentDecision.PASS or not role_decision.safe_to_continue:
+        return GeneratedSegmentProfile(role_decision)
+
+    classification_decision = _scenario_classification_decision(plan)
+    if classification_decision.decision is not SegmentDecision.PASS:
+        return GeneratedSegmentProfile(classification_decision)
+
+    start_decision = evaluate_segment_start(
+        plan,
+        observed_role_state=observed_role_state,
+        identity_decision=identity_decision,
+    )
+    if start_decision.decision is not SegmentDecision.PASS:
+        return GeneratedSegmentProfile(start_decision)
+
+    generated_profile = build_role_aware_profile(
+        lab_config,
+        observed_role_state,
+        segment_plan=plan,
+        artifact_root=artifact_root,
+    )
+    return GeneratedSegmentProfile(start_decision, generated_profile)

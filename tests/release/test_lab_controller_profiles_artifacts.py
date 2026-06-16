@@ -8,6 +8,7 @@ from tests.release.lab_controller.artifacts import build_segment_artifact
 from tests.release.lab_controller.models import (
     ControllerDecision,
     DesiredRoleState,
+    HubIdentityEvidence,
     ObservedRoleState,
     PhysicalHubConfig,
     PhysicalHubLabel,
@@ -30,6 +31,15 @@ def _desired(primary: PhysicalHubLabel, secondary: PhysicalHubLabel) -> DesiredR
     return DesiredRoleState(primary_physical_hub=primary, secondary_physical_hub=secondary)
 
 
+def _identity(label: PhysicalHubLabel) -> HubIdentityEvidence:
+    return HubIdentityEvidence(
+        physical_label=label,
+        kube_system_uid=f"uid-{label.value}",
+        api_server_fingerprint=f"api-{label.value}",
+        context_name=f"{label.value}-context",
+    )
+
+
 def _lab_config() -> StableLabConfig:
     return StableLabConfig(
         physical_hubs={
@@ -37,11 +47,13 @@ def _lab_config() -> StableLabConfig:
                 physical_label=PhysicalHubLabel.HUB_A,
                 kubeconfig_reference="hub-a-kubeconfig-ref",
                 context_name="hub-a-context",
+                expected_identity=_identity(PhysicalHubLabel.HUB_A),
             ),
             PhysicalHubLabel.HUB_B: PhysicalHubConfig(
                 physical_label=PhysicalHubLabel.HUB_B,
                 kubeconfig_reference="hub-b-kubeconfig-ref",
                 context_name="hub-b-context",
+                expected_identity=_identity(PhysicalHubLabel.HUB_B),
             ),
         },
         expected_managed_cluster_names=("mc-1", "mc-2", "mc-3"),
@@ -98,13 +110,13 @@ def test_profile_hash_changes_when_role_mapping_changes() -> None:
     assert hub_a_primary.sha256 != hub_b_primary.sha256
 
 
-def test_profile_generation_fails_closed_on_unexpected_final_primary() -> None:
+def test_profile_generation_fails_closed_on_impossible_initial_role_mapping() -> None:
     malformed_initial_state = ObservedRoleState(
         primary_physical_hub=PhysicalHubLabel.HUB_A,
         secondary_physical_hub=PhysicalHubLabel.HUB_A,
     )
 
-    with pytest.raises(ValueError, match="unexpected final primary hub-b"):
+    with pytest.raises(ValueError, match="primary and secondary physical hubs must differ"):
         build_role_aware_profile(
             _lab_config(),
             malformed_initial_state,

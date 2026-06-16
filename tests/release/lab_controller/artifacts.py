@@ -6,6 +6,35 @@ from typing import Any
 
 from .models import ControllerDecision, DesiredRoleState, ObservedRoleState, SegmentPlan
 
+_SENSITIVE_KEYWORDS = ("kubeconfig", "token", "secret", "credential")
+_TMP_PATH_PREFIX = f"/{'tmp'}/"
+
+
+def _is_unredacted_sensitive_string(value: str) -> bool:
+    if value == "[REDACTED]":
+        return False
+    lowered = value.lower()
+    if any(keyword in lowered for keyword in _SENSITIVE_KEYWORDS):
+        return True
+    return lowered.startswith(("/home/", _TMP_PATH_PREFIX, "~/.kube/")) or "/.kube/" in lowered
+
+
+def _contains_unredacted_sensitive_metadata(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            lowered = str(key).lower()
+            if any(keyword in lowered for keyword in _SENSITIVE_KEYWORDS) and child != "[REDACTED]":
+                if not lowered.endswith("_sha256"):
+                    return True
+            if _contains_unredacted_sensitive_metadata(child):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_unredacted_sensitive_metadata(item) for item in value)
+    if isinstance(value, str):
+        return _is_unredacted_sensitive_string(value)
+    return False
+
 
 def _desired_role_state_payload(state: DesiredRoleState) -> dict[str, str]:
     return {
@@ -39,6 +68,8 @@ def _generated_profile_payload(generated_profile_ref: Mapping[str, Any] | None) 
     for hub in hubs.values():
         if not isinstance(hub, dict) or hub.get("kubeconfig_reference") != "[REDACTED]":
             raise ValueError("generated profile metadata must be redacted before artifact construction")
+    if _contains_unredacted_sensitive_metadata(payload):
+        raise ValueError("generated profile metadata must be redacted before artifact construction")
     return payload
 
 
