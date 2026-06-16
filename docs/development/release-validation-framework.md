@@ -61,6 +61,53 @@ Profile scenario declarations define the default matrix for a run. CLI scenario 
 
 A focused rerun may select one mutating scenario plus its automatic prerequisites and final checks. Because focused reruns are not `certification` mode, they remain non-certification-eligible even when all selected checks pass.
 
+## Known-State Lab Control
+
+This section documents the intended direction for live lab-mutating certification; it is not a complete
+implementation spec and does not describe behavior that already exists.
+
+Terminology:
+
+- **Physical hub**: a stable cluster identity, for example `hub-a` or `hub-b`.
+- **Logical role**: the current `primary` or current `secondary` role assigned to a physical hub.
+- **Desired state**: the physical-hub-to-logical-role assignment required before a scenario starts.
+- **Observed state**: the role assignment discovered from live cluster evidence.
+- **Known-state segment**: one release-validation segment that starts from a proven lab state.
+- **Recovery-required state**: a state where the harness cannot safely prove the next starting state.
+
+“A release certification run is not a single linear script over a static primary/secondary profile. It is a
+sequence of known-state segments. Each segment starts with live discovery, proves the
+physical-hub-to-logical-role mapping, executes at most one lab-mutating scenario, verifies the expected final
+state, and either hands a proven state to the next segment or stops with a recovery-required NO-GO.”
+
+Static primary/secondary profiles are insufficient for full certification across multiple lab-mutating
+scenarios because successful mutations may change logical hub roles. A successful passive switchover normally
+makes the old secondary physical hub the active primary. Failed or partially completed scenarios can leave the
+lab in an unknown or unsafe intermediate state. Therefore, full multi-mutation certification must remain
+blocked or produce a NO-GO decision until reset/recovery sequencing can prove each next starting state.
+
+The future lab role controller is the intended mechanism for making multi-mutation certification safe. Its
+responsibilities will be to:
+
+- discover physical hub identities before mutation
+- map physical hubs to current logical roles
+- verify that the lab is in the required initial state for the scenario
+- generate or select a role-aware release profile
+- run at most one lab-mutating scenario per known-state segment
+- verify the expected final role state
+- record role transitions and recovery decisions in release artifacts
+- refuse to continue when active hub, passive hub, managed-cluster set, Argo CD state, RBAC state, or restore
+  evidence cannot be proven
+
+The intended hierarchy is a Python lab role controller as the authoritative implementation, with Agent skills
+or Agent instructions as optional orchestration conveniences. The controller owns truth and safety; the Agent
+owns orchestration convenience and explanation. An Agent may invoke deterministic release tooling and summarize
+artifacts, but it must not improvise live-cluster mutations or override controller GO/NO-GO decisions.
+
+Focused reruns remain useful for diagnostics or for gathering single-scenario evidence after an operator has
+corrected a lab issue. They are not full multi-mutation certification unless they are tied into known-state
+sequencing.
+
 ## Artifacts
 
 Each run writes a timestamped artifact directory under the profile's artifact root, unless overridden with `--release-artifact-dir`. Required outputs are:
