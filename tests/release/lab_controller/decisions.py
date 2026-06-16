@@ -67,3 +67,23 @@ def classify_scenario(scenario_id: str) -> ScenarioClassification:
     if classification is None:
         raise ValueError(f"unclassified release scenario: {scenario_id}")
     return classification
+
+
+def scenario_segment_blocking_reason(scenario_id: str, *, mutates_lab: bool) -> str | None:
+    classification = classify_scenario(scenario_id)
+    if classification is ScenarioClassification.DESTRUCTIVE_DISPOSABLE_LAB_ONLY:
+        return f"scenario {scenario_id} is destructive/disposable-lab-only"
+    if classification is ScenarioClassification.RECOVERY:
+        return f"scenario {scenario_id} is a recovery scenario and cannot run in the normal planner"
+    if classification is ScenarioClassification.LAB_MUTATING and not mutates_lab:
+        return f"scenario {scenario_id} is lab-mutating but segment is marked non-mutating"
+    if (
+        classification
+        in {
+            ScenarioClassification.STATIC_ONLY,
+            ScenarioClassification.LIVE_NON_MUTATING,
+        }
+        and mutates_lab
+    ):
+        return f"scenario {scenario_id} is non-mutating but segment is marked mutating"
+    return None

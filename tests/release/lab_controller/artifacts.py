@@ -4,17 +4,35 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from tests.release.reporting.redaction import RedactionError, sanitize_text
+
 from .models import ControllerDecision, DesiredRoleState, ObservedRoleState, SegmentPlan
 
-_SENSITIVE_KEYWORDS = ("kubeconfig", "token", "secret", "credential")
+_SENSITIVE_KEYWORDS = ("kubeconfig", "token", "secret", "credential", "password")
 _TMP_PATH_PREFIX = f"/{'tmp'}/"
+_URL_PREFIXES = ("http://", "https://")
+_CLUSTER_ID_MARKERS = ("cluster-id", "cluster_id")
+
+
+def _shared_redaction_would_change(value: str) -> bool:
+    try:
+        sanitized = sanitize_text(value)
+    except RedactionError:
+        return True
+    return sanitized.text != value
 
 
 def _is_unredacted_sensitive_string(value: str) -> bool:
     if value == "[REDACTED]":
         return False
+    if _shared_redaction_would_change(value):
+        return True
     lowered = value.lower()
     if any(keyword in lowered for keyword in _SENSITIVE_KEYWORDS):
+        return True
+    if lowered.startswith(_URL_PREFIXES):
+        return True
+    if any(marker in lowered for marker in _CLUSTER_ID_MARKERS):
         return True
     return lowered.startswith(("/home/", _TMP_PATH_PREFIX, "~/.kube/")) or "/.kube/" in lowered
 
@@ -73,6 +91,12 @@ def _generated_profile_payload(generated_profile_ref: Mapping[str, Any] | None) 
     return payload
 
 
+def validate_artifact_payload_redacted(payload: Mapping[str, Any]) -> None:
+    """Reject publishable artifact payloads that still contain sensitive metadata."""
+    if _contains_unredacted_sensitive_metadata(payload):
+        raise ValueError("artifact payload contains unredacted sensitive metadata")
+
+
 def build_segment_artifact(
     *,
     plan: SegmentPlan,
@@ -115,6 +139,5 @@ def build_segment_artifact(
         "managed_cluster_evidence_summary": managed_cluster_summary,
         "redaction_status": redaction_status,
     }
-    if _contains_unredacted_sensitive_metadata(artifact):
-        raise ValueError("segment artifact payload contains unredacted sensitive metadata")
+    validate_artifact_payload_redacted(artifact)
     return artifact

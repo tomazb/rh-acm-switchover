@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from .decisions import classify_scenario, no_go, pass_decision
+from .decisions import no_go, pass_decision, scenario_segment_blocking_reason
 from .models import (
     ControllerDecision,
     GeneratedSegmentProfile,
     ObservedRoleState,
-    ScenarioClassification,
     SegmentDecision,
     SegmentPlan,
     StableLabConfig,
@@ -88,26 +87,11 @@ def evaluate_segment_chain(
 
 def _scenario_classification_decision(plan: SegmentPlan) -> ControllerDecision:
     try:
-        classification = classify_scenario(plan.scenario_id)
+        blocking_reason = scenario_segment_blocking_reason(plan.scenario_id, mutates_lab=plan.mutates_lab)
     except ValueError as exc:
         return no_go(str(exc))
-    if classification is ScenarioClassification.DESTRUCTIVE_DISPOSABLE_LAB_ONLY:
-        return no_go(
-            f"scenario {plan.scenario_id} is destructive/disposable-lab-only and cannot get a live segment profile"
-        )
-    if classification is ScenarioClassification.RECOVERY:
-        return no_go(f"scenario {plan.scenario_id} is a recovery scenario and cannot get a normal segment profile")
-    if classification is ScenarioClassification.LAB_MUTATING and not plan.mutates_lab:
-        return no_go(f"scenario {plan.scenario_id} is classified as lab-mutating but segment is non-mutating")
-    if (
-        classification
-        in {
-            ScenarioClassification.STATIC_ONLY,
-            ScenarioClassification.LIVE_NON_MUTATING,
-        }
-        and plan.mutates_lab
-    ):
-        return no_go(f"scenario {plan.scenario_id} is classified as non-mutating but segment is mutating")
+    if blocking_reason is not None:
+        return no_go(blocking_reason)
     return pass_decision(f"scenario {plan.scenario_id} classification allows segment profile generation")
 
 
