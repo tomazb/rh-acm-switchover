@@ -11,9 +11,9 @@ from .controller import (
 )
 from .decisions import classify_scenario
 from .identity import verify_physical_hub_identities
+from .models import CertificationDecision
 from .planner import (
     CertificationArtifactBundle,
-    CertificationDecision,
     CertificationPlan,
     CertificationRunResult,
     PlannedSegment,
@@ -32,6 +32,15 @@ from .profiles import (
     validate_profile_role_mapping,
     write_generated_profile_yaml,
 )
+from .recovery import (
+    RecoveryCategory,
+    RunRecoveryDecision,
+    build_recovery_summary,
+    classify_segment_stop,
+    determine_manual_recovery_requirement,
+    determine_retry_eligibility,
+    evaluate_run_decision,
+)
 from .roles import infer_observed_role_state
 from .segments import evaluate_segment_chain, evaluate_segment_start, generate_segment_profile
 
@@ -44,7 +53,11 @@ __all__ = [
     "CertificationPlan",
     "CertificationRunResult",
     "classify_scenario",
+    "classify_segment_stop",
+    "determine_manual_recovery_requirement",
+    "determine_retry_eligibility",
     "evaluate_certification_decision",
+    "evaluate_run_decision",
     "evaluate_segment_chain",
     "evaluate_segment_start",
     "FakeScenarioExecutor",
@@ -54,7 +67,10 @@ __all__ = [
     "PlannedSegment",
     "plan_segment",
     "redact_generated_profile_metadata",
+    "RecoveryCategory",
     "RoleTransition",
+    "RunRecoveryDecision",
+    "build_recovery_summary",
     "run_certification_plan",
     "run_segment",
     "run_segment_plan",

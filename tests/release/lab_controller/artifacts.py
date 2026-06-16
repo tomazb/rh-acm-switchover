@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -12,6 +13,10 @@ _SENSITIVE_KEYWORDS = ("kubeconfig", "token", "secret", "credential", "password"
 _TMP_PATH_PREFIX = f"/{'tmp'}/"
 _URL_PREFIXES = ("http://", "https://")
 _CLUSTER_ID_MARKERS = ("cluster-id", "cluster_id")
+_URL_PATTERN = re.compile(r"https?://[^\s,;)'\"}]+", re.IGNORECASE)
+_KUBECONFIG_PATH_PATTERN = re.compile(
+    r"(?:/home/[^\s,;)'\"}]+|~/\.kube/[^\s,;)'\"}]+|/tmp/[^\s,;)'\"}]+|[^\s,;)'\"}]*[/\\]\.kube[/\\][^\s,;)'\"}]+)"
+)
 
 
 def _shared_redaction_would_change(value: str) -> bool:
@@ -28,6 +33,8 @@ def _is_unredacted_sensitive_string(value: str) -> bool:
     if _shared_redaction_would_change(value):
         return True
     lowered = value.lower()
+    if _URL_PATTERN.search(value) or _KUBECONFIG_PATH_PATTERN.search(value):
+        return True
     if any(keyword in lowered for keyword in _SENSITIVE_KEYWORDS):
         return True
     if lowered.startswith(_URL_PREFIXES):
@@ -97,6 +104,21 @@ def validate_artifact_payload_redacted(payload: Mapping[str, Any]) -> None:
         raise ValueError("artifact payload contains unredacted sensitive metadata")
 
 
+def sanitize_artifact_text(value: str | None) -> str | None:
+    """Return a publishable text value suitable for run-level artifact metadata."""
+    if value is None:
+        return None
+    try:
+        sanitized = sanitize_text(value).text
+    except RedactionError:
+        return "[REDACTED]"
+    sanitized = _URL_PATTERN.sub("[REDACTED]", sanitized)
+    sanitized = _KUBECONFIG_PATH_PATTERN.sub("[REDACTED]", sanitized)
+    if _is_unredacted_sensitive_string(sanitized):
+        return "[REDACTED]"
+    return sanitized
+
+
 def build_segment_artifact(
     *,
     plan: SegmentPlan,
@@ -132,8 +154,8 @@ def build_segment_artifact(
         "generated_profile_hash": generated_profile_hash,
         "controller_decision": controller_decision.decision.name,
         "safe_to_continue": controller_decision.safe_to_continue,
-        "reason": controller_decision.reason,
-        "recovery_hint": controller_decision.recovery_hint,
+        "reason": sanitize_artifact_text(controller_decision.reason),
+        "recovery_hint": sanitize_artifact_text(controller_decision.recovery_hint),
         "generated_profile": _generated_profile_payload(generated_profile_ref),
         "fake_execution_result": dict(fake_execution_result or {}),
         "managed_cluster_evidence_summary": managed_cluster_summary,

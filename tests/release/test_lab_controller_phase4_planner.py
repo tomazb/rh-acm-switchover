@@ -291,7 +291,7 @@ def test_successful_mutating_segment_with_mutation_completed_false_does_not_allo
         expected_identities=_expected_identities(),
     )
 
-    assert result.decision is CertificationDecision.NO_GO
+    assert result.decision is CertificationDecision.RECOVERY_REQUIRED
     assert len(result.segment_results) == 2
     assert "without mutation completion evidence" in result.first_blocking_reason
 

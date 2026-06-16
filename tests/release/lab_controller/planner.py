@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
-from .artifacts import validate_artifact_payload_redacted
+from .artifacts import sanitize_artifact_text, validate_artifact_payload_redacted
 from .controller import (
     FakeScenarioExecutor,
     ScenarioExecutionResult,
@@ -16,6 +15,7 @@ from .controller import (
 )
 from .decisions import scenario_segment_blocking_reason
 from .models import (
+    CertificationDecision,
     DesiredRoleState,
     HubIdentityEvidence,
     LabObservation,
@@ -25,17 +25,8 @@ from .models import (
     SegmentPlan,
     StableLabConfig,
 )
+from .recovery import RunRecoveryDecision, evaluate_run_decision
 from .roles import infer_observed_role_state
-
-_CERTIFICATION_PASS_VALUE = SegmentDecision.PASS.name
-
-
-class CertificationDecision(str, Enum):
-    PASS = _CERTIFICATION_PASS_VALUE
-    NO_GO = "NO_GO"
-    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
-    INFRA_RETRYABLE = "INFRA_RETRYABLE"
-    BLOCKED = "BLOCKED"
 
 
 @dataclass(frozen=True)
@@ -72,8 +63,8 @@ class RoleTransition:
     scenario_id: str
     initial_primary_physical_hub: PhysicalHubLabel | None
     initial_secondary_physical_hub: PhysicalHubLabel | None
-    expected_final_primary_physical_hub: PhysicalHubLabel
-    expected_final_secondary_physical_hub: PhysicalHubLabel
+    expected_final_primary_physical_hub: PhysicalHubLabel | None
+    expected_final_secondary_physical_hub: PhysicalHubLabel | None
     observed_final_primary_physical_hub: PhysicalHubLabel | None
     observed_final_secondary_physical_hub: PhysicalHubLabel | None
     mutation_attempted: bool
@@ -86,8 +77,8 @@ class RoleTransition:
             "scenario_id": self.scenario_id,
             "initial_primary_physical_hub": _label_value(self.initial_primary_physical_hub),
             "initial_secondary_physical_hub": _label_value(self.initial_secondary_physical_hub),
-            "expected_final_primary_physical_hub": self.expected_final_primary_physical_hub.value,
-            "expected_final_secondary_physical_hub": self.expected_final_secondary_physical_hub.value,
+            "expected_final_primary_physical_hub": _label_value(self.expected_final_primary_physical_hub),
+            "expected_final_secondary_physical_hub": _label_value(self.expected_final_secondary_physical_hub),
             "observed_final_primary_physical_hub": _label_value(self.observed_final_primary_physical_hub),
             "observed_final_secondary_physical_hub": _label_value(self.observed_final_secondary_physical_hub),
             "mutation_attempted": self.mutation_attempted,
@@ -125,6 +116,7 @@ class CertificationRunResult:
     final_role_state: ObservedRoleState | None
     first_blocking_reason: str | None
     recovery_hint: str | None
+    recovery_summary: RunRecoveryDecision
 
 
 def _label_value(label: PhysicalHubLabel | None) -> str | None:
@@ -147,11 +139,23 @@ def _role_state_payload(state: ObservedRoleState | None) -> dict[str, str | None
     }
 
 
-def _desired_role_state_payload(state: DesiredRoleState) -> dict[str, str]:
+def _desired_role_state_payload(state: DesiredRoleState | None) -> dict[str, str | None]:
+    if state is None:
+        return {
+            "primary_physical_hub": None,
+            "secondary_physical_hub": None,
+        }
     return {
         "primary_physical_hub": state.primary_physical_hub.value,
         "secondary_physical_hub": state.secondary_physical_hub.value,
     }
+
+
+def _expected_role_state(segment: PlannedSegment) -> DesiredRoleState | None:
+    expected = getattr(segment, "expected_final_role_state", None)
+    if not isinstance(expected, DesiredRoleState):
+        return None
+    return expected
 
 
 def _certification_decision_from_segment(decision: SegmentDecision) -> CertificationDecision:
@@ -164,7 +168,7 @@ def _planned_segment_payload(segment: PlannedSegment) -> dict[str, Any]:
         "scenario_id": segment.scenario_id,
         "mutates_lab": segment.mutates_lab,
         "expected_initial_role_state": _desired_role_state_payload(segment.expected_initial_role_state),
-        "expected_final_role_state": _desired_role_state_payload(segment.expected_final_role_state),
+        "expected_final_role_state": _desired_role_state_payload(_expected_role_state(segment)),
     }
 
 
@@ -283,6 +287,10 @@ def build_ping_pong_plan(*, plan_id: str = "phase4-ping-pong") -> CertificationP
 
 
 def _plan_validation_reason(segment: PlannedSegment) -> str | None:
+    if not isinstance(getattr(segment, "expected_initial_role_state", None), DesiredRoleState):
+        return f"segment {segment.segment_id} is missing expected initial role state"
+    if _expected_role_state(segment) is None:
+        return f"segment {segment.segment_id} is missing expected final role state"
     try:
         return scenario_segment_blocking_reason(segment.scenario_id, mutates_lab=segment.mutates_lab)
     except ValueError as exc:
@@ -293,13 +301,14 @@ def _transition_for_result(planned_segment: PlannedSegment, result: SegmentContr
     execution_result = result.execution_result
     observed_initial = result.observed_initial_role_state
     observed_final = result.observed_final_role_state
+    expected_final = _expected_role_state(planned_segment)
     return RoleTransition(
         segment_id=planned_segment.segment_id,
         scenario_id=planned_segment.scenario_id,
         initial_primary_physical_hub=observed_initial.primary_physical_hub,
         initial_secondary_physical_hub=observed_initial.secondary_physical_hub,
-        expected_final_primary_physical_hub=planned_segment.expected_final_role_state.primary_physical_hub,
-        expected_final_secondary_physical_hub=planned_segment.expected_final_role_state.secondary_physical_hub,
+        expected_final_primary_physical_hub=expected_final.primary_physical_hub if expected_final else None,
+        expected_final_secondary_physical_hub=expected_final.secondary_physical_hub if expected_final else None,
         observed_final_primary_physical_hub=observed_final.primary_physical_hub if observed_final else None,
         observed_final_secondary_physical_hub=observed_final.secondary_physical_hub if observed_final else None,
         mutation_attempted=execution_result.mutation_attempted if execution_result else False,
@@ -309,13 +318,19 @@ def _transition_for_result(planned_segment: PlannedSegment, result: SegmentContr
 
 
 def _blocked_transition(planned_segment: PlannedSegment, decision: CertificationDecision) -> RoleTransition:
+    expected_initial = (
+        planned_segment.expected_initial_role_state
+        if isinstance(getattr(planned_segment, "expected_initial_role_state", None), DesiredRoleState)
+        else None
+    )
+    expected_final = _expected_role_state(planned_segment)
     return RoleTransition(
         segment_id=planned_segment.segment_id,
         scenario_id=planned_segment.scenario_id,
-        initial_primary_physical_hub=planned_segment.expected_initial_role_state.primary_physical_hub,
-        initial_secondary_physical_hub=planned_segment.expected_initial_role_state.secondary_physical_hub,
-        expected_final_primary_physical_hub=planned_segment.expected_final_role_state.primary_physical_hub,
-        expected_final_secondary_physical_hub=planned_segment.expected_final_role_state.secondary_physical_hub,
+        initial_primary_physical_hub=expected_initial.primary_physical_hub if expected_initial else None,
+        initial_secondary_physical_hub=expected_initial.secondary_physical_hub if expected_initial else None,
+        expected_final_primary_physical_hub=expected_final.primary_physical_hub if expected_final else None,
+        expected_final_secondary_physical_hub=expected_final.secondary_physical_hub if expected_final else None,
         observed_final_primary_physical_hub=None,
         observed_final_secondary_physical_hub=None,
         mutation_attempted=False,
@@ -455,67 +470,8 @@ def evaluate_certification_decision(
     segment_results: Sequence[SegmentRunResult],
 ) -> tuple[CertificationDecision, str, str | None]:
     """Evaluate the run-level decision from ordered segment results."""
-    if not plan.segments:
-        return CertificationDecision.BLOCKED, "certification plan has no segments", None
-    if not segment_results:
-        return CertificationDecision.BLOCKED, "certification plan produced no segment results", None
-
-    for result in segment_results:
-        if result.decision is CertificationDecision.PASS:
-            continue
-        if result.decision is CertificationDecision.INFRA_RETRYABLE:
-            controller_result = result.controller_result
-            execution_result = controller_result.execution_result if controller_result else None
-            initial_state = controller_result.observed_initial_role_state if controller_result else None
-            if (
-                execution_result is not None
-                and not execution_result.mutation_attempted
-                and initial_state is not None
-                and initial_state.is_proven
-                and initial_state.matches_desired(result.planned_segment.expected_initial_role_state)
-            ):
-                return result.decision, result.reason, result.recovery_hint
-            return (
-                CertificationDecision.RECOVERY_REQUIRED,
-                "retryable failure cannot be retried because mutation safety or initial state proof is missing",
-                "rediscover the lab and prove a safe starting state before retrying",
-            )
-        return result.decision, result.reason, result.recovery_hint
-
-    if len(segment_results) != len(plan.segments):
-        return CertificationDecision.BLOCKED, "certification plan stopped before all required segments ran", None
-
-    for result in segment_results:
-        final_state = result.proven_final_role_state
-        if final_state is None or not final_state.is_proven:
-            return (
-                CertificationDecision.RECOVERY_REQUIRED,
-                f"segment {result.planned_segment.segment_id} final role state is not proven",
-                "rediscover the lab and prove the final role state",
-            )
-        if not final_state.matches_desired(result.planned_segment.expected_final_role_state):
-            return (
-                CertificationDecision.NO_GO,
-                f"segment {result.planned_segment.segment_id} final role state does not match expected final role state",
-                None,
-            )
-
-    final_result = segment_results[-1]
-    final_role_state = final_result.proven_final_role_state
-    if final_role_state is None or not final_role_state.is_proven:
-        return (
-            CertificationDecision.RECOVERY_REQUIRED,
-            "final role state is not proven",
-            "rediscover the lab and prove the final role state",
-        )
-    expected_final = plan.segments[-1].expected_final_role_state
-    if not final_role_state.matches_desired(expected_final):
-        return (
-            CertificationDecision.NO_GO,
-            "final role state does not match the certification plan expected final role state",
-            None,
-        )
-    return CertificationDecision.PASS, "all certification plan segments passed and final role state is proven", None
+    summary = evaluate_run_decision(plan, segment_results, artifact_redaction_passed=True)
+    return summary.final_decision, summary.reason, summary.operator_action_hint
 
 
 def _copy_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -540,26 +496,42 @@ def _safe_segment_artifact(result: SegmentRunResult) -> tuple[dict[str, Any], bo
         )
 
 
+def _segment_decision_payload(result: SegmentRunResult) -> dict[str, Any]:
+    return {
+        "segment_id": result.planned_segment.segment_id,
+        "scenario_id": result.planned_segment.scenario_id,
+        "decision": result.decision.value,
+        "reason": sanitize_artifact_text(result.reason),
+        "recovery_hint": sanitize_artifact_text(result.recovery_hint),
+        "mutation_attempted": result.role_transition.mutation_attempted,
+        "mutation_completed": result.role_transition.mutation_completed,
+        "final_state_proven": bool(
+            result.proven_final_role_state is not None and result.proven_final_role_state.is_proven
+        ),
+    }
+
+
 def _minimal_rejected_bundle(
     plan: CertificationPlan,
     segment_results: Sequence[SegmentRunResult],
-    final_decision: CertificationDecision,
+    run_decision: RunRecoveryDecision,
 ) -> CertificationArtifactBundle:
     return CertificationArtifactBundle(
         payload={
+            "artifact_version": 1,
             "schema_version": 1,
+            "controller_phase": "phase5",
             "plan_id": plan.plan_id,
             "ordered_segments": [_planned_segment_payload(segment) for segment in plan.segments],
-            "per_segment_decisions": [
-                {
-                    "segment_id": result.planned_segment.segment_id,
-                    "scenario_id": result.planned_segment.scenario_id,
-                    "decision": result.decision.value,
-                }
-                for result in segment_results
-            ],
-            "final_decision": final_decision.value,
+            "segment_decisions": [_segment_decision_payload(result) for result in segment_results],
+            "per_segment_decisions": [_segment_decision_payload(result) for result in segment_results],
+            "final_decision": run_decision.final_decision.value,
+            "safe_to_continue": False,
+            "retry_allowed": False,
+            "manual_recovery_required": False,
+            "recovery_category": "artifact_redaction_failed",
             "first_blocking_reason": "run artifact rejected by redaction",
+            "operator_action_hint": "review and remove unredacted sensitive artifact content before using this run",
             "redaction_status": "rejected",
         },
         redaction_status="rejected",
@@ -570,13 +542,15 @@ def merge_segment_artifacts(
     plan: CertificationPlan,
     segment_results: Sequence[SegmentRunResult],
     *,
-    final_decision: CertificationDecision,
-    final_reason: str,
+    final_decision: CertificationDecision | None = None,
+    final_reason: str | None = None,
     final_role_state: ObservedRoleState | None,
     recovery_hint: str | None = None,
+    run_decision: RunRecoveryDecision | None = None,
 ) -> CertificationArtifactBundle:
-    """Merge Phase 3 segment artifacts into a provisional Phase 4 run artifact."""
-    first_blocking_result = _first_blocking_result(segment_results)
+    """Merge segment artifacts into the deterministic Phase 5 run artifact."""
+    if run_decision is None:
+        run_decision = evaluate_run_decision(plan, segment_results, artifact_redaction_passed=True)
     redaction_status = "redacted"
     segment_artifacts: list[dict[str, Any]] = []
     for result in segment_results:
@@ -585,44 +559,48 @@ def merge_segment_artifacts(
             redaction_status = "rejected"
         segment_artifacts.append(segment_artifact)
 
+    final_reason_value = sanitize_artifact_text(final_reason) if final_reason is not None else run_decision.reason
+    recovery_hint_value = (
+        sanitize_artifact_text(recovery_hint) if recovery_hint is not None else run_decision.operator_action_hint
+    )
+    segment_decisions = [_segment_decision_payload(result) for result in segment_results]
     payload = {
+        "artifact_version": 1,
         "schema_version": 1,
+        "controller_phase": "phase5",
         "plan_id": plan.plan_id,
+        "final_decision": (final_decision or run_decision.final_decision).value,
+        "safe_to_continue": run_decision.safe_to_continue,
+        "retry_allowed": run_decision.retry_allowed,
+        "manual_recovery_required": run_decision.manual_recovery_required,
+        "first_blocking_segment": run_decision.first_blocking_segment_id,
+        "first_blocking_scenario": run_decision.first_blocking_scenario_id,
+        "first_blocking_reason": run_decision.first_blocking_reason,
+        "recovery_category": run_decision.recovery_category.value,
+        "operator_action_hint": recovery_hint_value,
+        "mutation_attempted_before_block": run_decision.mutation_attempted_before_block,
+        "mutation_completed_before_block": run_decision.mutation_completed_before_block,
+        "final_state_proven": run_decision.final_state_proven,
         "ordered_segments": [_planned_segment_payload(segment) for segment in plan.segments],
-        "per_segment_decisions": [
-            {
-                "segment_id": result.planned_segment.segment_id,
-                "scenario_id": result.planned_segment.scenario_id,
-                "decision": result.decision.value,
-                "reason": result.reason,
-            }
-            for result in segment_results
-        ],
+        "segment_decisions": segment_decisions,
+        "per_segment_decisions": segment_decisions,
         "role_transition_graph": [result.role_transition.to_payload() for result in segment_results],
         "segment_artifacts": segment_artifacts,
         "final_role_state": _role_state_payload(final_role_state),
-        "final_decision": final_decision.value,
-        "final_reason": final_reason,
-        "first_blocking_reason": first_blocking_result.reason if first_blocking_result else None,
-        "recovery_hint": recovery_hint,
-        "redaction_status": redaction_status,
-        "summary_counts": {
-            "total_segments": len(plan.segments),
-            "passed": _result_count(segment_results, CertificationDecision.PASS),
-            "no_go": _result_count(segment_results, CertificationDecision.NO_GO),
-            "recovery_required": _result_count(segment_results, CertificationDecision.RECOVERY_REQUIRED),
-            "infra_retryable": _result_count(segment_results, CertificationDecision.INFRA_RETRYABLE),
-            "blocked": _result_count(segment_results, CertificationDecision.BLOCKED),
-        },
+        "final_reason": final_reason_value,
+        "recovery_hint": recovery_hint_value,
+        "summary_counts": run_decision.summary_counts,
         "runtime_parity": {
             "status": "not_implemented",
-            "phase": "Phase 4 deterministic planner placeholder",
+            "authoritative": False,
+            "phase": "Phase 5 deterministic planner placeholder",
         },
+        "redaction_status": redaction_status,
     }
     try:
         validate_artifact_payload_redacted(payload)
     except ValueError:
-        return _minimal_rejected_bundle(plan, segment_results, final_decision)
+        return _minimal_rejected_bundle(plan, segment_results, run_decision)
     return CertificationArtifactBundle(payload=payload, redaction_status=redaction_status)
 
 
@@ -666,37 +644,32 @@ def run_certification_plan(
             break
         previous_result = result
 
-    final_decision, final_reason, recovery_hint = evaluate_certification_decision(plan, tuple(segment_results))
     final_role_state = segment_results[-1].proven_final_role_state if segment_results else None
+    recovery_summary = evaluate_run_decision(plan, tuple(segment_results), artifact_redaction_passed=True)
     artifact_bundle = merge_segment_artifacts(
         plan,
         tuple(segment_results),
-        final_decision=final_decision,
-        final_reason=final_reason,
+        run_decision=recovery_summary,
         final_role_state=final_role_state,
-        recovery_hint=recovery_hint,
     )
-    if artifact_bundle.redaction_status == "rejected" and final_decision is CertificationDecision.PASS:
-        final_decision = CertificationDecision.NO_GO
-        final_reason = "merged artifact redaction failure"
+    if artifact_bundle.redaction_status == "rejected":
+        recovery_summary = evaluate_run_decision(plan, tuple(segment_results), artifact_redaction_passed=False)
         artifact_bundle = merge_segment_artifacts(
             plan,
             tuple(segment_results),
-            final_decision=final_decision,
-            final_reason=final_reason,
+            run_decision=recovery_summary,
             final_role_state=final_role_state,
-            recovery_hint=recovery_hint,
         )
 
-    first_blocking_result = _first_blocking_result(segment_results)
     return CertificationRunResult(
         plan=plan,
-        decision=final_decision,
-        reason=final_reason,
+        decision=recovery_summary.final_decision,
+        reason=recovery_summary.reason,
         segment_results=tuple(segment_results),
         role_transition_graph=tuple(result.role_transition for result in segment_results),
         artifact_bundle=artifact_bundle,
         final_role_state=final_role_state,
-        first_blocking_reason=first_blocking_result.reason if first_blocking_result else None,
-        recovery_hint=recovery_hint,
+        first_blocking_reason=recovery_summary.first_blocking_reason,
+        recovery_hint=recovery_summary.operator_action_hint,
+        recovery_summary=recovery_summary,
     )

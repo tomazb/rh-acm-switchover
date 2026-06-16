@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
-from .artifacts import build_segment_artifact
+from .artifacts import build_segment_artifact, sanitize_artifact_text
 from .decisions import classify_scenario as _classify_scenario
 from .decisions import infra_retryable, no_go, pass_decision, recovery_required
 from .discovery import managed_cluster_summary
@@ -154,9 +154,9 @@ def _execution_result_summary(
         "mutation_attempted": execution_result.mutation_attempted,
         "mutation_completed": execution_result.mutation_completed,
         "retryable_infra_failure": execution_result.retryable_infra_failure,
-        "failure_reason": failure_reason,
-        "stdout_summary": stdout_summary,
-        "stderr_summary": stderr_summary,
+        "failure_reason": sanitize_artifact_text(failure_reason),
+        "stdout_summary": sanitize_artifact_text(stdout_summary),
+        "stderr_summary": sanitize_artifact_text(stderr_summary),
     }
 
 
@@ -483,7 +483,10 @@ def verify_segment_result(
         )
     if plan.mutates_lab and not execution_result.mutation_completed:
         return SegmentVerificationResult(
-            decision=no_go(f"mutating segment {plan.segment_id} succeeded without mutation completion evidence"),
+            decision=recovery_required(
+                f"mutating segment {plan.segment_id} succeeded without mutation completion evidence",
+                recovery_hint="rediscover the lab and prove mutation completion before continuing",
+            ),
             observed_final_role_state=observed_final_role_state,
         )
     if not observed_final_role_state.matches_desired(plan.expected_final_role_state):

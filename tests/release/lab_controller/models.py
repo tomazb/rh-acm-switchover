@@ -29,6 +29,14 @@ class SegmentDecision(Enum):
     INFRA_RETRYABLE = auto()
 
 
+class CertificationDecision(str, Enum):
+    PASS = SegmentDecision.PASS.name
+    NO_GO = "NO_GO"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+    INFRA_RETRYABLE = "INFRA_RETRYABLE"
+    BLOCKED = "BLOCKED"
+
+
 class ScenarioClassification(str, Enum):
     STATIC_ONLY = "static-only"
     LIVE_NON_MUTATING = "live-non-mutating"

@@ -325,6 +325,10 @@ The controller must choose from explicit outcomes when observed state does not m
 Recovery automation must be conservative. A recovery action that changes live state is itself a lab-mutating
 segment and must produce its own artifacts and final-state proof.
 
+Phase 5 implements the recovery decision tree for the non-live deterministic planner only. It centralizes
+run-level `PASS`, `NO_GO`, `RECOVERY_REQUIRED`, `INFRA_RETRYABLE`, and `BLOCKED` decisions, plus retry and
+manual-recovery metadata, but it does not perform live discovery or automatic live recovery.
+
 ## Artifact Requirements
 
 Exact JSON schema is future work. These fields are conceptual requirements.
@@ -358,6 +362,10 @@ Certification run artifact bundle:
 
 The artifact merger must preserve enough detail for a human operator to reconstruct why each segment was
 allowed to start, what changed, and why the next segment was allowed or blocked.
+
+Phase 5 adds a deterministic provisional run-level artifact contract with stable top-level decision,
+recovery, mutation, final-state, segment-decision, runtime-parity placeholder, and redaction-status fields.
+This is testable controller output, not a finalized production JSON schema.
 
 ## Agent Execution Contract
 

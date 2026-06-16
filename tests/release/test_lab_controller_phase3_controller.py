@@ -473,7 +473,7 @@ def test_successful_mutating_execution_without_completion_evidence_returns_no_go
         ),
     )
 
-    assert result.decision.decision is SegmentDecision.NO_GO
+    assert result.decision.decision is SegmentDecision.RECOVERY_REQUIRED
     assert "without mutation completion evidence" in result.decision.reason
 
 
@@ -566,7 +566,7 @@ def test_generated_profile_metadata_in_artifact_is_redacted() -> None:
     assert "kubeconfig-ref-hub-b" not in artifact_text
 
 
-def test_raw_kubeconfig_like_value_in_artifact_metadata_is_rejected() -> None:
+def test_raw_kubeconfig_like_value_in_execution_summary_is_sanitized() -> None:
     result = _run(
         _plan(),
         PhysicalHubLabel.HUB_A,
@@ -581,9 +581,9 @@ def test_raw_kubeconfig_like_value_in_artifact_metadata_is_rejected() -> None:
     )
     artifact_text = json.dumps(result.artifact_payload, sort_keys=True)
 
-    assert result.decision.decision is SegmentDecision.NO_GO
-    assert "redaction" in result.decision.reason
+    assert result.decision.decision is SegmentDecision.PASS
     assert "/home/operator/.kube/config" not in artifact_text
+    assert result.artifact_payload["fake_execution_result"]["stdout_summary"] == "wrote [REDACTED]"
 
 
 def test_destructive_disposable_lab_only_scenario_does_not_receive_normal_pass_behavior() -> None:
