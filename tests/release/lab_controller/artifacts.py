@@ -82,6 +82,10 @@ def build_segment_artifact(
     controller_decision: ControllerDecision,
     managed_cluster_summary: dict[str, Any],
     generated_profile_ref: Mapping[str, Any] | None = None,
+    generated_profile_hash: str | None = None,
+    scenario_classification: str | None = None,
+    identity_verification_summary: Mapping[str, Any] | None = None,
+    fake_execution_result: Mapping[str, Any] | None = None,
     redaction_status: str,
 ) -> dict[str, Any]:
     """Build the provisional Phase 1 segment artifact payload.
@@ -89,21 +93,28 @@ def build_segment_artifact(
     Persistence and final JSON schema are intentionally out of scope for Phase 1. The payload keeps the same
     information the future writer will need without committing generated profiles or live artifacts.
     """
-    return {
+    artifact = {
         "schema_version": 1,
         "segment_id": plan.segment_id,
         "scenario_id": plan.scenario_id,
+        "scenario_classification": scenario_classification,
         "mutates_lab": plan.mutates_lab,
+        "identity_verification_summary": dict(identity_verification_summary or {}),
         "observed_initial_role_state": _observed_role_state_payload(observed_initial_role_state),
         "desired_initial_role_state": _desired_role_state_payload(desired_initial_role_state),
         "expected_initial_role_state": _desired_role_state_payload(plan.expected_initial_role_state),
         "expected_final_role_state": _desired_role_state_payload(plan.expected_final_role_state),
         "observed_final_role_state": _observed_role_state_payload(observed_final_role_state),
+        "generated_profile_hash": generated_profile_hash,
         "controller_decision": controller_decision.decision.name,
         "safe_to_continue": controller_decision.safe_to_continue,
         "reason": controller_decision.reason,
         "recovery_hint": controller_decision.recovery_hint,
         "generated_profile": _generated_profile_payload(generated_profile_ref),
+        "fake_execution_result": dict(fake_execution_result or {}),
         "managed_cluster_evidence_summary": managed_cluster_summary,
         "redaction_status": redaction_status,
     }
+    if _contains_unredacted_sensitive_metadata(artifact):
+        raise ValueError("segment artifact payload contains unredacted sensitive metadata")
+    return artifact
