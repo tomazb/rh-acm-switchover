@@ -178,6 +178,53 @@ def test_run_level_artifact_contains_stable_phase5_contract_keys() -> None:
     )
 
 
+def test_artifact_merger_uses_centralized_recovery_decision_over_legacy_arguments() -> None:
+    result = _run(build_ping_pong_plan())
+    partial_results = result.segment_results[:2]
+
+    bundle = merge_segment_artifacts(
+        result.plan,
+        partial_results,
+        final_decision=CertificationDecision.PASS,
+        final_reason="legacy caller supplied PASS",
+        final_role_state=result.final_role_state,
+    )
+
+    assert bundle.payload["final_decision"] == "BLOCKED"
+    assert bundle.payload["safe_to_continue"] is False
+    assert bundle.payload["summary_counts"]["blocked"] == 1
+    assert bundle.payload["final_reason"] != "legacy caller supplied PASS"
+
+
+def test_blocked_partial_run_preserves_prior_mutation_evidence() -> None:
+    result = _run(build_ping_pong_plan())
+
+    summary = evaluate_run_decision(result.plan, result.segment_results[:2], artifact_redaction_passed=True)
+
+    assert summary.final_decision is CertificationDecision.BLOCKED
+    assert summary.first_blocking_segment_id == "verify-hub-b"
+    assert summary.first_blocking_scenario_id == "final-baseline-check"
+    assert summary.mutation_attempted_before_block is True
+    assert summary.mutation_completed_before_block is True
+
+
+def test_blocked_missing_final_state_preserves_mutation_evidence_before_block() -> None:
+    result = _run(build_ping_pong_plan())
+    malformed_segment = replace(result.segment_results[1].planned_segment, expected_final_role_state=None)
+    malformed_result = replace(result.segment_results[1], planned_segment=malformed_segment)
+
+    summary = evaluate_run_decision(
+        result.plan,
+        (result.segment_results[0], malformed_result) + result.segment_results[2:],
+        artifact_redaction_passed=True,
+    )
+
+    assert summary.final_decision is CertificationDecision.BLOCKED
+    assert summary.first_blocking_segment_id == "python-hub-a-to-hub-b"
+    assert summary.mutation_attempted_before_block is True
+    assert summary.mutation_completed_before_block is True
+
+
 def test_no_go_segment_records_blocking_segment_and_sanitized_reason() -> None:
     plan = build_ping_pong_plan()
     raw_url = "https://" + "api" + ".private" + ".cluster:6443"
@@ -479,6 +526,34 @@ def test_run_level_redaction_failure_overrides_supplied_pass_decision() -> None:
     assert bundle.payload["retry_allowed"] is False
     assert bundle.payload["recovery_category"] == "artifact_redaction_failed"
     assert bundle.payload["summary_counts"]["no_go"] == 1
+
+
+def test_redaction_failure_preserves_first_blocking_segment_and_mutation_evidence() -> None:
+    result = _run(build_ping_pong_plan())
+    raw_path = "/home/operator/.kube/config"
+    tampered_result = replace(
+        result.segment_results[1],
+        artifact_payload={
+            **result.segment_results[1].artifact_payload,
+            "nested": {"debug": {"kubeconfig_path": raw_path}},
+        },
+    )
+
+    bundle = merge_segment_artifacts(
+        result.plan,
+        (result.segment_results[0], tampered_result) + result.segment_results[2:],
+        run_decision=result.recovery_summary,
+        final_role_state=result.final_role_state,
+    )
+    artifact_text = json.dumps(bundle.payload, sort_keys=True)
+
+    assert bundle.redaction_status == "rejected"
+    assert bundle.payload["final_decision"] == "NO_GO"
+    assert bundle.payload["first_blocking_segment"] == "python-hub-a-to-hub-b"
+    assert bundle.payload["first_blocking_scenario"] == "python-passive-switchover"
+    assert bundle.payload["mutation_attempted_before_block"] is True
+    assert bundle.payload["mutation_completed_before_block"] is True
+    assert raw_path not in artifact_text
 
 
 def test_minimal_rejected_run_artifact_preserves_contract_and_sanitizes_plan_id() -> None:

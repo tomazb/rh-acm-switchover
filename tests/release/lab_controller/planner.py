@@ -602,16 +602,9 @@ def merge_segment_artifacts(
     if not run_decision.artifact_redaction_passed:
         redaction_status = "rejected"
 
-    if redaction_status == "rejected":
-        final_decision_value = run_decision.final_decision
-        final_reason_value = run_decision.reason
-        recovery_hint_value = run_decision.operator_action_hint
-    else:
-        final_decision_value = final_decision or run_decision.final_decision
-        final_reason_value = sanitize_artifact_text(final_reason) if final_reason is not None else run_decision.reason
-        recovery_hint_value = (
-            sanitize_artifact_text(recovery_hint) if recovery_hint is not None else run_decision.operator_action_hint
-        )
+    final_decision_value = run_decision.final_decision
+    final_reason_value = sanitize_artifact_text(run_decision.reason)
+    recovery_hint_value = sanitize_artifact_text(run_decision.operator_action_hint)
     segment_decisions = [_segment_decision_payload(result) for result in segment_results]
     payload = {
         "artifact_version": 1,
@@ -635,7 +628,7 @@ def merge_segment_artifacts(
         "per_segment_decisions": segment_decisions,
         "role_transition_graph": [result.role_transition.to_payload() for result in segment_results],
         "segment_artifacts": segment_artifacts,
-        "final_role_state": _role_state_payload(final_role_state),
+        "final_role_state": _role_state_payload(run_decision.observed_final_state),
         "final_reason": final_reason_value,
         "recovery_hint": recovery_hint_value,
         "summary_counts": run_decision.summary_counts,

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
-from .artifacts import sanitize_artifact_text
+from .artifacts import sanitize_artifact_text, validate_artifact_payload_redacted
 from .models import CertificationDecision, DesiredRoleState, ObservedRoleState
 
 
@@ -214,6 +214,19 @@ def _result_has_rejected_artifact(result: SegmentResultLike) -> bool:
     return result.artifact_payload.get("redaction_status") == "rejected"
 
 
+def _artifact_redaction_blocking_result(
+    segment_results: Sequence[SegmentResultLike],
+) -> SegmentResultLike | None:
+    for result in segment_results:
+        if _result_has_rejected_artifact(result):
+            return result
+        try:
+            validate_artifact_payload_redacted(result.artifact_payload)
+        except ValueError:
+            return result
+    return None
+
+
 def _summary_counts(
     plan: CertificationPlanLike,
     segment_results: Sequence[SegmentResultLike],
@@ -418,17 +431,28 @@ def _blocked_decision(
     *,
     reason: str,
     segment: PlannedSegmentLike | None = None,
+    blocking_result: SegmentResultLike | None = None,
     category: RecoveryCategory = RecoveryCategory.PLAN_INVALID,
 ) -> RunRecoveryDecision:
     clean_reason = _clean_text(reason)
+    mutation_attempted = (
+        _mutation_attempted_before(segment_results, blocking_result)
+        if blocking_result is not None
+        else any(_mutation_attempted(result) for result in segment_results)
+    )
+    mutation_completed = (
+        _mutation_completed_before(segment_results, blocking_result)
+        if blocking_result is not None
+        else any(_mutation_completed(result) for result in segment_results)
+    )
     return RunRecoveryDecision(
         final_decision=CertificationDecision.BLOCKED,
         recovery_category=category,
         first_blocking_segment_id=segment.segment_id if segment else None,
         first_blocking_scenario_id=segment.scenario_id if segment else None,
         first_blocking_reason=clean_reason,
-        mutation_attempted_before_block=False,
-        mutation_completed_before_block=False,
+        mutation_attempted_before_block=mutation_attempted,
+        mutation_completed_before_block=mutation_completed,
         final_state_proven=False,
         expected_final_state=None,
         observed_final_state=None,
@@ -478,27 +502,52 @@ def _redaction_failure_decision(
     plan: CertificationPlanLike,
     segment_results: Sequence[SegmentResultLike],
 ) -> RunRecoveryDecision:
+    blocking_result = _artifact_redaction_blocking_result(segment_results)
+    blocking_segment = blocking_result.planned_segment if blocking_result is not None else None
+    observed_final_state = (
+        blocking_result.proven_final_role_state
+        if blocking_result is not None
+        else segment_results[-1].proven_final_role_state if segment_results else None
+    )
+    expected_final_state = (
+        _expected_final_state(blocking_segment)
+        if blocking_segment is not None
+        else _expected_final_state(plan.segments[-1]) if plan.segments else None
+    )
+    reason = (
+        "segment artifact rejected by redaction"
+        if blocking_result is not None
+        else "run artifact rejected by redaction"
+    )
     return RunRecoveryDecision(
         final_decision=CertificationDecision.NO_GO,
         recovery_category=RecoveryCategory.ARTIFACT_REDACTION_FAILED,
-        first_blocking_segment_id=None,
-        first_blocking_scenario_id=None,
-        first_blocking_reason="run artifact rejected by redaction",
-        mutation_attempted_before_block=False,
-        mutation_completed_before_block=False,
-        final_state_proven=False,
-        expected_final_state=None,
-        observed_final_state=None,
+        first_blocking_segment_id=blocking_segment.segment_id if blocking_segment else None,
+        first_blocking_scenario_id=blocking_segment.scenario_id if blocking_segment else None,
+        first_blocking_reason=_clean_text(reason),
+        mutation_attempted_before_block=(
+            _mutation_attempted_before(segment_results, blocking_result)
+            if blocking_result is not None
+            else any(_mutation_attempted(result) for result in segment_results)
+        ),
+        mutation_completed_before_block=(
+            _mutation_completed_before(segment_results, blocking_result)
+            if blocking_result is not None
+            else any(_mutation_completed(result) for result in segment_results)
+        ),
+        final_state_proven=bool(observed_final_state is not None and observed_final_state.is_proven),
+        expected_final_state=expected_final_state,
+        observed_final_state=observed_final_state,
         safe_to_continue=False,
         retry_allowed=False,
         manual_recovery_required=False,
         operator_action_hint=_operator_hint_for(
             CertificationDecision.NO_GO,
             RecoveryCategory.ARTIFACT_REDACTION_FAILED,
-            None,
+            blocking_segment.segment_id if blocking_segment else None,
             None,
         ),
-        initial_state_proven=False,
+        initial_state_proven=_initial_state_proven(blocking_result) if blocking_result is not None else False,
         artifact_redaction_passed=False,
         summary_counts=_summary_counts(plan, segment_results, CertificationDecision.NO_GO),
     )
@@ -515,17 +564,25 @@ def evaluate_run_decision(
     if not plan.segments:
         return _blocked_decision(plan, segment_results, reason="certification plan has no segments")
     if not segment_results:
-        return _blocked_decision(plan, segment_results, reason="certification plan produced no segment results")
+        first_segment = plan.segments[0] if plan.segments else None
+        return _blocked_decision(
+            plan,
+            segment_results,
+            reason="certification plan produced no segment results",
+            segment=first_segment,
+        )
 
     first_non_pass = _first_non_pass(segment_results)
     if first_non_pass is not None:
         return _non_pass_decision(plan, segment_results, first_non_pass)
 
     if len(segment_results) != len(plan.segments):
+        first_unrun_segment = plan.segments[len(segment_results)] if len(segment_results) < len(plan.segments) else None
         return _blocked_decision(
             plan,
             segment_results,
             reason="certification plan stopped before all required segments ran",
+            segment=first_unrun_segment,
         )
 
     for result in segment_results:
@@ -536,6 +593,7 @@ def evaluate_run_decision(
                 segment_results,
                 reason=f"segment {result.planned_segment.segment_id} is missing expected final role state",
                 segment=result.planned_segment,
+                blocking_result=result,
             )
         final_state = result.proven_final_role_state
         if final_state is None or not final_state.is_proven:
@@ -628,6 +686,7 @@ def evaluate_run_decision(
             segment_results,
             reason="final segment is missing expected final role state",
             segment=final_segment,
+            blocking_result=segment_results[-1],
         )
     if final_role_state is None or not final_role_state.is_proven:
         return RunRecoveryDecision(
