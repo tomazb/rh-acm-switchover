@@ -274,7 +274,7 @@ def _build_artifact_payload(
             ),
             identity_verification_summary=_identity_summary(planning_result.identity_decision),
             fake_execution_result=_execution_result_summary(execution_result, redact_streams=True),
-            execution_request_summary=_execution_request_summary(execution_result),
+            execution_request_summary={},
             redaction_status="rejected",
         )
         return artifact, redaction_decision

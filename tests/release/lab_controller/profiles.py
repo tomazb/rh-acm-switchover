@@ -19,6 +19,7 @@ from .models import (
     ObservedRoleState,
     PhysicalHubConfig,
     PhysicalHubLabel,
+    SegmentDecision,
     SegmentPlan,
     StableLabConfig,
 )
@@ -433,7 +434,7 @@ def validate_generated_profile_freshness(
         return no_go("stale role-aware profile: profile hash metadata does not match generated profile")
 
     role_decision = validate_profile_role_mapping(generated_profile.profile_data, lab_config, role_state)
-    if role_decision.decision.name != "PASS":
+    if role_decision.decision is not SegmentDecision.PASS:
         return role_decision
 
     primary_label, secondary_label = _require_proven_role_state(role_state)

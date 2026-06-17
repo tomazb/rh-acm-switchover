@@ -2,9 +2,13 @@
 
 ## Status
 
-This is a proposed future design for release validation. It is not implemented behavior, it does not change
-the current release profile schema, and it does not authorize live lab mutation outside the existing release
-validation entrypoints.
+This document is both the design target for future live release validation and the implementation reference for
+the deterministic, non-live lab role controller now present under `tests/release/lab_controller/`.
+
+Phases 1 through 6C are implemented as non-live controller primitives, profile generation, provisional artifacts,
+dry-run request construction, non-executed invocation materialization, and an explicitly gated local harness. These
+phases do not change the current release profile schema and do not authorize live lab mutation outside the existing
+release validation entrypoints.
 
 The controller described here is a design target for safely certifying a live two-hub ACM lab when scenarios
 may change which physical cluster is the logical primary.

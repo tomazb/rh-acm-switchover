@@ -86,8 +86,13 @@ makes the old secondary physical hub the active primary. Failed or partially com
 lab in an unknown or unsafe intermediate state. Therefore, full multi-mutation certification must remain
 blocked or produce a NO-GO decision until reset/recovery sequencing can prove each next starting state.
 
-The future lab role controller is the intended mechanism for making multi-mutation certification safe. Its
-responsibilities will be to:
+The lab role controller under `tests/release/lab_controller/` is the intended mechanism for making multi-mutation
+certification safe. Its current Phase 1-6C implementation is deterministic and non-live: it models known-state
+sequencing, generated profile freshness, provisional artifacts, dry-run release-framework request construction,
+non-executed invocation materialization, and an explicitly gated local harness with injected runners. Future live
+execution remains unsupported and fail-closed.
+
+For live certification, the controller's responsibilities are to:
 
 - discover physical hub identities before mutation
 - map physical hubs to current logical roles

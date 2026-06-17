@@ -201,6 +201,46 @@ def test_artifact_rejects_unredacted_generated_profile_metadata() -> None:
         )
 
 
+def test_artifact_rejects_live_certification_evidence_claims() -> None:
+    with pytest.raises(ValueError, match="cannot claim live certification evidence"):
+        build_segment_artifact(
+            plan=_segment_plan(),
+            observed_initial_role_state=_role_state(PhysicalHubLabel.HUB_A, PhysicalHubLabel.HUB_B),
+            desired_initial_role_state=_desired(PhysicalHubLabel.HUB_A, PhysicalHubLabel.HUB_B),
+            observed_final_role_state=_role_state(PhysicalHubLabel.HUB_B, PhysicalHubLabel.HUB_A),
+            controller_decision=ControllerDecision(SegmentDecision.PASS, "segment passed", True),
+            managed_cluster_summary={"hub-a": {"observed": ["mc-1", "mc-2", "mc-3"]}},
+            execution_request_summary={
+                "execution_backend": "release_framework",
+                "execution_mode": "release_framework_local",
+                "dry_run": False,
+                "real_execution_evidence": True,
+                "live_certification_evidence": True,
+            },
+            redaction_status="redacted",
+        )
+
+
+def test_artifact_rejects_dry_run_real_execution_evidence_claims() -> None:
+    with pytest.raises(ValueError, match="dry-run segment artifacts cannot claim real execution evidence"):
+        build_segment_artifact(
+            plan=_segment_plan(),
+            observed_initial_role_state=_role_state(PhysicalHubLabel.HUB_A, PhysicalHubLabel.HUB_B),
+            desired_initial_role_state=_desired(PhysicalHubLabel.HUB_A, PhysicalHubLabel.HUB_B),
+            observed_final_role_state=_role_state(PhysicalHubLabel.HUB_B, PhysicalHubLabel.HUB_A),
+            controller_decision=ControllerDecision(SegmentDecision.PASS, "segment passed", True),
+            managed_cluster_summary={"hub-a": {"observed": ["mc-1", "mc-2", "mc-3"]}},
+            execution_request_summary={
+                "execution_backend": "release_framework",
+                "execution_mode": "release_framework_dry_run",
+                "dry_run": True,
+                "real_execution_evidence": True,
+                "live_certification_evidence": False,
+            },
+            redaction_status="redacted",
+        )
+
+
 def test_recovery_required_artifact_includes_reason() -> None:
     artifact = build_segment_artifact(
         plan=_segment_plan(),

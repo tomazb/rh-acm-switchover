@@ -10,7 +10,7 @@ from typing import Any
 
 from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 
-from .artifacts import sanitize_artifact_key, sanitize_artifact_text, validate_artifact_payload_redacted
+from .artifacts import sanitize_artifact_payload, sanitize_artifact_text, validate_artifact_payload_redacted
 from .decisions import scenario_segment_blocking_reason
 from .models import DesiredRoleState, GeneratedProfile, LabObservation, SegmentPlan
 
@@ -132,18 +132,6 @@ def _role_state_payload(state: DesiredRoleState) -> dict[str, str]:
     }
 
 
-def _sanitize_payload(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {sanitize_artifact_key(key): _sanitize_payload(child) for key, child in value.items()}
-    if isinstance(value, list):
-        return [_sanitize_payload(item) for item in value]
-    if isinstance(value, tuple):
-        return [_sanitize_payload(item) for item in value]
-    if isinstance(value, str):
-        return sanitize_artifact_text(value)
-    return value
-
-
 def _require_redacted_generated_profile_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     payload = json.loads(json.dumps(dict(metadata), sort_keys=True))
     hubs = payload.get("hubs")
@@ -240,21 +228,21 @@ def _request_summary_payload(request: ExecutionRequest, *, include_hash: bool) -
         "intended_stream": list(request.selected_streams),
         "selected_streams": list(request.selected_streams),
         "generated_profile_hash": request.generated_profile_hash,
-        "generated_profile_metadata": _sanitize_payload(dict(request.generated_profile_metadata)),
-        "release_profile_summary": _sanitize_payload(dict(request.release_profile_summary)),
+        "generated_profile_metadata": sanitize_artifact_payload(dict(request.generated_profile_metadata)),
+        "release_profile_summary": sanitize_artifact_payload(dict(request.release_profile_summary)),
         "intended_artifact_dir": sanitize_artifact_text(request.intended_artifact_dir),
         "expected_initial_role_state": _role_state_payload(request.expected_initial_role_state),
         "expected_final_role_state": _role_state_payload(request.expected_final_role_state),
         "mutates_lab": request.mutates_lab,
         "execution_request_redaction_status": request.redaction_status,
-        "execution_summary": _sanitize_payload(dict(request.execution_summary)),
+        "execution_summary": sanitize_artifact_payload(dict(request.execution_summary)),
         "materialization_status": request.materialization_status,
-        "materialized_invocation_summary": _sanitize_payload(dict(request.materialized_invocation_summary)),
-        "materialized_argv_summary": _sanitize_payload(dict(request.materialized_argv_summary)),
-        "environment_plan_summary": _sanitize_payload(dict(request.environment_plan_summary)),
-        "profile_compatibility_summary": _sanitize_payload(dict(request.profile_compatibility_summary)),
-        "artifact_directory_summary": _sanitize_payload(dict(request.artifact_directory_summary)),
-        "future_execution_eligibility": _sanitize_payload(dict(request.future_execution_eligibility)),
+        "materialized_invocation_summary": sanitize_artifact_payload(dict(request.materialized_invocation_summary)),
+        "materialized_argv_summary": sanitize_artifact_payload(dict(request.materialized_argv_summary)),
+        "environment_plan_summary": sanitize_artifact_payload(dict(request.environment_plan_summary)),
+        "profile_compatibility_summary": sanitize_artifact_payload(dict(request.profile_compatibility_summary)),
+        "artifact_directory_summary": sanitize_artifact_payload(dict(request.artifact_directory_summary)),
+        "future_execution_eligibility": sanitize_artifact_payload(dict(request.future_execution_eligibility)),
         "real_execution_evidence": request.real_execution_evidence,
         "live_certification_evidence": request.live_certification_evidence,
         "evidence_status": "dry_run_only" if request.dry_run else "not_live",

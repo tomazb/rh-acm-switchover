@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .artifacts import sanitize_artifact_key, sanitize_artifact_text, validate_artifact_payload_redacted
+from .artifacts import sanitize_artifact_payload, sanitize_artifact_text, validate_artifact_payload_redacted
 from .controller import (
     FakeScenarioExecutor,
     ScenarioExecutionResult,
@@ -512,18 +512,6 @@ def _copy_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(dict(payload), sort_keys=True))
 
 
-def _sanitize_payload_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {sanitize_artifact_key(key): _sanitize_payload_value(child) for key, child in value.items()}
-    if isinstance(value, list):
-        return [_sanitize_payload_value(item) for item in value]
-    if isinstance(value, tuple):
-        return [_sanitize_payload_value(item) for item in value]
-    if isinstance(value, str):
-        return sanitize_artifact_text(value)
-    return value
-
-
 def _safe_segment_artifact(result: SegmentRunResult) -> tuple[dict[str, Any], bool]:
     try:
         validate_artifact_payload_redacted(result.artifact_payload)
@@ -774,7 +762,7 @@ def _minimal_rejected_bundle(
         "redaction_status": "rejected",
     }
     return CertificationArtifactBundle(
-        payload=_sanitize_payload_value(payload),
+        payload=sanitize_artifact_payload(payload),
         redaction_status="rejected",
     )
 

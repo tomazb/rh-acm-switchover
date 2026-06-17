@@ -141,16 +141,35 @@ def sanitize_artifact_text(value: str | None) -> str | None:
     return sanitized
 
 
-def _sanitize_payload(value: Any) -> Any:
+def sanitize_artifact_payload(value: Any) -> Any:
+    """Return a recursively sanitized payload suitable for publishable controller artifacts."""
     if isinstance(value, dict):
-        return {sanitize_artifact_key(key): _sanitize_payload(child) for key, child in value.items()}
+        return {sanitize_artifact_key(key): sanitize_artifact_payload(child) for key, child in value.items()}
     if isinstance(value, list):
-        return [_sanitize_payload(item) for item in value]
+        return [sanitize_artifact_payload(item) for item in value]
     if isinstance(value, tuple):
-        return [_sanitize_payload(item) for item in value]
+        return [sanitize_artifact_payload(item) for item in value]
     if isinstance(value, str):
         return sanitize_artifact_text(value)
     return value
+
+
+def _payload_claims_live_certification_evidence(payload: Mapping[str, Any]) -> bool:
+    if bool(payload.get("live_certification_evidence", False)):
+        return True
+    execution_summary = payload.get("execution_summary", {})
+    if not isinstance(execution_summary, Mapping):
+        return False
+    if bool(execution_summary.get("live_certification_evidence", False)):
+        return True
+    execution_evidence = execution_summary.get("execution_evidence", {})
+    if isinstance(execution_evidence, Mapping) and bool(execution_evidence.get("live_certification_evidence", False)):
+        return True
+    return False
+
+
+def _payload_claims_dry_run_real_execution(payload: Mapping[str, Any]) -> bool:
+    return bool(payload.get("dry_run", False) and payload.get("real_execution_evidence", False))
 
 
 def build_segment_artifact(
@@ -174,7 +193,11 @@ def build_segment_artifact(
     Persistence and final JSON schema are intentionally out of scope for Phase 1. The payload keeps the same
     information the future writer will need without committing generated profiles or live artifacts.
     """
-    execution_request_payload = _sanitize_payload(dict(execution_request_summary or {}))
+    execution_request_payload = sanitize_artifact_payload(dict(execution_request_summary or {}))
+    if _payload_claims_live_certification_evidence(execution_request_payload):
+        raise ValueError("segment artifacts cannot claim live certification evidence in current controller phases")
+    if _payload_claims_dry_run_real_execution(execution_request_payload):
+        raise ValueError("dry-run segment artifacts cannot claim real execution evidence")
     execution_summary = execution_request_payload.get("execution_summary", {})
     if not isinstance(execution_summary, dict):
         execution_summary = {}
