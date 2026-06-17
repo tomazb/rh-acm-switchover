@@ -284,3 +284,95 @@ def test_changelog_unreleased_keeps_standard_groups():
 
     for heading in ("### Added", "### Changed", "### Fixed", "### Removed"):
         assert heading in unreleased
+
+
+def test_lab_role_controller_agent_instructions_document_non_live_authority_boundary():
+    """Phase 7B Agent guidance must preserve the controller-owned non-live boundary."""
+    content = _read("docs/development/lab-role-controller-agent-instructions.md")
+
+    required = (
+        "The Python lab role controller owns truth",
+        "The Agent owns only orchestration convenience and explanation",
+        "This is not live ACM certification",
+        "does not execute `oc`, `kubectl`, `ansible-playbook`",
+        "Use the Phase 7A CLI as the only supported command boundary",
+        "must not invent ad hoc live cluster commands",
+        "must not override controller final decisions",
+        "live_certification_evidence=false",
+        "Dry-run materialization is not execution evidence",
+        "Local harness evidence is not live ACM certification evidence",
+        "`safe_to_continue` is non-live controller metadata",
+    )
+
+    for token in required:
+        assert token in content
+
+
+def test_lab_role_controller_agent_instructions_cover_decisions_and_artifact_fields():
+    """Agent guidance must explain controller decision handling and required artifact reads."""
+    content = _read("docs/development/lab-role-controller-agent-instructions.md")
+
+    for decision in ("PASS", "NO_GO", "RECOVERY_REQUIRED", "INFRA_RETRYABLE", "BLOCKED"):
+        assert decision in content
+
+    for field in (
+        "final_decision",
+        "safe_to_continue",
+        "retry_allowed",
+        "manual_recovery_required",
+        "first_blocking_segment",
+        "first_blocking_scenario",
+        "first_blocking_reason",
+        "recovery_category",
+        "operator_action_hint",
+        "final_state_proven",
+        "segment_decisions",
+        "role_transition_graph",
+        "summary_counts",
+        "runtime_parity",
+        "redaction_status",
+        "real_execution_evidence",
+        "live_certification_evidence",
+        "materialized_release_framework",
+        "execution_harness_summary",
+    ):
+        assert field in content
+
+
+def test_lab_role_controller_agent_instruction_examples_are_supported_and_safe():
+    """Documented runnable examples should stay on the supported non-live CLI surface."""
+    content = _read("docs/development/lab-role-controller-agent-instructions.md")
+    command_lines = [
+        line.strip()
+        for line in content.splitlines()
+        if line.strip().startswith("python scripts/release/run_lab_role_controller.py")
+    ]
+
+    assert command_lines
+    assert any("--mode fake" in line and "--artifact-dir" in line for line in command_lines)
+    assert any("--mode release-framework-dry-run" in line and "--output-format json" in line for line in command_lines)
+    assert any("--mode fake" in line and "--no-write" in line for line in command_lines)
+    assert any("--mode fake" in line and "--strict" in line for line in command_lines)
+    assert any("--mode release-framework-local" in line and "--allow-local-execution" in line for line in command_lines)
+
+    runnable_examples = [
+        line for line in command_lines if "--mode live" not in line and "--mode release-framework-live" not in line
+    ]
+    for line in runnable_examples:
+        assert "--plan ping-pong" in line
+        assert ".release" not in line
+        assert "--kubeconfig" not in line
+        assert "https://" not in line
+        assert "token=" not in line.lower()
+        assert "bearer " not in line.lower()
+        if "--mode release-framework-local" in line:
+            assert "--allow-local-execution" in line
+
+
+def test_lab_role_controller_agent_instructions_require_human_retry_for_no_go():
+    """NO_GO handling should not imply automatic reruns from Agent intuition."""
+    content = _read("docs/development/lab-role-controller-agent-instructions.md")
+
+    assert "NO_GO" in content
+    assert "retry_allowed=true" in content
+    assert "human explicitly requests a new non-live run" in content

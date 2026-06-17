@@ -359,6 +359,11 @@ profile `tests/release/profiles/full-release-with-rbac-cert.example.yaml`. See
 and [`docs/deployment/rbac-live-certification.md`](docs/deployment/rbac-live-certification.md)
 for the full contract.
 
+Phase 7B Agent instructions for the non-live lab role controller live in
+[`docs/development/lab-role-controller-agent-instructions.md`](docs/development/lab-role-controller-agent-instructions.md).
+They are orchestration guidance only: the Python controller owns truth, safety,
+and final decisions, and Phase 7A/7B does not authorize live execution.
+
 ### Pre-Push CI Guardrails
 
 **Run the CI-equivalent checks locally before opening a PR and again before merging it.** The `Code Quality Checks` job fails the PR if formatting drifts, so reproduce these exact commands locally first. The simplest path is `./run_tests.sh` (strict mode on by default runs `black`, `isort`, `mypy`, and `bandit`). To run the individual gates exactly as CI does — using the same scope `acm_switchover.py lib modules ansible_collections/tomazb/acm_switchover/plugins ansible_collections/tomazb/acm_switchover/tests tests`:

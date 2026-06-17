@@ -12,25 +12,29 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, TextIO
 
-from tests.release.lab_controller.artifacts import (
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.release.lab_controller.artifacts import (  # noqa: E402
     sanitize_artifact_payload,
     sanitize_artifact_text,
     validate_artifact_payload_redacted,
 )
-from tests.release.lab_controller.discovery import fake_identity
-from tests.release.lab_controller.execution import (
+from tests.release.lab_controller.discovery import fake_identity  # noqa: E402
+from tests.release.lab_controller.execution import (  # noqa: E402
     ExecutionMode,
     ReleaseFrameworkLocalBackend,
 )
-from tests.release.lab_controller.harness import CommandRunResult, FakeCommandRunner
-from tests.release.lab_controller.models import (
+from tests.release.lab_controller.harness import CommandRunResult, FakeCommandRunner  # noqa: E402
+from tests.release.lab_controller.models import (  # noqa: E402
     CertificationDecision,
     HubIdentityEvidence,
     PhysicalHubConfig,
     PhysicalHubLabel,
     StableLabConfig,
 )
-from tests.release.lab_controller.planner import (
+from tests.release.lab_controller.planner import (  # noqa: E402
     CertificationRunResult,
     build_ping_pong_plan,
     run_certification_plan,

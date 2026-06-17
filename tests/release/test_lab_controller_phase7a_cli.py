@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts.release import run_lab_role_controller as cli
 from tests.release.lab_controller.models import CertificationDecision
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run(args: list[str]) -> tuple[int, str, str]:
@@ -35,6 +40,33 @@ def test_fake_mode_ping_pong_cli_returns_pass_with_sanitized_artifact(tmp_path: 
     assert artifact["live_certification_evidence"] is False
     assert "/.kube/" not in artifact_text
     assert "live_certification_evidence=false" in stdout
+
+
+def test_documented_script_invocation_works_without_pythonpath(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/release/run_lab_role_controller.py",
+            "--plan",
+            "ping-pong",
+            "--mode",
+            "fake",
+            "--artifact-dir",
+            str(tmp_path),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert _artifact(tmp_path)["final_decision"] == "PASS"
+    assert "live_certification_evidence=false" in result.stdout
 
 
 def test_release_framework_dry_run_writes_materialized_requests_without_execution(tmp_path: Path) -> None:
