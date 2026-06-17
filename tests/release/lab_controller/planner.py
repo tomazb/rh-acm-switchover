@@ -402,6 +402,7 @@ def run_segment_plan(
     artifact_root: str | None = None,
     execution_backend: ExecutionBackend | None = None,
     execution_mode: ExecutionMode | str = ExecutionMode.FAKE,
+    plan_id: str = "standalone",
 ) -> SegmentRunResult:
     """Run one planned segment through the Phase 3 non-live controller wrapper."""
     executor: FakeScenarioExecutor | ExecutionBackend
@@ -419,6 +420,7 @@ def run_segment_plan(
                 simulated_stdout_summary=planned_segment.execution_result.stdout_summary,
                 simulated_stderr_summary=planned_segment.execution_result.stderr_summary,
                 simulated_post_segment_observation=planned_segment.execution_result.post_segment_observation,
+                plan_id=plan_id,
             )
         else:
             raise ValueError("live release-framework execution is not supported in Phase 6A")
@@ -554,6 +556,13 @@ def _execution_backends_payload(segment_results: Sequence[SegmentRunResult]) -> 
         dry_run = bool(artifact.get("dry_run"))
         real_execution_evidence = bool(artifact.get("real_execution_evidence"))
         live_certification_evidence = bool(artifact.get("live_certification_evidence"))
+        materialization_status = str(artifact.get("materialization_status") or "not_materialized")
+        future_execution_eligibility = artifact.get("future_execution_eligibility") or {}
+        future_execution_eligible = (
+            bool(future_execution_eligibility.get("eligible"))
+            if isinstance(future_execution_eligibility, dict)
+            else False
+        )
 
         backend_counts[backend_kind] = backend_counts.get(backend_kind, 0) + 1
         if dry_run:
@@ -567,6 +576,8 @@ def _execution_backends_payload(segment_results: Sequence[SegmentRunResult]) -> 
                 "backend_kind": backend_kind,
                 "execution_mode": execution_mode,
                 "dry_run": dry_run,
+                "materialization_status": materialization_status,
+                "future_execution_eligible": future_execution_eligible,
                 "real_execution_evidence": real_execution_evidence,
                 "live_certification_evidence": live_certification_evidence,
             }
@@ -577,6 +588,66 @@ def _execution_backends_payload(segment_results: Sequence[SegmentRunResult]) -> 
         "backend_counts": dict(sorted(backend_counts.items())),
         "dry_run_segments": dry_run_segments,
         "total_segments_by_backend_kind": dict(sorted(backend_counts.items())),
+        "real_execution_evidence_exists": real_execution_evidence_exists,
+        "live_certification_evidence_exists": live_certification_evidence_exists,
+    }
+
+
+def _materialized_release_framework_payload(segment_results: Sequence[SegmentRunResult]) -> dict[str, Any]:
+    materialized_segments = []
+    not_materialized_segments = []
+    blockers = []
+    real_execution_evidence_exists = False
+    live_certification_evidence_exists = False
+
+    for result in segment_results:
+        artifact = result.artifact_payload
+        real_execution_evidence_exists = real_execution_evidence_exists or bool(artifact.get("real_execution_evidence"))
+        live_certification_evidence_exists = live_certification_evidence_exists or bool(
+            artifact.get("live_certification_evidence")
+        )
+        materialization_status = artifact.get("materialization_status")
+        if materialization_status == "materialized":
+            eligibility = artifact.get("future_execution_eligibility") or {}
+            blocking_fields = eligibility.get("blocking_fields", []) if isinstance(eligibility, dict) else []
+            if isinstance(blocking_fields, list) and blocking_fields:
+                blockers.append(
+                    {
+                        "segment_id": result.planned_segment.segment_id,
+                        "scenario_id": result.planned_segment.scenario_id,
+                        "blocking_fields": blocking_fields,
+                        "reason": sanitize_artifact_text(
+                            str(eligibility.get("reason", "materialization blocker"))
+                            if isinstance(eligibility, dict)
+                            else "materialization blocker"
+                        ),
+                    }
+                )
+            materialized_segments.append(
+                {
+                    "segment_id": result.planned_segment.segment_id,
+                    "scenario_id": result.planned_segment.scenario_id,
+                    "future_execution_eligible": (
+                        bool(eligibility.get("eligible")) if isinstance(eligibility, dict) else False
+                    ),
+                }
+            )
+        else:
+            not_materialized_segments.append(
+                {
+                    "segment_id": result.planned_segment.segment_id,
+                    "scenario_id": result.planned_segment.scenario_id,
+                    "reason": sanitize_artifact_text(
+                        str(artifact.get("reason") or "segment did not use release-framework dry-run materialization")
+                    ),
+                }
+            )
+
+    return {
+        "materialized_segments": len(materialized_segments),
+        "materialized_segment_refs": materialized_segments,
+        "not_materialized_segments": not_materialized_segments,
+        "materialization_blockers": blockers,
         "real_execution_evidence_exists": real_execution_evidence_exists,
         "live_certification_evidence_exists": live_certification_evidence_exists,
     }
@@ -626,6 +697,7 @@ def _minimal_rejected_bundle(
         "role_transition_graph": [result.role_transition.to_payload() for result in segment_results],
         "segment_artifacts": [],
         "execution_backends": _execution_backends_payload(segment_results),
+        "materialized_release_framework": _materialized_release_framework_payload(segment_results),
         "final_reason": run_decision.reason,
         "recovery_hint": run_decision.operator_action_hint,
         "summary_counts": run_decision.summary_counts,
@@ -695,6 +767,7 @@ def merge_segment_artifacts(
         "role_transition_graph": [result.role_transition.to_payload() for result in segment_results],
         "segment_artifacts": segment_artifacts,
         "execution_backends": _execution_backends_payload(segment_results),
+        "materialized_release_framework": _materialized_release_framework_payload(segment_results),
         "final_role_state": _role_state_payload(run_decision.observed_final_state),
         "final_reason": final_reason_value,
         "recovery_hint": recovery_hint_value,
@@ -754,6 +827,7 @@ def run_certification_plan(
             artifact_root=artifact_root,
             execution_backend=execution_backend,
             execution_mode=execution_mode,
+            plan_id=plan.plan_id,
         )
         segment_results.append(result)
         if result.decision is not CertificationDecision.PASS:

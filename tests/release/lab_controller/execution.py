@@ -50,6 +50,13 @@ class ExecutionRequest:
     real_execution_evidence: bool = False
     live_certification_evidence: bool = False
     execution_summary: Mapping[str, Any] = field(default_factory=dict)
+    materialized_invocation_summary: Mapping[str, Any] = field(default_factory=dict)
+    materialized_argv_summary: Mapping[str, Any] = field(default_factory=dict)
+    environment_plan_summary: Mapping[str, Any] = field(default_factory=dict)
+    profile_compatibility_summary: Mapping[str, Any] = field(default_factory=dict)
+    artifact_directory_summary: Mapping[str, Any] = field(default_factory=dict)
+    future_execution_eligibility: Mapping[str, Any] = field(default_factory=dict)
+    materialization_status: str = "not_materialized"
     request_hash: str = ""
 
 
@@ -240,6 +247,13 @@ def _request_summary_payload(request: ExecutionRequest, *, include_hash: bool) -
         "mutates_lab": request.mutates_lab,
         "execution_request_redaction_status": request.redaction_status,
         "execution_summary": _sanitize_payload(dict(request.execution_summary)),
+        "materialization_status": request.materialization_status,
+        "materialized_invocation_summary": _sanitize_payload(dict(request.materialized_invocation_summary)),
+        "materialized_argv_summary": _sanitize_payload(dict(request.materialized_argv_summary)),
+        "environment_plan_summary": _sanitize_payload(dict(request.environment_plan_summary)),
+        "profile_compatibility_summary": _sanitize_payload(dict(request.profile_compatibility_summary)),
+        "artifact_directory_summary": _sanitize_payload(dict(request.artifact_directory_summary)),
+        "future_execution_eligibility": _sanitize_payload(dict(request.future_execution_eligibility)),
         "real_execution_evidence": request.real_execution_evidence,
         "live_certification_evidence": request.live_certification_evidence,
         "evidence_status": "dry_run_only" if request.dry_run else "not_live",
@@ -299,6 +313,8 @@ def build_release_framework_request(
     release_mode: str = DEFAULT_RELEASE_MODE,
     stream_id: str | None = None,
     execution_mode: ExecutionMode = ExecutionMode.RELEASE_FRAMEWORK_DRY_RUN,
+    plan_id: str = "standalone",
+    explicit_env: Mapping[str, str] | None = None,
 ) -> ExecutionRequest:
     """Build the deterministic future pytest release-framework request without executing it."""
     if execution_mode is ExecutionMode.RELEASE_FRAMEWORK_LIVE:
@@ -347,6 +363,26 @@ def build_release_framework_request(
             "pytest_invoked": False,
             "adapters_invoked": False,
         },
+    )
+    from .invocation import materialize_release_framework_request, summarize_materialized_invocation
+
+    materialized = materialize_release_framework_request(
+        request=request,
+        generated_profile=generated_profile,
+        plan_id=plan_id,
+        artifact_root=root,
+        explicit_env=explicit_env,
+    )
+    materialized_summary = summarize_materialized_invocation(materialized)
+    request = replace(
+        request,
+        materialized_invocation_summary=materialized_summary,
+        materialized_argv_summary=materialized_summary["materialized_argv_summary"],
+        environment_plan_summary=materialized_summary["environment_plan_summary"],
+        profile_compatibility_summary=materialized_summary["profile_compatibility_summary"],
+        artifact_directory_summary=materialized_summary["artifact_directory_summary"],
+        future_execution_eligibility=materialized_summary["future_execution_eligibility"],
+        materialization_status="materialized",
     )
     request_hash = _stable_hash(_request_summary_payload(request, include_hash=False))
     request = replace(request, request_hash=request_hash)
@@ -424,6 +460,8 @@ class ReleaseFrameworkDryRunBackend(ExecutionBackend):
         simulated_stdout_summary: str = "release-framework dry-run request built",
         simulated_stderr_summary: str = "",
         simulated_post_segment_observation: LabObservation | None = None,
+        plan_id: str = "standalone",
+        explicit_env: Mapping[str, str] | None = None,
     ) -> None:
         self.release_mode = release_mode
         self.stream_id = stream_id
@@ -435,6 +473,8 @@ class ReleaseFrameworkDryRunBackend(ExecutionBackend):
         self.simulated_stdout_summary = simulated_stdout_summary
         self.simulated_stderr_summary = simulated_stderr_summary
         self.simulated_post_segment_observation = simulated_post_segment_observation
+        self.plan_id = plan_id
+        self.explicit_env = explicit_env
 
     def execute(
         self,
@@ -454,7 +494,31 @@ class ReleaseFrameworkDryRunBackend(ExecutionBackend):
             release_mode=self.release_mode,
             stream_id=self.stream_id,
             execution_mode=self.mode,
+            plan_id=self.plan_id,
+            explicit_env=self.explicit_env,
         )
+        future_eligibility = request.future_execution_eligibility
+        if isinstance(future_eligibility, Mapping) and not bool(future_eligibility.get("eligible", False)):
+            reason = sanitize_artifact_text(
+                str(future_eligibility.get("reason") or "future execution eligibility blocked")
+            )
+            return ExecutionResult(
+                backend_kind=self.kind,
+                execution_mode=self.mode,
+                scenario_id=plan.scenario_id,
+                status="failed",
+                mutation_attempted=False,
+                mutation_completed=False,
+                failure_reason=f"materialization blocked: {reason or '[REDACTED]'}",
+                retryable_infra_failure=False,
+                stdout_summary=self.simulated_stdout_summary,
+                stderr_summary=self.simulated_stderr_summary,
+                post_segment_observation=None,
+                request=request,
+                dry_run=True,
+                real_execution_evidence=False,
+                live_certification_evidence=False,
+            )
         return ExecutionResult(
             backend_kind=self.kind,
             execution_mode=self.mode,

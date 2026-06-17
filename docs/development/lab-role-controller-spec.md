@@ -374,6 +374,13 @@ summary without invoking pytest, release adapters, subprocesses, `oc`, `kubectl`
 artifacts are explicitly not live certification evidence; live release-framework execution remains unsupported and fails
 closed until a later explicitly gated phase.
 
+Phase 6B materializes validated release-framework dry-run requests into deterministic, structured invocation plans.
+The materialized plan records the future pytest target, supported release options, runtime-only profile reference,
+environment plan, profile compatibility result, deterministic artifact directory plan, and dry-run-only execution
+eligibility. These materialized requests are not executed, are not live certification evidence, do not write generated
+profiles under `.release/`, and do not enable live recovery or Agent integration. Live release-framework execution
+continues to fail closed until a later explicitly gated phase.
+
 ## Agent Execution Contract
 
 The Agent is an orchestration and explanation layer around deterministic release tooling. It must not be the
