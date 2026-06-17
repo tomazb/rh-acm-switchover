@@ -44,10 +44,32 @@ def _is_unredacted_sensitive_string(value: str) -> bool:
     return lowered.startswith(("/home/", _TMP_PATH_PREFIX, "~/.kube/")) or "/.kube/" in lowered
 
 
+def _is_unredacted_sensitive_key(value: str) -> bool:
+    if value == "[REDACTED]":
+        return False
+    lowered = value.lower()
+    return bool(
+        _URL_PATTERN.search(value)
+        or _KUBECONFIG_PATH_PATTERN.search(value)
+        or any(marker in lowered for marker in _CLUSTER_ID_MARKERS)
+    )
+
+
+def sanitize_artifact_key(value: object) -> str:
+    """Return a publishable artifact mapping key without raw path, URL, or cluster identity material."""
+    key = str(value)
+    if _is_unredacted_sensitive_key(key):
+        return "[REDACTED]"
+    return key
+
+
 def _contains_unredacted_sensitive_metadata(value: Any) -> bool:
     if isinstance(value, dict):
         for key, child in value.items():
-            lowered = str(key).lower()
+            key_text = str(key)
+            if _is_unredacted_sensitive_key(key_text):
+                return True
+            lowered = key_text.lower()
             if any(keyword in lowered for keyword in _SENSITIVE_KEYWORDS) and child != "[REDACTED]":
                 if not lowered.endswith("_sha256"):
                     return True
@@ -119,6 +141,18 @@ def sanitize_artifact_text(value: str | None) -> str | None:
     return sanitized
 
 
+def _sanitize_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {sanitize_artifact_key(key): _sanitize_payload(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_payload(item) for item in value]
+    if isinstance(value, str):
+        return sanitize_artifact_text(value)
+    return value
+
+
 def build_segment_artifact(
     *,
     plan: SegmentPlan,
@@ -132,6 +166,7 @@ def build_segment_artifact(
     scenario_classification: str | None = None,
     identity_verification_summary: Mapping[str, Any] | None = None,
     fake_execution_result: Mapping[str, Any] | None = None,
+    execution_request_summary: Mapping[str, Any] | None = None,
     redaction_status: str,
 ) -> dict[str, Any]:
     """Build the provisional Phase 1 segment artifact payload.
@@ -139,6 +174,7 @@ def build_segment_artifact(
     Persistence and final JSON schema are intentionally out of scope for Phase 1. The payload keeps the same
     information the future writer will need without committing generated profiles or live artifacts.
     """
+    execution_request_payload = _sanitize_payload(dict(execution_request_summary or {}))
     artifact = {
         "schema_version": 1,
         "segment_id": plan.segment_id,
@@ -158,6 +194,18 @@ def build_segment_artifact(
         "recovery_hint": sanitize_artifact_text(controller_decision.recovery_hint),
         "generated_profile": _generated_profile_payload(generated_profile_ref),
         "fake_execution_result": dict(fake_execution_result or {}),
+        "execution_backend": execution_request_payload.get("execution_backend"),
+        "execution_mode": execution_request_payload.get("execution_mode"),
+        "dry_run": execution_request_payload.get("dry_run"),
+        "intended_pytest_target": execution_request_payload.get("intended_pytest_target"),
+        "intended_release_mode": execution_request_payload.get("intended_release_mode"),
+        "intended_scenario": execution_request_payload.get("intended_scenario"),
+        "intended_stream": execution_request_payload.get("intended_stream"),
+        "execution_request_redaction_status": execution_request_payload.get("execution_request_redaction_status"),
+        "execution_summary": execution_request_payload.get("execution_summary", {}),
+        "execution_request": execution_request_payload,
+        "real_execution_evidence": execution_request_payload.get("real_execution_evidence", False),
+        "live_certification_evidence": execution_request_payload.get("live_certification_evidence", False),
         "managed_cluster_evidence_summary": managed_cluster_summary,
         "redaction_status": redaction_status,
     }

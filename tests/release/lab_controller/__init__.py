@@ -10,6 +10,18 @@ from .controller import (
     verify_segment_result,
 )
 from .decisions import classify_scenario
+from .execution import (
+    ExecutionBackend,
+    ExecutionBackendKind,
+    ExecutionMode,
+    ExecutionRequest,
+    ExecutionResult,
+    FakeExecutionBackend,
+    ReleaseFrameworkDryRunBackend,
+    build_release_framework_request,
+    summarize_execution_request,
+    validate_execution_request,
+)
 from .identity import verify_physical_hub_identities
 from .models import CertificationDecision
 from .planner import (
@@ -60,6 +72,12 @@ __all__ = [
     "evaluate_run_decision",
     "evaluate_segment_chain",
     "evaluate_segment_start",
+    "ExecutionBackend",
+    "ExecutionBackendKind",
+    "ExecutionMode",
+    "ExecutionRequest",
+    "ExecutionResult",
+    "FakeExecutionBackend",
     "FakeScenarioExecutor",
     "generate_segment_profile",
     "infer_observed_role_state",
@@ -68,15 +86,19 @@ __all__ = [
     "plan_segment",
     "redact_generated_profile_metadata",
     "RecoveryCategory",
+    "ReleaseFrameworkDryRunBackend",
     "RoleTransition",
     "RunRecoveryDecision",
     "build_recovery_summary",
+    "build_release_framework_request",
     "run_certification_plan",
     "run_segment",
     "run_segment_plan",
     "ScenarioExecutionResult",
     "ScenarioExecutionStatus",
     "SegmentRunResult",
+    "summarize_execution_request",
+    "validate_execution_request",
     "validate_generated_profile_freshness",
     "validate_profile_role_mapping",
     "verify_segment_result",

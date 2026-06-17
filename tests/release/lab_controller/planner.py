@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .artifacts import sanitize_artifact_text, validate_artifact_payload_redacted
+from .artifacts import sanitize_artifact_key, sanitize_artifact_text, validate_artifact_payload_redacted
 from .controller import (
     FakeScenarioExecutor,
     ScenarioExecutionResult,
@@ -14,6 +14,7 @@ from .controller import (
     run_segment,
 )
 from .decisions import scenario_segment_blocking_reason
+from .execution import ExecutionBackend, ExecutionMode, ReleaseFrameworkDryRunBackend
 from .models import (
     CertificationDecision,
     DesiredRoleState,
@@ -399,14 +400,36 @@ def run_segment_plan(
     lab_config: StableLabConfig,
     expected_identities: Mapping[PhysicalHubLabel, HubIdentityEvidence],
     artifact_root: str | None = None,
+    execution_backend: ExecutionBackend | None = None,
+    execution_mode: ExecutionMode | str = ExecutionMode.FAKE,
 ) -> SegmentRunResult:
     """Run one planned segment through the Phase 3 non-live controller wrapper."""
+    executor: FakeScenarioExecutor | ExecutionBackend
+    if execution_backend is None:
+        mode = ExecutionMode(execution_mode)
+        if mode is ExecutionMode.FAKE:
+            executor = FakeScenarioExecutor(planned_segment.execution_result)
+        elif mode is ExecutionMode.RELEASE_FRAMEWORK_DRY_RUN:
+            executor = ReleaseFrameworkDryRunBackend(
+                simulated_status=planned_segment.execution_result.status.value,
+                simulated_mutation_attempted=planned_segment.execution_result.mutation_attempted,
+                simulated_mutation_completed=planned_segment.execution_result.mutation_completed,
+                simulated_failure_reason=planned_segment.execution_result.failure_reason,
+                simulated_retryable_infra_failure=planned_segment.execution_result.retryable_infra_failure,
+                simulated_stdout_summary=planned_segment.execution_result.stdout_summary,
+                simulated_stderr_summary=planned_segment.execution_result.stderr_summary,
+                simulated_post_segment_observation=planned_segment.execution_result.post_segment_observation,
+            )
+        else:
+            raise ValueError("live release-framework execution is not supported in Phase 6A")
+    else:
+        executor = execution_backend
     result = run_segment(
         lab_config=lab_config,
         expected_identities=expected_identities,
         pre_segment_observation=planned_segment.pre_segment_observation,
         plan=planned_segment.segment_plan,
-        executor=FakeScenarioExecutor(planned_segment.execution_result),
+        executor=executor,
         post_segment_observation=planned_segment.post_segment_observation,
         artifact_root=artifact_root,
     )
@@ -489,7 +512,7 @@ def _copy_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def _sanitize_payload_value(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(key): _sanitize_payload_value(child) for key, child in value.items()}
+        return {sanitize_artifact_key(key): _sanitize_payload_value(child) for key, child in value.items()}
     if isinstance(value, list):
         return [_sanitize_payload_value(item) for item in value]
     if isinstance(value, tuple):
@@ -515,6 +538,48 @@ def _safe_segment_artifact(result: SegmentRunResult) -> tuple[dict[str, Any], bo
             },
             False,
         )
+
+
+def _execution_backends_payload(segment_results: Sequence[SegmentRunResult]) -> dict[str, Any]:
+    per_segment = []
+    backend_counts: dict[str, int] = {}
+    dry_run_segments = 0
+    real_execution_evidence_exists = False
+    live_certification_evidence_exists = False
+
+    for result in segment_results:
+        artifact = result.artifact_payload
+        backend_kind = str(artifact.get("execution_backend") or "not_executed")
+        execution_mode = str(artifact.get("execution_mode") or "not_executed")
+        dry_run = bool(artifact.get("dry_run"))
+        real_execution_evidence = bool(artifact.get("real_execution_evidence"))
+        live_certification_evidence = bool(artifact.get("live_certification_evidence"))
+
+        backend_counts[backend_kind] = backend_counts.get(backend_kind, 0) + 1
+        if dry_run:
+            dry_run_segments += 1
+        real_execution_evidence_exists = real_execution_evidence_exists or real_execution_evidence
+        live_certification_evidence_exists = live_certification_evidence_exists or live_certification_evidence
+        per_segment.append(
+            {
+                "segment_id": result.planned_segment.segment_id,
+                "scenario_id": result.planned_segment.scenario_id,
+                "backend_kind": backend_kind,
+                "execution_mode": execution_mode,
+                "dry_run": dry_run,
+                "real_execution_evidence": real_execution_evidence,
+                "live_certification_evidence": live_certification_evidence,
+            }
+        )
+
+    return {
+        "per_segment": per_segment,
+        "backend_counts": dict(sorted(backend_counts.items())),
+        "dry_run_segments": dry_run_segments,
+        "total_segments_by_backend_kind": dict(sorted(backend_counts.items())),
+        "real_execution_evidence_exists": real_execution_evidence_exists,
+        "live_certification_evidence_exists": live_certification_evidence_exists,
+    }
 
 
 def _segment_decision_payload(result: SegmentRunResult) -> dict[str, Any]:
@@ -560,6 +625,7 @@ def _minimal_rejected_bundle(
         "per_segment_decisions": [_segment_decision_payload(result) for result in segment_results],
         "role_transition_graph": [result.role_transition.to_payload() for result in segment_results],
         "segment_artifacts": [],
+        "execution_backends": _execution_backends_payload(segment_results),
         "final_reason": run_decision.reason,
         "recovery_hint": run_decision.operator_action_hint,
         "summary_counts": run_decision.summary_counts,
@@ -628,6 +694,7 @@ def merge_segment_artifacts(
         "per_segment_decisions": segment_decisions,
         "role_transition_graph": [result.role_transition.to_payload() for result in segment_results],
         "segment_artifacts": segment_artifacts,
+        "execution_backends": _execution_backends_payload(segment_results),
         "final_role_state": _role_state_payload(run_decision.observed_final_state),
         "final_reason": final_reason_value,
         "recovery_hint": recovery_hint_value,
@@ -654,6 +721,8 @@ def run_certification_plan(
     lab_config: StableLabConfig,
     expected_identities: Mapping[PhysicalHubLabel, HubIdentityEvidence],
     artifact_root: str | None = None,
+    execution_backend: ExecutionBackend | None = None,
+    execution_mode: ExecutionMode | str = ExecutionMode.FAKE,
 ) -> CertificationRunResult:
     """Run a deterministic multi-segment certification plan without live execution."""
     segment_results: list[SegmentRunResult] = []
@@ -683,6 +752,8 @@ def run_certification_plan(
             lab_config=lab_config,
             expected_identities=expected_identities,
             artifact_root=artifact_root,
+            execution_backend=execution_backend,
+            execution_mode=execution_mode,
         )
         segment_results.append(result)
         if result.decision is not CertificationDecision.PASS:

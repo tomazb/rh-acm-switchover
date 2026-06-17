@@ -9,6 +9,7 @@ from .artifacts import build_segment_artifact, sanitize_artifact_text
 from .decisions import classify_scenario as _classify_scenario
 from .decisions import infra_retryable, no_go, pass_decision, recovery_required
 from .discovery import managed_cluster_summary
+from .execution import ExecutionBackend, ExecutionBackendKind, ExecutionMode, ExecutionResult
 from .identity import verify_physical_hub_identities
 from .models import (
     ControllerDecision,
@@ -44,6 +45,12 @@ class ScenarioExecutionResult:
     stdout_summary: str = ""
     stderr_summary: str = ""
     post_segment_observation: LabObservation | None = None
+    execution_backend_kind: str = ExecutionBackendKind.FAKE.value
+    execution_mode: str = ExecutionMode.FAKE.value
+    dry_run: bool = False
+    real_execution_evidence: bool = False
+    live_certification_evidence: bool = False
+    execution_request_summary: Mapping[str, Any] | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -153,11 +160,65 @@ def _execution_result_summary(
         "status": execution_result.status.value,
         "mutation_attempted": execution_result.mutation_attempted,
         "mutation_completed": execution_result.mutation_completed,
+        "execution_backend": execution_result.execution_backend_kind,
+        "execution_mode": execution_result.execution_mode,
+        "dry_run": execution_result.dry_run,
+        "real_execution_evidence": execution_result.real_execution_evidence,
+        "live_certification_evidence": execution_result.live_certification_evidence,
         "retryable_infra_failure": execution_result.retryable_infra_failure,
         "failure_reason": sanitize_artifact_text(failure_reason),
         "stdout_summary": sanitize_artifact_text(stdout_summary),
         "stderr_summary": sanitize_artifact_text(stderr_summary),
     }
+
+
+def _execution_request_summary(execution_result: ScenarioExecutionResult | None) -> dict[str, Any]:
+    if execution_result is None:
+        return {}
+    if execution_result.execution_request_summary is not None:
+        return dict(execution_result.execution_request_summary)
+    return {
+        "execution_backend": execution_result.execution_backend_kind,
+        "execution_mode": execution_result.execution_mode,
+        "dry_run": execution_result.dry_run,
+        "intended_pytest_target": None,
+        "intended_release_mode": None,
+        "intended_scenario": execution_result.scenario_id,
+        "intended_stream": [],
+        "generated_profile_hash": None,
+        "execution_request_redaction_status": "not_applicable",
+        "execution_summary": _execution_result_summary(execution_result),
+        "real_execution_evidence": execution_result.real_execution_evidence,
+        "live_certification_evidence": execution_result.live_certification_evidence,
+        "evidence_status": "fake_only",
+    }
+
+
+def _scenario_execution_status(value: str) -> ScenarioExecutionStatus:
+    try:
+        return ScenarioExecutionStatus(value)
+    except ValueError as exc:
+        raise ValueError(f"unsupported execution result status: {value}") from exc
+
+
+def _scenario_result_from_backend_result(result: ExecutionResult) -> ScenarioExecutionResult:
+    return ScenarioExecutionResult(
+        scenario_id=result.scenario_id,
+        status=_scenario_execution_status(result.status),
+        mutation_attempted=result.mutation_attempted,
+        mutation_completed=result.mutation_completed,
+        failure_reason=result.failure_reason,
+        retryable_infra_failure=result.retryable_infra_failure,
+        stdout_summary=result.stdout_summary,
+        stderr_summary=result.stderr_summary,
+        post_segment_observation=result.post_segment_observation,
+        execution_backend_kind=result.backend_kind.value,
+        execution_mode=result.execution_mode.value,
+        dry_run=result.dry_run,
+        real_execution_evidence=result.real_execution_evidence,
+        live_certification_evidence=result.live_certification_evidence,
+        execution_request_summary=result.request_summary,
+    )
 
 
 def _classification_for_plan(plan: SegmentPlan) -> tuple[ScenarioClassification | None, ControllerDecision]:
@@ -193,6 +254,7 @@ def _build_artifact_payload(
             ),
             identity_verification_summary=_identity_summary(planning_result.identity_decision),
             fake_execution_result=_execution_result_summary(execution_result),
+            execution_request_summary=_execution_request_summary(execution_result),
             redaction_status=redaction_status,
         )
         return artifact, decision
@@ -212,6 +274,7 @@ def _build_artifact_payload(
             ),
             identity_verification_summary=_identity_summary(planning_result.identity_decision),
             fake_execution_result=_execution_result_summary(execution_result, redact_streams=True),
+            execution_request_summary=_execution_request_summary(execution_result),
             redaction_status="rejected",
         )
         return artifact, redaction_decision
@@ -510,7 +573,7 @@ def run_segment(
     expected_identities: Mapping[PhysicalHubLabel, HubIdentityEvidence],
     pre_segment_observation: LabObservation,
     plan: SegmentPlan,
-    executor: ScenarioExecutor,
+    executor: ScenarioExecutor | ExecutionBackend,
     post_segment_observation: LabObservation | None = None,
     artifact_root: str | None = None,
     generated_profile: GeneratedProfile | None = None,
@@ -547,7 +610,16 @@ def run_segment(
             artifact_payload=artifact_payload,
         )
 
-    execution_result = executor.execute(plan, planning_result.generated_profile)
+    if isinstance(executor, ExecutionBackend):
+        backend_result = executor.execute(
+            plan,
+            planning_result.generated_profile,
+            generated_profile_metadata=planning_result.generated_profile_metadata,
+            artifact_root=artifact_root,
+        )
+        execution_result = _scenario_result_from_backend_result(backend_result)
+    else:
+        execution_result = executor.execute(plan, planning_result.generated_profile)
     verification_result = verify_segment_result(
         plan=plan,
         observed_initial_role_state=planning_result.observed_initial_role_state,

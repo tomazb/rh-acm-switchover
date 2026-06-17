@@ -367,6 +367,13 @@ Phase 5 adds a deterministic provisional run-level artifact contract with stable
 recovery, mutation, final-state, segment-decision, runtime-parity placeholder, and redaction-status fields.
 This is testable controller output, not a finalized production JSON schema.
 
+Phase 6A adds a deterministic execution backend abstraction for the controller. The default backend remains the
+existing fake executor. The release-framework backend is dry-run only: it builds and validates the structured pytest
+release request, role-aware profile hash, scenario/stream selection, artifact directory summary, and redacted request
+summary without invoking pytest, release adapters, subprocesses, `oc`, `kubectl`, or `ansible-playbook`. Phase 6A dry-run
+artifacts are explicitly not live certification evidence; live release-framework execution remains unsupported and fails
+closed until a later explicitly gated phase.
+
 ## Agent Execution Contract
 
 The Agent is an orchestration and explanation layer around deterministic release tooling. It must not be the
