@@ -5,9 +5,10 @@
 This document is both the design target for future live release validation and the implementation reference for
 the deterministic, non-live lab role controller now present under `tests/release/lab_controller/`.
 
-Phases 1 through 6C are implemented as non-live controller primitives, profile generation, provisional artifacts,
-dry-run request construction, non-executed invocation materialization, and an explicitly gated local harness. These
-phases do not change the current release profile schema and do not authorize live lab mutation outside the existing
+Phases 1 through 7A are implemented as non-live controller primitives, profile generation, provisional artifacts,
+dry-run request construction, non-executed invocation materialization, an explicitly gated local harness, and a thin
+CLI wrapper for deterministic planning and redacted artifact emission. These phases do not change the current release
+profile schema, do not finalize a production JSON schema, and do not authorize live lab mutation outside the existing
 release validation entrypoints.
 
 The controller described here is a design target for safely certifying a live two-hub ACM lab when scenarios
@@ -391,6 +392,13 @@ local gates pass and `allow_local_execution` is set. Phase 6C local harness evid
 execution evidence only; it is never live ACM certification evidence. Live release-framework execution, live adapters,
 live discovery, automatic recovery, and Agent integration remain unsupported and fail closed.
 
+Phase 7A adds `scripts/release/run_lab_role_controller.py` as a non-live command boundary around the deterministic
+controller. The wrapper uses a built-in sanitized `hub-a`/`hub-b` plus `mc-1`/`mc-2`/`mc-3` fake lab fixture, supports
+fake and release-framework dry-run/materialization modes, and writes a redacted run artifact only to an explicitly
+provided `--artifact-dir` unless `--no-write` is selected. `release-framework-local` remains explicitly gated and uses
+only the fake command-runner harness path. Live modes are rejected, artifacts must not claim live ACM certification
+evidence, and this is not Agent integration.
+
 ## Agent Execution Contract
 
 The Agent is an orchestration and explanation layer around deterministic release tooling. It must not be the
@@ -463,7 +471,7 @@ Recommended structure:
 - `tests/release/lab_controller/planner.py` builds known-state segments and enforces mutation boundaries.
 - `tests/release/lab_controller/profiles.py` generates static-schema release profiles for one segment.
 - `tests/release/lab_controller/artifacts.py` defines the preliminary segment artifact payload and delegates writes to existing release artifact helpers.
-- `scripts/release/run_lab_role_controller.py` is added later as a thin command-line wrapper around the package.
+- `scripts/release/run_lab_role_controller.py` is a thin command-line wrapper around the package.
 
 Generated runtime profiles should not be written under `tests/release/profiles/` except for operator-local inputs
 under the already ignored `tests/release/profiles/local/`. Per-segment generated profiles should default under the
@@ -594,25 +602,34 @@ Useful companion tests:
 
 ### First CLI Contract
 
-The first operator-facing command should be a thin wrapper, not the implementation authority:
+The first operator-facing command is a thin wrapper, not the implementation authority:
 
 ```bash
 python scripts/release/run_lab_role_controller.py \
-  --lab-config tests/release/profiles/local/lab.yaml \
-  --plan tests/release/profiles/local/lab-controller-plan.yaml \
+  --plan ping-pong \
+  --mode release-framework-dry-run \
   --artifact-dir artifacts/release-lab/20260616T000000Z
 ```
 
-Initial contract:
+Phase 7A contract:
 
-- `--lab-config` points to an operator-local, non-versioned lab description with physical labels, kubeconfig path
-  references, contexts, expected managed cluster names, and optional Argo CD/RBAC fixture expectations.
-- `--plan` points to the requested known-state segment plan.
-- `--artifact-dir` is required and receives generated profiles, segment artifacts, controller decisions, and a summary.
-- Phase 1 may add `--discovery-fixture` for non-live development and unit-test parity with fake observations.
-- The command defaults to plan/validate behavior until execution wiring is added.
-- Exit code `0` means the requested plan is safe to start or the dry plan passed. Exit code `2` means NO-GO. Exit
-  code `3` means RECOVERY_REQUIRED. Exit code `4` means invalid inputs or unsafe artifact/profile content.
+- `--plan ping-pong` selects the deterministic fake ping-pong plan.
+- `--mode fake` runs the fake controller path; `--mode release-framework-dry-run` materializes release-framework
+  requests without invoking pytest or adapters.
+- `--mode release-framework-local` requires `--allow-local-execution` and uses only the fake command-runner harness
+  path; it is local harness evidence, not live ACM certification evidence.
+- `--allow-local-execution` is optional by default and is required only when selecting
+  `--mode release-framework-local`; it permits the local fake command-runner harness path and does not enable live
+  execution.
+- `--artifact-dir` is required unless `--no-write` is set, is caller-directed, and receives `lab-controller-run.json`.
+- Artifact output is sanitized/redacted before writing and must not claim live execution or live certification evidence.
+- `--no-write` prints only a sanitized summary and writes no artifact files.
+- `--strict` is optional and defaults to disabled; without it, a completed non-`PASS` controller decision can still
+  return exit code `0` for deterministic local inspection, while artifacts and stdout retain the non-`PASS` decision.
+- Live modes such as `live` or `release-framework-live` fail closed.
+- Exit code `0` means the CLI completed successfully. Exit code `1` means `--strict` was set and the final controller
+  decision was not `PASS`. Exit code `2` means invalid CLI usage or validation failure. Exit code `3` means artifact
+  redaction or write failure.
 - The script must not accept arbitrary mutation commands. It accepts known catalog scenario names and delegates later
   execution to the release framework.
 
