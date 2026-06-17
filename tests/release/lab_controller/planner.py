@@ -653,6 +653,70 @@ def _materialized_release_framework_payload(segment_results: Sequence[SegmentRun
     }
 
 
+def _execution_harness_payload(segment_results: Sequence[SegmentRunResult]) -> dict[str, Any]:
+    executed_segments = []
+    non_executed_segments = []
+    blocked_execution_segments = []
+    gate_blockers = []
+    any_real_execution_evidence = False
+    any_live_certification_evidence = False
+
+    for result in segment_results:
+        artifact = result.artifact_payload
+        executed = bool(artifact.get("executed"))
+        real_execution_evidence = bool(artifact.get("real_execution_evidence"))
+        live_certification_evidence = bool(artifact.get("live_certification_evidence"))
+        execution_gate = artifact.get("execution_gate") or {}
+        gate_allowed = bool(execution_gate.get("allowed")) if isinstance(execution_gate, dict) else False
+        gate_blocking_fields = execution_gate.get("blocking_fields", []) if isinstance(execution_gate, dict) else []
+        ref = {
+            "segment_id": result.planned_segment.segment_id,
+            "scenario_id": result.planned_segment.scenario_id,
+            "execution_mode": str(artifact.get("execution_mode") or "not_executed"),
+            "execution_evidence_type": str(artifact.get("execution_evidence_type") or "none"),
+            "command_runner_kind": str(artifact.get("command_runner_kind") or "none"),
+        }
+        if executed:
+            executed_segments.append(ref)
+        else:
+            non_executed_segments.append(ref)
+        if isinstance(gate_blocking_fields, list) and gate_blocking_fields:
+            blocked_ref = {
+                "segment_id": result.planned_segment.segment_id,
+                "scenario_id": result.planned_segment.scenario_id,
+                "blocking_fields": gate_blocking_fields,
+                "reason": sanitize_artifact_text(
+                    str(execution_gate.get("reason", "execution gate blocked"))
+                    if isinstance(execution_gate, dict)
+                    else "execution gate blocked"
+                ),
+            }
+            blocked_execution_segments.append(blocked_ref)
+            gate_blockers.append(blocked_ref)
+        elif isinstance(execution_gate, dict) and execution_gate and not gate_allowed and not executed:
+            blocked_execution_segments.append(
+                {
+                    "segment_id": result.planned_segment.segment_id,
+                    "scenario_id": result.planned_segment.scenario_id,
+                    "blocking_fields": [],
+                    "reason": sanitize_artifact_text(str(execution_gate.get("reason", "execution not allowed"))),
+                }
+            )
+        any_real_execution_evidence = any_real_execution_evidence or real_execution_evidence
+        any_live_certification_evidence = any_live_certification_evidence or live_certification_evidence
+
+    return {
+        "executed_segments": len(executed_segments),
+        "executed_segment_refs": executed_segments,
+        "non_executed_segments": len(non_executed_segments),
+        "non_executed_segment_refs": non_executed_segments,
+        "blocked_execution_segments": blocked_execution_segments,
+        "any_real_execution_evidence": any_real_execution_evidence,
+        "any_live_certification_evidence": any_live_certification_evidence,
+        "execution_gate_blockers": gate_blockers,
+    }
+
+
 def _segment_decision_payload(result: SegmentRunResult) -> dict[str, Any]:
     return {
         "segment_id": result.planned_segment.segment_id,
@@ -698,6 +762,7 @@ def _minimal_rejected_bundle(
         "segment_artifacts": [],
         "execution_backends": _execution_backends_payload(segment_results),
         "materialized_release_framework": _materialized_release_framework_payload(segment_results),
+        "execution_harness_summary": _execution_harness_payload(segment_results),
         "final_reason": run_decision.reason,
         "recovery_hint": run_decision.operator_action_hint,
         "summary_counts": run_decision.summary_counts,
@@ -768,6 +833,7 @@ def merge_segment_artifacts(
         "segment_artifacts": segment_artifacts,
         "execution_backends": _execution_backends_payload(segment_results),
         "materialized_release_framework": _materialized_release_framework_payload(segment_results),
+        "execution_harness_summary": _execution_harness_payload(segment_results),
         "final_role_state": _role_state_payload(run_decision.observed_final_state),
         "final_reason": final_reason_value,
         "recovery_hint": recovery_hint_value,

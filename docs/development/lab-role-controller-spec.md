@@ -381,6 +381,12 @@ eligibility. These materialized requests are not executed, are not live certific
 profiles under `.release/`, and do not enable live recovery or Agent integration. Live release-framework execution
 continues to fail closed until a later explicitly gated phase.
 
+Phase 6C adds an explicitly gated execution harness for materialized release-framework requests. Dry-run remains the
+default non-executing path, and `release_framework_local` can run only through an injected command-runner interface when
+local gates pass and `allow_local_execution` is set. Phase 6C local harness evidence is local release-framework
+execution evidence only; it is never live ACM certification evidence. Live release-framework execution, live adapters,
+live discovery, automatic recovery, and Agent integration remain unsupported and fail closed.
+
 ## Agent Execution Contract
 
 The Agent is an orchestration and explanation layer around deterministic release tooling. It must not be the

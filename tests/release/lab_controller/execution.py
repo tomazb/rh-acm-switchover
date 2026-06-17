@@ -26,6 +26,7 @@ class ExecutionBackendKind(str, Enum):
 class ExecutionMode(str, Enum):
     FAKE = "fake"
     RELEASE_FRAMEWORK_DRY_RUN = "release_framework_dry_run"
+    RELEASE_FRAMEWORK_LOCAL = "release_framework_local"
     RELEASE_FRAMEWORK_LIVE = "release_framework_live"
 
 
@@ -534,5 +535,120 @@ class ReleaseFrameworkDryRunBackend(ExecutionBackend):
             request=request,
             dry_run=True,
             real_execution_evidence=False,
+            live_certification_evidence=False,
+        )
+
+
+class ReleaseFrameworkLocalBackend(ExecutionBackend):
+    kind = ExecutionBackendKind.RELEASE_FRAMEWORK
+    mode = ExecutionMode.RELEASE_FRAMEWORK_LOCAL
+
+    def __init__(
+        self,
+        *,
+        command_runner: Any,
+        allow_local_execution: bool,
+        requested_execution_mode: ExecutionMode = ExecutionMode.RELEASE_FRAMEWORK_LOCAL,
+        release_mode: str = DEFAULT_RELEASE_MODE,
+        stream_id: str | None = None,
+        plan_id: str = "standalone",
+        explicit_env: Mapping[str, str] | None = None,
+        timeout_seconds: int = 3600,
+    ) -> None:
+        if requested_execution_mode is ExecutionMode.RELEASE_FRAMEWORK_LIVE:
+            raise ValueError("live release-framework execution is not supported in Phase 6C")
+        self.command_runner = command_runner
+        self.allow_local_execution = allow_local_execution
+        self.requested_execution_mode = requested_execution_mode
+        self.release_mode = release_mode
+        self.stream_id = stream_id
+        self.plan_id = plan_id
+        self.explicit_env = explicit_env
+        self.timeout_seconds = timeout_seconds
+
+    def execute(
+        self,
+        plan: SegmentPlan,
+        generated_profile: GeneratedProfile,
+        *,
+        generated_profile_metadata: Mapping[str, Any] | None = None,
+        artifact_root: str | None = None,
+    ) -> ExecutionResult:
+        if generated_profile_metadata is None:
+            raise ValueError("generated profile metadata must be supplied for release-framework local execution")
+        request = build_release_framework_request(
+            plan=plan,
+            generated_profile=generated_profile,
+            generated_profile_metadata=generated_profile_metadata,
+            artifact_root=artifact_root,
+            release_mode=self.release_mode,
+            stream_id=self.stream_id,
+            execution_mode=ExecutionMode.RELEASE_FRAMEWORK_DRY_RUN,
+            plan_id=self.plan_id,
+            explicit_env=self.explicit_env,
+        )
+        from .harness import execute_materialized_invocation, summarize_execution_evidence
+        from .invocation import materialize_release_framework_request
+
+        root = _artifact_root(generated_profile, artifact_root)
+        materialized = materialize_release_framework_request(
+            request=request,
+            generated_profile=generated_profile,
+            plan_id=self.plan_id,
+            artifact_root=root,
+            explicit_env=self.explicit_env,
+        )
+
+        evidence = execute_materialized_invocation(
+            materialized,
+            command_runner=self.command_runner,
+            requested_execution_mode=self.requested_execution_mode,
+            allow_local_execution=self.allow_local_execution,
+            timeout_seconds=self.timeout_seconds,
+        )
+        evidence_summary = summarize_execution_evidence(evidence)
+        result_request = replace(
+            request,
+            execution_mode=self.mode,
+            dry_run=False,
+            real_execution_evidence=evidence.real_execution_evidence,
+            live_certification_evidence=False,
+            execution_summary={
+                "action": "release_framework_local_harness",
+                "executed": evidence.executed,
+                "pytest_invoked": evidence.executed,
+                "adapters_invoked": False,
+                "execution_gate": evidence_summary["execution_gate"],
+                "execution_evidence": evidence_summary,
+            },
+            materialized_invocation_summary={
+                **dict(request.materialized_invocation_summary),
+                "executed": evidence.executed,
+                "real_execution_evidence": evidence.real_execution_evidence,
+                "live_certification_evidence": False,
+            },
+        )
+        result_request = replace(
+            result_request,
+            request_hash=_stable_hash(_request_summary_payload(result_request, include_hash=False)),
+        )
+        status = "succeeded" if evidence.status == "succeeded" else "failed"
+        mutation_attempted = bool(plan.mutates_lab and status == "succeeded")
+        mutation_completed = bool(plan.mutates_lab and status == "succeeded")
+        return ExecutionResult(
+            backend_kind=self.kind,
+            execution_mode=self.mode,
+            scenario_id=plan.scenario_id,
+            status=status,
+            mutation_attempted=mutation_attempted,
+            mutation_completed=mutation_completed,
+            failure_reason=None if status == "succeeded" else evidence.stderr_summary or evidence.gate.reason,
+            retryable_infra_failure=evidence.retryable_infra_failure,
+            stdout_summary=evidence.stdout_summary,
+            stderr_summary=evidence.stderr_summary,
+            post_segment_observation=None,
+            request=result_request,
+            dry_run=False,
+            real_execution_evidence=evidence.real_execution_evidence,
             live_certification_evidence=False,
         )

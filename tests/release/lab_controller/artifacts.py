@@ -175,6 +175,18 @@ def build_segment_artifact(
     information the future writer will need without committing generated profiles or live artifacts.
     """
     execution_request_payload = _sanitize_payload(dict(execution_request_summary or {}))
+    execution_summary = execution_request_payload.get("execution_summary", {})
+    if not isinstance(execution_summary, dict):
+        execution_summary = {}
+    execution_evidence = execution_summary.get("execution_evidence", {})
+    if not isinstance(execution_evidence, dict):
+        execution_evidence = {}
+    execution_gate = execution_evidence.get("execution_gate", {})
+    if not isinstance(execution_gate, dict):
+        execution_gate = {}
+    sanitized_command_summary = execution_evidence.get("sanitized_command_summary", {})
+    if not isinstance(sanitized_command_summary, dict):
+        sanitized_command_summary = {}
     artifact = {
         "schema_version": 1,
         "segment_id": plan.segment_id,
@@ -203,6 +215,18 @@ def build_segment_artifact(
         "intended_stream": execution_request_payload.get("intended_stream"),
         "execution_request_redaction_status": execution_request_payload.get("execution_request_redaction_status"),
         "execution_summary": execution_request_payload.get("execution_summary", {}),
+        "execution_gate": execution_gate,
+        "command_runner_kind": execution_evidence.get("command_runner_kind"),
+        "executed": bool(execution_evidence.get("executed", False)),
+        "return_code": execution_evidence.get("return_code"),
+        "timeout": bool(execution_evidence.get("timeout", False)),
+        "stdout_summary": execution_evidence.get("stdout_summary", ""),
+        "stderr_summary": execution_evidence.get("stderr_summary", ""),
+        "execution_evidence_type": execution_evidence.get(
+            "execution_evidence_type",
+            "dry_run_materialization" if execution_request_payload.get("dry_run") else "none",
+        ),
+        "sanitized_command_summary": sanitized_command_summary,
         "materialization_status": execution_request_payload.get("materialization_status", "not_materialized"),
         "materialized_invocation_summary": execution_request_payload.get("materialized_invocation_summary", {}),
         "materialized_argv_summary": execution_request_payload.get("materialized_argv_summary", {}),
