@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.release.scenarios.catalog import SCENARIOS_BY_ID
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -376,3 +378,123 @@ def test_lab_role_controller_agent_instructions_require_human_retry_for_no_go():
     assert "NO_GO" in content
     assert "retry_allowed=true" in content
     assert "human explicitly requests a new non-live run" in content
+
+
+def test_lab_role_controller_live_readiness_design_preserves_non_live_boundary():
+    """Phase 8A design must not imply live execution is currently enabled."""
+    content = _read("docs/development/lab-role-controller-live-readiness-design.md")
+
+    required = (
+        "This is a proposed live-readiness design",
+        "It does not enable live execution",
+        "It does not approve live ACM certification",
+        "Phase 7C remains non-live",
+        "Any future live execution must be implemented in a later phase and pass independent audit",
+        "`live_certification_evidence=true`",
+        "unsupported through the",
+        "lab role controller",
+        "Phase 8A does not implement any of these checks",
+        "Recommendation: READY_FOR_PHASE_8B_GUARDRAILS",
+    )
+
+    for token in required:
+        assert token in content
+
+
+def test_lab_role_controller_live_readiness_design_documents_safety_boundaries():
+    """The live-readiness design should lock down recovery, Agent, and first-live boundaries."""
+    content = _read("docs/development/lab-role-controller-live-readiness-design.md")
+
+    required = (
+        "No automatic live recovery",
+        "Agent cannot invent live commands",
+        "Agent must stop on `NO_GO`, `RECOVERY_REQUIRED`, or `BLOCKED`",
+        "read-only live discovery plus preflight-only evidence",
+        "no mutation",
+        "Human approval is required before any live action",
+        "L10: final mutation confirmation",
+        "Controller owns truth and safety",
+        "Agent owns only orchestration convenience and explanation",
+    )
+
+    for token in required:
+        assert token in content
+
+
+def test_lab_role_controller_live_readiness_design_has_required_matrices():
+    """Command and scenario policy tables should stay present in the Phase 8A design."""
+    content = _read("docs/development/lab-role-controller-live-readiness-design.md")
+
+    assert "## Allowed / Forbidden Command Matrix" in content
+    assert "## Scenario Live Eligibility Matrix" in content
+
+    for command_family in (
+        "Read-only `oc`/`kubectl` discovery",
+        "Mutating `oc`/`kubectl` actions",
+        "`ansible-playbook` execution",
+        "Shell/arbitrary subprocess",
+        "Agent-invented commands",
+    ):
+        assert command_family in content
+
+    for scenario_id in (
+        "`preflight`",
+        "`static-gates`",
+        "`lab-readiness`",
+        "`baseline-check`",
+        "`runtime-parity`",
+        "`final-baseline-check`",
+        "`bash-discovery`",
+        "`bash-postflight`",
+        "`rbac-bootstrap`",
+        "`rbac-bootstrap-live`",
+        "`python-passive-switchover`",
+        "`ansible-passive-switchover`",
+        "`python-restore-only`",
+        "`ansible-restore-only`",
+        "`argocd-managed-switchover`",
+        "`checkpoint-resume`",
+        "`failure-injection`",
+        "`full-restore`",
+        "`decommission`",
+        "`soak`",
+    ):
+        assert scenario_id in content
+
+
+def test_lab_role_controller_live_readiness_scenarios_match_catalog():
+    """The Phase 8A live eligibility matrix should use current catalog scenario IDs."""
+    content = _read("docs/development/lab-role-controller-live-readiness-design.md")
+    marker = "| `static-gates` |"
+    assert marker in content
+    table = content.split(marker, 1)[1].split("\n\nAll requested scenario names exist", 1)[0]
+    documented_ids = {"static-gates"}
+    for line in table.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("| `"):
+            continue
+        documented_ids.add(stripped.split("`", 2)[1])
+
+    assert documented_ids == set(SCENARIOS_BY_ID)
+
+
+def test_lab_role_controller_live_readiness_design_avoids_sensitive_examples():
+    """The Phase 8A design must not carry real credential, API, or private lab examples."""
+    content = _read("docs/development/lab-role-controller-live-readiness-design.md")
+    lowered = content.lower()
+
+    forbidden_literals = (
+        "https://",
+        "http://",
+        "bearer ",
+        "token=",
+        "password=",
+        "secret=",
+        "~/.kube",
+        "/home/",
+        "/tmp/",
+    )
+    for literal in forbidden_literals:
+        assert literal not in lowered
+
+    assert "cluster-id" not in lowered
