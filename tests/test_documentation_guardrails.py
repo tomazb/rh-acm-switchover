@@ -4,9 +4,16 @@ from pathlib import Path
 
 import pytest
 
+from scripts.release import run_lab_role_controller as lab_controller_cli
 from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+LAB_CONTROLLER_SCHEMA_DOC = "docs/development/lab-role-controller-live-lab-config-schema.md"
+LAB_CONTROLLER_SAFETY_DOCS = (
+    "docs/development/lab-role-controller-live-readiness-design.md",
+    LAB_CONTROLLER_SCHEMA_DOC,
+    "docs/development/lab-role-controller-agent-instructions.md",
+)
 
 
 def _read(path: str) -> str:
@@ -24,6 +31,25 @@ def _assert_argocd_script_only_in_deprecated_context(path: str, content: str) ->
         window_end = min(len(lines), idx + 3)
         context = "\n".join(lines[window_start:window_end]).lower()
         assert "deprecated" in context, f"Non-deprecated argocd-manage.sh guidance remains in {path}: {line}"
+
+
+def _assert_no_real_live_config_literals(path: str, content: str) -> None:
+    lowered = content.lower()
+    forbidden_literals = (
+        "https://",
+        "http://",
+        "bearer ",
+        "token=",
+        "password=",
+        "secret=",
+        "~/.kube",
+        "/home/",
+        "/tmp/",
+    )
+    for literal in forbidden_literals:
+        assert literal not in lowered, f"{path} contains forbidden live-config-like literal {literal!r}"
+
+    assert "cluster-id" not in lowered, f"{path} contains a private-cluster-ID-like marker"
 
 
 def test_docs_index_surfaces_collection_and_tldr_docs():
@@ -407,18 +433,28 @@ def test_lab_role_controller_live_readiness_design_documents_safety_boundaries()
 
     required = (
         "No automatic live recovery",
+        "Agent cannot override controller decisions",
         "Agent cannot invent live commands",
         "Agent must stop on `NO_GO`, `RECOVERY_REQUIRED`, or `BLOCKED`",
         "read-only live discovery plus preflight-only evidence",
+        "Passive switchover",
         "no mutation",
         "Human approval is required before any live action",
         "L10: final mutation confirmation",
         "Controller owns truth and safety",
         "Agent owns only orchestration convenience and explanation",
+        "Runtime-only lab config reference supplied outside Git",
+        "Real kubeconfig paths must not appear in artifact-facing summaries",
+        "Raw API URLs must be fingerprinted or redacted",
+        "Private cluster identifiers must be redacted",
+        "Shell/arbitrary subprocess",
     )
 
     for token in required:
         assert token in content
+
+    assert "live_certification_evidence=true" in content
+    assert "unsupported through the\nlab role controller" in content
 
 
 def test_lab_role_controller_live_readiness_design_has_required_matrices():
@@ -481,20 +517,201 @@ def test_lab_role_controller_live_readiness_scenarios_match_catalog():
 def test_lab_role_controller_live_readiness_design_avoids_sensitive_examples():
     """The Phase 8A design must not carry real credential, API, or private lab examples."""
     content = _read("docs/development/lab-role-controller-live-readiness-design.md")
-    lowered = content.lower()
+    _assert_no_real_live_config_literals("docs/development/lab-role-controller-live-readiness-design.md", content)
 
-    forbidden_literals = (
-        "https://",
-        "http://",
-        "bearer ",
-        "token=",
-        "password=",
-        "secret=",
-        "~/.kube",
-        "/home/",
-        "/tmp/",
+
+def test_lab_role_controller_live_readiness_design_references_phase8b_schema_design():
+    """Phase 8A/8B docs should point future implementers to the external config schema design."""
+    content = _read("docs/development/lab-role-controller-live-readiness-design.md")
+
+    assert LAB_CONTROLLER_SCHEMA_DOC in content
+    assert "READY_FOR_PHASE_8C_EXTERNAL_LIVE_CONFIG_MODEL" in content
+
+
+def test_lab_role_controller_live_lab_config_schema_design_is_non_live():
+    """Phase 8B schema design must exist without enabling live config loading or execution."""
+    content = _read(LAB_CONTROLLER_SCHEMA_DOC)
+
+    required = (
+        "design-only",
+        "does not introduce live config loading",
+        "does not provide a real config",
+        "does not execute anything live",
+        "live config files must remain outside Git",
+        "examples are sanitized and fake",
+        "runtime-only fields must not appear in artifacts",
+        "future implementation must validate redaction before artifact creation",
+        "production JSON schema finalization remains unsupported",
     )
-    for literal in forbidden_literals:
-        assert literal not in lowered
 
-    assert "cluster-id" not in lowered
+    for token in required:
+        assert token in content
+
+
+def test_lab_role_controller_live_lab_config_schema_sections_and_sensitivity():
+    """The conceptual schema should separate runtime-only inputs from artifact-safe metadata."""
+    content = _read(LAB_CONTROLLER_SCHEMA_DOC)
+
+    for section in (
+        "schema_version",
+        "lab_id",
+        "plan_id",
+        "physical_hubs",
+        "managed_clusters",
+        "approval",
+        "credentials",
+        "identity_expectations",
+        "role_discovery",
+        "rbac_prerequisites",
+        "scenario_allowlist",
+        "artifact_policy",
+        "redaction_policy",
+        "execution_policy",
+    ):
+        assert section in content
+
+    for runtime_only_field in (
+        "context_ref",
+        "kubeconfig_ref",
+        "credentials.runtime_only",
+        "persist_to_artifacts: false",
+        "inherit_environment: false",
+        "allowed_env_vars",
+        "forbidden_env_patterns",
+    ):
+        assert runtime_only_field in content
+
+    for artifact_safe_field in (
+        "expected_identity_fingerprint",
+        "expected_api_fingerprint",
+        "cluster_identity_fingerprints",
+        "approval_timestamp",
+        "approver_reference",
+        "redaction_policy",
+    ):
+        assert artifact_safe_field in content
+
+    for conceptual_field in (
+        "mismatch_policy",
+        "ambiguity_policy",
+        "read_only_checks_required",
+        "mutation_checks_required",
+        "allowlist_version",
+        "reject_raw_api_urls",
+        "fingerprint_identity_values",
+        "forbidden committed values",
+    ):
+        assert conceptual_field in content
+
+
+def test_lab_role_controller_live_lab_config_schema_documents_safe_defaults():
+    """Future live execution policy defaults must remain fail-closed in the schema design."""
+    content = _read(LAB_CONTROLLER_SCHEMA_DOC)
+
+    for token in (
+        "live_execution_enabled: false",
+        "read_only_discovery_enabled: false",
+        "mutation_enabled: false",
+        "automatic_recovery_enabled: false",
+        "live_certification_evidence_enabled: false",
+        "artifact_dir must be caller-provided",
+        "no default `.release` output",
+        "no committed live artifacts",
+        "stdout/stderr sanitization required",
+    ):
+        assert token in content
+
+
+def test_lab_role_controller_live_lab_config_schema_documents_l0_l10_gates():
+    """The future gate model must represent L0-L10 as design-only concepts."""
+    content = _read(LAB_CONTROLLER_SCHEMA_DOC)
+
+    assert "Gate ID" in content
+    assert "Purpose" in content
+    assert "Input evidence" in content
+    assert "Artifact evidence" in content
+    assert "Failure decision" in content
+    assert "Retry/recovery stance" in content
+    assert "Current Phase 8B status" in content
+
+    expected_gates = {
+        "L0: explicit live mode selected",
+        "L1: clean working tree and expected branch/commit verified",
+        "L2: external live lab config provided from outside Git",
+        "L3: runtime-only kubeconfig/credential references validated",
+        "L4: physical hub identity proof passes",
+        "L5: logical role discovery proof passes",
+        "L6: managed cluster set exactly matches expectation",
+        "L7: RBAC/live prerequisites pass",
+        "L8: scenario live allowlist permits scenario",
+        "L9: dry-run/materialized invocation reviewed",
+        "L10: final human confirmation before mutation",
+    }
+    for gate in expected_gates:
+        assert gate in content
+
+    assert content.count("design-only / not executable") >= len(expected_gates)
+
+
+def test_lab_role_controller_live_lab_config_schema_scenario_policy_matches_catalog():
+    """Phase 8B scenario policy should use actual catalog IDs and keep first live scope read-only."""
+    content = _read(LAB_CONTROLLER_SCHEMA_DOC)
+
+    for scenario_id in SCENARIOS_BY_ID:
+        assert f"`{scenario_id}`" in content
+
+    assert "first future live scenario remains read-only/preflight-only" in content
+    assert "passive switchover is not the first live scenario" in content
+    assert "restore, decommission, failure injection, and mutating scenarios are later-phase only" in content
+    assert "decommission is disposable-lab-only unless separately designed" in content
+    assert "arbitrary shell commands are forbidden" in content
+    assert "Agent-invented live commands are forbidden" in content
+
+
+def test_lab_role_controller_live_lab_config_schema_uses_sanitized_placeholders_only():
+    """The schema design example must avoid real kubeconfig, API, credential, or private ID values."""
+    content = _read(LAB_CONTROLLER_SCHEMA_DOC)
+
+    for placeholder in (
+        "<runtime-only-kubeconfig-ref>",
+        "<runtime-only-context-ref>",
+        "<redacted-api-fingerprint>",
+        "<operator-provided-approval-ref>",
+        "<caller-provided-artifact-dir>",
+    ):
+        assert placeholder in content
+
+    for example_section in (
+        "identity_expectations:",
+        "role_discovery:",
+        "rbac_prerequisites:",
+        "scenario_allowlist:",
+        "redaction_policy:",
+    ):
+        assert example_section in content
+
+    _assert_no_real_live_config_literals(LAB_CONTROLLER_SCHEMA_DOC, content)
+
+
+def test_lab_role_controller_cli_and_docs_do_not_claim_live_mode_support():
+    """The CLI and Agent docs should keep live and release-framework-live unsupported."""
+    help_text = lab_controller_cli._parser().format_help().lower()
+    agent_doc = _read("docs/development/lab-role-controller-agent-instructions.md").lower()
+    schema_doc = _read(LAB_CONTROLLER_SCHEMA_DOC).lower()
+
+    assert "live" not in lab_controller_cli.SUPPORTED_MODES
+    assert "release-framework-live" not in lab_controller_cli.SUPPORTED_MODES
+    assert "live" in lab_controller_cli.LIVE_MODES
+    assert "release-framework-live" in lab_controller_cli.LIVE_MODES
+    assert "live modes are unsupported" in help_text
+    assert "supported: fake, release-framework-dry-run, release-framework-local" in help_text
+    assert "live mode is supported" not in agent_doc
+    assert "live execution is supported" not in agent_doc
+    assert ".release is the default" not in agent_doc
+    assert ".release is the default" not in schema_doc
+
+
+def test_lab_role_controller_safety_docs_avoid_real_live_config_examples():
+    """Lab-controller safety docs must not introduce real-looking live config or credential examples."""
+    for path in LAB_CONTROLLER_SAFETY_DOCS:
+        _assert_no_real_live_config_literals(path, _read(path))

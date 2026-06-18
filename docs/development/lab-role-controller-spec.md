@@ -299,7 +299,8 @@ Strategy requirements:
 - Maintain a stable lab config with physical hub labels and expected managed cluster names.
 - Never commit real kubeconfig paths, cluster IDs, or credentials.
 - Generate sanitized per-segment release profiles from the lab config.
-- Store generated profiles under an ignored runtime directory such as `.release/`.
+- Store generated profiles only under a caller-provided external runtime or artifact directory; `.release/` must not be
+  the default output.
 - Map current logical primary/secondary roles to physical hub identities at segment start.
 - Record generated profile path and hash in segment artifacts.
 - Redact generated profiles before publishing or merging artifacts.

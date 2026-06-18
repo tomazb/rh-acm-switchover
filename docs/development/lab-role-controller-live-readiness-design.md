@@ -13,6 +13,10 @@ Any future live execution must be implemented in a later phase and pass independ
 certification evidence. Until that audited phase exists, `live_certification_evidence=true` is unsupported through the
 lab role controller.
 
+Phase 8B turns the highest-risk boundaries from this document into non-live guardrails and records the external live
+lab config schema design in [`docs/development/lab-role-controller-live-lab-config-schema.md`](lab-role-controller-live-lab-config-schema.md).
+That schema design is not consumed by current code and does not enable live config loading or live execution.
+
 ## Scope
 
 In scope:
@@ -475,3 +479,5 @@ No blocker was found that should stop live-readiness design.
 ## Final Recommendation
 
 Recommendation: READY_FOR_PHASE_8B_GUARDRAILS
+
+Phase 8B target recommendation after guardrails and schema design: READY_FOR_PHASE_8C_EXTERNAL_LIVE_CONFIG_MODEL
