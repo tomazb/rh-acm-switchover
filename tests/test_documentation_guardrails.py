@@ -693,6 +693,23 @@ def test_lab_role_controller_live_lab_config_schema_uses_sanitized_placeholders_
     _assert_no_real_live_config_literals(LAB_CONTROLLER_SCHEMA_DOC, content)
 
 
+def test_lab_role_controller_live_lab_config_schema_documents_phase8c_model_boundary():
+    """Phase 8C model docs must not imply config loading or live execution exists."""
+    content = _read(LAB_CONTROLLER_SCHEMA_DOC)
+
+    required = (
+        "Phase 8C adds a pure typed Python model only",
+        "no live config loading exists",
+        "no YAML or JSON file loading of real config exists",
+        "no live execution exists",
+        "examples remain sanitized and fake",
+        "Recommendation: READY_FOR_PHASE_8D_READ_ONLY_DISCOVERY_DESIGN",
+    )
+
+    for token in required:
+        assert token in content
+
+
 def test_lab_role_controller_cli_and_docs_do_not_claim_live_mode_support():
     """The CLI and Agent docs should keep live and release-framework-live unsupported."""
     help_text = lab_controller_cli._parser().format_help().lower()

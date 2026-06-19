@@ -5,6 +5,11 @@
 This Phase 8B document is design-only. It does not introduce live config loading, does not provide a real config,
 does not execute anything live, and does not finalize a production JSON schema.
 
+Phase 8C adds a pure typed Python model only. It represents this design as in-memory dataclasses, enums, field
+sensitivity helpers, sanitized example builders, artifact-safe summaries, and deterministic validation results.
+It does not load live config files. In plain guardrail wording: no live config loading exists,
+no YAML or JSON file loading of real config exists, no live execution exists, and examples remain sanitized and fake.
+
 Live config files must remain outside Git. Any future live config examples in this repository must be sanitized and
 fake. Runtime-only fields must not appear in artifacts, and a future implementation must validate redaction before
 artifact creation. This document defines guardrails and schema concepts only.
@@ -433,4 +438,4 @@ The following remain unsupported:
 - default `.release` output
 - production JSON schema finalization
 
-Recommendation: READY_FOR_PHASE_8C_EXTERNAL_LIVE_CONFIG_MODEL
+Recommendation: READY_FOR_PHASE_8D_READ_ONLY_DISCOVERY_DESIGN
