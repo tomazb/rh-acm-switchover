@@ -9,9 +9,11 @@ from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAB_CONTROLLER_SCHEMA_DOC = "docs/development/lab-role-controller-live-lab-config-schema.md"
+LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC = "docs/development/lab-role-controller-read-only-discovery-design.md"
 LAB_CONTROLLER_SAFETY_DOCS = (
     "docs/development/lab-role-controller-live-readiness-design.md",
     LAB_CONTROLLER_SCHEMA_DOC,
+    LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC,
     "docs/development/lab-role-controller-agent-instructions.md",
 )
 
@@ -708,6 +710,114 @@ def test_lab_role_controller_live_lab_config_schema_documents_phase8c_model_boun
 
     for token in required:
         assert token in content
+
+
+def test_lab_role_controller_read_only_discovery_design_is_non_live():
+    """Phase 8D discovery design must not imply discovery is implemented."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC)
+
+    required = (
+        "This is a proposed design",
+        "It does not implement read-only discovery",
+        "It does not contact live clusters",
+        "It does not read kubeconfigs",
+        "It does not\nenable live ACM certification",
+        "It does not enable mutation",
+        "It does not enable automatic recovery",
+        "The current lab role\ncontroller implementation remains non-live",
+        "Phase 8D does not load real config files",
+        "Recommendation: READY_FOR_PHASE_8E_READ_ONLY_DISCOVERY_GUARDRAILS",
+    )
+
+    for token in required:
+        assert token in content
+
+
+def test_lab_role_controller_read_only_discovery_design_documents_required_contracts():
+    """The Phase 8D design should define gates, inputs, interfaces, artifacts, and failure decisions."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC)
+
+    for section in (
+        "## Definition of Read-Only Discovery",
+        "## Required Live Gates Before Discovery",
+        "## Runtime-Only Input Contract",
+        "## Discovery Backend Interface Design",
+        "## Physical Hub Identity Evidence",
+        "## Logical Role Discovery Evidence",
+        "## Managed Cluster Set Verification",
+        "## Read-Only Query / Command Policy",
+        "## Discovery Artifact Design",
+        "## Redaction Policy For Discovery",
+        "## Failure Decision Model",
+        "## Test / Guardrail Requirements For Future Implementation",
+    ):
+        assert section in content
+
+    for conceptual_type in (
+        "ReadOnlyDiscoveryBackend",
+        "ReadOnlyDiscoveryRequest",
+        "ReadOnlyDiscoveryResult",
+        "HubDiscoveryEvidence",
+        "PhysicalIdentityEvidence",
+        "LogicalRoleEvidence",
+        "ManagedClusterSetEvidence",
+        "ReadOnlyResourceQueryPlan",
+        "DiscoveryRedactionReport",
+        "DiscoveryDecision",
+    ):
+        assert conceptual_type in content
+
+    for field in (
+        "discovery_mode: read_only",
+        "runtime_inputs_redacted: true",
+        "live_certification_evidence",
+        "physical_identity_evidence",
+        "logical_role_evidence",
+        "managed_cluster_set_evidence",
+        "command_query_summary",
+    ):
+        assert field in content
+
+
+def test_lab_role_controller_read_only_discovery_design_documents_gates_and_forbidden_commands():
+    """The read-only discovery design must document live gates and keep mutation forbidden."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC)
+
+    for gate in (
+        "L0: explicit live mode selected",
+        "L1: clean working tree and expected branch/commit verified",
+        "L2: external live lab config provided from outside Git",
+        "L3: runtime-only kubeconfig and credential references validated",
+        "L4: physical hub identity proof gate initialized",
+        "L5: logical role discovery gate initialized",
+        "L6: managed cluster set expectation available",
+        "L7: RBAC/read prerequisites available",
+        "L8: scenario allowlist permits read-only discovery/preflight",
+        "L9: materialized read-only invocation reviewed",
+        "L10: final confirmation before mutation",
+    ):
+        assert gate in content
+
+    for token in (
+        "L10 is not required for\nread-only discovery",
+        "Arbitrary shell commands",
+        "Mutation-capable commands",
+        "Agent-invented commands",
+        "Forbidden in read-only discovery",
+        "Any mutation moves out of Phase 8D scope",
+    ):
+        assert token in content
+
+
+def test_lab_role_controller_read_only_discovery_scenarios_match_catalog():
+    """The Phase 8D scenario policy should use current catalog IDs."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC)
+
+    for scenario_id in SCENARIOS_BY_ID:
+        assert f"`{scenario_id}`" in content
+
+    for initially_allowed in ("lab-readiness", "baseline-check", "preflight", "final-baseline-check"):
+        assert f"`{initially_allowed}`" in content
 
 
 def test_lab_role_controller_cli_and_docs_do_not_claim_live_mode_support():

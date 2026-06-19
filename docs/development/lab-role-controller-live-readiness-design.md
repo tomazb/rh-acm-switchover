@@ -17,6 +17,11 @@ Phase 8B turns the highest-risk boundaries from this document into non-live guar
 lab config schema design in [`docs/development/lab-role-controller-live-lab-config-schema.md`](lab-role-controller-live-lab-config-schema.md).
 That schema design is not consumed by current code and does not enable live config loading or live execution.
 
+Phase 8D records the future read-only discovery backend contract in
+[`docs/development/lab-role-controller-read-only-discovery-design.md`](lab-role-controller-read-only-discovery-design.md).
+That design is documentation-only and does not implement live discovery, kubeconfig reading, live adapter execution, or
+mutation.
+
 ## Scope
 
 In scope:
@@ -434,9 +439,9 @@ Recommended next phases after Phase 8A:
 
 - Phase 8B: live-readiness guardrail tests and config schema design
 - Phase 8C: external live lab config model, no execution
-- Phase 8D: read-only live discovery backend behind explicit human gate
-- Phase 8E: read-only live preflight artifact run
-- Phase 8F: live RBAC certification integration
+- Phase 8D: read-only live discovery backend contract design, no implementation
+- Phase 8E: read-only discovery guardrails before backend implementation
+- Phase 8F: read-only live discovery backend only after guardrails and review
 - Phase 9A: first gated mutating live scenario design
 - Phase 9B: first gated mutating implementation, only after independent audit
 

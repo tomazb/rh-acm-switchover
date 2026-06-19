@@ -10,6 +10,11 @@ sensitivity helpers, sanitized example builders, artifact-safe summaries, and de
 It does not load live config files. In plain guardrail wording: no live config loading exists,
 no YAML or JSON file loading of real config exists, no live execution exists, and examples remain sanitized and fake.
 
+Phase 8D consumes the Phase 8C model conceptually in
+[`docs/development/lab-role-controller-read-only-discovery-design.md`](lab-role-controller-read-only-discovery-design.md).
+That design defines the future read-only discovery contract only. It does not load real config files, read
+kubeconfigs, contact clusters, or enable live ACM certification.
+
 Live config files must remain outside Git. Any future live config examples in this repository must be sanitized and
 fake. Runtime-only fields must not appear in artifacts, and a future implementation must validate redaction before
 artifact creation. This document defines guardrails and schema concepts only.
