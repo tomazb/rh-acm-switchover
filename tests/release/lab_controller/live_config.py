@@ -224,6 +224,7 @@ class LiveConfigValidationResult:
     artifact_safe_summary: dict[str, Any]
     redaction_status: str
     live_execution_enabled: bool
+    read_only_discovery_enabled: bool
     mutation_enabled: bool
     automatic_recovery_enabled: bool
     live_certification_evidence_enabled: bool
@@ -235,6 +236,7 @@ class LiveConfigValidationResult:
             "blocking_fields": list(self.blocking_fields),
             "redaction_status": self.redaction_status,
             "live_execution_enabled": self.live_execution_enabled,
+            "read_only_discovery_enabled": self.read_only_discovery_enabled,
             "mutation_enabled": self.mutation_enabled,
             "automatic_recovery_enabled": self.automatic_recovery_enabled,
             "live_certification_evidence_enabled": self.live_certification_evidence_enabled,
@@ -435,6 +437,7 @@ def validate_live_gate_set(gate_ids: Sequence[LiveGateId | str]) -> LiveConfigVa
         artifact_safe_summary=sanitize_artifact_payload(summary),
         redaction_status="redacted",
         live_execution_enabled=False,
+        read_only_discovery_enabled=False,
         mutation_enabled=False,
         automatic_recovery_enabled=False,
         live_certification_evidence_enabled=False,
@@ -476,6 +479,7 @@ def validate_no_committed_sensitive_values(
         artifact_safe_summary=sanitize_artifact_payload(summary),
         redaction_status="blocked" if blocking_fields else "redacted",
         live_execution_enabled=False,
+        read_only_discovery_enabled=False,
         mutation_enabled=False,
         automatic_recovery_enabled=False,
         live_certification_evidence_enabled=False,
@@ -552,6 +556,7 @@ def _validation_result(
         artifact_safe_summary=summary,
         redaction_status=redaction_status,
         live_execution_enabled=execution_policy.live_execution_enabled,
+        read_only_discovery_enabled=execution_policy.read_only_discovery_enabled,
         mutation_enabled=execution_policy.mutation_enabled,
         automatic_recovery_enabled=execution_policy.automatic_recovery_enabled,
         live_certification_evidence_enabled=execution_policy.live_certification_evidence_enabled,
@@ -574,6 +579,7 @@ def _artifact_safe_summary(
         "blocking_fields": list(blocking_fields),
         "redaction_status": redaction_status,
         "live_execution_enabled": execution_policy.live_execution_enabled,
+        "read_only_discovery_enabled": execution_policy.read_only_discovery_enabled,
         "mutation_enabled": execution_policy.mutation_enabled,
         "automatic_recovery_enabled": execution_policy.automatic_recovery_enabled,
         "live_certification_evidence_enabled": execution_policy.live_certification_evidence_enabled,
@@ -886,6 +892,13 @@ def _validate_execution_policy(config: ExternalLiveLabConfig, reasons: list[str]
             blocking_fields,
             "execution_policy.live_execution_enabled",
             "live execution must remain disabled in Phase 8C",
+        )
+    if policy.read_only_discovery_enabled:
+        _block(
+            reasons,
+            blocking_fields,
+            "execution_policy.read_only_discovery_enabled",
+            "read-only discovery must remain disabled in Phase 8C",
         )
     if policy.mutation_enabled:
         _block(

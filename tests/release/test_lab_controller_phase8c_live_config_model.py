@@ -59,6 +59,7 @@ def test_sanitized_example_config_validates_with_safe_pass_decision() -> None:
 
     assert result.decision is LiveConfigValidationDecision.PASS
     assert result.live_execution_enabled is False
+    assert result.read_only_discovery_enabled is False
     assert result.mutation_enabled is False
     assert result.automatic_recovery_enabled is False
     assert result.live_certification_evidence_enabled is False
@@ -89,6 +90,7 @@ def test_execution_policy_defaults_fail_closed() -> None:
     policy = LiveExecutionPolicy()
 
     assert policy.live_execution_enabled is False
+    assert policy.read_only_discovery_enabled is False
     assert policy.mutation_enabled is False
     assert policy.automatic_recovery_enabled is False
     assert policy.live_certification_evidence_enabled is False
@@ -100,6 +102,7 @@ def test_execution_policy_enabled_flags_are_blocked() -> None:
         example,
         execution_policy=LiveExecutionPolicy(
             live_execution_enabled=True,
+            read_only_discovery_enabled=True,
             mutation_enabled=True,
             automatic_recovery_enabled=True,
             live_certification_evidence_enabled=True,
@@ -110,6 +113,7 @@ def test_execution_policy_enabled_flags_are_blocked() -> None:
 
     assert result.decision is LiveConfigValidationDecision.BLOCKED
     assert "execution_policy.live_execution_enabled" in result.blocking_fields
+    assert "execution_policy.read_only_discovery_enabled" in result.blocking_fields
     assert "execution_policy.mutation_enabled" in result.blocking_fields
     assert "execution_policy.automatic_recovery_enabled" in result.blocking_fields
     assert "execution_policy.live_certification_evidence_enabled" in result.blocking_fields
@@ -177,6 +181,7 @@ def test_artifact_safe_summary_excludes_runtime_only_hub_references() -> None:
     assert "<runtime-only-kubeconfig-ref>" not in summary_text
     assert "<runtime-only-context-ref>" not in summary_text
     assert summary["live_execution_enabled"] is False
+    assert summary["read_only_discovery_enabled"] is False
     assert summary["mutation_enabled"] is False
     assert summary["automatic_recovery_enabled"] is False
     assert summary["live_certification_evidence_enabled"] is False
@@ -558,4 +563,5 @@ def test_validation_result_is_structured_for_invalid_input_without_exceptions() 
     assert isinstance(result.blocking_fields, tuple)
     assert isinstance(result.artifact_safe_summary, dict)
     assert result.live_execution_enabled is False
+    assert result.read_only_discovery_enabled is False
     assert result.mutation_enabled is False
