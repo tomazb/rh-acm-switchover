@@ -820,6 +820,29 @@ def test_lab_role_controller_read_only_discovery_scenarios_match_catalog():
         assert f"`{initially_allowed}`" in content
 
 
+def test_lab_role_controller_read_only_discovery_design_documents_phase8e_guardrail_status():
+    """Phase 8E status must stay guardrail-only and non-live, with no backend implementation claim."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC)
+
+    required = (
+        "## Phase 8E Status",
+        "Phase 8E adds guardrail code and no backend implementation",
+        "tests/release/lab_controller/read_only_discovery.py",
+        "tests/release/test_lab_controller_phase8e_read_only_discovery_guardrails.py",
+        "Phase 8E remains non-live",
+        "does not implement read-only discovery",
+        "even with L10 present, Phase 8E never authorizes mutation",
+        "fail-closed read-only query plan validation",
+        "fail-closed read-only discovery artifact field contracts",
+        "live_certification_evidence=false",
+        "READY_FOR_PHASE_8F_READ_ONLY_BACKEND_DESIGN",
+        "Live read-only discovery is still not implemented",
+    )
+
+    for token in required:
+        assert token in content
+
+
 def test_lab_role_controller_cli_and_docs_do_not_claim_live_mode_support():
     """The CLI and Agent docs should keep live and release-framework-live unsupported."""
     help_text = lab_controller_cli._parser().format_help().lower()

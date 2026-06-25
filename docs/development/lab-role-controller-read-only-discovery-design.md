@@ -504,9 +504,37 @@ Those links are documentation-only pointers.
 
 No protected operational runbooks are modified by this design. No Agent live behavior is added.
 
+## Phase 8E Status
+
+Phase 8E adds guardrail code and no backend implementation. The guardrails live in
+`tests/release/lab_controller/read_only_discovery.py` with focused tests in
+`tests/release/test_lab_controller_phase8e_read_only_discovery_guardrails.py`.
+
+Phase 8E remains non-live. The guardrail module does not implement read-only discovery, does not contact live
+clusters, does not read kubeconfigs, does not read environment credentials, does not run `oc`, `kubectl`,
+`ansible-playbook`, or release adapters, and does not write artifacts. It is pure classification and validation that
+fails closed.
+
+The guardrails deterministically model:
+
+- allowed and forbidden read-only query families, failing closed on unknown families
+- read-only versus mutating, unsafe, and unknown verbs, failing closed on unknown verbs
+- the L0-L9 gate requirement set, with L10 excluded for read-only discovery and required only for any future mutation
+  attempt; even with L10 present, Phase 8E never authorizes mutation
+- conservative, catalog-aligned read-only eligibility for every catalog scenario ID, failing closed on unknown IDs
+- fail-closed read-only query plan validation
+- fail-closed read-only discovery artifact field contracts
+- artifact-safe, redacted summaries that keep `live_certification_evidence=false`
+
+A future read-only discovery model or backend must consume these guardrails before any live contact is possible and
+must not weaken their safety semantics.
+
 ## Recommendation
 
 Recommendation: READY_FOR_PHASE_8E_READ_ONLY_DISCOVERY_GUARDRAILS
 
 Phase 8E should add read-only discovery guardrails before any backend implementation. It should not implement live
 discovery immediately unless the guardrail phase is explicitly completed and independently reviewed.
+
+Phase 8E is now implemented as guardrail code only. The next non-live target is
+READY_FOR_PHASE_8F_READ_ONLY_BACKEND_DESIGN. Live read-only discovery is still not implemented.
