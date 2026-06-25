@@ -2,7 +2,8 @@
 
 ## Status
 
-This is a proposed backend design. It does not implement a backend.
+This is a proposed backend design. Phase 8G adds a pure read-only backend interface skeleton, but it does not implement
+a transport backend.
 
 It does not contact live clusters. It does not read kubeconfigs. It does not load real live config files. It does not
 execute `oc`, `kubectl`, or `ansible-playbook`. It does not invoke live adapters. It does not enable live ACM
@@ -10,7 +11,9 @@ certification. It does not enable mutation. It does not enable automatic recover
 non-live.
 
 Phase 8F defines how a later read-only discovery backend should consume the Phase 8C `ExternalLiveLabConfig` model and
-the Phase 8E read-only discovery guardrails before any implementation exists. Transport execution, live cluster contact,
+the Phase 8E read-only discovery guardrails before transport implementation exists. Phase 8G turns the design into
+typed request/result/evidence contracts, deterministic validators, artifact-safe summaries, a backend protocol, and an
+`UnimplementedReadOnlyDiscoveryBackend` that fails closed with `BLOCKED`. Transport execution, live cluster contact,
 runtime config loading, and production artifact schema finalization remain future work.
 
 ## Scope
@@ -106,7 +109,7 @@ ExternalLiveLabConfig
   -> discovery artifact
 ```
 
-Transport execution is not part of Phase 8F. This document only defines the future shape and constraints.
+Transport execution is not part of Phase 8F or Phase 8G. This document only defines the future shape and constraints.
 
 ## Request Contract
 
@@ -492,10 +495,10 @@ from implicit local environment state.
 
 ## Future Implementation Sequence
 
-Recommended staged sequence after Phase 8F:
+Recommended staged sequence after Phase 8G:
 
-- Phase 8G: read-only backend interface skeleton, no transport implementation
-- Phase 8H: fake transport backend and contract tests, no live contact
+- Phase 8G: read-only backend interface skeleton, no transport implementation (complete)
+- Phase 8H: fake transport backend and contract tests, no live contact (next)
 - Phase 8I: read-only live transport design review
 - Phase 8J: first opt-in read-only live transport implementation behind explicit gates
 - Phase 8K: read-only live preflight artifact pilot
@@ -512,12 +515,32 @@ This design should be linked from:
 - `docs/development/lab-role-controller-read-only-discovery-design.md`
 - `docs/development/lab-role-controller-live-readiness-design.md`
 
-Documentation guardrails should pin that Phase 8F remains design-only, defines request/result contracts, constrains
-transport, consumes Phase 8C and Phase 8E, keeps current controller defaults non-live, and recommends Phase 8G as an
-interface skeleton rather than live implementation.
+Documentation guardrails should pin that Phase 8F remains design-only, Phase 8G remains interface-only, the code
+defines request/result contracts, constrains future transport, consumes Phase 8C and Phase 8E, keeps current controller
+defaults non-live, and recommends Phase 8H as fake transport contracts rather than live implementation.
 
 Protected operational runbooks remain read-only.
 
+## Phase 8G Status
+
+Phase 8G adds the read-only backend interface skeleton in
+`tests/release/lab_controller/read_only_backend.py`, with focused tests in
+`tests/release/test_lab_controller_phase8g_read_only_backend_interface.py`.
+
+The Phase 8G code defines pure typed contracts for future read-only discovery requests, results, evidence, query-plan
+bundles, runtime-only hub references, transport summaries, artifact-safe summaries, and backend interface decisions.
+It consumes Phase 8C redacted config summaries and Phase 8E guardrail results, validates that L0-L9 guardrails passed
+before any future contact, and keeps `mutation_enabled=false` and `live_certification_evidence=false`.
+
+`UnimplementedReadOnlyDiscoveryBackend` is intentionally fail-closed. It validates requests, then returns `BLOCKED`
+with no live contact, no query execution, runtime inputs redacted, mutation disabled, and live certification evidence
+disabled. It exists so later phases can type against the backend protocol without accidentally adding transport.
+
+Phase 8G remains non-live. It does not implement transport, fake transport execution, live transport execution, live
+config loading, kubeconfig reading, environment credential reading, live cluster commands, release adapter execution,
+live discovery, mutation, automatic recovery, committed generated profiles, `.release` runtime output, production JSON
+schema finalization, or Agent live behavior.
+
 ## Recommendation
 
-Recommendation: READY_FOR_PHASE_8G_READ_ONLY_BACKEND_INTERFACE_SKELETON
+Recommendation: READY_FOR_PHASE_8H_FAKE_TRANSPORT_CONTRACTS

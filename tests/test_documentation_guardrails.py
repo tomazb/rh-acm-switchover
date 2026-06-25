@@ -848,12 +848,12 @@ def test_lab_role_controller_read_only_discovery_design_documents_phase8e_guardr
 
 
 def test_lab_role_controller_read_only_backend_design_is_non_live():
-    """Phase 8F backend design must not imply a backend or live execution exists."""
+    """Phase 8F/8G backend docs must not imply transport or live execution exists."""
     content = _read(LAB_CONTROLLER_READ_ONLY_BACKEND_DOC)
 
     required = (
         "This is a proposed backend design",
-        "It does not implement a backend",
+        "it does not implement\na transport backend",
         "It does not contact live clusters",
         "It does not read kubeconfigs",
         "It does not load real live config files",
@@ -863,8 +863,11 @@ def test_lab_role_controller_read_only_backend_design_is_non_live():
         "It does not enable mutation",
         "It does not enable automatic recovery",
         "The current implementation remains\nnon-live",
-        "Transport execution is not part of Phase 8F",
-        "Recommendation: READY_FOR_PHASE_8G_READ_ONLY_BACKEND_INTERFACE_SKELETON",
+        "Transport execution is not part of Phase 8F or Phase 8G",
+        "## Phase 8G Status",
+        "tests/release/lab_controller/read_only_backend.py",
+        "UnimplementedReadOnlyDiscoveryBackend",
+        "Recommendation: READY_FOR_PHASE_8H_FAKE_TRANSPORT_CONTRACTS",
     )
 
     for token in required:
