@@ -1,0 +1,523 @@
+# Lab Role Controller Read-Only Backend Design
+
+## Status
+
+This is a proposed backend design. It does not implement a backend.
+
+It does not contact live clusters. It does not read kubeconfigs. It does not load real live config files. It does not
+execute `oc`, `kubectl`, or `ansible-playbook`. It does not invoke live adapters. It does not enable live ACM
+certification. It does not enable mutation. It does not enable automatic recovery. The current implementation remains
+non-live.
+
+Phase 8F defines how a later read-only discovery backend should consume the Phase 8C `ExternalLiveLabConfig` model and
+the Phase 8E read-only discovery guardrails before any implementation exists. Transport execution, live cluster contact,
+runtime config loading, and production artifact schema finalization remain future work.
+
+## Scope
+
+In scope:
+
+- future read-only backend architecture
+- component responsibilities
+- request and result contracts
+- transport abstraction design
+- query planning design
+- evidence collection design
+- Phase 8C config model consumption
+- Phase 8E guardrail integration
+- artifact and redaction contract
+- failure decision mapping
+- future implementation phases and tests
+
+Out of scope:
+
+- implementing a live backend
+- loading live config from disk
+- reading kubeconfigs
+- reading environment credentials
+- contacting API servers
+- running `oc` or `kubectl`
+- running `ansible-playbook`
+- invoking live adapters
+- mutation
+- restore
+- decommission
+- automatic recovery
+- Agent-driven live operation
+- production JSON schema finalization
+
+## Current Foundation
+
+Phase 8C added the external live lab config model in `tests/release/lab_controller/live_config.py`. The model is an
+in-memory dataclass and validation layer only. It provides `ExternalLiveLabConfig`, runtime-only field sensitivity,
+sanitized summaries, L0-L10 gate names, fail-closed validation, and disabled execution-policy defaults. It does not load
+real config files, read kubeconfigs, read environment credentials, contact clusters, run commands, write live artifacts,
+or enable live execution.
+
+Phase 8D documented the read-only discovery contract in
+`docs/development/lab-role-controller-read-only-discovery-design.md`. That design defines live gate requirements,
+runtime-only input boundaries, future backend interfaces, identity evidence, logical role evidence, managed cluster set
+evidence, artifact requirements, redaction policy, and failure decisions. It does not implement discovery.
+
+Phase 8E added pure read-only discovery guardrails in `tests/release/lab_controller/read_only_discovery.py`. Those
+guardrails classify query families, verbs, scenarios, gate sets, query plans, and provisional artifact fields. They fail
+closed on unknown or unsafe inputs, require L0-L9 before read-only contact, exclude L10 from read-only authorization,
+reject mutation even when L10 is present, and keep `live_certification_evidence=false`.
+
+The current controller and CLI remain non-live. `scripts/release/run_lab_role_controller.py` supports only `fake`,
+`release-framework-dry-run`, and explicitly gated local fake-harness execution. Live modes fail closed. Phase 8F depends
+on the Phase 8E guardrails but does not instantiate a backend.
+
+## Backend Architecture Overview
+
+A future read-only backend should be a controller-owned pipeline with narrow, typed boundaries. The backend must not
+accept arbitrary commands or raw runtime config. Every query must be planned, classified, guardrail-validated, executed
+through a constrained transport, converted into evidence, redacted, and then classified into a controller decision.
+
+Conceptual components:
+
+- `ReadOnlyDiscoveryOrchestrator`: owns the end-to-end request lifecycle, gate ordering, and decision handoff to the
+  existing lab role controller.
+- `ReadOnlyDiscoveryBackend`: receives a validated request, coordinates planning and evidence collection, and returns a
+  `ReadOnlyDiscoveryResult`.
+- `ReadOnlyQueryPlanner`: produces deterministic structured query plans from validated config summaries and scenario
+  policy.
+- `ReadOnlyTransport`: future transport interface for structured read-only query objects only.
+- `HubEvidenceCollector`: coordinates per-hub evidence collection and merges collector outputs.
+- `IdentityEvidenceCollector`: produces physical hub identity evidence.
+- `RoleEvidenceCollector`: produces active/passive logical role evidence.
+- `ManagedClusterEvidenceCollector`: produces exact managed cluster set evidence.
+- `RbacReadinessCollector`: produces read prerequisite evidence without RBAC mutation.
+- `DiscoveryArtifactBuilder`: builds provisional publishable artifact payloads.
+- `DiscoveryRedactor`: rejects, redacts, or fingerprints unsafe runtime and response data before publication.
+- `DiscoveryDecisionClassifier`: maps config, guardrail, transport, evidence, and redaction outcomes to decisions.
+
+Text diagram:
+
+```text
+ExternalLiveLabConfig
+  -> live gate evaluation
+  -> read-only query planner
+  -> Phase 8E guardrail validation
+  -> transport execution (future only)
+  -> evidence collectors
+  -> redaction
+  -> decision classifier
+  -> discovery artifact
+```
+
+Transport execution is not part of Phase 8F. This document only defines the future shape and constraints.
+
+## Request Contract
+
+A future `ReadOnlyDiscoveryRequest` should be an immutable, structured request assembled by the controller after the
+caller has already supplied a validated `ExternalLiveLabConfig` object. The request must not load or parse real files.
+
+Fields:
+
+- `request_id`
+- `scenario_id`
+- `plan_id`
+- `validated_config_summary`
+- `runtime_only_hub_refs`
+- `expected_physical_labels`
+- `expected_managed_cluster_names`
+- `required_gate_status`
+- `query_plan`
+- `redaction_policy`
+- `artifact_policy`
+- `retry_policy`
+- `live_execution_enabled`
+- `mutation_enabled=false`
+- `live_certification_evidence=false`
+
+Rules:
+
+- `runtime_only_hub_refs` are not artifact-facing and must never be copied into publishable summaries.
+- `validated_config_summary` comes from Phase 8C validation and redaction helpers, not from live file loading.
+- `expected_physical_labels` and `expected_managed_cluster_names` come from the validated config model.
+- `query_plan` must pass Phase 8E guardrails before contact.
+- `required_gate_status` must satisfy L0-L9 before contact.
+- `mutation_enabled` must be false.
+- `live_certification_evidence` must remain false for the first read-only phases.
+- The request must be rejected if Phase 8C validation fails, Phase 8E guardrails fail, or redaction policy is missing.
+
+## Result Contract
+
+A future `ReadOnlyDiscoveryResult` should be a structured controller result that is safe to summarize without exposing
+runtime-only inputs.
+
+Fields:
+
+- `decision`
+- `request_id`
+- `scenario_id`
+- `physical_identity_evidence`
+- `logical_role_evidence`
+- `managed_cluster_set_evidence`
+- `read_prerequisite_evidence`
+- `gate_status`
+- `query_results_summary`
+- `redaction_status`
+- `retry_allowed`
+- `manual_recovery_required`
+- `first_blocking_reason`
+- `live_certification_evidence=false`
+- `runtime_inputs_redacted=true`
+- `artifact_safe_summary`
+
+Rules:
+
+- `decision` uses the existing controller vocabulary: `PASS`, `BLOCKED`, `NO_GO`, `RECOVERY_REQUIRED`, and
+  `INFRA_RETRYABLE`.
+- `runtime_inputs_redacted` must be true for any artifact-facing result.
+- `live_certification_evidence` remains false unless a later audited phase changes that contract.
+- A result produced after failed redaction is not publishable certification evidence and must map to `NO_GO` or
+  `BLOCKED` according to where the failure happened.
+
+## Transport Abstraction
+
+The future `ReadOnlyTransport` must be constrained enough that the query planner, not an Agent or shell string, owns all
+live contact semantics.
+
+The transport should:
+
+- accept structured read-only query objects
+- not accept arbitrary shell strings
+- use explicit runtime credential handles only
+- not inherit `os.environ` wholesale
+- never expose raw kubeconfig paths or API URLs in artifacts
+- return structured response summaries
+- provide timeout and error categories
+- mark whether any live contact occurred
+- never perform mutation in read-only mode
+
+The transport must reject:
+
+- unknown query families
+- mutating verbs
+- arbitrary commands
+- Agent-invented commands
+- secret-bearing queries
+- unsafe artifact-facing payloads
+
+Transport inputs are runtime-only. Transport outputs are not artifact-safe until `DiscoveryRedactor` accepts or
+summarizes them.
+
+## Query Planner Design
+
+The future `ReadOnlyQueryPlanner` converts a validated request into deterministic query objects. It must be smaller and
+stricter than a command builder: it emits only known query families, known read-only verbs, known hub targets, and known
+artifact summary fields.
+
+It must:
+
+- generate only Phase 8E-valid read-only query plans
+- validate every planned query with `read_only_discovery.py` guardrails
+- require L0-L9 gate satisfaction
+- not use L10 to authorize mutation
+- keep query plans deterministic
+- produce artifact-safe query summaries
+- fail closed on unknown scenario or query family
+- require exact managed cluster expectations
+
+The planner should produce query plan objects with:
+
+- `query_id`
+- `scenario_id`
+- `hub_label`
+- `query_family`
+- `verb`
+- `resource_family`
+- `required_gate_ids`
+- `expected_artifact_fields`
+- `redaction_requirements`
+- `may_expose_secrets=false`
+- `mutates_state=false`
+- `uses_arbitrary_command=false`
+- `agent_invented=false`
+
+Planner output becomes executable only after every query plan passes Phase 8E validation. Conditional Phase 8E query
+families, such as Argo CD status or SubjectAccessReview-style checks, remain blocked until a separate audited design
+adds the scenario-specific proof field required to allow them.
+
+## Evidence Collection Design
+
+Evidence collectors should consume structured transport responses and produce redacted evidence models. They must not
+execute transport calls themselves unless the orchestrator explicitly passes a guarded query result into them.
+
+### Physical Identity Evidence
+
+Physical identity evidence should include:
+
+- `kube-system` namespace UID fingerprint
+- API identity fingerprint
+- OpenShift version summary
+- ACM, MCE, and MCH evidence summary
+- expected identity fingerprint comparison
+- signal count and match or mismatch summary
+
+Rules:
+
+- Context names and kubeconfig references are not identity proof.
+- At least two independent identity signals are preferred where practical.
+- Identity mismatch and swapped identity map to `NO_GO`.
+- Missing identity proof before contact maps to `BLOCKED`; missing or contradictory live evidence after read contact
+  maps to `NO_GO` or `RECOVERY_REQUIRED` depending on the evidence.
+- UID values are fingerprinted when policy treats them as private.
+
+### Logical Role Evidence
+
+Logical role evidence should include:
+
+- managed cluster ownership or presence
+- active and passive evidence categories
+- backup, restore, and passive indicators
+- ambiguity status
+- previous artifact reference status as supporting only, never sole proof
+
+Rules:
+
+- Both hubs active maps to `NO_GO`.
+- Neither hub active maps to `RECOVERY_REQUIRED`.
+- Ambiguous role evidence fails closed.
+- A previous artifact may explain expected state but must never prove current live state alone.
+
+### Managed Cluster Evidence
+
+Managed cluster set evidence should include:
+
+- expected names
+- observed names
+- missing names
+- extra names
+- exact match result
+- unexpected cluster policy
+
+Rules:
+
+- Expected names come from the validated Phase 8C config model.
+- `exact_match_required` must be true.
+- `unexpected_cluster_policy` must be `block`.
+- Missing or extra clusters block certification.
+- Artifact policy may choose names, counts, hashes, or fingerprints depending on lab privacy requirements.
+
+### RBAC And Read Prerequisite Evidence
+
+RBAC/read prerequisite evidence should include:
+
+- read capability list
+- allow or deny status
+- missing capability summary
+- no RBAC mutation
+
+Rules:
+
+- The initial backend must not bootstrap RBAC.
+- SubjectAccessReview-style checks remain conditional until separately designed as a non-mutating query family.
+- Missing read prerequisites map to `NO_GO` after read contact or `BLOCKED` when the plan cannot safely collect them.
+
+## Decision Classification
+
+`DiscoveryDecisionClassifier` maps outcomes to the controller decision vocabulary.
+
+`PASS` requires:
+
+- all gates satisfied
+- all queries guardrail-valid
+- identity proven
+- role state proven
+- managed cluster set exact
+- redaction passed
+- no mutation
+- `live_certification_evidence=false` unless a later audited phase changes this
+
+`BLOCKED` applies to:
+
+- invalid config
+- missing runtime handles
+- missing gates
+- invalid query plan
+- unsupported scenario
+- forbidden command or query
+- guardrail failure before live contact
+
+`NO_GO` applies to:
+
+- identity mismatch
+- swapped identity
+- both hubs active
+- managed cluster drift judged unsafe
+- redaction failure after evidence collection
+- unsafe artifact payload
+
+`RECOVERY_REQUIRED` applies to:
+
+- neither hub active
+- ambiguous role evidence requiring manual inspection
+- live state cannot be proven after read contact
+
+`INFRA_RETRYABLE` applies only when:
+
+- a read-only query timeout or transient error occurred
+- no mutation was attempted
+- initial gates and config remain valid
+- retry criteria are satisfied
+
+Retry does not mean automatic recovery. A retry still requires an explicit operator action in a later implementation.
+
+## Artifact Contract
+
+Future read-only backend artifacts are runtime outputs and must not be committed. The artifact contract remains
+provisional and is not a production JSON schema.
+
+Top-level fields:
+
+- `artifact_version`
+- `controller_phase`
+- `backend_phase`
+- `discovery_mode=read_only`
+- `request_id`
+- `scenario_id`
+- `live_execution_enabled`
+- `mutation_enabled=false`
+- `live_certification_evidence=false`
+- `runtime_inputs_redacted=true`
+- `query_plan_summary`
+- `query_result_summary`
+- `physical_identity_evidence`
+- `logical_role_evidence`
+- `managed_cluster_set_evidence`
+- `read_prerequisite_evidence`
+- `transport_summary`
+- `gate_status`
+- `decision`
+- `retry_allowed`
+- `manual_recovery_required`
+- `first_blocking_reason`
+- `redaction_status`
+
+Artifact rules:
+
+- Raw runtime inputs must not appear.
+- Query summaries use query IDs, families, verbs, labels, counts, booleans, hashes, and fingerprints.
+- Transport summaries record contact status, timeout category, and error category without raw endpoints or credentials.
+- Artifacts record whether a plan was blocked before live contact.
+- `mutation_enabled` must be false.
+- `live_certification_evidence` must be false for the first backend phases.
+
+## Redaction Model
+
+`DiscoveryRedactor` must treat runtime and response values as unsafe until proven otherwise.
+
+Redact, fingerprint, omit, or reject:
+
+- runtime hub refs
+- kubeconfig refs
+- context refs
+- raw API URLs
+- UID values, if private
+- cluster IDs
+- token, password, secret, and credential values
+- stdout, stderr, and log-like values
+- query response snippets
+- approval references
+- artifact paths
+
+Artifact-safe forms:
+
+- labels
+- counts
+- gate IDs
+- scenario IDs
+- fingerprints
+- hashes
+- booleans
+- decision strings
+- redacted summaries
+
+Redaction failure before live contact maps to `BLOCKED` when the request shape is unsafe. Redaction failure after
+evidence collection maps to `NO_GO` because the backend cannot safely publish or use the evidence.
+
+## Integration With Existing Controller
+
+The future backend should integrate as an explicit controller backend, not as a new default CLI path.
+
+Rules:
+
+- default CLI remains non-live
+- future backend requires explicit live/read-only mode
+- future backend consumes the Phase 8C config model
+- future backend validates Phase 8E guardrails before contact
+- current fake, dry-run, and local harness modes remain unchanged
+- Agent instructions remain non-live until a later audited update
+- `live_certification_evidence` remains false in initial read-only backend phases
+
+Integration shape:
+
+- A later controller entrypoint creates `ExternalLiveLabConfig` from a caller-supplied object that has already been
+  obtained outside this repository's committed files.
+- The controller validates the config with `validate_external_live_lab_config`.
+- The controller builds `ReadOnlyDiscoveryRequest` from the redacted config summary and runtime-only handles.
+- The backend validates the request and every query through Phase 8E guardrails.
+- Only a later phase may add transport execution behind explicit live/read-only gates.
+- The resulting evidence can feed the existing identity, role, managed-cluster, recovery, and artifact vocabulary after
+  type-specific adapters are designed.
+
+## Test Requirements For Future Backend Implementation
+
+Before implementation can be considered ready, tests must prove:
+
+- no live backend default
+- backend cannot run without explicit live/read-only mode
+- backend cannot run without validated config
+- backend cannot run without L0-L9 gates
+- backend rejects L10 mutation authorization
+- backend rejects mutating verbs
+- backend rejects arbitrary commands
+- backend rejects Agent-invented commands
+- backend rejects secret-bearing queries
+- backend validates every query through Phase 8E guardrails
+- backend redacts runtime refs
+- backend redacts API URLs and private IDs
+- backend records `live_certification_evidence=false`
+- identity mismatch maps to `NO_GO`
+- both hubs active maps to `NO_GO`
+- neither hub active maps to `RECOVERY_REQUIRED`
+- managed cluster drift blocks
+- transport timeout maps to `INFRA_RETRYABLE` only under strict criteria
+
+Tests must remain non-live by default. Any future live test path must be opt-in, clearly named, and impossible to trigger
+from implicit local environment state.
+
+## Future Implementation Sequence
+
+Recommended staged sequence after Phase 8F:
+
+- Phase 8G: read-only backend interface skeleton, no transport implementation
+- Phase 8H: fake transport backend and contract tests, no live contact
+- Phase 8I: read-only live transport design review
+- Phase 8J: first opt-in read-only live transport implementation behind explicit gates
+- Phase 8K: read-only live preflight artifact pilot
+- Phase 8L: read-only live pilot audit and closeout
+
+Do not implement mutation next. Mutating live implementation requires a later audited design after the read-only backend
+contract, fake transport, live transport review, live pilot, and audit have proven identity, role, managed-cluster,
+guardrail, artifact, and redaction behavior.
+
+## Documentation Integration
+
+This design should be linked from:
+
+- `docs/development/lab-role-controller-read-only-discovery-design.md`
+- `docs/development/lab-role-controller-live-readiness-design.md`
+
+Documentation guardrails should pin that Phase 8F remains design-only, defines request/result contracts, constrains
+transport, consumes Phase 8C and Phase 8E, keeps current controller defaults non-live, and recommends Phase 8G as an
+interface skeleton rather than live implementation.
+
+Protected operational runbooks remain read-only.
+
+## Recommendation
+
+Recommendation: READY_FOR_PHASE_8G_READ_ONLY_BACKEND_INTERFACE_SKELETON

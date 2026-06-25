@@ -22,6 +22,11 @@ Phase 8D records the future read-only discovery backend contract in
 That design is documentation-only and does not implement live discovery, kubeconfig reading, live adapter execution, or
 mutation.
 
+Phase 8F records the proposed future read-only backend architecture in
+[`docs/development/lab-role-controller-read-only-backend-design.md`](lab-role-controller-read-only-backend-design.md).
+That design is documentation-only and does not implement a backend, read kubeconfigs, load live config files, contact
+clusters, invoke live adapters, enable mutation, or enable automatic recovery.
+
 ## Scope
 
 In scope:
@@ -441,7 +446,13 @@ Recommended next phases after Phase 8A:
 - Phase 8C: external live lab config model, no execution
 - Phase 8D: read-only live discovery backend contract design, no implementation
 - Phase 8E: read-only discovery guardrails before backend implementation
-- Phase 8F: read-only live discovery backend only after guardrails and review
+- Phase 8F: read-only backend architecture design, no implementation
+- Phase 8G: read-only backend interface skeleton, no transport implementation
+- Phase 8H: fake transport backend and contract tests, no live contact
+- Phase 8I: read-only live transport design review
+- Phase 8J: first opt-in read-only live transport implementation behind explicit gates
+- Phase 8K: read-only live preflight artifact pilot
+- Phase 8L: read-only live pilot audit and closeout
 - Phase 9A: first gated mutating live scenario design
 - Phase 9B: first gated mutating implementation, only after independent audit
 

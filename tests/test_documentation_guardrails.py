@@ -10,10 +10,12 @@ from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAB_CONTROLLER_SCHEMA_DOC = "docs/development/lab-role-controller-live-lab-config-schema.md"
 LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC = "docs/development/lab-role-controller-read-only-discovery-design.md"
+LAB_CONTROLLER_READ_ONLY_BACKEND_DOC = "docs/development/lab-role-controller-read-only-backend-design.md"
 LAB_CONTROLLER_SAFETY_DOCS = (
     "docs/development/lab-role-controller-live-readiness-design.md",
     LAB_CONTROLLER_SCHEMA_DOC,
     LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC,
+    LAB_CONTROLLER_READ_ONLY_BACKEND_DOC,
     "docs/development/lab-role-controller-agent-instructions.md",
 )
 
@@ -726,7 +728,7 @@ def test_lab_role_controller_read_only_discovery_design_is_non_live():
         "It does not enable automatic recovery",
         "The current lab role\ncontroller implementation remains non-live",
         "Phase 8D does not load real config files",
-        "Recommendation: READY_FOR_PHASE_8E_READ_ONLY_DISCOVERY_GUARDRAILS",
+        "Recommendation: READY_FOR_PHASE_8G_READ_ONLY_BACKEND_INTERFACE_SKELETON",
     )
 
     for token in required:
@@ -835,12 +837,97 @@ def test_lab_role_controller_read_only_discovery_design_documents_phase8e_guardr
         "fail-closed read-only query plan validation",
         "fail-closed read-only discovery artifact field contracts",
         "live_certification_evidence=false",
-        "READY_FOR_PHASE_8F_READ_ONLY_BACKEND_DESIGN",
+        "## Phase 8F Status",
+        "lab-role-controller-read-only-backend-design.md",
+        "READY_FOR_PHASE_8G_READ_ONLY_BACKEND_INTERFACE_SKELETON",
         "Live read-only discovery is still not implemented",
     )
 
     for token in required:
         assert token in content
+
+
+def test_lab_role_controller_read_only_backend_design_is_non_live():
+    """Phase 8F backend design must not imply a backend or live execution exists."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_BACKEND_DOC)
+
+    required = (
+        "This is a proposed backend design",
+        "It does not implement a backend",
+        "It does not contact live clusters",
+        "It does not read kubeconfigs",
+        "It does not load real live config files",
+        "It does not\nexecute `oc`, `kubectl`, or `ansible-playbook`",
+        "It does not invoke live adapters",
+        "It does not enable live ACM\ncertification",
+        "It does not enable mutation",
+        "It does not enable automatic recovery",
+        "The current implementation remains\nnon-live",
+        "Transport execution is not part of Phase 8F",
+        "Recommendation: READY_FOR_PHASE_8G_READ_ONLY_BACKEND_INTERFACE_SKELETON",
+    )
+
+    for token in required:
+        assert token in content
+
+
+def test_lab_role_controller_read_only_backend_design_documents_contracts():
+    """Phase 8F should define backend contracts while preserving fail-closed guardrail use."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_BACKEND_DOC)
+
+    for section in (
+        "## Backend Architecture Overview",
+        "## Request Contract",
+        "## Result Contract",
+        "## Transport Abstraction",
+        "## Query Planner Design",
+        "## Evidence Collection Design",
+        "## Decision Classification",
+        "## Artifact Contract",
+        "## Redaction Model",
+        "## Integration With Existing Controller",
+        "## Test Requirements For Future Backend Implementation",
+        "## Future Implementation Sequence",
+    ):
+        assert section in content
+
+    for component in (
+        "ReadOnlyDiscoveryOrchestrator",
+        "ReadOnlyDiscoveryBackend",
+        "ReadOnlyQueryPlanner",
+        "ReadOnlyTransport",
+        "HubEvidenceCollector",
+        "IdentityEvidenceCollector",
+        "RoleEvidenceCollector",
+        "ManagedClusterEvidenceCollector",
+        "RbacReadinessCollector",
+        "DiscoveryArtifactBuilder",
+        "DiscoveryRedactor",
+        "DiscoveryDecisionClassifier",
+    ):
+        assert component in content
+
+    for field in (
+        "runtime_only_hub_refs",
+        "mutation_enabled=false",
+        "live_certification_evidence=false",
+        "runtime_inputs_redacted=true",
+        "query_plan_summary",
+        "transport_summary",
+    ):
+        assert field in content
+
+    for guardrail in (
+        "Phase 8C `ExternalLiveLabConfig`",
+        "Phase 8E guardrail validation",
+        "L0-L9",
+        "not use L10 to authorize mutation",
+        "not accept arbitrary shell strings",
+        "backend rejects mutating verbs",
+        "backend rejects Agent-invented commands",
+        "Do not implement mutation next",
+    ):
+        assert guardrail in content
 
 
 def test_lab_role_controller_cli_and_docs_do_not_claim_live_mode_support():

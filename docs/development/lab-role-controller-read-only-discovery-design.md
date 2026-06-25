@@ -529,12 +529,26 @@ The guardrails deterministically model:
 A future read-only discovery model or backend must consume these guardrails before any live contact is possible and
 must not weaken their safety semantics.
 
+## Phase 8F Status
+
+Phase 8F records the proposed future backend architecture in
+[`lab-role-controller-read-only-backend-design.md`](lab-role-controller-read-only-backend-design.md).
+
+Phase 8F remains documentation/design only. It does not implement a backend, does not contact live clusters, does not
+read kubeconfigs, does not load real live config files, does not run `oc`, `kubectl`, or `ansible-playbook`, does not
+invoke live adapters, does not enable live ACM certification, does not enable mutation, and does not enable automatic
+recovery.
+
+The Phase 8F backend design explains how a later backend would consume the Phase 8C `ExternalLiveLabConfig` model,
+Phase 8E guardrails, runtime-only inputs, transport/query/evidence contracts, artifact redaction, and fail-closed
+decision mapping before any implementation exists.
+
+Live read-only discovery is still not implemented.
+
 ## Recommendation
 
-Recommendation: READY_FOR_PHASE_8E_READ_ONLY_DISCOVERY_GUARDRAILS
+Recommendation: READY_FOR_PHASE_8G_READ_ONLY_BACKEND_INTERFACE_SKELETON
 
-Phase 8E should add read-only discovery guardrails before any backend implementation. It should not implement live
-discovery immediately unless the guardrail phase is explicitly completed and independently reviewed.
-
-Phase 8E is now implemented as guardrail code only. The next non-live target is
-READY_FOR_PHASE_8F_READ_ONLY_BACKEND_DESIGN. Live read-only discovery is still not implemented.
+Phase 8G should add a read-only backend interface skeleton only. It should not add transport implementation, live config
+loading, kubeconfig reading, live cluster contact, live adapter execution, live discovery, mutation, automatic recovery,
+or live certification evidence.
