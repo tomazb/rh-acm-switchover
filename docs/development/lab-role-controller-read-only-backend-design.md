@@ -515,6 +515,11 @@ This design should be linked from:
 - `docs/development/lab-role-controller-read-only-discovery-design.md`
 - `docs/development/lab-role-controller-live-readiness-design.md`
 
+The Phase 8I read-only live transport design review that this design recommends now exists at
+[`lab-role-controller-read-only-live-transport-design-review.md`](lab-role-controller-read-only-live-transport-design-review.md).
+It remains design-only and recommends `READY_FOR_PHASE_8J_OPT_IN_READ_ONLY_LIVE_TRANSPORT_IMPLEMENTATION`
+without adding any live transport.
+
 Documentation guardrails should pin that Phase 8F remains design-only, Phase 8G remains interface-only, Phase 8H adds
 fake transport contracts only, the code defines request/result contracts, constrains future transport, consumes Phase
 8C and Phase 8E, keeps current controller defaults non-live, and recommends Phase 8I read-only live transport design

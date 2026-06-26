@@ -11,11 +11,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LAB_CONTROLLER_SCHEMA_DOC = "docs/development/lab-role-controller-live-lab-config-schema.md"
 LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC = "docs/development/lab-role-controller-read-only-discovery-design.md"
 LAB_CONTROLLER_READ_ONLY_BACKEND_DOC = "docs/development/lab-role-controller-read-only-backend-design.md"
+LAB_CONTROLLER_READ_ONLY_LIVE_TRANSPORT_REVIEW_DOC = (
+    "docs/development/lab-role-controller-read-only-live-transport-design-review.md"
+)
 LAB_CONTROLLER_SAFETY_DOCS = (
     "docs/development/lab-role-controller-live-readiness-design.md",
     LAB_CONTROLLER_SCHEMA_DOC,
     LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC,
     LAB_CONTROLLER_READ_ONLY_BACKEND_DOC,
+    LAB_CONTROLLER_READ_ONLY_LIVE_TRANSPORT_REVIEW_DOC,
     "docs/development/lab-role-controller-agent-instructions.md",
 )
 
@@ -937,6 +941,73 @@ def test_lab_role_controller_read_only_backend_design_documents_contracts():
         "Do not implement mutation next",
     ):
         assert guardrail in content
+
+
+def test_lab_role_controller_read_only_live_transport_review_is_design_only():
+    """Phase 8I review must stay design-only and must not imply live transport exists."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_LIVE_TRANSPORT_REVIEW_DOC)
+
+    required = (
+        "This is a design review.",
+        "It does not implement live transport.",
+        "It does not contact live clusters.",
+        "It does not read kubeconfigs.",
+        "It does not load real live config files.",
+        "It does not run `oc`, `kubectl`, or `ansible-playbook`.",
+        "It does not invoke live release adapters.",
+        "It does not enable live ACM certification.",
+        "It does not enable mutation.",
+        "It does not enable automatic recovery.",
+        "The current implementation remains non-live.",
+        "READY_FOR_PHASE_8I_READ_ONLY_LIVE_TRANSPORT_DESIGN_REVIEW",
+        "Recommendation: READY_FOR_PHASE_8J_OPT_IN_READ_ONLY_LIVE_TRANSPORT_IMPLEMENTATION",
+        "is **not** live ACM certification evidence",
+    )
+    for token in required:
+        assert token in content
+
+
+def test_lab_role_controller_read_only_live_transport_review_documents_contract():
+    """Phase 8I review must define transport policy, gates, decisions, and the artifact contract."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_LIVE_TRANSPORT_REVIEW_DOC)
+
+    for section in (
+        "## Status",
+        "## Final Recommendation",
+        "## Scope",
+        "## Current Foundation",
+        "## Transport Mechanism Decision",
+        "## Live Contact Boundary",
+        "## Required Gates Before Future Live Contact",
+        "## Runtime Credential and Kubeconfig Boundary",
+        "## Read-Only Query Surface",
+        "## Query Plan Enforcement",
+        "## Response Handling and Redaction",
+        "## Evidence Mapping",
+        "## Decision Mapping",
+        "## Artifact Contract",
+        "## Test Matrix For Phase 8J",
+        "## Operational Safeguards",
+        "## Risk Register",
+        "## Phase 8J Entry Criteria",
+        "## Documentation Integration",
+    ):
+        assert section in content
+
+    for token in (
+        "### Recommended Transport Policy",
+        "structured API-client abstraction",
+        "Rejected for the first read-only live implementation",
+        "FakeReadOnlyTransport",
+        "L0-L9 are required before read-only contact",
+        "authorize read-only contact or mutation in Phase 8J",
+        "mutation_enabled=false",
+        "live_certification_evidence=false",
+        "live_contact_attempted",
+        "discovery_mode=read_only",
+        "runtime_inputs_redacted=true",
+    ):
+        assert token in content
 
 
 def test_lab_role_controller_cli_and_docs_do_not_claim_live_mode_support():
