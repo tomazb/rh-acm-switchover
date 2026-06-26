@@ -498,8 +498,8 @@ from implicit local environment state.
 Recommended staged sequence after Phase 8G:
 
 - Phase 8G: read-only backend interface skeleton, no transport implementation (complete)
-- Phase 8H: fake transport backend and contract tests, no live contact (next)
-- Phase 8I: read-only live transport design review
+- Phase 8H: fake transport contracts and contract tests, no live contact (complete)
+- Phase 8I: read-only live transport design review (next)
 - Phase 8J: first opt-in read-only live transport implementation behind explicit gates
 - Phase 8K: read-only live preflight artifact pilot
 - Phase 8L: read-only live pilot audit and closeout
@@ -515,9 +515,10 @@ This design should be linked from:
 - `docs/development/lab-role-controller-read-only-discovery-design.md`
 - `docs/development/lab-role-controller-live-readiness-design.md`
 
-Documentation guardrails should pin that Phase 8F remains design-only, Phase 8G remains interface-only, the code
-defines request/result contracts, constrains future transport, consumes Phase 8C and Phase 8E, keeps current controller
-defaults non-live, and recommends Phase 8H as fake transport contracts rather than live implementation.
+Documentation guardrails should pin that Phase 8F remains design-only, Phase 8G remains interface-only, Phase 8H adds
+fake transport contracts only, the code defines request/result contracts, constrains future transport, consumes Phase
+8C and Phase 8E, keeps current controller defaults non-live, and recommends Phase 8I read-only live transport design
+review rather than live implementation.
 
 Protected operational runbooks remain read-only.
 
@@ -541,6 +542,33 @@ config loading, kubeconfig reading, environment credential reading, live cluster
 live discovery, mutation, automatic recovery, committed generated profiles, `.release` runtime output, production JSON
 schema finalization, or Agent live behavior.
 
+## Phase 8H Status
+
+Phase 8H adds deterministic fake read-only transport contracts in
+`tests/release/lab_controller/read_only_transport.py`, with focused tests in
+`tests/release/test_lab_controller_phase8h_fake_transport_contracts.py`. It adds fake transport contracts only, not a
+real transport backend.
+
+The Phase 8H code defines the structured query a future transport would receive (`ReadOnlyTransportQuery`), the
+deterministic fake response it returns (`ReadOnlyTransportResponse`), in-memory response fixtures
+(`FakeTransportFixture`), a deterministic `FakeReadOnlyTransport`, and artifact-safe transport summaries. Transport
+decisions are `PASS`, `BLOCKED`, `NO_GO`, and `INFRA_RETRYABLE`; response statuses are success, blocked, failed,
+timeout, and unsafe_payload. Every query is validated through the Phase 8E guardrails before any fixture lookup, so an
+invalid query is `BLOCKED` before lookup, a missing fixture is `BLOCKED`, an unsafe payload is `NO_GO`, a non-retryable
+timeout is `NO_GO`, and a retryable timeout is `INFRA_RETRYABLE` only when no contact occurred.
+
+A fake transport never sets `live_contact_attempted`, `live_contact_succeeded`, `mutation_attempted`, or
+`live_certification_evidence` to true, never mutates state outside its in-memory call log, and records every received
+query deterministically. Fixtures must carry artifact-safe payloads, reject duplicate query IDs at construction, and
+fail closed. The Phase 8H integration helpers let the Phase 8G request/result skeleton consume fake transport responses
+without ever flipping the unimplemented backend to `PASS`.
+
+Phase 8H remains non-live. It does not implement a real transport, contact clusters, load live config files, read
+kubeconfigs, read environment credentials, run subprocesses, execute `oc`, `kubectl`, or `ansible-playbook`, call
+release adapters, implement live discovery, enable mutation, enable automatic recovery, commit generated profiles, emit
+`.release` runtime output, finalize a production JSON schema, or add Agent live behavior. The next phase is a read-only
+live transport design review, not live mutation.
+
 ## Recommendation
 
-Recommendation: READY_FOR_PHASE_8H_FAKE_TRANSPORT_CONTRACTS
+Recommendation: READY_FOR_PHASE_8I_READ_ONLY_LIVE_TRANSPORT_DESIGN_REVIEW

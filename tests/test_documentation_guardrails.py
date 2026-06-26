@@ -848,7 +848,7 @@ def test_lab_role_controller_read_only_discovery_design_documents_phase8e_guardr
 
 
 def test_lab_role_controller_read_only_backend_design_is_non_live():
-    """Phase 8F/8G backend docs must not imply transport or live execution exists."""
+    """Phase 8F/8G/8H backend docs must not imply real transport or live execution exists."""
     content = _read(LAB_CONTROLLER_READ_ONLY_BACKEND_DOC)
 
     required = (
@@ -867,7 +867,13 @@ def test_lab_role_controller_read_only_backend_design_is_non_live():
         "## Phase 8G Status",
         "tests/release/lab_controller/read_only_backend.py",
         "UnimplementedReadOnlyDiscoveryBackend",
-        "Recommendation: READY_FOR_PHASE_8H_FAKE_TRANSPORT_CONTRACTS",
+        "## Phase 8H Status",
+        "It adds fake transport contracts only",
+        "tests/release/lab_controller/read_only_transport.py",
+        "FakeReadOnlyTransport",
+        "Phase 8H remains non-live",
+        "not live mutation",
+        "Recommendation: READY_FOR_PHASE_8I_READ_ONLY_LIVE_TRANSPORT_DESIGN_REVIEW",
     )
 
     for token in required:
