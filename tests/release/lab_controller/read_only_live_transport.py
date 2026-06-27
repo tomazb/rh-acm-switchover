@@ -62,6 +62,10 @@ _CREDENTIAL_VALUE_PATTERN = re.compile(
     r"(bearer\s+|token\s*[:=]|password\s*[:=]|secret\s*[:=]|credential\s*[:=]|\bcredential[-_:][^\s,;]+)",
     re.IGNORECASE,
 )
+_RUNTIME_HANDLE_CREDENTIAL_VALUE_PATTERN = re.compile(
+    r"(bearer\s+|token\s*[:=]|password\s*[:=]|secret\s*[:=]|credential\s*[:=])",
+    re.IGNORECASE,
+)
 _PRIVATE_ID_PATTERN = re.compile(r"\bcluster[-_]id(?:[-_:][A-Za-z0-9][\w.-]*)?\b", re.IGNORECASE)
 _COMMAND_LIKE_PATTERN = re.compile(
     r"\b(?:oc|kubectl|ansible-playbook|bash|sh|python3?|rm|curl|wget)\b(?=\s|$|[|;&])",
@@ -333,6 +337,9 @@ class ReadOnlyLiveTransportResult:
         # Hard invariant: a Phase 8J result can never claim mutation or live certification evidence.
         object.__setattr__(self, "mutation_attempted", False)
         object.__setattr__(self, "live_certification_evidence", False)
+        if self.live_contact_attempted is not True:
+            object.__setattr__(self, "live_contact_succeeded", False)
+            object.__setattr__(self, "real_execution_evidence", False)
 
     @property
     def no_live_contact(self) -> bool:
@@ -399,6 +406,12 @@ def evaluate_read_only_live_contact_guard(
             ReadOnlyLiveTransportErrorCategory.MISSING_HANDLE,
             "handle",
             "a runtime-only hub handle with access and context references is required before contact",
+        )
+    elif _runtime_handle_has_unsafe_values(context.handle):
+        _fail(
+            ReadOnlyLiveTransportErrorCategory.SAFETY_VIOLATION,
+            "handle",
+            "runtime-only hub handle contains unsafe raw runtime values",
         )
     if not _positive_timeout(options):
         _fail(
@@ -791,6 +804,31 @@ def _classify_live_payload(
 
 def _runtime_handle_present(handle: Any) -> bool:
     return isinstance(handle, RuntimeOnlyLiveHubHandle) and bool(handle.kubeconfig_ref) and bool(handle.context_ref)
+
+
+def _runtime_handle_has_unsafe_values(handle: RuntimeOnlyLiveHubHandle) -> bool:
+    return any(
+        value is not None and _runtime_handle_value_is_unsafe(value)
+        for value in (
+            handle.physical_label,
+            handle.kubeconfig_ref,
+            handle.context_ref,
+            handle.credential_ref,
+            handle.client_ref,
+        )
+    )
+
+
+def _runtime_handle_value_is_unsafe(value: str) -> bool:
+    lowered = value.lower()
+    return bool(
+        _URL_PATTERN.search(value)
+        or _KUBECONFIG_PATH_PATTERN.search(value)
+        or _RUNTIME_HANDLE_CREDENTIAL_VALUE_PATTERN.search(value)
+        or _PRIVATE_ID_PATTERN.search(value)
+        or _COMMAND_LIKE_PATTERN.search(value)
+        or _RELEASE_PATH_MARKER in lowered
+    )
 
 
 def _positive_timeout(options: Any) -> bool:

@@ -57,6 +57,7 @@ from tests.release.scenarios.catalog import SCENARIOS_BY_ID
 
 _MODULE_PATH = Path(__file__).resolve().parent / "lab_controller" / "read_only_live_transport.py"
 _CLI_PATH = Path(__file__).resolve().parents[2] / "scripts" / "release" / "run_lab_role_controller.py"
+_PLANNER_PATH = Path(__file__).resolve().parent / "lab_controller" / "planner.py"
 
 
 # --- helpers -------------------------------------------------------------------------------------
@@ -240,8 +241,11 @@ def test_module_source_has_no_live_execution_or_transport_primitives() -> None:
 
 def test_cli_does_not_integrate_live_transport() -> None:
     cli_source = _CLI_PATH.read_text(encoding="utf-8")
+    planner_source = _PLANNER_PATH.read_text(encoding="utf-8")
     assert "read_only_live_transport" not in cli_source
     assert "ReadOnlyLiveTransport" not in cli_source
+    assert "read_only_live_transport" not in planner_source
+    assert "ReadOnlyLiveTransport" not in planner_source
 
     assert lab_controller_cli.SUPPORTED_MODES == {"fake", "release-framework-dry-run", "release-framework-local"}
     assert "live" not in lab_controller_cli.SUPPORTED_MODES
@@ -333,6 +337,27 @@ def test_blocks_when_runtime_handle_missing() -> None:
     assert result.decision is ReadOnlyTransportDecision.BLOCKED
     assert result.error_category is ReadOnlyLiveTransportErrorCategory.MISSING_HANDLE
     assert client.call_count == 0
+
+
+def test_blocks_unsafe_runtime_handle_values_before_client_call() -> None:
+    for bad_handle in (
+        _handle(kubeconfig_ref=_UNSAFE_KUBECONFIG),
+        _handle(context_ref=_UNSAFE_URL),
+        _handle(credential_ref=_UNSAFE_TOKEN),
+        _handle(client_ref=_UNSAFE_PRIVATE_ID),
+    ):
+        client = _RecordingFakeClient()
+        transport = _transport(client=client, context=_context(handle=bad_handle))
+        result = transport.execute(_query())
+
+        assert result.decision is ReadOnlyTransportDecision.BLOCKED
+        assert result.error_category is ReadOnlyLiveTransportErrorCategory.SAFETY_VIOLATION
+        assert result.live_contact_attempted is False
+        assert result.real_execution_evidence is False
+        assert client.call_count == 0
+        summary = summarize_live_transport_result(result)
+        for unsafe in (_UNSAFE_KUBECONFIG, _UNSAFE_URL, _UNSAFE_TOKEN, _UNSAFE_PRIVATE_ID):
+            assert unsafe not in _summary_blob(summary)
 
 
 def test_blocks_when_gates_missing() -> None:
@@ -806,9 +831,27 @@ def test_no_result_path_sets_mutation_or_certification_true() -> None:
 
 def test_no_mutating_verb_is_executable_through_transport() -> None:
     client = _RecordingFakeClient()
-    for verb in ("create", "delete", "patch", "apply", "scale", "restore", "decommission"):
+    for verb in (
+        "create",
+        "update",
+        "patch",
+        "delete",
+        "apply",
+        "scale",
+        "rollout",
+        "annotate",
+        "label",
+        "pause",
+        "resume",
+        "sync",
+        "refresh",
+        "restore",
+        "decommission",
+    ):
         result = _transport(client=client).execute(_query(verb=verb))
         assert result.decision is ReadOnlyTransportDecision.BLOCKED
+        assert result.error_category is ReadOnlyLiveTransportErrorCategory.POLICY_BLOCKED
+        assert result.first_blocking_reason == "query failed the Phase 8E/8H read-only guardrails before contact"
     assert client.call_count == 0
 
 
@@ -875,6 +918,23 @@ def test_result_forces_mutation_and_certification_false_even_if_requested() -> N
 
     assert result.mutation_attempted is False
     assert result.live_certification_evidence is False
+
+
+def test_result_clears_contact_success_and_execution_evidence_when_no_contact_occurred() -> None:
+    result = ReadOnlyLiveTransportResult(
+        query_id="q",
+        scenario_id="preflight",
+        status=ReadOnlyLiveTransportStatus.BLOCKED,
+        decision=ReadOnlyTransportDecision.BLOCKED,
+        response_summary="blocked",
+        live_contact_attempted=False,
+        live_contact_succeeded=True,
+        real_execution_evidence=True,
+    )
+
+    assert result.live_contact_attempted is False
+    assert result.live_contact_succeeded is False
+    assert result.real_execution_evidence is False
 
 
 def test_scenario_ids_used_by_examples_come_from_catalog() -> None:
