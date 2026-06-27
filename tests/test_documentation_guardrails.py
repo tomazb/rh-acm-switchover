@@ -1032,3 +1032,43 @@ def test_lab_role_controller_safety_docs_avoid_real_live_config_examples():
     """Lab-controller safety docs must not introduce real-looking live config or credential examples."""
     for path in LAB_CONTROLLER_SAFETY_DOCS:
         _assert_no_real_live_config_literals(path, _read(path))
+
+
+def test_lab_role_controller_backend_design_records_phase8j_status():
+    """The backend design must record Phase 8J as an opt-in, non-live, gated implementation."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_BACKEND_DOC)
+
+    for token in (
+        "## Phase 8J Status",
+        "tests/release/lab_controller/read_only_live_transport.py",
+        "ReadOnlyLiveTransport",
+        "disabled by default",
+        "an injected client",
+        "L0-L9 gate evidence",
+        "mutation_attempted=false",
+        "live_certification_evidence=false",
+        "Tokens, passwords, secrets, and credentials are rejected outright",
+        "ACM_ENABLE_LAB_CONTROLLER_LIVE_TRANSPORT_PILOT",
+        "READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN",
+        "Phase 8J: first opt-in read-only live transport implementation behind explicit gates (complete)",
+        "Phase 8K: read-only live preflight artifact pilot (next)",
+    ):
+        assert token in content
+
+
+def test_lab_role_controller_live_transport_review_records_phase8j_implementation():
+    """The Phase 8I review must point at the opt-in Phase 8J implementation while staying design-only."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_LIVE_TRANSPORT_REVIEW_DOC)
+
+    assert "## Phase 8J Implementation Status" in content
+    for token in (
+        "This document remains a design review.",
+        "read_only_live_transport.py",
+        "disabled by default",
+        "never sets `live_certification_evidence` true",
+        "ACM_ENABLE_LAB_CONTROLLER_LIVE_TRANSPORT_PILOT",
+        "READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN",
+    ):
+        assert token in content
+    # The review's own design-only recommendation must remain unchanged.
+    assert "Recommendation: READY_FOR_PHASE_8J_OPT_IN_READ_ONLY_LIVE_TRANSPORT_IMPLEMENTATION" in content

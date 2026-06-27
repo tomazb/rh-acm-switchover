@@ -546,6 +546,20 @@ Phase 8J may begin only when all of the following hold:
 
 This review modifies no protected operational runbooks and adds no Agent live behavior.
 
+## Phase 8J Implementation Status
+
+This document remains a design review. Phase 8J has since implemented the opt-in read-only live
+transport that this review specifies, in
+[`read_only_live_transport.py`](../../tests/release/lab_controller/read_only_live_transport.py), with
+tests in `tests/release/test_lab_controller_phase8j_read_only_live_transport.py` and opt-in pilot
+scaffolding in `tests/release/test_lab_controller_phase8j_live_opt_in.py`. The implementation is
+disabled by default, ships no real client, performs no live contact on its own, never mutates, and
+never sets `live_certification_evidence` true. The controller and CLI defaults remain non-live, and
+all live pilot tests are opt-in behind `ACM_ENABLE_LAB_CONTROLLER_LIVE_TRANSPORT_PILOT` and excluded
+from normal CI. The Phase 8J status of record lives in the
+[`Phase 8J Status`](lab-role-controller-read-only-backend-design.md) section of the backend design,
+and the next phase is `READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN`.
+
 ## Recommendation
 
 Recommendation: READY_FOR_PHASE_8J_OPT_IN_READ_ONLY_LIVE_TRANSPORT_IMPLEMENTATION

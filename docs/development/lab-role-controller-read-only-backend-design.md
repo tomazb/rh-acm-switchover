@@ -499,9 +499,9 @@ Recommended staged sequence after Phase 8G:
 
 - Phase 8G: read-only backend interface skeleton, no transport implementation (complete)
 - Phase 8H: fake transport contracts and contract tests, no live contact (complete)
-- Phase 8I: read-only live transport design review (next)
-- Phase 8J: first opt-in read-only live transport implementation behind explicit gates
-- Phase 8K: read-only live preflight artifact pilot
+- Phase 8I: read-only live transport design review (complete)
+- Phase 8J: first opt-in read-only live transport implementation behind explicit gates (complete)
+- Phase 8K: read-only live preflight artifact pilot (next)
 - Phase 8L: read-only live pilot audit and closeout
 
 Do not implement mutation next. Mutating live implementation requires a later audited design after the read-only backend
@@ -574,6 +574,46 @@ release adapters, implement live discovery, enable mutation, enable automatic re
 `.release` runtime output, finalize a production JSON schema, or add Agent live behavior. The next phase is a read-only
 live transport design review, not live mutation.
 
+## Phase 8J Status
+
+Phase 8J adds the first opt-in, read-only live transport implementation in
+`tests/release/lab_controller/read_only_live_transport.py`, with focused tests in
+`tests/release/test_lab_controller_phase8j_read_only_live_transport.py` and opt-in pilot scaffolding in
+`tests/release/test_lab_controller_phase8j_live_opt_in.py`. It adds an opt-in transport abstraction only; it does not
+wire a real client and does not implement live read-only discovery, so `UnimplementedReadOnlyDiscoveryBackend` stays
+fail-closed.
+
+The Phase 8J code defines runtime-only handle/context/option types (`RuntimeOnlyLiveHubHandle`,
+`RuntimeOnlyLiveTransportContext`, `ReadOnlyLiveTransportOptions`), a controller-owned client protocol
+(`ReadOnlyLiveClientProtocol`) that receives structured query objects and returns raw runtime data, typed
+transient/timeout/permanent/safety errors, an opt-in guard (`evaluate_read_only_live_contact_guard`), and the
+`ReadOnlyLiveTransport` itself. The transport is disabled by default: it returns `BLOCKED` before any client call
+unless `allow_live_contact` and `allow_read_only_queries` are exactly true, a runtime handle and an injected client are
+present, the L0-L9 gate evidence passes `validate_read_only_discovery_gates`, and the structured query passes the
+Phase 8E/8H `validate_transport_query` guardrails. L10 cannot authorize contact or mutation.
+
+The transport classifies responses as `PASS`, `BLOCKED`, `NO_GO`, or `INFRA_RETRYABLE`, records
+`live_contact_attempted` and `live_contact_succeeded` accurately, summarizes responses through the existing redaction
+helpers (reused, not widened), and rejects unsafe payloads (raw API URLs, kubeconfig-like values, tokens, passwords,
+secrets, credentials, private cluster identifiers, command-like strings, `.release` paths, forbidden runtime-only keys,
+and over-broad dumps) as `NO_GO`. Tokens, passwords, secrets, and credentials are rejected outright. Every result forces
+`mutation_attempted=false` and `live_certification_evidence=false`, and `real_execution_evidence` (set only when the
+injected client is actually called) stays distinct from live certification evidence.
+
+Phase 8J remains non-live by default. It ships no real client, contacts no cluster on its own, loads no live config
+files, reads no kubeconfigs, reads no environment credentials, runs no subprocesses, executes no `oc`, `kubectl`, or
+`ansible-playbook`, calls no release adapters, implements no live read-only discovery, enables no mutation, enables no
+automatic recovery, commits no generated profiles, emits no `.release` runtime output, finalizes no production JSON
+schema, and adds no Agent live behavior. Live transport is not wired into the CLI or planner. All live pilot tests are
+opt-in behind `ACM_ENABLE_LAB_CONTROLLER_LIVE_TRANSPORT_PILOT` and excluded from normal CI; even when enabled they
+exercise a fake injected client and never contact a cluster. The next phase is a read-only live preflight pilot design
+(`READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN`), not live mutation.
+
 ## Recommendation
 
-Recommendation: READY_FOR_PHASE_8I_READ_ONLY_LIVE_TRANSPORT_DESIGN_REVIEW
+Recommendation: READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN
+
+Phases 8G-8J are complete (see the phase status sections above); the next phase is a read-only live
+preflight pilot design, not live mutation. The original Phase 8F/8G backend design recommendation was
+`Recommendation: READY_FOR_PHASE_8I_READ_ONLY_LIVE_TRANSPORT_DESIGN_REVIEW`, which has since been
+satisfied by the Phase 8I review and the opt-in Phase 8J implementation.
