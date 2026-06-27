@@ -451,13 +451,15 @@ Recommended next phases after Phase 8A:
 - Phase 8H: fake transport backend and contract tests, no live contact
 - Phase 8I: read-only live transport design review
 - Phase 8J: first opt-in read-only live transport implementation behind explicit gates
-- Phase 8K: read-only live preflight artifact pilot
-- Phase 8L: read-only live pilot audit and closeout
+- Phase 8K: read-only live preflight pilot design, no pilot execution
+- Phase 8L: read-only live preflight pilot dry-run or fake-backed rehearsal
+- Later audited phase: read-only live pilot audit and closeout after separately approved live contact
 - Phase 9A: first gated mutating live scenario design
 - Phase 9B: first gated mutating implementation, only after independent audit
 
-Do not implement a live mutating scenario immediately after Phase 8A. The next phase should strengthen guardrails and
-external config shape before any live command path exists.
+Do not implement a live mutating scenario immediately after the read-only pilot sequence. The next phase should first
+prove the design, dry-run/rehearsal, approval, runtime-input, identity, role, managed-cluster, guardrail, artifact, and
+redaction boundaries before any live mutation path exists.
 
 ## Validation / Acceptance Requirements for Future Live Work
 

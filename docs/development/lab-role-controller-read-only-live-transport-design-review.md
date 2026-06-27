@@ -543,6 +543,8 @@ Phase 8J may begin only when all of the following hold:
   already records the future read-only discovery contract; its roadmap is unchanged by this review.
 - `tests/test_documentation_guardrails.py` pins this design as design-only and checks it for
   real-looking live-config or credential literals.
+- [`lab-role-controller-read-only-live-preflight-pilot-design.md`](lab-role-controller-read-only-live-preflight-pilot-design.md)
+  records the Phase 8K pilot design that follows the Phase 8J implementation.
 
 This review modifies no protected operational runbooks and adds no Agent live behavior.
 
@@ -559,6 +561,16 @@ all live pilot tests are opt-in behind `ACM_ENABLE_LAB_CONTROLLER_LIVE_TRANSPORT
 from normal CI. The Phase 8J status of record lives in the
 [`Phase 8J Status`](lab-role-controller-read-only-backend-design.md) section of the backend design,
 and the next phase is `READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN`.
+
+## Phase 8K Pilot Design Status
+
+Phase 8K now exists at
+[`lab-role-controller-read-only-live-preflight-pilot-design.md`](lab-role-controller-read-only-live-preflight-pilot-design.md).
+It is design/documentation only. It does not run a pilot, contact live clusters, read kubeconfigs, load live config
+files, execute the Phase 8J live transport, invoke live release adapters, enable mutation, produce live ACM
+certification evidence, enable automatic recovery, add Agent-driven live behavior, or change non-live defaults. It
+recommends `READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN`, with Phase 8L limited to a fake-backed or
+non-contact rehearsal before any separately approved live-contact pilot.
 
 ## Recommendation
 

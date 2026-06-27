@@ -501,12 +501,13 @@ Recommended staged sequence after Phase 8G:
 - Phase 8H: fake transport contracts and contract tests, no live contact (complete)
 - Phase 8I: read-only live transport design review (complete)
 - Phase 8J: first opt-in read-only live transport implementation behind explicit gates (complete)
-- Phase 8K: read-only live preflight artifact pilot (next)
-- Phase 8L: read-only live pilot audit and closeout
+- Phase 8K: read-only live preflight pilot design, no pilot execution (complete)
+- Phase 8L: read-only live preflight pilot dry-run or fake-backed rehearsal (next)
+- Later audited phase: read-only live pilot audit and closeout after separately approved live contact
 
 Do not implement mutation next. Mutating live implementation requires a later audited design after the read-only backend
-contract, fake transport, live transport review, live pilot, and audit have proven identity, role, managed-cluster,
-guardrail, artifact, and redaction behavior.
+contract, fake transport, live transport review, pilot design, dry-run/rehearsal, any separately approved live-contact
+pilot, and audit have proven identity, role, managed-cluster, guardrail, artifact, and redaction behavior.
 
 ## Documentation Integration
 
@@ -519,6 +520,11 @@ The Phase 8I read-only live transport design review that this design recommends 
 [`lab-role-controller-read-only-live-transport-design-review.md`](lab-role-controller-read-only-live-transport-design-review.md).
 It remains design-only and recommends `READY_FOR_PHASE_8J_OPT_IN_READ_ONLY_LIVE_TRANSPORT_IMPLEMENTATION`
 without adding any live transport.
+
+The Phase 8K read-only live preflight pilot design now exists at
+[`lab-role-controller-read-only-live-preflight-pilot-design.md`](lab-role-controller-read-only-live-preflight-pilot-design.md).
+It remains design-only, does not run a pilot, does not contact clusters, does not read kubeconfigs, and recommends
+`READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN`.
 
 Documentation guardrails should pin that Phase 8F remains design-only, Phase 8G remains interface-only, Phase 8H adds
 fake transport contracts only, the code defines request/result contracts, constrains future transport, consumes Phase
@@ -609,11 +615,26 @@ opt-in behind `ACM_ENABLE_LAB_CONTROLLER_LIVE_TRANSPORT_PILOT` and excluded from
 exercise a fake injected client and never contact a cluster. The next phase is a read-only live preflight pilot design
 (`READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN`), not live mutation.
 
+## Phase 8K Status
+
+Phase 8K adds the read-only live preflight pilot design in
+[`lab-role-controller-read-only-live-preflight-pilot-design.md`](lab-role-controller-read-only-live-preflight-pilot-design.md).
+It is design/documentation only. It does not run a pilot, contact live clusters, read kubeconfigs, load live config
+files, execute the Phase 8J live transport, run `oc`, `kubectl`, `ansible-playbook`, release adapters, or the pytest
+release framework against live clusters, enable mutation, produce live ACM certification evidence, enable automatic
+recovery, add Agent-driven live behavior, or change the current non-live defaults.
+
+The Phase 8K design defines the first pilot objective, boundaries, operator prerequisites, runtime-only inputs,
+scenario/query allowlists, gate sequence, abort criteria, artifact contract, evidence acceptance criteria, decision
+interpretation, manual recovery/retry policy, risk register, and Phase 8L entry criteria. Its recommendation is
+`READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN`; Phase 8L is not a broad live rollout and must start with
+a fake-backed or non-contact rehearsal unless separately approved.
+
 ## Recommendation
 
-Recommendation: READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN
+Recommendation: READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN
 
-Phases 8G-8J are complete (see the phase status sections above); the next phase is a read-only live
-preflight pilot design, not live mutation. The original Phase 8F/8G backend design recommendation was
-`Recommendation: READY_FOR_PHASE_8I_READ_ONLY_LIVE_TRANSPORT_DESIGN_REVIEW`, which has since been
-satisfied by the Phase 8I review and the opt-in Phase 8J implementation.
+Phases 8G-8K are complete (see the phase status sections above); the next phase is a read-only live preflight pilot
+dry-run or fake-backed rehearsal, not broad live rollout and not live mutation. The original Phase 8F/8G backend design
+recommendation was `Recommendation: READY_FOR_PHASE_8I_READ_ONLY_LIVE_TRANSPORT_DESIGN_REVIEW`, which has since been
+satisfied by the Phase 8I review, the opt-in Phase 8J implementation, and the Phase 8K pilot design.

@@ -14,12 +14,16 @@ LAB_CONTROLLER_READ_ONLY_BACKEND_DOC = "docs/development/lab-role-controller-rea
 LAB_CONTROLLER_READ_ONLY_LIVE_TRANSPORT_REVIEW_DOC = (
     "docs/development/lab-role-controller-read-only-live-transport-design-review.md"
 )
+LAB_CONTROLLER_READ_ONLY_LIVE_PREFLIGHT_PILOT_DOC = (
+    "docs/development/lab-role-controller-read-only-live-preflight-pilot-design.md"
+)
 LAB_CONTROLLER_SAFETY_DOCS = (
     "docs/development/lab-role-controller-live-readiness-design.md",
     LAB_CONTROLLER_SCHEMA_DOC,
     LAB_CONTROLLER_READ_ONLY_DISCOVERY_DOC,
     LAB_CONTROLLER_READ_ONLY_BACKEND_DOC,
     LAB_CONTROLLER_READ_ONLY_LIVE_TRANSPORT_REVIEW_DOC,
+    LAB_CONTROLLER_READ_ONLY_LIVE_PREFLIGHT_PILOT_DOC,
     "docs/development/lab-role-controller-agent-instructions.md",
 )
 
@@ -534,6 +538,25 @@ def test_lab_role_controller_live_readiness_design_references_phase8b_schema_des
 
     assert LAB_CONTROLLER_SCHEMA_DOC in content
     assert "READY_FOR_PHASE_8C_EXTERNAL_LIVE_CONFIG_MODEL" in content
+
+
+def test_lab_role_controller_live_readiness_design_records_phase8k_phase8l_sequence():
+    """The live-readiness roadmap should keep Phase 8K design-only and Phase 8L rehearsal-only."""
+    content = _read("docs/development/lab-role-controller-live-readiness-design.md")
+
+    for token in (
+        "Phase 8K: read-only live preflight pilot design, no pilot execution",
+        "Phase 8L: read-only live preflight pilot dry-run or fake-backed rehearsal",
+        "Later audited phase: read-only live pilot audit and closeout after separately approved live contact",
+        "before any live mutation path exists",
+    ):
+        assert token in content
+
+    for stale in (
+        "Phase 8K: read-only live preflight artifact pilot",
+        "Phase 8L: read-only live pilot audit and closeout",
+    ):
+        assert stale not in content
 
 
 def test_lab_role_controller_live_lab_config_schema_design_is_non_live():
@@ -1051,7 +1074,27 @@ def test_lab_role_controller_backend_design_records_phase8j_status():
         "ACM_ENABLE_LAB_CONTROLLER_LIVE_TRANSPORT_PILOT",
         "READY_FOR_PHASE_8K_READ_ONLY_LIVE_PREFLIGHT_PILOT_DESIGN",
         "Phase 8J: first opt-in read-only live transport implementation behind explicit gates (complete)",
-        "Phase 8K: read-only live preflight artifact pilot (next)",
+        "Phase 8K: read-only live preflight pilot design, no pilot execution (complete)",
+        "Phase 8L: read-only live preflight pilot dry-run or fake-backed rehearsal (next)",
+    ):
+        assert token in content
+
+
+def test_lab_role_controller_backend_design_records_phase8k_status():
+    """The backend design should point to the Phase 8K pilot design and keep Phase 8L narrow."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_BACKEND_DOC)
+
+    for token in (
+        "## Phase 8K Status",
+        "lab-role-controller-read-only-live-preflight-pilot-design.md",
+        "It is design/documentation only.",
+        "does not run a pilot",
+        "run `oc`, `kubectl`, `ansible-playbook`, release adapters, or the pytest\nrelease framework",
+        "scenario/query allowlists",
+        "manual recovery/retry policy",
+        "READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN",
+        "Phase 8L is not a broad live rollout",
+        "Recommendation: READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN",
     ):
         assert token in content
 
@@ -1072,3 +1115,110 @@ def test_lab_role_controller_live_transport_review_records_phase8j_implementatio
         assert token in content
     # The review's own design-only recommendation must remain unchanged.
     assert "Recommendation: READY_FOR_PHASE_8J_OPT_IN_READ_ONLY_LIVE_TRANSPORT_IMPLEMENTATION" in content
+
+
+def test_lab_role_controller_live_transport_review_records_phase8k_design():
+    """The Phase 8I review should point to Phase 8K without changing its own recommendation."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_LIVE_TRANSPORT_REVIEW_DOC)
+
+    for token in (
+        "## Phase 8K Pilot Design Status",
+        "lab-role-controller-read-only-live-preflight-pilot-design.md",
+        "It is design/documentation only.",
+        "does not run a pilot",
+        "does not run a pilot, contact live clusters, read kubeconfigs",
+        "READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN",
+        "fake-backed or\nnon-contact rehearsal",
+    ):
+        assert token in content
+    assert "Recommendation: READY_FOR_PHASE_8J_OPT_IN_READ_ONLY_LIVE_TRANSPORT_IMPLEMENTATION" in content
+
+
+def test_lab_role_controller_phase8k_preflight_pilot_design_is_design_only():
+    """Phase 8K must remain design-only and must not imply live pilot execution exists."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_LIVE_PREFLIGHT_PILOT_DOC)
+
+    for token in (
+        "# Lab Role Controller Read-Only Live Preflight Pilot Design",
+        "This is a pilot design.",
+        "It does not run a pilot.",
+        "It does not contact live clusters.",
+        "It does not read kubeconfigs.",
+        "It does not load live config files.",
+        "It does not execute the Phase 8J live transport.",
+        "It does not run `oc`, `kubectl`, `ansible-playbook`, release adapters, or the pytest release framework",
+        "It does not enable mutation.",
+        "It does not produce live ACM certification evidence.",
+        "It does not enable automatic recovery.",
+        "It does not add Agent-driven live behavior.",
+        "Current defaults remain non-live.",
+        "READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN",
+        "not a broad\nlive rollout",
+    ):
+        assert token in content
+
+
+def test_lab_role_controller_phase8k_preflight_pilot_design_documents_required_contract():
+    """Phase 8K should define the pilot objective, gates, evidence, decisions, and next entry criteria."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_LIVE_PREFLIGHT_PILOT_DOC)
+
+    for section in (
+        "## Final Recommendation",
+        "## Scope",
+        "## Current Foundation",
+        "## Pilot Objective",
+        "## Pilot Non-Goals",
+        "## Pilot Environment Assumptions",
+        "## Operator Prerequisites",
+        "## Runtime-Only Inputs",
+        "## Pilot Scenario Allowlist",
+        "## Pilot Query Allowlist",
+        "## Gate Sequence",
+        "## Invocation Shape",
+        "## Artifact Contract For Pilot",
+        "## Evidence Acceptance Criteria",
+        "## Decision Interpretation",
+        "## Abort Criteria",
+        "## Manual Recovery And Retry Policy",
+        "## Operator Checklist",
+        "## Pilot Runbook Boundary",
+        "## Human Approval And Rollback Posture",
+        "## Audit Requirements Before Any Actual Pilot May Run",
+        "## Risk Register",
+        "## Phase 8L Entry Criteria",
+        "## Recommendation",
+    ):
+        assert section in content
+
+    for token in (
+        "pass L0-L9 gates",
+        "construct allowlisted read-only queries",
+        "distinguish live contact evidence from live certification evidence",
+        "`lab-readiness`",
+        "`baseline-check`",
+        "`preflight`",
+        "`final-baseline-check`",
+        "`cluster_identity`",
+        "`namespace_uid`",
+        "`cluster_version`",
+        "`acm_mce_mch_status`",
+        "`managed_cluster_status`",
+        "`backup_restore_status`",
+        "`live_certification_evidence=false`",
+        "`mutation_enabled=false`",
+        "`mutation_attempted=false`",
+        "`INFRA_RETRYABLE`",
+        "retry only when decision is `INFRA_RETRYABLE`",
+        "human approval required before any live contact",
+        "Recommendation: READY_FOR_PHASE_8L_READ_ONLY_LIVE_PREFLIGHT_PILOT_DRY_RUN",
+    ):
+        assert token in content
+
+    for forbidden_claim in (
+        "Recommendation: READY_WITH_FOLLOW_UPS",
+        "Recommendation: FAIL_BLOCKED",
+        "live ACM certification evidence=true",
+        "mutation_enabled=true is allowed",
+        "automatic recovery is enabled",
+    ):
+        assert forbidden_claim not in content
