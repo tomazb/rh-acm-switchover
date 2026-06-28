@@ -1222,3 +1222,30 @@ def test_lab_role_controller_phase8k_preflight_pilot_design_documents_required_c
         "automatic recovery is enabled",
     ):
         assert forbidden_claim not in content
+
+
+def test_lab_role_controller_phase8l_preflight_pilot_rehearsal_status_is_non_contact():
+    """Phase 8L documentation should pin fake-only rehearsal boundaries and the next safe recommendation."""
+    content = _read(LAB_CONTROLLER_READ_ONLY_LIVE_PREFLIGHT_PILOT_DOC)
+
+    for token in (
+        "## Phase 8L Rehearsal Status",
+        "read_only_preflight_pilot.py",
+        "test_lab_controller_phase8l_read_only_preflight_pilot_dry_run.py",
+        "`dry_run_no_contact`",
+        "`fake_backed_rehearsal`",
+        "`live_read_only_unsupported_in_phase_8l`",
+        "`simulated_contact_attempted`",
+        "`live_contact_attempted=false`",
+        "`live_contact_succeeded=false`",
+        "`real_execution_evidence=false`",
+        "`live_certification_evidence=false`",
+        "`mutation_enabled=false`",
+        "`mutation_attempted=false`",
+        "does not read live config files, read kubeconfigs, read environment credentials",
+        "does not read live config files, read kubeconfigs, read environment credentials,\ncreate real Kubernetes/OpenShift clients",
+        "CLI/planner defaults remain non-live",
+        "READY_FOR_PHASE_8M_READ_ONLY_LIVE_PREFLIGHT_PILOT_APPROVAL_PACKAGE",
+        "This is not broad live rollout and is not authorization for live contact.",
+    ):
+        assert token in content

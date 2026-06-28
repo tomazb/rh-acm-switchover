@@ -28,6 +28,40 @@ Phase 8L must still be tightly gated. It should perform either a non-contact dry
 fake-backed rehearsal before any real live-contact pilot is separately approved. This recommendation is not a broad
 live rollout.
 
+## Phase 8L Rehearsal Status
+
+Phase 8L implements the non-contact rehearsal package recommended by Phase 8K:
+
+- `tests/release/lab_controller/read_only_preflight_pilot.py` assembles a dry-run or fake-backed pilot package from
+  placeholder/runtime-only summaries.
+- `tests/release/test_lab_controller_phase8l_read_only_preflight_pilot_dry_run.py` verifies the rehearsal remains
+  non-live, fake-only, redacted, and conservative.
+- Supported modes are `dry_run_no_contact`, `fake_backed_rehearsal`, and
+  `live_read_only_unsupported_in_phase_8l`.
+- `dry_run_no_contact` executes no transport.
+- `fake_backed_rehearsal` may use the Phase 8H fake transport only.
+- `live_read_only_unsupported_in_phase_8l` is always `BLOCKED`.
+- `simulated_contact_attempted` and `simulated_contact_succeeded` describe fake-backed rehearsal activity.
+- `live_contact_attempted=false`, `live_contact_succeeded=false`, and `real_execution_evidence=false` remain fixed for
+  Phase 8L artifacts.
+- `live_certification_evidence=false`, `mutation_enabled=false`, and `mutation_attempted=false` remain fixed.
+- L0-L9 gate evidence, scenario/query allowlists, redaction, artifact directory safety, and abort criteria are evaluated
+  from synthetic or fake evidence only.
+- Artifact output remains provisional and redacted; no production JSON schema is finalized.
+- Optional artifact writing requires an explicit caller-provided directory and still rejects `.release`-style output.
+- CLI/planner defaults remain non-live and do not wire Phase 8L into any live behavior.
+
+Phase 8L remains non-contact. It does not read live config files, read kubeconfigs, read environment credentials,
+create real Kubernetes/OpenShift clients, run `oc`, `kubectl`, `ansible-playbook`, release adapters, or the pytest
+release framework against live clusters, enable mutation, enable automatic recovery, produce live ACM certification
+evidence, add Agent-driven live behavior, or create committed live profiles or `.release` artifacts.
+
+Phase 8L rehearsal success should recommend only the next approval-package phase:
+
+READY_FOR_PHASE_8M_READ_ONLY_LIVE_PREFLIGHT_PILOT_APPROVAL_PACKAGE
+
+This is not broad live rollout and is not authorization for live contact.
+
 ## Scope
 
 In scope:
