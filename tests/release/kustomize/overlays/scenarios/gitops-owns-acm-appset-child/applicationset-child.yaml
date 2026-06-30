@@ -1,0 +1,59 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: acm-owner-appset
+  namespace: openshift-gitops
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/gitops-mode: appset-child
+spec:
+  generators:
+    - list:
+        elements:
+          - cluster: in-cluster
+            path: tests/release/kustomize/overlays/scenarios/gitops-owns-acm-appset-child/owned-resources
+  template:
+    metadata:
+      name: acm-owner-appset-child
+      labels:
+        acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+        acm-switchover.redhat-lab/gitops-mode: appset-child
+    spec:
+      project: default
+      source:
+        repoURL: https://git.example.invalid/acm-switchover-lab.git
+        targetRevision: HEAD
+        path: "{{path}}"
+      destination:
+        name: "{{cluster}}"
+        namespace: open-cluster-management-backup
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: acm-owner-appset-child
+  namespace: openshift-gitops
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/gitops-mode: appset-child
+  ownerReferences:
+    - apiVersion: argoproj.io/v1alpha1
+      kind: ApplicationSet
+      name: acm-owner-appset
+      uid: static-appset-child-fixture-uid
+spec:
+  project: default
+  source:
+    repoURL: https://git.example.invalid/acm-switchover-lab.git
+    targetRevision: HEAD
+    path: tests/release/kustomize/overlays/scenarios/gitops-owns-acm-appset-child/owned-resources
+  destination:
+    name: in-cluster
+    namespace: open-cluster-management-backup
+status:
+  resources:
+    - group: ""
+      kind: ConfigMap
+      namespace: open-cluster-management-backup
+      name: appset-owned-acm-marker
+      status: Synced

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acm-lab-managed
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: managed-common
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: managed-sno-topology-sentinel
+  namespace: acm-lab-managed
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: managed-common
+data:
+  managed_cluster_labels: mc-1,mc-2,mc-3
+  footprint: sno-friendly-static-fixture

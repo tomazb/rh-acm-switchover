@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: appset-owned-acm-marker
+  namespace: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/gitops-mode: appset-child
+    acm-switchover.redhat-lab/acm-object: appset-owned-marker
+  annotations:
+    argocd.argoproj.io/tracking-id: acm-owner-appset-child:/ConfigMap:open-cluster-management-backup/appset-owned-acm-marker
+data:
+  owned_by: acm-owner-appset-child
+  parent: acm-owner-appset

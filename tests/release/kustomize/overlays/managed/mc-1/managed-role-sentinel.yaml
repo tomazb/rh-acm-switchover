@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mc-1-managed-sno-sentinel
+  namespace: acm-lab-managed
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/managed-cluster: mc-1
+    acm-switchover.redhat-lab/cluster-shape: sno
+data:
+  managed_cluster: mc-1
+  cluster_shape: sno

@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-observe-only
+  namespace: openshift-gitops
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: argocd-acm-safe-mode
+    acm-switchover.redhat-lab/gitops-mode: observe-only
+spec:
+  project: default
+  source:
+    repoURL: https://git.example.invalid/acm-switchover-lab.git
+    targetRevision: HEAD
+    path: tests/release/kustomize/bases/hub-common
+  destination:
+    name: in-cluster
+    namespace: acm-lab-hub
+status:
+  resources:
+    - group: ""
+      kind: ConfigMap
+      namespace: acm-lab-hub
+      name: hub-topology-sentinel
+      status: Synced
