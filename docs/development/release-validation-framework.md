@@ -95,8 +95,11 @@ execution remains unsupported and fail-closed.
 The static release-lab Kustomize fixtures under `tests/release/kustomize/` model the intended two-hub,
 three-managed-SNO topology and Argo CD ACM-object ownership interference modes for non-live validation only. These
 fixtures are not live ACM certification evidence, are not applied by the release framework, and intentionally rely on
-static YAML/Kustomize checks because server-side live validation is Phase 9 work. Phase 8P/8Q controller work may wire
-these fixtures into model and dry-run artifact generation without changing production switchover runtime behavior.
+static YAML/Kustomize checks because server-side live validation is Phase 9 work. Phase 8P/8Q wires these fixtures into
+controller-local GitOps ownership evidence, Argo CD interference classification, capability evidence for
+`spec.syncPolicy.automated.enabled`, coordination-strategy modeling, and provisional dry-run/materialized artifact
+summaries. The controller still performs no live CRD/schema detection and does not change production switchover runtime
+behavior.
 
 For live certification, the controller's responsibilities are to:
 

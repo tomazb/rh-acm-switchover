@@ -26,6 +26,7 @@ from tests.release.lab_controller.execution import (  # noqa: E402
     ExecutionMode,
     ReleaseFrameworkLocalBackend,
 )
+from tests.release.lab_controller.gitops import load_gitops_ownership_from_fixture  # noqa: E402
 from tests.release.lab_controller.harness import CommandRunResult, FakeCommandRunner  # noqa: E402
 from tests.release.lab_controller.models import (  # noqa: E402
     CertificationDecision,
@@ -50,6 +51,9 @@ EXIT_STRICT_NON_PASS = 1
 EXIT_USAGE = 2
 EXIT_ARTIFACT = 3
 EXPECTED_MANAGED_CLUSTERS = ("mc-1", "mc-2", "mc-3")
+DEFAULT_GITOPS_FIXTURE = (
+    REPO_ROOT / "tests" / "release" / "kustomize" / "overlays" / "scenarios" / "gitops-owns-acm-autosync-off"
+)
 _UNSAFE_ARTIFACT_COMPONENTS = {".release", ".kube"}
 _UNSAFE_ARTIFACT_MARKERS = ("kubeconfig", "token", "secret", "credential", "password")
 
@@ -103,6 +107,7 @@ def build_sanitized_lab_config() -> StableLabConfig:
         scenario_ids=("preflight",),
         profile_name="phase7a-sanitized-lab",
         artifact_root="artifacts/release-lab/phase7a",
+        gitops=load_gitops_ownership_from_fixture(DEFAULT_GITOPS_FIXTURE),
     )
 
 

@@ -184,6 +184,7 @@ def build_segment_artifact(
     generated_profile_hash: str | None = None,
     scenario_classification: str | None = None,
     identity_verification_summary: Mapping[str, Any] | None = None,
+    gitops_summary: Mapping[str, Any] | None = None,
     fake_execution_result: Mapping[str, Any] | None = None,
     execution_request_summary: Mapping[str, Any] | None = None,
     redaction_status: str,
@@ -217,6 +218,17 @@ def build_segment_artifact(
         "scenario_classification": scenario_classification,
         "mutates_lab": plan.mutates_lab,
         "identity_verification_summary": dict(identity_verification_summary or {}),
+        "gitops_evidence": sanitize_artifact_payload(
+            dict(
+                gitops_summary
+                or {
+                    "evaluated": False,
+                    "final_decision": "NOT_EVALUATED",
+                    "live_certification_evidence": False,
+                    "not_live_acm_certification_evidence": True,
+                }
+            )
+        ),
         "observed_initial_role_state": _observed_role_state_payload(observed_initial_role_state),
         "desired_initial_role_state": _desired_role_state_payload(desired_initial_role_state),
         "expected_initial_role_state": _desired_role_state_payload(plan.expected_initial_role_state),

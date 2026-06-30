@@ -10,11 +10,14 @@ from .decisions import classify_scenario as _classify_scenario
 from .decisions import infra_retryable, no_go, pass_decision, recovery_required
 from .discovery import managed_cluster_summary
 from .execution import ExecutionBackend, ExecutionBackendKind, ExecutionMode, ExecutionResult
+from .gitops import build_gitops_artifact_summary, classify_gitops_ownership
 from .identity import verify_physical_hub_identities
 from .models import (
     ControllerDecision,
     DesiredRoleState,
     GeneratedProfile,
+    GitOpsOwnershipEvidence,
+    GitOpsRiskDecision,
     HubIdentityEvidence,
     LabObservation,
     ObservedRoleState,
@@ -88,6 +91,9 @@ class SegmentPlanningResult:
     identity_decision: ControllerDecision
     role_decision: ControllerDecision
     scenario_classification: ScenarioClassification | None
+    gitops_evidence: GitOpsOwnershipEvidence
+    gitops_decision: GitOpsRiskDecision
+    gitops_summary: dict[str, Any]
     observed_initial_role_state: ObservedRoleState
     generated_profile: GeneratedProfile | None
     generated_profile_metadata: dict[str, Any] | None
@@ -194,6 +200,37 @@ def _execution_request_summary(execution_result: ScenarioExecutionResult | None)
     }
 
 
+def _requires_gitops_evidence(lab_config: StableLabConfig, plan: SegmentPlan) -> bool:
+    return plan.scenario_id == "argocd-managed-switchover" and bool(lab_config.argocd and lab_config.argocd.mandatory)
+
+
+def _gitops_evidence_for_plan(lab_config: StableLabConfig, plan: SegmentPlan) -> GitOpsOwnershipEvidence:
+    if lab_config.gitops is not None:
+        if _requires_gitops_evidence(lab_config, plan) and not lab_config.gitops.evaluated:
+            return GitOpsOwnershipEvidence.unknown(
+                lab_config.gitops.unknown_reason or "mandatory Argo CD lane has unevaluated GitOps evidence"
+            )
+        return lab_config.gitops
+    if _requires_gitops_evidence(lab_config, plan):
+        return GitOpsOwnershipEvidence.unknown("mandatory Argo CD lane has no non-live GitOps evidence")
+    return GitOpsOwnershipEvidence.not_evaluated()
+
+
+def _gitops_decision_for_plan(
+    lab_config: StableLabConfig,
+    plan: SegmentPlan,
+) -> tuple[GitOpsOwnershipEvidence, GitOpsRiskDecision, dict[str, Any], ControllerDecision]:
+    evidence = _gitops_evidence_for_plan(lab_config, plan)
+    decision = classify_gitops_ownership(evidence)
+    summary = build_gitops_artifact_summary(evidence, decision)
+    controller_decision = ControllerDecision(
+        decision=decision.decision,
+        reason=decision.blocking_reason or decision.reason,
+        safe_to_continue=decision.safe_to_continue,
+    )
+    return evidence, decision, summary, controller_decision
+
+
 def _scenario_execution_status(value: str) -> ScenarioExecutionStatus:
     try:
         return ScenarioExecutionStatus(value)
@@ -253,6 +290,7 @@ def _build_artifact_payload(
                 planning_result.scenario_classification.value if planning_result.scenario_classification else None
             ),
             identity_verification_summary=_identity_summary(planning_result.identity_decision),
+            gitops_summary=planning_result.gitops_summary,
             fake_execution_result=_execution_result_summary(execution_result),
             execution_request_summary=_execution_request_summary(execution_result),
             redaction_status=redaction_status,
@@ -273,6 +311,7 @@ def _build_artifact_payload(
                 planning_result.scenario_classification.value if planning_result.scenario_classification else None
             ),
             identity_verification_summary=_identity_summary(planning_result.identity_decision),
+            gitops_summary=planning_result.gitops_summary,
             fake_execution_result=_execution_result_summary(execution_result, redact_streams=True),
             execution_request_summary={},
             redaction_status="rejected",
@@ -291,6 +330,10 @@ def plan_segment(
 ) -> SegmentPlanningResult:
     """Plan one known-state segment without executing live commands."""
     identity_decision = verify_physical_hub_identities(expected_identities, pre_segment_observation)
+    gitops_evidence, gitops_decision, gitops_summary, gitops_controller_decision = _gitops_decision_for_plan(
+        lab_config,
+        plan,
+    )
     if identity_decision.decision is not SegmentDecision.PASS:
         role_state = _unproven_role_state(identity_decision.reason)
         return SegmentPlanningResult(
@@ -298,6 +341,9 @@ def plan_segment(
             identity_decision=identity_decision,
             role_decision=identity_decision,
             scenario_classification=None,
+            gitops_evidence=gitops_evidence,
+            gitops_decision=gitops_decision,
+            gitops_summary=gitops_summary,
             observed_initial_role_state=role_state,
             generated_profile=None,
             generated_profile_metadata=None,
@@ -312,6 +358,9 @@ def plan_segment(
             identity_decision=identity_decision,
             role_decision=role_decision,
             scenario_classification=None,
+            gitops_evidence=gitops_evidence,
+            gitops_decision=gitops_decision,
+            gitops_summary=gitops_summary,
             observed_initial_role_state=observed_initial_role_state,
             generated_profile=None,
             generated_profile_metadata=None,
@@ -326,6 +375,25 @@ def plan_segment(
             identity_decision=identity_decision,
             role_decision=role_decision,
             scenario_classification=scenario_classification,
+            gitops_evidence=gitops_evidence,
+            gitops_decision=gitops_decision,
+            gitops_summary=gitops_summary,
+            observed_initial_role_state=observed_initial_role_state,
+            generated_profile=None,
+            generated_profile_metadata=None,
+            generated_profile_hash=None,
+            redaction_status="not_published",
+        )
+
+    if gitops_controller_decision.decision is not SegmentDecision.PASS:
+        return SegmentPlanningResult(
+            decision=gitops_controller_decision,
+            identity_decision=identity_decision,
+            role_decision=role_decision,
+            scenario_classification=scenario_classification,
+            gitops_evidence=gitops_evidence,
+            gitops_decision=gitops_decision,
+            gitops_summary=gitops_summary,
             observed_initial_role_state=observed_initial_role_state,
             generated_profile=None,
             generated_profile_metadata=None,
@@ -349,6 +417,9 @@ def plan_segment(
             identity_decision=identity_decision,
             role_decision=role_decision,
             scenario_classification=scenario_classification,
+            gitops_evidence=gitops_evidence,
+            gitops_decision=gitops_decision,
+            gitops_summary=gitops_summary,
             observed_initial_role_state=observed_initial_role_state,
             generated_profile=None,
             generated_profile_metadata=None,
@@ -362,6 +433,9 @@ def plan_segment(
             identity_decision=identity_decision,
             role_decision=role_decision,
             scenario_classification=scenario_classification,
+            gitops_evidence=gitops_evidence,
+            gitops_decision=gitops_decision,
+            gitops_summary=gitops_summary,
             observed_initial_role_state=observed_initial_role_state,
             generated_profile=None,
             generated_profile_metadata=None,
@@ -384,6 +458,9 @@ def plan_segment(
             identity_decision=identity_decision,
             role_decision=role_decision,
             scenario_classification=scenario_classification,
+            gitops_evidence=gitops_evidence,
+            gitops_decision=gitops_decision,
+            gitops_summary=gitops_summary,
             observed_initial_role_state=observed_initial_role_state,
             generated_profile=selected_profile,
             generated_profile_metadata=None,
@@ -400,6 +477,9 @@ def plan_segment(
             identity_decision=identity_decision,
             role_decision=role_decision,
             scenario_classification=scenario_classification,
+            gitops_evidence=gitops_evidence,
+            gitops_decision=gitops_decision,
+            gitops_summary=gitops_summary,
             observed_initial_role_state=observed_initial_role_state,
             generated_profile=selected_profile,
             generated_profile_metadata=None,
@@ -412,6 +492,9 @@ def plan_segment(
         identity_decision=identity_decision,
         role_decision=role_decision,
         scenario_classification=scenario_classification,
+        gitops_evidence=gitops_evidence,
+        gitops_decision=gitops_decision,
+        gitops_summary=gitops_summary,
         observed_initial_role_state=observed_initial_role_state,
         generated_profile=selected_profile,
         generated_profile_metadata=redacted_profile_metadata,
