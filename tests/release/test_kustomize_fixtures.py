@@ -91,7 +91,7 @@ def _resource_docs() -> tuple[tuple[Path, dict[str, Any]], ...]:
 
 
 def _automated_policy_is_hostile(policy: Any) -> bool:
-    if not isinstance(policy, dict) or policy.get("enabled") is False:
+    if not isinstance(policy, dict):
         return False
     return policy.get("prune") is True or policy.get("selfHeal") is True
 
@@ -103,6 +103,20 @@ def _has_hostile_sync_policy(doc: dict[str, Any]) -> bool:
         template = doc.get("spec", {}).get("template", {})
         return _automated_policy_is_hostile(template.get("spec", {}).get("syncPolicy", {}).get("automated"))
     return False
+
+
+def test_automated_policy_treats_prune_and_selfheal_as_hostile_without_enabled_semantics() -> None:
+    assert _automated_policy_is_hostile({"enabled": False, "prune": True})
+    assert _automated_policy_is_hostile({"enabled": False, "selfHeal": True})
+    assert not _automated_policy_is_hostile({"enabled": False})
+
+
+def test_autosync_off_fixture_omits_automated_sync_for_gitops_compatibility() -> None:
+    path = FIXTURE_ROOT / "bases" / "argocd-acm-safe-mode" / "autosync-off" / "autosync-off-application.yaml"
+    docs = _docs_from(path)
+    assert len(docs) == 1
+    sync_policy = docs[0].get("spec", {}).get("syncPolicy", {})
+    assert "automated" not in sync_policy
 
 
 def _kustomization_resource_paths(kustomization_dir: Path, seen: set[Path] | None = None) -> tuple[Path, ...]:

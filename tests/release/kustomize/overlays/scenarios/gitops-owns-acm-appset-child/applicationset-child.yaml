@@ -40,6 +40,9 @@ metadata:
     - apiVersion: argoproj.io/v1alpha1
       kind: ApplicationSet
       name: acm-owner-appset
+      # Static placeholder only. Phase 8P/8Q controller code must discover
+      # live ApplicationSet owner UIDs and must not treat this fixture value
+      # as identity evidence.
       uid: static-appset-child-fixture-uid
 spec:
   project: default

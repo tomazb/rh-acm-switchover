@@ -33,6 +33,12 @@ All scenario manifests are static YAML. Kustomize rendering can be checked local
 Safe modes should be used for static discovery and dry-run planning. Hostile modes are intentionally labeled and isolated
 under hostile scenario overlays. They are not safe defaults and must not be applied to production clusters.
 
+The autosync-off fixture intentionally omits `spec.syncPolicy.automated` instead of using
+`spec.syncPolicy.automated.enabled: false`. The ACM 2.12+ test target spans OpenShift GitOps / Argo CD combinations
+where that field may not exist, so the generic safe fixture uses the lowest-common-denominator representation. Phase
+8P/8Q controller work must detect this capability from live CRD/schema or version evidence before relying on
+`automated.enabled`. `prune` and `selfHeal` are modeled only in explicit hostile fixtures.
+
 ## Fixture Safety
 
 The fixtures use Namespace and ConfigMap sentinels where possible. ACM-like objects are represented as ConfigMap data so

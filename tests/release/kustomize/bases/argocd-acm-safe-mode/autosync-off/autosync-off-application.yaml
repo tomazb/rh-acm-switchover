@@ -16,11 +16,11 @@ spec:
   destination:
     name: in-cluster
     namespace: open-cluster-management-backup
-  syncPolicy:
-    automated:
-      enabled: false
-      prune: true
-      selfHeal: true
+  # Compatibility-safe autosync-off fixture:
+  # omit spec.syncPolicy.automated so this remains valid for older
+  # OpenShift GitOps / Argo CD versions that do not support
+  # spec.syncPolicy.automated.enabled.
+  syncPolicy: {}
 status:
   resources:
     - group: ""
