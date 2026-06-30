@@ -172,6 +172,23 @@ def _payload_claims_dry_run_real_execution(payload: Mapping[str, Any]) -> bool:
     return bool(payload.get("dry_run", False) and payload.get("real_execution_evidence", False))
 
 
+def _gitops_evidence_payload(gitops_summary: Mapping[str, Any] | None) -> dict[str, Any]:
+    payload = sanitize_artifact_payload(
+        dict(
+            gitops_summary
+            or {
+                "evaluated": False,
+                "final_decision": "NOT_EVALUATED",
+            }
+        )
+    )
+    if _payload_claims_live_certification_evidence(payload):
+        raise ValueError("GitOps segment artifacts cannot claim live certification evidence")
+    payload["live_certification_evidence"] = False
+    payload["not_live_acm_certification_evidence"] = True
+    return payload
+
+
 def build_segment_artifact(
     *,
     plan: SegmentPlan,
@@ -218,17 +235,7 @@ def build_segment_artifact(
         "scenario_classification": scenario_classification,
         "mutates_lab": plan.mutates_lab,
         "identity_verification_summary": dict(identity_verification_summary or {}),
-        "gitops_evidence": sanitize_artifact_payload(
-            dict(
-                gitops_summary
-                or {
-                    "evaluated": False,
-                    "final_decision": "NOT_EVALUATED",
-                    "live_certification_evidence": False,
-                    "not_live_acm_certification_evidence": True,
-                }
-            )
-        ),
+        "gitops_evidence": _gitops_evidence_payload(gitops_summary),
         "observed_initial_role_state": _observed_role_state_payload(observed_initial_role_state),
         "desired_initial_role_state": _desired_role_state_payload(desired_initial_role_state),
         "expected_initial_role_state": _desired_role_state_payload(plan.expected_initial_role_state),
