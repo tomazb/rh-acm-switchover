@@ -44,9 +44,10 @@ data:
     apiVersion: cluster.open-cluster-management.io/v1beta1
     kind: Restore
     metadata:
-      name: acm-managed-clusters-restore
+      name: restore-acm-passive-sync
       namespace: open-cluster-management-backup
     spec:
+      syncRestoreWithNewBackups: true
       restoreSyncInterval: 10m
       cleanupBeforeRestore: CleanupRestored
       restoreStatus:
