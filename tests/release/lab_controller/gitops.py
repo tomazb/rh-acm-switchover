@@ -75,7 +75,7 @@ def _doc_resource(doc: Mapping[str, Any]) -> GitOpsTrackedResource | None:
     tracking_id = _annotations(doc).get(TRACKING_ID_ANNOTATION)
     tracking_text = tracking_id if isinstance(tracking_id, str) else None
     labels = _labels(doc)
-    acm_object = bool(labels.get(ACM_OBJECT_LABEL)) or namespace_text in ACM_NAMESPACES
+    acm_object = labels.get(ACM_OBJECT_LABEL) in {"true", True} or namespace_text in ACM_NAMESPACES
     return GitOpsTrackedResource(
         group=_resource_group(doc.get("apiVersion")),
         kind=kind,
@@ -187,6 +187,8 @@ def load_gitops_ownership_from_fixture(
 ) -> GitOpsOwnershipEvidence:
     """Load deterministic GitOps ownership evidence from checked-in release-lab fixture YAML."""
     resolved_dir = kustomization_dir.resolve()
+    if len(resolved_dir.parents) < 3:
+        raise ValueError(f"kustomization_dir {resolved_dir} must have at least three parent directories")
     root = resolved_dir.parents[2]
     docs = _yaml_docs(_resource_paths(resolved_dir, root))
     resource_lookup = _resource_lookup(docs)
