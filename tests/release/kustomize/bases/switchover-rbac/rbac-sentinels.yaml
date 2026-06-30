@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acm-switchover
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: switchover-rbac
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: acm-switchover-operator
+  namespace: acm-switchover
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: switchover-rbac
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: acm-switchover-validator
+  namespace: acm-switchover
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: switchover-rbac
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: switchover-rbac-static-boundary
+  namespace: acm-switchover
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: switchover-rbac
+data:
+  default_scope: baseline-rbac-only
+  teardown_extension: not-included
+  mutation_boundary: static-fixture-only

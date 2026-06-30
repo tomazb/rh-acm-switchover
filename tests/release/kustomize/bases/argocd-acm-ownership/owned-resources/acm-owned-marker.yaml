@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-acm-owned-marker
+  namespace: open-cluster-management-backup
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: argocd-acm-ownership
+    acm-switchover.redhat-lab/acm-object: argocd-owned-marker
+  annotations:
+    argocd.argoproj.io/tracking-id: acm-owner-static:/ConfigMap:open-cluster-management-backup/argocd-acm-owned-marker
+data:
+  owned_by: acm-owner-static
+  tracking: annotation

@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: acm-owner-selfheal
+  namespace: openshift-gitops
+  labels:
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
+    acm-switchover.redhat-lab/fixture-scope: argocd-acm-hostile-mode
+    acm-switchover.redhat-lab/gitops-mode: hostile-selfheal
+spec:
+  project: default
+  source:
+    repoURL: https://git.example.invalid/acm-switchover-lab.git
+    targetRevision: HEAD
+    path: tests/release/kustomize/bases/acm-dr-objects
+  destination:
+    name: in-cluster
+    namespace: open-cluster-management-backup
+  syncPolicy:
+    automated:
+      selfHeal: true
+status:
+  resources:
+    - group: ""
+      kind: ConfigMap
+      namespace: open-cluster-management-backup
+      name: acm-dr-backupschedule-desired-state
+      status: Synced

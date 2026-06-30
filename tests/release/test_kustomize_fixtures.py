@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+FIXTURE_ROOT = Path(__file__).resolve().parent / "kustomize"
+
+REQUIRED_KUSTOMIZATION_DIRS = (
+    "bases/hub-common",
+    "bases/managed-common",
+    "bases/switchover-rbac",
+    "bases/acm-dr-objects",
+    "bases/argocd-acm-ownership",
+    "bases/argocd-acm-safe-mode",
+    "bases/argocd-acm-hostile-mode",
+    "overlays/hubs/hub-a-primary",
+    "overlays/hubs/hub-a-secondary",
+    "overlays/hubs/hub-b-primary",
+    "overlays/hubs/hub-b-secondary",
+    "overlays/managed/mc-1",
+    "overlays/managed/mc-2",
+    "overlays/managed/mc-3",
+    "overlays/scenarios/gitops-observe-only",
+    "overlays/scenarios/gitops-owns-acm-autosync-off",
+    "overlays/scenarios/gitops-owns-acm-selfheal-on",
+    "overlays/scenarios/gitops-owns-acm-prune-on",
+    "overlays/scenarios/gitops-owns-acm-appset-child",
+    "overlays/scenarios/gitops-pause-required-before-switchover",
+)
+HOSTILE_SCENARIO_DIRS = (
+    "overlays/scenarios/gitops-owns-acm-selfheal-on",
+    "overlays/scenarios/gitops-owns-acm-prune-on",
+    "overlays/scenarios/gitops-pause-required-before-switchover",
+)
+ALLOWED_HOSTILE_BASE_DIR = "bases/argocd-acm-hostile-mode"
+REQUIRED_LAB_LABELS = {
+    "acm-switchover.redhat-lab/topology",
+}
+SECRET_MARKER_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"kind:\s*Secret\b",
+        r"\bstringData\s*:",
+        r"\btoken\s*[:=]",
+        r"\bpassword\s*[:=]",
+        r"\bcredential\s*[:=]",
+        r"\baws_access_key_id\b",
+        r"\baws_secret_access_key\b",
+        r"\bbootstrap-hub-kubeconfig\b",
+        r"\bimport\.yaml\b",
+        r"\bclient-key-data\b",
+        r"\bclient-certificate-data\b",
+        r"\bcertificate-authority-data\b",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        r"~/.kube/",
+        r"/home/[^/\s]+/\.kube/",
+        r"/tmp/[^/\s]*(?:kubeconfig|kube-config)",
+        r"https?://(?![^/\s]*\.example\.invalid\b)",
+    )
+)
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _metadata_from(doc: dict[str, Any]) -> dict[str, Any]:
+    return _as_mapping(doc.get("metadata"))
+
+
+def _labels_from(doc: dict[str, Any]) -> dict[str, Any]:
+    return _as_mapping(_metadata_from(doc).get("labels"))
+
+
+def _desired_state_from_configmap(doc: dict[str, Any], key: str = "desired-state.yaml") -> dict[str, Any]:
+    name = _metadata_from(doc).get("name", "unknown")
+    raw = _as_mapping(doc.get("data")).get(key)
+    assert isinstance(raw, str), f"{name} is missing {key}"
+    desired_state = yaml.safe_load(raw)
+    assert isinstance(desired_state, dict), f"{name} {key} must be a mapping"
+    return desired_state
+
+
+def _fixture_files() -> tuple[Path, ...]:
+    assert FIXTURE_ROOT.exists(), "release-lab Kustomize fixture tree is missing"
+    return tuple(sorted(path for path in FIXTURE_ROOT.rglob("*") if path.is_file()))
+
+
+def _yaml_files() -> tuple[Path, ...]:
+    return tuple(path for path in _fixture_files() if path.suffix in {".yaml", ".yml"})
+
+
+def _docs_from(path: Path) -> tuple[dict[str, Any], ...]:
+    docs = []
+    for doc in yaml.safe_load_all(path.read_text(encoding="utf-8")):
+        if doc:
+            assert isinstance(doc, dict), f"{path} contains a non-mapping YAML document"
+            docs.append(doc)
+    return tuple(docs)
+
+
+def _resource_docs() -> tuple[tuple[Path, dict[str, Any]], ...]:
+    resources: list[tuple[Path, dict[str, Any]]] = []
+    for path in _yaml_files():
+        for doc in _docs_from(path):
+            if doc.get("kind") != "Kustomization":
+                resources.append((path, doc))
+    return tuple(resources)
+
+
+def _automated_policy_is_hostile(policy: Any) -> bool:
+    if not isinstance(policy, dict):
+        return False
+    return policy.get("prune") is True or policy.get("selfHeal") is True
+
+
+def _has_hostile_sync_policy(doc: dict[str, Any]) -> bool:
+    spec = _as_mapping(doc.get("spec"))
+    if doc.get("kind") == "Application":
+        sync_policy = _as_mapping(spec.get("syncPolicy"))
+        return _automated_policy_is_hostile(sync_policy.get("automated"))
+    if doc.get("kind") == "ApplicationSet":
+        template = _as_mapping(spec.get("template"))
+        template_spec = _as_mapping(template.get("spec"))
+        sync_policy = _as_mapping(template_spec.get("syncPolicy"))
+        return _automated_policy_is_hostile(sync_policy.get("automated"))
+    return False
+
+
+def _has_applicationset_owner(doc: dict[str, Any]) -> bool:
+    if doc.get("kind") != "Application":
+        return False
+    owner_refs = _as_list(_metadata_from(doc).get("ownerReferences"))
+    return any(isinstance(ref, dict) and ref.get("kind") == "ApplicationSet" for ref in owner_refs)
+
+
+def test_automated_policy_treats_prune_and_selfheal_as_hostile_without_enabled_semantics() -> None:
+    assert _automated_policy_is_hostile({"enabled": False, "prune": True})
+    assert _automated_policy_is_hostile({"enabled": False, "selfHeal": True})
+    assert not _automated_policy_is_hostile({"enabled": False})
+
+
+def test_nested_fixture_helpers_tolerate_non_mapping_yaml_shapes() -> None:
+    assert not _has_hostile_sync_policy({"kind": "Application", "spec": None})
+    assert not _has_hostile_sync_policy({"kind": "ApplicationSet", "spec": {"template": []}})
+    assert not _has_hostile_sync_policy({"kind": "ApplicationSet", "spec": {"template": {"spec": None}}})
+    assert not _has_applicationset_owner({"kind": "Application", "metadata": {"ownerReferences": {}}})
+    assert _labels_from({"metadata": {"labels": ["not", "a", "mapping"]}}) == {}
+
+
+def test_autosync_off_fixture_omits_automated_sync_for_gitops_compatibility() -> None:
+    path = FIXTURE_ROOT / "bases" / "argocd-acm-safe-mode" / "autosync-off" / "autosync-off-application.yaml"
+    docs = _docs_from(path)
+    assert len(docs) == 1
+    sync_policy = _as_mapping(_as_mapping(docs[0].get("spec")).get("syncPolicy"))
+    assert "automated" not in sync_policy
+
+
+def _kustomization_resource_paths(kustomization_dir: Path, seen: set[Path] | None = None) -> tuple[Path, ...]:
+    seen = seen or set()
+    kustomization = (kustomization_dir / "kustomization.yaml").resolve()
+    assert kustomization.exists(), f"{kustomization_dir.relative_to(FIXTURE_ROOT)} is missing kustomization.yaml"
+    if kustomization in seen:
+        return ()
+    seen.add(kustomization)
+
+    raw = yaml.safe_load(kustomization.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raw = {}
+    resources = raw.get("resources", ())
+    assert isinstance(resources, list), f"{kustomization} resources must be a list"
+
+    resolved: list[Path] = []
+    for resource in resources:
+        resource_path = (kustomization_dir / resource).resolve()
+        assert resource_path.is_relative_to(FIXTURE_ROOT.resolve()), f"{resource} escapes the fixture tree"
+        assert resource_path.exists(), f"{kustomization} references missing resource {resource}"
+        if resource_path.is_dir():
+            resolved.extend(_kustomization_resource_paths(resource_path, seen))
+        else:
+            resolved.append(resource_path)
+    return tuple(resolved)
+
+
+def test_release_lab_kustomize_tree_has_expected_overlays() -> None:
+    assert (FIXTURE_ROOT / "README.md").exists()
+    assert (FIXTURE_ROOT / "local" / ".gitkeep").exists()
+    for relative_dir in REQUIRED_KUSTOMIZATION_DIRS:
+        assert (FIXTURE_ROOT / relative_dir / "kustomization.yaml").exists(), relative_dir
+
+
+def test_release_lab_kustomize_resources_resolve_static_build_inputs() -> None:
+    for relative_dir in REQUIRED_KUSTOMIZATION_DIRS:
+        resources = _kustomization_resource_paths(FIXTURE_ROOT / relative_dir)
+        assert resources, f"{relative_dir} should resolve at least one static resource"
+
+
+def test_release_lab_fixture_files_do_not_commit_secret_material_or_private_references() -> None:
+    for path in _fixture_files():
+        if path.name == ".gitkeep":
+            continue
+        text = path.read_text(encoding="utf-8")
+        for pattern in SECRET_MARKER_PATTERNS:
+            assert not pattern.search(
+                text
+            ), f"{path.relative_to(FIXTURE_ROOT)} contains unsafe marker {pattern.pattern}"
+
+
+def test_release_lab_fixtures_do_not_default_to_enforce_or_decommission() -> None:
+    for path, doc in _resource_docs():
+        assert _as_mapping(doc.get("spec")).get("remediationAction") != "enforce", path
+
+    for relative_dir in REQUIRED_KUSTOMIZATION_DIRS:
+        for resource in _kustomization_resource_paths(FIXTURE_ROOT / relative_dir):
+            assert "extensions/decommission" not in resource.as_posix()
+
+
+def test_hostile_gitops_modes_are_isolated_to_explicit_hostile_fixtures() -> None:
+    allowed_prefixes = HOSTILE_SCENARIO_DIRS + (ALLOWED_HOSTILE_BASE_DIR,)
+    for path, doc in _resource_docs():
+        labels = _labels_from(doc)
+        mode = labels.get("acm-switchover.redhat-lab/gitops-mode", "")
+        if not (str(mode).startswith("hostile-") or _has_hostile_sync_policy(doc)):
+            continue
+        relative = path.relative_to(FIXTURE_ROOT).as_posix()
+        assert any(relative.startswith(prefix) for prefix in allowed_prefixes), relative
+
+
+def test_applicationset_child_fixture_is_present_and_documented() -> None:
+    appset_dir = FIXTURE_ROOT / "overlays/scenarios/gitops-owns-acm-appset-child"
+    docs = [doc for path, doc in _resource_docs() if appset_dir in path.parents]
+    assert any(doc.get("kind") == "ApplicationSet" for doc in docs)
+    assert any(_has_applicationset_owner(doc) for doc in docs)
+
+    readme = (FIXTURE_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "ApplicationSet child Application" in readme
+
+
+def test_fixture_resources_carry_required_lab_labels() -> None:
+    for path, doc in _resource_docs():
+        labels = _labels_from(doc)
+        missing = REQUIRED_LAB_LABELS - set(labels)
+        assert not missing, f"{path.relative_to(FIXTURE_ROOT)} missing labels: {sorted(missing)}"
+        assert labels["acm-switchover.redhat-lab/topology"] == "2hub-3mc-sno"
+
+
+def test_acm_dr_restore_fixture_models_passive_sync_restore_input() -> None:
+    restore_docs = [
+        doc for _, doc in _resource_docs() if _labels_from(doc).get("acm-switchover.redhat-lab/acm-object") == "restore"
+    ]
+    assert len(restore_docs) == 1
+
+    restore = _desired_state_from_configmap(restore_docs[0])
+    metadata = _as_mapping(restore.get("metadata"))
+    spec = _as_mapping(restore.get("spec"))
+    assert restore.get("kind") == "Restore"
+    assert metadata.get("name") == "restore-acm-passive-sync"
+    assert spec.get("syncRestoreWithNewBackups") is True
+    assert spec.get("restoreSyncInterval") == "10m"
+
+
+def test_release_lab_readme_documents_static_non_live_boundary() -> None:
+    readme = (FIXTURE_ROOT / "README.md").read_text(encoding="utf-8")
+    required_phrases = (
+        "not live ACM certification evidence",
+        "server-side live validation is Phase 9 work",
+        "Phase 8P/8Q",
+        "2 hubs and 3 managed SNO clusters",
+    )
+    for phrase in required_phrases:
+        assert phrase in readme

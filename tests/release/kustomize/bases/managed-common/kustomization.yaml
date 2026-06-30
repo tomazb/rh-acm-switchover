@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- managed-sentinels.yaml
+
+labels:
+- includeSelectors: true
+  pairs:
+    acm-switchover.redhat-lab/fixture-scope: managed-common
+    acm-switchover.redhat-lab/topology: 2hub-3mc-sno
