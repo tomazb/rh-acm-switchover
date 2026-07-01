@@ -167,7 +167,7 @@ class ArgoCDApplicationEvidence:
     namespace: str | None
     owns_acm_resources: bool
     tracked_resources: tuple[GitOpsTrackedResource, ...] = ()
-    sync_policy: Mapping[str, Any] = field(default_factory=dict)
+    sync_policy: Any = field(default_factory=dict)
     sync_options: tuple[str, ...] = ()
     applicationset_parent: str | None = None
     applicationset_owner_uid_present: bool = False

@@ -58,9 +58,18 @@ def _resource_key(group: str, kind: str, namespace: str | None, name: str) -> tu
 
 
 def _tracking_application(tracking_id: str | None) -> str | None:
-    if not tracking_id or ":" not in tracking_id:
+    if not tracking_id:
         return None
-    app_name = tracking_id.split(":", 1)[0].strip()
+    parts = tuple(part.strip() for part in tracking_id.split(":"))
+    if len(parts) != 3:
+        return None
+    app_name, resource_ref, object_ref = parts
+    if not app_name or "/" not in resource_ref or "/" not in object_ref:
+        return None
+    _, kind = resource_ref.rsplit("/", 1)
+    namespace, name = object_ref.rsplit("/", 1)
+    if not kind or not namespace or not name:
+        return None
     return app_name or None
 
 
@@ -179,6 +188,44 @@ def _resource_lookup(
     return lookup
 
 
+def _resource_sort_key(resource: GitOpsTrackedResource) -> tuple[str, str, str, str]:
+    return resource.group, resource.kind, resource.namespace or "", resource.name
+
+
+def _annotated_resources_for_application(
+    resource_lookup: Mapping[tuple[str, str, str | None, str], GitOpsTrackedResource],
+    application_name: str,
+) -> tuple[GitOpsTrackedResource, ...]:
+    return tuple(
+        sorted(
+            (
+                resource
+                for resource in resource_lookup.values()
+                if resource.acm_object and resource.owning_application == application_name
+            ),
+            key=_resource_sort_key,
+        )
+    )
+
+
+def _malformed_tracking_reason(
+    resource_lookup: Mapping[tuple[str, str, str | None, str], GitOpsTrackedResource],
+) -> str | None:
+    malformed = tuple(
+        sorted(
+            (
+                resource
+                for resource in resource_lookup.values()
+                if resource.acm_object and resource.tracking_id is not None and resource.owning_application is None
+            ),
+            key=_resource_sort_key,
+        )
+    )
+    if not malformed:
+        return None
+    return f"malformed Argo CD tracking annotation on ACM resource {malformed[0].ref}"
+
+
 def load_gitops_ownership_from_fixture(
     kustomization_dir: Path,
     *,
@@ -192,6 +239,15 @@ def load_gitops_ownership_from_fixture(
     root = resolved_dir.parents[2]
     docs = _yaml_docs(_resource_paths(resolved_dir, root))
     resource_lookup = _resource_lookup(docs)
+    source = resolved_dir.relative_to(root).as_posix()
+    malformed_tracking = _malformed_tracking_reason(resource_lookup)
+    if malformed_tracking is not None:
+        return GitOpsOwnershipEvidence(
+            evaluated=True,
+            source=source,
+            unknown_reason=malformed_tracking,
+            automated_enabled_capability=automated_enabled_capability or GitOpsCapabilityEvidence.unknown(),
+        )
     coordinated = set(coordinated_appsets)
 
     application_sets = []
@@ -222,7 +278,7 @@ def load_gitops_ownership_from_fixture(
         if not isinstance(name, str):
             continue
         parent_name, owner_uid_present = _child_appset_parent(doc)
-        status_resources = []
+        application_resources: dict[tuple[str, str, str | None, str], GitOpsTrackedResource] = {}
         for status_resource in _application_status_resources(doc):
             matched = resource_lookup.get(
                 _resource_key(
@@ -242,22 +298,39 @@ def load_gitops_ownership_from_fixture(
                 owning_application=name,
                 acm_object=resource.acm_object,
             )
-            status_resources.append(resource)
+            application_resources[_resource_key(resource.group, resource.kind, resource.namespace, resource.name)] = (
+                resource
+            )
+        for annotated_resource in _annotated_resources_for_application(resource_lookup, name):
+            resource = GitOpsTrackedResource(
+                group=annotated_resource.group,
+                kind=annotated_resource.kind,
+                namespace=annotated_resource.namespace,
+                name=annotated_resource.name,
+                tracking_id=annotated_resource.tracking_id,
+                owning_application=name,
+                acm_object=annotated_resource.acm_object,
+            )
+            application_resources.setdefault(
+                _resource_key(resource.group, resource.kind, resource.namespace, resource.name),
+                resource,
+            )
+        application_tracked_resources = tuple(application_resources.values())
+        for resource in application_tracked_resources:
             if resource.acm_object:
                 tracked_resources.append(resource)
+        spec = _as_mapping(doc.get("spec"))
+        sync_policy = spec.get("syncPolicy", {})
+        sync_policy_mapping = sync_policy if isinstance(sync_policy, Mapping) else {}
         applications.append(
             ArgoCDApplicationEvidence(
                 name=name,
                 namespace=metadata.get("namespace") if isinstance(metadata.get("namespace"), str) else None,
-                owns_acm_resources=any(resource.acm_object for resource in status_resources),
-                tracked_resources=tuple(status_resources),
-                sync_policy=_as_mapping(_as_mapping(doc.get("spec")).get("syncPolicy")),
+                owns_acm_resources=any(resource.acm_object for resource in application_tracked_resources),
+                tracked_resources=application_tracked_resources,
+                sync_policy=sync_policy,
                 sync_options=tuple(
-                    option
-                    for option in _as_list(
-                        _as_mapping(_as_mapping(doc.get("spec")).get("syncPolicy")).get("syncOptions")
-                    )
-                    if isinstance(option, str)
+                    option for option in _as_list(sync_policy_mapping.get("syncOptions")) if isinstance(option, str)
                 ),
                 applicationset_parent=parent_name,
                 applicationset_owner_uid_present=owner_uid_present,
@@ -282,7 +355,7 @@ def load_gitops_ownership_from_fixture(
 
     return GitOpsOwnershipEvidence(
         evaluated=True,
-        source=resolved_dir.relative_to(root).as_posix(),
+        source=source,
         applications=tuple(applications),
         application_sets=tuple(application_sets),
         tracked_resources=tuple(tracked_resources),
@@ -503,10 +576,13 @@ def classify_gitops_ownership(evidence: GitOpsOwnershipEvidence) -> GitOpsRiskDe
 
 
 def _sync_policy_summary(application: ArgoCDApplicationEvidence) -> dict[str, Any]:
+    sync_policy_malformed = not isinstance(application.sync_policy, Mapping)
     sync_policy = application.sync_policy if isinstance(application.sync_policy, Mapping) else {}
     automated = sync_policy.get("automated")
+    automated_malformed = automated is not None and not isinstance(automated, Mapping)
     automated_mapping = automated if isinstance(automated, Mapping) else {}
     return {
+        "malformed": sync_policy_malformed or automated_malformed,
         "automated_present": "automated" in sync_policy,
         "automated_enabled": automated_mapping.get("enabled"),
         "prune": automated_mapping.get("prune") is True,

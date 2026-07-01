@@ -109,6 +109,82 @@ def _argocd_segment() -> PlannedSegment:
     )
 
 
+def _write_gitops_fixture(
+    scenario_dir: Path,
+    *,
+    application_name: str = "acm-owner-fixture",
+    sync_policy_yaml: str | None = "  syncPolicy: {}\n",
+    resource_namespace: str = "open-cluster-management-backup",
+    resource_label: str | None = '"true"',
+    tracking_id: str | None = None,
+    include_status_resource: bool = False,
+) -> Path:
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "kustomization.yaml").write_text("resources:\n  - app.yaml\n  - resource.yaml\n", encoding="utf-8")
+    status_yaml = (
+        """
+status:
+  resources:
+    - group: ""
+      kind: ConfigMap
+      namespace: open-cluster-management-backup
+      name: fixture-owned-resource
+      status: Synced
+"""
+        if include_status_resource
+        else ""
+    )
+    (scenario_dir / "app.yaml").write_text(
+        f"""
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {application_name}
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: https://git.example.invalid/acm-switchover-lab.git
+    targetRevision: HEAD
+    path: tests/release/kustomize/bases/acm-dr-objects
+  destination:
+    name: in-cluster
+    namespace: open-cluster-management-backup
+{sync_policy_yaml or ""}{status_yaml}
+""",
+        encoding="utf-8",
+    )
+    annotations_yaml = (
+        f"""
+  annotations:
+    argocd.argoproj.io/tracking-id: {tracking_id}
+"""
+        if tracking_id is not None
+        else ""
+    )
+    labels_yaml = (
+        f"""
+  labels:
+    acm-switchover.redhat-lab/acm-object: {resource_label}
+"""
+        if resource_label is not None
+        else ""
+    )
+    (scenario_dir / "resource.yaml").write_text(
+        f"""
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fixture-owned-resource
+  namespace: {resource_namespace}
+{labels_yaml}{annotations_yaml}data:
+  placeholder: static-fixture
+""",
+        encoding="utf-8",
+    )
+    return scenario_dir
+
+
 def _manual_owned_application(
     *,
     automated: dict[str, Any] | None,
@@ -161,6 +237,83 @@ def test_observe_only_fixture_classifies_as_pass_without_acm_ownership() -> None
     assert decision.interference_mode is ArgoCDInterferenceMode.OBSERVE_ONLY
     assert decision.coordination_strategy is CoordinationStrategy.OBSERVE_ONLY
     assert decision.blocking_reason is None
+
+
+def test_annotation_only_hostile_application_ownership_blocks(tmp_path: Path) -> None:
+    fixture = _write_gitops_fixture(
+        tmp_path / "kustomize" / "overlays" / "scenarios" / "annotation-hostile",
+        application_name="annotation-hostile-owner",
+        sync_policy_yaml="  syncPolicy:\n    automated:\n      selfHeal: true\n",
+        tracking_id="annotation-hostile-owner:/ConfigMap:open-cluster-management-backup/fixture-owned-resource",
+    )
+
+    evidence = load_gitops_ownership_from_fixture(fixture)
+    decision = classify_gitops_ownership(evidence)
+
+    assert evidence.applications[0].owns_acm_resources is True
+    assert evidence.applications[0].tracked_resources[0].owning_application == "annotation-hostile-owner"
+    assert decision.decision is SegmentDecision.NO_GO
+    assert decision.interference_mode is ArgoCDInterferenceMode.AUTOMATED_SELF_HEAL
+
+
+def test_annotation_only_autosync_off_application_ownership_is_safe(tmp_path: Path) -> None:
+    fixture = _write_gitops_fixture(
+        tmp_path / "kustomize" / "overlays" / "scenarios" / "annotation-safe",
+        application_name="annotation-safe-owner",
+        sync_policy_yaml="  syncPolicy: {}\n",
+        tracking_id="annotation-safe-owner:/ConfigMap:open-cluster-management-backup/fixture-owned-resource",
+    )
+
+    evidence = load_gitops_ownership_from_fixture(fixture)
+    decision = classify_gitops_ownership(evidence)
+
+    assert evidence.applications[0].owns_acm_resources is True
+    assert len(evidence.tracked_resources) == 1
+    assert decision.decision is SegmentDecision.PASS
+    assert decision.interference_mode is ArgoCDInterferenceMode.OWNED_AUTOSYNC_OFF
+
+
+@pytest.mark.parametrize(
+    "tracking_id",
+    (
+        "not-a-valid-tracking-id",
+        "malformed-tracking-owner:bad",
+        "malformed-tracking-owner:/ConfigMap",
+    ),
+)
+def test_malformed_tracking_id_on_acm_resource_blocks(tmp_path: Path, tracking_id: str) -> None:
+    fixture = _write_gitops_fixture(
+        tmp_path / "kustomize" / "overlays" / "scenarios" / "malformed-tracking",
+        application_name="malformed-tracking-owner",
+        sync_policy_yaml="  syncPolicy: {}\n",
+        tracking_id=tracking_id,
+    )
+
+    evidence = load_gitops_ownership_from_fixture(fixture)
+    decision = classify_gitops_ownership(evidence)
+
+    assert decision.decision is SegmentDecision.NO_GO
+    assert decision.interference_mode is ArgoCDInterferenceMode.UNKNOWN
+    assert "malformed" in decision.blocking_reason
+
+
+def test_fixture_without_tracked_acm_resource_remains_observe_only(tmp_path: Path) -> None:
+    fixture = _write_gitops_fixture(
+        tmp_path / "kustomize" / "overlays" / "scenarios" / "no-tracked-acm",
+        application_name="observe-only-hostile",
+        sync_policy_yaml="  syncPolicy:\n    automated:\n      selfHeal: true\n",
+        resource_namespace="acm-lab-hub",
+        resource_label=None,
+        tracking_id=None,
+    )
+
+    evidence = load_gitops_ownership_from_fixture(fixture)
+    decision = classify_gitops_ownership(evidence)
+
+    assert evidence.applications[0].owns_acm_resources is False
+    assert evidence.tracked_resources == ()
+    assert decision.decision is SegmentDecision.PASS
+    assert decision.interference_mode is ArgoCDInterferenceMode.OBSERVE_ONLY
 
 
 def test_no_tracked_acm_resources_classifies_as_pass_not_owned() -> None:
@@ -245,6 +398,50 @@ def test_hostile_automated_sync_fixtures_block_without_coordination(
     assert decision.coordination_strategy is CoordinationStrategy.APPLICATION_COORDINATION_REQUIRED
     assert decision.blocking_reason is not None
     assert reason in decision.blocking_reason
+
+
+@pytest.mark.parametrize(
+    "sync_policy_yaml",
+    (
+        "  syncPolicy: []\n",
+        '  syncPolicy: "bad"\n',
+        "  syncPolicy:\n    automated: []\n",
+        '  syncPolicy:\n    automated: "bad"\n',
+    ),
+)
+def test_malformed_sync_policy_on_acm_owning_application_blocks(tmp_path: Path, sync_policy_yaml: str) -> None:
+    fixture = _write_gitops_fixture(
+        tmp_path / "kustomize" / "overlays" / "scenarios" / "malformed-sync-policy",
+        sync_policy_yaml=sync_policy_yaml,
+        include_status_resource=True,
+    )
+
+    evidence = load_gitops_ownership_from_fixture(fixture)
+    decision = classify_gitops_ownership(evidence)
+
+    assert evidence.applications[0].owns_acm_resources is True
+    assert decision.decision is SegmentDecision.NO_GO
+    assert decision.interference_mode is ArgoCDInterferenceMode.UNKNOWN
+    assert "syncPolicy" in decision.blocking_reason
+
+
+@pytest.mark.parametrize("sync_policy_yaml", (None, "  syncPolicy: {}\n"))
+def test_absent_or_empty_sync_policy_on_acm_owning_application_is_safe(
+    tmp_path: Path,
+    sync_policy_yaml: str | None,
+) -> None:
+    fixture = _write_gitops_fixture(
+        tmp_path / "kustomize" / "overlays" / "scenarios" / "safe-sync-policy",
+        sync_policy_yaml=sync_policy_yaml,
+        include_status_resource=True,
+    )
+
+    evidence = load_gitops_ownership_from_fixture(fixture)
+    decision = classify_gitops_ownership(evidence)
+
+    assert evidence.applications[0].owns_acm_resources is True
+    assert decision.decision is SegmentDecision.PASS
+    assert decision.interference_mode is ArgoCDInterferenceMode.OWNED_AUTOSYNC_OFF
 
 
 def test_applicationset_child_blocks_without_parent_coordination() -> None:
