@@ -48,8 +48,16 @@ CI can parse and statically inspect them without CRDs or API-server validation. 
 The tree intentionally excludes real API endpoints, cluster IDs, live import assets, pull assets, S3 storage settings,
 and backup storage settings. Placeholder Git repository references use `example.invalid`.
 
+## Controller Consumption
+
+Phase 8P/8Q consumes these checked-in manifests as deterministic static inputs for lab-controller GitOps ownership
+evidence and dry-run/materialized artifact summaries. The controller resolves Kustomization `resources` entries and
+parses YAML only; it does not shell out to Kustomize, contact a cluster, discover live Argo CD CRDs, or validate these
+resources server-side. Capability evidence for `spec.syncPolicy.automated.enabled` is explicit non-live evidence, not an
+ACM/OpenShift GitOps version assumption. Phase 9 remains responsible for live CRD/schema and server-side validation.
+
 ## Follow-Up Boundary
 
-Phase 8P/8Q should wire these fixtures into the lab controller model and dry-run artifact flow. That follow-up may
-consume rendered manifests as deterministic inputs, but live Argo CD pause/resume behavior and production switchover
-runtime changes remain outside this fixture PR.
+Phase 8P/8Q wires these fixtures into the lab controller model and dry-run artifact flow as provisional, non-live
+evidence only. Live Argo CD pause/resume behavior, production switchover runtime changes, and live ACM certification
+evidence remain outside this fixture tree.

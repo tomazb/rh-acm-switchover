@@ -45,6 +45,26 @@ class ScenarioClassification(str, Enum):
     DESTRUCTIVE_DISPOSABLE_LAB_ONLY = "destructive-disposable-lab-only"
 
 
+class ArgoCDInterferenceMode(str, Enum):
+    NOT_OWNED = "not_owned"
+    OBSERVE_ONLY = "observe_only"
+    OWNED_AUTOSYNC_OFF = "owned_autosync_off"
+    AUTOMATED_SYNC = "automated_sync"
+    AUTOMATED_SELF_HEAL = "automated_self_heal"
+    AUTOMATED_PRUNE = "automated_prune"
+    APPLICATIONSET_CHILD = "applicationset_child"
+    UNKNOWN = "unknown"
+
+
+class CoordinationStrategy(str, Enum):
+    NOT_REQUIRED = "not_required"
+    OBSERVE_ONLY = "observe_only"
+    APPLICATION_COORDINATION_REQUIRED = "application_coordination_required"
+    APPLICATIONSET_PARENT_COORDINATION_REQUIRED = "applicationset_parent_coordination_required"
+    PARENT_LEVEL_COORDINATION = "parent_level_coordination"
+    BLOCKED_UNKNOWN = "blocked_unknown"
+
+
 @dataclass(frozen=True)
 class HubIdentityEvidence:
     physical_label: PhysicalHubLabel
@@ -125,6 +145,87 @@ class SegmentPlan:
 
 
 @dataclass(frozen=True)
+class GitOpsTrackedResource:
+    group: str
+    kind: str
+    namespace: str | None
+    name: str
+    tracking_id: str | None = None
+    owning_application: str | None = None
+    acm_object: bool = False
+
+    @property
+    def ref(self) -> str:
+        group = self.group or ""
+        namespace = self.namespace or ""
+        return f"{group}/{self.kind}:{namespace}/{self.name}"
+
+
+@dataclass(frozen=True)
+class ArgoCDApplicationEvidence:
+    name: str
+    namespace: str | None
+    owns_acm_resources: bool
+    tracked_resources: tuple[GitOpsTrackedResource, ...] = ()
+    sync_policy: Any = field(default_factory=dict)
+    sync_options: tuple[str, ...] = ()
+    applicationset_parent: str | None = None
+    applicationset_owner_uid_present: bool = False
+    applicationset_owner_uid_is_identity_evidence: bool = False
+
+
+@dataclass(frozen=True)
+class ApplicationSetOwnershipEvidence:
+    name: str
+    namespace: str | None
+    child_applications: tuple[str, ...] = ()
+    parent_level_coordination: bool = False
+    owner_uid_identity_evidence: str = "not_used"
+
+
+@dataclass(frozen=True)
+class GitOpsCapabilityEvidence:
+    automated_enabled_supported: bool | None
+    source: str = "unknown"
+    detail: str | None = None
+    field_path: str = "spec.syncPolicy.automated.enabled"
+
+    @classmethod
+    def unknown(cls, detail: str | None = None) -> "GitOpsCapabilityEvidence":
+        return cls(automated_enabled_supported=None, source="unknown", detail=detail)
+
+
+@dataclass(frozen=True)
+class GitOpsOwnershipEvidence:
+    evaluated: bool
+    source: str
+    applications: tuple[ArgoCDApplicationEvidence, ...] = ()
+    application_sets: tuple[ApplicationSetOwnershipEvidence, ...] = ()
+    tracked_resources: tuple[GitOpsTrackedResource, ...] = ()
+    automated_enabled_capability: GitOpsCapabilityEvidence = field(default_factory=GitOpsCapabilityEvidence.unknown)
+    unknown_reason: str | None = None
+    live_certification_evidence: bool = False
+
+    @classmethod
+    def unknown(cls, reason: str) -> "GitOpsOwnershipEvidence":
+        return cls(evaluated=True, source="unknown", unknown_reason=reason)
+
+    @classmethod
+    def not_evaluated(cls, reason: str = "GitOps evidence was not supplied") -> "GitOpsOwnershipEvidence":
+        return cls(evaluated=False, source="not_evaluated", unknown_reason=reason)
+
+
+@dataclass(frozen=True)
+class GitOpsRiskDecision:
+    decision: SegmentDecision
+    safe_to_continue: bool
+    interference_mode: ArgoCDInterferenceMode
+    coordination_strategy: CoordinationStrategy
+    reason: str
+    blocking_reason: str | None = None
+
+
+@dataclass(frozen=True)
 class ControllerDecision:
     decision: SegmentDecision
     reason: str
@@ -189,6 +290,7 @@ class StableLabConfig:
     release: LabReleaseMetadata | None = None
     argocd: LabArgoCDSettings | None = None
     artifacts: LabArtifactSettings | None = None
+    gitops: GitOpsOwnershipEvidence | None = None
 
     def __post_init__(self) -> None:
         managed_clusters = self.managed_clusters

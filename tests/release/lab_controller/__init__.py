@@ -23,6 +23,12 @@ from .execution import (
     summarize_execution_request,
     validate_execution_request,
 )
+from .gitops import (
+    build_gitops_artifact_summary,
+    classify_gitops_ownership,
+    load_automated_enabled_capability_from_crd,
+    load_gitops_ownership_from_fixture,
+)
 from .harness import (
     CommandRunRequest,
     CommandRunResult,
@@ -33,7 +39,7 @@ from .harness import (
     summarize_execution_evidence,
 )
 from .identity import verify_physical_hub_identities
-from .models import CertificationDecision
+from .models import ArgoCDInterferenceMode, CertificationDecision, CoordinationStrategy
 from .planner import (
     CertificationArtifactBundle,
     CertificationPlan,
@@ -72,6 +78,12 @@ __all__ = [
     "classify_scenario",
     "infer_observed_role_state",
     "verify_physical_hub_identities",
+    "ArgoCDInterferenceMode",
+    "CoordinationStrategy",
+    "build_gitops_artifact_summary",
+    "classify_gitops_ownership",
+    "load_automated_enabled_capability_from_crd",
+    "load_gitops_ownership_from_fixture",
     "RecoveryCategory",
     "RunRecoveryDecision",
     "classify_segment_stop",

@@ -5,11 +5,11 @@
 This document is both the design target for future live release validation and the implementation reference for
 the deterministic, non-live lab role controller now present under `tests/release/lab_controller/`.
 
-Phases 1 through 7A are implemented as non-live controller primitives, profile generation, provisional artifacts,
-dry-run request construction, non-executed invocation materialization, an explicitly gated local harness, and a thin
-CLI wrapper for deterministic planning and redacted artifact emission. These phases do not change the current release
-profile schema, do not finalize a production JSON schema, and do not authorize live lab mutation outside the existing
-release validation entrypoints.
+Phases 1 through 8P/8Q are implemented as non-live controller primitives, profile generation, provisional artifacts,
+dry-run request construction, non-executed invocation materialization, an explicitly gated local harness, a thin CLI
+wrapper for deterministic planning and redacted artifact emission, and static GitOps ownership/interference evidence
+from checked-in release-lab fixtures. These phases do not change the current release profile schema, do not finalize a
+production JSON schema, and do not authorize live lab mutation outside the existing release validation entrypoints.
 
 The controller described here is a design target for safely certifying a live two-hub ACM lab when scenarios
 may change which physical cluster is the logical primary.
@@ -399,6 +399,16 @@ fake and release-framework dry-run/materialization modes, and writes a redacted 
 provided `--artifact-dir` unless `--no-write` is selected. `release-framework-local` remains explicitly gated and uses
 only the fake command-runner harness path. Live modes are rejected, artifacts must not claim live ACM certification
 evidence, and this is not Agent integration.
+
+Phase 8P/8Q adds deterministic GitOps evidence for the non-live Argo CD lane. The controller can parse checked-in
+release-lab Kustomize fixture YAML, summarize Argo CD Application/ApplicationSet ACM ownership, classify automated sync
+interference (`selfHeal`, `prune`, ApplicationSet child ownership, malformed or unknown evidence), model whether
+`spec.syncPolicy.automated.enabled` is supported from explicit non-live capability evidence, and record the resulting
+coordination strategy in provisional dry-run/materialized artifacts. Unknown ownership and unknown capability evidence
+fail closed when required for a decision. ApplicationSet child ownership remains blocked unless explicit parent-level
+coordination evidence is present. These artifacts are dry-run/materialized evidence only, are not live ACM
+certification evidence, and must not be used as proof that a live Argo CD installation or live CRD schema was inspected.
+Live CRD/schema detection and server-side validation remain Phase 9 work.
 
 ## Agent Execution Contract
 

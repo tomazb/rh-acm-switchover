@@ -705,6 +705,64 @@ def _execution_harness_payload(segment_results: Sequence[SegmentRunResult]) -> d
     }
 
 
+def _gitops_evidence_payload(segment_results: Sequence[SegmentRunResult]) -> dict[str, Any]:
+    summaries = [
+        result.artifact_payload.get("gitops_evidence")
+        for result in segment_results
+        if isinstance(result.artifact_payload.get("gitops_evidence"), dict)
+    ]
+    evaluated = any(bool(summary.get("evaluated", False)) for summary in summaries)
+    first_blocking = next((summary for summary in summaries if summary.get("blocking_reason")), None)
+    first_evaluated = next((summary for summary in summaries if summary.get("evaluated")), None)
+    selected = first_blocking or first_evaluated or (summaries[0] if summaries else {})
+    final_decision = "NOT_EVALUATED"
+    if summaries:
+        if first_blocking:
+            final_decision = str(first_blocking.get("final_decision") or "NO_GO")
+        elif evaluated:
+            final_decision = "PASS"
+    tracked_refs: list[dict[str, Any]] = []
+    seen_refs: set[str] = set()
+    for summary in summaries:
+        tracked = summary.get("tracked_acm_resources", [])
+        if not isinstance(tracked, list):
+            continue
+        for item in tracked:
+            if not isinstance(item, dict):
+                continue
+            ref = str(item.get("ref") or "")
+            if ref in seen_refs:
+                continue
+            seen_refs.add(ref)
+            tracked_refs.append(dict(item))
+    return sanitize_artifact_payload(
+        {
+            "evaluated": evaluated,
+            "evaluated_segments": sum(1 for summary in summaries if summary.get("evaluated")),
+            "tracked_acm_resources": tracked_refs,
+            "application_evidence": (
+                list(selected.get("application_evidence", []))
+                if isinstance(selected.get("application_evidence", []), list)
+                else []
+            ),
+            "application_set_evidence": (
+                list(selected.get("application_set_evidence", []))
+                if isinstance(selected.get("application_set_evidence", []), list)
+                else []
+            ),
+            "sync_policy_classification": selected.get("sync_policy_classification", {}),
+            "automated_enabled_capability": selected.get("automated_enabled_capability", {}),
+            "coordination_strategy": selected.get("coordination_strategy"),
+            "final_decision": final_decision,
+            "blocking_reason": sanitize_artifact_text(
+                str(first_blocking.get("blocking_reason")) if first_blocking else None
+            ),
+            "live_certification_evidence": False,
+            "not_live_acm_certification_evidence": True,
+        }
+    )
+
+
 def _segment_decision_payload(result: SegmentRunResult) -> dict[str, Any]:
     return {
         "segment_id": result.planned_segment.segment_id,
@@ -751,6 +809,7 @@ def _minimal_rejected_bundle(
         "execution_backends": _execution_backends_payload(segment_results),
         "materialized_release_framework": _materialized_release_framework_payload(segment_results),
         "execution_harness_summary": _execution_harness_payload(segment_results),
+        "gitops_evidence": _gitops_evidence_payload(segment_results),
         "final_reason": run_decision.reason,
         "recovery_hint": run_decision.operator_action_hint,
         "summary_counts": run_decision.summary_counts,
@@ -759,6 +818,8 @@ def _minimal_rejected_bundle(
             "authoritative": False,
             "phase": "Phase 5 deterministic planner placeholder",
         },
+        "live_certification_evidence": False,
+        "live_execution_evidence": False,
         "redaction_status": "rejected",
     }
     return CertificationArtifactBundle(
@@ -822,6 +883,7 @@ def merge_segment_artifacts(
         "execution_backends": _execution_backends_payload(segment_results),
         "materialized_release_framework": _materialized_release_framework_payload(segment_results),
         "execution_harness_summary": _execution_harness_payload(segment_results),
+        "gitops_evidence": _gitops_evidence_payload(segment_results),
         "final_role_state": _role_state_payload(run_decision.observed_final_state),
         "final_reason": final_reason_value,
         "recovery_hint": recovery_hint_value,
@@ -831,6 +893,8 @@ def merge_segment_artifacts(
             "authoritative": False,
             "phase": "Phase 5 deterministic planner placeholder",
         },
+        "live_certification_evidence": False,
+        "live_execution_evidence": False,
         "redaction_status": redaction_status,
     }
     try:
