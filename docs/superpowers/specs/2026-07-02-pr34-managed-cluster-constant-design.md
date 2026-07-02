@@ -111,9 +111,9 @@ The review's 49-site count covered only top-level `modules/*.py`. The
 - `backup_validators.py:584`, `:682`, `version_validators.py:529` —
   ManagedCluster list/get calls.
 - `backup_validators.py:638` — backup label key
-  `cluster.open-cluster-management.io/backup-schedule-type`; add
-  `BACKUP_SCHEDULE_TYPE_LABEL = f"{CLUSTER_BACKUP_API_GROUP}/backup-schedule-type"`
-  to `lib/constants.py`.
+  `cluster.open-cluster-management.io/backup-schedule-type`; `lib/constants.py`
+  already defines `ACM_BACKUP_SCHEDULE_TYPE_LABEL` for this key — redefine it to
+  derive from the group constant and use it here (no new constant).
 - `backup_validators.py:455`, `:564` — operator debug-hint strings using the
   `restore.<group>` resource form; interpolate the constant
   (`f"restore.{CLUSTER_BACKUP_API_GROUP}"`).

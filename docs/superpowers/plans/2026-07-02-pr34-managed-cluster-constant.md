@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace every hardcoded `cluster.open-cluster-management.io` API literal in `modules/*.py` (49 sites) and the two behavioral `lib/kube_client.py` helpers with constants from `lib/constants.py`, guarded by a static literal-ban test and a constants-parity entry.
+**Goal:** Replace every hardcoded `cluster.open-cluster-management.io` API literal in `modules/**/*.py` (56 sites, recursive — including `modules/preflight/`) and the two behavioral `lib/kube_client.py` helpers with constants from `lib/constants.py`, guarded by a static literal-ban test and a constants-parity entry.
 
 **Architecture:** Purely mechanical constants routing per the approved design (`docs/superpowers/specs/2026-07-02-pr34-managed-cluster-constant-design.md`). New `CLUSTER_BACKUP_*` companion constants alias the existing `MANAGED_CLUSTER_API_GROUP`; no behavior change — every constant resolves to the exact literal it replaces.
 
@@ -45,7 +45,7 @@ BANNED_LITERAL = "cluster.open-cluster-management.io"
 def test_no_hardcoded_managed_cluster_api_group_in_modules():
     """modules/*.py must route the ACM cluster API group through lib.constants."""
     violations = []
-    for path in sorted(MODULES_DIR.glob("*.py")):
+    for path in sorted(MODULES_DIR.rglob("*.py")):
         for lineno, line in enumerate(path.read_text().splitlines(), start=1):
             if BANNED_LITERAL in line:
                 violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
@@ -58,7 +58,7 @@ def test_no_hardcoded_managed_cluster_api_group_in_modules():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_api_literal_guardrails.py -q`
-Expected: FAIL listing 49 violations across 7 files.
+Expected: FAIL listing 56 violations across 9 files (7 top-level modules plus `modules/preflight/backup_validators.py` and `modules/preflight/version_validators.py`).
 
 - [ ] **Step 3: Commit**
 
@@ -119,7 +119,7 @@ git commit -m "feat: add CLUSTER_BACKUP_* API constants and group parity guard"
 ### Task 3: Swap literals in modules/ and kube_client helpers
 
 **Files:**
-- Modify: `modules/activation.py`, `modules/finalization.py`, `modules/post_activation.py`, `modules/primary_prep.py`, `modules/backup_schedule.py`, `modules/restore_discovery.py`, `modules/decommission.py`, `lib/kube_client.py:980-996`
+- Modify: `modules/activation.py`, `modules/finalization.py`, `modules/post_activation.py`, `modules/primary_prep.py`, `modules/backup_schedule.py`, `modules/restore_discovery.py`, `modules/decommission.py`, `modules/preflight/backup_validators.py`, `modules/preflight/version_validators.py`, `lib/kube_client.py:980-996`
 
 **Interfaces:**
 - Consumes: constants from Task 2.
@@ -149,6 +149,16 @@ For each file, replace (adding the needed names to the existing `from lib.consta
 - Manifest dicts:
   ```python
   "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
+  ```
+- Backup label key (`modules/preflight/backup_validators.py:638`): use the existing
+  `ACM_BACKUP_SCHEDULE_TYPE_LABEL`, redefined in `lib/constants.py` to derive from the
+  group constant:
+  ```python
+  ACM_BACKUP_SCHEDULE_TYPE_LABEL = f"{CLUSTER_BACKUP_API_GROUP}/backup-schedule-type"
+  ```
+- Operator debug-hint f-strings (`modules/preflight/backup_validators.py:455`, `:564`):
+  ```python
+  f"restore.{CLUSTER_BACKUP_API_GROUP}"
   ```
 - `lib/kube_client.py` `list_managed_clusters()`/`patch_managed_cluster()`: use the three `MANAGED_CLUSTER_*` constants (import from `lib.constants`, matching the module's existing import style).
 
