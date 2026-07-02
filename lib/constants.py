@@ -171,7 +171,6 @@ CLUSTER_BACKUP_API_VERSION = "v1beta1"
 CLUSTER_BACKUP_API_VERSION_FULL = f"{CLUSTER_BACKUP_API_GROUP}/{CLUSTER_BACKUP_API_VERSION}"
 BACKUP_SCHEDULE_PLURAL = "backupschedules"
 RESTORE_PLURAL = "restores"
-BACKUP_SCHEDULE_TYPE_LABEL = f"{CLUSTER_BACKUP_API_GROUP}/backup-schedule-type"
 
 # MultiClusterObservability API identifiers
 OBSERVABILITY_API_GROUP = "observability.open-cluster-management.io"
@@ -308,7 +307,7 @@ except (ValueError, TypeError, OverflowError) as e:
 BACKUP_VERIFY_TIMEOUT = 600
 BACKUP_POLL_INTERVAL = 30
 BACKUP_INTEGRITY_MAX_AGE_SECONDS = 600
-ACM_BACKUP_SCHEDULE_TYPE_LABEL = "cluster.open-cluster-management.io/backup-schedule-type"
+ACM_BACKUP_SCHEDULE_TYPE_LABEL = f"{CLUSTER_BACKUP_API_GROUP}/backup-schedule-type"
 ACM_BACKUP_SCHEDULE_TYPES = frozenset({"managedClusters", "credentials", "resources"})
 ACM_BACKUP_NAME_RE = re.compile(r"^acm-(managed-clusters|credentials|resources)-")
 

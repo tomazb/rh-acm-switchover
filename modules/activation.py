@@ -16,10 +16,16 @@ from lib.constants import (
     AUTO_IMPORT_STRATEGY_SYNC,
     BACKUP_NAMESPACE,
     CLEANUP_BEFORE_RESTORE_VALUE,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
+    CLUSTER_BACKUP_API_VERSION_FULL,
     DELETE_REQUEST_TIMEOUT,
     IMMEDIATE_IMPORT_ANNOTATION,
     IMPORT_CONTROLLER_CONFIG_CM,
     LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
     MANAGED_CLUSTER_RESTORE_NAME,
     MCE_NAMESPACE,
     PATCH_VERIFY_MAX_RETRIES,
@@ -29,6 +35,7 @@ from lib.constants import (
     RESTORE_FAST_POLL_TIMEOUT,
     RESTORE_FULL_NAME,
     RESTORE_PASSIVE_SYNC_NAME,
+    RESTORE_PLURAL,
     RESTORE_POLL_INTERVAL,
     RESTORE_WAIT_TIMEOUT,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
@@ -175,9 +182,9 @@ class SecondaryActivation:
 
         restore_name = self._get_passive_sync_restore_name()
         restore = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
             name=restore_name,
             namespace=BACKUP_NAMESPACE,
         )
@@ -243,9 +250,9 @@ class SecondaryActivation:
         logger.info("PATCHING: Applying patch = %s", patch)
 
         result = self.secondary.patch_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
             name=restore_name,
             patch=patch,
             namespace=BACKUP_NAMESPACE,
@@ -281,9 +288,9 @@ class SecondaryActivation:
             try:
                 logger.info("Deleting passive sync restore %s before activation restore", restore_name)
                 self.secondary.delete_custom_resource(
-                    group="cluster.open-cluster-management.io",
-                    version="v1beta1",
-                    plural="restores",
+                    group=CLUSTER_BACKUP_API_GROUP,
+                    version=CLUSTER_BACKUP_API_VERSION,
+                    plural=RESTORE_PLURAL,
                     name=restore_name,
                     namespace=BACKUP_NAMESPACE,
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
@@ -303,9 +310,9 @@ class SecondaryActivation:
             logger.info("No passive sync restore found before activation; proceeding with activation restore creation")
 
         existing_restore = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
             name=MANAGED_CLUSTER_RESTORE_NAME,
             namespace=BACKUP_NAMESPACE,
         )
@@ -314,7 +321,7 @@ class SecondaryActivation:
             return
 
         restore_body = {
-            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
             "kind": "Restore",
             "metadata": {
                 "name": MANAGED_CLUSTER_RESTORE_NAME,
@@ -330,9 +337,9 @@ class SecondaryActivation:
 
         try:
             self.secondary.create_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 body=restore_body,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -373,7 +380,7 @@ class SecondaryActivation:
             snapshot_metadata["annotations"] = annotations
 
         return {
-            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
             "kind": "Restore",
             "metadata": snapshot_metadata,
             "spec": restore.get("spec", {}),
@@ -384,9 +391,9 @@ class SecondaryActivation:
         restore_name = restore_snapshot.get("metadata", {}).get("name", "unknown")
         try:
             self.secondary.create_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 body=restore_snapshot,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -410,9 +417,9 @@ class SecondaryActivation:
 
         def _poll_restore_deletion():
             restore = self.secondary.get_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 name=restore_name,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -439,9 +446,9 @@ class SecondaryActivation:
     def _get_restore_or_raise(self, restore_name: str) -> Dict:
         """Fetch restore resource or raise a fatal error if missing."""
         restore = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
             name=restore_name,
             namespace=BACKUP_NAMESPACE,
         )
@@ -512,9 +519,9 @@ class SecondaryActivation:
             time.sleep(PATCH_VERIFY_RETRY_DELAY)
 
             restore_after = self.secondary.get_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 name=restore_name,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -603,9 +610,9 @@ class SecondaryActivation:
                 return
             # Count non-local clusters
             mcs = self.secondary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1",
-                plural="managedclusters",
+                group=MANAGED_CLUSTER_API_GROUP,
+                version=MANAGED_CLUSTER_API_VERSION,
+                plural=MANAGED_CLUSTER_PLURAL,
             )
             has_non_local = any(mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME for mc in mcs)
             if not has_non_local:
@@ -677,9 +684,9 @@ class SecondaryActivation:
             return
 
         managed_clusters = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
         )
 
         non_local_clusters = [mc for mc in managed_clusters if mc.get("metadata", {}).get("name") != LOCAL_CLUSTER_NAME]
@@ -766,9 +773,9 @@ class SecondaryActivation:
             )
             try:
                 self.secondary.delete_custom_resource(
-                    group="cluster.open-cluster-management.io",
-                    version="v1beta1",
-                    plural="restores",
+                    group=CLUSTER_BACKUP_API_GROUP,
+                    version=CLUSTER_BACKUP_API_VERSION,
+                    plural=RESTORE_PLURAL,
                     name=passive_name,
                     namespace=BACKUP_NAMESPACE,
                     timeout_seconds=DELETE_REQUEST_TIMEOUT,
@@ -783,9 +790,9 @@ class SecondaryActivation:
 
         # Check if full restore already exists (idempotent resume)
         existing_restore = self.secondary.get_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="restores",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=RESTORE_PLURAL,
             name=RESTORE_FULL_NAME,
             namespace=BACKUP_NAMESPACE,
         )
@@ -796,7 +803,7 @@ class SecondaryActivation:
 
         # Create restore resource
         restore_body = {
-            "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+            "apiVersion": CLUSTER_BACKUP_API_VERSION_FULL,
             "kind": "Restore",
             "metadata": {
                 "name": RESTORE_FULL_NAME,
@@ -812,9 +819,9 @@ class SecondaryActivation:
 
         try:
             self.secondary.create_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 body=restore_body,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -857,9 +864,9 @@ class SecondaryActivation:
 
         def _poll_restore():
             restore = self.secondary.get_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 name=restore_name,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -942,9 +949,9 @@ class SecondaryActivation:
         def _poll_velero_restore():
             # Get the ACM restore to find the Velero restore name
             restore = self.secondary.get_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="restores",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=RESTORE_PLURAL,
                 name=restore_name,
                 namespace=BACKUP_NAMESPACE,
             )
@@ -1013,9 +1020,9 @@ class SecondaryActivation:
             return list(name_cache["non_local_names"])
 
         managed_clusters = self.secondary.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1",
-            plural="managedclusters",
+            group=MANAGED_CLUSTER_API_GROUP,
+            version=MANAGED_CLUSTER_API_VERSION,
+            plural=MANAGED_CLUSTER_PLURAL,
         )
         names = []
         for mc in managed_clusters:

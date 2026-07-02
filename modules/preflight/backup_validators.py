@@ -7,11 +7,18 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from lib.constants import (
+    ACM_BACKUP_SCHEDULE_TYPE_LABEL,
     BACKUP_NAMESPACE,
     BACKUP_POLL_INTERVAL,
     BACKUP_SCHEDULE_DEFAULT_NAME,
+    BACKUP_SCHEDULE_PLURAL,
     BACKUP_VERIFY_TIMEOUT,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
     LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
     RESTORE_PASSIVE_SYNC_NAME,
     SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS,
     SPEC_USE_MANAGED_SERVICE_ACCOUNT,
@@ -299,9 +306,9 @@ class BackupScheduleValidator(BaseValidator):
         try:
             # Try to find a BackupSchedule resource
             backup_schedules = primary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 namespace=BACKUP_NAMESPACE,
             )
 
@@ -452,7 +459,7 @@ class PassiveSyncValidator(BaseValidator):
                     False,
                     "No passive sync restore found on secondary hub (required for passive method). "
                     f"Expected a sync-enabled passive Restore with spec.{SPEC_SYNC_RESTORE_WITH_NEW_BACKUPS}=true. "
-                    f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get restore.cluster.open-cluster-management.io -o wide",
+                    f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get restore.{CLUSTER_BACKUP_API_GROUP} -o wide",
                     critical=True,
                 )
                 return
@@ -561,7 +568,7 @@ class PassiveSyncValidator(BaseValidator):
         error_message += (
             " (check ACM restore + Velero restore for details). "
             f"Debug: oc --context={context} -n {BACKUP_NAMESPACE} get "
-            f"restore.cluster.open-cluster-management.io {restore_name} -o yaml; "
+            f"restore.{CLUSTER_BACKUP_API_GROUP} {restore_name} -o yaml; "
             f"oc --context={context} -n {BACKUP_NAMESPACE} get restore.velero.io -o wide"
         )
 
@@ -581,9 +588,9 @@ class ManagedClusterBackupValidator(BaseValidator):
         try:
             # Get all joined ManagedClusters (excluding local-cluster)
             managed_clusters = primary.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1",
-                plural="managedclusters",
+                group=MANAGED_CLUSTER_API_GROUP,
+                version=MANAGED_CLUSTER_API_VERSION,
+                plural=MANAGED_CLUSTER_PLURAL,
             )
 
             joined_clusters = []
@@ -633,10 +640,7 @@ class ManagedClusterBackupValidator(BaseValidator):
             mc_backups = [
                 b
                 for b in backups
-                if b.get("metadata", {})
-                .get("labels", {})
-                .get("cluster.open-cluster-management.io/backup-schedule-type")
-                == "managedClusters"
+                if b.get("metadata", {}).get("labels", {}).get(ACM_BACKUP_SCHEDULE_TYPE_LABEL) == "managedClusters"
             ]
 
             if not mc_backups:
@@ -679,9 +683,9 @@ class ManagedClusterBackupValidator(BaseValidator):
                     # Check each joined cluster's creation time against backup time
                     for cluster_name in joined_clusters:
                         cluster_info = primary.get_custom_resource(
-                            group="cluster.open-cluster-management.io",
-                            version="v1",
-                            plural="managedclusters",
+                            group=MANAGED_CLUSTER_API_GROUP,
+                            version=MANAGED_CLUSTER_API_VERSION,
+                            plural=MANAGED_CLUSTER_PLURAL,
                             name=cluster_name,
                         )
                         if cluster_info:

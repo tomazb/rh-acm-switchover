@@ -14,6 +14,9 @@ from lib.constants import (
     BACKUP_NAMESPACE,
     IMPORT_CONTROLLER_CONFIGMAP,
     LOCAL_CLUSTER_NAME,
+    MANAGED_CLUSTER_API_GROUP,
+    MANAGED_CLUSTER_API_VERSION,
+    MANAGED_CLUSTER_PLURAL,
     MCE_NAMESPACE,
 )
 from lib.gitops_detector import safe_record_gitops_markers
@@ -526,9 +529,9 @@ class AutoImportStrategyValidator(BaseValidator):
         """
         try:
             mcs = client.list_custom_resources(
-                group="cluster.open-cluster-management.io",
-                version="v1",
-                plural="managedclusters",
+                group=MANAGED_CLUSTER_API_GROUP,
+                version=MANAGED_CLUSTER_API_VERSION,
+                plural=MANAGED_CLUSTER_PLURAL,
             )
         except Exception as exc:
             logger.debug("Error listing managedclusters for auto-import check: %s", exc)
