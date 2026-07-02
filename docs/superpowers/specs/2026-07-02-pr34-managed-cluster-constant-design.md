@@ -102,6 +102,24 @@ constant can never drift from the collection's
   `CLUSTER_OPEN_CLUSTER_MANAGEMENT_IO`).
 - No behavior change; no parity change (values identical on both surfaces).
 
+## Addendum (found during red-test run)
+
+The review's 49-site count covered only top-level `modules/*.py`. The
+`modules/preflight/` subpackage carries 7 more literal lines, all in scope:
+
+- `backup_validators.py:302` — BackupSchedule list call.
+- `backup_validators.py:584`, `:682`, `version_validators.py:529` —
+  ManagedCluster list/get calls.
+- `backup_validators.py:638` — backup label key
+  `cluster.open-cluster-management.io/backup-schedule-type`; add
+  `BACKUP_SCHEDULE_TYPE_LABEL = f"{CLUSTER_BACKUP_API_GROUP}/backup-schedule-type"`
+  to `lib/constants.py`.
+- `backup_validators.py:455`, `:564` — operator debug-hint strings using the
+  `restore.<group>` resource form; interpolate the constant
+  (`f"restore.{CLUSTER_BACKUP_API_GROUP}"`).
+
+The guardrail test scans `modules/**/*.py` recursively (56 literal lines red).
+
 ## Acceptance criteria
 
 1. `grep -rn 'cluster\.open-cluster-management\.io' modules/` returns zero rows.
