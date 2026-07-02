@@ -109,8 +109,9 @@ constant can never drift from the collection's
 3. `tests/test_constants_parity.py` includes the group-constant pair and passes.
 4. Targeted suites pass: `tests/test_activation.py`, `tests/test_finalization.py`,
    `tests/test_post_activation.py`, `tests/test_primary_prep.py`,
-   `tests/test_backup_schedule.py`, `tests/test_restore_discovery.py`,
-   `tests/test_decommission.py`, `tests/test_constants_parity.py`.
+   `tests/test_backup_schedule.py`, `tests/test_decommission.py`,
+   `tests/test_kube_client.py`, `tests/test_constants_parity.py`
+   (`modules/restore_discovery.py` is exercised through `tests/test_activation.py`).
 5. Touched-file `black --check --line-length 120` and
    `isort --check-only --profile black --line-length 120` pass;
    `git diff --check` clean.
