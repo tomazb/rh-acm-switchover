@@ -164,6 +164,15 @@ MANAGED_CLUSTER_API_GROUP = "cluster.open-cluster-management.io"
 MANAGED_CLUSTER_API_VERSION = "v1"
 MANAGED_CLUSTER_PLURAL = "managedclusters"
 
+# ACM cluster-backup-operator CRDs (BackupSchedule, Restore) share the
+# ManagedCluster API group but use v1beta1.
+CLUSTER_BACKUP_API_GROUP = MANAGED_CLUSTER_API_GROUP
+CLUSTER_BACKUP_API_VERSION = "v1beta1"
+CLUSTER_BACKUP_API_VERSION_FULL = f"{CLUSTER_BACKUP_API_GROUP}/{CLUSTER_BACKUP_API_VERSION}"
+BACKUP_SCHEDULE_PLURAL = "backupschedules"
+RESTORE_PLURAL = "restores"
+BACKUP_SCHEDULE_TYPE_LABEL = f"{CLUSTER_BACKUP_API_GROUP}/backup-schedule-type"
+
 # MultiClusterObservability API identifiers
 OBSERVABILITY_API_GROUP = "observability.open-cluster-management.io"
 MULTICLUSTEROBSERVABILITIES_PLURAL = "multiclusterobservabilities"
