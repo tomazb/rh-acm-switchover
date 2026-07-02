@@ -33,7 +33,7 @@ Before implementation begins for any remaining Thermos slice:
 
 This gate applies to the remaining deep-scan queue (`PR 24` onward) and to any new Thermos follow-up slice added later.
 
-**Last Updated:** 2026-06-13
+**Last Updated:** 2026-07-02
 
 ## Post-Merge Revalidation (2026-06-03)
 
@@ -103,6 +103,95 @@ Follow-up order after `PR 32`:
    `get_step_timestamp(name)` and remove direct `StateManager.state` reach-through.
 4. `H3` - decompose large modules only through separate design-gated PRs.
 
+## Thermos Review #2 (2026-07-02)
+
+Full-branch deep review (798 commits, 684 files, ~123.5k insertions, `ansible` vs
+`main`) using 14 chunked, paired `thermo-nuclear-review-subagent` +
+`thermo-nuclear-code-quality-review-subagent` passes (one quality pass for the
+release validation framework stalled after ~50 minutes with zero progress and
+was replaced by a narrower bounded retry rather than re-run as-is). Full findings,
+evidence, and the disputed-finding resolution are in
+[`docs/plans/2026-07-02-thermos-ansible-review-2-findings.md`](docs/plans/2026-07-02-thermos-ansible-review-2-findings.md).
+
+Headline results:
+
+- All previously tracked open items (`H1`, `H2`, `H3`, `M1`-`M5`, `L2`, `L4`,
+  `L6`, `L7`) were re-confirmed still open and unchanged, with two
+  (`M2`, `M5`) reprioritized upward after being shown to be net-new debt added
+  within this branch rather than legacy carryover.
+- 12 new findings were validated with independent source verification (not
+  just subagent claims): `R2-H1` (unbounded delete API calls on the
+  PRIMARY_PREP critical path), `R2-H2` (a sharper, quantified framing of the
+  existing `H2`: `MANAGED_CLUSTER_API_GROUP` is used in only 1 of ~48 relevant
+  call sites), `R2-H3` (new ~140-line RBAC validation duplication on the
+  Ansible side, mirroring `H1`), `R2-M1` (resolves a genuine disagreement
+  between the two chunk-5 subagents about check-mode `changed` reporting
+  across three collection "plan" modules — confirmed `acm_preflight_report.py`
+  has a distinct, self-contained bug, and the other two modules have a real
+  but architecturally different role-aggregation gap versus the collection's
+  documented native-check-mode contract), `R2-M2` through `R2-M5`,
+  `R2-H4`/`R2-M6`-`R2-M8` (release validation framework: a 1199-line
+  `orchestrator.py` with a triplicated short-circuit pattern in its very first
+  commit, plus 70%-duplicated adapter execution logic despite an existing
+  shared contract), and 9 `R2-L*` low-severity items.
+- No new Blocker-severity findings; `R2-H1`, `R2-H3`, and `R2-M2` are the
+  highest-value safety/RBAC-adjacent items in the queue below.
+
+Follow-up order after `PR 33` (new queue, sequenced for risk-adjusted value —
+mechanical/low-risk fixes first to build confidence, then safety fixes, then
+larger structural work):
+
+1. `PR 34` - `R2-H2`: route the 47 remaining hardcoded API-group/version/plural
+   literals in `modules/` through `MANAGED_CLUSTER_API_GROUP` (and companion
+   constants where they exist).
+2. `PR 35` - `R2-M4`: deduplicate `lib/utils.py` `REPORT_PHASE_NAMES` and
+   `lib/workflow.py` `_CANONICAL_RESUME_START_PHASES` into one shared mapping.
+3. `PR 36` - `R2-H1`: add request timeouts to `delete_configmap`/`delete_pod`
+   and thread an explicit timeout through `primary_prep.py`'s ACM ≤2.11
+   BackupSchedule delete call.
+4. `PR 37` - `R2-M1` (part 1): fix `acm_preflight_report.py`'s check-mode
+   `changed` override to match its `acm_report_artifact.py` sibling.
+5. `PR 38` - `R2-M1` (part 2): resolve or explicitly document the
+   native-Ansible-check-mode `changed` gap in `pause_backups.yml` /
+   `activate_restore.yml` against the `docs/variable-reference.md`
+   "native check mode is non-mutating" contract.
+6. `PR 39` - `R2-H3`: deduplicate the Ansible RBAC validation task file's
+   primary/secondary blocks; sequence against the still-queued Python `H1`
+   unification so both sides land on a consistent approach.
+7. `PR 40` - `R2-M3` + existing `M2`: extract the near-duplicate
+   `_wait_for_restore_deletion`/`_wait_for_primary_restore_deletion` methods
+   into `lib/waiter.py` alongside the `M2` unification work.
+8. `PR 41` - `R2-M5`: factor the 4x-duplicated Ansible summary-path resolution
+   logic into one shared `set_fact`/filter.
+9. `PR 42` - `R2-M2`: add resume-path re-validation of Velero-restore
+   staleness in `modules/activation.py` for the crash-mid-verification case.
+10. `PR 43` - `R2-L*` batch: bundle the remaining low-severity items
+    (`R2-L1`, `R2-L3`-`R2-L9`) into one cleanup PR, splitting into a second PR
+    only if review feedback indicates the diff is too large for one review.
+11. `PR 44` - `R2-H4`: extract `tests/release/orchestrator.py`'s triplicated
+    short-circuit finalize blocks in `_run_release_certification` into one
+    helper.
+12. `PR 45` - `R2-M7`: extract the duplicated primary/secondary RBAC
+    certification handling in `tests/release/orchestrator.py` into a loop over
+    a single helper.
+13. `PR 46` - `R2-M8`: deduplicate the required-vs-forbidden permission
+    evaluation loops in `tests/release/checks/rbac_certification.py` into one
+    polarity-parameterized helper.
+14. `PR 47` - `R2-M6`: extract the ~70%-duplicated subprocess/timeout/artifact
+    execution logic shared by `tests/release/adapters/ansible.py`, `bash.py`,
+    and `python_cli.py` into a shared helper in `adapters/common.py`.
+
+`PR 44`-`PR 47` are independent of `PR 34`-`PR 43` (different subsystem:
+release validation tooling, not the live switchover code paths) and, being
+release-tooling-scoped, carry no operator-facing safety risk; they can be
+implemented in any order relative to the rest of this queue, including in
+parallel by a different worker.
+
+Existing queued items `H1`, `H2`, `M4`, `H3` (Python-side, from the `PR 32`
+follow-up order above) remain valid and should be sequenced alongside `PR 34`,
+`PR 39`, and the Python `H3` decomposition track; this queue does not replace
+that one, it extends it with Review #2's findings.
+
 ## Finding Validation Matrix
 
 | Finding | Validation | Resolution PR | Notes |
@@ -151,6 +240,19 @@ Follow-up order after `PR 32`:
 | F42 | resolved | PR 25 | Python RBAC preflight now avoids repeated serial SelfSubjectAccessReview probes without losing reporting fidelity. |
 | F43 | resolved | PR 26 | Release runtime parity now compares real resume, Argo CD, and RBAC/bootstrap outcomes instead of mostly artifact metadata. |
 | F44 | planned deep-scan follow-up | PR 27+ | `PR 27` extracted the runtime/bootstrap seam after PR26 cleared the parity/runtime guardrail gate. `PR 28` records the remaining slice map before follow-up implementation slices tackle operation runners, Argo CD resume safety, and CLI outcome/report orchestration. |
+| R2-H1 | confirmed | PR 36 | `delete_configmap`/`delete_pod` in `lib/kube_client.py` and the ACM ≤2.11 `delete_custom_resource` BackupSchedule call in `modules/primary_prep.py` have no request timeout; a hung API call can block PRIMARY_PREP indefinitely. |
+| R2-H2 | confirmed, sharper framing of `H2` | PR 34 | `MANAGED_CLUSTER_API_GROUP` exists but is used in only 1 of ~48 relevant call sites across `modules/`; verified by grep. |
+| R2-H3 | confirmed | PR 39 | Ansible RBAC validation task file duplicates ~140 lines between primary-hub and secondary-hub blocks, mirroring the still-open Python `H1`. |
+| R2-M1 | confirmed, resolves subagent disagreement | PR 37 (part 1), PR 38 (part 2) | `acm_preflight_report.py` computes an accurate check-mode `changed` value then explicitly discards it (confirmed by reading `write_json_artifact`/`write_report` and comparing against sibling `acm_report_artifact.py`, which has no such override) — a real, self-contained bug. `acm_backup_schedule.py`/`acm_restore_info.py` force `changed=False` under native Ansible check mode; their owning roles do not surface this to the published role-level `changed` result unless the collection's own `mode: dry_run` variable is set (traced through `pause_backups.yml`/`activate_restore.yml`), which is misleading against the documented "native Ansible check mode is non-mutating even when `mode: execute`" contract in `docs/variable-reference.md` — a real but architecturally distinct issue from the `acm_preflight_report.py` bug. |
+| R2-M2 | confirmed | PR 42 | Crash between restore-staleness verification and activation completion, followed by resume, can skip re-validating restore staleness before completing activation. |
+| R2-M3 | confirmed | PR 40 | `_wait_for_restore_deletion` (`activation.py`) and `_wait_for_primary_restore_deletion` (`finalization.py`) are near-verbatim duplicates; bundle with existing `M2` waiter unification. |
+| R2-M4 | confirmed | PR 35 | `lib/utils.py` `REPORT_PHASE_NAMES` and `lib/workflow.py` `_CANONICAL_RESUME_START_PHASES` are byte-identical duplicate dicts. |
+| R2-M5 | confirmed | PR 41 | Ansible summary-path resolution logic is duplicated across 4 role/playbook locations. |
+| R2-L1..L9 | confirmed, low priority | PR 43 | Mixed low-severity maintainability/robustness items; see findings doc for the full list and per-item effort. |
+| R2-H4 | confirmed | PR 44 | `tests/release/orchestrator.py` is 1199 lines on its first commit; `_run_release_certification` (335 lines) triplicates a short-circuit finalize pattern at 3 call sites. |
+| R2-M6 | confirmed | PR 47 | `tests/release/adapters/ansible.py`, `bash.py`, `python_cli.py` duplicate ~70% of `execute()` logic despite an existing shared contract in `adapters/common.py`. |
+| R2-M7 | confirmed | PR 45 | `tests/release/orchestrator.py` duplicates primary/secondary RBAC certification handling inline (~75 lines) instead of looping over a shared helper. |
+| R2-M8 | confirmed | PR 46 | `tests/release/checks/rbac_certification.py`'s required-vs-forbidden permission evaluation loops are the same algorithm with polarity flipped, duplicated in full. |
 
 ## PR Sequence
 
@@ -187,7 +289,22 @@ Follow-up order after `PR 32`:
 | 29 | merged | `refactor/thermos-29-operation-runners` | `.worktrees/thermos-29-operation-runners` | F44 operation/phase-flow runner extraction | https://github.com/tomazb/rh-acm-switchover/pull/104 | Added design spec `docs/superpowers/specs/2026-06-07-pr29-operation-runner-design.md` and implementation plan `docs/superpowers/plans/2026-06-07-pr29-operation-runner-extraction.md`. `lib/operation_runners.py` now owns dispatch plus switchover/restore-only runner orchestration. `acm_switchover.py` keeps thin compatibility wrappers and `_run_restore_only_argocd_pause()` remains in place for PR30. Verification: `python -m pytest tests/test_operation_runners.py tests/test_main.py tests/test_main_phase_flow.py tests/test_documentation_guardrails.py -q` passed (`169 passed`); `graphify update .` passed; `git diff --check` passed; final `./run_tests.sh` passed after touched-file import sorting (`1435 passed, 6 skipped` root unit lane; `212 passed, 1 skipped` release lane; `black --check`, `isort --check-only`, `mypy`, `bandit`, `pip-audit`, and compile checks all passed). PR #104 merged 2026-06-07. |
 | 30 | merged | `refactor/thermos-30-argocd-resume-safety` | `.worktrees/thermos-30-argocd-resume` | F44 Argo CD resume safety extraction | https://github.com/tomazb/rh-acm-switchover/pull/106 | Added design spec `docs/superpowers/specs/2026-06-08-pr30-argocd-resume-safety-design.md` and implementation plan `docs/superpowers/plans/2026-06-08-pr30-argocd-resume-safety.md`. `lib/argocd_resume.py` now owns `_prepare_argocd_resume_clients()`, `_run_argocd_resume_only()`, and `_attempt_argocd_resume_on_failure()`; `acm_switchover.py` keeps compatibility wrappers, and `_run_restore_only_argocd_pause()` remains in place and out of scope for this slice. Verification: `python -m pytest tests/test_argocd_resume_helpers.py tests/test_main_argocd_resume.py tests/test_main.py tests/test_main_phase_flow.py tests/test_operation_runners.py tests/test_documentation_guardrails.py -q` passed (`213 passed`); repo mypy scope passed; `graphify update .` passed; `git diff --check` passed; CodeRabbit re-review reported `No findings`; earlier branch validation also completed a full strict `./run_tests.sh` pass before the final constants/import cleanup, followed by fresh post-review focused checks. PR #106 merged 2026-06-08. |
 | 31 | merged | `refactor/thermos-31-cli-report-orchestration` | `.worktrees/thermos-31-cli-reporting` | F44 CLI outcome/report orchestration extraction | https://github.com/tomazb/rh-acm-switchover/pull/107 | Added design spec `docs/superpowers/specs/2026-06-08-pr31-cli-outcome-report-design.md` and implementation plan `docs/superpowers/plans/2026-06-08-pr31-cli-outcome-report-orchestration.md`. `lib/cli_outcomes.py` now owns report target selection, phase summarization, Python report writing, setup-mode outcome handling, and the non-setup completion shell; `acm_switchover.py` keeps thin compatibility wrappers plus entrypoint ordering and delegates setup/runtime outcome handling through the extracted helper module. Verification: `python -m pytest tests/test_cli_outcomes.py tests/test_main.py tests/test_report_artifacts.py tests/test_main_phase_flow.py -q` passed (`167 passed`); `python -m pytest tests/test_documentation_guardrails.py -q` passed (`24 passed`); `graphify update .` passed; `git diff --check` passed; final `./run_tests.sh` passed after formatting the new direct test file with Black during verification. PR #107 merged 2026-06-08 at `fb90d62`. |
-| 32 | in_progress | `docs/thermos-32-review-validation` | `.worktrees/thermos-32-review-validation` | Thermos Review #1 validation + B1 cleanup | TBD | Scope: track the 2026-06-13 Thermos review, add the validated findings document, and remove the dead Python `Finalization` deprecated-flag instance field without changing CLI compatibility or old-hub observability behavior. Planned verification: `python -m pytest tests/test_finalization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_old_hub_parity.py tests/test_documentation_guardrails.py -q`; `black --check --line-length 120 modules/finalization.py tests/test_finalization.py`; `git diff --check`; `coderabbit review --plain -t all --base ansible`. |
+| 32 | merged | `docs/thermos-32-review-validation` | `.worktrees/thermos-32-review-validation` | Thermos Review #1 validation + B1 cleanup | https://github.com/tomazb/rh-acm-switchover/pull/120 | Added the validated 2026-06-13 Thermos review findings document and resolved `B1` by removing the dead `Finalization.disable_observability_on_secondary` instance field while preserving constructor/CLI compatibility and old-hub observability cleanup behavior. `python -m pytest tests/test_finalization.py ansible_collections/tomazb/acm_switchover/tests/unit/test_finalization_old_hub_parity.py tests/test_documentation_guardrails.py -q` passed (`120 passed`); `black --check --line-length 120 modules/finalization.py tests/test_finalization.py` passed; `git diff --check` passed; `coderabbit review --plain -t all --base ansible` reported `No findings` on rerun; final `./run_tests.sh` passed (root lane `1516 passed, 105 deselected`; release lane `212 passed, 1 skipped`; Black/MyPy/Bandit/pip-audit all clean). PR #120 merged 2026-06-15 at `ddbe46e`. |
+| 33 | merged | `codex/thermos-maintainability-followups` | (no dedicated worktree recorded) | Argo CD resume/CLI-entrypoint/logging maintainability cleanup (not H1/H2/M4) | https://github.com/tomazb/rh-acm-switchover/pull/109 | Addressed a maintainability backlog adjacent to, but distinct from, the `H1`/`H2`/`M4` items queued after `PR 32`: decomposed the Argo CD resume client preparation hotspot into focused, independently testable helpers with unit coverage for resume identity checks; removed dead compatibility wrappers and stale complexity suppression from the CLI entrypoint; routed shared report filenames/types and Argo CD pause/hub role strings through constants; hardened the Option-B resume contract test; extracted duplicated operation-completion logging into `lib/workflow.py`; documented the dry-run rollback boundary. Verification: targeted `pytest` across `test_argocd_resume_helpers.py`, `test_operation_runners.py`, `test_cli_outcomes.py`, `test_primary_prep.py`, collection restore-only contracts, release adapters, and targeted `test_main.py` classes passed; `python -m compileall`, `black --check --line-length 120`, `isort --check-only --profile black --line-length 120`, `git diff --check`, and `./run_tests.sh` all passed. PR #109 merged 2026-06-08 at `7010dc2`. This PR only updated the `PR 31` row in the tracker at merge time and had no row of its own until this reconciliation pass. **Correction (2026-07-02, Thermos Review #2):** the original reconciliation-pass label for this row overstated scope by tagging it `H1, H2, M4 partial`; `lib/rbac_validator.py`'s primary/secondary duplication (`H1`), the modules-wide API-group/version/plural literal duplication (`H2`), and the `finalization.py:570` state accessor gap (`M4`) were independently re-verified as still fully unresolved by Review #2 (see `R2-H2`/`H1`/`H2`/`M4` in [`docs/plans/2026-07-02-thermos-ansible-review-2-findings.md`](docs/plans/2026-07-02-thermos-ansible-review-2-findings.md)); this PR's actual changes never touched those files. |
+| 34 | planned | `fix/thermos-34-managed-cluster-constant` | `.worktrees/thermos-34-managed-cluster-constant` | R2-H2 (sharper H2) | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. |
+| 35 | planned | `refactor/thermos-35-phase-name-dedup` | `.worktrees/thermos-35-phase-name-dedup` | R2-M4 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. |
+| 36 | planned | `fix/thermos-36-delete-timeouts` | `.worktrees/thermos-36-delete-timeouts` | R2-H1 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. |
+| 37 | planned | `fix/thermos-37-preflight-report-checkmode` | `.worktrees/thermos-37-preflight-report-checkmode` | R2-M1 (part 1) | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. |
+| 38 | planned | `fix/thermos-38-checkmode-changed-surfacing` | `.worktrees/thermos-38-checkmode-changed-surfacing` | R2-M1 (part 2) | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. Design must explicitly decide between (a) wiring native-check-mode `changed` through the role-level aggregation, or (b) documenting the limitation in `docs/variable-reference.md`; either is acceptable, but the choice and rationale must be recorded in the PR's design spec. |
+| 39 | planned | `refactor/thermos-39-ansible-rbac-dedup` | `.worktrees/thermos-39-ansible-rbac-dedup` | R2-H3 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. Sequence against the still-queued Python `H1` unification (see "Follow-up order after PR 32") to keep both sides consistent. |
+| 40 | planned | `refactor/thermos-40-restore-wait-dedup` | `.worktrees/thermos-40-restore-wait-dedup` | R2-M3, existing M2 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. |
+| 41 | planned | `refactor/thermos-41-summary-path-dedup` | `.worktrees/thermos-41-summary-path-dedup` | R2-M5 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. |
+| 42 | planned | `fix/thermos-42-activation-resume-staleness` | `.worktrees/thermos-42-activation-resume-staleness` | R2-M2 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. Highest-complexity item in this queue; expect a more involved brainstorming/design phase given the crash-resume safety implications. |
+| 43 | planned | `chore/thermos-43-low-severity-cleanup` | `.worktrees/thermos-43-low-severity-cleanup` | R2-L1, R2-L3..R2-L9 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. Split into a second PR if review feedback indicates the bundled diff is too large. |
+| 44 | planned | `refactor/thermos-44-release-orchestrator-shortcircuit` | `.worktrees/thermos-44-release-orchestrator-shortcircuit` | R2-H4 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. Independent of PR 34-43 (release-tooling scope, not live switchover code). |
+| 45 | planned | `refactor/thermos-45-release-orchestrator-rbac-dedup` | `.worktrees/thermos-45-release-orchestrator-rbac-dedup` | R2-M7 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. Independent of PR 34-43. |
+| 46 | planned | `refactor/thermos-46-rbac-certification-dedup` | `.worktrees/thermos-46-rbac-certification-dedup` | R2-M8 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. Independent of PR 34-43. |
+| 47 | planned | `refactor/thermos-47-release-adapter-dedup` | `.worktrees/thermos-47-release-adapter-dedup` | R2-M6 | TBD | Not started. Spec/design gate required before implementation per the tracker rules above. Independent of PR 34-43. Largest diff in this sub-batch; verify against `test_ansible.py`/`test_bash.py`/`test_python_cli.py` which assert on `StreamResult` fields rather than implementation. |
 
 ## Per-PR Implementation Details
 
