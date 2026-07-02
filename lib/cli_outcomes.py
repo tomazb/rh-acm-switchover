@@ -18,7 +18,7 @@ from lib.constants import (
 from lib.exceptions import SwitchoverError
 from lib.report_artifacts import SOURCE as PYTHON_REPORT_SOURCE
 from lib.report_artifacts import build_operation_report, write_json_report_artifact
-from lib.utils import REPORT_PHASE_NAMES, Phase, StateIdentityMismatch, StateManager
+from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateIdentityMismatch, StateManager
 
 # Fallback for state entries recorded before completion-time phases existed.
 # Matched by prefix so e.g. verify_backup_schedule_enabled still resolves.
@@ -52,7 +52,7 @@ _PHASE_BY_STEP_PREFIX = {
     "reset_auto_import_strategy": "finalization",
 }
 
-_REPORT_PHASE_VALUES = frozenset(REPORT_PHASE_NAMES.values())
+_REPORT_PHASE_VALUES = frozenset(CANONICAL_PHASE_NAMES.values())
 
 
 def fallback_phase_for_step(step_name: str) -> Optional[str]:
@@ -99,7 +99,7 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
 
         last_error = errors[-1] if errors else None
         failed_phase_value = last_error.get("phase") if isinstance(last_error, dict) else None
-        failed_phase = {phase.value: name for phase, name in REPORT_PHASE_NAMES.items()}.get(failed_phase_value)
+        failed_phase = {phase.value: name for phase, name in CANONICAL_PHASE_NAMES.items()}.get(failed_phase_value)
         if failed_phase:
             phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})["status"] = "fail"
 

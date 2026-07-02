@@ -123,9 +123,10 @@ class Phase(Enum):
     FAILED = "failed"
 
 
-# Report-artifact phase names keyed by execution phase. Legacy secondary-verify
-# folds into activation, matching the canonical resume mapping in lib/workflow.py.
-REPORT_PHASE_NAMES = {
+# Canonical phase names keyed by execution phase — the single source for
+# (a) report-artifact phase labels and (b) resume-start phase labels.
+# Legacy secondary-verify folds into activation.
+CANONICAL_PHASE_NAMES = {
     Phase.PREFLIGHT: "preflight",
     Phase.PRIMARY_PREP: "primary_prep",
     Phase.SECONDARY_VERIFY: "activation",
@@ -518,7 +519,7 @@ class StateManager:
         if not self.is_step_completed(step_name):
             entry = {"name": step_name, "timestamp": _utc_timestamp()}
             try:
-                report_phase = REPORT_PHASE_NAMES.get(Phase(self.state.get("current_phase")))
+                report_phase = CANONICAL_PHASE_NAMES.get(Phase(self.state.get("current_phase")))
             except ValueError:
                 report_phase = None
             if report_phase:
