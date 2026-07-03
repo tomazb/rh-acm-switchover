@@ -53,6 +53,7 @@ _PHASE_BY_STEP_PREFIX = {
 }
 
 _REPORT_PHASE_VALUES = frozenset(CANONICAL_PHASE_NAMES.values())
+_PHASE_VALUE_TO_REPORT_NAME = {phase.value: name for phase, name in CANONICAL_PHASE_NAMES.items()}
 
 
 def fallback_phase_for_step(step_name: str) -> Optional[str]:
@@ -99,7 +100,7 @@ def phase_report_from_state(state_snapshot: dict) -> dict[str, dict[str, Any]]:
 
         last_error = errors[-1] if errors else None
         failed_phase_value = last_error.get("phase") if isinstance(last_error, dict) else None
-        failed_phase = {phase.value: name for phase, name in CANONICAL_PHASE_NAMES.items()}.get(failed_phase_value)
+        failed_phase = _PHASE_VALUE_TO_REPORT_NAME.get(failed_phase_value)
         if failed_phase:
             phases.setdefault(failed_phase, {"phase": failed_phase, "steps": []})["status"] = "fail"
 

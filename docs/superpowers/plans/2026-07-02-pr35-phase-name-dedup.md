@@ -149,7 +149,7 @@ Expected: all PASS.
 
 - [ ] **Step 5: Verify no stragglers, format, commit**
 
-Run: `grep -rn "REPORT_PHASE_NAMES\|_CANONICAL_RESUME_START_PHASES" lib/ modules/ tests/ acm_switchover.py`
+Run: `grep -rn "REPORT_PHASE_NAMES\|_CANONICAL_RESUME_START_PHASES" lib/ modules/ acm_switchover.py`
 Expected: no output.
 
 ```bash

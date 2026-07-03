@@ -15,6 +15,7 @@ import signal
 import stat
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Callable, Dict, Literal, Optional, Set, Tuple, TypeVar
 
 from lib.exceptions import StateLoadError, StateLockError
@@ -126,14 +127,16 @@ class Phase(Enum):
 # Canonical phase names keyed by execution phase — the single source for
 # (a) report-artifact phase labels and (b) resume-start phase labels.
 # Legacy secondary-verify folds into activation.
-CANONICAL_PHASE_NAMES = {
-    Phase.PREFLIGHT: "preflight",
-    Phase.PRIMARY_PREP: "primary_prep",
-    Phase.SECONDARY_VERIFY: "activation",
-    Phase.ACTIVATION: "activation",
-    Phase.POST_ACTIVATION: "post_activation",
-    Phase.FINALIZATION: "finalization",
-}
+CANONICAL_PHASE_NAMES = MappingProxyType(
+    {
+        Phase.PREFLIGHT: "preflight",
+        Phase.PRIMARY_PREP: "primary_prep",
+        Phase.SECONDARY_VERIFY: "activation",
+        Phase.ACTIVATION: "activation",
+        Phase.POST_ACTIVATION: "post_activation",
+        Phase.FINALIZATION: "finalization",
+    }
+)
 
 
 def _utc_timestamp() -> str:
@@ -518,10 +521,7 @@ class StateManager:
         """
         if not self.is_step_completed(step_name):
             entry = {"name": step_name, "timestamp": _utc_timestamp()}
-            try:
-                report_phase = CANONICAL_PHASE_NAMES.get(Phase(self.state.get("current_phase")))
-            except ValueError:
-                report_phase = None
+            report_phase = CANONICAL_PHASE_NAMES.get(self.get_current_phase())
             if report_phase:
                 entry["phase"] = report_phase
             self.state["completed_steps"].append(entry)

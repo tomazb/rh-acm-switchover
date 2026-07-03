@@ -8,12 +8,12 @@
 
 ## Problem
 
-`lib/utils.py:128` (`REPORT_PHASE_NAMES`) and `lib/workflow.py:76`
-(`_CANONICAL_RESUME_START_PHASES`) are byte-identical `Phase → str` dicts,
-each carrying its own copy of the same rule (including the legacy
-`SECONDARY_VERIFY → "activation"` fold, cross-referenced only by comments).
-A change to one silently desyncs report-artifact phase labels from
-resume-start phase labels.
+Before this change, `lib/utils.py` (`REPORT_PHASE_NAMES`) and
+`lib/workflow.py` (`_CANONICAL_RESUME_START_PHASES`) had byte-identical
+`Phase → str` dicts, each carrying its own copy of the same rule (including the
+legacy `SECONDARY_VERIFY → "activation"` fold, cross-referenced only by
+comments). A change to one could silently desync report-artifact phase labels
+from resume-start phase labels.
 
 Verified consumers:
 - `lib/utils.py:521` — `StateManager.mark_step_completed` phase tagging.
@@ -61,9 +61,10 @@ Extend guardrail-style coverage in a new
 
 ## Acceptance criteria
 
-1. One `Phase → str` mapping defined in the repo; `grep -rn
-   "REPORT_PHASE_NAMES\|_CANONICAL_RESUME_START_PHASES" lib/ modules/
-   tests/` returns nothing.
+1. One `Phase → str` mapping defined in source code; `grep -rn
+   "REPORT_PHASE_NAMES\|_CANONICAL_RESUME_START_PHASES" lib/ modules/`
+   returns nothing. Tests may reference the legacy names only as negative
+   guardrails.
 2. New test passes; suites for the three consumers pass:
    `tests/test_utils.py`, `tests/test_main_phase_flow.py`,
    `tests/test_cli_outcomes.py`, `tests/test_report_artifacts.py`,

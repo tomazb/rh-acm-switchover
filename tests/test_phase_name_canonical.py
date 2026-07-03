@@ -1,5 +1,7 @@
 """Guardrails for the single canonical Phase -> report/resume name mapping (Thermos R2-M4)."""
 
+import pytest
+
 import lib.cli_outcomes as cli_outcomes
 import lib.utils as utils
 import lib.workflow as workflow
@@ -27,6 +29,11 @@ def test_single_mapping_object_shared_by_all_consumers():
     """workflow and cli_outcomes must use the exact same dict object as lib.utils."""
     assert workflow.CANONICAL_PHASE_NAMES is CANONICAL_PHASE_NAMES
     assert cli_outcomes.CANONICAL_PHASE_NAMES is CANONICAL_PHASE_NAMES
+
+
+def test_canonical_phase_names_are_immutable():
+    with pytest.raises(TypeError):
+        CANONICAL_PHASE_NAMES[Phase.PREFLIGHT] = "changed"
 
 
 def test_old_duplicate_names_are_gone():
