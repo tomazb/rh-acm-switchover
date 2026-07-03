@@ -132,7 +132,7 @@
           or (_restore_delete_result.changed | default(false))
           or (_restore_create_result.changed | default(false))
           or (
-            acm_switchover_execution.mode | default('dry_run') == 'dry_run'
+            (((acm_switchover_execution | default({})).get('mode', 'dry_run') == 'dry_run') or ansible_check_mode)
             and (acm_restore_activation_plan.changed | default(false))
           )
         }}

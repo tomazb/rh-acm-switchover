@@ -67,7 +67,7 @@ post-activation reaches klusterlet operations.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `mode` | `execute`, `validate`, `dry_run` | `execute` | Runtime mode. `validate` runs the checkpoint preflight (loading and verifying checkpoint state, including hub-identity binding) along the same path used by `execute`, but does not persist checkpoint transitions or perform mutations — so misconfigured checkpoints fail fast before any execute-mode run. `dry_run` also does not persist checkpoint transitions. Native Ansible check mode is non-mutating even when this is `execute`. |
+| `mode` | `execute`, `validate`, `dry_run` | `execute` | Runtime mode. `validate` runs the checkpoint preflight (loading and verifying checkpoint state, including hub-identity binding) along the same path used by `execute`, but does not persist checkpoint transitions or perform mutations — so misconfigured checkpoints fail fast before any execute-mode run. `dry_run` also does not persist checkpoint transitions. Native Ansible check mode is non-mutating even when this is `execute`; published role results (`acm_switchover_pause_backups_result.changed`, `acm_switchover_restore_activation_result.changed`) report the would-change verdict under `--check`. |
 | `verbose` | bool | `false` | Enable verbose collection output where roles expose additional debug detail |
 | `force` | bool | `false` | Operator override flag reserved for compatibility with Python CLI state-reset workflows |
 | `report_dir` | str | `./artifacts` | Directory for JSON report artifacts; validated by the safe-path policy |

@@ -34,7 +34,7 @@ from tests.release.baseline.discovery import HubDiscoveryClient, discover_hub_fa
 from tests.release.baseline.fingerprint import build_environment_fingerprint
 from tests.release.checks.lab_readiness import assert_lab_readiness
 from tests.release.checks.metadata import validate_release_metadata
-from tests.release.checks.rbac_certification import certify_rbac_permissions
+from tests.release.checks.rbac_certification import CertificationResult, certify_rbac_permissions
 from tests.release.checks.static_gates import (
     GateCommand,
     GateResult,
@@ -218,6 +218,41 @@ def _rbac_certification_scope(
     if hub_name == "primary":
         return scenario_profile.rbac_certification.primary
     return scenario_profile.rbac_certification.secondary
+
+
+def _certify_hub_rbac(
+    *,
+    hub,
+    hub_name: str,
+    scenario_profiles: Mapping[str, ScenarioProfile],
+    rbac_cert_dir: Path,
+) -> tuple[CertificationResult, list[dict]]:
+    """Certify one hub's RBAC scope and return its result plus prefixed assertion dicts."""
+    scope = _rbac_certification_scope(scenario_profiles, hub_name)
+    result = certify_rbac_permissions(
+        hub=hub,
+        hub_name=hub_name,
+        artifact_dir=rbac_cert_dir / hub_name,
+        role=scope.role,
+        namespace=scope.namespace,
+        service_account=scope.service_account,
+        include_decommission=scope.include_decommission,
+        include_old_hub_finalization=scope.include_old_hub_finalization,
+        include_forbidden_permissions=scope.include_forbidden_permissions,
+    )
+    assertions = [
+        {
+            "capability": a.capability,
+            "name": f"{hub_name}:{a.name}",
+            "status": a.status,
+            "expected": a.expected,
+            "actual": a.actual,
+            "evidence_path": a.evidence_path,
+            "message": a.message,
+        }
+        for a in result.assertions
+    ]
+    return result, assertions
 
 
 def _as_dict(value: Any) -> dict:
@@ -832,6 +867,41 @@ def _not_applicable_artifact(status: str = "not_applicable") -> dict:
     return {"schema_version": 1, "status": status, "comparisons": []}
 
 
+def _short_circuit_finalize(
+    *,
+    artifacts: ReleaseArtifacts,
+    release_options: ReleaseOptions,
+    matrix,
+    manifest: dict,
+    certification_eligible: bool,
+    results: list[dict],
+    recovery: dict,
+    mandatory_argocd: dict,
+    release_metadata: dict,
+    matrix_validation: dict,
+    finalize_run_fn: Callable[..., dict] = _finalize_run,
+) -> dict:
+    """Write not-applicable runtime-parity/final-baseline artifacts and finalize an aborted run."""
+    runtime_parity = _not_applicable_artifact()
+    artifacts.write_json("runtime-parity.json", runtime_parity)
+    final_baseline = {"status": "not_applicable", "assertions": []}
+    artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
+    return finalize_run_fn(
+        artifacts=artifacts,
+        release_options=release_options,
+        matrix=matrix,
+        manifest=manifest,
+        certification_eligible=certification_eligible,
+        results=results,
+        runtime_parity=runtime_parity,
+        final_baseline=final_baseline,
+        recovery=recovery,
+        mandatory_argocd=mandatory_argocd,
+        release_metadata=release_metadata,
+        matrix_validation=matrix_validation,
+    )
+
+
 def _run_release_certification(
     *,
     release_options: ReleaseOptions,
@@ -901,19 +971,13 @@ def _run_release_certification(
         manifest = build_manifest(certification_eligible)
         artifacts.write_json("manifest.json", manifest)
         results = matrix_validation_results(matrix_validation_result)
-        runtime_parity = _not_applicable_artifact()
-        artifacts.write_json("runtime-parity.json", runtime_parity)
-        final_baseline = {"status": "not_applicable", "assertions": []}
-        artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
-        return _finalize_run(
+        return _short_circuit_finalize(
             artifacts=artifacts,
             release_options=release_options,
             matrix=matrix,
             manifest=manifest,
             certification_eligible=certification_eligible,
             results=results,
-            runtime_parity=runtime_parity,
-            final_baseline=final_baseline,
             recovery=recovery,
             mandatory_argocd=({"status": "not_applicable"} if profile.argocd.mandatory else {"status": "passed"}),
             release_metadata=release_metadata,
@@ -954,19 +1018,13 @@ def _run_release_certification(
             )
         )
         if status == "failed" and scenarios_by_id["static-gates"].required:
-            runtime_parity = _not_applicable_artifact()
-            artifacts.write_json("runtime-parity.json", runtime_parity)
-            final_baseline = {"status": "not_applicable", "assertions": []}
-            artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
-            return _finalize_run(
+            return _short_circuit_finalize(
                 artifacts=artifacts,
                 release_options=release_options,
                 matrix=matrix,
                 manifest=manifest,
                 certification_eligible=certification_eligible,
                 results=results,
-                runtime_parity=runtime_parity,
-                final_baseline=final_baseline,
                 recovery=recovery,
                 mandatory_argocd=({"status": "not_applicable"} if profile.argocd.mandatory else {"status": "passed"}),
                 release_metadata=release_metadata,
@@ -1019,19 +1077,13 @@ def _run_release_certification(
         lab_readiness_status=lab_readiness.status,
         initial_baseline_status=initial_baseline.status,
     ):
-        runtime_parity = _not_applicable_artifact()
-        artifacts.write_json("runtime-parity.json", runtime_parity)
-        final_baseline = {"status": "not_applicable", "assertions": []}
-        artifacts.write_json("final-baseline.json", {"schema_version": 1, **final_baseline})
-        return _finalize_run(
+        return _short_circuit_finalize(
             artifacts=artifacts,
             release_options=release_options,
             matrix=matrix,
             manifest=manifest,
             certification_eligible=certification_eligible,
             results=results,
-            runtime_parity=runtime_parity,
-            final_baseline=final_baseline,
             recovery=recovery,
             mandatory_argocd={"status": "passed" if not profile.argocd.mandatory else lab_readiness.status},
             release_metadata=release_metadata,
@@ -1052,64 +1104,21 @@ def _run_release_certification(
     if "rbac-bootstrap-live" in scenarios_by_id:
         rbac_cert_dir = artifacts.run_dir / "scenarios" / "rbac-bootstrap-live"
         rbac_cert_dir.mkdir(parents=True, exist_ok=True)
-        rbac_cert_assertions = []
+        rbac_cert_assertions: list[dict] = []
+        hub_statuses: list[str] = []
+        for hub_name in ("primary", "secondary"):
+            hub_result, hub_assertions = _certify_hub_rbac(
+                hub=profile.hubs[hub_name],
+                hub_name=hub_name,
+                scenario_profiles=scenario_profiles,
+                rbac_cert_dir=rbac_cert_dir,
+            )
+            hub_statuses.append(hub_result.status)
+            rbac_cert_assertions.extend(hub_assertions)
 
-        # Certify primary hub
-        primary_scope = _rbac_certification_scope(scenario_profiles, "primary")
-        primary_result = certify_rbac_permissions(
-            hub=profile.hubs["primary"],
-            hub_name="primary",
-            artifact_dir=rbac_cert_dir / "primary",
-            role=primary_scope.role,
-            namespace=primary_scope.namespace,
-            service_account=primary_scope.service_account,
-            include_decommission=primary_scope.include_decommission,
-            include_old_hub_finalization=primary_scope.include_old_hub_finalization,
-            include_forbidden_permissions=primary_scope.include_forbidden_permissions,
-        )
-        rbac_cert_assertions.extend(
-            {
-                "capability": a.capability,
-                "name": f"primary:{a.name}",
-                "status": a.status,
-                "expected": a.expected,
-                "actual": a.actual,
-                "evidence_path": a.evidence_path,
-                "message": a.message,
-            }
-            for a in primary_result.assertions
-        )
-
-        # Certify secondary hub
-        secondary_scope = _rbac_certification_scope(scenario_profiles, "secondary")
-        secondary_result = certify_rbac_permissions(
-            hub=profile.hubs["secondary"],
-            hub_name="secondary",
-            artifact_dir=rbac_cert_dir / "secondary",
-            role=secondary_scope.role,
-            namespace=secondary_scope.namespace,
-            service_account=secondary_scope.service_account,
-            include_decommission=secondary_scope.include_decommission,
-            include_old_hub_finalization=secondary_scope.include_old_hub_finalization,
-            include_forbidden_permissions=secondary_scope.include_forbidden_permissions,
-        )
-        rbac_cert_assertions.extend(
-            {
-                "capability": a.capability,
-                "name": f"secondary:{a.name}",
-                "status": a.status,
-                "expected": a.expected,
-                "actual": a.actual,
-                "evidence_path": a.evidence_path,
-                "message": a.message,
-            }
-            for a in secondary_result.assertions
-        )
-
-        # Determine overall status
-        if primary_result.status == "skipped" and secondary_result.status == "skipped":
+        if all(status == "skipped" for status in hub_statuses):
             rbac_cert_status = "not_applicable"
-        elif primary_result.status == "failed" or secondary_result.status == "failed":
+        elif any(status == "failed" for status in hub_statuses):
             rbac_cert_status = "failed"
         else:
             rbac_cert_status = "passed"
