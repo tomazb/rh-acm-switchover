@@ -15,6 +15,7 @@ from lib.constants import (
     BACKUP_SCHEDULE_PLURAL,
     CLUSTER_BACKUP_API_GROUP,
     CLUSTER_BACKUP_API_VERSION,
+    DELETE_REQUEST_TIMEOUT,
     DISABLE_AUTO_IMPORT_ANNOTATION,
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
@@ -195,6 +196,7 @@ class PrimaryPreparation:
                 plural=BACKUP_SCHEDULE_PLURAL,
                 name=bs_name,
                 namespace=BACKUP_NAMESPACE,
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
             )
 
             logger.info("BackupSchedule %s deleted (saved to state)", bs_name)
