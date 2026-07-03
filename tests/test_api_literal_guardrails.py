@@ -13,10 +13,10 @@ BANNED_LITERAL = "cluster.open-cluster-management.io"
 
 
 def test_no_hardcoded_managed_cluster_api_group_in_modules():
-    """modules/*.py must route the ACM cluster API group through lib.constants."""
+    """modules/**/*.py must route the ACM cluster API group through lib.constants."""
     violations = []
     for path in sorted(MODULES_DIR.rglob("*.py")):
-        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if BANNED_LITERAL in line:
                 violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
     assert not violations, (

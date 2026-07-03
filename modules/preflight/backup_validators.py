@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from lib.constants import (
     ACM_BACKUP_SCHEDULE_TYPE_LABEL,
@@ -31,6 +31,16 @@ from ..restore_discovery import find_passive_sync_restore, restore_messages_are_
 from .base_validator import BaseValidator
 
 logger = logging.getLogger("acm_switchover")
+
+
+def _as_mapping(value: Any) -> Dict[str, Any]:
+    """Return mapping values as-is and normalize malformed nested fields."""
+    return value if isinstance(value, dict) else {}
+
+
+def _labels_from(resource: Dict[str, Any]) -> Dict[str, Any]:
+    """Return metadata.labels from a Kubernetes resource, or an empty mapping."""
+    return _as_mapping(_as_mapping(resource.get("metadata")).get("labels"))
 
 
 def _format_condition_details(conditions: Optional[List[dict]]) -> str:
@@ -638,9 +648,7 @@ class ManagedClusterBackupValidator(BaseValidator):
 
             # Filter for managed-clusters backups using ACM backup schedule type label
             mc_backups = [
-                b
-                for b in backups
-                if b.get("metadata", {}).get("labels", {}).get(ACM_BACKUP_SCHEDULE_TYPE_LABEL) == "managedClusters"
+                b for b in backups if _labels_from(b).get(ACM_BACKUP_SCHEDULE_TYPE_LABEL) == "managedClusters"
             ]
 
             if not mc_backups:

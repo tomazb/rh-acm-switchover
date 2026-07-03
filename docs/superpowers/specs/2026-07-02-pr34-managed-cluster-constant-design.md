@@ -61,7 +61,7 @@ RESTORE_PLURAL = "restores"
 `CLUSTER_BACKUP_API_GROUP` is an alias assignment (single source of truth), not
 a second copy of the string.
 
-### Call-site substitution (all 49 sites in `modules/*.py`)
+### Call-site substitution (all 56 sites in `modules/**/*.py`)
 
 - ManagedCluster sites: `group=MANAGED_CLUSTER_API_GROUP,
   version=MANAGED_CLUSTER_API_VERSION, plural=MANAGED_CLUSTER_PLURAL`.
@@ -75,11 +75,12 @@ Behavior is unchanged: every constant resolves to the exact literal it replaces.
 
 ### Guardrail test (new, red-first)
 
-`tests/test_api_literal_guardrails.py`: statically scans `modules/*.py` source
+`tests/test_api_literal_guardrails.py`: statically scans `modules/**/*.py` source
 text and asserts zero occurrences of the raw literal
 `cluster.open-cluster-management.io` (constants must be imported from
-`lib.constants`). Written before the substitution so it starts red at 49
-violations and proves the sweep is complete.
+`lib.constants`). Written before the substitution so it starts red at 56
+violations (49 top-level module sites plus 7 in `modules/preflight/`) and proves
+the sweep is complete.
 
 ### Parity hardening
 
@@ -90,12 +91,12 @@ constant can never drift from the collection's
 
 ## Scope boundaries
 
-- **In scope:** `modules/*.py` (49 sites), `lib/kube_client.py`
+- **In scope:** `modules/**/*.py` (56 sites), `lib/kube_client.py`
   `list_managed_clusters()`/`patch_managed_cluster()` (2 behavioral sites,
   lines 983/991 — same fix class), `lib/constants.py` additions, the two
   test files above.
 - **Out of scope:** `lib/rbac_validator.py` literals (8 — RBAC permission-table
-  rows, owned by the queued `H1` unification), the `lib/kube_client.py:567`
+  rows, owned by the queued `H1` unification), the `lib/kube_client.py:568`
   docstring example (documentation text, not a call site),
   `tests/**` fixture literals (test data, intentionally literal), and the
   Ansible collection side (already routed through

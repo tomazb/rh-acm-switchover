@@ -12,7 +12,7 @@
 
 - `black --line-length 120` and `isort --profile black --line-length 120` on touched Python files (no repo-level config; 120 is CI's flag).
 - No behavior change: constant values must equal the replaced literals byte-for-byte.
-- Do not touch `lib/rbac_validator.py`, `lib/kube_client.py:567` docstring, `tests/**` fixture literals, or the Ansible collection.
+- Do not touch `lib/rbac_validator.py`, `lib/kube_client.py:568` docstring, `tests/**` fixture literals, or the Ansible collection.
 - Base branch: `ansible`; PR branch `fix/thermos-34-managed-cluster-constant`.
 
 ---
@@ -43,10 +43,10 @@ BANNED_LITERAL = "cluster.open-cluster-management.io"
 
 
 def test_no_hardcoded_managed_cluster_api_group_in_modules():
-    """modules/*.py must route the ACM cluster API group through lib.constants."""
+    """modules/**/*.py must route the ACM cluster API group through lib.constants."""
     violations = []
     for path in sorted(MODULES_DIR.rglob("*.py")):
-        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if BANNED_LITERAL in line:
                 violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
     assert not violations, (
@@ -165,7 +165,7 @@ For each file, replace (adding the needed names to the existing `from lib.consta
 - [ ] **Step 2: Verify zero literals remain in scope**
 
 Run: `grep -rn 'cluster\.open-cluster-management\.io' modules/ lib/kube_client.py`
-Expected: exactly one hit — `lib/kube_client.py:567` docstring.
+Expected: exactly one hit — `lib/kube_client.py:568` docstring.
 
 - [ ] **Step 3: Run guardrail + targeted suites**
 
@@ -175,8 +175,8 @@ Expected: all PASS.
 - [ ] **Step 4: Format and commit**
 
 ```bash
-black --line-length 120 modules/*.py lib/constants.py lib/kube_client.py tests/test_api_literal_guardrails.py tests/test_constants_parity.py
-isort --profile black --line-length 120 modules/*.py lib/constants.py lib/kube_client.py tests/test_api_literal_guardrails.py tests/test_constants_parity.py
+black --line-length 120 modules/*.py modules/preflight/*.py lib/constants.py lib/kube_client.py tests/test_api_literal_guardrails.py tests/test_constants_parity.py
+isort --profile black --line-length 120 modules/*.py modules/preflight/*.py lib/constants.py lib/kube_client.py tests/test_api_literal_guardrails.py tests/test_constants_parity.py
 git add -A
 git commit -m "refactor: route ACM cluster API-group literals through lib.constants (R2-H2)"
 ```
