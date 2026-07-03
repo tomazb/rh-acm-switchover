@@ -53,7 +53,7 @@ Add to `tests/release/adapters/common.py`:
 
 ```python
 DEFAULT_STREAM_COMMAND_TIMEOUT_SECONDS = 3600
-_REDACTION_REJECTED_MESSAGE = "Captured output was rejected by the sanitizer"
+_REDACTION_REJECTED_MESSAGE = CAPTURE_REDACTION_REJECTED_MESSAGE  # sourced from lib/constants.py
 
 
 def _now() -> str: ...            # moved from the adapters
@@ -82,7 +82,7 @@ Behavior (all byte-identical to today):
 
 - `scenario_dir.mkdir(parents=True, exist_ok=True)`;
   `stdout_path`/`stderr_path` under `scenario_dir`.
-- `effective_timeout = timeout_seconds or DEFAULT_STREAM_COMMAND_TIMEOUT_SECONDS`;
+- `effective_timeout = timeout_seconds if timeout_seconds is not None else DEFAULT_STREAM_COMMAND_TIMEOUT_SECONDS`;
   `subprocess.run(command, cwd=cwd, text=True, capture_output=True,
   check=False, timeout=effective_timeout, **({"env": dict(env)} if env is
   not None else {}))`.
@@ -122,8 +122,10 @@ Existing `test_ansible.py`/`test_bash.py`/`test_python_cli.py` assert on
 adapters. Red-first addition in `test_common.py`: direct
 `run_stream_subprocess` tests for (a) success path (echo command → passed,
 exit-code assertion, captures written), (b) failure path (non-zero exit),
-(c) timeout path (sleep with sub-second timeout → `returncode=-1`,
-`actual="timeout"`, formatted message), (d) reports callable passthrough.
+(c) timeout path (sleep with 1-second timeout → `returncode=-1`,
+`actual="timeout"`, formatted message), (d) reports callable passthrough,
+(e) redaction-rejected path (patched `write_capture_artifact` returning
+rejected → forced `failed` + `artifact-redaction` assertion).
 
 ## Acceptance criteria
 

@@ -125,7 +125,7 @@ from typing import Callable
 from tests.release.reporting.artifacts import write_capture_artifact
 
 DEFAULT_STREAM_COMMAND_TIMEOUT_SECONDS = 3600
-_REDACTION_REJECTED_MESSAGE = "Captured output was rejected by the sanitizer"
+_REDACTION_REJECTED_MESSAGE = CAPTURE_REDACTION_REJECTED_MESSAGE  # sourced from lib/constants.py
 
 
 def _now() -> str:
@@ -166,7 +166,7 @@ def run_stream_subprocess(
     scenario_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = scenario_dir / "stdout.txt"
     stderr_path = scenario_dir / "stderr.txt"
-    effective_timeout = timeout_seconds or DEFAULT_STREAM_COMMAND_TIMEOUT_SECONDS
+    effective_timeout = timeout_seconds if timeout_seconds is not None else DEFAULT_STREAM_COMMAND_TIMEOUT_SECONDS
     started_at = _now()
     run_kwargs: dict[str, Any] = {
         "cwd": cwd,

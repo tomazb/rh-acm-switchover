@@ -126,3 +126,21 @@ def test_run_stream_subprocess_evaluates_reports_callable(tmp_path):
     result, _ = _run_helper(tmp_path, ["true"], reports=lambda: [report])
 
     assert result.reports == [report]
+
+
+def test_run_stream_subprocess_rejected_capture_forces_failure(tmp_path, monkeypatch):
+    from tests.release.adapters import common as common_module
+
+    def fake_write_capture_artifact(*, run_dir, relative_path, content, rejected_placeholder):
+        return run_dir / relative_path, False
+
+    monkeypatch.setattr(common_module, "write_capture_artifact", fake_write_capture_artifact)
+    result, _ = _run_helper(tmp_path, ["sh", "-c", "echo out"])
+
+    assert result.status == "failed"
+    assert [a.name for a in result.assertions] == ["exit-code", "artifact-redaction"]
+    redaction = result.assertions[1]
+    assert redaction.status == "failed"
+    assert redaction.expected == "clean"
+    assert redaction.actual == "rejected"
+    assert redaction.message == "Captured output was rejected by the sanitizer"
