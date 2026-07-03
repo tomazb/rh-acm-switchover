@@ -39,7 +39,7 @@ from lib.constants import (
     WORKFLOW_STATE_FILE_MESSAGE,
 )
 from lib.exceptions import SwitchoverError
-from lib.utils import Phase, StateManager
+from lib.utils import CANONICAL_PHASE_NAMES, Phase, StateManager
 
 PhaseHandler = Callable[
     [argparse.Namespace, StateManager, Any, Any, logging.Logger],
@@ -71,17 +71,6 @@ class CompletionLogConfig:
     success_message: str
     completed_at_message: str
     next_step_messages: Tuple[str, ...]
-
-
-_CANONICAL_RESUME_START_PHASES = {
-    Phase.PREFLIGHT: "preflight",
-    Phase.PRIMARY_PREP: "primary_prep",
-    # Legacy secondary-verify resumes continue through activation.
-    Phase.SECONDARY_VERIFY: "activation",
-    Phase.ACTIVATION: "activation",
-    Phase.POST_ACTIVATION: "post_activation",
-    Phase.FINALIZATION: "finalization",
-}
 
 
 def log_completed_noop(
@@ -243,7 +232,7 @@ def run_phase_flow(
             logger,
         )
 
-    resume_start_phase = _CANONICAL_RESUME_START_PHASES.get(current_phase)
+    resume_start_phase = CANONICAL_PHASE_NAMES.get(current_phase)
     if current_phase != Phase.INIT and resume_start_phase is not None:
         state.set_config(
             STATE_KEY_RESUME_SUMMARY,
