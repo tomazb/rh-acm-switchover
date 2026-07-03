@@ -34,7 +34,7 @@ from tests.release.baseline.discovery import HubDiscoveryClient, discover_hub_fa
 from tests.release.baseline.fingerprint import build_environment_fingerprint
 from tests.release.checks.lab_readiness import assert_lab_readiness
 from tests.release.checks.metadata import validate_release_metadata
-from tests.release.checks.rbac_certification import certify_rbac_permissions
+from tests.release.checks.rbac_certification import CertificationResult, certify_rbac_permissions
 from tests.release.checks.static_gates import (
     GateCommand,
     GateResult,
