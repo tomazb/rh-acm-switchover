@@ -92,3 +92,9 @@ def test_pause_backups_delete_targets_primary_backup_schedule_resource():
     assert k8s_args["kind"] == "BackupSchedule"
     assert k8s_args["name"] == "{{ item.metadata.name }}"
     assert k8s_args["namespace"] == "{{ item.metadata.namespace | default('open-cluster-management-backup') }}"
+
+
+def test_pause_backups_published_changed_covers_native_check_mode():
+    """--check with mode: execute must surface a would-change verdict (Thermos R2-M1 part 2)."""
+    text = (PRIMARY_PREP_TASKS / "pause_backups.yml").read_text()
+    assert "ansible_check_mode" in text, "pause_backups.yml published changed must treat native check mode like dry_run"
