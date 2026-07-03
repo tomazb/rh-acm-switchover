@@ -24,6 +24,7 @@ from tests.release.contracts.models import HubProfile
 from tests.release.reporting.redaction import RedactionError, sanitize_text
 
 VALID_ROLES = ("operator", "validator")
+RBAC_CERTIFICATION_CAPABILITY = "rbac-certification"
 RBAC_SERVICE_ACCOUNT_FORMAT = "system:serviceaccount:{namespace}:{name}"
 RBAC_DEFAULT_NAMESPACE = "acm-switchover"
 RBAC_DEFAULT_SERVICE_ACCOUNT = "acm-switchover-operator"
@@ -366,7 +367,7 @@ def _evaluate_permissions(
             error_count += 1
             assertions.append(
                 CertificationAssertion(
-                    capability="rbac-certification",
+                    capability=RBAC_CERTIFICATION_CAPABILITY,
                     name=perm_name,
                     status="failed",
                     expected=expected,
@@ -379,7 +380,7 @@ def _evaluate_permissions(
             unexpected_count += 1
             assertions.append(
                 CertificationAssertion(
-                    capability="rbac-certification",
+                    capability=RBAC_CERTIFICATION_CAPABILITY,
                     name=perm_name,
                     status="failed",
                     expected=expected,
@@ -395,7 +396,7 @@ def _evaluate_permissions(
         else:
             assertions.append(
                 CertificationAssertion(
-                    capability="rbac-certification",
+                    capability=RBAC_CERTIFICATION_CAPABILITY,
                     name=perm_name,
                     status="passed",
                     expected=expected,
@@ -450,7 +451,7 @@ def certify_rbac_permissions(
             status="failed",
             assertions=[
                 CertificationAssertion(
-                    capability="rbac-certification",
+                    capability=RBAC_CERTIFICATION_CAPABILITY,
                     name="role-validation",
                     status="failed",
                     expected=f"one of {VALID_ROLES}",
@@ -475,7 +476,7 @@ def certify_rbac_permissions(
             status="failed",
             assertions=[
                 CertificationAssertion(
-                    capability="rbac-certification",
+                    capability=RBAC_CERTIFICATION_CAPABILITY,
                     name="scope-validation",
                     status="failed",
                     expected="valid RBAC certification scope",
