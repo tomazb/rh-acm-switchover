@@ -12,6 +12,7 @@ from kubernetes.client.rest import ApiException
 from lib.argocd_coordinator import ArgoCDPauseCoordinator
 from lib.constants import (
     BACKUP_NAMESPACE,
+    DELETE_REQUEST_TIMEOUT,
     DISABLE_AUTO_IMPORT_ANNOTATION,
     HUB_ROLE_PRIMARY,
     HUB_ROLE_SECONDARY,
@@ -192,6 +193,7 @@ class PrimaryPreparation:
                 plural="backupschedules",
                 name=bs_name,
                 namespace=BACKUP_NAMESPACE,
+                timeout_seconds=DELETE_REQUEST_TIMEOUT,
             )
 
             logger.info("BackupSchedule %s deleted (saved to state)", bs_name)
