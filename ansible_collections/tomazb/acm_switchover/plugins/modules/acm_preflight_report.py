@@ -153,8 +153,6 @@ def main() -> None:
         if write_error:
             module.fail_json(msg=write_error, report=report, path=output_path)
             return
-        if module.check_mode:
-            changed = False
 
     module.exit_json(changed=changed, report=report, path=output_path)
 
