@@ -12,7 +12,6 @@ from lib.constants import CAPTURE_REDACTION_REJECTED_MESSAGE
 from tests.release.reporting.artifacts import write_capture_artifact
 
 DEFAULT_STREAM_COMMAND_TIMEOUT_SECONDS = 3600
-_REDACTION_REJECTED_MESSAGE = CAPTURE_REDACTION_REJECTED_MESSAGE
 
 
 def _now() -> str:
@@ -121,7 +120,7 @@ def run_stream_subprocess(
             run_dir=artifact_dir,
             relative_path=stderr_path.relative_to(artifact_dir),
             content=stderr_content,
-            rejected_placeholder=_REDACTION_REJECTED_MESSAGE + "\n",
+            rejected_placeholder=CAPTURE_REDACTION_REJECTED_MESSAGE + "\n",
         )
         return stdout_written and stderr_written
 
@@ -132,8 +131,8 @@ def run_stream_subprocess(
             status="failed",
             expected="clean",
             actual="rejected",
-            evidence_path="",
-            message=_REDACTION_REJECTED_MESSAGE,
+            evidence_path=None,
+            message=CAPTURE_REDACTION_REJECTED_MESSAGE,
         )
 
     def _result(status: str, returncode: int | None, assertions: list[AssertionRecord], ended_at: str) -> StreamResult:

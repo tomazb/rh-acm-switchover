@@ -1,3 +1,4 @@
+from lib.constants import CAPTURE_REDACTION_REJECTED_MESSAGE
 from tests.release.adapters.common import AssertionRecord, ReportArtifact, StreamResult
 
 
@@ -143,4 +144,5 @@ def test_run_stream_subprocess_rejected_capture_forces_failure(tmp_path, monkeyp
     assert redaction.status == "failed"
     assert redaction.expected == "clean"
     assert redaction.actual == "rejected"
-    assert redaction.message == "Captured output was rejected by the sanitizer"
+    assert redaction.evidence_path is None
+    assert redaction.message == CAPTURE_REDACTION_REJECTED_MESSAGE
