@@ -385,3 +385,58 @@ def test_get_required_permissions_includes_namespace_scoped():
     assert any(
         p.resource == "pods" and p.verb == "get" and p.namespace == "open-cluster-management-backup" for p in perms
     )
+
+
+@pytest.mark.parametrize(
+    ("expect_allowed", "allowed", "error", "exp_status", "exp_actual", "exp_message", "exp_unexpected", "exp_errors"),
+    [
+        (True, True, None, "passed", "allowed", "Permission allowed for {sa}", 0, 0),
+        (True, False, None, "failed", "denied", "Permission denied for {sa}", 1, 0),
+        (True, False, "boom", "failed", "error", "SAR check failed for {sa}: boom", 0, 1),
+        (False, False, None, "passed", "denied", "Forbidden permission denied for {sa}", 0, 0),
+        (False, True, None, "failed", "allowed", "Forbidden permission allowed for {sa}", 1, 0),
+        (False, True, "boom", "failed", "error", "SAR check failed for {sa}: boom", 0, 1),
+    ],
+)
+def test_evaluate_permissions_polarity_matrix(
+    monkeypatch,
+    tmp_path,
+    expect_allowed,
+    allowed,
+    error,
+    exp_status,
+    exp_actual,
+    exp_message,
+    exp_unexpected,
+    exp_errors,
+):
+    from tests.release.checks import rbac_certification as module
+    from tests.release.checks.rbac_certification import _evaluate_permissions
+
+    sa = "system:serviceaccount:ns:sa"
+
+    def fake_sar(**kwargs):
+        return SARCheckResult(allowed=allowed, evidence_path="ev.json", error=error)
+
+    monkeypatch.setattr(module, "_check_permission_via_sar", fake_sar)
+    hub = HubProfile(kubeconfig="kc", context="ctx")
+    permission = _get_required_permissions(
+        role="validator", include_decommission=False, include_old_hub_finalization=False
+    )[0]
+
+    assertions, unexpected, errors = _evaluate_permissions(
+        permissions=[permission],
+        expect_allowed=expect_allowed,
+        hub=hub,
+        service_account=sa,
+        artifact_dir=tmp_path,
+    )
+
+    assert len(assertions) == 1
+    a = assertions[0]
+    assert a.status == exp_status
+    assert a.expected == ("allowed" if expect_allowed else "denied")
+    assert a.actual == exp_actual
+    assert a.message == exp_message.format(sa=sa)
+    assert unexpected == exp_unexpected
+    assert errors == exp_errors
