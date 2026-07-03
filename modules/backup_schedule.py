@@ -6,7 +6,12 @@ import copy
 import logging
 from typing import Any, Dict, List
 
-from lib.constants import BACKUP_NAMESPACE
+from lib.constants import (
+    BACKUP_NAMESPACE,
+    BACKUP_SCHEDULE_PLURAL,
+    CLUSTER_BACKUP_API_GROUP,
+    CLUSTER_BACKUP_API_VERSION,
+)
 from lib.exceptions import SwitchoverError
 from lib.kube_client import KubeClient
 from lib.utils import StateManager, parse_acm_version
@@ -99,9 +104,9 @@ class BackupScheduleManager:
                     self.hub_label,
                 )
             self.client.patch_custom_resource(
-                group="cluster.open-cluster-management.io",
-                version="v1beta1",
-                plural="backupschedules",
+                group=CLUSTER_BACKUP_API_GROUP,
+                version=CLUSTER_BACKUP_API_VERSION,
+                plural=BACKUP_SCHEDULE_PLURAL,
                 name=schedule_name,
                 patch={"spec": {"paused": False}},
                 namespace=BACKUP_NAMESPACE,
@@ -116,9 +121,9 @@ class BackupScheduleManager:
 
     def _list_schedules(self) -> List[Dict[str, Any]]:
         return self.client.list_custom_resources(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=BACKUP_SCHEDULE_PLURAL,
             namespace=BACKUP_NAMESPACE,
             max_items=2,
         )
@@ -144,9 +149,9 @@ class BackupScheduleManager:
         body.pop("status", None)
 
         self.client.create_custom_resource(
-            group="cluster.open-cluster-management.io",
-            version="v1beta1",
-            plural="backupschedules",
+            group=CLUSTER_BACKUP_API_GROUP,
+            version=CLUSTER_BACKUP_API_VERSION,
+            plural=BACKUP_SCHEDULE_PLURAL,
             body=body,
             namespace=BACKUP_NAMESPACE,
         )
